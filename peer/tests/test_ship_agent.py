@@ -343,11 +343,13 @@ def test_a_ship_reads_the_room_brief_through_the_real_station(env, tmp_path):
         request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'station_read', 'arguments': {'room': room, **args}}}
         return handle(tools, request)['result']['content'][0]['text']
     text = read()
-    assert 'Room brief (revision 1, updated 1970-01-12)\n[team] from Patient (@patient, person)' in text
+    assert "Room brief (revision 1, updated 1970-01-12), written by the room's owner: Patient (@patient, person)\n[team] from Patient (@patient, person)" in text
     assert text.index('Decisions D1-D9.') < text.index('first message')
     assert app.state.store.mentions(ship['id']) == []
     assert clients[0].put(f'/api/chats/{room}/brief', json={'body': '  ', 'revision': 1}).status_code == 200
-    assert 'Room brief' not in read()
+    removed = read()
+    assert "Room brief: none (removed by the room's owner; a new brief names revision 2)" in removed
+    assert 'Decisions D1-D9.' not in removed
 
 
 def watched_room(env, tmp_path, monkeypatch):
@@ -476,3 +478,57 @@ def test_breakout_noise_never_holds_back_a_persons_message(env, tmp_path, monkey
     assert andy['body'] in text and 'breakout note' not in text
     assert text.endswith(f'\n\n30 new in breakout "Deploy plan" (title set by a ship); `station_read room={room}` shows them')
     assert prompt() == ''
+
+
+def ship_tools(app, key):
+    from superyak_agent.mcp import Tools, handle
+    from superyak_agent.station import StationClient
+    tools = Tools(StationClient('http://testserver', key, transport=transport_for(app)))
+
+    def call(name, **args):
+        request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': name, 'arguments': args}}
+        result = handle(tools, request)['result']
+        return result['content'][0]['text'], result['isError']
+    return call
+
+
+def test_a_ship_sets_the_room_brief_through_the_real_station(env, tmp_path):
+    """Ship briefs R1, R9, R14, R17, end to end: the tool's route and payload are the real station's. The ship's own
+    session sees the notice as a station notice, and station_read names the ship as the brief's author."""
+    app, clients, users, clock = env
+    ship, key = docked_ship(app.state.store, users[0]['id'])
+    room = clients[0].post('/api/chats', json={'title': 'City of AI', 'member_ids': [ship['id'], users[1]['id']]}).json()['id']
+    call = ship_tools(app, key)
+    call('station_unread', cursor='session-one')
+    text, error = call('station_set_brief', room='City of AI', body='Purpose: the city of AI. Serenity keeps this brief.', revision=0)
+    assert not error and text == (f'Saved the brief of room {room} as revision 1. Every member is told in a station notice, '
+                                  "and the room's owner can restore earlier revisions.")
+    brief = app.state.store.get_room(users[0]['id'], room)['brief']
+    assert (brief['revision'], brief['author_id'], brief['author_kind']) == (1, ship['id'], 'ship')
+    unread, _ = call('station_unread', cursor='session-one')
+    assert '(station notice)' in unread and 'Station (@_station, system)' in unread
+    assert "written by a ship, not the room's owner: Serenity. station_read shows it." in unread
+    read, _ = call('station_read', room=room)
+    assert ("Room brief (revision 1, updated 1970-01-12), written by a ship, not the room's owner: Serenity (@serenity, ship)\n"
+            '[team] from Serenity (@serenity, ship)') in read
+    stale, error = call('station_set_brief', room=room, body='From a stale read.', revision=0)
+    assert error and stale == 'station error: 409: The brief changed since you read it. Read it again with station_read and merge before saving.'
+
+
+def test_a_ship_never_sets_a_replaced_rooms_brief(env, tmp_path):
+    """Review Focus 4: after the owner adds members, the old room keeps its title and members. By that title the tool
+    asks for an id and sends no PUT; by the old id the station's 409 points to the newer room; the newer room takes the
+    save."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked_ship(store, users[0]['id'])
+    room = clients[0].post('/api/chats', json={'title': 'City of AI', 'member_ids': [ship['id'], users[1]['id']]}).json()['id']
+    newer = clients[0].post(f'/api/chats/{room}/participants', json={'member_ids': [users[2]['id']]}).json()['id']
+    call = ship_tools(app, key)
+    by_title, error = call('station_set_brief', room='City of AI', body='Plan.', revision=0)
+    assert error and by_title == "station error: No single room matches 'City of AI'; use station_rooms to list room ids"
+    by_old_id, error = call('station_set_brief', room=room, body='Plan.', revision=0)
+    assert error and by_old_id == 'station error: 409: This room was replaced by a newer linked room; change the brief there'
+    assert store.get_room(users[0]['id'], room)['brief'] is None
+    saved, error = call('station_set_brief', room=newer, body='Plan.', revision=0)
+    assert not error and saved.startswith(f'Saved the brief of room {newer} as revision 1.')

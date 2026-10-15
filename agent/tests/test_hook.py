@@ -624,3 +624,19 @@ def test_a_session_start_that_shows_the_law_keeps_the_session(station, ship_conf
     law(fake, serenity, [])
     start(fake, config_path, 's2', sessions)  # no law at all: still a successful start
     assert prompt(fake, config_path, 's2', sessions) == ''
+
+
+def test_the_hook_shows_a_brief_notice_as_a_station_notice(station, ship_config, tmp_path):
+    """R14 (ship briefs), a guard on today's unread rendering: a brief notice reaches a member ship's session at its next
+    prompt, named as the station and labelled "station notice"."""
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    system = fake.user('_station', 'Station', 'system')
+    room = fake.room('City of AI', andy, jenn, serenity)
+    sessions = tmp_path / 'sessions'
+    hook.run(config_path, transport=fake, session_id='s1', sessions_dir=sessions)
+    text = "Station notice: the room brief is now revision 2, written by a ship, not the room's owner: Rio Grande. station_read shows it."
+    notice = fake.say(room, system, text, f'brief-{room}-2')
+    fake.kinds[notice['id']] = 'notice'
+    shown = hook.run(config_path, transport=fake, session_id='s1', sessions_dir=sessions)
+    assert f'Room City of AI, message {notice["id"]} (station notice):\n[team] from Station (@_station, system)' in shown
+    assert text in shown

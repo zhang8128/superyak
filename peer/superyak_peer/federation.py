@@ -361,7 +361,7 @@ class Federation:
             if kind == 'room' and payload is not None:
                 history = json.loads(old['payload']).get('messages',[]) if old and old['payload'] else []
                 message = payload.pop('message', None)
-                if message:
+                if message and action == 'room.message':  # only a room.message is validated above
                     found = next((m for m in history if m['id']==message['id']),None)
                     if found and found != message:
                         raise Problem(409, 'Message ID already used')

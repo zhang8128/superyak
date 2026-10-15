@@ -45,13 +45,13 @@ class Ships:
         self.plain = tmp_path / 'plain'
         self.plain.mkdir()
 
-    def run(self, config, monkeypatch, *, project_dir=None, cwd=None, event='prompt', session='s1'):
+    def run(self, config, monkeypatch, *, project_dir=None, cwd=None, event='prompt', session='s1', mode=None):
         if project_dir is None:
             monkeypatch.delenv('CLAUDE_PROJECT_DIR', raising=False)
         else:
             monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(project_dir))
         transport = Counting(self.fake)
-        text = hook.run(config, session_id=session, cwd=None if cwd is None else str(cwd), event=event, transport=transport)
+        text = hook.run(config, session_id=session, cwd=None if cwd is None else str(cwd), event=event, transport=transport, mode=mode)
         return text, transport.calls
 
 
@@ -70,8 +70,8 @@ def test_machine_ship_hook_stands_down_in_a_claimed_project(ships, monkeypatch):
     unset: nothing printed, no station call, no session file and no unreachable marker touched."""
     for where in (ships.repo, ships.repo / 'sub', ships.wt, ships.wt / 'sub'):
         for event in ('prompt', 'session-start'):
-            assert ships.run(ships.machine_config, monkeypatch, project_dir=where, event=event) == ('', [])
-            assert ships.run(ships.machine_config, monkeypatch, cwd=where, event=event) == ('', [])
+            assert ships.run(ships.machine_config, monkeypatch, project_dir=where, event=event, mode='write') == ('', [])
+            assert ships.run(ships.machine_config, monkeypatch, cwd=where, event=event, mode='write') == ('', [])
     assert sessions_files(ships.machine_config) == []
 
 

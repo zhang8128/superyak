@@ -36,7 +36,7 @@ const state = {
   invitation: null,
   flash: null,
   transitionNote: null,
-  briefEdit: null, chatPicked: null, chatError: null,
+  briefEdit: null, briefHistory: null, chatPicked: null, chatError: null,
   reauth: false,
   reauthError: null,
   layerEdits: {},
@@ -109,7 +109,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.briefEdit = null; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -470,8 +470,9 @@ function participantSummary(room) {
   return others.map(participantName).join(", ");
 }
 
-function messageDelivery(message) {
+function messageDelivery(message, room) {
   if (message.state) return message.state;
+  if (room?.origin) return null;  // a received room: only the station's own state, never a guess from client ids
   const matches = state.sync.deliveries.filter((delivery) => delivery.message_id === message.id || (delivery.client_message_id && delivery.client_message_id === message.client_message_id));
   if (!matches.length) return "saved";
   if (matches.some((item) => item.status === "failed")) return "failed";
@@ -510,45 +511,91 @@ function sourceLabel(message) {
   return source.kind === "post" ? "no run ticket" : "";
 }
 
-function messageMarkup(message) {
+// The server's mark for words a room's host attributes to someone on this station that this station never sent.
+const UNVERIFIED_AUTHOR = "Unverified: the room's host says this is from someone on this station";
+
+function messageMarkup(message, room) {
   const mine = isSelf(message.author_id);
-  const system = state.room?.system_author;  // the station's own author, known by id, never by display name (R31)
-  const author = mine ? "You" : system && message.author_id === system.id ? "Station" : participantName(message.author_id);
-  return `<div class="message ${mine ? "mine" : ""}"><div class="message-meta">${escapeHtml(author)}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)} · ${escapeHtml(deliveryText(messageDelivery(message)))}</div></div>`;
+  const system = room?.system_author;  // the station's own author, known by id, never by display name (R31)
+  const author = mine ? "You" : system && message.author_id === system.id ? "Station" : message.unverified ? UNVERIFIED_AUTHOR : participantName(message.author_id);
+  const delivery = messageDelivery(message, room);
+  return `<div class="message${mine ? " mine" : ""}${message.unverified ? " unverified" : ""}"><div class="message-meta">${escapeHtml(author)}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)}${delivery ? ` · ${escapeHtml(deliveryText(delivery))}` : ""}</div></div>`;
+}
+
+// Ship briefs S4: whose words a revision is, from its own author fields and never from a name. The room's owner when
+// the author is the owner and a person (or an older station doesn't say); a ship when the station says ship.
+function briefAuthorClass(room, item) {
+  if (item.author_kind === "ship") return "ship";
+  if (item.author_id && item.author_id === room.owner_id && (item.author_kind === "person" || item.author_kind == null)) return "owner";
+  return "other";
+}
+
+function briefAuthorLine(room, item) {
+  const kind = briefAuthorClass(room, item);
+  if (kind === "owner") return room.owner_id === state.me.id ? "Written by you" : `Written by the room's owner, ${item.author_name}`;
+  if (kind === "ship") return `Written by ${item.author_name}, a ship, not the room's owner`;
+  return `Written by ${item.author_name}, not the room's owner`;
+}
+
+// The author line, everywhere a brief's text shows (S4). A ship's revision leads with the "Ship" tag. All escaped.
+function briefAuthor(room, item, place = "") {
+  const tag = briefAuthorClass(room, item) === "ship" ? '<span class="badge pending brief-ship-tag">Ship</span> ' : "";
+  return `<p class="meta brief-author ${place}">${tag}${escapeHtml(briefAuthorLine(room, item))}</p>`;
 }
 
 function briefMeta(brief) {
   if (brief.carried_from) return `Carried from the previous room on ${formatDate(brief.updated)}`;
-  return `Revision ${brief.revision} · updated ${formatDate(brief.updated)} by ${brief.author_name}`;
+  return `Revision ${brief.revision} · updated ${formatDate(brief.updated)}`;
 }
 
-// The room's brief, at the top of the room. The owner edits it; everyone else reads it. A received room has none here.
+// S4: when the editor opens with a ship's text, saving makes all of it the owner's, so it says so above Save.
+function briefWarning(edit) {
+  if (!edit.shipAuthor) return "";
+  return `<p class="brief-warning" role="note">${escapeHtml(`This text was written by ${edit.shipAuthor}, a ship. Saving makes all of it yours, so read it all first.`)}</p>`;
+}
+
+// S5: the owner's history, newest first. Every body and name is escaped. "Use this text" puts a revision's body in
+// the editor as its value, at the room's current revision, and Save is the ordinary save. A removal has no text to use.
+function briefHistory(room) {
+  const history = state.briefHistory?.roomId === room.id ? state.briefHistory : null;
+  if (!history) return "";
+  let rows;
+  if (history.error) rows = `<p class="inline-message error" role="status">${escapeHtml(history.error)}</p>`;
+  else if (!history.items) rows = `<p class="meta">Loading the brief's history…</p>`;
+  else rows = `<ol class="brief-revisions">${history.items.map((item) => `<li class="brief-revision">${briefAuthor(room, item)}<p class="meta">${escapeHtml(`Revision ${item.revision} · ${formatDate(item.updated)}${item.carried_from ? " · carried from the previous room" : ""}`)}</p>${item.body ? `<div class="brief-revision-body">${escapeHtml(item.body)}</div><button class="button ghost" type="button" data-action="use-brief-revision" data-revision="${escapeHtml(item.revision)}">Use this text</button>` : '<p class="meta">Removed</p>'}</li>`).join("")}</ol>`;
+  return `<div class="brief-history"><h4>Brief history</h4>${rows}</div>`;
+}
+
+// The room's brief, at the top of the room. The owner edits it and reads its history; everyone else reads it. A
+// received room has none here.
 function roomBrief(room) {
   if (room.origin) return "";
   const brief = room.brief;
   const owner = room.owner_id === state.me.id;
   if (!brief && !owner) return "";
   const edit = owner && state.briefEdit?.roomId === room.id ? state.briefEdit : null;
+  const historyOpen = owner && state.briefHistory?.roomId === room.id;
   const shown = brief
-    ? `<div class="room-brief-body">${escapeHtml(brief.body)}</div><p class="meta">${escapeHtml(briefMeta(brief))}</p>`
+    ? `<div class="room-brief-body">${escapeHtml(brief.body)}</div>${briefAuthor(room, brief, "room-brief-author")}<p class="meta">${escapeHtml(briefMeta(brief))}</p>`
     : `<p class="meta">No brief yet. Write what this room is for, what it has decided and who does what.</p>`;
   const editor = edit
-    ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p><div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
-    : owner ? `<button class="button ghost" type="button" data-action="edit-brief">Edit brief</button>` : "";
-  return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Visible to members on this station only.</p>${editor}</section>`;
+    ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p>${briefWarning(edit)}<div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
+    : owner ? `<div class="button-row"><button class="button ghost" type="button" data-action="edit-brief">Edit brief</button><button class="button ghost" type="button" data-action="${historyOpen ? "hide-brief-history" : "brief-history"}">${historyOpen ? "Hide brief history" : "Brief history"}</button></div>` : "";
+  return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Visible to members on this station only.</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
 }
 
-// In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried.
+// In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried and
+// who wrote it (S4), since a carry keeps the author.
 function carryBriefChoice(room) {
   const brief = room && !room.origin ? room.brief : null;
   if (!brief) return "";
-  return `<fieldset class="field"><legend>Room brief</legend><label class="choice"><input type="checkbox" name="carry-brief" value="${escapeHtml(brief.revision)}"><span class="choice-copy"><strong>Carry the room brief into the new room</strong><small>Only the brief is carried. Earlier messages stay with their original participants.</small></span></label><div class="carry-brief-text">${escapeHtml(brief.body)}</div></fieldset>`;
+  return `<fieldset class="field"><legend>Room brief</legend><label class="choice"><input type="checkbox" name="carry-brief" value="${escapeHtml(brief.revision)}"><span class="choice-copy"><strong>Carry the room brief into the new room</strong><small>Only the brief is carried. Earlier messages stay with their original participants.</small></span></label>${briefAuthor(room, brief, "carry-brief-author")}<div class="carry-brief-text">${escapeHtml(brief.body)}</div></fieldset>`;
 }
 
 function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map(messageMarkup).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row"><button class="button ghost" data-action="change-participants">Change participants</button>${(room.member_ids || []).filter((id) => !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
@@ -1064,6 +1111,7 @@ async function openChat(id) {
   location.hash = `chats/${pathPart(id)}`;
   state.flash = null;
   state.transitionNote = null;
+  state.briefHistory = null;
   render();
 }
 
@@ -1140,8 +1188,31 @@ async function saveBrief(form) {
     const latest = await api(`/api/chats/${pathPart(room.id)}`);
     if (state.room?.id === room.id) state.room = latest;
   } catch (_) { /* the save stands; the next refresh shows it */ }
+  if (state.briefHistory?.roomId === room.id) await openBriefHistory(room);  // the saved revision joins the list
   setFlash(body.trim() ? "Room brief saved." : "Room brief removed.");
   render();
+}
+
+async function openBriefHistory(room) {
+  // Keeps the rows already shown while it reloads, so a save doesn't flash "Loading".
+  const history = { roomId: room.id, items: state.briefHistory?.roomId === room.id ? state.briefHistory.items : null, error: null };
+  state.briefHistory = history;
+  render();
+  try { history.items = await api(`/api/chats/${pathPart(room.id)}/brief/revisions`); }
+  catch (error) { history.error = error.message; }
+  if (state.briefHistory === history) render();
+}
+
+// "Use this text" (S5): the revision's body becomes the editor's value, never HTML, at the room's current revision,
+// so Save is the ordinary save and makes a new revision by the owner. The editor warns when the text is a ship's (S4).
+function useBriefRevision(room, revision) {
+  const item = state.briefHistory?.roomId === room.id ? state.briefHistory.items?.find((r) => r.revision === revision) : null;
+  if (!item) return;
+  state.briefEdit = { roomId: room.id, revision: room.brief_revision ?? 0, body: item.body, status: "", error: false,
+                      shipAuthor: briefAuthorClass(room, item) === "ship" ? item.author_name : null };
+  render();
+  const box = document.querySelector("#brief-body");
+  if (box) { box.value = item.body; box.focus(); }
 }
 
 async function removeParticipant(id) {
@@ -1478,11 +1549,17 @@ document.addEventListener("click", async (event) => {
   if (action === "change-participants") { state.chatDialog = "linked"; state.chatPicked = null; state.chatError = null; render(); }
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
   if (action === "edit-brief" && state.room) {
-    state.briefEdit = { roomId: state.room.id, revision: state.room.brief_revision ?? 0, body: state.room.brief?.body || "", status: "", error: false };
+    const brief = state.room.brief;
+    // S4: the editor warns when the text it opens with is a ship's; saving would make all of it the owner's.
+    state.briefEdit = { roomId: state.room.id, revision: state.room.brief_revision ?? 0, body: brief?.body || "", status: "", error: false,
+                        shipAuthor: brief && briefAuthorClass(state.room, brief) === "ship" ? brief.author_name : null };
     render();
     document.querySelector("#brief-body")?.focus();
   }
   if (action === "cancel-brief") { state.briefEdit = null; render(); }
+  if (action === "brief-history" && state.room) await openBriefHistory(state.room);
+  if (action === "hide-brief-history") { state.briefHistory = null; render(); }
+  if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
   if (action === "profile") { state.profileDialog = true; render(); }
   if (action === "logout") await logout();
   if (action === "invite") {

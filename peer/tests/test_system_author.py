@@ -20,7 +20,7 @@ def setup(env):
 
 def notice(store, room, ship_id, mention_id='m1', text='Station notice: test'):
     with store.transaction() as db:
-        return store._post_as_system(db, room, ship_id, mention_id, text)
+        return store._post_as_system(db, room, f'notice-{ship_id}-{mention_id}', text)
 
 
 def test_nobody_can_sign_in_dock_hold_a_key_or_post_as_the_system_author(env):
@@ -85,7 +85,7 @@ def test_system_and_kind_messages_never_federate(two_peers):
     store = a[0]
     room = store.create_room(a[1], 'Across peers', [ca['id']])
     with store.transaction() as db:
-        noticed = store._post_as_system(db, room['id'], 'ship-x', 'm1', 'Station notice: stays here')
+        noticed = store._post_as_system(db, room['id'], 'notice-ship-x-m1', 'Station notice: stays here')
     claimed = store.send_message(a[1], room['id'], 'claim-1', 'Claimed `spec:d7` until 18:00 UTC')
     with store.transaction() as db:
         db.execute("INSERT INTO message_kinds VALUES(?, 'claim')", (claimed['id'],))

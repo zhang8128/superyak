@@ -110,6 +110,7 @@ def test_the_headers_change_nothing_else(station, ship_config, tmp_path, monkeyp
         if stripped:
             monkeypatch.setattr(hook, 'presence_headers', lambda *args, **kwargs: {})
             monkeypatch.setattr(mcp, 'presence_headers', lambda *args, **kwargs: {})
+        monkeypatch.setattr(hook, '_watch_default', lambda *args, **kwargs: None)  # the default needs the session header
         fake = type(station[0])()
         andy, jenn = fake.user('andy', 'Andy'), fake.user('jenn', 'Jenn')
         ship = fake.user('serenity', 'Serenity', 'ship', andy['id'], key='serenity-key')

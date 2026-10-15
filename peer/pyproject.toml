@@ -120,6 +120,7 @@ only-include = [
     "tests/test_room_claims.py",
     "tests/test_share_link.py",
     "tests/test_ship_agent.py",
+    "tests/test_ship_briefs.py",
     "tests/test_system_author.py",
     "tests/test_ships.py",
     "tests/test_tickets.py",

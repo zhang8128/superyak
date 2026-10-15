@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import urlopen
 
 import pytest
@@ -72,17 +73,18 @@ def browser_peer(tmp_path, request):
         [users["family"]["id"], users["doctor"]["id"]],
     )
     remote_store = Store(tmp_path / "remote-peer")
-    remote_user = remote_store.create_user(
-        "casey", "Casey Remote", "long-remote-password"
+    remote_user = remote_store.create_user(  # the stand-in station's admin, so it can pair back
+        "casey", "Casey Remote", "long-remote-password", is_admin=True
     )
     remote_identity = PeerIdentity.load_or_create(
         remote_store.data_dir, hosts=("remote.example",)
     )
-    remote_card = Federation(
+    remote_federation = Federation(
         remote_store,
         endpoint="https://remote.example:7443",
         identity=remote_identity,
-    ).card(remote_user["id"])
+    )
+    remote_card = remote_federation.card(remote_user["id"])
     config = uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="warning", access_log=False
     )
@@ -108,6 +110,7 @@ def browser_peer(tmp_path, request):
         "users": users,
         "app": app,
         "remote_card": remote_card,
+        "remote": {"store": remote_store, "federation": remote_federation, "user": remote_user},
         "local_demo": local_demo,
     }
     server.should_exit = True
@@ -1564,7 +1567,7 @@ def test_a_room_labels_the_station_notice_by_id_never_by_name(browser_peer):
     store.rename_user(users["doctor"]["id"], "Station")
     store.send_message(users["doctor"]["id"], room["id"], "p", "a person called Station")
     with store.transaction() as db:
-        store._post_as_system(db, room["id"], ship["id"], "m1", "Station notice: the notice itself")
+        store._post_as_system(db, room["id"], f'notice-{ship["id"]}-m1', "Station notice: the notice itself")
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.goto(f"{base}/#chats/{room['id']}")
@@ -1978,3 +1981,250 @@ def test_an_instructions_layer_switched_back_to_a_note_shows_note_mode(browser_p
             expect(page.get_by_label("Kind")).to_have_value("note")
             expect(page.get_by_role("checkbox", name="Anyone with the public link")).to_have_count(1)
     assert errors == [], errors
+
+
+def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_delivery_state(browser_peer):
+    """Federation follow-ups (spec 2026-10-14-federation-followups-design.md), F1 and F2 in the browser. Words the
+    room's host attributes to the signed-in person without proof read as unverified, never "You". A host's message that
+    carries a delivery state and reuses the client id of the person's own delivered reply shows no delivery text."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    here, remote = browser_peer["app"].state.federation, browser_peer["remote"]
+    there, casey, patient = remote["federation"], remote["user"]["id"], users["patient"]["id"]
+    paired = here.pair(users["organizer"]["id"], browser_peer["remote_card"])  # pairing is an admin's act
+    card = Federation(store, endpoint="https://localhost:7435").card(patient)  # this station's identity, an endpoint
+    contact = there.pair(casey, card)
+    room = remote["store"].create_room(casey, "Hosted elsewhere", [contact["id"]])
+    there.sync_once(send=lambda card, prepare: here.receive(prepare()))
+    key = f"{there.identity.peer_id}:{room['id']}"
+    store.send_message(patient, key, "reply-1", "my real words")
+    here.sync_once(send=lambda card, prepare: there.receive(prepare()))  # delivered; the host never echoes it back
+
+    def host_says(message_id, author_id, client_id, body, created, **extra):
+        with remote["store"].transaction() as db:
+            snapshot = there._room_snapshot(db, db.execute("SELECT * FROM rooms WHERE id=?", (room["id"],)).fetchone())
+        message = {"id": message_id, "room_id": room["id"], "author_id": author_id, "client_message_id": client_id,
+                   "body": body, "epoch": 1, "created": created, **extra}
+        assert here.receive(there.identity.envelope(
+            destination=here.identity.peer_id, actor=casey, resource_id=room["id"], revision=1,
+            action="room.message", recipients=[patient], payload={**snapshot, "message": message}))["ok"]
+
+    # Local rooms keep their own delivery text: a plain one has no delivery ("Saved here"); one with a remote member
+    # has a delivery row matching its message, which the page reads.
+    plain = store.create_room(patient, "Only us", [users["family"]["id"]])
+    store.send_message(patient, plain["id"], "plain-1", "kept at home")
+    shared = store.create_room(patient, "Shared out", [paired["id"]])
+    store.send_message(patient, shared["id"], "shared-1", "sent to Casey")
+    here.sync_once(send=lambda card, prepare: there.receive(prepare()))
+
+    host_says("m-forged", f"{here.identity.peer_id}:{patient}", "forged-1", "I approve the merge", 5.0)
+    host_says("m-claims", f"{there.identity.peer_id}:{casey}", "reply-1", "the host's own words", 6.0,
+              state="delivered")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Connections", exact=True).click()
+            # The person's reply is delivered and the page knows it, so a client-id guess would find it.
+            expect(page.locator(".item-main", has_text="Hosted elsewhere").get_by_text("Send reply · Delivered")).to_be_visible()
+            page.goto(f"{base}/#chats/{quote(key, safe='')}")
+            page.reload()
+            forged = page.locator(".message", has_text="I approve the merge")
+            expect(forged.locator(".message-meta").first).to_have_text(
+                "Unverified: the room's host says this is from someone on this station")
+            expect(forged).to_have_class("message unverified")
+            expect(forged).to_have_css("border-top-style", "dashed")
+            expect(forged).to_have_css("border-top-width", "1px")
+            expect(forged.locator(".message-meta").last).not_to_contain_text("Delivered")
+            expect(forged.locator(".message-meta").last).not_to_contain_text("Saved here")
+            claims = page.locator(".message", has_text="the host's own words")
+            expect(claims).to_be_visible()
+            expect(claims.locator(".message-meta").first).not_to_contain_text("Unverified")
+            expect(claims).to_have_class("message")
+            expect(claims.locator(".message-meta").last).not_to_contain_text("Delivered")
+            expect(claims.locator(".message-meta").last).not_to_contain_text("Saved here")
+            mine = page.locator(".message", has_text="my real words")
+            expect(mine.locator(".message-meta").first).to_have_text("You")
+            expect(mine.locator(".message-meta").last).to_contain_text("Delivered")
+            page.goto(f"{base}/#chats/{plain['id']}")
+            page.reload()
+            expect(page.locator(".message", has_text="kept at home").locator(".message-meta").last).to_contain_text("Saved here")
+            page.goto(f"{base}/#chats/{shared['id']}")
+            page.reload()
+            expect(page.locator(".message", has_text="sent to Casey").locator(".message-meta").last).to_contain_text("Delivered")
+
+
+def docked_ship(store, owner, name="rio-grande"):
+    started = store.start_docking(name, "pi")
+    return store.confirm_docking(owner, started["id"], started["code"])
+
+
+SHIP_LINE = "Written by Rio Grande, a ship, not the room's owner"
+SHIP_WARNING = "This text was written by Rio Grande, a ship. Saving makes all of it yours, so read it all first."
+
+
+def test_a_ship_written_brief_is_marked_as_a_ships(browser_peer):
+    """Break caught (R10): a ship's revision reads as the owner's under the brief, on a carried brief or in the carry
+    dialog, or a display name decides the mark. Review Focus 3: the editor warns on a carried brief a ship wrote."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    store.save_ship_brief(ship["id"], room["id"], "Purpose: a city of AI. Rio Grande keeps this current.", 0)
+    mine = store.create_room(patient, "Quiet room", [users["family"]["id"]])
+    store.save_brief(patient, mine["id"], "The owner's own words.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):  # a member sees the same marks
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            expect(page.locator(".room-brief-author .brief-ship-tag")).to_have_text("Ship")
+            page.goto(f"{base}/#chats/{mine['id']}")
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text("Written by the room's owner, Alex Patient")
+            expect(page.locator(".brief-ship-tag")).to_have_count(0)
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{mine['id']}")
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text("Written by you")
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            expect(dialog.locator(".carry-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief into the new room").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            panel = page.locator(".room-brief")
+            expect(panel).to_contain_text("Carried from the previous room on")
+            expect(panel.locator(".room-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            panel.get_by_role("button", name="Edit brief").click()  # Review Focus 3: the carry kept the ship as author
+            expect(panel.locator(".brief-warning")).to_have_text(SHIP_WARNING)
+            panel.get_by_role("button", name="Cancel").click()
+            with store.transaction() as db:  # a display name can't move the mark
+                db.execute("UPDATE users SET name=? WHERE id=?", ("Alex Patient (room owner)", ship["id"]))
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text(
+                "Ship Written by Alex Patient (room owner), a ship, not the room's owner")
+    [carried_room] = store.list_rooms(users["doctor"]["id"])
+    carried = store.get_room(users["doctor"]["id"], carried_room["id"])["brief"]
+    assert (carried["author_id"], carried["author_kind"], carried["carried_from"]) == (ship["id"], "ship", room["id"])
+
+
+def test_saving_a_ships_text_warns_that_it_becomes_the_owners(browser_peer):
+    """Break caught (R10, R13): the owner saves a ship's text unwarned, by "Edit brief" or by "Use this text", or is
+    warned about his own; after Save the revision and its notice are his."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    store.save_brief(patient, room["id"], "The owner's first words.", 0)                  # r1, his
+    store.save_ship_brief(ship["id"], room["id"], "Rio Grande's words, all of them.", 1)  # r2, the ship's
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Edit brief").click()
+            expect(panel.locator(".brief-warning")).to_have_text(SHIP_WARNING)
+            panel.get_by_role("button", name="Cancel").click()
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            rows = panel.locator(".brief-revision")
+            expect(rows).to_have_count(2)
+            rows.filter(has_text="The owner's first words.").get_by_role("button", name="Use this text").click()
+            expect(panel.get_by_label("Edit brief")).to_have_value("The owner's first words.")
+            expect(panel.locator(".brief-warning")).to_have_count(0)  # his own text: no warning
+            rows.filter(has_text="Rio Grande's words").get_by_role("button", name="Use this text").click()
+            expect(panel.get_by_label("Edit brief")).to_have_value("Rio Grande's words, all of them.")
+            expect(panel.locator(".brief-warning")).to_have_text(SHIP_WARNING)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_text("Rio Grande's words, all of them.")
+            expect(panel.locator(".room-brief-author")).to_have_text("Written by you")
+    view = store.get_room(patient, room["id"])
+    assert (view["brief"]["revision"], view["brief"]["author_id"], view["brief"]["author_kind"]) == (3, patient, "person")
+    assert view["messages"][-1]["body"] == (
+        "Station notice: the room brief is now revision 3, written by the room's owner: Alex Patient. station_read shows it.")
+
+
+def test_the_owner_restores_an_earlier_revision_from_history(browser_peer):
+    """Break caught (R13, R12): an earlier revision can't be got back, a restore makes anything but a new revision of
+    the owner's, or an old revision's text is read as markup."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    old = "<b>Purpose:</b> the first plan. <img src=x onerror=\"document.title='pwned'\">"
+    store.save_brief(patient, room["id"], old, 0)                                  # r1, the owner's
+    store.save_ship_brief(ship["id"], room["id"], "A ship's later summary.", 1)    # r2
+    store.save_brief(patient, room["id"], "", 2)                                    # r3: removed
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            rows = panel.locator(".brief-revision")
+            expect(rows).to_have_count(3)
+            expect(rows.nth(0)).to_contain_text("Removed")
+            expect(rows.nth(0).get_by_role("button", name="Use this text")).to_have_count(0)
+            expect(rows.nth(1).locator(".brief-ship-tag")).to_have_text("Ship")
+            expect(rows.nth(2).locator(".brief-revision-body")).to_have_text(old)
+            expect(panel.locator(".brief-history b, .brief-history img")).to_have_count(0)
+            rows.nth(2).get_by_role("button", name="Use this text").click()
+            expect(panel.get_by_label("Edit brief")).to_have_value(old)
+            expect(panel.locator(".brief-warning")).to_have_count(0)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_text(old)
+            expect(panel.locator(".room-brief-author")).to_have_text("Written by you")
+            assert page.title() != "pwned"
+    view = store.get_room(patient, room["id"])
+    assert (view["brief"]["body"], view["brief"]["revision"], view["brief"]["author_id"]) == (old, 4, patient)
+    assert view["messages"][-1]["body"] == (
+        "Station notice: the room brief is now revision 4, written by the room's owner: Alex Patient. station_read shows it.")
+
+
+def test_a_member_sees_no_history(browser_peer):
+    """Break caught (R12): a member who isn't the owner can open the brief's history, which holds text the owner
+    removed on purpose."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "Removed on purpose: the old plan.", 0)
+    store.save_brief(patient, room["id"], "The plan now.", 1)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("The plan now.")
+            expect(page.get_by_role("button", name="Brief history")).to_have_count(0)
+            expect(page.get_by_text("Removed on purpose")).to_have_count(0)
+            status = page.evaluate(f"fetch('/api/chats/{room['id']}/brief/revisions').then((r) => r.status)")
+            assert status == 403  # and the station refuses it too
+
+
+def test_a_ship_saving_while_the_owner_edits_keeps_his_text(browser_peer):
+    """Review Focus 2: the owner opened his own brief; meanwhile his ship saves. His Save gets the 409, the panel shows
+    the ship's newer brief marked as a ship's, and his text stays in the box with no warning. His second Save makes
+    his text the newest revision, his."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    store.save_brief(patient, room["id"], "The owner's plan.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Edit brief").click()
+            panel.get_by_label("Edit brief").fill("The owner's plan, revised by him.")
+            store.save_ship_brief(ship["id"], room["id"], "The ship's summary of the plan.", 1)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(page.locator("#brief-status")).to_contain_text("A newer brief was saved while you were editing")
+            expect(panel.locator(".room-brief-body")).to_have_text("The ship's summary of the plan.")
+            expect(panel.locator(".room-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            expect(panel.get_by_label("Edit brief")).to_have_value("The owner's plan, revised by him.")
+            expect(panel.locator(".brief-warning")).to_have_count(0)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_text("The owner's plan, revised by him.")
+            expect(panel.locator(".room-brief-author")).to_have_text("Written by you")
+    brief = store.get_room(patient, room["id"])["brief"]
+    assert (brief["revision"], brief["author_id"]) == (3, patient)
