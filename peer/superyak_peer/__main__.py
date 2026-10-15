@@ -213,7 +213,7 @@ def main(argv=None):
     backup_cmd.add_argument('--output', type=Path, help='One checked copy at this new path, outside the rotation; never replaces a file')
     backup_cmd.add_argument('--copy-to', default='', help='A mounted directory on another disk for the copy off the Pi; empty does nothing')
     reconcile_cmd = commands.add_parser('station-restore-reconcile', help='Trusted local: on a staged copy, take back what a restore revives (runbook step 5)')
-    reconcile_cmd.add_argument('--db', type=Path, required=True, help='The staged copy; never a file in a live data directory')
+    reconcile_cmd.add_argument('--db', type=Path, required=True, help='The staged copy (restored.sqlite3); never a file in a live data directory, nor one named peer.sqlite3')
     reconcile_cmd.add_argument('--replaced', type=Path, help='The peer.sqlite3 the restore replaces, opened read-only')
     reconcile_cmd.add_argument('--unpair', action='append', default=[], metavar='PEER', help="Unpair this peer (12-character id or full id) in the copy as the browser does; repeatable; the only way without a usable --replaced")
     reconcile_cmd.add_argument('--live-data-dir', type=Path, help='The live data directory, which is refused (make passes STATION_DATA)')
@@ -316,7 +316,8 @@ def main(argv=None):
         elif args.command == 'station-restore-reconcile':
             from .backups import ReconcileRefused, UnpairRefused, describe_reconcile, reconcile
             try:
-                report = reconcile(args.db, replaced=args.replaced, live_data_dir=args.live_data_dir, unpair=args.unpair)
+                report = reconcile(args.db, replaced=args.replaced, live_data_dir=args.live_data_dir, unpair=args.unpair,
+                                   refuse_live_name=True)
             except UnpairRefused as refused:
                 parser.exit(2, f'station-restore-reconcile: {refused}\n')
             except ReconcileRefused:

@@ -330,7 +330,11 @@ The decisions below rest on these facts, each checked on 2026-10-14.
     - It refuses a FILE in the live data dir: the directory `--live-data-dir` names (the make target passes
       `$(STATION_DATA)`), and any directory holding a `dispatch.lock`, which every directory a station has opened
       holds.
-    - It refuses a symlink, and a copy that fails `integrity_check`.
+    - It refuses a symlink, and a copy that fails `integrity_check` or has no `users` table (a 0-byte file is a valid
+      empty database; final review M5).
+    - The command (not the restore test, whose scratch copy has the name) refuses a FILE named `peer.sqlite3`: the
+      runbook always stages `restored.sqlite3`, and the live file and the original runbook step 4 sets aside both
+      have that name, so the set-aside original is never rewritten (final review I1).
     - **An older copy.** A copy taken before a later migration lacks some tables or columns. A step whose table or
       column the staged copy doesn't have is skipped and named in the report: migrations only add, empty or at a
       default that grants nothing, so there is nothing there to take back. A missing table or column is never an
@@ -445,8 +449,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
   five existing unit files are not edited.
 - **R17.** `make station-backup [OUTPUT=…]`, `make station-restore-test [BACKUP=…]`, `make station-alerts` and
   `make station-restore-reconcile DB=… [REPLACED=…]` run the same commands by hand.
-- **R18.** `station-restore-reconcile` works as S16 says. It refuses the live data dir, symlinks and a copy that fails
-  its check, and applies only changes that take access away, in one transaction. It prints counts, and the usernames,
+- **R18.** `station-restore-reconcile` works as S16 says. It refuses the live data dir, symlinks, a FILE named
+  `peer.sqlite3`, a copy without `users` and a copy that fails its check, and applies only changes that take access
+  away, in one transaction. It prints counts, and the usernames,
   short ids and titles S16 names under the data-not-instructions header, never hashes, keys or tokens. With a usable
   replaced file it takes back the keys, memberships and roles taken away there, and unpairs the peers unpaired there
   (a peer the replaced file lacks is reported, not unpaired); without one, or with one that fails its check, it
@@ -470,7 +475,7 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 | restore test | 24 | `station-restore-reconcile` failed on the scratch copy | "the restore's reconcile step failed" |
 | restore test | 1 | Anything else | "see the log" |
 | alert | 2 | A run outside systemd (no `SERVICE_RESULT` or `--monitor` variables), or an invalid unit | Nothing queued; a usage message |
-| reconcile | 1 | A refused FILE (live data dir, symlink, failed check) or any error during the transaction; a missing table or column is skipped and named, never an error | The staged copy is unchanged; go on in the runbook only after exit 0 |
+| reconcile | 1 | A refused FILE (live data dir, symlink, named `peer.sqlite3`, no `users` table, failed check) or any error during the transaction; a missing table or column is skipped and named, never an error | The staged copy is unchanged; go on in the runbook only after exit 0 |
 
 - **Every failing timer run** fails its unit. `OnFailure=` then queues the reason that matches the exit status, or
   S11's words for a systemd result.

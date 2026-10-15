@@ -723,11 +723,29 @@ def _not_this_station(db, old):
     return None
 
 
-def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=time.time):
+LIVE_NAME = 'peer.sqlite3'
+
+
+def _refuse_live_name(db_path):
+    """Final review I1: the live file, the original runbook step 4 sets aside, a rollback's restored-live and a stray
+    are all peer.sqlite3, while the runbook always stages restored.sqlite3. A slip at step 5 (the original as DB=, or
+    DB= and REPLACED= swapped with equal sequences) would otherwise rewrite the rollback target with exit 0 and leave
+    the staged copy unreconciled for step 6."""
+    if db_path.name == LIVE_NAME:
+        raise ReconcileRefused(f'Refused: --db is named {LIVE_NAME}, a live-shaped name: the live file and the original '
+                               'runbook step 4 set aside both have it. DB= is the staged restored.sqlite3 (runbook step 5); '
+                               'are DB= and REPLACED= swapped? Refusing so the set-aside original is never rewritten.')
+
+
+def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=time.time, refuse_live_name=False):
     """station-restore-reconcile (S16): on a staged copy, take back what a restore revives. Every step only takes access
-    away, all in one transaction: if any step fails it rolls back and the copy is unchanged. Returns the report."""
+    away, all in one transaction: if any step fails it rolls back and the copy is unchanged. Returns the report.
+    refuse_live_name: the CLI sets it, so a DB named peer.sqlite3 is refused (final review I1); the restore test's
+    scratch copy has that name and leaves it off."""
     db_path = Path(db_path).absolute()
     _refuse(db_path, live_data_dir)
+    if refuse_live_name:
+        _refuse_live_name(db_path)
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],
@@ -737,17 +755,23 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     try:
         if not _check(db, 'integrity_check'):
             raise ReconcileRefused('Refused: the copy failed its integrity check.')
-        # Plan review M2: the likeliest slips at runbook step 5. The live file always holds the copy's history and more,
-        # so its events sequence is never lower; a lower one means DB= and REPLACED= were swapped.
+        if not _has(db, 'users'):  # final review M5: a 0-byte file is a valid empty database; step 6 must not install it
+            raise ReconcileRefused('Refused: the copy has no users table, so it is not a station database (an empty file '
+                                   'is a valid empty one). Stage it again from chosen.sqlite3 (runbook step 5).')
+        # Plan review M2: the likeliest slips at runbook step 5.
         if old is not None and os.path.samefile(Path(replaced).absolute(), db_path):
             raise ReconcileRefused('Refused: --replaced is the staged copy itself. REPLACED= is the peer.sqlite3 set aside in runbook step 4.')
-        if old is not None and _has(old, 'events') and _has(db, 'events') and _sequence(old, 'events') < _sequence(db, 'events'):
-            raise ReconcileRefused('Refused: the replaced file is older than the staged copy. Are DB= and REPLACED= swapped? '
-                                   'DB= is the staged restored.sqlite3; REPLACED= is the peer.sqlite3 set aside in runbook step 4.')
         why = _not_this_station(db, old) if old is not None else None
         if why:  # review I1: compared, it would take back nothing and revoke no key; fail closed, as for one that fails its check
             old.close()
             old, report['replaced'] = None, f'treated as absent ({why})'
+        # The live file always holds the copy's history and more, so its events sequence is never lower; a lower one
+        # means DB= and REPLACED= were swapped. Final review M1: only a replaced file that is this station's is checked.
+        # One treated as absent left the copy's sequences 1,000,000 higher, so a second run (UNPAIR=) would read as
+        # swapped when it isn't. A real swap names the set-aside peer.sqlite3 as DB=, which the CLI refuses by name.
+        if old is not None and _has(old, 'events') and _has(db, 'events') and _sequence(old, 'events') < _sequence(db, 'events'):
+            raise ReconcileRefused('Refused: the replaced file is older than the staged copy. Are DB= and REPLACED= swapped? '
+                                   'DB= is the staged restored.sqlite3; REPLACED= is the peer.sqlite3 set aside in runbook step 4.')
         named = _resolve_peers(db, list(unpair))
         db.execute('BEGIN IMMEDIATE')
         try:
@@ -845,10 +869,23 @@ def server_command(scratch, port):
     return [sys.executable, '-I', '-m', 'superyak_peer', 'serve', '--data-dir', str(scratch), '--host', '127.0.0.1', '--port', str(port)]
 
 
-def _free_port():
+def _pick_port():
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
         return probe.getsockname()[1]
+
+
+LIVE_PORTS = (7435, 7436)  # serve's and the door's --port defaults: the lighthouse and the door
+PORT_TRIES = 20
+
+
+def _free_port():
+    """Final review M8: a free loopback port that is never the live station's, whatever the kernel's ephemeral range."""
+    for _ in range(PORT_TRIES):
+        port = _pick_port()
+        if port not in LIVE_PORTS:
+            return port
+    raise BackupError(22, 'the restored station did not start: no free loopback port other than 7435 and 7436')
 
 
 def _answers(port):
@@ -876,9 +913,9 @@ def _start(scratch):
     """S7 steps 5-6: serve the scratch copy on a free loopback port until /api/health answers 200, within 60 s. A server
     that exits during start-up (its port taken in the meantime) is started again, up to 3 times."""
     for _ in range(START_TRIES):
-        port = _free_port()
-        process = subprocess.Popen(server_command(scratch, port), cwd=scratch, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        try:
+        port, process = _free_port(), None
+        try:  # final review M7: Popen inside the try, so a signal just after it can't orphan the server
+            process = subprocess.Popen(server_command(scratch, port), cwd=scratch, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             deadline = time.monotonic() + START_WAIT
             while process.poll() is None and time.monotonic() < deadline:
                 if _answers(port):

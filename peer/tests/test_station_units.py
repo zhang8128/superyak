@@ -149,3 +149,47 @@ def test_no_exit_code_is_masked(name):
     forbidden = {'SuccessExitStatus', 'ExecStartPre', 'ExecStartPost', 'Restart', 'RestartForceExitStatus'}
     assert not forbidden & set(service), name
     assert service['ExecStart'].startswith('%h/'), name
+
+
+MAKE_VARIABLES = ('DB', 'REPLACED', 'UNPAIR', 'OUTPUT', 'BACKUP', 'STATION_DATA', 'STATION_BACKUPS', 'MAKEFLAGS', 'MFLAGS',
+                  'MAKELEVEL')
+CLI = ['uv', 'run', '--locked', '--project', 'peer', 'python', '-m', 'superyak_peer']
+
+
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
+def test_by_hand_targets_run_the_same_commands(tmp_path):
+    """R17 (final review M6): make -n of station-backup [OUTPUT=], station-restore-test [BACKUP=],
+    station-restore-reconcile DB= [REPLACED=] [UNPAIR=] and station-alerts. Paths with a space stay one argument, the
+    reconcile always gets --live-data-dir "$(STATION_DATA)", and each UNPAIR= id is its own --unpair. Without DB= the
+    reconcile stops at its usage line before uv runs. Mutations: drop --live-data-dir; drop the quotes around $(DB);
+    drop the UNPAIR expansion."""
+    import shlex
+    root = tmp_path / 'a b'
+    data, rotation = root / 'lighthouse', root / 'backups' / 'station'
+    env = {name: value for name, value in os.environ.items() if name not in MAKE_VARIABLES}
+
+    def make(*args, dry=True):
+        return subprocess.run(['make', '--no-print-directory', *(['-n'] if dry else []), *args, f'STATION_DATA={data}',
+                               f'STATION_BACKUPS={rotation}'], cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
+
+    def commands(*args):
+        made = make(*args)
+        assert made.returncode == 0, made.stderr
+        return [shlex.split(line) for line in made.stdout.splitlines()]
+
+    staged, replaced, output, chosen = (root / name for name in ('restored.sqlite3', 'peer.sqlite3', 'out.sqlite3', 'chosen.sqlite3'))
+    assert commands('station-backup') == [CLI + ['station-backup', '--data-dir', str(data), '--backup-dir', str(rotation)]]
+    assert commands('station-backup', f'OUTPUT={output}') == [
+        CLI + ['station-backup', '--data-dir', str(data), '--backup-dir', str(rotation), '--output', str(output)]]
+    assert commands('station-restore-test') == [CLI + ['station-restore-test', '--backup-dir', str(rotation)]]
+    assert commands('station-restore-test', f'BACKUP={chosen}') == [
+        CLI + ['station-restore-test', '--backup-dir', str(rotation), '--backup', str(chosen)]]
+    assert commands('station-alerts') == [CLI + ['station-alerts', '--data-dir', str(data)]]
+    reconcile = CLI + ['station-restore-reconcile', '--db', str(staged), '--live-data-dir', str(data)]
+    usage = commands('station-restore-reconcile', f'DB={staged}')[0]
+    assert usage[:3] == ['test', '-n', str(staged)]
+    assert commands('station-restore-reconcile', f'DB={staged}')[1:] == [reconcile]
+    assert commands('station-restore-reconcile', f'DB={staged}', f'REPLACED={replaced}', 'UNPAIR=abcdef012345 ' + 'ab' * 32)[1:] == [
+        reconcile + ['--replaced', str(replaced), '--unpair', 'abcdef012345', '--unpair', 'ab' * 32]]
+    refused = make('station-restore-reconcile', dry=False)
+    assert refused.returncode == 2 and refused.stdout.startswith('Usage: make station-restore-reconcile DB=')

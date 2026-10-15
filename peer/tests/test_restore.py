@@ -1,6 +1,7 @@
 """The restore (docs/superpowers/specs/2026-10-14-station-backups-alerts-design.md, S6, S7, S16; R7-R9, R18). Every
 test works in tmp_path; the restore test boots real loopback servers and stops every one of them."""
 from contextlib import closing
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import pytest
@@ -248,6 +250,9 @@ def test_reconcile_takes_back_what_the_restore_revived(tmp_path, capsys):
                for line in lines)
     for secret in [key, token_hash(key), invitation['token'], token_hash(invitation['token']), session['token'], *hashes]:
         assert secret not in out
+    # Final review M4: today's schema against today's schema skips and leaves uncompared nothing, so a future rename
+    # (against "migrations only add") can't silently drop a take-back step.
+    assert not any(line.startswith(('Skipped', 'Not compared')) for line in lines), out
 
 
 def test_reconcile_takes_back_every_other_step(tmp_path, capsys):
@@ -528,6 +533,103 @@ def test_reconcile_refuses_a_hard_link_and_a_same_or_older_replaced_file(tmp_pat
         code, out, err = reconcile(capsys, *args)
         assert code == 1 and err.startswith('Refused') and out == '', (args, err)
         assert touched.read_bytes() == before
+
+
+def set_aside(store, copy):
+    """Runbook step 4: the live database moved into the restore's directory as peer.sqlite3, beside the staged copy."""
+    original = copy.parent / 'peer.sqlite3'
+    shutil.copyfile(store.db_path, original)
+    return original
+
+
+def files_beside(*paths):
+    """Each file's bytes, and every journal or WAL beside it, so a test can show nothing was written."""
+    return {str(path): path.read_bytes() for path in paths} | {
+        str(side): side.read_bytes() for path in paths for end in ('-journal', '-wal', '-shm')
+        if (side := Path(f'{path}{end}')).exists()}
+
+
+def test_reconcile_refuses_the_set_aside_original_as_db(tmp_path, capsys):
+    """Final review I1: a slip at runbook step 5 that names the set-aside original as DB= is refused, so that file (the
+    rollback target) is never rewritten and step 6 never installs a staged copy left unreconciled. (a) The original as
+    DB= without REPLACED=. (b) DB= and REPLACED= swapped with no event since the copy, so the events sequences are equal
+    and the swap check can't see it. Each exits 1 and says why, and neither file changes by a byte. Mutation: drop the
+    name check (both exit 0 and rewrite the original: its sessions deleted, (a) its owned keys revoked)."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    docked(store, andy['id'], 'serenity')                                        # an owned key (a) would revoke
+    store.login('andy', 'long-password-andy', 'test')                           # a session either would delete
+    copy = staged(tmp_path, store)
+    original = set_aside(store, copy)
+    assert sequences(original) == sequences(copy)                               # (b): no event since the copy
+    for args in (['--db', original, '--live-data-dir', store.data_dir],
+                 ['--db', original, '--replaced', copy, '--live-data-dir', store.data_dir]):
+        before = files_beside(original, copy)
+        code, out, err = reconcile(capsys, *args)
+        assert code == 1 and out == '' and err.startswith('Refused'), (args, err)
+        assert 'peer.sqlite3' in err and 'restored.sqlite3' in err and 'never rewritten' in err, err
+        assert files_beside(original, copy) == before
+
+
+REPO = Path(__file__).resolve().parents[2]
+MAKE_VARIABLES = ('DB', 'REPLACED', 'UNPAIR', 'OUTPUT', 'BACKUP', 'STATION_DATA', 'STATION_BACKUPS', 'MAKEFLAGS', 'MFLAGS',
+                  'MAKELEVEL')
+
+
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make') or not shutil.which('uv'),
+                    reason='needs the parent repository Makefile, make and uv')
+def test_make_station_restore_reconcile_refuses_the_set_aside_original(tmp_path):
+    """Final review I1, through the make target and the CLI as Andy runs them: make station-restore-reconcile
+    DB="$ASIDE/peer.sqlite3", with and without REPLACED=, exits non-zero, says why, and changes no byte."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    store.login('andy', 'long-password-andy', 'test')
+    copy = staged(tmp_path, store)
+    original = set_aside(store, copy)
+    env = {name: value for name, value in os.environ.items() if name not in MAKE_VARIABLES}
+    for extra in ([], [f'REPLACED={copy}']):
+        before = files_beside(original, copy)
+        made = subprocess.run(['make', '--no-print-directory', 'station-restore-reconcile', f'DB={original}', *extra,
+                               f'STATION_DATA={store.data_dir}'], cwd=REPO, env=env, capture_output=True, text=True, timeout=300)
+        assert made.returncode != 0 and 'Refused' in made.stderr and 'never rewritten' in made.stderr, made.stderr
+        assert files_beside(original, copy) == before
+
+
+def test_a_second_unpair_run_is_not_called_swapped_after_an_absent_replaced_file(tmp_path, capsys):
+    """Final review M1: the first run treated the replaced file as absent because it lacks an account the copy has, and
+    so raised the copy's sequences by 1,000,000. A second run with the same REPLACED= and an UNPAIR= (runbook step 5)
+    treats it as absent again and unpairs the peer, instead of refusing it as swapped. Mutation: the swap check before
+    the absent decision ("Are DB= and REPLACED= swapped?", exit 1)."""
+    store, peers = peer_station(tmp_path)
+    copy = staged(tmp_path, store)
+    replaced = set_aside(store, copy)
+    with closing(sqlite3.connect(replaced)) as db:                              # damaged: an account the copy has is gone
+        db.execute("DELETE FROM users WHERE username='andy'")
+        db.commit()
+    absent = 'The replaced file was treated as absent (it lacks accounts or ship keys the copy has'
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced)
+    assert code == 0 and absent in out, err
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced, '--unpair', peers['cut'][:12])
+    assert code == 0, err
+    assert absent in out and peer_rows(copy)[0][peers['cut']] == 0
+
+
+def test_reconcile_refuses_a_copy_that_is_not_a_station_database(tmp_path, capsys):
+    """Final review M5: a staged copy without a users table is refused before any write, so step 6 never installs an
+    empty station: a 0-byte file (a valid empty database, which a bad install at step 5 leaves) and a database of
+    something else. Exit 1, and the file is byte for byte unchanged. Mutation: drop the check (exit 0, "Taken back: .")."""
+    aside = tmp_path / 'backups' / 'replaced-20261017-120000'
+    aside.mkdir(parents=True, mode=0o700)
+    empty, other = aside / 'restored.sqlite3', aside / 'other.sqlite3'
+    empty.write_bytes(b'')
+    with closing(sqlite3.connect(other)) as db:
+        db.execute('CREATE TABLE notes(body TEXT)')
+        db.commit()
+    for path in (empty, other):
+        before = files_beside(path)
+        code, out, err = reconcile(capsys, '--db', path)
+        assert code == 1 and out == '' and err.startswith('Refused') and 'users' in err, (path, err)
+        assert files_beside(path) == before
 
 
 def test_reconcile_closes_breakouts_closed_since_the_copy(tmp_path, capsys):
@@ -829,3 +931,151 @@ def test_a_stopped_restore_test_leaves_no_server_and_no_scratch(tmp_path, monkey
     assert restore_test('--backup-dir', rotation) == 128 + stop
     assert list(run.iterdir()) == []
     assert started and all(process.poll() is not None for process in started)
+
+
+def test_a_signal_just_after_the_server_starts_still_stops_it(tmp_path, monkeypatch):
+    """Final review M7: a signal that lands just after Popen returns still stops and reaps the server. Here a trace
+    function raises SystemExit, as the restore test's SIGTERM handler does, at the first line _start runs after Popen.
+    Mutation: Popen before the try (the server is orphaned)."""
+    started = record_processes(monkeypatch)
+    monkeypatch.setattr(backups, 'server_command', lambda scratch, port: [sys.executable, '-c', 'import time; time.sleep(60)'])
+    fired = []
+
+    def local(frame, event, arg):
+        if event == 'line' and started and not fired:
+            fired.append(frame.f_lineno)
+            raise SystemExit(128 + signal.SIGTERM)
+        return local
+
+    def trace(frame, event, arg):
+        return local if frame.f_code is backups._start.__code__ else None
+
+    previous = sys.gettrace()
+    sys.settrace(trace)
+    try:
+        with pytest.raises(SystemExit):
+            backups._start(tmp_path)
+    finally:
+        sys.settrace(previous)
+        orphans = [process for process in started if process.poll() is None]
+        for process in orphans:
+            process.kill()
+            process.wait()
+    assert fired and len(started) == 1 and orphans == []
+
+
+def test_the_restore_test_never_serves_on_the_live_ports(monkeypatch):
+    """Final review M8: the lighthouse's 7435 and the door's 7436 are refused whatever the kernel's ephemeral range, so
+    the picker is asked again; a picker that only gives those stops with exit 22 rather than spinning. Mutation: return
+    the first port picked."""
+    picked = iter([7435, 7436, 7435, 41234])
+    monkeypatch.setattr(backups, '_pick_port', lambda: next(picked))
+    assert backups._free_port() == 41234
+    monkeypatch.setattr(backups, '_pick_port', lambda: 7436)
+    with pytest.raises(backups.BackupError) as failed:
+        backups._free_port()
+    assert failed.value.code == 22
+
+
+def test_the_restore_test_copies_under_the_rotation_lock(tmp_path, monkeypatch):
+    """R8 (final review): the restore test reads the copy under the rotation lock, so pruning can't remove it mid-copy.
+    While it copies, another open of the rotation's .lock can't take it. Mutation: nullcontext() for rotation_lock in
+    restore_test."""
+    runtime_dir(tmp_path, monkeypatch)
+    store, rotation = small_station(tmp_path)
+    held = []
+
+    def probe(source, target):
+        fd = os.open(rotation / '.lock', os.O_RDWR | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held.append(False)
+        except BlockingIOError:
+            held.append(True)
+        finally:
+            os.close(fd)
+        return False                                                             # then stop: exit 21
+
+    monkeypatch.setattr(backups, '_restored_copy', probe)
+    with pytest.raises(backups.BackupError) as failed:
+        backups.restore_test(rotation)
+    assert failed.value.code == 21 and held == [True]
+
+
+RUNBOOK = REPO / 'docs' / 'station-restore.md'
+SYSTEMCTL = '''#!/bin/sh
+echo "$*" >> "$LOG"
+case "$*" in
+  "--user list-units --all --plain --no-legend superyak-ship-*") cat "$UNITS" ;;
+  "--user is-enabled "*) awk -v unit="$3" '$1 == unit {print $2}' "$STATES" ;;
+  "--user is-active "*) awk -v unit="$3" '$1 == unit {print $3}' "$STATES" ;;
+esac
+'''
+# Each watcher's state before the restore: (is-enabled, is-active, list-units' SUB)
+WATCHERS = {'superyak-ship-running.service': ('enabled', 'active', 'running'),
+            'superyak-ship-byhand.service': ('disabled', 'active', 'running'),          # started by hand, never enabled
+            'superyak-ship-crashed.service': ('enabled', 'activating', 'auto-restart'),  # Restart=always brings it back
+            'superyak-ship-failed.service': ('enabled', 'failed', 'failed'),
+            'superyak-ship-stopped.service': ('disabled', 'inactive', 'dead')}          # Andy stopped it
+
+
+def runbook_block(step):
+    """The bash lines of runbook step `step`, as Andy pastes them."""
+    lines = RUNBOOK.read_text().splitlines()
+    start = next(number for number, line in enumerate(lines) if line.startswith(f'{step}. **'))
+    begin = next(number for number in range(start, len(lines)) if lines[number].strip() == '```bash')
+    end = next(number for number in range(begin + 1, len(lines)) if lines[number].strip() == '```')
+    return textwrap.dedent('\n'.join(lines[begin + 1:end]))
+
+
+def run_runbook(tmp_path, step, aside):
+    """Runbook step `step` in bash, with systemctl and make shimmed on PATH and HOME in tmp_path: the real ones never run.
+    Returns (stdout, the systemctl and make calls)."""
+    shim, home, log = tmp_path / 'bin', tmp_path / 'home', tmp_path / 'calls.log'
+    if not shim.exists():
+        shim.mkdir()
+        home.mkdir()
+        (shim / 'systemctl').write_text(SYSTEMCTL)
+        (shim / 'make').write_text(f'#!/bin/sh\necho "make $*" >> "{log}"\n')
+        for tool in ('systemctl', 'make'):
+            (shim / tool).chmod(0o755)
+        (tmp_path / 'units.txt').write_text(''.join(f'{unit} loaded {active} {sub} Superyak watcher\n'
+                                                    for unit, (_, active, sub) in WATCHERS.items()))
+        (tmp_path / 'states.txt').write_text(''.join(f'{unit} {enabled} {active}\n'
+                                                     for unit, (enabled, active, _) in WATCHERS.items()))
+    log.unlink(missing_ok=True)
+    env = {'PATH': f'{shim}:{os.environ["PATH"]}', 'HOME': str(home), 'ASIDE': str(aside), 'LOG': str(log),
+           'UNITS': str(tmp_path / 'units.txt'), 'STATES': str(tmp_path / 'states.txt')}
+    ran = subprocess.run(['bash', '-c', runbook_block(step)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+    return ran.stdout, log.read_text().splitlines() if log.exists() else []
+
+
+def test_runbook_step_3_does_nothing_without_aside(tmp_path):
+    """Final review M2: step 3 with ASIDE unset refuses visibly, as steps 4 and 10.2 do, and stops nothing: before, it
+    stopped the ship, odo and wormhole but left every project watcher running, and step 8 never saw them."""
+    out, calls = run_runbook(tmp_path, 3, '')
+    assert 'NOT stopped: ASIDE is not set' in out
+    assert calls == []
+
+
+def test_runbook_steps_3_and_8_put_each_watcher_back_as_it_was(tmp_path):
+    """Final review M3: step 3 stops and disables every loaded watcher, a crashed one in auto-restart included, and saves
+    whether each was enabled and running. Step 8 enables again only those that were enabled and starts only those that
+    were running, so a watcher Andy had stopped stays stopped. A second step 3 keeps the first list. Mutation: step 8
+    enabling and starting every saved watcher."""
+    aside = tmp_path / 'replaced-20261017-120000'
+    aside.mkdir(mode=0o700)
+    out, calls = run_runbook(tmp_path, 3, aside)
+    for unit in WATCHERS:
+        assert f'--user disable --now {unit}' in calls
+    saved = (aside / 'watchers.txt').read_text()
+    assert all(unit in saved for unit in WATCHERS)
+    (tmp_path / 'states.txt').write_text(''.join(f'{unit} disabled inactive\n' for unit in WATCHERS))   # as step 3 left them
+    run_runbook(tmp_path, 3, aside)
+    assert (aside / 'watchers.txt').read_text() == saved
+    out, calls = run_runbook(tmp_path, 8, aside)
+    watchers = [call for call in calls if 'superyak-ship-' in call and not call.startswith('--user is-active')]
+    assert watchers == ['--user enable superyak-ship-running.service', '--user enable superyak-ship-crashed.service',
+                        '--user enable superyak-ship-failed.service', '--user start superyak-ship-running.service',
+                        '--user start superyak-ship-byhand.service', '--user start superyak-ship-crashed.service']
+    assert 'make station-rooms' in calls

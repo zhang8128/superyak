@@ -48,17 +48,22 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
 2. **Test it:** `make station-restore-test BACKUP="$ASIDE/chosen.sqlite3"`. It must pass. If it fails, that copy is no
    good: go back to step 1 and choose the next older one. Step 1 then makes a new directory, which is fine, since nothing
    has been moved yet; the old one keeps only the failed `chosen.sqlite3`, and setting `ASIDE` again finds the new one.
-3. **Stop everything.** The first line saves the project ships' watchers (`superyak-ship-…`) in `$ASIDE/watchers.txt`
-   (empty when there are none); step 8 starts them again. Running these lines again, after a restart or from steps 6
-   and 10, keeps the list from the first run. The ship, odo, wormhole, the listed watchers and both timers are
-   disabled as well as stopped, so a restart starts none of them before step 8 does. The lighthouse and the door stay
-   enabled: step 8 starts them first anyway.
+3. **Stop everything.** The lines do nothing, and print why, when `ASIDE` is not set: set it again (see the top) and
+   run them again. Their first line saves every project ship's watcher (`superyak-ship-…`) that systemd has loaded,
+   running, crashed or stopped, in `$ASIDE/watchers.txt` (empty when there are none), each with whether it was enabled
+   and whether it was running; step 8 puts each back as it was, so a watcher you had stopped stays stopped. Running these
+   lines again, after a restart or from steps 6 and 10, keeps the list from the first run. The ship, odo, wormhole, the
+   listed watchers and both timers are disabled as well as stopped, so a restart starts none of them before step 8
+   does. The lighthouse and the door stay enabled: step 8 starts them first anyway.
    ```bash
-   test -e "$ASIDE/watchers.txt" || { systemctl --user list-units --all --plain --no-legend 'superyak-ship-*' > "$ASIDE/watchers.new" && mv "$ASIDE/watchers.new" "$ASIDE/watchers.txt"; }; cat "$ASIDE/watchers.txt"
-   systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer   # a restart must not run a catch-up backup on a half-restored station
-   for unit in superyak-ship superyak-odo superyak-wormhole $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user disable --now "$unit"; done
-   systemctl --user stop superyak-backup.service superyak-door superyak-odo superyak-wormhole superyak-ship superyak-lighthouse
-   systemctl --user list-units 'superyak-*'
+   if [ ! -d "$ASIDE" ]; then echo 'NOT stopped: ASIDE is not set; set it again (see the top), then run these lines again'
+   else
+     test -e "$ASIDE/watchers.txt" || { units=$(systemctl --user list-units --all --plain --no-legend 'superyak-ship-*') && for unit in $(printf '%s\n' "$units" | awk '{print $1}'); do echo "$unit enabled=$(systemctl --user is-enabled "$unit") active=$(systemctl --user is-active "$unit")"; done > "$ASIDE/watchers.new" && mv "$ASIDE/watchers.new" "$ASIDE/watchers.txt"; }; cat "$ASIDE/watchers.txt"
+     systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer   # a restart must not run a catch-up backup on a half-restored station
+     for unit in superyak-ship superyak-odo superyak-wormhole $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user disable --now "$unit"; done
+     systemctl --user stop superyak-backup.service superyak-door superyak-odo superyak-wormhole superyak-ship superyak-lighthouse
+     systemctl --user list-units 'superyak-*'
+   fi
    ```
    Stop any unit the last list still shows as active: `systemctl --user stop <unit>`.
 4. **Set the current state aside.** Move the station's database and its sidecars into `$ASIDE`, as one set. The lines
@@ -86,8 +91,10 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    make station-restore-reconcile DB="$ASIDE/restored.sqlite3" REPLACED="$ASIDE/peer.sqlite3"
    ```
    Leave out `REPLACED=` only when the old file won't open; then every docked ship's keys are revoked, and those
-   machines dock again, and no peer is unpaired (see the peers paragraph below). It refuses a swapped `DB=` and
-   `REPLACED=`, the same file twice, and a hard link. Read its report. Go on only when it exits 0. If it says the replaced file was treated as absent
+   machines dock again, and no peer is unpaired (see the peers paragraph below). It refuses a `DB=` named
+   `peer.sqlite3` (the staged copy is always `restored.sqlite3`, so that is the set-aside original, or `DB=` and
+   `REPLACED=` swapped), a staged copy that isn't a station database, a swapped `DB=` and `REPLACED=`, the same file
+   twice, and a hard link. Read its report. Go on only when it exits 0. If it says the replaced file was treated as absent
    (there is no such file), `REPLACED=` is wrong: stop, set `ASIDE` again as at the top, then run both lines (the first stages the copy again). Don't go on, and don't
    just run the reconcile again on the same file: the first run raised its sequences and a second one is refused as "swapped". If it
    says that for another reason (for example "a hot journal beside it"), the room and space members, admins, law layers
@@ -161,16 +168,18 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
 8. **Start the lighthouse and the door.** Set the law layers the report listed as they should be, in the browser, and
    check by hand the members, admins and law layers step 5 said weren't compared (not peers: those were done in step 5). Then
    enable and start ship and odo, run `make station-rooms` and check the `bridged` column before enabling and starting
-   wormhole: if a room shows bridged that should not be, run `make station-unbridge ID=<short id>`. Enable and start
-   again the watchers step 3 saved. Check each with `is-active`, then enable both timers again.
+   wormhole: if a room shows bridged that should not be, run `make station-unbridge ID=<short id>`. Put the watchers
+   step 3 saved back as they were: enable again those that were enabled, and start again those that were running (a
+   crashed one restarting counts as running). Check each started unit with `is-active`, then enable both timers again.
    ```bash
    systemctl --user start superyak-lighthouse superyak-door
    # now the law layers, in the browser
    for unit in superyak-ship superyak-odo; do systemctl --user enable --now "$unit"; done
    make station-rooms                                   # check the bridged column first
    systemctl --user enable --now superyak-wormhole
-   for unit in $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable --now "$unit"; done   # the watchers step 3 saved
-   for unit in superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(awk '{print $1}' "$ASIDE/watchers.txt"); do printf '%s ' "$unit"; systemctl --user is-active "$unit"; done
+   for unit in $(awk '$2 == "enabled=enabled" {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done   # the watchers step 3 saved as enabled
+   for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done   # and those it saved as running
+   for unit in superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do printf '%s ' "$unit"; systemctl --user is-active "$unit"; done
    systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer   # as make station-units does
    ```
 9. **Say in the room** what was restored and from when. Everything said after the copy's time is gone.
@@ -205,7 +214,7 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        ```
        If a `peer.sqlite3` file is in the data directory: when 10.2 ran, it is a stray, so set it aside with step 6's
        stray-case lines and run 10.3 again; when 10.2 didn't run, run 10.2 first.
-    4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo,
-       wormhole and the watchers step 3 saved, and enable the timers again. Step 8's checks that act on step 5's report
-       (the law layers, the members and admins, the `bridged` column) are for a restored copy and don't apply to a
-       rollback.
+    4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and
+       wormhole, put the watchers step 3 saved back as they were, and enable the timers again. Step 8's checks that act
+       on step 5's report (the law layers, the members and admins, the `bridged` column) are for a restored copy and
+       don't apply to a rollback.

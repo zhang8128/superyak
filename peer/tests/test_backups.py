@@ -12,6 +12,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import threading
 import time
 import pytest
 from superyak_peer import backups
@@ -486,3 +487,39 @@ def test_a_failed_folder_sync_after_the_link_does_not_blame_hard_links(tmp_path,
     message = capsys.readouterr().err
     assert 'hard link' not in message and 'is in place' in message and 'sync' in message
     assert ok(target) and not list(tmp_path.glob('.peer-*'))
+
+
+def test_a_second_backup_waits_for_the_rotation_lock(tmp_path):
+    """S2, one run at a time (final review R8): while another process holds the rotation's .lock, a backup writes
+    nothing and waits; once the lock is released it finishes. Mutation: nullcontext() for rotation_lock in run_backup."""
+    store, rotation = station(tmp_path)
+    rotation.mkdir(parents=True, mode=0o700)
+    holder = subprocess.Popen([sys.executable, '-c', HOLD, str(rotation / '.lock')], stdout=subprocess.PIPE, text=True)
+    result = {}
+    try:
+        assert holder.stdout.readline().strip() == 'held'
+        worker = threading.Thread(target=lambda: result.update(written=backups.run_backup(store.data_dir, rotation)), daemon=True)
+        worker.start()
+        worker.join(1.0)
+        assert worker.is_alive() and backups.rotation(rotation) == [] and not list(rotation.glob('.peer-*'))
+    finally:
+        holder.kill()
+        holder.wait()
+    worker.join(30)
+    assert not worker.is_alive() and backups.rotation(rotation) == [result['written']]
+
+
+def test_the_copy_and_its_folder_are_fsynced(tmp_path, monkeypatch):
+    """R2 (final review): the temporary file is fsynced before the rename, and the rotation folder after it, once the
+    copy has its final name. Mutations: drop _fsync(tmp); drop _fsync(final.parent); sync the folder before the rename."""
+    store, rotation = station(tmp_path)
+    calls, real_fsync = [], backups._fsync
+
+    def record(path):
+        calls.append((Path(path), [copy.name for copy in backups.rotation(rotation)]))
+        return real_fsync(path)
+
+    monkeypatch.setattr(backups, '_fsync', record)
+    written = backups.run_backup(store.data_dir, rotation)
+    stamp = backups.COPY_NAME.fullmatch(written.name)[1]
+    assert calls == [(rotation / f'.peer-{stamp}-{os.getpid()}.tmp', []), (rotation, [written.name])]
