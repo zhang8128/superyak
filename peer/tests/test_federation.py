@@ -866,12 +866,13 @@ def test_a_hand_edited_malformed_member_cannot_break_the_room_list(two_peers):
     assert any(r['id'] == remote_id for r in b[0].list_rooms(b[1]))
 
 
-def _roster_with(a, b, room, **fields):
-    """A room.roster the origin (a) signs, with some of its room snapshot's fields replaced."""
+def _roster_with(a, b, room, action='room.roster', **fields):
+    """A room event the origin (a) signs (a roster unless `action` says otherwise), with some of its room snapshot's
+    fields replaced."""
     with a[0].transaction() as db:
         snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
     return a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
-                                  action='room.roster', recipients=[b[1]], payload={**snapshot, **fields})
+                                  action=action, recipients=[b[1]], payload={**snapshot, **fields})
 
 
 @pytest.mark.parametrize('linked', [['a', 'list'], {'a': 'dict'}, 7, 'no-colon', 'another-station', 'a-local-room',
@@ -1026,3 +1027,15 @@ def test_received_follows_each_event_and_a_restart_leaves_it(two_peers):
     reopened = Store(b[0].data_dir)
     assert _received(reopened, a[2].identity.peer_id, room['id'], b[1]) == before
     assert [r['last_activity'] for r in reopened.list_rooms(b[1]) if r['title'] == 'Steady'] == [listed['last_activity']]
+
+
+def test_a_received_message_with_a_foreign_linked_room_is_refused(two_peers):
+    """Remote room fields (section 2 review of 997ab69, S1): the rule holds for room.message too, not only rosters."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Linked message', [ca['id']])
+    deliver(a, b)
+    message = {'id': 'm-l', 'room_id': room['id'], 'author_id': a[2].identity.peer_id + ':' + a[1],
+               'client_message_id': 'l-1', 'body': 'words', 'epoch': 1, 'created': time.time()}
+    with pytest.raises(Problem, match='Invalid linked room'):
+        b[2].receive(_roster_with(a, b, room, action='room.message', message=message,
+                                  linked_room_id='f' * 64 + ':' + room['id']))

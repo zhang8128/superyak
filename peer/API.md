@@ -301,7 +301,8 @@ Creation/activity values are Unix seconds. Home and chat lists sort by
 room creation and latest message time; summaries expose no message bodies.
 A received room's activity is the origin's, but no later than when this station
 last stored an event for it; this station's queued replies count at their own
-time. Message times inside the room stay the origin's.
+time. Message times inside the room, and a received room's `created`, stay the
+origin's.
 The additive `room_activity` table preserves existing room records; rooms created
 before timestamp support have `created:0` and use their latest message time for
 activity until a new message arrives. Empty members creates a
