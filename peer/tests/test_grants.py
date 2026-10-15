@@ -311,7 +311,7 @@ def test_room_titles_show_only_to_members_and_a_replaced_room_shows_the_current_
         {'id': ops['id'], 'title': 'Ops'}, {'id': plans['id'], 'title': 'Plans', 'current': current}]
     gone = clients[0].delete(f'/api/chats/{third["id"]}/participants/{doctor["id"]}')  # M1: doctor leaves the newest room
     assert gone.status_code == 200, gone.text
-    assert listed(clients[1])[0]['rooms'][1]['current'] == {'id': third['id'], 'title': 'a room you are not in'}
+    assert listed(clients[1])[0]['rooms'][1]['current'] == {'title': 'a room you are not in'}  # no id (3b's section 2 review)
     with store.transaction() as db:  # by hand, so serenity's new owner sees the grant: added later, never in Plans itself
         db.execute('UPDATE users SET owner_id=? WHERE id=?', (family['id'], serenity['id']))
     assert listed(clients[3])[0]['rooms'] == [

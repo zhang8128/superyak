@@ -1557,6 +1557,27 @@ def test_a_room_shows_which_ship_messages_came_from_runs(browser_peer):
 
 
 
+def test_a_grantees_build_reply_is_labelled_with_the_grantee(browser_peer):
+    """G17, test 17: a reply from a grant's builder run shows "builder run for Alex Patient, via <grantee>", and a grantee
+    name written as HTML shows as text."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    room = store.create_room(users["patient"]["id"], "Ops", [ship["id"], users["doctor"]["id"]])
+    store.rename_user(users["doctor"]["id"], "<b>Dr. Morgan</b>")
+    store.make_grant(users["patient"]["id"], users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    asked = store.send_message(users["doctor"]["id"], room["id"], "a", "@serenity add notes")
+    ticket = store.issue_ticket(ship["id"], asked["id"])
+    store.send_message(ship["id"], room["id"], f"reply-{asked['id']}", "Added notes", ticket["id"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            label = page.locator(".message", has_text="Added notes").locator(".message-source")
+            expect(label).to_have_text("builder run for Alex Patient, via <b>Dr. Morgan</b>")
+            assert page.locator(".message-source b").count() == 0
+
+
 def test_a_room_labels_the_station_notice_by_id_never_by_name(browser_peer):
     """R31, the room UI: the system author's message shows as "Station" with the "station notice" label; a person
     who calls themselves "Station" gets no label."""
@@ -2952,3 +2973,188 @@ def test_a_failed_first_reload_does_not_say_no_revisions(browser_peer):
             expect(panel.locator(".room-brief-body")).to_have_text("First words.")
             expect(panel.locator(".brief-history .inline-message.error")).to_have_text("History is down")
             expect(panel.locator(".brief-history")).not_to_contain_text("No revisions yet.")
+
+
+def grant_station(browser_peer):
+    """Grants step 3's page (G20-G22): patient owns serenity, in a room with doctor whose title is HTML, and in a room
+    without doctor; doctor's display name is HTML too. (store, users, ship, room, lone)."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    store.rename_user(users["doctor"]["id"], "<img src=x onerror=alert(1)>")
+    room = store.create_room(users["patient"]["id"], "<b>City</b> of AI", [users["doctor"]["id"], ship["id"]])
+    lone = store.create_room(users["patient"]["id"], "Just me", [ship["id"]])
+    return store, users, ship, room, lone
+
+
+def fill_grant(page, person, *rooms):
+    page.get_by_label("Person").select_option(label=person)
+    page.get_by_label("Serenity").check()
+    for title in rooms:
+        page.get_by_label(title).check()
+
+
+def test_a_grant_is_made_on_the_page_held_by_its_grantee_and_revoked_after_the_ask(browser_peer):
+    """Test 20, G20-G22: the patient makes a grant, choosing from a person list without ships or himself, and sees it
+    under "Given by you"; the doctor sees it under "Held by you", with no Revoke; Revoke asks in place, revokes nothing
+    before the confirm, and then revokes with its reason. A grantee name and a room title written as HTML show as text."""
+    base = browser_peer["base_url"]
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            expect(page.get_by_role("heading", name="Grants", level=1)).to_be_visible()
+            expect(page.get_by_text("Their mentions start builder runs of your ships on your machine. A run can read your "
+                                    "repository and uses your model time, and its reply is posted in the room.")).to_be_visible()
+            assert page.get_by_label("Person").locator("option").all_inner_texts() == [
+                "Choose a person", "<img src=x onerror=alert(1)>", "Sam Family", "Taylor Organizer"]
+            expect(page.get_by_label("How long")).to_have_value("168")
+            expect(page.get_by_label("Builds a day")).to_have_value("5")
+            fill_grant(page, "<img src=x onerror=alert(1)>", "<b>City</b> of AI")
+            expect(page.get_by_label("Just me")).to_have_count(0)  # it doesn't hold the doctor
+            expect(page.get_by_label("These rooms")).to_be_checked()
+            page.get_by_role("button", name="Make grant").click()
+            item = page.locator(".grants-given .grant-item")
+            expect(item).to_have_count(1)
+            made = store.list_grants(patient)[0]
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} made.")).to_be_visible()
+            expect(item).to_contain_text(f"{made['short']} To <img src=x onerror=alert(1)>")
+            expect(item).to_contain_text("Serenity, 20 grant builds left for the ship")
+            expect(item).to_contain_text("Rooms: <b>City</b> of AI")
+            expect(item).to_contain_text("5 of 5 builds left in the last 24 hours")
+            expect(item.locator(".badge")).to_have_text("Valid")
+            assert page.locator("#main-content img, #main-content b").count() == 0
+            assert (made["grantee"]["id"], [r["id"] for r in made["rooms"]], made["expires"] - made["created"], made["budget"]) == (
+                doctor, [room["id"]], 7 * 86400, 5)
+        with signed_in_browser(playwright, browser_peer, "doctor") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            held = page.locator(".grants-held .grant-item")
+            expect(held).to_contain_text(f"{made['short']} From Alex Patient")
+            expect(held.get_by_role("button")).to_have_count(0)
+            expect(page.locator(".grants-given .grant-item")).to_have_count(0)
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            revokes = []
+            page.on("request", lambda request: revokes.append(request.url) if request.method == "POST" and request.url.endswith("/revoke") else None)
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            expect(item).to_contain_text(f"Revoke {made['short']}? Their mentions stop starting builder runs at once")
+            expect(item.get_by_role("button", name="Cancel")).to_be_focused()
+            item.get_by_role("button", name="Cancel").click()  # the safe choice changes nothing (S2 of the plan review)
+            expect(item.locator(".grant-ask")).to_have_count(0)
+            expect(item.get_by_role("button", name=f"Revoke {made['short']}")).to_be_focused()
+            assert revokes == [] and store.list_grants(patient)[0]["valid"] is True
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            assert store.list_grants(patient)[0]["revoked"] is None  # nothing before the confirm
+            item.get_by_label("Reason (optional)").fill("Done for now")
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
+            expect(item).to_contain_text(f"Not valid Grant {made['short']} was revoked by Alex Patient")
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
+            expect(item.get_by_role("button")).to_have_count(0)
+            assert len(revokes) == 1
+    assert store.list_grants(patient)[0]["revoke_reason"] == "Done for now"
+
+
+def test_a_double_click_on_make_grant_makes_one_grant(browser_peer):
+    """Plan Review Focus 2: a second submit while the first is on its way would make a second grant, doubling the person's
+    builds; the page sends one write at a time. The POSTs are counted, so a station that refused the second one could
+    not pass for a page that sent one."""
+    base = browser_peer["base_url"]
+    store, users, ship, room, lone = grant_station(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            posts = []
+            page.on("request", lambda request: posts.append(request.url) if request.method == "POST" and request.url.endswith("/api/grants") else None)
+            page.get_by_role("link", name="Grants", exact=True).click()
+            page.get_by_role("button", name="Make grant").click()  # no person yet: the page says so and sends nothing (R19)
+            expect(page.locator(".notice", has_text="Choose a person.")).to_be_visible()
+            assert posts == []
+            fill_grant(page, "<img src=x onerror=alert(1)>", "<b>City</b> of AI")
+            page.get_by_role("button", name="Make grant").dblclick()
+            expect(page.locator(".grants-given .grant-item")).to_have_count(1)
+            page.wait_for_timeout(300)
+            assert len(posts) == 1, posts
+    assert len(store.list_grants(users["patient"]["id"])) == 1
+
+
+def test_an_admin_is_offered_only_his_own_ships(browser_peer):
+    """Plan Review Focus 3: Andy is the station's admin, and /api/ships gives an admin every ship; the form offers only the
+    ships he owns, since a grant over anyone else's is refused (G8 step 4)."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    started = store.start_docking("defiant", "taylor-pc")
+    store.confirm_docking(users["organizer"]["id"], started["id"], started["code"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            ships = page.locator("#grant-form input[name='grant-ship']")
+            expect(ships).to_have_count(1)
+            expect(page.get_by_label("Defiant")).to_be_visible()
+            expect(page.get_by_label("Serenity")).to_have_count(0)
+
+
+def test_choosing_another_person_rebuilds_the_rooms_and_drops_the_ones_they_are_not_in(browser_peer):
+    """Plan Review Focus 4: rooms ticked for one person stay only if the next person is in them too, so the page never sends
+    a room the grantee isn't in (G8 step 2 would refuse it); a room both share keeps its tick."""
+    base = browser_peer["base_url"]
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient, doctor, family = users["patient"]["id"], users["doctor"]["id"], users["family"]["id"]
+    both = store.create_room(patient, "Both of them", [doctor, family, ship["id"]])
+    old = store.create_room(patient, "Old", [family])
+    store.add_participants(patient, old["id"], [users["organizer"]["id"]])  # a newer "Old" replaces it
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            fill_grant(page, "<img src=x onerror=alert(1)>", "<b>City</b> of AI", "Both of them")
+            page.get_by_label("Person").select_option(label="Sam Family")
+            expect(page.get_by_label("<b>City</b> of AI")).to_have_count(0)
+            expect(page.get_by_label("Both of them")).to_be_checked()
+            expect(page.get_by_label("Old", exact=True)).to_have_count(1)  # the current one only
+            page.get_by_label("Person").select_option(label="<img src=x onerror=alert(1)>")
+            expect(page.get_by_label("<b>City</b> of AI")).not_to_be_checked()  # dropped, not kept for later
+            page.get_by_label("Person").select_option(label="Sam Family")
+            page.get_by_role("button", name="Make grant").click()
+            expect(page.locator(".grants-given .grant-item")).to_contain_text("To Sam Family")
+    made = store.list_grants(patient)[0]
+    assert (made["grantee"]["id"], [r["id"] for r in made["rooms"]]) == (family, [both["id"]])
+
+
+@pytest.mark.parametrize("viewport", [{"width": 1440, "height": 960}, {"width": 390, "height": 844}])
+def test_a_hurried_double_click_on_revoke_only_opens_the_ask(browser_peer, viewport):
+    """G22: the ask takes Revoke's place with its question first, so the second press of a hurried double click lands on
+    text, at desktop and phone widths: the ask stays open and nothing is revoked or cancelled."""
+    base = browser_peer["base_url"]
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient", viewport=viewport) as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            revoke = item.get_by_role("button", name=f"Revoke {made['short']}")
+            revoke.scroll_into_view_if_needed()  # mouse clicks go to viewport coordinates
+            double_click_apart(page, revoke)
+            page.wait_for_timeout(600)
+            expect(item).to_contain_text(f"Revoke {made['short']}?")
+    assert store.list_grants(patient)[0]["revoked"] is None
+
+
+def test_any_room_you_share_sends_the_star_and_a_room_made_after_sign_in_is_offered(browser_peer):
+    """G21's "Any room you share with them" sends `rooms: "*"`, and the grant says so (S1 of the plan review). Entering the
+    page reads the rooms again, so a room made after sign-in is offered (R21)."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            sent = []
+            page.on("request", lambda request: sent.append(request.post_data_json) if request.method == "POST" and request.url.endswith("/api/grants") else None)
+            store.create_room(patient, "Made after sign-in", [doctor])
+            page.get_by_role("link", name="Grants", exact=True).click()
+            page.get_by_label("Person").select_option(label="<img src=x onerror=alert(1)>")
+            expect(page.get_by_label("Made after sign-in")).to_be_visible()
+            page.get_by_label("Serenity").check()
+            page.get_by_label("Any room you share with them").check()
+            page.get_by_role("button", name="Make grant").click()
+            expect(page.locator(".grants-given .grant-item")).to_contain_text("Rooms: Any room you share with them")
+            assert [body["rooms"] for body in sent] == ["*"]
+    assert store.list_grants(patient)[0]["rooms"] == "*"

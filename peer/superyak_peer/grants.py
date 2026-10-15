@@ -86,11 +86,17 @@ class Grants:
         return db.execute('SELECT count(*) FROM budget_uses WHERE grant_id=? AND created>?',
                           (grant_id, now - DAY)).fetchone()[0]
 
-    def _grant_validity(self, db, grant):
+    def _ship_grant_builds(self, db, ship_id, now):
+        """A ship's grant build tickets in the last 24 hours, under every grant: G11's ship_builds_left and G15's per-ship
+        cap read this one count, so the page and the ticket can't disagree. Owner builds never count."""
+        return db.execute("SELECT count(*) FROM tickets WHERE ship_id=? AND mode='build' AND basis='grant' AND created>?",
+                          (ship_id, now - DAY)).fetchone()[0]
+
+    def _grant_validity(self, db, grant, budget=True):
         """G9: (True, None), or (False, the reason of the first check that fails). Each link, from the grant up to its
         root, is checked in the spec's order: 1 revoked, 2 expired, 3 the policy in force now (lifetime, chain length,
         grantee set), 4 budget, 5 the root's issuer still owns every target. Names are the station's own, through
-        safe_line."""
+        safe_line. budget=False skips check 4, for a ticket that has already paid (G18)."""
         now, policy = self.clock(), self._grant_policy(db)
         chain = self._grant_chain(db, grant)
         root = chain[-1]
@@ -105,7 +111,7 @@ class Grants:
                 return False, f'Grant {short} lasts longer than the station now allows'
             if len(chain) > policy['max_depth'] or (policy['grantees'] is not None and link['grantee_id'] not in policy['grantees']):
                 return False, f"Grant {short} is no longer allowed by the station's policy"
-            if self._budget_used(db, link['id'], now) >= link['budget']:
+            if budget and self._budget_used(db, link['id'], now) >= link['budget']:
                 builds = f'{link["budget"]} build' + ('' if link['budget'] == 1 else 's')
                 return False, f'Grant {short} has used its {builds} for the last 24 hours'
             for ship_id in json.loads(link['targets']):
@@ -135,11 +141,26 @@ class Grants:
             raise Problem(404, 'Not found')
         return grant
 
-    def _room_label(self, db, actor, room_id):
-        """G11: a room's title for its members only; anyone else sees NOT_IN_ROOM."""
+    def _member_title(self, db, actor, room_id):
+        """A room's title when the caller is a member of it, else None."""
         row = db.execute('SELECT rooms.title FROM rooms JOIN room_members ON room_members.room_id=rooms.id '
                          'WHERE rooms.id=? AND room_members.user_id=?', (room_id, actor)).fetchone()
-        return row['title'] if row else NOT_IN_ROOM
+        return row['title'] if row else None
+
+    def _room_label(self, db, actor, room_id):
+        """G11: a room's title for its members only; anyone else sees NOT_IN_ROOM."""
+        title = self._member_title(db, actor, room_id)
+        return NOT_IN_ROOM if title is None else title
+
+    def _rooms_back(self, db, room_id):
+        """G15: a room and every room it replaced, walking back along linked_room_id, the room itself first. A seen list
+        ends the walk at a cycle made by hand, so it always ends."""
+        walked, key = [], room_id
+        while key is not None and key not in walked:
+            walked.append(key)
+            row = db.execute('SELECT linked_room_id FROM rooms WHERE id=?', (key,)).fetchone()
+            key = row['linked_room_id'] if row else None
+        return walked
 
     def _current_room(self, db, room_id):
         """G11: the current room a replaced room now covers, following linked_room_id forward (S5); None for a current
@@ -168,17 +189,16 @@ class Grants:
 
         targets = []
         for ship_id in json.loads(grant['targets']):
-            # G11: the ship's grant builds in the last 24 hours, under every grant. Merge 3c writes these tickets.
-            built = db.execute("SELECT count(*) FROM tickets WHERE ship_id=? AND mode='build' AND basis='grant' AND created>?",
-                               (ship_id, now - DAY)).fetchone()[0]
+            built = self._ship_grant_builds(db, ship_id, now)  # G11: under every grant, as G15's cap counts them
             targets.append({**person(ship_id), 'ship_builds_left': max(0, policy['builds_per_ship_per_day'] - built)})
         rooms = json.loads(grant['rooms'])
         if rooms != '*':
             listed = []
             for room_id in rooms:
                 entry, current = {'id': room_id, 'title': self._room_label(db, actor, room_id)}, self._current_room(db, room_id)
-                if current is not None:
-                    entry['current'] = {'id': current, 'title': self._room_label(db, actor, current)}
+                if current is not None:  # 3b's section 2 review: no id for a non-member, who has no use for it
+                    title = self._member_title(db, actor, current)
+                    entry['current'] = {'title': NOT_IN_ROOM} if title is None else {'id': current, 'title': title}
                 listed.append(entry)
             rooms = listed
         valid, reason = self._grant_validity(db, grant)

@@ -106,6 +106,7 @@ only-include = [
     "tests/test_dockings.py",
     "tests/test_door.py",
     "tests/test_federation.py",
+    "tests/test_grant_tickets.py",
     "tests/test_grants.py",
     "tests/test_identity.py",
     "tests/test_inbox.py",

@@ -46,7 +46,8 @@ def refuse_a_lost_identity_before_the_store(data_dir):
                 refuse_a_lost_identity(data_dir, db)
         except sqlite3.Error as error:
             raise ValueError(f'{database} could not be read read-only ({type(error).__name__}), so the station cannot tell '
-                             'whether it holds signed records; it will not start until the database can be read') from error
+                             'whether it holds signed records; it will not start until the database can be read. Any normal opener plays a '
+                             'hot journal back (for example `make station-pending`, or `serve` without `--peer-tls`)') from error
 
 
 class Signatures:

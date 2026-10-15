@@ -332,6 +332,10 @@ a.button { display: inline-block; text-decoration: none; }
 .board-ask { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; }
 .board-ask p { margin: 0 0 8px; }
 .carry-board ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
+.grant-list { list-style: none; margin: 0; padding: 0; }
+.grant-item { padding: 10px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.grant-item p { margin: 0 0 6px; }
+.grant-make form { display: grid; gap: 12px; max-width: 720px; }
 .carry-brief-text { max-height: 200px; margin-top: 10px; padding: 12px 14px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 
 .brief-author { margin: 8px 0 0; }

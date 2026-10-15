@@ -1,4 +1,4 @@
-"""One Claude run per mention: read-only for everyone, builder for the ship's owner."""
+"""One Claude run per mention: read-only for everyone, builder for the ship's owner or a person the owner granted."""
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
