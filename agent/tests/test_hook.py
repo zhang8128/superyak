@@ -674,6 +674,15 @@ def test_the_hook_shows_board_counts_never_item_text(station, ship_config, tmp_p
     assert fake.requests and not any(r['path'] == '/api/ships/me/board' for r in fake.requests)
 
 
+def test_the_hook_board_lines_cap_a_huge_count():
+    """A hostile station may send a 4,000-digit int as `waiting`: a count above 999 shows as 999+, never in full."""
+    got = {'rooms': [{'room_id': 'a1', 'title': 'Big', 'waiting': 10 ** 4000}, {'room_id': 'b2', 'title': 'Edge', 'waiting': 999},
+                     {'room_id': 'c3', 'title': 'Over', 'waiting': 1000}]}
+    lines = hook.board_lines(got)
+    assert lines[1].startswith('999+ waiting on the board in "Big"') and lines[2].startswith('999 waiting on the board in "Edge"')
+    assert lines[3].startswith('999+ waiting on the board in "Over"') and max(map(len, lines[1:])) < 100
+
+
 def test_the_hook_board_lines_need_a_working_station(monkeypatch, capsys, station, ship_config, tmp_path):
     """Work board 5.4: no board lines inside a run, for a D7 ship standing down (which makes no call at all), past
     INSTRUCTIONS_DEADLINE, when the call fails, or when the law couldn't be fetched (then no count call is made). An

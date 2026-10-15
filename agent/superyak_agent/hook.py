@@ -304,7 +304,7 @@ def board_lines(got):
         waiting = room.get('waiting') if isinstance(room, dict) else None
         if type(waiting) is int and waiting > 0:
             call = f'; `station_board room={room["room_id"]}` lists them' if plain_id(room.get('room_id')) else ''
-            lines.append(f'{waiting} waiting on the board in "{quoted_title(room.get("title"))}"{call}')
+            lines.append(f'{"999+" if waiting > 999 else waiting} waiting on the board in "{quoted_title(room.get("title"))}"{call}')
     if not lines:
         return []
     if len(lines) > COUNT_LINES:
