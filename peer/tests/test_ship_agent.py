@@ -191,6 +191,39 @@ def test_odo_announces_station_notices_in_ops(env, tmp_path):
     assert watcher.cycle() == 0
 
 
+def test_odo_posts_a_queued_alert_in_ops_once(env, tmp_path):
+    """R13 (spec S10, S13): an alert queued while Odo can't reach the station waits in the queue; the next cycle posts
+    it in Ops through the existing notices path, and the one after posts nothing."""
+    from superyak_agent.station import StationClient, StationError
+    from superyak_agent.watch import Watcher
+    from superyak_peer import alerts
+    app, clients, users, clock = env
+    store = app.state.store
+    odo = store.create_station_ship('odo', 'Odo')
+    key = store.issue_ship_key(odo['id'])
+    ops = clients[2].post('/api/chats', json={'title': 'Ops', 'member_ids': [odo['id']]}).json()['id']
+    down, send = [False], transport_for(app)
+
+    def flaky(method, url, headers, data):
+        return (503, b'{"error": "The station is restarting"}') if down[0] else send(method, url, headers, data)
+
+    notices = [sys.executable, '-m', 'superyak_peer', 'station-notices', '--data-dir', str(store.data_dir)]
+    config = {'station': 'http://testserver', 'origin': None, 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': key, 'workspace': str(tmp_path)}
+    watcher = Watcher(StationClient('http://testserver', key, transport=flaky), config, tmp_path / 'odo.json', None,
+                      notices_command=notices, resident=True)
+    assert watcher.cycle() == 0
+    down[0] = True
+    one = alerts.record(store.data_dir / 'alerts', 'superyak-lighthouse.service', 'stopped',
+                        {'result': 'exit-code', 'exit_code': 'exited', 'exit_status': '1'}, time.time())
+    with pytest.raises(StationError):
+        watcher.cycle()
+    down[0] = False
+    assert watcher.cycle() == 1
+    posted = clients[2].get(f'/api/chats/{ops}').json()['messages'][-1]
+    assert posted['body'] == one['text'] and posted['client_message_id'] == f'notice-alert-{one["id"]}'
+    assert watcher.cycle() == 0
+
+
 def test_an_anonymous_door_name_cannot_wake_a_ship_through_odos_ops_notice(env, tmp_path):
     from superyak_agent.station import StationClient
     from superyak_agent.watch import Watcher

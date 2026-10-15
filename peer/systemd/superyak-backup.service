@@ -1,0 +1,14 @@
+[Unit]
+Description=Superyak station backup: a checked copy of peer.sqlite3 (spec 2026-10-14 S2)
+After=superyak-lighthouse.service
+OnFailure=superyak-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/superyak/peer
+EnvironmentFile=-%h/.config/superyak/backup.env
+ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer station-backup --data-dir %h/.local/share/superyak/lighthouse --backup-dir %h/.local/share/superyak/backups/station --copy-to=${SUPERYAK_BACKUP_COPY_TO}
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=15min
+MemoryMax=512M

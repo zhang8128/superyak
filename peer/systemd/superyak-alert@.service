@@ -1,0 +1,7 @@
+[Unit]
+Description=Superyak station alert for %i
+
+[Service]
+Type=oneshot
+TimeoutStartSec=1min
+ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer station-alert --data-dir %h/.local/share/superyak/lighthouse --unit %i --monitor

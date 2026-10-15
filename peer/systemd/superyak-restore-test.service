@@ -1,0 +1,11 @@
+[Unit]
+Description=Superyak restore test: a throwaway station from the newest copy (spec 2026-10-14 S7)
+After=superyak-backup.service
+OnFailure=superyak-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/superyak/peer
+ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer station-restore-test --backup-dir %h/.local/share/superyak/backups/station
+TimeoutStartSec=10min
+MemoryMax=1G

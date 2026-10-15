@@ -103,6 +103,7 @@ accounts. All these accounts are known local contacts for this first slice.
 
 | Method/path | Request JSON | Response |
 |---|---|---|
+| GET `/api/health` | — | `{ok:true}` after one database read; no session; the lighthouse only, never the door |
 | POST `/api/login` | `{username,password}` | `{user,csrf_token}`, session cookie |
 | GET `/api/me` | — | User fields plus `csrf_token` and public key-derived `peer_id` |
 | PATCH `/api/me` | `{name}` | Corrected user, same ID and grants |
