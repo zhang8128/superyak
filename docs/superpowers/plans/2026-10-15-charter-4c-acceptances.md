@@ -28,24 +28,26 @@ acceptances, with the spec's own Review Focus items 1, 3, 4 and 5 (tests 26, 29,
 (`docs/superpowers/specs/2026-10-15-grants-step3-design.md`) holds where it is silent.
 
 **Base:** charter-4c at `9e0aac8` (main `25ca91e` plus the spec). 4c is built only after merge 4a (the station's
-charter) has merged: first merge main, with 4a, into this branch, then reconcile the section below. When this plan was
-written, Rio Grande was planning 4a and `git fetch https://github.com/zhang8128/superyak.git charter-4a` found no such
-branch on GitHub (2026-10-15), so 4c's code sits behind a few named 4a behaviours, listed below with the signature this
-plan assumes. Every edit below names its anchor text exactly, so an anchor that moved fails loudly instead of landing in
-the wrong place.
+charter) has merged. Rio Grande's 4a plan (branch `charter-4a` at `9cbe58f`, "Charter 4a plan: adopt 4c's interface
+names and seams; an Interfaces for 4c section") builds every 4a behaviour 4c uses, under the names and signatures
+below. Before Task 1, merge main, with 4a, into this branch and record the merge's hash (`git rev-parse HEAD` right
+after the merge commit; Task 10 Step 3 finds it again if it wasn't kept). Every edit below names its anchor text
+exactly, in 4a's code where the edit lands in 4a's code, so an anchor that moved fails loudly instead of landing in the
+wrong place.
 
-**Dry run.** Every task was dry-run in a scratch clone of `9e0aac8` on top of Appendix A, a stand-in for the 4a
-interfaces below, written for the dry run only and never committed. Each RED below is the one seen, each GREEN ran, and
-each Step 5 mutation was applied alone and failed the test it names, except where a step says otherwise. The code blocks
-are the dry run's own text: Appendix A and then every task in order reproduce its tree. At the end the peer suite ran
-975 passed and 1 skipped, this plan's 34 new tests among them. On the real 4a, the counts in Steps 2 and
-4 grow by 4a's own tests, and a RED message that 4a's code writes may read differently; each such place says so.
+**Dry run.** Every task was dry-run in a scratch clone of `9e0aac8` on top of Appendix A, a stand-in for 4a with 4a's
+plan's names, signatures and anchors at `9cbe58f` (the I-rows below) and none of 4a's other work, written for the dry run
+only and never committed. Each RED below is the one seen, each GREEN ran, and each Step 5 mutation was applied alone and
+failed the test it names, except where a step says otherwise. The code blocks are the dry run's own text: Appendix A and
+then every task in order reproduce its tree. At the end the peer suite ran 975 passed and 1 skipped, this plan's 34 new
+tests among them, and the agent suite (Appendix A adds `charter_line`) 755 passed. On the real 4a, the counts in Steps 2
+and 4 grow by 4a's own tests, and a RED message that 4a's code writes may read differently; each such place says so.
 
 **Plan revision 2.** A fresh review of revision 1 (`446e013`: APPROVE WITH CHANGES, 0 must-fix, 4 should-fix, 7 nits;
 it transcribed every step, matched every RED and GREEN, and ran all 60 mutations) is answered here: S1 (Task 5:
 `test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_stays_active` and its mutation; Known
 limits), S2 (Task 5: `test_an_own_layer_that_would_send_a_follower_back_past_a_large_revision_is_refused` and its
-mutation; R11's reason), S3 (Known limits: display names), S4 (the reconciliation risk; Task 3 Step 4's two flagged
+mutation; P11's reason), S3 (Known limits: display names), S4 (the reconciliation risk; Task 3 Step 4's two flagged
 assertions), N1 (Task 7 Step 5's anchor), N2 (Task 3 Step 3's blank line), N3 (`_accepted_pair` compares with
 `_active_charter`, from Task 2), N4 (Task 9: "accepted revision"), N5 (Known limits: a charter alone can pass the
 caps), N6 (two line references), N7 (Task 3's test 26 also reads the person list and makes a second grant), and the
@@ -53,50 +55,56 @@ review's 3c (Known limits: re-activating a withdrawn layer can be refused). The 
 Grande for 4a's planner. Every task was replayed after these changes, with the counts below; each new or changed
 mutation was run and bites.
 
+**Plan revision 3.** Reconciled with 4a's plan at `9cbe58f`, using the earlier reconcile against its `49733a1` as a
+checklist: every I-row now names 4a's own function, signature and anchor (all sixteen match 4c's names; I8 and I13
+changed 4c's code, `_refuse_a_moved_charter` now taking the revision; I10, I12 and I13 moved anchors to 4a's text; Task
+1's `Store` bases now end with 4a's `Charter`; see the table); 4c's own rulings are P1-P16, so they no longer share labels
+with the spec's R1-R23; ships are listed in 4a's order (`name COLLATE NOCASE, id`, its P6); Task 10 diffs the grant code
+against the commit where 4a entered this branch, and brings 4a's API.md and agent/README.md sentences that say only the
+signer's ships and residents are bound up to date; the preview's `binds` is a known limit; Task 9 also tightens three
+grants-followups browser tests; Appendix A mirrors 4a's shapes. Every task, every mutation (63, all bite) and both suites
+were run again.
+
 Tasks: 1 the table and its two signed records (R29: records, G4b, the backfill, the signed route); 2 a pinned acceptance
 binds its owner's ships (R29, R31; C15, C19, C22); 3 reading, accepting and leaving (R30, R32; C17, C18, C20); 4 follow
 (R31, C21); 5 caps at re-activation, at a follower's next revision and at an owner's own activation
 (R33, C23); 6 past charter revisions for the people who accepted them (C26); 7 the restore reconcile by person (R34, C27); 8 the
 500-step binding oracle (test 35); 9 the Charter page (R35); 10 API.md, the restore runbook and the whole suite.
 
-## Interfaces 4c consumes from 4a (to reconcile with 4a's plan before building)
+## Interfaces 4c consumes from 4a (reconciled with 4a's plan at `9cbe58f`)
 
-4c needs these 4a behaviours. Each row gives the name and signature this plan assumes, the spec section that defines
-the behaviour, and where 4c uses it. Appendix A implements each one with the spec's semantics; it is the reference for
-what a row means, not for how 4a writes it.
+4c needs these 4a behaviours. Each row gives 4a's name, signature and anchor as its plan at `9cbe58f` builds them (its
+"Interfaces for 4c", Tasks 1-12), the spec section that defines the behaviour, where 4c uses it, and whether it matches
+what 4c assumed or what 4c changed. Appendix A implements each one with 4a's names and the spec's semantics.
 
-| # | 4a behaviour | Assumed name and signature | Spec | Used by |
+| # | 4a's name, signature and anchor (`9cbe58f`) | Spec | Used by | Reconciled |
 | --- | --- | --- | --- | --- |
-| I1 | The full no-charter policy | `charter.DEFAULT_POLICY: dict`, spec Data's JSON with every default | Data; C5, C11 | Tasks 3, 5 (`acceptances.py`) |
-| I2 | Widened paths from a baseline policy to a policy, both full | `charter.widened_paths(baseline: dict, policy: dict) -> list[dict]`, items `{path, before, after}`, sorted by path | Data "Widened paths"; C13 | Tasks 3, 4, 5 |
-| I3 | Narrowed paths, the same paths where the policy is smaller or lacks a member | `charter.narrowed_paths(baseline: dict, policy: dict) -> list[dict]`, same shape | Routes, preview | Task 3 (`pending.narrowings`) |
-| I4 | `confirm_widenings`' shape check | `charter.confirm_paths(value) -> list[str]`: `None` gives `[]`; anything but a list of at most 105 strings of at most 200 characters raises `Problem(400, 'confirm_widenings is a list of paths')` | Routes, activation step 5 | Task 3 (accept step 2) |
-| I5 | The exact-set check | `charter.require_confirmed(paths: list[str], widenings: list[dict]) -> None`: raises `Problem(409, 'Confirm exactly these widenings: …')` unless the paths equal the widened paths as a set, each once | C13; R6 | Task 3 (accept step 5) |
-| I6 | The caps predicate and its refusal | `instructions.over_caps(layers: list[dict]) -> bool` (more than `MAX_LAYERS` layers, or more than `MAX_BYTES` of `render_blocks(layers, 'x' * 12)`); `instructions.CAPS_REFUSAL = '{ship} would have more than 10 instruction layers or 48,000 bytes of them'` | Routes, activation step 5; C23; R16 | Tasks 3, 5 |
-| I7 | The layers at recorded pairs, in the recorded order | `Instructions._layers_for(db, pairs) -> list[dict]`, not re-sorted, each dict as `_binding_layers` returns it (so a charter block is measured as a ticket renders it) | Binding; R15 | Tasks 3, 5 |
-| I8 | An owner's own layers for one ship | `Instructions._own_layers(db, ship: sqlite3.Row, replace: dict \| None = None) -> list[dict]`: the owner's own active non-charter instructions layers whose audience lists the ship, by `(created, layer_id)`; `replace` is today's `_binding_layers` `replace`, `{layer_id, snapshot, created, revision}` | Binding 3 | Tasks 3, 5 |
-| I9 | The charter pair for a ship, and the binding built on it | `Instructions._charter_pair(db, ship: sqlite3.Row) -> tuple[str, int] \| None` (a resident, or a ship whose owner signed the active charter: its active revision; any other ship: `None` in 4a), and `Instructions._binding_layers(db, ship_id, replace=None)` = `_layers_for(db, [pair])` + `_own_layers(...)`, the one function tickets, `GET /api/ships/me/instructions`, `GET /api/ships` and every caps check read | Binding 2; C22 | Task 2 changes `_charter_pair`'s last case |
-| I10 | `GET /api/ships/me/instructions`' `charter` field | `Instructions._charter_status(db, ship: sqlite3.Row) -> dict \| None`, `{layer_id, revision, binding, accepted}`, `accepted` true for a resident or the signer's ship in 4a | Routes, ship route; R20 | Task 2 adds the acceptance to `accepted` |
-| I11 | The active charter | `Layers._active_charter(db) -> sqlite3.Row \| None`, the layers row (with at least `id`, `owner_id`, `active_revision`) whose active revision is a charter revision | Binding 1 | Tasks 2, 3, 5 |
-| I12 | The charter activation path | in 4a's charter activation, the point after `require_confirmed` and before the new revision row is written | Routes, activation step 5, its last bullet; C23 | Task 5 adds `self._check_rebound_caps(db, key)` |
-| I13 | The ordinary instructions activation path | 4a's activation of a non-charter instructions layer, right after its `self._check_instruction_caps(db, actor, key, snapshot)` | C23, its last sentence; Binding, its last paragraph | Task 5 adds `self._refuse_a_moved_charter(db, actor, key, snapshot)` |
-| I14 | Who reads a non-owned charter revision's signature | `Signatures._may_read_charter_revision(db, actor, layer: sqlite3.Row, revision: int) -> bool`, true in 4a for the active revision; `revision_signed` asks it only for a charter revision and a caller who isn't the owner | C26; Routes `/signed` 2-3 | Task 6 adds the acceptance clause |
-| I15 | Spec-defined data and routes, read directly | a charter revision's snapshot holds `charter: true`, `audience_users: []` and the full `policy`; `POST/PUT /api/layers` take `charter` and `policy`; `POST /api/layers/{id}/activate` takes `confirm_widenings`; `POST /api/layers/{id}/withdraw` takes `{confirm_widenings}` | Data; Routes | `acceptances.py` reads snapshots; every test helper uses these routes |
-| I16 | The agent's charter line | `superyak_agent.station.charter_line(charter: dict \| None) -> str \| None`, R20's line from the ship route's field | R20 | Task 2's status test only |
+| I1 | `charter.DEFAULT_POLICY: dict`, spec Data's JSON with every default (4a Task 1) | Data; C5, C11 | Tasks 3, 5 (`acceptances.py`) | matches 4a 9cbe58f |
+| I2 | `charter.widened_paths(baseline: dict, policy: dict) -> list[dict]`, items `{path, before, after}`, sorted by path (4a Task 4) | Data "Widened paths"; C13 | Tasks 3, 4, 5 | matches 4a 9cbe58f |
+| I3 | `charter.narrowed_paths(baseline: dict, policy: dict) -> list[dict]`, same shape; a narrowed `grantees` item is `{path: 'grantees', before: None, after: <the new full grantees>}` (4a Task 4) | Routes, preview | Task 3 (`pending.narrowings`) | matches 4a 9cbe58f |
+| I4 | `charter.confirm_paths(value) -> list[str]`: `None` gives `[]`; anything but a list of at most 105 (`MAX_CONFIRMED`) strings of at most 200 characters raises `Problem(400, 'confirm_widenings is a list of paths')` (4a Task 4) | Routes, activation step 5 | Task 3 (accept step 2) | matches 4a 9cbe58f |
+| I5 | `charter.require_confirmed(paths: list[str], widened: list[dict]) -> None`: `Problem(409, 'Confirm exactly these widenings: ' + (', '.join(paths) or 'none'))` unless the paths equal the widened paths as a set, each once (4a Task 4) | C13; R6 | Task 3 (accept step 5) | matches 4a 9cbe58f |
+| I6 | `instructions.over_caps(layers: list[dict]) -> bool` (more than `MAX_LAYERS` layers, or more than `MAX_BYTES` of `render_blocks(layers, 'x' * 12)`); `instructions.CAPS_REFUSAL = '{ship} would have more than 10 instruction layers or 48,000 bytes of them'` (4a Task 8) | Routes, activation step 5; C23; R16 | Tasks 3, 5 | matches 4a 9cbe58f |
+| I7 | `Instructions._layers_for(db, pairs) -> list[dict]`, in the order given, each dict `binding_entry(...)` with `charter` (4a Task 7) | Binding; R15 | Tasks 3, 5 | matches 4a 9cbe58f |
+| I8 | `Instructions._own_layers(db, ship: sqlite3.Row, replace: dict \| None = None) -> list[dict]`: the owner's own active non-charter instructions layers whose audience lists the ship, by `(created, layer_id)`; `replace` is `{layer_id, revision, snapshot, created}`, `revision` the number the activation will write (4a Task 7) | Binding 3 | Tasks 3, 5 | matches 4a 9cbe58f; 4c changed: `_refuse_a_moved_charter` takes that `revision` and passes it, as 4a's caps check does (4c had used 0) |
+| I9 | `Instructions._charter_pair(db, ship: sqlite3.Row) -> tuple[str, int] \| None`, ending `return None` for a ship whose owner is neither absent nor the active charter's signer; `_binding_layers(db, ship_id, replace=None)` = `_layers_for(db, [pair])` + `_own_layers(db, ship, replace)`, read by tickets, the ship routes and every caps check (4a Task 7) | Binding 2; C22 | Task 2 turns `_charter_pair`'s `return None` into the acceptance | matches 4a 9cbe58f |
+| I10 | `Instructions._charter_status(db, ship: sqlite3.Row) -> dict \| None`, `{layer_id, revision, binding, accepted}`, whose return ends `'accepted': ship['owner_id'] in (None, active['owner_id'])}` (4a Task 11) | Routes, ship route; R20 | Task 2 adds the acceptance to `accepted` | matches 4a 9cbe58f; 4c changed its anchor to 4a's line |
+| I11 | `Charter._active_charter(db) -> sqlite3.Row \| None`, on 4a's `Charter` mixin in `charter.py` (`Store` resolves `self._active_charter` either way): the layers row (`id`, `owner_id`, `active_revision`, ...) whose active revision is a charter revision, plus that revision's `snapshot` as JSON text (4a Task 3) | Binding 1 | Tasks 2, 3, 5 | matches 4a 9cbe58f (4c reads `id`, `owner_id`, `active_revision`) |
+| I12 | `Charter._check_charter_activation(db, actor, key, snapshot, confirm=None)` in `charter.py`, which ends `require_confirmed(confirm_paths(confirm), widened_paths(self._policy_in_force(db), policy))` then `return policy`; `Layers.activate_layer` calls it before the revision row is written, and runs 4a's own `_check_charter_caps(db, signer_id)` once the revision is written and active (4a Tasks 4, 8, its P14) | Routes, activation step 5, its last bullet; C23 | Task 5 inserts `self._check_rebound_caps(db, key)` before `return policy` | matches 4a 9cbe58f; 4c changed: the anchor moved from Appendix A's old `Layers._activate_charter` to 4a's `charter.py` |
+| I13 | in `Layers.activate_layer`, inside `else:` then `if snapshot.get('kind') == 'instructions':`, at 20 spaces: `self._check_instruction_caps(db, actor, key, snapshot, row['resource_version'] + 1)` (4a Task 7) | C23, its last sentence; Binding, its last paragraph | Task 5 adds `self._refuse_a_moved_charter(db, actor, key, snapshot, row['resource_version'] + 1)` after it | matches 4a 9cbe58f; 4c changed: the anchor and 4c's call both take 4a's `revision` argument |
+| I14 | `Signatures._may_read_charter_revision(db, actor, layer: sqlite3.Row, revision: int) -> bool`, whose body is `return layer['active_revision'] == revision`; `revision_signed`'s inline condition asks it only for a charter revision and a caller who doesn't own the layer (4a Task 10) | C26; Routes `/signed` 2-3 | Task 6 adds the acceptance clause to its body | matches 4a 9cbe58f |
+| I15 | Spec data and routes: a charter revision's snapshot holds `charter: true`, `audience_users: []` and the full `policy`; `POST/PUT /api/layers` take `charter` and `policy`; `POST /api/layers/{id}/activate` takes `confirm_widenings`; `POST /api/layers/{id}/withdraw` takes `{confirm_widenings}` (an empty body is `{}`) (4a Tasks 2-5) | Data; Routes | `acceptances.py` reads snapshots; every test helper uses these routes | matches 4a 9cbe58f |
+| I16 | `superyak_agent.station.charter_line(charter) -> str \| None`, from the ship route's `charter` field's value (`None` is "Charter: none active"); `status` calls it only when the answer has the field (4a Task 12) | R20 | Task 2's status test only | matches 4a 9cbe58f |
 
-**Reconciling: medium risk.** I1 to I7, I9, I11 to I13 and I15 are behaviours 4a must have, under some name; I8
-(`_own_layers` with `replace`), I10 (`_charter_status`), I14 (`_may_read_charter_revision`) and I16 (`charter_line`)
-assume 4a builds them as separate functions. If 4a inlines one of those four, reconciling means extracting it from 4a's
-code, not renaming. Tests also pin two texts whose exact form is 4a's: the message after "Confirm exactly these
-widenings: " and the shape of a narrowed `grantees` item (Task 3 Step 4 names both). The coordinator has posted I1-I16
-to Rio Grande, so 4a's plan can build these seams. Before Task 1, read 4a's plan and its merged code. For each row,
-find 4a's name: either rename the uses this plan lists (the last column) or give 4a's module a one-line alias. Rows I12 to I14 are edits inside 4a's
-functions; their anchors are 4a's code, shown here as Appendix A writes it. If 4a computes a row differently (say
-`_charter_pair` takes `replace`), keep 4c's code behind the same name and adjust only the call. If 4a's `status` prints
-the charter line inline rather than through a function (I16), Task 2's status test calls the function 4a's own test 20
-calls, or runs `superyak-agent status` against the station as `test_ship_agent.py` runs the hook. Tests reach 4a only
-through spec routes and I6 to I11 and I16, so the tests need renames at most (and the two texts above); the code may
-also need one of the four seams extracted from 4a's code, never a change to 4c's design.
+Also in 4a, read only by Appendix A: `charter.full_policy(db, raw)` (it takes `db`, to check grantee ids),
+`Charter._policy_in_force(db)` and `Instructions._check_charter_caps(db, signer_id)`.
+
+**Reconciling: low risk.** 4a's plan at `9cbe58f` builds all sixteen rows under 4c's names, including the four seams
+(I8, I10, I14, I16) as separately callable functions, and its own tests pin the two texts 4c's tests read from it:
+`require_confirmed`'s message and the narrowed `grantees` item (its preview test asserts the same form). What remains is
+that 4a is a plan, not merged code: before Task 1, check that 4a's merged code still has the five anchors this plan edits
+(I9's `return None`, I10's `accepted` line, I12's `return policy`, I13's call, I14's body) and the names in I1-I8,
+I11 and I16. A renamed one is a rename here; nothing in 4c's design depends on how 4a writes them.
 
 **Not from 4a.** 4b's signing dialog also has a line diff and widened paths in words (C30, R25). If 4b merged before
 4c with helpers for both, Task 9 uses 4b's helpers in place of `lineDiff` and `wideningWords`; Task 9's tests read the
@@ -104,26 +112,27 @@ page, not the helpers, so they stay as they are.
 
 ## Rulings
 
-Decisions this plan makes where the spec leaves a choice. A fresh reviewer checks each; Andy can veto any.
+Decisions this plan makes where the spec leaves a choice, numbered P1-P16 so they don't share labels with the spec's
+R1-R23 (4a's plan numbers its own the same way). A fresh reviewer checks each; Andy can veto any.
 
 | # | Ruling | Why |
 | --- | --- | --- |
-| R1 | `peer/superyak_peer/acceptances.py` holds the `Acceptances` mixin and `ACCEPTANCE_SCHEMA`: rows, the binding an acceptance gives, `GET /api/charter`, accepting, leaving, and 4c's caps checks. Signing stays in `signatures.py`, beside the grants' (`_acceptance_record`, `_sign_acceptance`, `_acceptance_revocation_record`, `_sign_acceptance_revocation`, `_backfill_acceptance_revocation_signatures`, `acceptance_signed`); the reconcile in `backups.py`. | As 3b's R1: `signatures.py` owns the station's signatures and their routes. |
-| R2 | An acceptance row is inserted with an empty `signature`, which `_sign_acceptance` fills from the stored row before the transaction commits; an end is signed the same way. | Spec Data ("a row holds an empty signature only inside the transaction that inserts and signs it"), and 3b's R2: one record builder serves signing and the signed route. |
-| R3 | Acceptance ends get their own startup backfill, called beside the grants' in `Store.__init__`'s signing block. `_backfill_revocation_signatures` is not changed. | Step 3 amendment 3 asks for the backfill; C18 and R29 say 4c changes no step 3 grant code. |
-| R4 | Accept's first four 400s have no words in the spec. This plan's: `An acceptance takes only layer_id, revision, follow and confirm_widenings`; `layer_id is the id of the charter layer`; `revision is a whole number`; `follow is true or false`. A bad `confirm_widenings` gets 4a's activation message (I4). | One message per check, so the order test can tell which answered (3b's R14). |
-| R5 | "Already accepted with the same `follow`" is checked after steps 3 and 4 and before steps 5 and 6. | A retry of an acceptance that needed a widening carries the same `confirm_widenings`; by then the baseline is the accepted revision, so step 5 read first would refuse the retry with 409. R30's idempotence needs the retry to answer 200; it changes nothing either way. |
-| R6 | Leaving takes `reason` as grants' revoke does: missing, null or blank is `left`; other keys are ignored. | The spec gives only the reason's 400. |
-| R7 | `acceptances[].revision` is the revision the acceptance names, as `acceptance.revision` is the caller's. `charter.names` names the person ids of the active revision's grantee set and of the caller's binding revision's. | The spec's shape names the keys only. The binding revision is the caller's own text, and the active revision's people are visible to everyone (C26's cost). |
-| R8 | The follow walk also stops before a revision that isn't a charter revision. | C6 makes it unreachable; a hand-edited database can't make the walk read a policy that isn't there. |
-| R9 | `_too_large` answers for every caps question 4c asks (accept step 6, `pending.too_large`, the re-bound check): the person's ships, by name, that the revision with each ship's own layers puts over the caps. A 409 names the first. | C23: one rule, one function, as the spec's Binding says ("the caps check uses the same function"). |
-| R10 | The re-bound check runs only when the layer has no active revision at activation, and checks each acceptance's own revision, pinned or following. | C23 and Binding: a follower re-bound after a withdrawal "starts its walk at a revision it can't stop before"; a layer active now binds no one again. |
-| R11 | An owner's own activation that would change their charter pair, either way, gets 409 `<ship> would be bound by charter revision <after> instead of revision <before>`, naming the ship whose caps made the difference. It runs after 4a's caps check (I13). That check refuses a move back only when the revision binding now stops fitting; a move back past an earlier large revision (her walk is at r4 through a large r3, and the new layer still fits r4 but not r3) and every move forward (shrinking an own layer lets a follower take a revision they haven't accepted by hand) are refused by this check alone. A move forward through an own layer's withdrawal or narrowing is allowed, and must stay so: C23 checks activations only, C21's follow consents to non-widening revisions, and refusing it would stop owners withdrawing their own layers. | Binding: "if any pair differs, the activation gets 409 naming the ship"; re-check SA(b). The spec gives no words. |
-| R12 | The reconcile's report: `Charter acceptances ended, as the replaced file holds none in force for them: …`, `Charter acceptances kept: …`, `Charter acceptances lost: in the replaced file, not in this copy, and a restore never adds one: … Ask them to accept again on the Charter page.`, by username. A copy from before 4c (no table) is skipped as any step is, and every acceptance in force in the replaced file is listed as lost. No count joins "Taken back:". | C27 and Security ("names every acceptance it couldn't keep"). Ending an acceptance takes law away, not access. |
-| R13 | Test 35 is a new 500-step test beside 4a's oracle (test 23), not a rewrite of it. | 4a owns test 23. Caps need layer sizes, which the 60-case oracle doesn't have. |
-| R14 | The Charter page states the limits in words, shows the line diff, one checkbox per widened path, the ships a revision is too large for, and pin or follow; its button stays disabled until every box is ticked and while a ship is too large; one write at a time; "Stop accepting" asks in place, Cancel focused. Narrowings aren't listed: the limits list shows the new values. | R35; 3c's R17 and R18 for the ask and the one write. |
-| R15 | Tests are split where their parts land: test 25 (Tasks 1, 2, 3), 26 (1, 3, 7, 9), 27 (1, 3), 28 (2, 3), 33 (3, 5); test 19's 4c addition is Task 6. | Each part is written with the code it tests. |
-| R16 | Tests reach 4a only through spec routes and the names in I6 to I11 and I16; their helpers (`super_admin`, `new_charter`, `sign`, `withdraw`) are this plan's. | Reconciling with 4a renames nothing in the tests unless 4a changed a route the spec defines. |
+| P1 | `peer/superyak_peer/acceptances.py` holds the `Acceptances` mixin and `ACCEPTANCE_SCHEMA`: rows, the binding an acceptance gives, `GET /api/charter`, accepting, leaving, and 4c's caps checks. Signing stays in `signatures.py`, beside the grants' (`_acceptance_record`, `_sign_acceptance`, `_acceptance_revocation_record`, `_sign_acceptance_revocation`, `_backfill_acceptance_revocation_signatures`, `acceptance_signed`); the reconcile in `backups.py`. | As 3b's R1: `signatures.py` owns the station's signatures and their routes. |
+| P2 | An acceptance row is inserted with an empty `signature`, which `_sign_acceptance` fills from the stored row before the transaction commits; an end is signed the same way. | Spec Data ("a row holds an empty signature only inside the transaction that inserts and signs it"), and 3b's R2: one record builder serves signing and the signed route. |
+| P3 | Acceptance ends get their own startup backfill, called beside the grants' in `Store.__init__`'s signing block. `_backfill_revocation_signatures` is not changed. | Step 3 amendment 3 asks for the backfill; C18 and R29 say 4c changes no step 3 grant code. |
+| P4 | Accept's first four 400s have no words in the spec. This plan's: `An acceptance takes only layer_id, revision, follow and confirm_widenings`; `layer_id is the id of the charter layer`; `revision is a whole number`; `follow is true or false`. A bad `confirm_widenings` gets 4a's activation message (I4). | One message per check, so the order test can tell which answered (3b's R14). |
+| P5 | "Already accepted with the same `follow`" is checked after steps 3 and 4 and before steps 5 and 6. | A retry of an acceptance that needed a widening carries the same `confirm_widenings`; by then the baseline is the accepted revision, so step 5 read first would refuse the retry with 409. R30's idempotence needs the retry to answer 200; it changes nothing either way. |
+| P6 | Leaving takes `reason` as grants' revoke does: missing, null or blank is `left`; other keys are ignored. | The spec gives only the reason's 400. |
+| P7 | `acceptances[].revision` is the revision the acceptance names, as `acceptance.revision` is the caller's. `charter.names` names the person ids of the active revision's grantee set and of the caller's binding revision's. | The spec's shape names the keys only. The binding revision is the caller's own text, and the active revision's people are visible to everyone (C26's cost). |
+| P8 | The follow walk also stops before a revision that isn't a charter revision. | C6 makes it unreachable; a hand-edited database can't make the walk read a policy that isn't there. |
+| P9 | `_too_large` answers for every caps question 4c asks (accept step 6, `pending.too_large`, the re-bound check): the person's ships that the revision with each ship's own layers puts over the caps, listed as 4a lists ships (`name COLLATE NOCASE, id`, its P6), so a 409 names the ship 4a's rule would. The follow walk and the re-bound check visit ships in the same order (`_owned_ships`). | C23: one rule, one function, as the spec's Binding says ("the caps check uses the same function"). |
+| P10 | The re-bound check runs only when the layer has no active revision at activation, and checks each acceptance's own revision, pinned or following. | C23 and Binding: a follower re-bound after a withdrawal "starts its walk at a revision it can't stop before"; a layer active now binds no one again. |
+| P11 | An owner's own activation that would change their charter pair, either way, gets 409 `<ship> would be bound by charter revision <after> instead of revision <before>`, naming the ship whose caps made the difference. It runs after 4a's caps check (I13). That check refuses a move back only when the revision binding now stops fitting; a move back past an earlier large revision (her walk is at r4 through a large r3, and the new layer still fits r4 but not r3) and every move forward (shrinking an own layer lets a follower take a revision they haven't accepted by hand) are refused by this check alone. A move forward through an own layer's withdrawal or narrowing is allowed, and must stay so: C23 checks activations only, C21's follow consents to non-widening revisions, and refusing it would stop owners withdrawing their own layers. | Binding: "if any pair differs, the activation gets 409 naming the ship"; re-check SA(b). The spec gives no words. |
+| P12 | The reconcile's report: `Charter acceptances ended, as the replaced file holds none in force for them: …`, `Charter acceptances kept: …`, `Charter acceptances lost: in the replaced file, not in this copy, and a restore never adds one: … Ask them to accept again on the Charter page.`, by username. A copy from before 4c (no table) is skipped as any step is, and every acceptance in force in the replaced file is listed as lost. No count joins "Taken back:". | C27 and Security ("names every acceptance it couldn't keep"). Ending an acceptance takes law away, not access. |
+| P13 | Test 35 is a new 500-step test beside 4a's oracle (test 23), not a rewrite of it. | 4a owns test 23. Caps need layer sizes, which the 60-case oracle doesn't have. |
+| P14 | The Charter page states the limits in words, shows the line diff, one checkbox per widened path, the ships a revision is too large for, and pin or follow; its button stays disabled until every box is ticked and while a ship is too large; one write at a time; "Stop accepting" asks in place, Cancel focused. Narrowings aren't listed: the limits list shows the new values. | R35; 3c's R17 and R18 for the ask and the one write. |
+| P15 | Tests are split where their parts land: test 25 (Tasks 1, 2, 3), 26 (1, 3, 7, 9), 27 (1, 3), 28 (2, 3), 33 (3, 5); test 19's 4c addition is Task 6. | Each part is written with the code it tests. |
+| P16 | Tests reach 4a only through spec routes and the names in I6 to I11 and I16; their helpers (`super_admin`, `new_charter`, `sign`, `withdraw`) are this plan's. | Reconciling with 4a renames nothing in the tests unless 4a changed a route the spec defines. |
 
 ## Global Constraints
 
@@ -137,6 +146,7 @@ Decisions this plan makes where the spec leaves a choice. A fresh reviewer check
   - The page's words: "Keep this revision until I accept another" (pin), "Follow later revisions that don't widen the limits" (follow), "all your ships, now and later", "Stop accepting", "You signed this charter; it binds your ships".
 - 4c changes no step 3 grant code (C18, R29): `grants.py`, `tickets.py`, the grant functions of `signatures.py`, the G13 functions of `backups.py` and the Grants page in `app.js` stay as they are. Task 10 checks the first two with `git diff`.
 - Production SQL names its columns (`INSERT INTO charter_acceptances(id,person_id,...)`).
+- Ships are listed by `name COLLATE NOCASE, id`, as 4a's plan lists them (its P6).
 - No test, and no code path, runs a request inside `with store.transaction()`: the TestClient's request would wait on the same dispatch gate (Task 3's grant-reader test reads the lists before it opens one).
 - Every test is named, written first and seen failing first; where a test guards behaviour that already holds, the step says so and Step 5's mutation shows it bites.
 - Repo norms: the new module goes in both `only-include` lists of `peer/pyproject.toml`, the new test file in the sdist one.
@@ -167,10 +177,11 @@ Inputs no spec test names, most likely to bite a person first. Each is pinned by
 - The follow walk runs at every binding computation (tickets, the ship route, `GET /api/ships`, `GET /api/charter`):
   each step renders the candidate revision with each of the owner's ships' own layers. A station holds a handful of
   revisions and ships.
-- When an own activation makes the revision binding now stop fitting, which 409 answers depends on 4a (R11): 4a's caps
-  check names the ship with the caps message; were 4a to compute the pair with the new layer, R11's check would answer
-  instead. That test asserts the status and the ship's name only.
-- `_check_rebound_caps` returns at once for a layer that is active now (R10). That early return is what keeps a
+- When an own activation makes the revision binding now stop fitting, 4a's caps check answers it (4a's `_charter_pair`
+  takes no `replace`, so the pair it measures is the one before the activation), naming the ship with the caps message;
+  P11's check answers only the moves 4a's check lets through. That test asserts the status and the ship's name only, so
+  it holds either way.
+- `_check_rebound_caps` returns at once for a layer that is active now (P10). That early return is what keeps a
   follower's accepted revision, which their walk has left, from being checked again at each later revision: without it,
   one follower whose own layers fit where their walk is but not the revision they accepted would block every revision
   of the charter (the spec review's S6). Task 5's `test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_stays_active`
@@ -184,13 +195,17 @@ Inputs no spec test names, most likely to bite a person first. Each is pinned by
   ship to check) is bound over the caps by the ship they dock later. The live station has residents, whose check
   refuses such a charter.
 - Re-activating a withdrawn charter layer can be refused (409 naming the ship) by re-bound owners, pinned or following,
-  whose ships would pass the caps at their accepted revision (R10; spec C23). The signer's way out is a new charter
+  whose ships would pass the caps at their accepted revision (P10; spec C23). The signer's way out is a new charter
   layer, the spec's own rollback path, at the cost of every owner accepting again. The narrower rule, leaving such an
   owner unbound with the revision shown as pending, needs a spec change under D8 (C23, Binding, spec A amendment 4,
   R33, test 33's two re-activation cases, R20's status words) and is recorded for the next spec revision (the plan
   review's 3c).
 - The restore report names people by username, as the grants' lines do.
 - Test 35's seed reaches each event its last assertion lists; "own refused: moved" occurs once in 500 steps.
+- After 4c, the charter preview's `binds` (4a's `_charter_preview`) still lists only the residents and the signer's
+  ships, not the ships of owners who accept the charter. Extending it isn't a one-line change in 4a's plan: which
+  acceptors a draft would bind depends on whether its layer is active (re-bound owners) and on each follower's walk
+  against a revision that isn't written yet, so 4c records it here, and API.md says so (Task 10), rather than extend it.
 - Task 9's RED takes about a minute and a half: three tests wait 30 s for the Charter link.
 
 ## File Structure
@@ -200,11 +215,13 @@ Inputs no spec test names, most likely to bite a person first. Each is pinned by
 - Modify `peer/superyak_peer/identity.py` (`RECORD_KEYS`), `peer/superyak_peer/signatures.py` (`SIGNED_RECORDS`, the
   records, their signatures, backfill and signed route), `peer/superyak_peer/db.py` (the schema, the mixin, the backfill
   call), `peer/superyak_peer/app.py` (four routes) and `peer/pyproject.toml` (Task 1; app.py again in Task 3).
-- Modify 4a's code at four points: `_charter_pair` and `_charter_status` (Task 2), the two activation paths (Task 5),
-  `_may_read_charter_revision` (Task 6). With Appendix A these are in `instructions.py`, `layers.py` and `signatures.py`.
+- Modify 4a's code at five points: `Instructions._charter_pair` and `_charter_status` (Task 2, `instructions.py`),
+  `Charter._check_charter_activation` (Task 5, `charter.py`), `Layers.activate_layer` (Task 5, `layers.py`), and
+  `Signatures._may_read_charter_revision` (Task 6, `signatures.py`).
 - Modify `peer/superyak_peer/backups.py`: `COMPARED`, the acceptances steps, the report (Task 7).
 - Modify `peer/superyak_peer/static/app.js` and `app.css`: the Charter page (Task 9).
-- Modify `peer/API.md` and `docs/station-restore.md` (Task 10).
+- Modify `peer/API.md` (4c's section and record kinds, and 4a's sentences that say only the signer's ships and the
+  residents are bound), `agent/README.md` (4a's "What binds a ship") and `docs/station-restore.md` (Task 10).
 - Create `peer/tests/test_acceptances.py` (Tasks 1-8). Modify `peer/tests/test_signatures.py` and
   `peer/tests/test_restore.py` (Task 1), `peer/tests/test_ship_agent.py` (Task 2), `peer/tests/test_browser.py`
   (Task 9).
@@ -262,7 +279,8 @@ Inputs no spec test names, most likely to bite a person first. Each is pinned by
 - Create: `peer/superyak_peer/acceptances.py`
 - Modify: `peer/superyak_peer/identity.py` (`RECORD_KEYS` and the comment above it, `:74-83`)
 - Modify: `peer/superyak_peer/signatures.py` (`SIGNED_RECORDS`, `:16-19`; six methods after `grant_signed`, `:168-178`)
-- Modify: `peer/superyak_peer/db.py` (an import, the `Store` bases `:50`, the schema `:64`, the signing block `:86-89`)
+- Modify: `peer/superyak_peer/db.py` (an import, the `Store` bases `:50` as 4a leaves them, the schema `:64`, the signing
+  block `:86-89`)
 - Modify: `peer/superyak_peer/app.py` (one route after `grant_signed`, `:508-510`)
 - Modify: `peer/pyproject.toml` (both `only-include` lists)
 - Create: `peer/tests/test_acceptances.py`
@@ -272,7 +290,7 @@ Inputs no spec test names, most likely to bite a person first. Each is pinned by
 **Interfaces:**
 - Consumes: `Signatures._station_identity(db)`, `refuse_a_lost_identity_before_the_store`, `holds_signed_records` (3b);
   test helpers `docked`, `ship_client` (`test_instructions.py`), `card_of`, `raw_sign`, `run_cli`
-  (`test_signatures.py`). Nothing from 4a.
+  (`test_signatures.py`). From 4a, only the `Store` bases' text (4a adds `Charter`).
 - Produces:
   - `ACCEPTANCE_SCHEMA` (the spec's table and index); `Acceptances._insert_acceptance(db, person_id, signer_id,
     layer_id, revision, follow) -> str` (the id; stored and signed in the caller's transaction);
@@ -665,7 +683,8 @@ In `peer/superyak_peer/db.py`, after `from .grants import Grants, GRANT_SCHEMA` 
 from .acceptances import Acceptances, ACCEPTANCE_SCHEMA
 ```
 
-then add `, Acceptances` after `Grants` at the end of the `class Store(...)` bases, and `+ ACCEPTANCE_SCHEMA` after
+(it then sits above 4a's `from .charter import Charter`), then add `, Acceptances` after `Charter` at the end of the
+`class Store(...)` bases (4a's plan makes them end `Grants, Charter):`), and `+ ACCEPTANCE_SCHEMA` after
 `+ GRANT_SCHEMA` in the `db.executescript(...)` line, and after
 
 ```python
@@ -735,7 +754,7 @@ git commit -m "Charter 4c: the charter_acceptances table and its two signed reco
 **Files:**
 - Modify: `peer/superyak_peer/acceptances.py` (three methods after `_end_acceptance`)
 - Modify: 4a's `Instructions._charter_pair` (its last statement) and `Instructions._charter_status` (its `accepted`)
-  (I9, I10; `instructions.py` with Appendix A)
+  (I9, I10; `instructions.py`)
 - Test: `peer/tests/test_acceptances.py`, `peer/tests/test_ship_agent.py`
 
 **Interfaces:**
@@ -948,27 +967,37 @@ In `peer/superyak_peer/acceptances.py`, append to the `Acceptances` class, after
         return held['layer_id'], held['revision']
 ```
 
-In 4a's `Instructions._charter_pair` (I9), the last statement, which answers `None` for a ship whose owner is neither
-absent nor the active charter's signer, becomes:
+In 4a's `Instructions._charter_pair` (I9), replace its last two lines,
 
 ```python
-        return self._accepted_pair(db, ship['owner_id'])  # charter 4c: the revision the owner's acceptance binds
-```
-
-With Appendix A that replaces the method's last line, `        return None`.
-
-In 4a's `Instructions._charter_status` (I10), `accepted` gains the acceptance. With Appendix A, replace
-
-```python
-        accepted = not ship['owner_id'] or ship['owner_id'] == active['owner_id']
+            return active['id'], active['active_revision']
+        return None
 ```
 
 with
 
 ```python
-        accepted = (not ship['owner_id'] or ship['owner_id'] == active['owner_id']
-                    or self._accepts(db, ship['owner_id'], active['id']))  # charter 4c: an acceptance of this charter
+            return active['id'], active['active_revision']
+        return self._accepted_pair(db, ship['owner_id'])  # charter 4c: the revision the owner's acceptance binds
 ```
+
+so the case 4a answers `None` for (an owner who is neither absent nor the active charter's signer) gets the acceptance.
+
+In 4a's `Instructions._charter_status` (I10), `accepted` gains the acceptance. Replace the return's last line,
+
+```python
+                'accepted': ship['owner_id'] in (None, active['owner_id'])}
+```
+
+with
+
+```python
+                'accepted': (ship['owner_id'] in (None, active['owner_id'])
+                             or self._accepts(db, ship['owner_id'], active['id']))}  # charter 4c: or an acceptance of it
+```
+
+(4a's `binding` there is `pair[1] if pair else None`; with an acceptance, the pair is always the active charter's layer,
+since `_accepted_pair` compares with `_active_charter`.)
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -993,8 +1022,6 @@ Apply each alone, run `tests/test_acceptances.py`, see the named test fail, rest
 git add peer/superyak_peer/acceptances.py peer/superyak_peer/instructions.py peer/tests/test_acceptances.py peer/tests/test_ship_agent.py
 git commit -m "Charter 4c: a pinned acceptance binds its owner's ships, now and docked later (R29, R31, C22)"
 ```
-
-(Add whichever file holds 4a's `_charter_pair` and `_charter_status`, if not `instructions.py`.)
 
 ---
 
@@ -1326,7 +1353,7 @@ Append to the end of the `Acceptances` class, after `_accepted_pair`:
         return {row['id']: row['name'] for row in rows if row is not None}
 
     def _owned_ships(self, db, person_id):
-        return db.execute("SELECT * FROM users WHERE kind='ship' AND owner_id=? ORDER BY name, id", (person_id,)).fetchall()
+        return db.execute("SELECT * FROM users WHERE kind='ship' AND owner_id=? ORDER BY name COLLATE NOCASE, id", (person_id,)).fetchall()
 
     def _too_large(self, db, person_id, layer_id, revision):
         """C23: the names of the person's ships that this charter revision, with each ship's own layers, would put over
@@ -1449,12 +1476,11 @@ In `peer/superyak_peer/app.py`, before `    @app.get('/api/charter/acceptances/{
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_acceptances.py`
 Expected: `15 passed`.
 
-Two assertions pin text whose exact form is 4a's, and may need 4a's form (plan review S4): every
-`'Confirm exactly these widenings: delegation.max_depth'` in the order test and the baseline test (the spec writes
-"Confirm exactly these widenings: …", so 4a may join or end the list differently), and the narrowed `grantees` item
-`{'path': 'grantees', 'before': None, 'after': {'people': [...], 'ships_of': []}}` in the `GET /api/charter` test (the
-spec defines narrowed paths only as "the same paths where P is smaller or lacks a member"). If 4a's I3 or I5 writes
-them otherwise, change the expected values to 4a's, not 4a's code.
+Two assertions pin text whose exact form is 4a's (plan review S4), and 4a's plan at `9cbe58f` confirms both: every
+`'Confirm exactly these widenings: delegation.max_depth'` in the order test and the baseline test is `require_confirmed`'s
+text (`', '.join(paths) or 'none'`, I5), and the narrowed `grantees` item `{'path': 'grantees', 'before': None, 'after':
+{'people': [...], 'ships_of': []}}` in the `GET /api/charter` test is `narrowed_paths`' form (I3), which 4a's own preview
+test pins. If 4a's merged code wrote either otherwise, change the expected values to 4a's, not 4a's code.
 - [ ] **Step 5: Check the tests bite**
 
 Apply each alone, run `tests/test_acceptances.py`, see the named test fail, restore:
@@ -1640,8 +1666,7 @@ git commit -m "Charter 4c: a follower steps one existing revision at a time, nev
 
 **Files:**
 - Modify: `peer/superyak_peer/acceptances.py` (`MOVED`; `_accepted_pair`, `_follow_walk`; two methods after it)
-- Modify: 4a's charter activation path (I12) and ordinary instructions activation path (I13); `layers.py` with
-  Appendix A
+- Modify: 4a's `Charter._check_charter_activation` (I12, `charter.py`) and `Layers.activate_layer` (I13, `layers.py`)
 - Test: `peer/tests/test_acceptances.py`
 
 **Interfaces:**
@@ -1652,8 +1677,8 @@ git commit -m "Charter 4c: a follower steps one existing revision at a time, nev
     (revision, blocker_name | None)`, which also stops before a revision that would put one of the owner's ships over
     the caps.
   - `Acceptances._check_rebound_caps(db, layer_id) -> None` (409 `CAPS_REFUSAL` naming a ship) and
-    `Acceptances._refuse_a_moved_charter(db, actor, key, snapshot) -> None` (409 `MOVED`), called from 4a's two
-    activation paths.
+    `Acceptances._refuse_a_moved_charter(db, actor, key, snapshot, revision) -> None` (409 `MOVED`; `revision` is the
+    number the activation will write, for I8's `replace`), called from 4a's two activation paths.
   - Test helper: `own_layer(client, ship, body, title='Big') -> (layer_id, activation response)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1729,7 +1754,7 @@ def test_an_owners_own_activation_never_moves_their_ships_to_another_charter_rev
 
 
 def test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_stays_active(station):
-    """Plan review S1 (C21, C23, R10): Jenn follows from a large revision 2 and her walk moves on to a small revision 3;
+    """Plan review S1 (C21, C23, P10): Jenn follows from a large revision 2 and her walk moves on to a small revision 3;
     her own layers then fit 3 but not 2, which her walk has left. Andy's revision 4 activates, and her ship moves to it:
     a layer that is active now binds no one again, so her accepted revision isn't checked, and one follower never blocks
     every later revision."""
@@ -1747,7 +1772,7 @@ def test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_st
 
 
 def test_an_own_layer_that_would_send_a_follower_back_past_a_large_revision_is_refused(station):
-    """Plan review S2 (C23's last check, R11): Jenn follows from revision 2 and her walk reaches revision 4 through a
+    """Plan review S2 (C23's last check, P11): Jenn follows from revision 2 and her walk reaches revision 4 through a
     large revision 3. A new own layer still fits 4, so 4a's caps check lets it through, but it no longer fits 3, so her
     walk would fall back to 2: the activation gets 409 naming the ship, and her ship stays at 4."""
     s = station
@@ -1858,40 +1883,54 @@ and add after it:
             if too_large:
                 raise Problem(409, CAPS_REFUSAL.format(ship=too_large[0]))
 
-    def _refuse_a_moved_charter(self, db, actor, key, snapshot):
+    def _refuse_a_moved_charter(self, db, actor, key, snapshot, revision):
         """C23's last check, at an owner's own activation of an instructions layer: their follow walk, which reads
         their own layers, must stop at the same revision with the new snapshot as without it, or 409 naming the ship
-        whose caps made the difference. A pin, a withdrawn charter and the signer's own ships never move."""
+        whose caps made the difference; `revision` is the one the activation will write, as 4a's caps check
+        measures it (I8). A pin, a withdrawn charter and the signer's own ships never move."""
         held = self._acceptance_in_force(db, actor)
         if held is None or not held['follow']:
             return
         layer = db.execute('SELECT active_revision FROM layers WHERE id=?', (held['layer_id'],)).fetchone()
         if layer is None or layer['active_revision'] is None:
             return
-        replace = {'layer_id': key, 'snapshot': snapshot, 'created': self.clock(), 'revision': 0}
+        replace = {'layer_id': key, 'revision': revision, 'snapshot': snapshot, 'created': self.clock()}
         (before, held_back), (after, stopped) = self._follow_walk(db, held), self._follow_walk(db, held, replace)
         if before != after:
             raise Problem(409, MOVED.format(ship=stopped or held_back, after=after, before=before))
 ```
 
-In 4a's charter activation (I12), after `require_confirmed(...)` and before the new revision row is written, while the
-layer's `active_revision` is still the one before this activation, add:
+In `peer/superyak_peer/charter.py`, in 4a's `Charter._check_charter_activation` (I12), replace its last two lines,
 
 ```python
+        require_confirmed(confirm_paths(confirm), widened_paths(self._policy_in_force(db), policy))
+        return policy
+```
+
+with
+
+```python
+        require_confirmed(confirm_paths(confirm), widened_paths(self._policy_in_force(db), policy))
         self._check_rebound_caps(db, key)  # charter 4c (C23): owners whose acceptance binds again, before the write
+        return policy
 ```
 
-With Appendix A that is in `Layers._activate_charter`, between `snapshot['resolved_space_users'], snapshot['audience_notes'] = {}, []`
-and `revision = row['resource_version'] + 1`.
+`activate_layer` calls it before the revision row is written, so the layer's `active_revision` is still the one before
+this activation; 4a's own `_check_charter_caps` runs after the write (its P14). The spec's step 5 has one caps bullet,
+so the two checks' order is free.
 
-In 4a's ordinary instructions activation (I13), right after `self._check_instruction_caps(db, actor, key, snapshot)`,
-at its indentation, add:
+In `peer/superyak_peer/layers.py`, in 4a's `Layers.activate_layer` (I13), replace
 
 ```python
-                self._refuse_a_moved_charter(db, actor, key, snapshot)  # charter 4c (C23): never another charter revision
+                    self._check_instruction_caps(db, actor, key, snapshot, row['resource_version'] + 1)
 ```
 
-With Appendix A that is in `Layers.activate_layer`, inside `if snapshot.get('kind') == 'instructions':`.
+with
+
+```python
+                    self._check_instruction_caps(db, actor, key, snapshot, row['resource_version'] + 1)
+                    self._refuse_a_moved_charter(db, actor, key, snapshot, row['resource_version'] + 1)  # charter 4c (C23)
+```
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -1906,7 +1945,7 @@ Apply each alone, run `tests/test_acceptances.py`, see the named test fail, rest
 - `... AND revoked IS NULL AND follow=0 ORDER BY ...` in `_check_rebound_caps` (pins only) → `[True]`: a re-bound
   follower left unchecked;
 - drop `if blocker is not None: return revision, safe_line(blocker['name'])` → `test_a_revision_too_large_for_a_followers_ship_stops_the_follower_and_is_never_refused`;
-- drop the `_refuse_a_moved_charter` call → `test_an_owners_own_activation_never_moves_their_ships_to_another_charter_revision`
+- drop the `_refuse_a_moved_charter` call in `activate_layer` → `test_an_owners_own_activation_never_moves_their_ships_to_another_charter_revision`
   (the forward half: shrinking a layer moves her to revision 4 in silence);
 - `self._own_layers(db, ship)` for `self._own_layers(db, ship, replace)` in `_follow_walk` → the same test (the walk
   can't see the activation being checked);
@@ -1920,11 +1959,9 @@ Apply each alone, run `tests/test_acceptances.py`, see the named test fail, rest
 - [ ] **Step 6: Commit**
 
 ```bash
-git add peer/superyak_peer/acceptances.py peer/superyak_peer/layers.py peer/tests/test_acceptances.py
+git add peer/superyak_peer/acceptances.py peer/superyak_peer/charter.py peer/superyak_peer/layers.py peer/tests/test_acceptances.py
 git commit -m "Charter 4c: caps for owners bound again, a follower's next revision, and an owner's own layers (R33, C23)"
 ```
-
-(Add whichever file holds 4a's activation paths, if not `layers.py`.)
 
 ---
 
@@ -1932,7 +1969,7 @@ git commit -m "Charter 4c: caps for owners bound again, a follower's next revisi
 
 **Files:**
 - Modify: `peer/superyak_peer/acceptances.py` (`_acceptance_names` before `_accepted_pair`)
-- Modify: 4a's `Signatures._may_read_charter_revision` (I14; `signatures.py` with Appendix A)
+- Modify: 4a's `Signatures._may_read_charter_revision` (I14, `signatures.py`)
 - Test: `peer/tests/test_acceptances.py`
 
 **Interfaces:**
@@ -1994,7 +2031,7 @@ In `peer/superyak_peer/acceptances.py`, insert before `_accepted_pair`:
         return self._accepted_pair(db, person_id) == (layer_id, revision)
 ```
 
-In 4a's `Signatures._may_read_charter_revision` (I14), the answer gains the acceptance. With Appendix A, replace
+In 4a's `Signatures._may_read_charter_revision` (I14), the answer gains the acceptance. Replace its body,
 
 ```python
         return layer['active_revision'] == revision
@@ -2602,7 +2639,7 @@ git commit -m "Charter 4c: the binding oracle over 500 seeded steps with pins, f
   page's functions before the board's one-write comment `:803`, `loadRoute` `:1090`, `render`'s view and title maps
   `:1117`, `:1137`, the submit, click and change handlers `:1769`, `:1887`, `:2043`)
 - Modify: `peer/superyak_peer/static/app.css` (after `.grant-make form`, `:338`)
-- Test: `peer/tests/test_browser.py`
+- Test: `peer/tests/test_browser.py` (four new tests; three grants-followups revoke tests tightened, `:3163-3247`)
 
 **Interfaces:**
 - Consumes: `GET /api/charter`, `POST /api/charter/accept`, `POST /api/charter/leave` (Task 3) and their shapes; the
@@ -3032,47 +3069,168 @@ Apply each alone, run the test named, see it fail, restore:
 - in `_insert_acceptance`, also `self._insert_grant(db, person_id, signer_id, [], '*', 720, 1)` after signing →
   `test_the_grants_page_lists_the_grant_and_never_the_acceptance`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Tighten three grants-followups browser tests**
+
+Two test-robustness minors from an earlier section 2 review, test-only: the grants-followups revoke tests match their
+buttons and heading by exact name (without `exact=True`, "Revoke #a1b2" also matches "Yes, revoke #a1b2"), and the
+revoke-twice test lets its held routes go in a `finally`, so a failing assertion leaves no `CancelledError` noise as the
+page shuts down. In `peer/tests/test_browser.py`, replace each of these three tests with the version below.
+
+```python
+def test_a_second_press_of_yes_revoke_while_the_first_is_on_its_way_sends_nothing(browser_peer):
+    """Section 2 review of merge 3c, minor 4: the revoke path has no guard of its own, only grantWrite's one write at a
+    time. With the first POST held the button is still on screen; a second press must not send a second POST (which the
+    station would answer with a 409 that the page then shows). The POSTs are counted."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            posts, held = [], []
+            page.on("request", lambda request: posts.append(request.url) if request.method == "POST" and request.url.endswith("/revoke") else None)
+            page.route("**/api/grants/*/revoke", lambda route: held.append(route))
+            try:
+                page.get_by_role("link", name="Grants", exact=True).click()
+                item = page.locator(".grants-given .grant-item")
+                item.get_by_role("button", name=f"Revoke {made['short']}", exact=True).click()
+                confirm = item.get_by_role("button", name=f"Yes, revoke {made['short']}", exact=True)
+                with page.expect_request("**/api/grants/*/revoke"):
+                    confirm.click()
+                assert len(held) == 1
+                expect(confirm).to_be_visible()
+                expect(confirm).to_be_enabled()
+                confirm.click()  # the first write is still on its way
+                page.wait_for_timeout(300)
+                assert len(posts) == 1, posts  # held requests are counted when sent
+            finally:  # a failure above still lets every held request go, so the page shuts down quietly
+                for route in held:
+                    route.continue_()
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
+            page.wait_for_timeout(300)
+            assert len(posts) == 1, posts
+            expect(page.locator(".notice.error")).to_have_count(0)
+    assert store.list_grants(patient)[0]["revoked"] is not None
+```
+
+```python
+def test_focus_moves_to_given_by_you_only_after_a_revoke_that_worked(browser_peer):
+    """The Mac's final review of 3c, m4: after a revoke that went through the item is gone, so focus goes to the "Given by
+    you" heading; after a refused one the ask stays open with its error and focus returns to its "Yes, revoke" button."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            title = page.locator("#grants-given-title")
+            item.get_by_role("button", name=f"Revoke {made['short']}", exact=True).click()
+            refuse = lambda route: route.fulfill(status=409, content_type="application/json", body='{"error": "Grant is already revoked"}')
+            page.route("**/api/grants/*/revoke", refuse)
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}", exact=True).click()
+            expect(page.locator(".notice.error", has_text="Grant is already revoked")).to_be_visible()
+            page.wait_for_timeout(300)
+            expect(item.locator(".grant-ask")).to_have_count(1)
+            expect(title).not_to_be_focused()
+            expect(item.get_by_role("button", name=f"Yes, revoke {made['short']}", exact=True)).to_be_focused()  # the keyboard user keeps their place
+            page.unroute("**/api/grants/*/revoke", refuse)
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}", exact=True).click()
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
+            expect(title).to_be_focused()
+    assert store.list_grants(patient)[0]["revoked"] is not None
+```
+
+```python
+def test_a_revoke_whose_reload_finds_the_session_ended_shows_the_sign_in(browser_peer):
+    """The Mac's final review of 3c, m4: the revoke went through, then the list's reload answered 401 (the session ended
+    meanwhile). The sign-in prompt shows, not a list that quietly went stale."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            item.get_by_role("button", name=f"Revoke {made['short']}", exact=True).click()
+            posted = []
+
+            def after_the_post(route):
+                posted.append(route.request.url)  # the reload is answered 401 from here on
+                route.continue_()
+
+            page.route("**/api/grants/*/revoke", after_the_post)
+            page.route("**/api/grants", lambda route: route.fulfill(status=401, content_type="application/json", body='{"error": "Sign in"}')
+                       if posted else route.continue_())
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}", exact=True).click()
+            expect(page.get_by_text("Your session ended. Sign in again;")).to_be_visible()
+            expect(page.get_by_role("heading", name="Sign in to your home", exact=True)).to_be_visible()
+    assert store.list_grants(patient)[0]["revoked"] is not None
+```
+
+Run: `cd peer && uv run --locked python -m pytest -q tests/test_browser.py::test_a_second_press_of_yes_revoke_while_the_first_is_on_its_way_sends_nothing tests/test_browser.py::test_focus_moves_to_given_by_you_only_after_a_revoke_that_worked tests/test_browser.py::test_a_revoke_whose_reload_finds_the_session_ended_shows_the_sign_in`
+Expected: `3 passed`. No mutation: the tests check the same behaviour as before.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add peer/superyak_peer/static/app.js peer/superyak_peer/static/app.css peer/tests/test_browser.py
-git commit -m "Charter 4c: the Charter page: read, accept pinned or following with each widening ticked, stop accepting (R35)"
+git commit -m "Charter 4c: the Charter page: read, accept pinned or following with each widening ticked, stop accepting (R35); exact names in three grants tests"
 ```
 
 ---
 
-### Task 10: API.md, the restore runbook, and the whole suite
+### Task 10: API.md, agent/README.md, the restore runbook, and the whole suite
 
 **Files:**
-- Modify: `peer/API.md` ("## Signed records", `:267-308`; a new "## Charter acceptances" before "## Grants", `:310`)
+- Modify: `peer/API.md` ("## Signed records"; a new "## Charter acceptances" before "## Grants"; and 4a's sentences that
+  say only the signer's ships and the residents are bound: the layer table's `/signed` row, the binding rule, and 4a's
+  "## Charter" intro, activation, preview and reading)
+- Modify: `agent/README.md` (4a's "What binds a ship")
 - Modify: `docs/station-restore.md` (the "brings back" paragraph, `:10-15`; step 7, `:170-171`)
 
 **Interfaces:**
-- Consumes: everything above. Produces: documentation only.
+- Consumes: everything above, and 4a's API.md and agent/README.md as 4a's plan at `9cbe58f` (its Task 14) leaves them.
+  Produces: documentation only.
 
-API.md's "Charter" section, binding rule and block format are 4a's (its R23). This task adds 4c's own section beside
-them and the two record kinds; if 4a reworded a line anchored below, reconcile the anchor, not the text 4c adds.
+API.md's "Charter" section, binding rule and block format are 4a's (its R23). Step 1 adds 4c's own section and the two
+record kinds; its anchors are lines 4a's Task 14 leaves as they are. Step 2 brings 4a's sentences up to date, anchored
+in 4a's text. The dry run applied 4a's plan's twenty-one API.md and agent/README.md edits to the files at `9e0aac8` and
+then every edit below, each anchor matching once; Appendix A doesn't carry 4a's docs, so the replay's tree has Step 1's
+edits only.
 
-- [ ] **Step 1: Write the docs**
+- [ ] **Step 1: Write 4c's own docs**
 
-In `peer/API.md`, replace `don't (see below). It signs three kinds:` with `don't (see below). It signs five kinds:`.
-After the `grant-revocation` bullet,
+In `peer/API.md`, replace
+
+```markdown
+don't (see below). It signs three kinds:
+```
+
+with
+
+```markdown
+don't (see below). It signs five kinds:
+```
+
+In `peer/API.md`, replace
 
 ```markdown
 - `grant-revocation`: `{kind, station, grant, revoked, revoked_by, reason}`, signed in the transaction that revokes.
   A revocation the restore reconcile wrote is signed once at the next start.
 ```
 
-add
+with
 
 ```markdown
+- `grant-revocation`: `{kind, station, grant, revoked, revoked_by, reason}`, signed in the transaction that revokes.
+  A revocation the restore reconcile wrote is signed once at the next start.
 - `charter-acceptance`: `{kind, station, id, person_id, signer_id, layer_id, revision, follow, created}`, with `follow`
   a JSON boolean, signed in the transaction that stores the acceptance (see Charter acceptances).
 - `charter-acceptance-revocation`: `{kind, station, acceptance, revoked, revoked_by, reason}`, signed in the transaction
   that ends the acceptance. An end the restore reconcile wrote is signed once at the next start.
 ```
 
-Replace the line
+In `peer/API.md`, replace
 
 ```markdown
 kind's keys (`instructions-revision`, `grant` or `grant-revocation`), its `station` is the card's peer id, and the
@@ -3085,7 +3243,7 @@ kind's keys (`instructions-revision`, `grant`, `grant-revocation`, `charter-acce
 `charter-acceptance-revocation`), its `station` is the card's peer id, and the
 ```
 
-and the line
+In `peer/API.md`, replace
 
 ```markdown
 card export still names its host; but a station that holds signed records (a revision signature or a grant) and has
@@ -3098,7 +3256,13 @@ card export still names its host; but a station that holds signed records (a rev
 acceptance) and has
 ```
 
-Before `## Grants` insert, followed by a blank line:
+In `peer/API.md`, insert before
+
+```markdown
+## Grants
+```
+
+this, followed by a blank line:
 
 ```markdown
 ## Charter acceptances
@@ -3197,26 +3361,167 @@ and in step 7, after the sentence that ends `a grant made after the copy is gone
 
 (with its leading space, so the sentence joins the line as the step's other sentences do).
 
-- [ ] **Step 2: Run the whole suite**
+- [ ] **Step 2: Bring 4a's sentences up to date**
+
+Once 4c lands, these 4a sentences would say that only the signer's ships and the residents are bound, or that only the
+owner reads a past charter revision. Each edit below is anchored in 4a's text as its Task 14 writes it.
+
+In `peer/API.md`, replace
+
+```markdown
+| GET `/api/layers/{id}/revisions/{n}/signed` | — | `{station, record, signature}` for an instructions revision; owner only, but every person reads the active charter revision's (see Signed records) |
+```
+
+with
+
+```markdown
+| GET `/api/layers/{id}/revisions/{n}/signed` | — | `{station, record, signature}` for an instructions revision; owner only, but every person reads the active charter revision's, and a past charter revision goes to the people whose acceptance names it (see Signed records) |
+```
+
+In `peer/API.md`, replace
+
+```markdown
+**Binding rule.** A ship is bound first by the station's charter, when one is active and the ship is a resident (no
+owner) or its owner signed it (see Charter); then by the active instruction layers of its owner whose audience lists
+```
+
+with
+
+```markdown
+**Binding rule.** A ship is bound first by the station's charter, when one is active and the ship is a resident (no
+owner) or its owner signed it (see Charter), or by the charter revision its owner's acceptance binds (see Charter
+acceptances); then by the active instruction layers of its owner whose audience lists
+```
+
+In `peer/API.md`, replace
+
+```markdown
+binds the ships its signer owns and the resident ships, first among their instructions. Acceptance by other owners is
+merge 4c; until then another owner's ship is bound by its owner's own layers alone.
+```
+
+with
+
+```markdown
+binds the ships its signer owns and the resident ships, first among their instructions. Another owner who accepts it
+has their ships bound by the revision their acceptance binds (see Charter acceptances, merge 4c).
+```
+
+In `peer/API.md`, replace
+
+```markdown
+have more than 10 instruction layers or 48,000 bytes of them" for a resident or a ship of the signer's that the new
+revision would put over the caps.
+```
+
+with
+
+```markdown
+have more than 10 instruction layers or 48,000 bytes of them" for a resident or a ship of the signer's that the new
+revision would put over the caps, or, activating a withdrawn charter again, for a ship of an owner whose acceptance
+binds again (see Charter acceptances).
+```
+
+In `peer/API.md`, replace
+
+```markdown
+person id's name), the ships it would bind (`[{id, name, owner_name}]`, residents with `owner_name: null`), and
+```
+
+with
+
+```markdown
+person id's name), the ships it would bind (`[{id, name, owner_name}]`, residents with `owner_name: null`; the residents
+and the signer's ships only, not the ships of owners who accept it), and
+```
+
+In `peer/API.md`, replace
+
+```markdown
+`GET /api/layers/{id}/revisions/{n}/signed`; every other revision, a charter's included, stays its owner's.
+```
+
+with
+
+```markdown
+`GET /api/layers/{id}/revisions/{n}/signed`; any other charter revision goes to its owner and to each person whose
+acceptance names it (see Charter acceptances), and every other revision stays its owner's.
+```
+
+In `peer/API.md`, replace
+
+```markdown
+and whether the ship's owner signed it (always true for a resident).
+```
+
+with
+
+```markdown
+and whether the ship's owner signed or accepted it (always true for a resident).
+```
+
+In `peer/API.md`, replace
+
+```markdown
+the active charter revision's to every signed-in person. Anyone else, and any revision without a signature, gets the
+same 404; a ship key gets 403.
+```
+
+with
+
+```markdown
+the active charter revision's to every signed-in person, and a past charter revision's to each person whose acceptance
+names it (see Charter acceptances). Anyone else, and any revision without a signature, gets the same 404; a ship key
+gets 403.
+```
+
+In `agent/README.md`, replace
+
+```markdown
+**What binds a ship.** First the station's charter, when one is active and the ship's owner signed it (only a super
+admin signs one, in the web app) or the ship is a resident such as Odo or Wormhole; then the owner's own active
+```
+
+with
+
+```markdown
+**What binds a ship.** First the station's charter, when one is active and the ship's owner signed it (only a super
+admin signs one, in the web app) or the ship is a resident such as Odo or Wormhole, or else the charter revision the
+owner's acceptance binds (an owner accepts on the web app's Charter page, pinned to a revision or following later ones
+that don't widen its limits); then the owner's own active
+```
+
+(`agent/README.md` is documentation: no agent code changes, so the agent suite needn't run.)
+
+- [ ] **Step 3: Run the whole suite**
 
 Run: `cd peer && uv run --locked python -m pytest -q -ra --tb=short`
 Expected: `975 passed, 1 skipped` on Appendix A, this plan's 34 new tests among them, in about 7 minutes; on the real
-4a, the suite's count before Task 1 plus 34. The skip is `test_station_units.py:73`'s, away from the station host. `test_restore.py` reads
-`docs/station-restore.md`'s commands and still passes: no command changed.
+4a, the suite's count before Task 1 plus 34. The skip is `test_station_units.py:73`'s, away from the station host.
+`test_restore.py` reads `docs/station-restore.md`'s commands and still passes: no command changed.
 
-- [ ] **Step 3: Check that no step 3 grant code changed**
+- [ ] **Step 4: Record where 4a entered this branch, then check that no step 3 grant code changed**
 
-Run: `git diff 9e0aac8 -- peer/superyak_peer/grants.py peer/superyak_peer/tickets.py`
-Expected: no output (C18, R29). Then read `git diff 9e0aac8 -- peer/superyak_peer/signatures.py peer/superyak_peer/backups.py peer/superyak_peer/static/app.js`
-and see that every line 4c added is new code beside the grants' (the acceptance methods, the acceptances steps, the
-Charter page), with no grant function, the grants reconcile or the Grants page touched. (Run both against the commit
-where 4a merged into this branch, if later than `9e0aac8`.)
+The grant code check diffs against the commit where main, with 4a, merged into charter-4c, not `9e0aac8`: 4a changes
+`grants.py` (its policy in force) and `tickets.py` (its footer). Use the hash recorded before Task 1, or find it as the
+last merge on this branch's first-parent line that brought in `charter.py`:
 
-- [ ] **Step 4: Commit**
+Run: `AFTER_4A=$(git log --first-parent --merges --format=%H -1 -- peer/superyak_peer/charter.py) && git show --no-patch --oneline "$AFTER_4A"`
+Expected: one line, the merge of main (with 4a) into charter-4c. If it names anything else, set `AFTER_4A` by hand to
+that merge's hash.
+
+Run: `git diff "$AFTER_4A" -- peer/superyak_peer/grants.py peer/superyak_peer/tickets.py`
+Expected: no output (C18, R29). Then read `git diff "$AFTER_4A" -- peer/superyak_peer/signatures.py peer/superyak_peer/backups.py peer/superyak_peer/static/app.js`
+and see that every line 4c added is new code beside the grants' (the acceptance methods and the clause in
+`_may_read_charter_revision`, the acceptances steps, the Charter page), with no grant function, the grants reconcile or
+the Grants page touched. (In the dry run, with no 4a merge, `git diff 9e0aac8 -- peer/superyak_peer/grants.py
+peer/superyak_peer/tickets.py` was empty.)
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add peer/API.md docs/station-restore.md
-git commit -m "Charter 4c: API.md's charter acceptances and signed records, and the restore runbook's report lines"
+git add peer/API.md agent/README.md docs/station-restore.md
+git commit -m "Charter 4c: API.md's charter acceptances and signed records, 4a's binding sentences, the agent README and the restore runbook"
 ```
 
 ---
@@ -3235,14 +3540,18 @@ the copy. On a failed check: revert, restart, announce. Acceptance rows left beh
 
 ## Appendix A: the 4a stand-in, for dry runs only
 
-Never commit this. It implements I1 to I16 with the spec's semantics and nothing else (no policy validation, no
-footers, no brackets in headers, no `GET /api/grants/policy`), so 4c's tasks can be dry-run before 4a exists. Save it as
-`standin.diff` in a scratch clone of `9e0aac8` and run `git apply standin.diff`; then apply the tasks in order. Its one
-change to an existing test (the ship route's answer gains `charter: None`) is 4a's to make for real.
+Never commit this as code: 4a's merge replaces it. It implements I1 to I16 with 4a's plan's names, signatures and
+anchors at `9cbe58f` (`charter.py`'s functions and `Charter` mixin, `_charter_pair`, `_own_layers`, `_charter_status`,
+`_check_instruction_caps(..., revision)`, `_check_charter_caps`, `_may_read_charter_revision`, `charter_line`) and the
+spec's semantics, and nothing else of 4a's (no policy validation, no draft refusals beyond a charter's ships, no
+narrowing refusal, no footers, no brackets in headers, no preview, no `GET /api/grants/policy`, no docs), so 4c's tasks
+can be dry-run before 4a exists. Save it as `standin.diff` in a scratch clone of `9e0aac8`, run `git apply standin.diff`
+and commit it in the scratch clone; then apply the tasks in order. Its one change to an existing test (the ship route's
+answer gains `charter: None`) is 4a's to make for real.
 
 ```diff
 diff --git a/agent/superyak_agent/station.py b/agent/superyak_agent/station.py
-index 9c809e7..dc4790d 100644
+index 9c809e7..d973d60 100644
 --- a/agent/superyak_agent/station.py
 +++ b/agent/superyak_agent/station.py
 @@ -523,3 +523,18 @@ def board_block(title, room_id, items, budget):
@@ -3252,8 +3561,8 @@ index 9c809e7..dc4790d 100644
 +
 +
 +def charter_line(charter):
-+    """4a STAND-IN (R20): the status command's one charter line from GET /api/ships/me/instructions' charter field; None
-+    when the station sent no such field."""
++    """4a STAND-IN (R20): `status`'s one charter line from the ship route's `charter` field (null: none active), or None
++    for a value that isn't one."""
 +    if charter is None:
 +        return 'Charter: none active'
 +    if not isinstance(charter, dict):
@@ -3261,9 +3570,9 @@ index 9c809e7..dc4790d 100644
 +    revision, binding = charter.get('revision'), charter.get('binding')
 +    if binding == revision:
 +        return f'Charter: revision {revision} binds this ship'
-+    if binding is not None:
-+        return f"Charter: revision {revision} is pending for this ship's owner; revision {binding} binds this ship"
-+    return f"Charter: revision {revision} is active; this ship's owner has not accepted it"
++    if binding is None:
++        return f"Charter: revision {revision} is active; this ship's owner has not accepted it"
++    return f"Charter: revision {revision} is pending for this ship's owner; revision {binding} binds this ship"
 diff --git a/peer/pyproject.toml b/peer/pyproject.toml
 index 58295e8..6e8b6d9 100644
 --- a/peer/pyproject.toml
@@ -3285,7 +3594,7 @@ index 58295e8..6e8b6d9 100644
      "superyak_peer/common.py",
      "superyak_peer/db.py",
 diff --git a/peer/superyak_peer/app.py b/peer/superyak_peer/app.py
-index 4296dd2..eadae5c 100644
+index 4296dd2..2c904cb 100644
 --- a/peer/superyak_peer/app.py
 +++ b/peer/superyak_peer/app.py
 @@ -467,11 +467,13 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
@@ -3300,20 +3609,21 @@ index 4296dd2..eadae5c 100644
 -        return store.withdraw_layer(actor(request), key)
 +    async def layer_withdraw(key: str, request: Request):
 +        who = actor(request)
-+        data = await body(request) if (await request.body()).strip() else {}  # 4a stand-in: an empty body is {}
++        data = await body(request) if await request.body() else {}  # charter step 4: an empty body is {}, as before
 +        return store.withdraw_layer(who, key, data.get('confirm_widenings'))
  
      @app.post('/api/layers/{key}/revoke')
      async def layer_revoke(key: str, request: Request):
 diff --git a/peer/superyak_peer/charter.py b/peer/superyak_peer/charter.py
 new file mode 100644
-index 0000000..12e1fed
+index 0000000..5e80d59
 --- /dev/null
 +++ b/peer/superyak_peer/charter.py
-@@ -0,0 +1,79 @@
-+"""STAND-IN for merge 4a's policy module, for dry runs of the 4c plan only. It implements the interfaces the 4c plan
-+consumes, with the spec's semantics and no schema validation; 4a's real module replaces it."""
+@@ -0,0 +1,98 @@
++"""STAND-IN for merge 4a's charter.py (4a's plan at 9cbe58f), for dry runs of the 4c plan only, never committed: the
++names and shapes 4c consumes (its I1-I5, I11, I12), with the spec's semantics and none of the policy's validation."""
 +import copy
++import json
 +from .common import Problem
 +
 +DEFAULT_POLICY = {'version': 1,
@@ -3321,14 +3631,14 @@ index 0000000..12e1fed
 +                                 'delegable': ['direct']},
 +                  'budgets': {'builds_per_ship_per_day': 20},
 +                  'grantees': None}
-+MAX_WIDENINGS = 105
-+NUMBERS = (('delegation', 'max_depth'), ('delegation', 'max_expiry_hours'),
-+           ('delegation', 'agent_grant_default_hours'), ('budgets', 'builds_per_ship_per_day'))
++NUMBERS = ('delegation.max_depth', 'delegation.max_expiry_hours', 'delegation.agent_grant_default_hours',
++           'budgets.builds_per_ship_per_day')
++MAX_CONFIRMED = 105
 +
 +
-+def full_policy(policy):
-+    """Every default filled in (spec Data, C11). The stand-in does not validate."""
-+    given = policy or {}
++def full_policy(db, raw):
++    """C11: every default filled in. 4a's checks every value (and that grantee ids are people); the stand-in doesn't."""
++    given = raw or {}
 +    full = copy.deepcopy(DEFAULT_POLICY)
 +    for section in ('delegation', 'budgets'):
 +        full[section].update(given.get(section) or {})
@@ -3340,69 +3650,108 @@ index 0000000..12e1fed
 +    return full
 +
 +
-+def _compare(old, new, grows):
-+    found = []
-+    for section, key in NUMBERS:
-+        before, after = old[section][key], new[section][key]
-+        if (after > before) if grows else (after < before):
-+            found.append({'path': f'{section}.{key}', 'before': before, 'after': after})
-+    gained = set(new['delegation']['delegable']) - set(old['delegation']['delegable'])
-+    lost = set(old['delegation']['delegable']) - set(new['delegation']['delegable'])
-+    for action in sorted(gained if grows else lost):
-+        found.append({'path': f'delegation.delegable:{action}', 'before': None if grows else action,
-+                      'after': action if grows else None})
-+    if grows and old['grantees'] is not None and new['grantees'] is None:
-+        found.append({'path': 'grantees', 'before': old['grantees'], 'after': None})
-+    if not grows and old['grantees'] is None and new['grantees'] is not None:
-+        found.append({'path': 'grantees', 'before': None, 'after': new['grantees']})
-+    if old['grantees'] is not None and new['grantees'] is not None:
-+        for field in ('people', 'ships_of'):
-+            changed = (set(new['grantees'][field]) - set(old['grantees'][field]) if grows
-+                       else set(old['grantees'][field]) - set(new['grantees'][field]))
-+            for member in sorted(changed):
-+                found.append({'path': f'grantees.{field}:{member}', 'before': None if grows else member,
-+                              'after': member if grows else None})
-+    return sorted(found, key=lambda item: item['path'])
++def _changes(base, policy):
++    """C13: (widened, narrowed), each [{path, before, after}] sorted by path."""
++    widened, narrowed = [], []
++    for path in NUMBERS:
++        section, key = path.split('.')
++        before, after = base[section][key], policy[section][key]
++        if after != before:
++            (widened if after > before else narrowed).append({'path': path, 'before': before, 'after': after})
++    was, now = base['delegation']['delegable'], policy['delegation']['delegable']
++    widened += [{'path': f'delegation.delegable:{action}', 'before': None, 'after': action} for action in now if action not in was]
++    narrowed += [{'path': f'delegation.delegable:{action}', 'before': action, 'after': None} for action in was if action not in now]
++    was, now = base['grantees'], policy['grantees']
++    if was is not None and now is None:
++        widened.append({'path': 'grantees', 'before': was, 'after': None})
++    elif was is None and now is not None:
++        narrowed.append({'path': 'grantees', 'before': None, 'after': now})
++    elif was is not None:
++        for key in ('people', 'ships_of'):
++            widened += [{'path': f'grantees.{key}:{i}', 'before': None, 'after': i} for i in now[key] if i not in was[key]]
++            narrowed += [{'path': f'grantees.{key}:{i}', 'before': i, 'after': None} for i in was[key] if i not in now[key]]
++    return sorted(widened, key=lambda change: change['path']), sorted(narrowed, key=lambda change: change['path'])
 +
 +
 +def widened_paths(baseline, policy):
-+    """Spec Data: the paths that widen from baseline to policy, as [{path, before, after}], sorted by path."""
-+    return _compare(baseline, policy, True)
++    return _changes(baseline, policy)[0]
 +
 +
 +def narrowed_paths(baseline, policy):
-+    """Spec Routes (preview): the same paths where policy is smaller or lacks a member."""
-+    return _compare(baseline, policy, False)
++    return _changes(baseline, policy)[1]
 +
 +
 +def confirm_paths(value):
-+    """confirm_widenings as a list of paths; absent is []. 400 otherwise (spec Routes, activation step 5)."""
 +    if value is None:
 +        return []
-+    if (not isinstance(value, list) or len(value) > MAX_WIDENINGS
-+            or not all(isinstance(path, str) and len(path) <= 200 for path in value)):
++    if (not isinstance(value, list) or len(value) > MAX_CONFIRMED
++            or any(not isinstance(path, str) or len(path) > 200 for path in value)):
 +        raise Problem(400, 'confirm_widenings is a list of paths')
 +    return value
 +
 +
-+def require_confirmed(paths, widenings):
-+    """C13: exactly the widened paths, each once, in any order; 409 naming them otherwise."""
-+    wanted = [item['path'] for item in widenings]
-+    if len(paths) != len(set(paths)) or set(paths) != set(wanted):
++def require_confirmed(paths, widened):
++    wanted = [change['path'] for change in widened]
++    if len(set(paths)) != len(paths) or set(paths) != set(wanted):
 +        raise Problem(409, 'Confirm exactly these widenings: ' + (', '.join(wanted) or 'none'))
++
++
++class Charter:
++    def _active_charter(self, db):
++        """The layers row whose active revision is a charter revision, with that revision's `snapshot`, or None."""
++        return db.execute('SELECT layers.*, layer_revisions.snapshot FROM layers JOIN layer_revisions '
++                          'ON layer_revisions.layer_id=layers.id AND layer_revisions.revision=layers.active_revision '
++                          "WHERE json_extract(layer_revisions.snapshot, '$.charter')=1 "
++                          'ORDER BY layer_revisions.created, layers.id LIMIT 1').fetchone()
++
++    def _policy_in_force(self, db):
++        active = self._active_charter(db)
++        return copy.deepcopy(DEFAULT_POLICY) if active is None else json.loads(active['snapshot'])['policy']
++
++    def _check_charter_activation(self, db, actor, key, snapshot, confirm=None):
++        user = db.execute('SELECT is_super_admin, activation_pending FROM users WHERE id=?', (actor,)).fetchone()
++        if user is None or not user['is_super_admin'] or user['activation_pending']:
++            raise Problem(403, "Only a super admin can sign the station's charter")
++        active = self._active_charter(db)
++        if active is not None and active['id'] != key:
++            raise Problem(409, 'Another charter is active; its owner must withdraw it first')
++        policy = full_policy(db, snapshot.get('policy'))
++        require_confirmed(confirm_paths(confirm), widened_paths(self._policy_in_force(db), policy))
++        return policy
+diff --git a/peer/superyak_peer/db.py b/peer/superyak_peer/db.py
+index da879a6..ed0b66e 100644
+--- a/peer/superyak_peer/db.py
++++ b/peer/superyak_peer/db.py
+@@ -23,6 +23,7 @@ from .room_board import RoomBoard, BOARD_SCHEMA
+ from .breakouts import Breakouts, BREAKOUT_SCHEMA
+ from .signatures import Signatures, SIGNATURE_SCHEMA
+ from .grants import Grants, GRANT_SCHEMA
++from .charter import Charter
+ from .common import encode, Problem
+ from .peer_store import PeerStore, PEER_SCHEMA
+ from .dispatch import DispatchGate
+@@ -47,7 +48,7 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL R
+ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
+ '''
+ 
+-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants):
++class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Charter):
+     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True):
+         self.data_dir = Path(data_dir).absolute()
+         self.clock = clock
 diff --git a/peer/superyak_peer/instructions.py b/peer/superyak_peer/instructions.py
-index cae93a8..17b1396 100644
+index cae93a8..c4cc29d 100644
 --- a/peer/superyak_peer/instructions.py
 +++ b/peer/superyak_peer/instructions.py
 @@ -8,6 +8,7 @@ from .ships import safe_line
  PREAMBLE = ('These instructions were signed by people and bind this ship. If two of them conflict, do not choose: '
              'ask in the room.')
  MAX_LAYERS, MAX_BYTES = 10, 48000
-+CAPS_REFUSAL = '{ship} would have more than 10 instruction layers or 48,000 bytes of them'  # 4a stand-in (R16)
++CAPS_REFUSAL = '{ship} would have more than 10 instruction layers or 48,000 bytes of them'  # R16: each 409 names the ship
  DRAFTS_PER_HOUR = 10
  WAITING_DRAFTS, WAITING_DAYS = 20, 7  # a rolling window: layers cannot be deleted, so a lifetime cap could lock a ship out
  
-@@ -16,11 +17,17 @@ def defuse_body(text):
+@@ -16,8 +17,9 @@ def defuse_body(text):
      return '\n'.join(' ' + line if line.startswith(('===', "Instructions '")) else line for line in str(text).splitlines())
  
  
@@ -3414,23 +3763,35 @@ index cae93a8..17b1396 100644
              f'{safe_line(layer["signer_name"])} on station {str(station)[:12]} ===\n{defuse_body(layer["body"])}')
  
  
+@@ -25,6 +27,17 @@ def render_blocks(layers, station):
+     return PREAMBLE + '\n\n' + '\n\n'.join(render_one(l, station) for l in layers) if layers else ''
+ 
+ 
 +def over_caps(layers):
-+    """4a stand-in: spec A's caps, 10 layers and 48,000 bytes of rendered blocks."""
++    """Spec A's caps (R16): more than MAX_LAYERS layers, or more than MAX_BYTES of their rendered blocks."""
 +    return len(layers) > MAX_LAYERS or len(render_blocks(layers, 'x' * 12).encode()) > MAX_BYTES
 +
 +
- def render_blocks(layers, station):
-     return PREAMBLE + '\n\n' + '\n\n'.join(render_one(l, station) for l in layers) if layers else ''
- 
-@@ -37,16 +44,55 @@ class Instructions:
++def binding_entry(layer_id, revision, snapshot, signer_id, signer_name, created):
++    """One binding layer, as _binding_layers and _layers_for give it; `charter` marks a charter revision."""
++    return {'layer_id': layer_id, 'revision': revision, 'title': snapshot['title'], 'body': snapshot['body'],
++            'signer_id': signer_id, 'signer_name': signer_name, 'created': created, 'charter': snapshot.get('charter') is True}
++
++
+ class Instructions:
+     def _layers_for(self, db, pairs):
+         """The layers at exactly these (layer_id, revision) pairs, as _binding_layers returns them."""
+@@ -35,18 +48,27 @@ class Instructions:
+                              'JOIN users ON users.id=layers.owner_id WHERE layer_revisions.layer_id=? AND layer_revisions.revision=?',
+                              (layer_id, revision)).fetchone()
              if row:
-                 snap = json.loads(row['snapshot'])
-                 found.append({'layer_id': layer_id, 'revision': revision, 'title': snap['title'], 'body': snap['body'],
+-                snap = json.loads(row['snapshot'])
+-                found.append({'layer_id': layer_id, 'revision': revision, 'title': snap['title'], 'body': snap['body'],
 -                              'signer_id': row['owner_id'], 'signer_name': row['signer'], 'created': row['created']})
 -        return sorted(found, key=lambda l: (l['created'], l['layer_id']))
-+                              'signer_id': row['owner_id'], 'signer_name': row['signer'], 'created': row['created'],
-+                              'charter': snap.get('charter') is True})
-+        return found  # 4a stand-in (R15): in the order recorded
++                found.append(binding_entry(layer_id, revision, json.loads(row['snapshot']), row['owner_id'], row['signer'],
++                                           row['created']))
++        return found
  
      def ship_instructions(self, actor, station):
          with self.transaction() as db:
@@ -3440,109 +3801,101 @@ index cae93a8..17b1396 100644
                  'layers': [{'layer_id': l['layer_id'], 'revision': l['revision'], 'title': safe_line(l['title'], 200),
 -                            'signer_name': safe_line(l['signer_name']), 'block': render_one(l, station)} for l in layers],
 -                'blocks': render_blocks(layers, station)}
-+                            'signer_name': safe_line(l['signer_name']), 'block': render_one(l, station),
-+                            'charter': l['charter']} for l in layers],
++                            'signer_name': safe_line(l['signer_name']), 'charter': l['charter'],
++                            'block': render_one(l, station)} for l in layers],
 +                'blocks': render_blocks(layers, station), 'charter': charter}
 +
 +    def _charter_status(self, db, ship):
-+        """4a stand-in: GET /api/ships/me/instructions' charter field."""
 +        active = self._active_charter(db)
 +        if active is None:
 +            return None
 +        pair = self._charter_pair(db, ship)
-+        accepted = not ship['owner_id'] or ship['owner_id'] == active['owner_id']
-+        return {'layer_id': active['id'], 'revision': active['active_revision'],
-+                'binding': pair[1] if pair and pair[0] == active['id'] else None, 'accepted': accepted}
-+
-+    def _charter_pair(self, db, ship):
-+        """4a stand-in, spec Binding 2: a resident gets the active charter's active revision; the signer's ships too
-+        (C17); any other owner's ship, none before 4c."""
-+        active = self._active_charter(db)
-+        if not ship['owner_id'] or (active is not None and ship['owner_id'] == active['owner_id']):
-+            return (active['id'], active['active_revision']) if active is not None else None
-+        return None
-+
-+    def _own_layers(self, db, ship, replace=None):
-+        """4a stand-in, spec Binding 3: the owner's own active non-charter instructions layers that list the ship, by
-+        (created, layer_id). replace substitutes one layer's snapshot, for an activation being checked."""
-+        if not ship['owner_id']:
-+            return []
-+        signer = db.execute('SELECT name FROM users WHERE id=?', (ship['owner_id'],)).fetchone()['name']
-+        rows = [(r['layer_id'], r['revision'], json.loads(r['snapshot']), r['created']) for r in db.execute(
-+            'SELECT layers.id AS layer_id, layer_revisions.revision, layer_revisions.snapshot, layer_revisions.created '
-+            'FROM layers JOIN layer_revisions ON layers.id=layer_revisions.layer_id AND layers.active_revision=layer_revisions.revision '
-+            'WHERE layers.owner_id=?', (ship['owner_id'],))]
-+        if replace is not None:
-+            rows = [r for r in rows if r[0] != replace['layer_id']] + [(replace['layer_id'], replace.get('revision', 0), replace['snapshot'], replace['created'])]
-+        found = [{'layer_id': lid, 'revision': rev, 'title': snap['title'], 'body': snap['body'], 'signer_id': ship['owner_id'],
-+                  'signer_name': signer, 'created': created, 'charter': False}
-+                 for lid, rev, snap, created in rows
-+                 if snap.get('kind') == 'instructions' and not snap.get('charter') and ship['id'] in snap.get('audience_users', [])]
-+        return sorted(found, key=lambda l: (l['created'], l['layer_id']))
++        return {'layer_id': active['id'], 'revision': active['active_revision'], 'binding': pair[1] if pair else None,
++                'accepted': ship['owner_id'] in (None, active['owner_id'])}
  
      def ship_draft(self, actor, data):
          """A ship drafts an instructions layer in its owner's name, addressed to itself. Only the owner can activate it."""
-@@ -76,20 +122,12 @@ class Instructions:
+@@ -75,9 +97,14 @@ class Instructions:
+             db.execute('INSERT INTO layers(id,owner_id,version,draft) VALUES(?,?,1,?)', (key, owner, encode(draft)))
              return {'id': key, 'title': draft['title'], 'version': 1, 'state': 'draft', 'drafted_by': actor}
  
-     def _binding_layers(self, db, ship_id, replace=None):
-+        """4a stand-in, spec Binding: the charter pair first, then the owner's own layers."""
-         ship = require(db.execute('SELECT * FROM users WHERE id=?', (ship_id,)).fetchone())
+-    def _binding_layers(self, db, ship_id, replace=None):
+-        ship = require(db.execute('SELECT * FROM users WHERE id=?', (ship_id,)).fetchone())
 -        if ship['kind'] != 'ship' or not ship['owner_id']:
-+        if ship['kind'] != 'ship':
++    def _charter_pair(self, db, ship):
++        active = self._active_charter(db)
++        if active is not None and ship['owner_id'] in (None, active['owner_id']):
++            return active['id'], active['active_revision']
++        return None
++
++    def _own_layers(self, db, ship, replace=None):
++        if not ship['owner_id']:
              return []
--        signer = db.execute('SELECT name FROM users WHERE id=?', (ship['owner_id'],)).fetchone()['name']
--        rows = [(r['layer_id'], r['revision'], json.loads(r['snapshot']), r['created']) for r in db.execute(
--            'SELECT layers.id AS layer_id, layer_revisions.revision, layer_revisions.snapshot, layer_revisions.created '
--            'FROM layers JOIN layer_revisions ON layers.id=layer_revisions.layer_id AND layers.active_revision=layer_revisions.revision '
--            'WHERE layers.owner_id=?', (ship['owner_id'],))]
--        if replace is not None:
+         signer = db.execute('SELECT name FROM users WHERE id=?', (ship['owner_id'],)).fetchone()['name']
+         rows = [(r['layer_id'], r['revision'], json.loads(r['snapshot']), r['created']) for r in db.execute(
+@@ -85,19 +112,33 @@ class Instructions:
+             'FROM layers JOIN layer_revisions ON layers.id=layer_revisions.layer_id AND layers.active_revision=layer_revisions.revision '
+             'WHERE layers.owner_id=?', (ship['owner_id'],))]
+         if replace is not None:
 -            rows = [r for r in rows if r[0] != replace['layer_id']] + [(replace['layer_id'], replace.get('revision', 0), replace['snapshot'], replace['created'])]
 -        found = [{'layer_id': lid, 'revision': rev, 'title': snap['title'], 'body': snap['body'], 'signer_id': ship['owner_id'],
 -                  'signer_name': signer, 'created': created}
 -                 for lid, rev, snap, created in rows if snap.get('kind') == 'instructions' and ship_id in snap.get('audience_users', [])]
--        return sorted(found, key=lambda l: (l['created'], l['layer_id']))
++            rows = [r for r in rows if r[0] != replace['layer_id']] + [
++                (replace['layer_id'], replace['revision'], replace['snapshot'], replace['created'])]
++        found = [binding_entry(lid, rev, snap, ship['owner_id'], signer, created) for lid, rev, snap, created in rows
++                 if snap.get('kind') == 'instructions' and snap.get('charter') is not True
++                 and ship['id'] in snap.get('audience_users', [])]
+         return sorted(found, key=lambda l: (l['created'], l['layer_id']))
+ 
+-    def _check_instruction_caps(self, db, actor, key, snapshot):
++    def _binding_layers(self, db, ship_id, replace=None):
++        ship = require(db.execute('SELECT * FROM users WHERE id=?', (ship_id,)).fetchone())
++        if ship['kind'] != 'ship':
++            return []
 +        pair = self._charter_pair(db, ship)
 +        return self._layers_for(db, [pair] if pair else []) + self._own_layers(db, ship, replace)
- 
-     def _check_instruction_caps(self, db, actor, key, snapshot):
++
++    def _check_instruction_caps(self, db, actor, key, snapshot, revision):
          if not snapshot['audience_users']:
-@@ -99,5 +137,13 @@ class Instructions:
+             raise Problem(400, 'Choose at least one ship for these instructions')
++        replace = {'layer_id': key, 'revision': revision, 'snapshot': snapshot, 'created': self.clock()}
+         for ship_id in snapshot['audience_users']:
+-            row = db.execute('SELECT owner_id FROM users WHERE id=?', (ship_id,)).fetchone()
++            row = db.execute('SELECT name, owner_id FROM users WHERE id=?', (ship_id,)).fetchone()
              if not row or row['owner_id'] != actor:
                  continue  # it does not bind a ship the activator does not own, so it cannot crowd that ship out
-             layers = self._binding_layers(db, ship_id, replace={'layer_id': key, 'snapshot': snapshot, 'created': self.clock(), 'revision': 0})
+-            layers = self._binding_layers(db, ship_id, replace={'layer_id': key, 'snapshot': snapshot, 'created': self.clock(), 'revision': 0})
 -            if len(layers) > MAX_LAYERS or len(render_blocks(layers, 'x' * 12).encode()) > MAX_BYTES:
 -                raise Problem(409, 'That ship would have more than 10 instruction layers or 48,000 bytes of them')
-+            if over_caps(layers):  # 4a stand-in (R16): each 409 names the ship
-+                ship = db.execute('SELECT name FROM users WHERE id=?', (ship_id,)).fetchone()
-+                raise Problem(409, CAPS_REFUSAL.format(ship=safe_line(ship['name'])))
++            if over_caps(self._binding_layers(db, ship_id, replace=replace)):  # its binding counts the charter (R16)
++                raise Problem(409, CAPS_REFUSAL.format(ship=safe_line(row['name'])))
 +
 +    def _check_charter_caps(self, db, signer_id):
-+        """4a stand-in (C23 in 4a): with the new revision active, the residents and the signer's ships."""
-+        for ship in db.execute("SELECT * FROM users WHERE kind='ship' AND (owner_id IS NULL OR owner_id=?) ORDER BY name, id",
-+                               (signer_id,)).fetchall():
++        for ship in db.execute("SELECT id, name FROM users WHERE kind='ship' AND (owner_id IS NULL OR owner_id=?) "
++                               'ORDER BY name COLLATE NOCASE, id', (signer_id,)).fetchall():
 +            if over_caps(self._binding_layers(db, ship['id'])):
 +                raise Problem(409, CAPS_REFUSAL.format(ship=safe_line(ship['name'])))
 diff --git a/peer/superyak_peer/layers.py b/peer/superyak_peer/layers.py
-index c9e13b8..654e0a4 100644
+index c9e13b8..5e7942e 100644
 --- a/peer/superyak_peer/layers.py
 +++ b/peer/superyak_peer/layers.py
 @@ -1,8 +1,9 @@
  """Owner-only drafts and immutable, explicitly activated release snapshots."""
  import json
  from .common import Problem, text, ids, uid, require, encode
-+from .charter import DEFAULT_POLICY, confirm_paths, full_policy, require_confirmed, widened_paths  # 4a stand-in
++from .charter import DEFAULT_POLICY, confirm_paths, require_confirmed, widened_paths  # 4a stand-in
  
 -FIELDS = {'kind', 'title', 'body', 'audience_users', 'audience_spaces', 'public', 'attachment_ids'}
 +FIELDS = {'kind', 'title', 'body', 'audience_users', 'audience_spaces', 'public', 'attachment_ids', 'charter', 'policy'}
  DEFAULT = {'kind': 'note', 'title': 'Untitled', 'body': '', 'audience_users': [], 'audience_spaces': [], 'public': False, 'attachment_ids': []}
  SERVER_KEYS = {'drafted_by', 'drafted_at'}
  
-@@ -45,10 +46,28 @@ class Layers:
+@@ -45,6 +46,12 @@ class Layers:
              attachment_size += require(db.execute('SELECT size FROM files WHERE id=? AND owner_id=?', (key, actor)).fetchone())[0]
          if any(u.startswith('remote_') for u in draft['audience_users']) and attachment_size > 4 * 1024 * 1024:
              raise Problem(400, 'Remote release attachments exceed 4 MiB')
-+        if draft.get('charter') is True:  # 4a stand-in: a charter is instructions with no audience
++        if draft.get('charter') is True:  # 4a stand-in: a charter is instructions with no ships
 +            if draft['kind'] != 'instructions' or draft['audience_users']:
 +                raise Problem(400, 'A charter names no ships: it binds every ship whose owner accepts it')
 +        else:
@@ -3551,23 +3904,7 @@ index c9e13b8..654e0a4 100644
          if draft['kind'] == 'note':
              del draft['kind']  # never stored for a note: a rolled-back station refuses any key it does not know
          return draft
- 
-+    def _active_charter(self, db):
-+        """4a stand-in: the one layer whose active revision is a charter revision, or None."""
-+        for row in db.execute('SELECT layers.*, layer_revisions.snapshot FROM layers JOIN layer_revisions ON '
-+                              'layer_revisions.layer_id=layers.id AND layer_revisions.revision=layers.active_revision').fetchall():
-+            if json.loads(row['snapshot']).get('charter') is True:
-+                return row
-+        return None
-+
-+    def _policy_in_force(self, db):
-+        active = self._active_charter(db)
-+        return json.loads(active['snapshot'])['policy'] if active else DEFAULT_POLICY
-+
-     def _owned_layer(self, db, actor, key):
-         return require(db.execute('SELECT * FROM layers WHERE id=? AND owner_id=?', (key, actor)).fetchone())
- 
-@@ -103,12 +122,14 @@ class Layers:
+@@ -103,14 +110,19 @@ class Layers:
              return {**self._layer_json(row), 'files':files, 'people':people, 'audience_details':details,
                      'space_versions':{space['id']:space['version'] for space in details}}
  
@@ -3578,91 +3915,81 @@ index c9e13b8..654e0a4 100644
              if type(version) is not int or version != row['version']:
                  raise Problem(409, 'Draft changed; preview this version again')
              snapshot = self._draft(db, actor, json.loads(row['draft']), stored=True)
-+            if snapshot.get('charter') is True:  # 4a stand-in
-+                return self._activate_charter(db, actor, key, row, version, snapshot, confirm_widenings)
-             if snapshot.get('kind') == 'instructions':
-                 self._check_instruction_caps(db, actor, key, snapshot)
+-            if snapshot.get('kind') == 'instructions':
+-                self._check_instruction_caps(db, actor, key, snapshot)
++            if snapshot.get('charter') is True:
++                snapshot['policy'] = self._check_charter_activation(db, actor, key, snapshot, confirm_widenings)  # in full (R2)
++            else:
++                if confirm_widenings:
++                    raise Problem(400, 'Only a charter has widenings to confirm')
++                if snapshot.get('kind') == 'instructions':
++                    self._check_instruction_caps(db, actor, key, snapshot, row['resource_version'] + 1)
              if space_versions is not None:
-@@ -131,9 +152,38 @@ class Layers:
+                 current = {space['id']:space['version'] for space in self._audience_details(db, snapshot)}
+                 if not isinstance(space_versions, dict) or space_versions != current:
+@@ -126,15 +138,21 @@ class Layers:
+                     snapshot['audience_notes'].append('Current and future members of ' + space['name'])
+             revision = row['resource_version'] + 1
+             db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, version, encode(snapshot), self.clock()))
+-            self._sign_revision(db, key, revision)  # spec A step 3, G2: an instructions revision is signed as it is written
+             db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
++            if snapshot.get('charter') is True:
++                self._check_charter_caps(db, actor)  # C23, with the new revision active: a 409 rolls this write back
++            self._sign_revision(db, key, revision)  # spec A step 3, G2: an instructions revision is signed as it is written
              self.emit(db, 'layer.activated', key, revision, {'owner_id': actor, 'draft_version': version})
              return self._active_layer(db, key, actor)
  
 -    def withdraw_layer(self, actor, key):
-+    def _activate_charter(self, db, actor, key, row, version, snapshot, confirm_widenings):
-+        """4a stand-in: C3, the one-charter check, C13's widenings against the policy in force, caps for the signer's
-+        ships and the residents with the new revision active, then the revision written and signed."""
-+        self._super_admin_signs(db, actor)
-+        active = self._active_charter(db)
-+        if active is not None and active['id'] != key:
-+            raise Problem(409, 'Another charter is active; its owner must withdraw it first')
-+        paths = confirm_paths(confirm_widenings)
-+        snapshot['policy'] = full_policy(snapshot.get('policy'))
-+        require_confirmed(paths, widened_paths(self._policy_in_force(db), snapshot['policy']))
-+        snapshot['audience_users'] = []
-+        snapshot['resolved_space_users'], snapshot['audience_notes'] = {}, []
-+        revision = row['resource_version'] + 1
-+        db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, version, encode(snapshot), self.clock()))
-+        db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
-+        self._check_charter_caps(db, actor)
-+        self._sign_revision(db, key, revision)
-+        self.emit(db, 'layer.activated', key, revision, {'owner_id': actor, 'draft_version': version})
-+        return self._active_layer(db, key, actor)
-+
-+    def _super_admin_signs(self, db, actor):
-+        row = require(db.execute('SELECT is_super_admin, activation_pending FROM users WHERE id=?', (actor,)).fetchone())
-+        if not row['is_super_admin'] or row['activation_pending']:
-+            raise Problem(403, "Only a super admin can sign the station's charter")
-+
 +    def withdraw_layer(self, actor, key, confirm_widenings=None):
          with self.transaction() as db:
              row = self._owned_layer(db, actor, key)
-+            active = self._active_charter(db)
-+            if active is not None and active['id'] == key:  # 4a stand-in, C15
-+                paths = confirm_paths(confirm_widenings)
-+                require_confirmed(paths, widened_paths(json.loads(active['snapshot'])['policy'], DEFAULT_POLICY))
              if row['active_revision'] is not None:
++                active = self._active_charter(db)
++                if active is not None and active['id'] == key:  # C15: its limits return to the defaults (R9)
++                    policy = json.loads(active['snapshot'])['policy']
++                    require_confirmed(confirm_paths(confirm_widenings), widened_paths(policy, DEFAULT_POLICY))
                  revision = row['resource_version'] + 1
                  db.execute('UPDATE layers SET active_revision=NULL,resource_version=? WHERE id=?', (revision, key))
+                 self.emit(db, 'layer.withdrawn', key, revision, {'owner_id': actor})
 diff --git a/peer/superyak_peer/signatures.py b/peer/superyak_peer/signatures.py
-index f8a545f..2d4a806 100644
+index f8a545f..eb146bb 100644
 --- a/peer/superyak_peer/signatures.py
 +++ b/peer/superyak_peer/signatures.py
-@@ -91,7 +91,9 @@ class Signatures:
+@@ -91,7 +91,8 @@ class Signatures:
              return None
          return {'kind': 'instructions-revision', 'station': self._station_identity(db).peer_id, 'layer_id': layer_id,
                  'revision': revision, 'owner_id': row['owner_id'], 'title': snapshot['title'], 'body': snapshot['body'],
 -                'audience_users': snapshot['audience_users'], 'policy': None, 'created': row['created']}
 +                'audience_users': snapshot['audience_users'],
-+                'policy': snapshot.get('policy') if snapshot.get('charter') is True else None,  # 4a stand-in (C12)
-+                'created': row['created']}
++                'policy': snapshot.get('policy') if snapshot.get('charter') is True else None, 'created': row['created']}
  
      def _sign_revision(self, db, layer_id, revision):
          """G2: in the transaction that writes the revision. A note's revision is not signed."""
-@@ -112,17 +114,25 @@ class Signatures:
+@@ -112,17 +113,25 @@ class Signatures:
                  self._sign_revision(db, row['layer_id'], row['revision'])
  
      def revision_signed(self, actor, layer_id, revision):
 -        """G6: {station, record, signature} for the layer's owner. Anyone else, and any revision without a signature
 -        (a note's, or one that doesn't exist), gets 404, so the route never says whether a layer exists."""
-+        """G6 as C26 widens it (4a stand-in): the owner; for a charter revision, also the readers C26 names."""
++        """G6 as C26 amends it (4a stand-in)."""
          with self.transaction() as db:
 -            self._owned_layer(db, actor, layer_id)
-             if not 1 <= revision <= 2 ** 63 - 1:  # past SQLite's integers sqlite3 raises OverflowError; no such revision
-                 raise Problem(404, 'Not found')
+-            if not 1 <= revision <= 2 ** 63 - 1:  # past SQLite's integers sqlite3 raises OverflowError; no such revision
 +            layer = db.execute('SELECT * FROM layers WHERE id=?', (layer_id,)).fetchone()
++            if layer is None or not 1 <= revision <= 2 ** 63 - 1:  # past SQLite's integers sqlite3 raises OverflowError
+                 raise Problem(404, 'Not found')
              row = require(db.execute('SELECT signature FROM revision_signatures WHERE layer_id=? AND revision=?',
--                                     (layer_id, revision)).fetchone())
-+                                     (layer_id, revision)).fetchone() if layer else None)
-+            if layer['owner_id'] != actor:
-+                snapshot = json.loads(db.execute('SELECT snapshot FROM layer_revisions WHERE layer_id=? AND revision=?',
-+                                                 (layer_id, revision)).fetchone()['snapshot'])
-+                if snapshot.get('charter') is not True or not self._may_read_charter_revision(db, actor, layer, revision):
-+                    raise Problem(404, 'Not found')
+                                      (layer_id, revision)).fetchone())
++            charter = db.execute("SELECT 1 FROM layer_revisions WHERE layer_id=? AND revision=? AND "
++                                 "json_extract(snapshot, '$.charter')=1", (layer_id, revision)).fetchone()
++            if layer['owner_id'] != actor and (charter is None or not self._may_read_charter_revision(db, actor, layer, revision)):
++                raise Problem(404, 'Not found')
              return {'station': self._station_identity(db).peer_id, 'record': self._revision_record(db, layer_id, revision),
                      'signature': row['signature']}
  
 +    def _may_read_charter_revision(self, db, actor, layer, revision):
-+        """4a stand-in (C26): any person reads the active charter revision; other charter revisions only the signer."""
++        """C26 in 4a: a person who doesn't own the layer reads a charter revision only while it is the layer's active
++        revision, which makes it the active charter; merge 4c adds the people whose acceptance names it."""
 +        return layer['active_revision'] == revision
 +
      def _grant_record(self, db, grant_id):
