@@ -556,18 +556,29 @@ function briefMeta(brief) {
 // S4: when the editor opens with a ship's text, saving makes all of it the owner's, so it says so above Save.
 function briefWarning(edit) {
   if (!edit.shipAuthor) return "";
-  return `<p class="brief-warning" role="note">${escapeHtml(`This text was written by ${edit.shipAuthor}, a ship. Saving makes all of it yours, so read it all first.`)}</p>`;
+  // Hidden while the box is blank (trimmed): Save then removes the brief, so nothing becomes the owner's. The input
+  // handler toggles it as he types.
+  return `<p class="brief-warning" role="note"${edit.body.trim() ? "" : " hidden"}>${escapeHtml(`This text was written by ${edit.shipAuthor}, a ship. Saving makes all of it yours, so read it all first.`)}</p>`;
 }
 
 // S5: the owner's history, newest first. Every body and name is escaped. "Use this text" puts a revision's body in
 // the editor as its value, at the room's current revision, and Save is the ordinary save. A removal has no text to use.
+// "Use this text" over typing the owner hasn't saved asks first, in place, as the board's Drop does.
+function briefUseAsk(revision) {
+  const n = escapeHtml(revision);
+  return `<div class="board-ask" role="group" aria-label="Replace your unsaved text with revision ${n}?"><p>Replace your unsaved text with revision ${n}?</p><div class="button-row"><button class="button secondary" type="button" data-action="brief-use-cancel">Cancel</button><button class="button danger" type="button" data-action="brief-use-confirm" data-revision="${n}" aria-label="Yes, replace my text with revision ${n}">Yes</button></div></div>`;
+}
+
 function briefHistory(room) {
   const history = state.briefHistory?.roomId === room.id ? state.briefHistory : null;
   if (!history) return "";
-  let rows;
-  if (history.error) rows = `<p class="inline-message error" role="status">${escapeHtml(history.error)}</p>`;
-  else if (!history.items) rows = `<p class="meta">Loading the brief's history…</p>`;
-  else rows = `<ol class="brief-revisions">${history.items.map((item) => `<li class="brief-revision">${briefAuthor(room, item)}<p class="meta">${escapeHtml(`Revision ${item.revision} · ${formatDate(item.updated)}${item.carried_from ? " · carried from the previous room" : ""}`)}</p>${item.body ? `<div class="brief-revision-body">${escapeHtml(item.body)}</div><button class="button ghost" type="button" data-action="use-brief-revision" data-revision="${escapeHtml(item.revision)}">Use this text</button>` : '<p class="meta">Removed</p>'}</li>`).join("")}</ol>`;
+  let rows = "";
+  if (history.items?.length === 0) rows = `<p class="meta">No revisions yet.</p>`;
+  else if (history.items) {
+    rows = `<ol class="brief-revisions">${history.items.map((item) => `<li class="brief-revision">${briefAuthor(room, item)}<p class="meta">${escapeHtml(`Revision ${item.revision} · ${formatDate(item.updated)}${item.carried_from ? " · carried from the previous room" : ""}`)}</p>${item.body ? `<div class="brief-revision-body">${escapeHtml(item.body)}</div>${history.ask === item.revision ? briefUseAsk(item.revision) : `<button class="button ghost" type="button" data-action="use-brief-revision" data-revision="${escapeHtml(item.revision)}">Use this text</button>`}` : '<p class="meta">Removed</p>'}</li>`).join("")}</ol>`;
+  } else if (!history.error) rows = `<p class="meta">Loading the brief's history…</p>`;
+  // A failed reload keeps the rows already shown and puts its error under them.
+  if (history.error) rows += `<p class="inline-message error" role="status">${escapeHtml(history.error)}</p>`;
   return `<div class="brief-history"><h4>Brief history</h4>${rows}</div>`;
 }
 
@@ -1364,10 +1375,17 @@ async function openBriefHistory(room) {
 
 // "Use this text" (S5): the revision's body becomes the editor's value, never HTML, at the room's current revision,
 // so Save is the ordinary save and makes a new revision by the owner. The editor warns when the text is a ship's (S4).
-function useBriefRevision(room, revision) {
+function useBriefRevision(room, revision, confirmed = false) {
   const item = state.briefHistory?.roomId === room.id ? state.briefHistory.items?.find((r) => r.revision === revision) : null;
   if (!item) return;
-  state.briefEdit = { roomId: room.id, revision: room.brief_revision ?? 0, body: item.body, status: "", error: false,
+  const open = state.briefEdit?.roomId === room.id ? state.briefEdit : null;
+  if (open && open.body !== open.opened && !confirmed) {  // unsaved typing: ask before it goes
+    state.briefHistory.ask = revision;
+    render();
+    return;
+  }
+  state.briefHistory.ask = null;
+  state.briefEdit = { roomId: room.id, revision: room.brief_revision ?? 0, body: item.body, opened: item.body, status: "", error: false,
                       shipAuthor: briefAuthorClass(room, item) === "ship" ? item.author_name : null };
   render();
   const box = document.querySelector("#brief-body");
@@ -1730,15 +1748,17 @@ document.addEventListener("click", async (event) => {
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
     // S4: the editor warns when the text it opens with is a ship's; saving would make all of it the owner's.
-    state.briefEdit = { roomId: state.room.id, revision: state.room.brief_revision ?? 0, body: brief?.body || "", status: "", error: false,
+    state.briefEdit = { roomId: state.room.id, revision: state.room.brief_revision ?? 0, body: brief?.body || "", opened: brief?.body || "", status: "", error: false,
                         shipAuthor: brief && briefAuthorClass(state.room, brief) === "ship" ? brief.author_name : null };
     render();
     document.querySelector("#brief-body")?.focus();
   }
-  if (action === "cancel-brief") { state.briefEdit = null; render(); }
+  if (action === "cancel-brief") { state.briefEdit = null; if (state.briefHistory) state.briefHistory.ask = null; render(); }
   if (action === "brief-history" && state.room) await openBriefHistory(state.room);
   if (action === "hide-brief-history") { state.briefHistory = null; render(); }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
+  if (action === "brief-use-confirm" && state.room) useBriefRevision(state.room, Number(target.dataset.revision), true);
+  if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); }
   if (action === "profile") { state.profileDialog = true; render(); }
   if (action === "logout") await logout();
   if (action === "invite") {
@@ -1842,7 +1862,11 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("input", (event) => {
   Research.remember(event.target); Dashboard.input(event.target);
-  if (event.target.id === "brief-body" && state.briefEdit) state.briefEdit.body = event.target.value;
+  if (event.target.id === "brief-body" && state.briefEdit) {
+    state.briefEdit.body = event.target.value;
+    const warning = document.querySelector("#brief-form .brief-warning");
+    if (warning) warning.hidden = !event.target.value.trim();
+  }
   if (event.target.closest("#board-post-form") && state.room) {
     const form = event.target.form;  // kept per room, so a re-render (a message sent, another item closed) keeps it
     state.boardPost = { roomId: state.room.id, key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
