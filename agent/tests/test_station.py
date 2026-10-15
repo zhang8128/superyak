@@ -192,6 +192,18 @@ def test_concurrent_private_writers_never_leave_invalid_json(tmp_path):
     assert errors == [] and read_json(path) in values and [p.name for p in path.parent.iterdir()] == ['hook-state.json']
 
 
+def test_a_grant_runs_label_says_via_whom():
+    """Grants step 3, G17, test 17: source_label appends ", via <via_name>" when the source has one, so run prompts and
+    hooks read a grantee's build as such. A via_name that isn't text adds nothing, and one is collapsed to one line."""
+    grant = {'kind': 'run', 'mode': 'build', 'basis': 'grant', 'root_name': 'Andy', 'via_name': 'Jenn', 'answering': 'm1'}
+    assert source_label({'source': grant}) == 'builder run for Andy, via Jenn'
+    assert source_label({'source': {**grant, 'via_name': 'Jenn\n`x`'}}) == 'builder run for Andy, via Jenn x'
+    for odd in (None, '', ['Jenn'], 5):
+        assert source_label({'source': {**grant, 'via_name': odd}}) == 'builder run for Andy', odd
+    assert source_label({'source': {key: value for key, value in grant.items() if key != 'via_name'}}) == 'builder run for Andy'
+    assert source_label({'source': {**grant, 'root_name': None}}) == 'builder run'
+
+
 def test_labels_never_raise_on_a_source_kind_or_author_kind_they_do_not_know():
     """Rio Grande (8cd296f1): a station may add a source kind or a user kind later; an agent's views must not break.
     An unknown source kind, or a source of an odd shape, labels as '' (no claim about where it came from), and a

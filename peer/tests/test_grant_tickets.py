@@ -450,3 +450,52 @@ def test_a_grant_build_is_never_deferred_but_another_persons_mention_is(env):
     decided = ask(watcher, granted, decisions=True).json()
     assert (decided['decision'], decided['mode'], decided['basis']) == ('run', 'build', 'grant')
     assert ask(watcher, other, decisions=True).json()['decision'] == 'defer'
+
+
+def test_a_grant_builds_footer_and_source_name_the_root_the_grantee_and_the_grant(env):
+    """Test 17, G17: the footer is `Builder for <root>, via <grantee> · grant #a1b2`, and a reply posted with the ticket
+    has source {kind, mode, basis, root_name, via_name, answering}. A chain of two links, made by hand as step 5 will
+    make them, reads `grants #root > #child`."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, key = docked(store, patient['id'])
+    watcher = ship_client(app, key)
+    ops = room(store, patient, 'Ops', doctor, family, serenity)
+    grant = make(store, patient, doctor, [serenity], hours=48)
+    asked = mention(store, doctor, ops, serenity)
+    issued = ask(watcher, asked).json()
+    assert (issued['footer'], issued['root_name'], issued['chain']) == (f'Builder for Patient, via Doctor · grant #{grant[:4]}', 'Patient', [grant])
+    posted = watcher.post(f'/api/chats/{ops}/messages', json={'client_message_id': f'reply-{asked["id"]}', 'body': 'Added notes',
+                                                              'ticket_id': issued['id']})
+    assert posted.status_code == 201, posted.text
+    shown = {m['body']: m['source'] for m in clients[0].get(f'/api/chats/{ops}').json()['messages']}
+    assert shown['Added notes'] == {'kind': 'run', 'mode': 'build', 'basis': 'grant', 'root_name': 'Patient',
+                                    'via_name': 'Doctor', 'answering': asked['id']}
+    child = make(store, doctor, family, [serenity], hours=48)
+    later = mention(store, family, ops, serenity)
+    with store.transaction() as db:  # by hand: step 5's delegation makes such a child; step 3 never spends one
+        db.execute('UPDATE grants SET parent_id=? WHERE id=?', (grant, child))
+    relayed = store.issue_ticket(serenity['id'], later['id'])
+    assert relayed['footer'] == f'Builder for Patient, via Family · grants #{grant[:4]} > #{child[:4]}'
+    assert (relayed['root_id'], relayed['chain'], len(uses(store, grant)), len(uses(store, child))) == (
+        patient['id'], [grant, child], 2, 1)  # G16: one budget use per link
+
+
+def test_a_grantees_name_never_mentions_anyone_in_the_footer_or_the_label(env):
+    """Plan Review Focus 1: the footer is posted in the room under the build's reply, so a grantee named "Jenn\n@rio-grande"
+    must not mention rio-grande (which would start its run): the names are the station's own, through safe_line."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, key = docked(store, patient['id'])
+    watcher = ship_client(app, key)
+    ops = room(store, patient, 'Ops', doctor, serenity)
+    store.rename_user(doctor['id'], 'Jenn\n@rio-grande')
+    grant = make(store, patient, doctor, [serenity], hours=48)
+    asked = mention(store, doctor, ops, serenity)
+    issued = ask(watcher, asked).json()
+    assert issued['footer'] == f'Builder for Patient, via Jenn (at)rio-grande · grant #{grant[:4]}'
+    watcher.post(f'/api/chats/{ops}/messages', json={'client_message_id': 'r', 'body': 'Added notes', 'ticket_id': issued['id']})
+    source = next(m['source'] for m in clients[0].get(f'/api/chats/{ops}').json()['messages'] if m['body'] == 'Added notes')
+    assert source['via_name'] == 'Jenn (at)rio-grande'

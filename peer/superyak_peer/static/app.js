@@ -509,7 +509,8 @@ const BOARD_KINDS = ["spec", "plan", "build", "review", "ops", "other"];
 function sourceLabel(message) {
   const source = message.source;
   if (!source) return "";
-  if (source.kind === "run") return source.mode === "build" ? (source.root_name ? `builder run for ${source.root_name}` : "builder run") : "read-only run";
+  // A grant's builder run names its grantee too (grants step 3, G17). Escaped where it is shown.
+  if (source.kind === "run") return source.mode === "build" ? (source.root_name ? `builder run for ${source.root_name}${source.via_name ? `, via ${source.via_name}` : ""}` : "builder run") : "read-only run";
   if (source.kind === "notice") return "station notice";
   // Only the station writes a kind-claim body, so no member's post can pass as a board line (work board 5.2).
   if (source.kind === "claim") return BOARD_WORDS.some((word) => String(message.body || "").startsWith(word)) ? "board" : "claim";

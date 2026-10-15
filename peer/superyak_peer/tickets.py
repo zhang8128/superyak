@@ -4,6 +4,7 @@ read-only run. Step 5 adds directs to the same decision."""
 import json
 import math
 from .common import REPLACED_ROOMS, Problem, require, text, uid
+from .grants import short_id
 from .instructions import render_blocks
 from .ships import safe_line
 
@@ -42,10 +43,30 @@ class Tickets:
     def _ticket_running(self, row):
         return row['status'] == 'running' and row['created'] > self.clock() - TICKET_LIFETIME
 
+    def _via_name(self, db, chain):
+        """G17: the person a grant run builds for, beside the root: the grantee of the chain's last link (in step 3 the
+        mention's author), on one safe line, or None."""
+        row = db.execute('SELECT users.name FROM grants JOIN users ON users.id=grants.grantee_id WHERE grants.id=?',
+                         (chain[-1],)).fetchone() if chain else None
+        return safe_line(row['name']) if row else None
+
+    def _footer(self, db, row, root_name):
+        """Spec A's footers, written without @: `Builder for Andy (owner)`, and for a grant (G17) `Builder for Andy, via
+        Jenn · grant #a1b2`, or `grants #a1b2 > #c3d4` for a chain of several links (step 5)."""
+        if row['mode'] != 'build' or not root_name:
+            return ''
+        if row['basis'] == 'owner':
+            return f'Builder for {root_name} (owner)'
+        chain = json.loads(row['chain'])
+        via = self._via_name(db, chain)
+        if row['basis'] != 'grant' or not via:
+            return ''
+        return f'Builder for {root_name}, via {via} · {"grant" if len(chain) == 1 else "grants"} {" > ".join(map(short_id, chain))}'
+
     def _ticket_json(self, db, row, station=''):
         root = db.execute('SELECT name FROM users WHERE id=?', (row['root_id'],)).fetchone() if row['root_id'] else None
         root_name = safe_line(root['name']) if root else None
-        footer = f'Builder for {root_name} (owner)' if row['mode'] == 'build' and row['basis'] == 'owner' and root_name else ''
+        footer = self._footer(db, row, root_name)
         return {'id': row['id'], 'ship_id': row['ship_id'], 'message_id': row['message_id'], 'mode': row['mode'],
                 'basis': row['basis'], 'root_id': row['root_id'], 'root_name': root_name, 'chain': json.loads(row['chain']),
                 'hops': row['hops'], 'instructions': json.loads(row['instructions']),
@@ -234,11 +255,13 @@ class Tickets:
         """Each local message's source as the station recorded it: a run's ticket, a ship's own post, or none for a
         person. Never derived from a client's own message ids."""
         runs = {r['message_id']: {'kind': 'run', 'mode': r['mode'], 'basis': r['basis'],
-                                  'root_name': safe_line(r['root_name']) if r['root_name'] else None, 'answering': r['answering']}
-                for r in db.execute('SELECT message_sources.message_id, tickets.mode, tickets.basis, tickets.message_id AS answering, '
-                                    'users.name AS root_name FROM message_sources JOIN tickets ON tickets.id=message_sources.ticket_id '
-                                    'JOIN messages ON messages.id=message_sources.message_id LEFT JOIN users ON users.id=tickets.root_id '
-                                    'WHERE messages.room_id=?', (room_id,))}
+                                  'root_name': safe_line(r['root_name']) if r['root_name'] else None, 'answering': r['answering'],
+                                  # G17: a grant run names its grantee too; every other source is exactly as before
+                                  **({'via_name': self._via_name(db, json.loads(r['chain']))} if r['basis'] == 'grant' else {})}
+                for r in db.execute('SELECT message_sources.message_id, tickets.mode, tickets.basis, tickets.chain, '
+                                    'tickets.message_id AS answering, users.name AS root_name FROM message_sources '
+                                    'JOIN tickets ON tickets.id=message_sources.ticket_id JOIN messages ON messages.id=message_sources.message_id '
+                                    'LEFT JOIN users ON users.id=tickets.root_id WHERE messages.room_id=?', (room_id,))}
         ships = {r[0] for r in db.execute("SELECT id FROM users WHERE kind='ship'")}
         kinds = {r[0]: r[1] for r in db.execute('SELECT message_kinds.message_id, message_kinds.kind FROM message_kinds JOIN messages '
                                                'ON messages.id=message_kinds.message_id WHERE messages.room_id=?', (room_id,))}

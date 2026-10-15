@@ -335,7 +335,10 @@ def source_label(message):
         return ''
     if source.get('kind') == 'run':
         if source.get('mode') == 'build':
-            return f'builder run for {label(source["root_name"])}' if source.get('root_name') else 'builder run'
+            if not source.get('root_name'):
+                return 'builder run'
+            via = source.get('via_name')  # grants step 3, G17: a grantee's build names the grantee too
+            return f'builder run for {label(source["root_name"])}' + (f', via {label(via)}' if isinstance(via, str) and via else '')
         return 'read-only run'
     if source.get('kind') == 'notice':
         return 'station notice'

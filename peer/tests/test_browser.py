@@ -1557,6 +1557,27 @@ def test_a_room_shows_which_ship_messages_came_from_runs(browser_peer):
 
 
 
+def test_a_grantees_build_reply_is_labelled_with_the_grantee(browser_peer):
+    """G17, test 17: a reply from a grant's builder run shows "builder run for Alex Patient, via <grantee>", and a grantee
+    name written as HTML shows as text."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    room = store.create_room(users["patient"]["id"], "Ops", [ship["id"], users["doctor"]["id"]])
+    store.rename_user(users["doctor"]["id"], "<b>Dr. Morgan</b>")
+    store.make_grant(users["patient"]["id"], users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    asked = store.send_message(users["doctor"]["id"], room["id"], "a", "@serenity add notes")
+    ticket = store.issue_ticket(ship["id"], asked["id"])
+    store.send_message(ship["id"], room["id"], f"reply-{asked['id']}", "Added notes", ticket["id"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            label = page.locator(".message", has_text="Added notes").locator(".message-source")
+            expect(label).to_have_text("builder run for Alex Patient, via <b>Dr. Morgan</b>")
+            assert page.locator(".message-source b").count() == 0
+
+
 def test_a_room_labels_the_station_notice_by_id_never_by_name(browser_peer):
     """R31, the room UI: the system author's message shows as "Station" with the "station notice" label; a person
     who calls themselves "Station" gets no label."""

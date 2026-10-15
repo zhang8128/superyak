@@ -179,6 +179,27 @@ def test_a_revoke_between_tries_stops_the_retry_and_the_fallback_goes_out_unlabe
     assert watcher.cycle() == 0 and calls == ['build']
 
 
+def test_a_grantees_mention_builds_through_the_real_station_and_its_label_says_via_whom(env, tmp_path):
+    """G17, test 17, through the real station: the watcher runs the grantee's mention as a builder, posts the ticket's
+    footer, and the agent's source_label reads the reply as "builder run for Patient, via Doctor"."""
+    from superyak_agent.runs import RunResult
+    from superyak_agent.station import StationClient, source_label
+    from superyak_agent.watch import Watcher
+    app, clients, users, clock, ship, key, room, grant, config = granted_room(env, tmp_path)
+    clients[1].post(f'/api/chats/{room}/messages', json={'client_message_id': 'g', 'body': '@serenity add a NOTES file'})
+    calls = []
+
+    class Runner:
+        def run(self, mode, prompt, message_id, instructions=''):
+            calls.append(mode)
+            return RunResult('Added notes')
+    watcher = Watcher(StationClient('http://testserver', key, transport=transport_for(app)), config, tmp_path / 'state.json', Runner())
+    assert watcher.cycle() == 1 and calls == ['build']
+    reply = clients[0].get(f'/api/chats/{room}').json()['messages'][-1]
+    assert reply['body'] == f'Added notes\n\nBuilder for Patient, via Doctor · grant {grant["short"]}'
+    assert source_label(reply) == 'builder run for Patient, via Doctor'
+
+
 def test_the_hook_reads_the_real_stations_instructions_and_hears_a_withdrawal(env, tmp_path):
     """Break caught: the station's instructions response and the hook drift apart (a renamed field), and the hook
     falls silent, which looks exactly like "no instructions"."""
