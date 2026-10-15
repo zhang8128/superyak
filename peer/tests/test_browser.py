@@ -1711,6 +1711,106 @@ def test_the_add_dialog_says_open_items_are_carried_without_a_brief(browser_peer
                 dialog.get_by_role("button", name="Cancel").click()
 
 
+def test_the_board_panel_posts_shows_and_closes_items(browser_peer):
+    """Work board 5.2, 5.x: the owner posts an item and it shows waiting; a ship's claim shows after a refresh; the owner
+    releases it and marks it done, and it moves to the closed list; the history labels its lines; a title like an HTML
+    tag shows literally; the Board view lists two rooms; the add dialog lists what moves; another person sees no post
+    button."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(patient, started["id"], started["code"])
+    room = store.create_room(patient, "City of AI", [ship["id"], users["family"]["id"]])
+    hands = store.create_room(patient, "All hands", [ship["id"]])
+    store.post_item(ship["id"], hands["id"], "ops:hands", "Work in All hands", "ops")
+    evil = "<img src=x onerror=alert(1)>"
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            expect(panel.get_by_role("heading", name="Board")).to_be_visible()
+            panel.get_by_label("Key").fill("spec:d7")
+            panel.get_by_label("Title").fill(evil)
+            panel.get_by_label("Kind").select_option("spec")
+            panel.get_by_role("button", name="Post item").click()
+            item = panel.locator(".board-item", has_text="spec:d7")
+            expect(item).to_contain_text(evil)
+            expect(item).to_contain_text("waiting")
+            assert page.locator(".room-board img").count() == 0
+            store.claim(ship["id"], room["id"], "spec:d7", None, 60)
+            page.reload()
+            expect(item).to_contain_text("taken by Serenity until")
+            item.get_by_role("button", name="Release claim").click()
+            expect(item).to_contain_text("waiting")
+            item.get_by_role("button", name="Mark done").click()
+            panel.get_by_label("Outcome link").fill("commit:1ff0efb")
+            panel.get_by_role("button", name="Mark done").click()
+            expect(panel.locator(".board-closed .board-item", has_text="spec:d7")).to_contain_text("outcome commit:1ff0efb")
+            page.reload()  # the history updates with the room; the panel updates after its own actions (5.2)
+            for line, label in (("Posted `spec:d7`", "board"), ("Claimed `spec:d7`", "claim"),
+                                ("Released Serenity", "claim"), ("Done `spec:d7`", "board")):
+                expect(page.locator(".message", has_text=line).locator(".message-source")).to_have_text(label)
+            store.post_item(patient, room["id"], "build:panel", "Build the <b>panel</b>", "build")
+            store.post_item(ship["id"], room["id"], "review:panel", "Review the panel", "review")
+            page.get_by_role("link", name="Board", exact=True).click()
+            expect(page.get_by_role("heading", name="Board", level=1)).to_be_visible()
+            expect(page.locator(".board-room")).to_have_count(2)
+            expect(page.get_by_text("Work in All hands")).to_be_visible()
+            expect(page.get_by_text("Build the <b>panel</b>")).to_be_visible()
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            expect(dialog.get_by_text("Only the brief, if ticked, and the board's open items are carried. Earlier messages stay with their original participants.")).to_be_visible()
+            expect(dialog.get_by_text("These 2 open board items, with their links and claims, move to the new room. Drop any that shouldn't first.")).to_be_visible()
+            expect(dialog.locator(".carry-board li")).to_have_count(2)
+            expect(dialog.locator(".carry-board")).to_contain_text("build:panel Build the <b>panel</b>")
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-board .board-item", has_text="build:panel")).to_be_visible()
+            expect(page.get_by_role("button", name="Post item")).to_have_count(0)
+            expect(page.get_by_role("button", name="Mark done")).to_have_count(0)
+
+
+def test_a_double_click_on_post_item_posts_once(browser_peer):
+    """Review Focus 4: the second submit of a double click would get 409 for the first one's own item and show it as a
+    failure; the panel sends one write at a time."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            panel.get_by_label("Key").fill("spec:d7")
+            panel.get_by_label("Title").fill("Write the D7 spec")
+            panel.get_by_role("button", name="Post item").dblclick()
+            expect(panel.locator(".board-item", has_text="spec:d7")).to_be_visible()
+            expect(page.locator(".notice", has_text="Item posted.")).to_be_visible()
+            expect(page.get_by_text("already on this board")).to_have_count(0)
+    assert [i["key"] for i in store.room_board(users["patient"]["id"], room["id"])] == ["spec:d7"]
+
+
+def test_a_120_character_emoji_title_posts_whole_from_the_panel(browser_peer):
+    """Review Focus 5: the station counts code points; a maxlength would count UTF-16 units and stop emoji at 60."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [])
+    title = "🛰" * 120
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            assert panel.get_by_label("Title").get_attribute("maxlength") is None
+            panel.get_by_label("Key").fill("spec:emoji")
+            panel.get_by_label("Title").fill(title)
+            panel.get_by_role("button", name="Post item").click()
+            expect(panel.locator(".board-item", has_text="spec:emoji")).to_contain_text(title)
+    assert store.room_board(users["patient"]["id"], room["id"])[0]["title"] == title
+
+
 def test_a_member_reads_the_brief_but_cannot_edit_it(browser_peer):
     """Break caught: a member who is not the owner can change the brief, or cannot see it."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]

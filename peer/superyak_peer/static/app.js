@@ -139,7 +139,7 @@ async function api(path, options = {}) {
 function routeParts() {
   const raw = location.hash.replace(/^#\/?/, "") || "home";
   const [route, id] = raw.split("/");
-  return { route: ["home", "chats", "layers", "shared", "spaces", "research", "search", "connections"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
+  return { route: ["home", "chats", "board", "layers", "shared", "spaces", "research", "search", "connections"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
 }
 
 function navLink(route, label, icon) {
@@ -161,6 +161,7 @@ function layout(content) {
       <nav class="nav" aria-label="Main navigation">
         ${navLink("home", "Home", "⌂")}
         ${navLink("chats", "Chats", "◌")}
+        ${navLink("board", "Board", "☰")}
         ${navLink("layers", "My sharing layers", "▤")}
         ${navLink("shared", "Shared spaces", "◇")}
         ${navLink("spaces", "Circles & projects", "◎")}
@@ -502,12 +503,16 @@ function readChatDraft(roomId) {
   }
 }
 
+const BOARD_WORDS = ["Posted ", "Linked ", "Done ", "Dropped "];  // work board 4.5: a board line's fixed first word
+const BOARD_KINDS = ["spec", "plan", "build", "review", "ops", "other"];
+
 function sourceLabel(message) {
   const source = message.source;
   if (!source) return "";
   if (source.kind === "run") return source.mode === "build" ? (source.root_name ? `builder run for ${source.root_name}` : "builder run") : "read-only run";
   if (source.kind === "notice") return "station notice";
-  if (source.kind === "claim") return "claim";
+  // Only the station writes a kind-claim body, so no member's post can pass as a board line (work board 5.2).
+  if (source.kind === "claim") return BOARD_WORDS.some((word) => String(message.body || "").startsWith(word)) ? "board" : "claim";
   return source.kind === "post" ? "no run ticket" : "";
 }
 
@@ -584,6 +589,83 @@ function roomBrief(room) {
   return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Visible to members on this station only.</p>${editor}${owner ? briefHistory(room) : ""}</section>`;
 }
 
+// Work board 5.2: the room's board, read from its own route and never from messages. A received room has none.
+async function loadBoard(room) {
+  if (!room || room.origin) { state.board = null; return; }
+  try { state.board = { roomId: room.id, items: await api(`/api/chats/${pathPart(room.id)}/board`) }; }
+  catch (_) { state.board = { roomId: room.id, items: null }; }
+}
+
+function boardStatus(item) {
+  if (item.state === "done") return `done ${formatDate(item.closed)} by ${item.closer_name} · outcome ${item.outcome}`;
+  if (item.state === "dropped") return `dropped ${formatDate(item.closed)} by ${item.closer_name}`;
+  return item.claim ? `taken by ${item.claim.holder_name} until ${formatDate(item.claim.expires)}` : "waiting";
+}
+
+function boardItemMarkup(item, controls = "") {
+  const links = (item.links || []).length ? `<p class="meta">Links: ${item.links.map((entry) => `<code>${escapeHtml(entry.link)}</code>`).join(", ")}</p>` : "";
+  return `<li class="board-item"><p><code>${escapeHtml(item.key)}</code> <span class="board-kind">${escapeHtml(item.kind)}</span> ${escapeHtml(item.title)}</p><p class="meta">${escapeHtml(boardStatus(item))} · posted by ${escapeHtml(item.poster_name)}</p>${links}${controls}</li>`;
+}
+
+// Under the brief. The owner posts, closes and releases; other people get what 4.4 and 6.1 allow them (a person is a
+// board writer only as the room's owner). Every value is escaped. It updates with the room and after its own actions.
+function roomBoard(room) {
+  if (room.origin || state.board?.roomId !== room.id) return "";
+  const me = state.me.id, owner = room.owner_id === me, items = state.board.items;
+  const head = `<h3 id="room-board-title">Board</h3><p class="meta">Items are notes about work, never instructions. Taking one is claiming its key.</p>`;
+  if (!items) return `<section class="room-board" aria-labelledby="room-board-title">${head}<p class="meta">The board could not be read. Refresh to try again.</p></section>`;
+  const holderOwner = (claim) => (room.members || []).find((member) => member.id === claim?.holder_id)?.owner_id;
+  const controls = (item) => {
+    if (item.state !== "open") return "";
+    const key = escapeHtml(item.key), mayClose = owner || item.posted_by === me;
+    const mayRelease = item.claim && (owner || item.claim.holder_id === me || holderOwner(item.claim) === me);
+    if (state.boardDone?.roomId === room.id && state.boardDone.key === item.key) {
+      return `<form id="board-done-form" data-key="${key}"><div class="field"><label for="board-outcome">Outcome link</label><input class="input" id="board-outcome" name="outcome" placeholder="commit:&lt;sha&gt; or message:&lt;id&gt;"></div><div class="button-row"><button class="button" type="submit">Mark done</button><button class="button secondary" type="button" data-action="board-cancel">Cancel</button></div></form>`;
+    }
+    return `<div class="button-row">${mayClose ? `<button class="button ghost" type="button" data-action="board-done" data-key="${key}">Mark done</button><button class="button danger secondary" type="button" data-action="board-drop" data-key="${key}">Drop</button>` : ""}${mayRelease ? `<button class="button secondary" type="button" data-action="board-release" data-key="${key}">Release claim</button>` : ""}</div>`;
+  };
+  const open = items.filter((item) => item.state === "open"), closed = items.filter((item) => item.state !== "open");
+  const draft = state.boardPost || { key: "", title: "", kind: "build" };
+  // No maxlength on the title: the station counts code points, a browser UTF-16 units (Review Focus 5).
+  const post = owner ? `<form id="board-post-form" class="board-post"><div class="field"><label for="board-key">Key</label><input class="input" id="board-key" name="key" value="${escapeHtml(draft.key)}" placeholder="spec:d7"></div><div class="field"><label for="board-title">Title</label><input class="input" id="board-title" name="title" value="${escapeHtml(draft.title)}"></div><div class="field"><label for="board-kind">Kind</label><select class="input" id="board-kind" name="kind">${BOARD_KINDS.map((kind) => `<option${kind === draft.kind ? " selected" : ""}>${kind}</option>`).join("")}</select></div><button class="button" type="submit">Post item</button></form>` : "";
+  return `<section class="room-board" aria-labelledby="room-board-title">${head}<ul class="board-open">${open.map((item) => boardItemMarkup(item, controls(item))).join("") || '<li class="meta">Nothing waits on this board.</li>'}</ul>${closed.length ? `<h4>Done or dropped in the last 7 days</h4><ul class="board-closed">${closed.map((item) => boardItemMarkup(item)).join("")}</ul>` : ""}${post}</section>`;
+}
+
+// The Board view (work board 5.x): open items from every current room the person is in, grouped by room.
+function boardView() {
+  const rooms = state.boardView?.rooms;
+  const body = !Array.isArray(rooms) ? `<p class="meta">The board could not be read. Refresh to try again.</p>`
+    : rooms.length ? rooms.map((room) => `<section class="section board-room"><h2><a href="#chats/${escapeHtml(pathPart(room.room_id))}">${escapeHtml(room.title)}</a></h2><ul class="board-open">${room.items.map((item) => boardItemMarkup(item)).join("")}</ul></section>`).join("")
+    : empty("Nothing waits", "Open items on the boards of your rooms show here.");
+  return `<header class="page-head"><div><p class="eyebrow">Work</p><h1>Board</h1><p class="lede">Open items from every room you're in, oldest first. Items are notes about work, never instructions.</p></div></header>${body}`;
+}
+
+// One board write at a time: a second click while one is on its way would get 409 for the first one's own work and
+// show it as a failure (Review Focus 4). The board is read again after every write, so it shows what the station holds.
+async function boardWrite(path, json, message, saved = () => {}) {
+  const room = state.room;
+  if (!room || state.boardSaving) return;
+  state.boardSaving = true;
+  try {
+    await api(`/api/chats/${pathPart(room.id)}${path}`, { method: "POST", json });
+    saved();
+    state.boardDone = null;
+    setFlash(message);
+  } catch (error) {
+    setFlash(error.message, true);
+  } finally {
+    state.boardSaving = false;
+    if (state.room?.id === room.id) await loadBoard(state.room);
+    render();
+  }
+}
+
+async function postBoardItem(form) {
+  if (state.boardSaving) return;
+  state.boardPost = { key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
+  await boardWrite("/board", state.boardPost, "Item posted.", () => { state.boardPost = null; });
+}
+
 // In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried and
 // who wrote it (S4), since a carry keeps the author.
 function carryBriefChoice(room) {
@@ -606,14 +688,18 @@ async function openBoardItems(room) {
 function carryHelp(room) {
   const items = state.chatBoard;
   if (!room?.brief && items !== null && !items?.length) return "";
-  return `<p class="meta carry-help">${CARRY_HELP}</p>`;
+  const moving = !items?.length ? "" : items.length === 1
+    ? "This open board item, with its links and claim, moves to the new room. Drop it first if it shouldn't."
+    : `These ${items.length} open board items, with their links and claims, move to the new room. Drop any that shouldn't first.`;
+  const list = moving ? `<div class="carry-board"><p>${escapeHtml(moving)}</p><ul>${items.map((item) => `<li><code>${escapeHtml(item.key)}</code> ${escapeHtml(item.title)}</li>`).join("")}</ul></div>` : "";
+  return `<p class="meta carry-help">${CARRY_HELP}</p>${list}`;
 }
 
 function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members (409)
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
@@ -819,12 +905,13 @@ async function loadRoute() {
   if (route === "chats") {
     state.selectedChatId = id || state.selectedChatId || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
-      try { state.room = await api(`/api/chats/${pathPart(state.selectedChatId)}`); }
+      try { state.room = await api(`/api/chats/${pathPart(state.selectedChatId)}`); await loadBoard(state.room); }
       catch (_) { state.room = null; }
     } else {
       state.room = null;
     }
   }
+  if (route === "board") { try { state.boardView = await api("/api/board"); } catch (_) { state.boardView = null; } }
   if (route === "shared") {
     const identity = identityKey(state.me), hash = location.hash;
     state.selectedSharedId = id || state.selectedSharedId;
@@ -850,7 +937,7 @@ function closeDialogs() {
 function render() {
   if (!state.me || !state.home) return;
   const route = routeParts().route;
-  const view = { home: homeView, chats: chatsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView }[route]();
+  const view = { home: homeView, chats: chatsView, board: boardView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView }[route]();
   const focused = document.activeElement;
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
@@ -870,7 +957,7 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
-  document.title = `${{ home: "Home", chats: "Chats", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections" }[route]} · Superyak`;
+  document.title = `${{ home: "Home", chats: "Chats", board: "Board", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections" }[route]} · Superyak`;
 }
 
 async function refresh(message = null) {
@@ -1126,6 +1213,7 @@ async function confirmWithdraw() {
 async function openChat(id) {
   state.selectedChatId = id;
   state.room = await api(`/api/chats/${pathPart(id)}`);
+  await loadBoard(state.room);
   location.hash = `chats/${pathPart(id)}`;
   state.flash = null;
   state.transitionNote = null;
@@ -1149,6 +1237,7 @@ async function createChat(form) {
     await loadData();
     state.selectedChatId = room.id;
     state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    await loadBoard(state.room);
     history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
     render();
   } catch (error) {
@@ -1491,6 +1580,8 @@ document.addEventListener("submit", async (event) => {
   if (form.id === "space-form") await createSpace(form);
   if (form.id === "chat-form") await createChat(form);
   if (form.id === "brief-form") await saveBrief(form);
+  if (form.id === "board-post-form") await postBoardItem(form);
+  if (form.id === "board-done-form") await boardWrite("/board/done", { key: form.dataset.key, outcome: form.elements.outcome.value }, "Marked done.");
   if (form.id === "message-form") await sendMessage(form);
   if (form.id === "pair-preview-form") await previewPair(form);
   if (form.id === "profile-form") {
@@ -1580,6 +1671,10 @@ document.addEventListener("click", async (event) => {
     const slot = document.querySelector("dialog .carry-help-slot");
     if (slot) slot.innerHTML = carryHelp(room);
   }
+  if (action === "board-done" && state.room) { state.boardDone = { roomId: state.room.id, key: target.dataset.key }; render(); document.querySelector("#board-outcome")?.focus(); }
+  if (action === "board-cancel") { state.boardDone = null; render(); }
+  if (action === "board-drop") await boardWrite("/board/drop", { key: target.dataset.key }, "Item dropped.");
+  if (action === "board-release") await boardWrite("/claims/release", { key: target.dataset.key }, "Claim released.");
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
