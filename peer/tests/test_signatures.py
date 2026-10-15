@@ -214,6 +214,28 @@ def test_the_first_signature_creates_a_missing_identity(tmp_path):
     assert verify_record(card, stored_record(store, layer['id'], 1), signature_rows(store)[(layer['id'], 1)])
 
 
+def test_a_failed_signature_leaves_no_revision_behind(tmp_path, monkeypatch):
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'state')
+    owner = store.create_user('owner', 'Owner', 'long-password')
+    ship, _ = docked(store, owner['id'], 'serenity')
+    layer = store.create_layer(owner['id'], {'kind': 'instructions', 'title': 'Law', 'body': 'Be kind.',
+                                             'audience_users': [ship['id']]})
+    assert not (store.data_dir / 'identity.json').exists()
+
+    def failing(cls, data_dir, **kwargs):
+        raise OSError('disk full')
+
+    monkeypatch.setattr(PeerIdentity, 'load_or_create', classmethod(failing))
+    with pytest.raises(OSError):
+        store.activate_layer(owner['id'], layer['id'], layer['version'])
+    with store.transaction() as db:
+        assert db.execute('SELECT 1 FROM layer_revisions WHERE layer_id=?', (layer['id'],)).fetchone() is None
+        assert db.execute('SELECT active_revision FROM layers WHERE id=?', (layer['id'],)).fetchone()[0] is None
+    assert signature_rows(store) == {}
+    assert not (store.data_dir / 'identity.json').exists()
+
+
 def test_only_the_layers_owner_reads_a_signed_revision(env):
     app, clients, users, clock = env
     store = app.state.store
