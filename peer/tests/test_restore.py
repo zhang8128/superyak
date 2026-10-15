@@ -1262,3 +1262,47 @@ def test_a_rolled_back_reconcile_leaves_no_mark(tmp_path, monkeypatch, capsys):
         assert not db.execute("SELECT 1 FROM system_meta WHERE key='restore_reconcile'").fetchall()
     out, installed = step_6(tmp_path, copy.parent)
     assert installed is None and "step 5 hasn't run" in out
+
+
+def test_lowering_a_role_bumps_role_version_and_records_a_change(tmp_path, capsys):
+    """Follow-up 3: a role the reconcile lowers is recorded as the station's own role changes are (auth.py
+    change_account_role): role_version goes up past both files' value, so a browser tab holding the old version is
+    refused, and one account_role_changes row names the user, the old and the new role, the new version and the system
+    author as actor. A role it does not lower has no row. Mutations: no version bump; no row."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    jenn = store.create_user('jenn', 'Jenn', 'long-password-jenn', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam', is_admin=True)
+    kept = store.create_user('kept', 'Kept', 'long-password-kept', is_admin=True)
+    with store.transaction() as db:
+        db.execute('UPDATE users SET is_super_admin=1 WHERE id IN (?, ?)', (andy['id'], sam['id']))
+    copy = staged(tmp_path, store)                                                # A
+    store.change_account_role(andy['id'], jenn['id'], 'participant', 1)           # B: jenn 2, then sam 2
+    store.change_account_role(andy['id'], sam['id'], 'admin', 1)
+    with store.transaction() as db:
+        db.execute('UPDATE users SET role_version=5 WHERE id=?', (jenn['id'],))  # B's version is ahead of the copy's
+        system = db.execute("SELECT value FROM system_meta WHERE key='system_author'").fetchone()[0]
+    with closing(sqlite3.connect(copy)) as db:
+        before = db.execute('SELECT count(*) FROM account_role_changes').fetchone()[0]
+        copy_versions = dict(db.execute('SELECT username, role_version FROM users'))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    live = go_live(copy, tmp_path / 'live')
+    with live.transaction() as db:
+        versions = dict(db.execute('SELECT username, role_version FROM users'))
+        roles = dict(db.execute('SELECT username, is_admin + is_super_admin FROM users'))
+        rows = [dict(row) for row in db.execute('SELECT * FROM account_role_changes ORDER BY id DESC LIMIT ?', (2,))]
+        total = db.execute('SELECT count(*) FROM account_role_changes').fetchone()[0]
+    assert (roles['jenn'], roles['sam'], roles['kept']) == (0, 1, 1)
+    assert versions['jenn'] == 6 and versions['sam'] == 3 and versions['kept'] == copy_versions['kept']
+    assert total == before + 2
+    by_user = {row['user_id']: row for row in rows}
+    assert {key: by_user[jenn['id']][key] for key in ('actor_id', 'old_role', 'new_role', 'role_version')} == {
+        'actor_id': system, 'old_role': 'admin', 'new_role': 'participant', 'role_version': 6}
+    assert {key: by_user[sam['id']][key] for key in ('actor_id', 'old_role', 'new_role', 'role_version')} == {
+        'actor_id': system, 'old_role': 'super_admin', 'new_role': 'admin', 'role_version': 3}
+    assert kept['id'] not in by_user and by_user[jenn['id']]['created'] > 0
+    with pytest.raises(Problem) as stale:                                        # a tab that read version 5 is refused
+        live.change_account_role(andy['id'], jenn['id'], 'admin', 5)
+    assert stale.value.status == 409
+    assert live.change_account_role(andy['id'], jenn['id'], 'admin', 6)['role_version'] == 7

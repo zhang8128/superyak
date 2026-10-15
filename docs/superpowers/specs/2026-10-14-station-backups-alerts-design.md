@@ -361,6 +361,11 @@ The decisions below rest on these facts, each checked on 2026-10-14.
     - for rooms and spaces in both files, remove each room, remote-room or space membership that isn't there
       (`room_members`, `remote_room_members`, `space_members`);
     - lower `is_admin` and `is_super_admin` to the replaced file's value where that is lower.
+      Each account lowered is recorded as `change_account_role` records a change (auth.py): `role_version` becomes one
+      past the higher of the two files' values, and one `account_role_changes` row is written with the old and new
+      role, that version and the system author as actor (the account itself when a copy has no system author). A
+      copy lacking `role_version` or the table is still lowered, and the report names what it skipped. (Follow-up
+      from the final reviews; narrows, no new D8 round.)
     - close each breakout that is closed there and still open here, with its closing time (Rio Grande's ruling, Q1).
     - unpair each peer that is paired here and has a `peers` row with `paired` = 0 there, exactly as
       `Federation.unpair` does (federation.py:43-45): `peers.paired` = 0, the `pending` and `failed` outbox rows of
@@ -785,3 +790,4 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 |---|---|---|
 | The step-6 mark catches a skipped step 5 | The reconcile writes the mark above; step 6 refuses a copy without it | S16 ("The mark"), the runbook step 6, `test_step_6_*` |
 | R16: the existing unit files are not edited | The units test compares their bytes before and after `make station-units` and `station-units-remove` | R16, `test_station_units_install_and_remove_only_their_own_files` |
+| Role lowering leaves a trace | `role_version` bump and an `account_role_changes` row, as the station's role changes do | S16 ("With a usable replaced file"), `test_lowering_a_role_bumps_role_version_and_records_a_change` |
