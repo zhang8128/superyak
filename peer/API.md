@@ -311,7 +311,8 @@ peer pairs again, and replies it already sent into remote rooms show as unverifi
 
 A grant lets a person direct some of their own ships in some rooms, for some hours, with a daily budget of builds
 (spec A step 3, `docs/superpowers/specs/2026-10-15-grants-step3-design.md`, G7-G14). In this release every grant is a
-root `direct` grant from one person to another, made in the browser; merge 3c lets the grantee's mentions spend it.
+root `direct` grant from one person to another, made in the browser, and the grantee's mentions spend it through run
+tickets (see Run tickets). The web app's Grants page lists them and makes and revokes them.
 Every `/api/grants` route takes a person session (CSRF on writes), and a ship key gets 403 on each.
 
 | Method/path | Body | Behavior |
@@ -566,7 +567,8 @@ Signatures (spec A step 3): `_sign_revision(db,layer_id,revision)` signs an inst
 transaction that writes it; `revision_signed(actor,key,revision)` returns its signed record to the layer's owner.
 Grants (spec A step 3): `make_grant(actor,grantee,targets,rooms,hours,budget)`, `list_grants(actor)`,
 `revoke_grant(actor,grant_id,reason=None)`, `grant_signed(actor,grant_id)` and `grant_people(actor)` back the routes;
-`_grant_validity(db,grant)` returns `(valid, reason)`, and `_grant_policy(db)` is the policy in force.
+`_grant_validity(db,grant,budget=True)` returns `(valid, reason)`, and `_grant_policy(db)` is the policy in force.
+`Tickets._spendable_grant(db,ship,message)` returns the chain a ticket spends, root first, or None (G15).
 
 Delivery checks must run immediately before output. A bool check followed by
 uncoordinated later send is not an atomic delivery guarantee: the transport task
@@ -1004,19 +1006,38 @@ approval still succeeds and `share` is `missing`; Odo posts a notice in `Ops` so
 
 Spec A, section 4. Before each run, a ship's watcher asks for a ticket, and the station decides the run's mode at
 that moment. In this step, `build` with basis `owner` goes to a message by the ship's owner (a person) that
-mentions the ship and is fresh: posted within 24 hours of the ticket, and not yet answered by the ship. An owner's
-mention that isn't fresh gets `read` with basis `old` or `answered` (fresh owner mentions spec). Everything else, and every resident ship,
-gets `read` with basis `none`. Any member of the
+mentions the ship and is fresh: posted within 24 hours of the ticket, and not yet answered by the ship.
+
+`build` with basis `grant` (spec A step 3, G15-G18) goes to a fresh message that mentions the ship, by another person
+who holds a grant over it (see Grants), when all of these hold: the grant's targets include the ship, `direct` is in
+its actions and no link in its chain says `confirm: each`; its rooms are `"*"`, or list the message's room or a room
+it replaced (following `linked_room_id` back); the message's room is current, local and not a breakout; the author,
+the ship and the grant's issuer are all members of it when the ticket is issued; the grant is valid then (see Grants)
+and was made no later than the message; and the ship has had fewer than `builds_per_ship_per_day` (20) grant build
+tickets in the last 24 hours, under any grant (owner builds don't count). Of several grants, the oldest that qualifies
+(by `created`, then id) is used. A grant ticket records `root_id` (the grant's issuer) and `chain` (the grant ids,
+root first), and charges each grant in the chain one budget use in the ticket's own transaction, so a message that
+mentions two ships charges a grant once per ship's ticket.
+
+An owner's or a grantee's mention that would build but isn't fresh gets `read` with basis `old` or `answered` (fresh
+owner mentions spec). Everything else, and every resident ship, gets `read` with basis `none`. Any member of the
 message's room can get a ticket. Ticket: `{id, ship_id, message_id, mode, basis, root_id, root_name, chain,
-hops, instructions, blocks, footer, status, created}`. `footer` is `Builder for <owner> (owner)` for a build,
-written without `@`, and empty otherwise. Asking again for the same message returns the same ticket while it is
-`running`, so the watcher's retries share one decision. Once it is finished, or 7,200 s after it was created,
-asking again gets 409.
+hops, instructions, blocks, footer, status, created}`. `footer` is `Builder for <owner> (owner)` for an owner build
+and `Builder for <issuer>, via <grantee> · grant #a1b2` for a grant build (`grants #a1b2 > #c3d4` for a chain of
+several links), its names on one line without `@`, and empty otherwise. Asking again for the same message returns
+the same ticket while it is `running`, so the watcher's retries share one decision. For a grant ticket the station
+first checks the grant again: not revoked, not expired, within the policy, its issuer still owning every target and
+still in the message's room. It doesn't check the budget or the per-ship cap again, which the ticket already paid. If
+a check fails, the ticket is finished and the request gets 409 with the reason; the watcher then posts its fallback
+note, which the finished ticket can't label, and stops retrying. A run already under way finishes. A grant build is
+never deferred to the ship's session on watch: only a read decision is. Once a ticket is finished, or 7,200 s after
+it was created, asking again gets 409.
 
 `POST /api/chats/{id}/messages` accepts an optional `ticket_id`. It labels that message if the ticket is the
 posting ship's, still running, for a message in this room, and has labelled nothing yet. Otherwise the post is
 refused with 409. Each message in `GET /api/chats/{id}` carries `source`:
-`{kind:"run", mode, basis, root_name, answering}` for a ticketed reply, `{kind:"post"}` for anything else a ship
+`{kind:"run", mode, basis, root_name, answering}` for a ticketed reply (with `via_name`, the grantee, when the basis is
+`grant`), `{kind:"post"}` for anything else a ship
 posts (including replies from watchers too old to use tickets), and `null` for people. Labels come only from
 tickets the station issued and checked, never from client message ids. Messages in remote rooms (ids with `:`) always
 have `source: null`, whatever the paired peer sent. Known limit: a ship's key is the ship. A session on the ship's
