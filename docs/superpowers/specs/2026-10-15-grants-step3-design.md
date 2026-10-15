@@ -13,6 +13,9 @@ the section 2 review of merge 3a (findings 1 and 4); their D8 re-check (APPROVE 
 check and `_own_peer_id`'s single loader; its second re-check (APPROVE WITH CHANGES: 0 must-fix, 1 should-fix, 3 nits)
 added G4c's handling of leftover TLS files and its fuller warning, the lazy path's use of the caller's connection, and
 the read-only `serve --peer-tls` check. All are built in merge 3b, and with them G4a-G4c are approved under D8.
+Clarifications from drafting merge 3b's plan, with no new D8 round: G4b counts only signed grant rows; G4a's
+`signing=False` also skips the revocation backfill; G9's expiry instant; G11's visibility of grants below one's own and
+the shape of `revoked_by`.
 Base: `main` (6623845). Roadmap item 2.2 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`), claimed by
 Serenity as `build:grants`; Rio Grande reviews each merge under section 2.
 Amends: [spec A](2026-10-08-instruction-layers-and-grants-design.md) (approved 2026-10-08), its build order step 3
@@ -104,8 +107,8 @@ envelopes. This merge gives the store a signer and signs instructions revisions.
   creating the file at every start would fix a new station's certificate before `card --endpoint` can add the
   station's hostname to it.)
 - **G4a. Only the lighthouse holds the key at startup (built in merge 3b; section 2 review of 3a, finding 1).**
-  `Store` takes `signing=True` by default. With `signing=False` it skips G4's startup load, G4b's check and G5's
-  backfill, and holds no key unless something it does signs, in which case `_station_identity()` still loads or
+  `Store` takes `signing=True` by default. With `signing=False` it skips G4's startup load, G4b's check, G5's
+  backfill and G12's revocation backfill, and holds no key unless something it does signs, in which case `_station_identity()` still loads or
   creates the identity inside the signing transaction, so nothing is ever written unsigned. The door
   (`create_door`) and the station commands that open a store but never sign (`station-pending`, `station-approve`,
   `station-deny`, `station-rooms`, `station-bridge`, `station-unbridge`, `station-notices`) open it with
@@ -118,7 +121,8 @@ envelopes. This merge gives the store a signer and signs instructions revisions.
   itself, so there is one loader and G4 to G4b hold by construction.
 - **G4b. A lost identity is not replaced silently (built in merge 3b; section 2 review of 3a, finding 4).** At a
   `signing=True` start, if `identity.json` is missing (not a file, not a symlink) while the station holds signed
-  records (a row in `revision_signatures`, or, from merge 3b, in `grants`), the store refuses to start with a
+  records (a row in `revision_signatures`, or, from merge 3b, a row in `grants` whose `signature` is set, so a grant
+  being signed in the current transaction never counts itself), the store refuses to start with a
   `ValueError` naming the file: a new identity would void every stored signature. The message says to restore the
   file, or, if it is truly gone, to run `station-new-identity` (below). A station with no signed records still creates
   its identity at the first signature (G4), so a new station's first `card --endpoint` still names its host. The same
@@ -197,7 +201,7 @@ never change, except that revoking fills `revoked`, `revoked_by`, `revoke_reason
   every grant is its own root. A link is valid when all of these hold, checked in this order, and the first that
   fails is the reason:
   1. it is not revoked: "Grant #a1b2 was revoked by Andy";
-  2. it has not expired: "Grant #a1b2 expired 2026-10-20 14:00 UTC";
+  2. it has not expired (a grant is expired from its `expires` instant on): "Grant #a1b2 expired 2026-10-20 14:00 UTC";
   3. it fits the policy in force now, so narrowing the policy later takes effect at the next check: its lifetime
      (`expires − created`) is at most `max_expiry_hours` ("Grant #a1b2 lasts longer than the station now allows"),
      the chain is at most `max_depth` links long, and its grantee is in the grantee set ("... is no longer allowed
@@ -216,7 +220,8 @@ never change, except that revoking fills `revoked`, `revoked_by`, `revoke_reason
   already revoked gets 409. `reason` is optional, one line, at most 200 characters, and defaults to `revoked`. The
   station signs the revocation (G12).
 - **G11. Reading.** `GET /api/grants` (person) lists the grants the caller issued, holds, or that cover their ships,
-  newest first. No one else sees a grant. Each shows:
+  or that lie below a grant the caller issued (so G10's "issuer of any grant above" can see what it may revoke; in
+  step 3 every grant is a root), newest first. No one else sees a grant. `revoked_by` is shown as `{id, name}`. Each shows:
   - `id`, `short`, the issuer and grantee (id and name), the targets (id and name), `expires`, `budget`, `created`,
     the revocation fields, `valid`, and `reason` when it is not valid;
   - `budget_left`: the budget minus the builds charged to the grant in the last 24 hours, shared by all its ships;
