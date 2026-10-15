@@ -24,6 +24,7 @@ NOISE = '''events.resource_id IN (SELECT room_id FROM breakouts) AND NOT EXISTS 
 INBOX_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS read_cursors(ship_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, position INTEGER NOT NULL, updated REAL NOT NULL, PRIMARY KEY(ship_id, name));
 CREATE TABLE IF NOT EXISTS message_replies(message_id TEXT PRIMARY KEY, reply_to TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS message_replies_by_reply_to ON message_replies(reply_to);
 CREATE TABLE IF NOT EXISTS inbox_meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 INSERT OR IGNORE INTO inbox_meta VALUES('epoch', (SELECT COALESCE(MAX(id), 0) FROM events WHERE kind='chat.message'));
 CREATE INDEX IF NOT EXISTS events_kind_id ON events(kind, id);
