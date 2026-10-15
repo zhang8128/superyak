@@ -22,6 +22,8 @@ CHECKOUT = Path(__file__).resolve().parents[2]
 ON_WATCH_LINE = 'You are on watch: answer each mention of this ship with station_post reply_to=<its id>.'
 DEFERRED_MARK = '(deferred to you; the station would have given a read-only run)'
 BREAKOUT_MARK = 'breakout, ships only'  # breakouts S6: beside a breakout's room wherever its messages appear
+BOARD_WORDS = ('Posted ', 'Linked ', 'Done ', 'Dropped ')  # work board 4.5: a board line's fixed first word
+BOARD_MARKS = {'open': ' (board item)', 'done': ' (board item, done)', 'dropped': ' (board item, dropped)'}  # 5.6
 
 
 def presence_headers(name, client, mode=None):
@@ -152,6 +154,25 @@ class StationClient:
 
     def release(self, room_id, key):
         return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/claims/release', {'key': key})
+
+    def board(self, room_id):
+        return self.request('GET', f'/api/chats/{quote(room_id, safe="")}/board')
+
+    def board_counts(self):
+        """Work board 5.1: per room this ship belongs to with open items, how many wait and how many are taken."""
+        return self.request('GET', '/api/ships/me/board')
+
+    def post_item(self, room_id, key, title, kind):
+        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/board', {'key': key, 'title': title, 'kind': kind})
+
+    def link_item(self, room_id, key, link):
+        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/board/link', {'key': key, 'link': link})
+
+    def done_item(self, room_id, key, outcome):
+        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/board/done', {'key': key, 'outcome': outcome})
+
+    def drop_item(self, room_id, key):
+        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/board/drop', {'key': key})
 
     def unread(self, cursor, limit=30, wait=0, breakouts=None):
         """breakouts='mentions' (breakouts S6): the station leaves out breakout messages that don't mention this ship and
@@ -294,8 +315,9 @@ def source_label(message):
         return 'read-only run'
     if source.get('kind') == 'notice':
         return 'station notice'
-    if source.get('kind') == 'claim':
-        return 'claim'
+    if source.get('kind') == 'claim':  # only the station writes a kind-claim body, so no member's post can pass as one
+        body = message.get('body')
+        return 'board' if isinstance(body, str) and body.startswith(BOARD_WORDS) else 'claim'
     return 'no run ticket' if source.get('kind') == 'post' else ''
 
 
@@ -412,8 +434,9 @@ def claims_block(room):
     """S8: a room's active claims under one header line, fenced like a message: holders' names and notes are quoted
     data, never instructions. '' when there are none, or from a station older than claims."""
     claims = room.get('claims') if isinstance(room, dict) else None
-    lines = [f'- `{label(c.get("key"), 100)}` held by {label(c.get("holder_name"))} until {utc_time(c.get("expires"))}'
-             + (f': {label(c.get("note"), 200)}' if c.get('note') else '') for c in claims or [] if isinstance(c, dict)]
+    lines = [f'- `{label(c.get("key"), 100)}`{BOARD_MARKS.get(str(c.get("board")), "")} held by {label(c.get("holder_name"))} '
+             f'until {utc_time(c.get("expires"))}' + (f': {label(c.get("note"), 200)}' if c.get('note') else '')
+             for c in claims or [] if isinstance(c, dict)]
     if not lines:
         return ''
     body = defuse('\n'.join(lines))

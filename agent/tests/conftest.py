@@ -7,6 +7,23 @@ BREAKOUT_CLOSED = 'This breakout is closed'
 DAY = 86400
 
 
+def board_item(key, title='Some work', kind='build', state='open', poster=None, created=1000.0, links=(), claim=None,
+               room_id='r1', closed=None, closer=None, outcome=None):
+    """A board item as the station's routes give it (work board 5.1)."""
+    poster = poster or {'id': 'u-andy', 'name': 'Andy'}
+    return {'id': f'i-{key}', 'room_id': room_id, 'key': key, 'title': title, 'kind': kind, 'state': state,
+            'posted_by': poster['id'], 'poster_name': poster['name'], 'created': created, 'closed': closed,
+            'closed_by': closer['id'] if closer else None, 'closer_name': closer['name'] if closer else None,
+            'outcome': outcome, 'links': [{'link': l, 'added_by': poster['id'], 'added': created} for l in links],
+            'claim': claim}
+
+
+def held_by(member, key, expires=4600.0):
+    """The active claim on a key, as _claim_json gives it."""
+    return {'id': f'c-{key}', 'room_id': 'r1', 'key': key, 'holder_id': member['id'], 'holder_name': member['name'],
+            'note': '', 'created': 1000.0, 'expires': expires}
+
+
 @pytest.fixture(autouse=True)
 def private_home(monkeypatch, tmp_path_factory):
     """Every test gets its own HOME and no Claude Code project directory, so no test can read or write the machine's
@@ -37,6 +54,8 @@ class FakeStation:
         self.claims = {}  # room id -> active claims, as GET /api/chats/{id}/claims shows them
         self.ticket_bodies, self.decide = [], {}  # every ticket request's JSON; message id -> its answer when decisions are asked
         self.breakouts = {}  # breakouts: room id -> {creator, created, closed}, as step 1's station keeps them
+        self.board = {}  # work board: room id -> its items, as GET /api/chats/{id}/board gives them
+        self.board_refusal = None  # (status, error): what the count route answers instead, as an older or failing station
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -224,6 +243,54 @@ class FakeStation:
             return {'kind': 'post'}
         return {'kind': 'run', 'mode': ticket['mode'], 'basis': ticket['basis'], 'root_name': ticket['root_name'], 'answering': ticket['message_id']}
 
+    def board_route(self, me, room, method, rest, payload):
+        """The room routes of work board 5.1, as step 1's station answers them, with the refusals the tool tests use."""
+        items = self.board.setdefault(room['id'], [])
+
+        def answer(value, status=200):
+            return status, json.dumps(value).encode()
+
+        def refuse(status, error):
+            return status, json.dumps({'error': error}).encode()
+        if method == 'GET' and not rest:
+            return answer(items)
+        key = str(payload.get('key', '')).lower()
+        found = next((i for i in items if i['key'] == key), None)
+        if not rest:
+            if found is not None:
+                return refuse(409, f'`{key}` is already on this board or a room it replaced ({found["state"]}); new work needs a new key')
+            self.clock += 1
+            made = board_item(key, payload['title'], payload['kind'], poster=self.users[me], created=self.clock, room_id=room['id'])
+            items.append(made)
+            return answer(made, 201)
+        if found is None:
+            return refuse(404, 'Not found')
+        if found['state'] != 'open':
+            return refuse(409, f'`{key}` is already {found["state"]}')
+        if rest == ['link']:
+            if any(entry['link'] == payload['link'] for entry in found['links']):
+                return answer({**found, 'added': False})
+            found['links'].append({'link': payload['link'], 'added_by': me, 'added': self.clock})
+            return answer({**found, 'added': True})
+        held = found['claim']
+        found.update(state='done' if rest == ['done'] else 'dropped', closed=self.clock, closed_by=me,
+                     closer_name=self.users[me]['name'], outcome=payload.get('outcome'), claim=None)
+        return answer({**found, **({'released': held['holder_name']} if held else {})})
+
+    def board_counts(self, me):
+        """GET /api/ships/me/board: per current room with open items, waiting and taken; oldest waiting first."""
+        rows = []
+        for room in self.rooms.values():
+            if me not in room['member_ids'] or any(r.get('linked_room_id') == room['id'] for r in self.rooms.values()):
+                continue
+            open_items = [i for i in self.board.get(room['id'], []) if i['state'] == 'open']
+            waiting = [i for i in open_items if not i.get('claim')]
+            if open_items:
+                oldest = min((i['created'] for i in waiting), default=None)
+                rows.append(((oldest is None, oldest or 0, room['id']),
+                             {'room_id': room['id'], 'title': room['title'], 'waiting': len(waiting), 'taken': len(open_items) - len(waiting)}))
+        return {'rooms': [row for _, row in sorted(rows, key=lambda pair: pair[0])]}
+
     def __call__(self, method, url, headers, data):
         if self.down:
             raise OSError('station unreachable')
@@ -250,6 +317,8 @@ class FakeStation:
                 return 404, b'{"error": "Not found"}'
             if method == 'GET' and len(segments) == 3:
                 return ok(self.view(room))
+            if segments[3:4] == ['board']:  # work board 5.1
+                return self.board_route(me, room, method, segments[4:], json.loads(data) if data else {})
             if method == 'POST' and segments[3:] in (['claims'], ['claims', 'release']) and self.closed(room['id']) is not None:
                 return 409, json.dumps({'error': BREAKOUT_CLOSED}).encode()  # breakouts S4
             if method == 'POST' and segments[3:] == ['messages']:
@@ -291,6 +360,9 @@ class FakeStation:
                     return 409, json.dumps({'error': f'{held["holder_name"]} holds `{key}` until 18:00 UTC'}).encode()
                 made = {'id': f'c-{key}', 'room_id': room['id'], 'key': key, 'holder_id': me, 'holder_name': self.users[me]['name'],
                         'note': payload.get('note') or '', 'created': self.clock, 'expires': self.clock + 60 * payload.get('minutes', 240)}
+                item = next((i for i in self.board.get(room['id'], []) if i['key'] == key), None)
+                if item is not None:  # work board 5.6: _claim_json's `board`, only for an item's key
+                    made['board'] = item['state']
                 self.claims[room['id']] = [c for c in self.claims.get(room['id'], []) if c['key'] != key] + [made]
                 return ok(made, 201)
             if method == 'POST' and segments[3:] == ['claims', 'release']:
@@ -382,6 +454,10 @@ class FakeStation:
             held = self.watches.get((me, name))
             return ok({'name': name, 'on_watch': held is not None, 'watch_until': self.clock + minutes * 60 if held else None,
                        'writable': bool(held and held['writable']), 'label': held['label'] if held else None})
+        if method == 'GET' and path == '/api/ships/me/board':
+            if self.board_refusal is not None:
+                return self.board_refusal[0], json.dumps({'error': self.board_refusal[1]}).encode()
+            return ok(self.board_counts(me))
         return 403, b'{"error": "Ship keys cannot use this route"}'
 
 
