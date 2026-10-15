@@ -1,10 +1,11 @@
 # Spec A step 4: the charter
 
-Status: revision 2, for the D8 re-check. Rio Grande owns this spec; this draft was written for it. A fresh reviewer
-approves it in Andy's place (law section 3, D8), and its summary and decisions are posted in "Superyak: city of AI".
-Andy can veto anything. Revision 1 (592faa3) was reviewed: APPROVE WITH CHANGES, with 1 must-fix, 9 should-fix and 13
-nits, and Serenity's five notes folded in. This revision takes every finding, under Rio Grande's rulings on them;
-"Review map" at the end says where each one went.
+Status: revision 3, approved under D8: the fresh reviewer's verdict on revision 1 (592faa3) was APPROVE WITH CHANGES;
+its re-check of revision 2 (a30e8fe) is APPROVE, with 2 should-fix and 3 nits folded into this revision (room messages
+07229111 and the re-check's post). Rio Grande owns this spec; this draft was written for it. Its summary and decisions
+are posted in "Superyak: city of AI". Andy can veto anything. Revision 1's review had 1 must-fix, 9 should-fix and 13
+nits, with Serenity's five notes folded in; revision 2 took every one, under Rio Grande's rulings on them. "Review map"
+at the end says where each finding went.
 Base: `main` at c29e91e (grants step 3 complete), plus the survey commit 86d2919. Branch `charter-spec`. Roadmap 2.3.
 Amends: [spec A](2026-10-08-instruction-layers-and-grants-design.md), its build order step 4 ("The charter") and the
 parts of its sections 1, 2, 4 and Plurality that step 4 builds; the [step 3 spec](2026-10-15-grants-step3-design.md)
@@ -47,7 +48,7 @@ Each line is this spec's ruling. A fresh reviewer checks it; Andy can veto any o
 | C6 | **A charter stays a charter** (ruling 3). Once a layer has a charter revision, saving or activating its draft without `charter: true` is refused with 409, before any other check of the draft. To end a charter, its owner withdraws it (C15). | Clearing the flag would end the charter for the residents and every accepting owner through a draft edit, and change the rule under which the same text binds. Withdrawal says plainly that the charter ends, and checks the limits that return to the defaults. The safe answer. | A charter can't step back to an ordinary layer. Rollback uses a new layer (Deploy). |
 | C7 | **The hook's change notice** (ruling 3). The layer id stays the same, so a session sees the existing changed-revision notice: the new block in full, and no "no longer apply" line. The block's header marks the charter (C25). | `hook.py` keys notices by layer id and revision (`:450-491`); only a layer that disappears prints "no longer apply" (`:455-456`). | Codex sessions get no notice and keep what they read until they restart. |
 | C8 | **D3 stays prose until spec B** (ruling 4). The first charter revision's text must change the law's "until the charter exists" lines (sections 1 and 2), so that section 2 is the charter's merge rule until a charter revision Andy signs gives merging and deploying rules of their own. "Amendments to the law" proposes the wording. Rio Grande drafts it later as a layer draft. No code reads it. | A charter whose text still says "until the charter exists" ends section 2 when signed, and section 1 then sends every merge to Andy (survey 4.4). Policy version 1 can't express D3: `merge`, `deploy` and `admit` are reserved for spec B (A:94-95). Tying the end of section 2 to a revision Andy signs, not to spec B's approval, keeps it in his hands (review S4). | A fresh reviewer must check the rewording against Andy's words before he signs, as for the law's revision 1 (roadmap 0.2). |
-| C9 | **Andy's choices** (ruling 5, as amended by review S1). Q5, Q6 and the rename change the charter's text, so Rio Grande asks them first, one at a time, before the text is drafted and reviewed. Q3 changes only the policy and is asked at signing. None blocks this spec. | They are about the first charter's content, not the code. A text reviewed before Andy answers could turn out wrong and need a second review. | Andy answers three questions before the drafting starts, and one at signing. |
+| C9 | **Andy's choices** (ruling 5, as amended by review S1). Q5, Q6 and the rename change the charter's text, so Rio Grande asks them first, one at a time, before the text is drafted and reviewed. Q3 changes only the policy and is asked after the review, before the final rehearsal, which runs with the policy Andy chose. None blocks this spec. | They are about the first charter's content, not the code. A text reviewed before Andy answers could turn out wrong and need a second review. A policy Andy hasn't chosen yet can't be rehearsed, nor its invalidated grants listed for him (re-check SB). | Andy answers three questions before the drafting starts, and one before the final rehearsal. |
 | C10 | **The display-name spoof in grant footers** (room message bd2802fa) goes to step 5's spec (ruling 7). | Step 5 adds more names to footers (chains of ships) and fixes them together. | Until then a person's chosen display name can read like another's (Out of scope). |
 | C11 | **Policy schema:** spec A's version 1 without `roots` (C2) and without `breaker`, also reserved for step 5. A charter always has a policy: a missing policy, section or key takes the default; a missing `agent_grant_default_hours` defaults to 24 or `max_expiry_hours`, whichever is smaller. Cross-checks run after the defaults are filled. The revision stores the full policy; the draft keeps what was written. | Spec A gives no bounds for the breaker's numbers, and step 5 builds the breaker; a checkbox for a number nothing reads confirms nothing. A full stored policy makes the signed record state every limit in force, and marks a charter revision by its policy alone (C12). A fixed default of 24 would make every policy with `max_expiry_hours` under 24 fail its own cross-check (review N7). | Step 5 adds `breaker`; a charter without it reads as the defaults. `agent_grant_default_hours` and `grantees.ships_of` have no reader until step 5 either; they stay because spec A bounds them. |
 | C12 | **The signed record keeps its kind and keys.** `instructions-revision`'s `policy` comes from the revision's snapshot: the full policy on a charter revision, `null` on every other. | Step 3 reserved `policy` for this (G2). `verify_record` checks the key set exactly (`identity.py:76-87`). With C11 a non-null policy marks a charter revision. Every signature made so far verifies unchanged. | A reader of a record must know that rule; peer/API.md states it. |
@@ -61,7 +62,7 @@ Each line is this spec's ruling. A fresh reviewer checks it; Andy can veto any o
 | C20 | **Only the active revision can be accepted.** The baseline at acceptance is the revision that binds the caller's ships now (pinned, or followed to), or the no-charter defaults when none does, as at a first acceptance. | Spec A (A:104-106). The page then has one thing to accept. | No owner can accept an older revision than the active one. |
 | C21 | **Follow moves one revision at a time** over the layer's existing revisions, each compared with the revision binding the owner then. It stops before the first revision that widens, before one that would put one of the owner's ships over the caps (C23), and at a withdrawal. A skipped revision number marks a withdrawal: only `withdraw_layer` advances `resource_version` without writing a revision (`layers.py:127-139`). The revision it stops before, and every later one, show as pending. | Spec A: "the newest without a widening against O's baseline" (A:115-116), and a widening "cannot ride in on a prose-only r5" (A:107-108). Stepping is the narrower reading: after r4 narrows `max_depth` to 2, an r5 that sets it back to 3 is a widening for a follower bound by r4. A follower carried across a withdrawal would be bound by a re-activated charter's new text without having seen any of it (review N12). A follower's own layers must not let them block every later revision for everyone (review S6). | A follower stops more often and accepts by hand. If later code advanced `resource_version` for another reason, followers would stop more often, never less. |
 | C22 | **Binding** (spec A rule 1, amended). For a ship: first the charter revision that binds its owner (C17, C18, C21), or for a resident the active one; then its owner's own active instructions layers that list it, by creation. A withdrawn charter binds nothing. Spec A's rule 3 stays out (C1). | Spec A's order (A:139-140) and residents (A:123-124). | Odo's runs carry the charter from the moment Andy signs, with no consent of their own. |
-| C23 | **Caps** (A:75-77). At a charter activation, every ship whose binding the activation changes is checked with its new binding: the residents and the signer's ships, and from 4c, the ships of owners whose acceptance binds again after a withdrawal. Any of them over 10 layers or 48 KB gets 409 naming the ship. A follower's ships are never refused this way: a revision that would put one of them over the caps stops that follower, as a widening does (C21). At an acceptance: every ship the caller owns, 409. An owner's own activation counts the charter. | `_check_instruction_caps` refuses an empty audience and skips ships the activator doesn't own (`instructions.py:94-103`), so it can't serve as it is (survey risk 9). A ship re-bound after a withdrawal can have gained layers meanwhile, and spec A drops nothing silently (review S5). One follower's layers would otherwise refuse every later revision, and the signer can't end their acceptance (review S6). | A pinned owner's own layers can block re-activating a withdrawn charter; the 409 says which ship. A follower near the caps stops and accepts by hand. |
+| C23 | **Caps** (A:75-77). At a charter activation, every ship whose binding the activation changes is checked with its new binding: the residents and the signer's ships, and from 4c, the ships of owners whose acceptance binds again after a withdrawal, pinned or following alike. Any of them over 10 layers or 48 KB gets 409 naming the ship. The one exception is a revision a follower would move to: one that would put a follower's ship over the caps is not refused but stops that follower, as a widening does (C21). At an acceptance: every ship the caller owns, 409. An owner's own activation counts the charter, and gets 409 naming the ship if it would change which charter revision binds any of the owner's ships. | `_check_instruction_caps` refuses an empty audience and skips ships the activator doesn't own (`instructions.py:94-103`), so it can't serve as it is (survey risk 9). A ship re-bound after a withdrawal can have gained layers meanwhile, and spec A drops nothing silently (review S5). A re-bound follower's walk can't stop before the revision it starts at, so it is checked like a pinned owner (re-check SA a). One follower's layers would otherwise refuse every later revision, and the signer can't end their acceptance (review S6). The walk reads the owner's own layers, so without the last check one more own layer could move their ships back to an older charter text in silence (re-check SA b). | A pinned or following owner's own layers can block re-activating a withdrawn charter; the 409 says which ship. A follower near the caps stops and accepts by hand, and can't add an own layer that would move them back. |
 | C24 | **The footer gains `· charter rN`** when the ticket's recorded instructions include a charter revision; N is that recorded revision. | Spec A's footer (A:310-311). The ticket's record, not the charter now, so a footer never changes after its run. | Tickets issued before the conversion keep footers without it. |
 | C25 | **Titles are bracketed** in block headers, in the hook's short header and in `superyak-agent status`, with `[` and `]` inside a title shown as `(` and `)`. A charter says `charter revision N`. | HANDOFF: bracket titles "once other signers can bind a ship", and the charter is the first. With no inner brackets, the title's bounds can't be faked. Status shows the same titles, so it gets the same form (review S2). | The block's bytes change at 4a's deploy but its `[layer_id, revision]` pairs don't, so no session sees a spurious change notice. |
 | C26 | **Who reads a charter revision** (review M1, Rio Grande's ruling). Every signed-in person reads the active charter revision: its text (`GET /api/charter`, as spec A gives it) and its signature. Any other charter revision, withdrawn or superseded, goes, text and signature, only to its signer and to a person whose acceptance names it now or did before. A follower's acceptance names the revision its walk binds now as well as the one it was made at. Other revisions stay owner-only (step 3, G6). An acceptance's signed record goes to its person and the charter's signer. | Spec A gives every person the active charter (A:131-132), and step 3's G6 planned to add only "the owners whose ships a revision binds". A past revision reaches only people who signed it, accepted it or are bound by it. | A person who never accepted can't read a past revision, even one that was once in Odo's prompt. The active charter's policy, with the names of any people it lists, is visible to every person on the station. |
@@ -84,8 +85,9 @@ Each amendment is made in place with the note "(charter step 4 spec, Cn)".
 3. A:73: "unknown keys are rejected with 400" gains "; `roots` and `breaker` are reserved for step 5 and rejected with
    400 too (C2, C11). A charter always has a policy; missing keys take the defaults, and its revisions store it in full."
 4. A:75-77, the caps: "Activation is refused with 409 if it would bind more than 10 layers to any ship in its audience"
-   gains "; for a charter, any ship whose binding the activation changes, except a follower's, whose walk stops before
-   that revision instead (C23)".
+   gains "; for a charter, any ship whose binding the activation changes, re-bound ships included, except a follower's
+   ship for a revision the follower would move to, whose walk stops before that revision instead. An owner's own
+   activation is refused if it would change which charter revision binds one of their ships (C23)".
 5. A:78-79: "Activation, revisions, narrowing and withdrawal are the existing layer routes." gains "Narrowing is refused
    on a charter (C14), and withdrawing one needs `confirm_widenings` (C15)."
 6. A:101-102: "the previous active revision, or for a first charter the no-charter defaults" becomes "the policy in
@@ -261,9 +263,9 @@ stale `version`), then:
 7. every other existing draft check, unchanged.
 
 **`GET /api/layers/{id}/preview`.** As today. For a charter draft it adds `charter: {policy, widenings, narrowings,
-names, binds}`: the full policy, the widened paths against the policy in force (C5), the narrowed paths (the same
-paths where P is smaller or lacks a member), and the ships it would bind (`[{id, name, owner_name}]`, residents with
-`owner_name: null`).
+names, binds, sha256}`: the full policy, the widened paths against the policy in force (C5), the narrowed paths (the
+same paths where P is smaller or lacks a member), the ships it would bind (`[{id, name, owner_name}]`, residents with
+`owner_name: null`), and `{title, body}`, the sha256 of the saved title and body in UTF-8, as hex.
 
 **`POST /api/layers/{id}/activate {version, space_versions?, confirm_widenings?}`.**
 1. 404: no such layer, or not the caller's;
@@ -377,7 +379,10 @@ For a ship S, computed when a ticket is issued or the instructions are fetched, 
 A ticket records the pairs in this order, and `_layers_for` renders them in the order recorded, never re-sorted
 (`instructions.py:41` today). The caps check (C23) uses the same function, with the new revision active, for every ship
 whose binding the activation changes. A layer that becomes a charter is counted once, as the charter pair: its old
-revision no longer binds through the audience rule.
+revision no longer binds through the audience rule. A follower re-bound after a withdrawal starts its walk at a
+revision it can't stop before, so that revision is checked as a pinned one is: over the caps, the activation gets 409.
+When an owner activates one of their own layers, the station computes each of their ships' charter pair with and
+without it; if any pair differs, the activation gets 409 naming the ship (C23).
 
 At most one charter binds a ship: one charter layer is active at a time, a withdrawn one binds nothing, and an owner
 holds at most one acceptance in force (the partial unique index).
@@ -446,7 +451,9 @@ holds at most one acceptance in force (the partial unique index).
 - **R25.** For a charter, "Sign" shows the line diff of title and body against the active revision (or "new"), the full
   policy, the ships it will bind, and one checkbox per widened path in words (before → after). The button stays
   disabled until every box is ticked. Each narrowed path is stated in words too, with its effect: for example, an empty
-  grantee set means no one can receive a grant, and `max_depth` 0 means no grant is valid and none can be made.
+  grantee set means no one can receive a grant, and `max_depth` 0 means no grant is valid and none can be made. It also
+  shows the preview's sha256 of the title and of the body, so Andy can compare them with the reviewer's verdict before
+  he signs.
 - **R26.** Withdrawing a charter asks first, says which ships stop being bound, and shows one checkbox per widened path.
 - **R27.** `GET /api/ships` gains the `instructions` field for the caller's own ships and resident ships only, and the
   Ships section shows them (title, revision, charter mark).
@@ -468,11 +475,12 @@ holds at most one acceptance in force (the partial unique index).
 - **R32.** `GET /api/charter` gives the shape in "Routes", with the baseline of C20. It never shows another person's
   acceptance, except to the active charter's signer, in `acceptances`.
 - **R33.** The caps hold at acceptance for each of the caller's ships, and at activation for ships re-bound after a
-  withdrawal (409). A follower's ships never cause a 409: the revision stops the follower instead.
+  withdrawal, pinned or following (409). A revision a follower would move to never causes a 409 for that follower's
+  ships: it stops the follower instead. An owner's own activation that would change which charter revision binds any
+  of their ships gets 409 naming the ship.
 - **R34.** The restore reconcile treats acceptances by person (C27): `charter_acceptances.id`, `.person_id`,
   `.revision`, `.follow`, `.revoked`, `.revoked_by` and `.revoke_reason` join `COMPARED`. It never adds a row. Its
-  report lists each acceptance it ended or kept without a replaced file, and each person whose acceptance in the
-  replaced file was lost (accepted only after the copy, or re-accepted after it), with the revision they had. Grants are
+  report lists each acceptance it ended or kept, and each person whose acceptance in the replaced file was lost (accepted only after the copy, or re-accepted after it), with the revision they had. Grants are
   reconciled exactly as G13 says.
 - **R35.** The web has a Charter page (`#charter`, linked in the sidebar): the text and policy, the caller's acceptance,
   a pending revision with its diff against the binding one, one checkbox per widened path, any of the caller's ships it
@@ -569,11 +577,12 @@ Each test is named, written first, and seen failing first. Each names the wrong 
 **Merge 4b**
 
 24. Browser: Andy, a super admin, ticks the charter box on an instructions layer and signs it; the dialog shows the
-    diff against revision 1 and the ships it binds. With a widened policy the button stays disabled until every box is
+    diff against revision 1, the ships it binds, and the sha256 of the title and body, equal to the hashes of the text
+    saved. With a widened policy the button stays disabled until every box is
     ticked; with `max_depth` 0 the dialog says no grant will be valid or can be made. An admin who is not a super admin
     sees no charter box. Withdrawing asks and shows the boxes. `GET /api/ships` gives `instructions` for own ships and
     residents only, and the Ships section shows them. Under `max_expiry_hours` 48 the grants form offers 1 day and 48
-    hours, with 1 day chosen; under 2,160 it offers 1, 3, 7 and 30 days and 2,160 hours. A title and a body written as
+    hours, with 48 hours chosen (7 days doesn't fit, so the longest choice is); under 2,160 it offers 1, 3, 7 and 30 days and 2,160 hours. A title and a body written as
     HTML show as text. Catches: a sign button that ignores the boxes; a form that offers what the station refuses;
     unescaped titles.
 
@@ -611,18 +620,23 @@ Each test is named, written first, and seen failing first. Each names the wrong 
     her pinned revision. A second charter layer activated after the first was withdrawn binds Andy's ships and the
     residents, and not Jenn's until she accepts it. Catches: pinned text that outlives its charter; two charters at once.
 33. Caps: Jenn's ship with 10 own layers: her acceptance gets 409 naming it. Jenn pins r2, Andy withdraws, Jenn
-    activates layers up to 10 while unbound, and Andy's re-activation gets 409 naming her ship. Jenn follows with 47 KB
-    of her own layers: Andy's larger next revision activates, her ship stays at the earlier one, and `GET /api/charter`
-    shows it pending as too large for that ship. Catches: caps checked only for the signer's ships; re-bound ships left
-    unchecked; one follower blocking every revision.
+    activates layers up to 10 while unbound, and Andy's re-activation gets 409 naming her ship. The same with Jenn
+    following from r2: the re-activation gets 409 too. Jenn follows with 47 KB of her own layers: Andy's larger next
+    revision activates, her ship stays at the earlier one, and `GET /api/charter` shows it pending as too large for that
+    ship. Jenn follows from r2 and her walk is at r3, near 48 KB with her own layers: her own activation of one more
+    layer, which would leave r3 too large and move her ship back to r2, gets 409 naming the ship, and her ship stays at
+    r3. Catches: caps checked only for the signer's ships; re-bound ships left unchecked, followers included; one
+    follower blocking every revision; an owner's own layer moving their ships back to older charter text in silence.
 34. The reconcile: with a replaced file where Jenn re-accepted after the copy, the copy's acceptance stays and the
     report names her with the revision she had; where she left, it ends with reason `restored`, and the next start signs
     that end; where Stanley accepted only after the copy, no row is added and the report names him; with no usable
     replaced file, every acceptance stays and is listed; grants follow G13. Catches: ending acceptances row by row, which
     leaves a re-accepted owner unbound; a lost acceptance that passes in silence.
 35. The oracle grows to spec A's 500 seeded cases with owners, signers, residents, pins, follows, withdrawals and
-    owners' own layers near the caps, each revision a random policy; expected from "Binding" alone. Catches: any
-    divergence in the follow walk.
+    owners' own layers near the caps, each revision a random policy; expected from "Binding" alone. Among the random
+    steps, owners activate their own layers; the oracle expects 409 exactly when the step would change a ship's charter
+    pair or break the caps, and an unchanged binding after it. Catches: any divergence in the follow walk; an own
+    activation that moves a charter pair.
 36. `GET /api/charter` for: no charter; the signer, who sees Jenn in `acceptances`; a person with no ships; a pinned
     owner with a pending revision; an owner whose acceptance names a withdrawn layer while another charter is active
     (its `layer_id` tells them apart). No one else sees another person's acceptance. A ship key gets 403 on every
@@ -692,13 +706,15 @@ Other machines get the agent changes when they pull and `make dock`.
 
 - **4a, before any charter.** Rio Grande's `superyak-agent status` on the Pi prints the law as `[Station law for Andy's
   ships] · revision 1 · signed by Andy` and "Charter: none active"; its next prompt prints no change notice.
-- **The rehearsal (after 4a, and again with the reviewed text just before Andy signs).**
+- **The rehearsal (after 4a, and again just before Andy signs, with the reviewed text and the policy Andy chose in
+  Q3).**
   - Copy the live database with SQLite's backup API, never `cp` (it runs in WAL mode), into a scratch directory. Create
     a throwaway identity there, as `station-restore-test` does, but don't run that command or its reconcile: grants and
     ship keys on the copy stay as they are live.
   - Open a throwaway store on the copy. As Andy's account, through store methods: save the law's draft with
-    `charter: true`, `audience_users: []` and the reviewed text; preview it (no widenings; it binds Andy's four ships,
-    odo and wormhole); activate it.
+    `charter: true`, `audience_users: []`, the reviewed text and Andy's policy; preview it (no widenings with Q3 A, or
+    exactly the widenings Andy will confirm with Q3 B; it binds Andy's four ships, odo and wormhole); activate it with
+    that `confirm_widenings`.
   - Check: each of the six ships is bound by the law's new revision first; Rio Grande's blocks start with the charter
     header; an owner ticket ends ` · charter rN`, for a message by Andy that mentions Rio Grande, made by a store call
     on the copy (never a post, so law section 7's "post only as yourself" isn't engaged); the new revision verifies
@@ -717,12 +733,13 @@ Other machines get the agent changes when they pull and `make dock`.
    (C28): the law's text with the lines in "Amendments to the law" and Andy's answers. A fresh reviewer checks every
    changed line against Andy's words and posts the verdict in the room, quoting the sha256 of the draft's title and of
    its body (UTF-8).
-4. The rehearsal, with the reviewed text. Then Rio Grande asks Q3.
+4. Rio Grande asks Q3, then runs the final rehearsal with the reviewed text and the policy Andy chose.
 5. Back up the database.
 6. Andy, in the web app: opens the law layer itself (c879…, not Rio Grande's draft, which he leaves unsigned), ticks
    "This is the station's charter", pastes the reviewed title and text from Rio Grande's draft (shown among his drafts
-   as "drafted by Rio Grande"), sets the policy from his Q3 answer (empty for A), saves, opens "Sign", reads the diff
-   against revision 1 and the six ships, and signs. The revision is 2 unless the layer changed before.
+   as "drafted by Rio Grande"), sets the policy from his Q3 answer (empty for A), saves, and opens "Sign". He checks
+   that the dialog's sha256 of the title and body equal the verdict's, reads the diff against revision 1 and the six
+   ships, ticks any widenings, and signs. The revision is 2 unless the layer changed before.
 7. The live check:
    - on a fresh copy, the sha256 of the new revision's title and body equal the reviewed draft's. A mismatch is a
      failed check: Rio Grande tells Andy at once, no merge proceeds under the charter, and Andy signs a corrected
@@ -751,7 +768,9 @@ Other machines get the agent changes when they pull and `make dock`.
 
   This order never leaves Andy's ships without law. If the release's own withdrawal is broken, step 3 may come before
   step 2 once step 1 holds: an older station then binds Andy's ships by the plain layer and ignores the charter (its
-  audience is empty), so only Odo and Wormhole lose it. Never revert while the charter is active and step 1 doesn't
+  audience is empty), so only Odo and Wormhole lose it. That revert also returns the station-wide limits to the
+  defaults with none of the withdrawal's checkboxes. With Q3 A nothing changes; with Q3 B, Andy first agrees in the
+  room to the limits returning to the defaults, and only then does the revert go ahead. Never revert while the charter is active and step 1 doesn't
   hold: an older station would bind Andy's ships with nothing. The plain law gets a new layer id, because c879… stays a
   charter (C6).
 - **A restore from a copy taken before the conversion** brings the law back at revision 1, as an ordinary layer. The
@@ -767,12 +786,13 @@ Other machines get the agent changes when they pull and `make dock`.
 - C3 names the role. A second super admin could sign a charter whenever none is active. Today Andy is the only one.
 - A charter whose owner loses the super admin role stays active until they withdraw it. No one else can end it, and no
   other charter can be signed while it is active.
-- The charter's text reaches the law layer by pasting in the editor. The sha256 check after signing catches a paste
-  that differs from the reviewed draft.
+- The charter's text reaches the law layer by pasting in the editor. The sha256 in the Sign dialog, and the check after
+  signing, catch a paste that differs from the reviewed draft.
 - A follower stops at the first widening, at a revision too large for their ships, and at a withdrawal, even when a
   later revision would have suited them (C21).
-- The signer's own layers, and a pinned owner's re-bound after a withdrawal, can block a charter revision through the
-  caps; the 409 names the ship (C23).
+- The signer's own layers, and those of an owner re-bound after a withdrawal, pinned or following, can block a charter
+  revision through the caps; the 409 names the ship. An owner can't activate an own layer that would move their ships
+  to another charter revision (C23).
 - Without a usable replaced file, a restore keeps every acceptance (C27).
 - Acceptances are not on the grants page; the Charter page shows the caller's own, and the signer sees who accepted.
 - A person who never accepted can't read a past charter revision (C26).
@@ -806,7 +826,7 @@ Before the text is drafted and reviewed:
 - **The rename.** Whether the law becomes "Station charter" (Amendments to the law, item 4). Recommended: rename, since
   it will bind the residents and other owners' ships. The resident line is recommended either way.
 
-At signing:
+After the review, before the final rehearsal:
 
 - **Q3. The first charter's limits.** Recommended: **A, spec A's defaults**, by leaving the policy empty: depth 3, 720
   hours, 24 hours, 20 builds per ship a day, `delegable` `direct`, unrestricted grantees. Nothing widens, so there is
@@ -834,7 +854,7 @@ Three merges, each with its own plan reviewed by a fresh reviewer agent and merg
   owns a ship, so it has its own merge and doesn't hold up the signature. Value alone: the first other owner can accept
   the law.
 
-## Review map (revision 1's D8 review)
+## Review map (revision 1's D8 review, and the re-check of revision 2)
 
 | Finding | Change | Where |
 | --- | --- | --- |
@@ -861,3 +881,8 @@ Three merges, each with its own plan reviewed by a fresh reviewer agent and merg
 | N11 narrowings in words; which merge adds the field | The signing dialog states each narrowing's effect; `GET /api/ships`' field is 4b's | C29; C30; Routes; R25; R27; test 24; Build order |
 | N12 skipped numbers; follow across a withdrawal | The walk goes over existing rows and stops at a withdrawal (a skipped number) | C21; C15; Binding; spec A amendment 7; R31; test 30 |
 | N13 flattened `grantees` | `people` or None; ship grantees refused under a restricted set until step 5 | C16; step 3 amendment 5; R10; Known limits |
+| SA (re-check) the caps in the follow walk | (a) A follower re-bound after a withdrawal is checked like a pinned owner and gets 409; "never refused" covers only revisions a follower would move to. (b) An owner's own activation that would change which charter revision binds any of their ships gets 409 naming the ship | C23; spec A amendment 4; Binding; R33; tests 33 and 35; Known limits |
+| SB (re-check) Q3 after the rehearsal | Q3 is asked before the final rehearsal, which runs with the policy Andy chose | C9; Deploy, the rehearsal and conversion step 4; Andy's choices |
+| NA (re-check) amendment 8 and test 24 disagreed | Amendment 8's rule kept (7 days when it fits, else the longest choice); test 24 now expects 48 hours chosen under `max_expiry_hours` 48 | Test 24 |
+| NB (re-check) a revert ahead of the withdrawal | With Q3 B, Andy agrees in the room to the limits returning to the defaults before such a revert | Deploy, Rollback |
+| NC (re-check) "ended or kept"; sha256 before signing | R34 now says "ended or kept", as C27 does. The preview carries the sha256 of the title and body, and the Sign dialog shows it for Andy to compare with the verdict's | C27; R34; Routes (preview); R25; test 24; Deploy conversion step 6; Known limits |
