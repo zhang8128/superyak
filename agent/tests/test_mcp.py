@@ -708,6 +708,19 @@ def test_station_set_brief_saves_and_reports_the_revision(station):
     assert described['station_set_brief'][2] == ['room', 'body', 'revision']
 
 
+def test_station_set_brief_says_so_when_the_text_was_already_the_brief(station):
+    """Ship briefs follow-up: the station answers an unchanged save with the current brief and its same revision, and
+    writes nothing, so the tool must not say that every member was told."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('City of AI', andy, jenn, serenity)
+    tools = tools_for(fake)
+    call(tools, 'station_set_brief', room=room, body='Purpose: the city of AI.', revision=0)
+    result = call(tools, 'station_set_brief', room=room, body='Purpose: the city of AI.', revision=1)
+    assert result['isError'] is False
+    assert result['content'][0]['text'] == f'The brief of room {room} already says that; nothing was saved (it stays revision 1).'
+    assert fake.brief_revisions[room] == 1
+
+
 def test_station_set_brief_refuses_a_revision_that_is_not_a_whole_number(station):
     """R17: true, "3", 1.5, null or no revision at all is refused before any station call, even to resolve the room;
     so is a body that isn't text, which would otherwise save the brief "None"."""
@@ -751,3 +764,16 @@ def test_station_set_brief_reports_refusals_in_the_stations_words(station):
         result = call(tools_for(fake), 'station_set_brief', room=room, body='Plan.', revision=0)
         assert result['isError'] is True and result['content'][0]['text'] == f'station error: {status}: {error}'
     assert room not in fake.briefs
+
+
+def test_station_rooms_shows_which_room_a_newer_room_replaces(station):
+    """Ship briefs follow-up: the replaced-room 409 says to change the brief in the newer room, so a ship must be able
+    to see which room replaced which; a replaced room keeps its title. An id with unusual characters is never copied."""
+    fake, andy, jenn, serenity = station
+    old = fake.room('City of AI', andy, jenn, serenity)
+    new = fake.room('City of AI', andy, jenn, serenity, linked_room_id=old)
+    odd = fake.room('Odd', andy, jenn, serenity, linked_room_id='x y`z')
+    listed = {r['id']: r for r in json.loads(call(tools_for(fake), 'station_rooms')['content'][0]['text'])}
+    assert listed[new]['replaces'] == old
+    assert 'replaces' not in listed[old]
+    assert listed[odd]['replaces'] == '(an id with unusual characters)'

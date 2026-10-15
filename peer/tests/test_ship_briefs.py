@@ -513,6 +513,34 @@ def test_a_stale_revision_from_a_ship_is_409_and_says_read_again(env):
     assert brief_row(app, room) == ('A new brief.', 3)
 
 
+def test_a_ships_save_of_unchanged_text_writes_nothing(env):
+    """Follow-up from the final reviews: after the checks up to and including the revision check, a body equal to the
+    current one answers 200 with the current brief and its same revision, and writes no revision, no notice, spends no
+    rate slot and leaves the owner's words the owner's. A stale revision still gets its 409 first."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    rio = ship_client(app, key)
+    room = new_room(clients[0], users[1], ship)
+    assert put_brief(clients[0], room, 'The owner wrote this.', 0).status_code == 200
+    before, shown = history(app, room), brief_of(clients[0], room)
+    asked = len(notices(clients[1], room))
+    same = ship_put(rio, room, 'The owner wrote this.', 1)
+    assert same.status_code == 200, same.text
+    assert same.json() == shown and same.json()['revision'] == 1 and same.json()['author_id'] == users[0]['id']
+    assert history(app, room) == before and len(notices(clients[1], room)) == asked
+    assert brief_row(app, room) == ('The owner wrote this.', 1)
+    stale = ship_put(rio, room, 'The owner wrote this.', 0)  # the revision check still comes first
+    assert (stale.status_code, stale.json()['error']) == (409, READ_AGAIN)
+    for n in range(2, 10):  # the ship's first eight saves: revisions 2-9
+        assert ship_put(rio, room, f'Save {n}.', n - 1).status_code == 200, n
+    spent = len(history(app, room))
+    assert ship_put(rio, room, 'Save 9.', 9).json()['revision'] == 9  # unchanged: no revision, no notice, no rate charge
+    assert len(history(app, room)) == spent == 9 and len(notices(clients[1], room)) == 9
+    assert ship_put(rio, room, 'Save 10.', 9).status_code == 200      # the ship's ninth save
+    assert ship_put(rio, room, 'Save 11.', 10).status_code == 200     # its tenth still fits: the unchanged save cost nothing
+    assert ship_put(rio, room, 'Save 12.', 11).status_code == 429
+
+
 def test_a_ship_writes_names_without_the_at_sign(env):
     """R5: an addressed @name from a ship is 400, scanned exactly as mentions are, so names talked about pass. No brief
     save records a mention, and the owner's brief may still hold @names."""

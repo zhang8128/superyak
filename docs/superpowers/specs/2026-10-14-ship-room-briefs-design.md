@@ -130,6 +130,8 @@ Today:
        - S1(d) (409);
        - S2's removal (403);
        - the revision (409);
+       - a body equal to the current brief's: answer with the current brief, unchanged, and stop. It writes no
+         revision, posts no notice, spends no rate slot, and the author stays whoever wrote it (follow-up from the final reviews; narrows, no new D8 round);
        - the rate (429);
        - the write.
   - **The expected revision** is the person route's check: an `int` that isn't a `bool`, equal to the current
@@ -302,6 +304,12 @@ Today:
   - **Its result:** "Saved the brief of room <id> as revision N. Every member is told in a station notice, and the
     room's owner can restore earlier revisions." When `redact` changed the text, it adds " Text that looked like a
     secret was masked."
+  - **When nothing changed:** the route answers the current brief with the revision the ship passed, and the tool
+    says "The brief of room <id> already says that; nothing was saved (it stays revision N)." It reads the same
+    revision back, so the route's answer shape is unchanged (follow-up from the final reviews; narrows, no new D8 round).
+  - **`station_rooms`** shows `replaces: <id>` on a room that replaced an earlier one (the station's
+    `linked_room_id`), through the id helpers, so a ship that gets the replaced-room 409 can find the newer room
+    (follow-up from the final reviews; narrows, no new D8 round).
   - **Refusals** come back as "station error: <the station's words>", like every tool.
 
 ## Requirements

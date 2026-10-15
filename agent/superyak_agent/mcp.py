@@ -138,6 +138,8 @@ def room_entry(room):
     """One station_rooms item. Breakouts S9: a breakout is marked, and a closed one says when it closed; every other
     room's item is today's."""
     entry = {'id': room['id'], 'title': label(room.get('title')), 'last_activity': room.get('last_activity')}
+    if room.get('linked_room_id'):  # ship briefs follow-up: the newer room says which room it replaced
+        entry['replaces'] = shown_id(room['linked_room_id'])
     mark = room.get('breakout')
     if isinstance(mark, dict):
         entry['breakout'] = 'ships only'
@@ -284,6 +286,8 @@ class Tools:
         body = redact(given)
         saved = self.client.set_brief(room_id, body, revision)
         masked = ' Text that looked like a secret was masked.' if body != given else ''
+        if saved['revision'] == revision:  # a save always makes revision + 1; the same one back means the station wrote nothing
+            return f'The brief of room {shown_id(room_id)} already says that; nothing was saved (it stays revision {revision}).' + masked
         return (f'Saved the brief of room {shown_id(room_id)} as revision {saved["revision"]}. Every member is told in a '
                 "station notice, and the room's owner can restore earlier revisions." + masked)
 
