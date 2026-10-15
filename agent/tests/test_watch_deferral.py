@@ -6,7 +6,7 @@ import json
 import pytest
 from superyak_agent.runs import RunTimeout
 from superyak_agent.watch import DEFERRED_PER_CYCLE, FALLBACK, READ_ONLY_LINE, TIMEOUT_NOTE
-from test_watch import FakeRunner, bodies, watcher
+from test_watch import ANSWERED_TAIL, FakeRunner, bodies, watcher
 
 
 def defer(fake, *messages):
@@ -578,4 +578,4 @@ def test_a_full_deferred_list_watcher_gets_answered_and_tells_the_run(station, s
     assert w.cycle() == 1 and [mid for _, mid, _ in runner.calls] == [extra['id']]
     sent = {b['message_id']: b for b in fake.ticket_bodies}
     assert 'decisions' not in sent[extra['id']]
-    assert 'already answered this mention in this room' in runner.calls[0][2]
+    assert runner.calls[0][2].endswith(ANSWERED_TAIL)

@@ -522,6 +522,10 @@ def test_an_answered_owner_mention_reads_answered_without_decisions(env):
     got = ask(watcher, second['id'], decisions=False).json()
     assert (got['mode'], got['basis']) == ('read', 'answered')
     third = say(clients[0], room, 'c', '@serenity third')
+    clock[0] += 86401
+    on_watch(session)
+    assert ask(watcher, third['id']).json()['decision'] == 'defer'
+    assert len(table(store, 'deferrals')) == 1
     reply(session, room, 'r3', 'on it', third['id'])
     assert ask(watcher, third['id']).json() == {'decision': 'answered', 'message_id': third['id']}
     assert table(store, 'deferrals') == []

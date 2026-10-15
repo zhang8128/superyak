@@ -508,6 +508,14 @@ BUILD_TAIL = ("mentions you (@serenity). You are in builder mode, in a fresh git
               "changed. Do not commit or push; the watcher commits your work on its own branch.\n")
 
 
+LEAD = ("mentions you (@serenity). You are in read-only mode: you can read and search the repository and use the "
+        "aDNA tools, but you cannot run commands or change files. ")
+OLD_TAIL = LEAD + ("This mention is more than 24 hours old, so this run is read-only. If the request needs changes, say "
+                   "what you would do, and that a new message will start a builder run if it is still wanted.\n")
+ANSWERED_TAIL = LEAD + ("This ship has already answered this mention in this room, so this run is read-only. Say so, "
+                        "and that a new message will start a builder run if more is wanted.\n")
+
+
 def test_a_limited_read_prompt_says_why_and_nothing_else_changes(station, ship_config):
     fake, andy, jenn, serenity = station
     room = fake.room('Ops', andy, jenn, serenity)
@@ -519,8 +527,7 @@ def test_a_limited_read_prompt_says_why_and_nothing_else_changes(station, ship_c
     assert plain_read.endswith(READ_TAIL) and plain_build.endswith(BUILD_TAIL)
     old = build_prompt(view, mention, 'serenity', 'read', limited='old')
     answered = build_prompt(view, mention, 'serenity', 'read', limited='answered')
-    assert 'more than 24 hours old, so this run is read-only' in old
-    assert 'already answered this mention in this room' in answered
+    assert old.endswith(OLD_TAIL) and answered.endswith(ANSWERED_TAIL)
     for prompt in (old, answered):
         assert "can ask the ship's owner" not in prompt and "from the ship's owner" not in prompt
     for value in (None, 'none', 'grant', ['old'], 5):
@@ -536,7 +543,7 @@ def test_the_watcher_passes_an_old_basis_to_the_prompt(station, ship_config, tmp
     fake.ticket_override[asked['id']] = (200, {'id': 'tx', 'mode': 'read', 'basis': 'old', 'footer': '', 'status': 'running'})
     runner = FakeRunner()
     assert watcher(fake, ship_config, tmp_path, runner).cycle() == 1
-    assert 'more than 24 hours old, so this run is read-only' in runner.calls[0][2]
+    assert runner.calls[0][2].endswith(OLD_TAIL)
 
 
 @pytest.mark.parametrize('basis', ['none', 'grant', ['old'], 5, 'missing'])

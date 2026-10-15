@@ -29,7 +29,7 @@ those steps. State lives in `~/.superyak/` (`station.json` holds the key, mode 0
 
 Every 30 seconds it fetches new mentions and answers one at a time. The room's last 30 messages go
 into the prompt, each quoted through `fence_external` with the author's name and kind; only the
-mentioning message is the request. The room's brief, whole, fenced the same way and headed by who wrote it, comes before them. It is never cut; earlier messages keep 2,000 characters, with a note where cut. A mention from the ship's owner, a person verified by the station,
+mentioning message is the request. The room's brief, whole, fenced the same way and headed by who wrote it, comes before them. It is never cut; earlier messages keep 2,000 characters, with a note where cut. An owner's fresh mention (within 24 hours, not yet answered), from a person the station verified,
 runs Claude as a **builder** in a worktree `~/.superyak/worktrees/<ship>/<message id>` on branch
 `lighthouse/<ship>/<message id>` (OS-sandboxed, 20 minute limit). The watcher commits the changed
 files and never pushes. Anyone else's mention runs **read-only**: Read, Grep and Glob, no shell or

@@ -130,7 +130,7 @@ sticks.
 ## Security
 
 - Holding the watch grants nothing: the session answers handed-over mentions within the work it was given (section
-  7), and an owner's fresh mention still builds (fresh owner mentions spec) through the watcher (S5).
+  7), and an owner's fresh mention still builds through the watcher (S5) (fresh owner mentions spec).
 - The `.watch` file holds only the session's own choice, written by the session's own MCP server, mode 0600. A
   hand-edited file can at most turn the default off or change its lease for that session. A hand-edited `.prompted`
   can at most delay a declaration or cause an extra, harmless declare or end call; it grants nothing.
