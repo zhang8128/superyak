@@ -153,7 +153,8 @@ class Tickets:
         if self._ship_grant_builds(db, ship['id'], now) >= self._grant_policy(db)['builds_per_ship_per_day']:
             return None  # the per-ship cap, under every grant; owner builds never count
         covered = self._rooms_back(db, room_id)
-        for grant in db.execute('SELECT * FROM grants WHERE grantee_id=? ORDER BY created, id', (author_id,)).fetchall():
+        for grant in db.execute('SELECT * FROM grants WHERE grantee_id=? AND revoked IS NULL AND expires > ? '
+                                'ORDER BY created, id', (author_id, now)).fetchall():  # validity still runs below
             rooms = json.loads(grant['rooms'])
             if (ship['id'] not in json.loads(grant['targets']) or 'direct' not in json.loads(grant['actions'])
                     or (rooms != '*' and not any(key in rooms for key in covered)) or not _made_by(grant, message['created'])):

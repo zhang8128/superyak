@@ -1005,8 +1005,9 @@ approval still succeeds and `share` is `missing`; Odo posts a notice in `Ops` so
 ## Run tickets
 
 Spec A, section 4. Before each run, a ship's watcher asks for a ticket, and the station decides the run's mode at
-that moment. In this step, `build` with basis `owner` goes to a message by the ship's owner (a person) that
-mentions the ship and is fresh: posted within 24 hours of the ticket, and not yet answered by the ship.
+that moment. A `build` ticket has one of two bases, `owner` and `grant` (below). Basis `owner` goes to a message by
+the ship's owner (a person) that mentions the ship and is fresh: posted within 24 hours of the ticket, and not yet
+answered by the ship.
 
 `build` with basis `grant` (spec A step 3, G15-G18) goes to a fresh message that mentions the ship, by another person
 who holds a grant over it (see Grants), when all of these hold: the grant's targets include the ship, `direct` is in

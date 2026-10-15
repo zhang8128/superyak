@@ -763,7 +763,8 @@ function grantsView() {
 // One grant write at a time (G22): a second click while one is on its way would make a second grant or meet the first
 // one's revoke. The list is read again after every write, so it shows what the station holds.
 async function grantWrite(path, json, message, saved = () => {}) {
-  if (state.grantSaving) return;
+  if (state.grantSaving) return false;
+  let done = false;
   state.grantSaving = true;
   const who = identityKey(state.me);
   try {
@@ -772,16 +773,20 @@ async function grantWrite(path, json, message, saved = () => {}) {
     saved(answer);
     state.grantAsk = null;
     setFlash(message(answer));
+    done = true;
   } catch (error) {
-    if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+    if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return false; }
     if (identityKey(state.me) === who) setFlash(error.message, true);
   } finally {
     state.grantSaving = false;
     if (state.me && identityKey(state.me) === who) {
-      try { await loadGrants(); } catch (_) { /* the list below says it could not be read */ }
+      try { await loadGrants(); } catch (error) {
+        if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return false; }  // a list that could not be read is said below
+      }
       if (routeParts().route === "grants") render();
     }
   }
+  return done;
 }
 
 async function makeGrant(form) {
@@ -1874,8 +1879,8 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "grant-revoke-confirm" && state.grantAsk?.id === target.dataset.id) {
     const grant = (state.grants || []).find((item) => item.id === target.dataset.id);
-    await grantWrite(`/api/grants/${pathPart(target.dataset.id)}/revoke`, { reason: state.grantAsk.reason }, () => `Grant ${grant?.short || ""} revoked.`);
-    document.querySelector("#grants-given-title")?.focus();
+    const revoked = await grantWrite(`/api/grants/${pathPart(target.dataset.id)}/revoke`, { reason: state.grantAsk.reason }, () => `Grant ${grant?.short || ""} revoked.`);
+    if (revoked) document.querySelector("#grants-given-title")?.focus();  // a refused revoke keeps the ask open, focus where it was
   }
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
   if (action === "edit-brief" && state.room) {

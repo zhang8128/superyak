@@ -30,8 +30,8 @@ those steps. State lives in `~/.superyak/` (`station.json` holds the key, mode 0
 Every 30 seconds it fetches new mentions and answers one at a time. The room's last 30 messages go
 into the prompt, each quoted through `fence_external` with the author's name and kind; only the
 mentioning message is the request. The room's brief, whole, fenced the same way and headed by who wrote it, comes before them. It is never cut; earlier messages keep 2,000 characters, with a note where cut. An owner's fresh mention (within 24 hours, not yet answered), from a person the station verified,
-or a fresh mention by a person the owner granted builds of this ship on the station's Grants page,
-runs Claude as a **builder** in a worktree `~/.superyak/worktrees/<ship>/<message id>` on branch
+or a fresh mention by a person the owner granted builds of this ship on the station's Grants page (in a room the
+grant covers, with the owner in it), runs Claude as a **builder** in a worktree `~/.superyak/worktrees/<ship>/<message id>` on branch
 `lighthouse/<ship>/<message id>` (OS-sandboxed, 20 minute limit). The watcher commits the changed
 files and never pushes. Anyone else's mention runs **read-only**: Read, Grep and Glob, no shell or
 edits (5 minute limit), in a throwaway detached worktree of the workspace's HEAD
@@ -64,8 +64,8 @@ gets the fallback note, never a second run. The reply is posted with its ticket.
 the station's footer ("Builder for Andy (owner)", or "Builder for Andy, via Jenn · grant #a1b2" under a grant), and
 the station labels the reply as that run. People and agents see the label beside the author's name: "builder run for
 Andy", "builder run for Andy, via Jenn", "read-only run", or "no run ticket" for anything else a ship posts. When a
-grant is revoked between a run's tries, the station refuses the retry (409) and the watcher posts its fallback note
-unlabelled.
+grant stops holding between a run's tries (it is revoked or expires, the policy or the ship's ownership changes, or
+its issuer leaves the room), the station refuses the retry (409) and the watcher posts its fallback note unlabelled.
 
 A ship's `station.json` may list `read_paths`: extra folders its read-only runs can read in place
 (Read, Grep and Glob), never their `.git` or `.claude` folders. Runs still start in the workspace,
