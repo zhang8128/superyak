@@ -490,3 +490,42 @@ def test_station_alerts_shows_the_queue_and_what_is_held_back(tmp_path, capsys):
     out = capsys.readouterr().out
     assert f'stopped  superyak-alerttest.service  {first["id"]}' in out
     assert 'superyak-alerttest.service: 3 stops held back since ' in out
+
+
+def hand_made(queue, name, **fields):
+    """An alert file as a person might write it: the shape of ours with fields changed."""
+    body = {'id': name, 'unit': 'superyak-odo.service', 'kind': 'down', 'at': time.time(), 'text': 'Odo gave up'} | fields
+    (queue / f'{name}.json').write_text(json.dumps(body).replace('"INF"', 'Infinity').replace('"-INF"', '-Infinity').replace('"NAN"', 'NaN'))
+    return queue / f'{name}.json'
+
+
+def test_an_alert_with_a_non_finite_time_is_skipped_and_cleaned(tmp_path, capsys):
+    """Follow-up 6: a hand-made "at": Infinity (or -Infinity or NaN) is not an alert. queued() skips it, so station-alerts
+    (describe_queue) and station-notices don't raise on it, and clean() removes it once the file is over 30 days old by
+    its own mtime, as it never could by "at". Mutation: the finite check dropped (describe_queue raises)."""
+    store = Store(tmp_path / 'lighthouse')
+    queue = store.data_dir / 'alerts'
+    good = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, time.time())
+    odd = [hand_made(queue, name, at=value) for name, value in (('aaaaaaaaaaaa', 'INF'), ('bbbbbbbbbbbb', '-INF'), ('cccccccccccc', 'NAN'))]
+    old = time.time() - 40 * 86400
+    os.utime(odd[0], (old, old))
+    assert [alert['id'] for alert in alerts.queued(queue)] == [good['id']]
+    assert good['id'] in alerts.describe_queue(queue, time.time())
+    code, out, err = notices(capsys, store.data_dir)
+    assert code == 0 and [notice['id'] for notice in json.loads(out)] == [f'alert-{good["id"]}']
+    alerts.clean(queue, time.time())
+    assert [path.exists() for path in odd] == [False, True, True]        # only the one old by its mtime; a fresh one may be mid-write
+    assert (queue / f'{good["id"]}.json').exists()
+
+
+def test_an_alert_whose_text_sanitises_to_nothing_is_not_listed(tmp_path, capsys):
+    """Follow-up 6: text of only invisible characters shows as an empty notice. listed() skips it. Mutation: the empty
+    check dropped (the notice is listed with empty text)."""
+    store = Store(tmp_path / 'lighthouse')
+    queue = store.data_dir / 'alerts'
+    good = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, time.time())
+    hand_made(queue, 'dddddddddddd', text='​‮ ​')
+    hand_made(queue, 'eeeeeeeeeeee', text='')
+    code, out, err = notices(capsys, store.data_dir)
+    assert code == 0 and [notice['id'] for notice in json.loads(out)] == [f'alert-{good["id"]}']
+    assert all(notice['text'] for notice in alerts.listed(queue, time.time()))

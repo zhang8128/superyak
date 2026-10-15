@@ -268,7 +268,8 @@ def queued(alerts_dir):
             continue
         if (isinstance(alert, dict) and alert.get('id') == match[1] and isinstance(alert.get('unit'), str)
                 and UNIT.fullmatch(alert['unit']) and alert.get('kind') in KINDS
-                and isinstance(alert.get('at'), (int, float)) and isinstance(alert.get('text'), str)):
+                and isinstance(alert.get('at'), (int, float)) and not isinstance(alert['at'], bool) and math.isfinite(alert['at'])
+                and isinstance(alert.get('text'), str)):
             found.append(alert)
     return sorted(found, key=lambda alert: (alert['at'], alert['id']))
 
@@ -277,9 +278,16 @@ def clean(alerts_dir, now):
     """S10: alert files more than 30 days old are deleted each time the notifier runs."""
     if Path(alerts_dir).is_symlink():
         raise OSError(f'{alerts_dir} is a symlink')  # never unlink files in a link's target
-    for alert in queued(alerts_dir):
+    waiting = queued(alerts_dir)
+    for alert in waiting:
         if alert['at'] < now - KEPT_DAYS * DAY:
             (Path(alerts_dir) / f'{alert["id"]}.json').unlink(missing_ok=True)
+    # Follow-up 6: a file queued() skips (an "at" of Infinity, say) can never be old by "at"; it goes by its own age.
+    kept = {f'{alert["id"]}.json' for alert in waiting}
+    for entry in os.scandir(alerts_dir):
+        if (ALERT_FILE.fullmatch(entry.name) and entry.name not in kept and entry.is_file(follow_symlinks=False)
+                and entry.stat(follow_symlinks=False).st_mtime < now - KEPT_DAYS * DAY):
+            Path(entry.path).unlink(missing_ok=True)
 
 
 def station_alert(data_dir, unit, *, monitor, environ, now=None):
@@ -306,9 +314,12 @@ def station_alert(data_dir, unit, *, monitor, environ, now=None):
 def listed(alerts_dir, now):
     """S10: the last 7 days' alerts, oldest first: at most the 20 newest, plus every down and failed alert of those
     days, so a give-up line is never pushed out by restarts. The text goes through safe_line again on the way out."""
-    recent = [alert for alert in queued(alerts_dir) if alert['at'] > now - LISTED_DAYS * DAY]
+    waiting = queued(alerts_dir)
+    shown = {alert['id']: safe_line(alert['text'], LINE_LIMIT) for alert in waiting}
+    # follow-up 6: text of only invisible characters would list as nothing, so it is not an alert to list (or to count)
+    recent = [alert for alert in waiting if alert['at'] > now - LISTED_DAYS * DAY and shown[alert['id']]]
     newest = {alert['id'] for alert in recent[-LISTED_NEWEST:]}
-    return [{'id': f'alert-{alert["id"]}', 'text': safe_line(alert['text'], LINE_LIMIT)}
+    return [{'id': f'alert-{alert["id"]}', 'text': shown[alert['id']]}
             for alert in recent if alert['id'] in newest or alert['kind'] != 'stopped']
 
 

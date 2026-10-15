@@ -462,7 +462,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 - **R13.** Alerts are queued as 0600 files in `<data-dir>/alerts/`. `station-notices` lists, from the last 7 days,
   at most the 20 newest plus every `down` and `failed` alert, and Odo posts each once in Ops through its existing
   path. Files more than 30 days old are deleted. When the store can't be opened, the queued alerts are still listed
-  and the command exits 0.
+  and the command exits 0. A file whose `at` is not a finite number is not an alert: it is skipped, and deleted once
+  the file itself is over 30 days old. An alert whose text sanitises to nothing is not listed. (Follow-up from the
+  final reviews; narrows, no new D8 round.)
 - **R14.** A rotation whose newest copy is more than 36 hours old gives exactly one `backup-stale-<name>` notice. No
   rotation, or an empty one, gives none.
 - **R15.** With no alerts directory and no rotation directory, `station-notices` prints exactly what it prints today,
@@ -797,3 +799,4 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 | Role lowering leaves a trace | `role_version` bump and an `account_role_changes` row, as the station's role changes do | S16 ("With a usable replaced file"), `test_lowering_a_role_bumps_role_version_and_records_a_change` |
 | A restore brings back a changed or removed room brief | Reported by room short id and title, "reported, not applied", never the text | S16 ("Reported, never applied"), runbook step 7, `test_reconcile_reports_briefs_changed_since_the_copy_without_their_text` |
 | A colliding short id prints twice | The two peer lines print the full id for a peer sharing its 12-character prefix | S16 ("What it prints"), `test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line` |
+| Odd alert files | `at` must be finite, else the file is skipped and cleaned by its mtime; an alert whose text sanitises to empty is not listed | R13, `test_an_alert_with_a_non_finite_time_is_skipped_and_cleaned`, `test_an_alert_whose_text_sanitises_to_nothing_is_not_listed` |
