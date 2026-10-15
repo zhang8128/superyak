@@ -26,18 +26,28 @@ spec (`docs/superpowers/specs/2026-10-15-owner-mention-fresh-design.md`, approve
 and so in this base): `_mention_stale`, `MENTION_FRESH_SECONDS` (86,400) and its `old` and `answered` basis values.
 Spec A (`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`) holds where both are silent.
 
-**Base:** grants-3b at `6841ce0`, on branch grants-3c. When this plan was drafted, 3b was under its section 2 review on
-the Pi. That review has since passed (Rio Grande, APPROVE WITH MINORS), and 3b is merged and deployed as main `d5843b8`,
-whose tree equals `6841ce0`, so no anchor below changes. If 3b or main changes before building, rebase grants-3c and
-re-check the anchors first: every edit below names its text exactly, so a moved anchor fails loudly instead of landing in
-the wrong place. The review's one minor (nothing pinned the pre-check's read-only open) and Rio Grande's ruling on a
-replaced room's `current` are Task 0, with tests.
+**Base:** grants-3c at `388ef1d`: grants-3b `6841ce0` (passed its section 2 review, Rio Grande, APPROVE WITH MINORS;
+merged and deployed as main `d5843b8`, whose tree equals `6841ce0`), with main `3452e19` merged in (docs only: the
+roadmap and HANDOFF) and the spec's notes on G11, G17 and G19 (`a66aa1e`). No code file differs from `6841ce0`, so every
+anchor below applies unchanged at `388ef1d`, and every count below was measured there. If main moves before building,
+merge it and re-check the anchors first: every edit names its text exactly, so a moved anchor fails loudly instead of
+landing in the wrong place. 3b's review minor (nothing pinned the pre-check's read-only open) and Rio Grande's ruling on
+a replaced room's `current` are Task 0, with tests.
 
-**Dry run.** Every task was dry-run in a scratch worktree at `6841ce0`. Each RED output below is the one seen, each GREEN
-ran, and each Step 5 mutation was applied alone and failed the test it names. The code blocks are the dry run's own
-strings: applying every step in order to `6841ce0` reproduced the dry run's tree byte for byte, and replaying the tasks
-one by one on it gave each RED and GREEN below. At the end the peer suite ran 932 passed and 1 skipped (907 at
-`6841ce0`, plus this plan's 25 tests) and the agent suite 753 passed (751 plus 2).
+**Plan revision 2.** The fresh review of revision 1 (`7114188`, reviewed at `388ef1d`: APPROVE WITH CHANGES, 0 must-fix,
+2 should-fix, 8 nits; it dry-ran every step and all 72 mutations, and got the full suites' counts) is answered here:
+S1 (Task 5: `test_any_room_you_share_sends_the_star_and_a_room_made_after_sign_in_is_offered`), S2 (Task 5: test 20
+clicks Cancel first), N1 (Task 5: the double-click test presses "Make grant" with no person first; the S1 test pins the
+route's reload), N2 (Task 4: the `watch.py` comment), N3 (Task 2: `issue_ticket`'s docstring), N4 (this Base paragraph),
+N5 (Task 2: `_grant_lapsed` never raises on a missing issuer row, and a test), N6 (Task 5: `makeGrant`'s comment; R19),
+N7 (Known limits) and N8 (Task 2: a two-link re-send test, with both swap mutations). The steps revision 2 changed were
+dry-run again at `388ef1d`.
+
+**Dry run.** Every task was dry-run in a scratch worktree (revision 1 at `6841ce0`, revision 2 at `388ef1d`). Each RED
+output below is the one seen, each GREEN ran, and each Step 5 mutation was applied alone and failed the test it names.
+The code blocks are the dry run's own strings: applying every step in order to `388ef1d` reproduces the dry run's tree
+byte for byte, and replaying the tasks one by one on it gave each RED and GREEN below. At the end the peer suite ran 935
+passed and 1 skipped (907 at the base, plus this plan's 28 tests) and the agent suite 753 passed (751 plus 2).
 
 Tasks: 0 3b's section 2 review (the read-only pre-check pinned, `current` without an id for a non-member); 1 the ticket
 basis `grant` (G15, G16, the per-ship cap, the oldest grant, `old` and `answered`); 2 a re-sent grant ticket re-checked,
@@ -62,16 +72,16 @@ plan adds. A fresh reviewer checks each; Andy can veto any.
 | R9 | One count, `_ship_grant_builds(db, ship_id, now)` (grant build tickets, `created > now - 86400`), serves G15's cap and G11's `ship_builds_left`. | The page can never say a ship has builds left that the ticket refuses. |
 | R10 | "Local" is checked (`':'` in the room id) though a ticket's message is a `messages` row and a remote room's messages are `peer_messages`; test 11 writes a remote-id room by hand, as 3b's G8 test did. The ship's own membership is not checked in `_spendable_grant`: `issue_ticket` answers 404 for a ship outside the room before `_mode_for` runs, so that check could never fail there. | A check that costs one comparison and a test that can fail; a check that can't fail is left out. |
 | R11 | A message `created` that isn't a number passes "made no later than the message", so `_mention_stale` reads it `old`, as it does an owner's (fresh owner mentions R4). | A naive `grant['created'] <= created` raises `TypeError` on text (a 500); R4's rule is never to raise. |
-| R12 | A failed re-check's reasons: G9's own, `"<issuer> is no longer in this room"` (the name through `safe_line`), and `"The grant behind this run is gone"` for a chain whose grant row is missing (only by hand). | The spec names G9's reasons only. The 409 reaches the watcher, which logs it; no person reads it. |
+| R12 | A failed re-check's reasons: G9's own, `"<issuer> is no longer in this room"` (the name through `safe_line`), and `"The grant behind this run is gone"` for a chain whose grant row, or whose root issuer's row, is missing (only by hand). `_grant_lapsed` never raises. | The spec names G9's reasons only. The 409 reaches the watcher, which logs it; no person reads it. A missing row must be a 409, not a 500 (R11's rule; plan review N5). |
 | R13 | `via_name` appears only on a grant run's source; every other source is byte for byte as before. The ticket JSON gains no field: the footer carries the names. | Existing tests compare whole source dicts (owner, read, `old`); spec G17 lists `via_name` for grant runs. |
 | R14 | The web app's label for a grant run is "builder run for Andy, via Jenn", its existing form plus ", via <via_name>", the same words as the agent's `source_label`. | Spec G17 and test 17 write the web label as "builder for Andy, via Jenn", but the web app's owner label is already "builder run for Andy" (`test_a_room_shows_which_ship_messages_came_from_runs`); one label for both readers. Reported as a spec ambiguity. |
 | R15 | G19 with fresh owner mentions: when `limited` is `old` or `answered`, its reason sentence replaces the prompt's last sentence; otherwise the last sentence is G19's ("... can ask the ship's owner for a grant, or check the Grants page."). Never both. | Spec G19's "keeps both, the reason line first" read with fresh owner mentions' "Order with grants step 3" (the limited sentence replaces the last sentence when set, G19's is used otherwise) and its test 9 (a limited prompt never says "can ask the ship's owner"). A grantee whose mention is a day old holds a grant already. |
 | R16 | The page's lists: "Held by you" is every listed grant whose grantee is the caller; "Given by you" is every other listed grant (the ones the caller issued, and, only after a hand edit in step 3, ones over ships the caller owns, which G10 lets them revoke). Revoke shows on "Given by you" for a grant not yet revoked; the station decides (403, 409). | G11's list holds exactly those grants; every one not held is one the caller has power over. |
 | R17 | No click guard on the Grants page. The ask takes the Revoke button's place with its question first, so the second press of a hurried double click lands on text, at desktop and phone widths; a test pins it, and its mutation (the buttons first) shows the danger. Cancel gets the focus, and the confirm is away from where Revoke was, as on the board. | The board's guard exists because a re-render moved another control under the pointer; here nothing moves under it. One write at a time still holds (R18). |
 | R18 | One grant write at a time (`state.grantSaving`), for making and revoking, and the list is read again after each. | A double click on "Make grant" would otherwise make two grants: no 409 stops a second POST. |
-| R19 | The page checks three things before sending: a person, at least one ship, and at least one room (or "Any room you share with them"). Everything else, a budget that isn't a whole number from 1 to 500 among them, is the station's own message. | The station's messages for those three name JSON fields ("rooms is "*" or a list of 1 to 20 room ids ..."). |
+| R19 | The page checks three things before sending: a person, at least one ship, and at least one room (or "Any room you share with them"). The budget field's own validation (`min="1" max="500" step="1"`) stops an out-of-range or fractional budget before the page sends anything; an empty field is sent as 0, and the station's own message says why it is refused. Everything else is the station's message too. | The station's messages for those three name JSON fields ("rooms is "*" or a list of 1 to 20 room ids ..."). |
 | R20 | No `maxlength` on the revoke reason. | The station counts code points and a browser counts UTF-16 units (the board's Review Focus 5); the station's 400 says so. |
-| R21 | Entering `#grants` reloads the home data (ships and rooms) and then the grants and the people list, as the Board route reloads. The draft form is kept in `state.grantForm` through re-renders, and read from the form itself, so a room ticked for one person and gone from the next person's list is dropped. | The room list must be the one the station would accept now. |
+| R21 | Entering `#grants` reloads the home data (ships and rooms) and then the grants and the people list, as the Board route reloads (pinned: a room made after sign-in is offered). The draft form is kept in `state.grantForm` through re-renders, and read from the form itself, so a room ticked for one person and gone from the next person's list is dropped. | The room list must be the one the station would accept now. |
 | R22 | `agent/README.md`'s watcher paragraphs name grant builds, the grant footer, the new label and the stopped retry. | G23 names API.md only, but the README is where a ship's owner reads what the watcher does; it would be wrong after this merge. |
 
 ## Global Constraints
@@ -124,7 +134,12 @@ Inputs no spec test names, most likely to bite a person first. Each is pinned by
   again.
 - Task 1's walk mutation (dropping the seen list) makes the cycle test hang; run it under `timeout 60` (coreutils;
   `gtimeout` on a Mac with Homebrew) to see exit 124.
-- Task 5's RED takes about three minutes: each of its six tests waits 30 s for the Grants link that isn't there yet.
+- A room replaced out of the caller's sight is still offered. The page counts a room as current unless its replacement
+  is in the caller's own room list, so a caller removed from X' (the room that replaced X) still sees X offered, and the
+  station refuses the grant with 400 "A listed room was replaced by a newer linked room; list the current one", which
+  the caller can't act on. It needs a room's owner to add a member and then remove the caller from the new room.
+- Task 5's RED takes about three and a half minutes: each of its seven tests waits 30 s for the Grants link that isn't
+  there yet.
 
 ## File Structure
 
@@ -913,7 +928,9 @@ from test_grants import charge, make, revoke_by_hand
 with
 
 ```python
+from contextlib import closing
 import json
+import sqlite3
 import pytest
 from superyak_peer import grants as G
 from superyak_peer.common import Problem, uid
@@ -1032,6 +1049,48 @@ def test_a_resend_is_refused_once_the_grant_expires_ownership_moves_the_issuer_l
         409, f'Grant #{grants["narrowed"][:4]} lasts longer than the station now allows', 'finished')
 
 
+def test_a_resent_two_link_ticket_checks_the_held_grant_and_the_roots_issuer(env):
+    """G18 with a chain of two links, made by hand as step 5 will make them: the re-send checks the validity of the grant
+    the author holds (its walk covers the root), and the membership of the root's issuer, not the held link's issuer."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    s = ships(store, patient['id'], 'alpha', 'beta')
+    theirs = room(store, family, 'Theirs', patient, doctor, s['alpha'], s['beta'])  # family's room: family can remove patient
+    held = {}
+    for name in ('alpha', 'beta'):
+        root = make(store, patient, doctor, [s[name]], hours=48)
+        held[name] = make(store, doctor, family, [s[name]], hours=48)
+        with store.transaction() as db:
+            db.execute('UPDATE grants SET parent_id=? WHERE id=?', (root, held[name]))
+    asked = {name: mention(store, family, theirs, s[name]) for name in held}
+    for name in held:
+        assert store.issue_ticket(s[name]['id'], asked[name]['id'])['chain'][1:] == [held[name]], name
+    revoke_by_hand(store, held['alpha'], doctor)  # the link family holds, not its root
+    assert refused(store, s['alpha'], asked['alpha']) == (409, f'Grant #{held["alpha"][:4]} was revoked by Doctor', 'finished')
+    store.remove_participant(family['id'], theirs, patient['id'])  # the root's issuer leaves; the held link's issuer stays
+    assert refused(store, s['beta'], asked['beta']) == (409, 'Patient is no longer in this room', 'finished')
+
+
+def test_a_resend_whose_issuers_row_is_gone_is_refused_and_never_raises(env):
+    """R11's rule, never to raise, on G18's re-check: an issuer's row that is gone (only in a hand-edited database; users
+    are never deleted) reads as a grant that is gone, a 409, never a 500."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    issuer = store.create_user('vanished', 'Vanished', 'long-password-vanished')
+    orphan = ships(store, issuer['id'], 'orphan')['orphan']
+    theirs = room(store, doctor, 'Theirs', issuer, orphan)
+    make(store, issuer, doctor, [orphan], hours=48)
+    asked = mention(store, doctor, theirs, orphan)
+    assert store.issue_ticket(orphan['id'], asked['id'])['mode'] == 'build'
+    with closing(sqlite3.connect(store.db_path)) as db:  # by hand, on a connection without the store's foreign keys
+        db.execute('DELETE FROM room_members WHERE user_id=?', (issuer['id'],))
+        db.execute('DELETE FROM users WHERE id=?', (issuer['id'],))
+        db.commit()
+    assert refused(store, orphan, asked) == (409, 'The grant behind this run is gone', 'finished')
+
+
 def test_a_grant_build_is_never_deferred_but_another_persons_mention_is(env):
     """Test 18: only read decisions defer (ship status S10), so a grantee's build runs while the ship's session holds a
     writable watch; another person's mention of the same ship still defers to that session."""
@@ -1101,14 +1160,17 @@ def test_a_revoke_between_tries_stops_the_retry_and_the_fallback_goes_out_unlabe
 `test_a_resend_after_the_room_gains_a_member_keeps_its_ticket` and
 `test_a_grant_build_is_never_deferred_but_another_persons_mention_is` pass before this task: nothing re-checks a re-send
 yet, and only read decisions defer. They guard the re-check's limits and G18's first sentence; Step 5 shows each bites.
+The two-link test is the only place `_grant_lapsed`'s `links[-1]` (the held grant, whose validity walk covers the root)
+and `links[0]` (the root, whose issuer must be in the room) can be told apart; step 3's grants have one link (plan review
+N8).
 
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_grant_tickets.py tests/test_ship_agent.py`
-Expected: `3 failed, 33 passed`: the test 12 refusal (`assert (200, {'id': ..., 'mode': 'build', ...}) == (409, {'error': 'Grant #... was revoked by Patient'})`),
-the re-check table (`Failed: DID NOT RAISE Problem`, at the expiry), and the real watcher's
-`test_a_revoke_between_tries_stops_the_retry_and_the_fallback_goes_out_unlabelled` (`assert (0 == 1)` at the second
-cycle: the retry got the running ticket and ran again).
+Expected: `5 failed, 33 passed`: the test 12 refusal (`assert (200, {'id': ..., 'mode': 'build', ...}) == (409, {'error': 'Grant #... was revoked by Patient'})`);
+the re-check table, the two-link test and the missing-issuer test, each `Failed: DID NOT RAISE Problem` at its first
+refusal; and the real watcher's `test_a_revoke_between_tries_stops_the_retry_and_the_fallback_goes_out_unlabelled`
+(`assert (0 == 1)` at the second cycle: the retry got the running ticket and ran again).
 
 - [ ] **Step 3: Write the implementation**
 
@@ -1147,6 +1209,21 @@ with
 In `peer/superyak_peer/tickets.py`, replace
 
 ```python
+        """S5's order: 0 never answered (422), 1 answered, 2 running, 3 finished (409), 4 defer, 5 run. Steps 1 and 4
+        only for a watcher that asked for them (R23); without them the answer is exactly today's."""
+```
+
+with
+
+```python
+        """S5's order: 0 never answered (422), 1 answered, 2 running (a grant ticket re-checked first, G18), 3 finished
+        (409), 4 defer, 5 run. Steps 1 and 4 only for a watcher that asked for them (R23); without them the answer is
+        exactly today's."""
+```
+
+In `peer/superyak_peer/tickets.py`, replace
+
+```python
             if existing:
                 if self._ticket_running(existing):
                     return self._decided(db, existing, station, decisions)
@@ -1176,7 +1253,8 @@ this:
     def _grant_lapsed(self, db, ticket, message):
         """G18: a running grant ticket asked for again. None while its grant still holds, else why not: G9's revocation,
         expiry, policy and ownership checks, then the root issuer's membership of the message's room. Not the budget or
-        the per-ship cap, which this ticket already paid."""
+        the per-ship cap, which this ticket already paid. Never raises: a missing grant or issuer row (only by hand) is
+        "gone"."""
         links = [db.execute('SELECT * FROM grants WHERE id=?', (key,)).fetchone() for key in json.loads(ticket['chain'])]
         if not links or any(link is None for link in links):
             return 'The grant behind this run is gone'
@@ -1185,7 +1263,7 @@ this:
             return reason
         if not _in_room(db, message['room_id'], links[0]['issuer_id']):
             issuer = db.execute('SELECT name FROM users WHERE id=?', (links[0]['issuer_id'],)).fetchone()
-            return f'{safe_line(issuer["name"])} is no longer in this room'
+            return f'{safe_line(issuer["name"])} is no longer in this room' if issuer else 'The grant behind this run is gone'
         return None
 
 ```
@@ -1193,7 +1271,7 @@ this:
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_grant_tickets.py tests/test_ship_agent.py tests/test_tickets.py tests/test_deferrals.py`
-Expected: `85 passed`.
+Expected: `87 passed`.
 
 - [ ] **Step 5: Check the tests bite**
 
@@ -1211,7 +1289,13 @@ fail, restore:
   (an owner ticket has no chain, so it reads "gone");
 - `UPDATE tickets SET status='finished' WHERE id=?` without `finished` → test 12 (`finished` is None);
 - `if decisions and self._writable_on_watch(db, actor):` (no `mode == 'read'`) → `test_a_grant_build_is_never_deferred_but_another_persons_mention_is`;
-- drop the two "gone" lines in `_grant_lapsed` → the re-check table (`TypeError` on the missing row).
+- drop the two "gone" lines in `_grant_lapsed` → the re-check table (`TypeError` on the missing row);
+- `self._grant_validity(db, links[0], budget=False)` (the root's validity, not the held grant's) →
+  `test_a_resent_two_link_ticket_checks_the_held_grant_and_the_roots_issuer` (the revoked held link isn't seen);
+- `links[-1]['issuer_id']` for `links[0]['issuer_id']` in the membership check → the same test (the held link's issuer is
+  still in the room);
+- `... is no longer in this room'` without `if issuer else 'The grant behind this run is gone'` →
+  `test_a_resend_whose_issuers_row_is_gone_is_refused_and_never_raises` (`TypeError: 'NoneType' object is not subscriptable`).
 
 - [ ] **Step 6: Commit**
 
@@ -1380,7 +1464,7 @@ def test_a_grantees_build_reply_is_labelled_with_the_grantee(browser_peer):
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_grant_tickets.py tests/test_ship_agent.py`
-Expected: `3 failed, 36 passed`: the footer test (`At index 0 diff: '' != 'Builder for Patient, via Doctor · grant #...'`),
+Expected: `3 failed, 38 passed`: the footer test (`At index 0 diff: '' != 'Builder for Patient, via Doctor · grant #...'`),
 the safe-name test (`assert '' == 'Builder for ...'`) and the real watcher's (`assert 'Added notes' == 'Added notes\n\nBuilder for Patient, via Doctor · grant #...'`).
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_browser.py -k grantees_build`
@@ -1502,7 +1586,7 @@ with
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_grant_tickets.py tests/test_ship_agent.py tests/test_tickets.py tests/test_inbox.py`
-Expected: `69 passed` (test_tickets' whole-dict sources for owner and read runs are unchanged: R13).
+Expected: `71 passed` (test_tickets' whole-dict sources for owner and read runs are unchanged: R13).
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_browser.py -k "grantees_build or ship_messages_came or station_notice_by_id"`
 Expected: `3 passed`.
@@ -1617,7 +1701,7 @@ In `agent/superyak_agent/watch.py`, replace
 with
 
 ```python
-        why = LIMITED_SENTENCES.get(limited) if isinstance(limited, str) else None  # the reason line comes first (G19)
+        why = LIMITED_SENTENCES.get(limited) if isinstance(limited, str) else None  # G19: the reason line replaces the last sentence; never both
         task = ('You are in read-only mode: you can read and search the repository and use the aDNA tools, but '
                 'you cannot run commands or change files. '
                 + (why or f'If the request needs changes, say what you would do and that '
@@ -1739,17 +1823,25 @@ def test_a_grant_is_made_on_the_page_held_by_its_grantee_and_revoked_after_the_a
             expect(held.get_by_role("button")).to_have_count(0)
             expect(page.locator(".grants-given .grant-item")).to_have_count(0)
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            revokes = []
+            page.on("request", lambda request: revokes.append(request.url) if request.method == "POST" and request.url.endswith("/revoke") else None)
             page.get_by_role("link", name="Grants", exact=True).click()
             item = page.locator(".grants-given .grant-item")
             item.get_by_role("button", name=f"Revoke {made['short']}").click()
             expect(item).to_contain_text(f"Revoke {made['short']}? Their mentions stop starting builder runs at once")
             expect(item.get_by_role("button", name="Cancel")).to_be_focused()
+            item.get_by_role("button", name="Cancel").click()  # the safe choice changes nothing (S2 of the plan review)
+            expect(item.locator(".grant-ask")).to_have_count(0)
+            expect(item.get_by_role("button", name=f"Revoke {made['short']}")).to_be_focused()
+            assert revokes == [] and store.list_grants(patient)[0]["valid"] is True
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
             assert store.list_grants(patient)[0]["revoked"] is None  # nothing before the confirm
             item.get_by_label("Reason (optional)").fill("Done for now")
             item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
             expect(item).to_contain_text(f"Not valid Grant {made['short']} was revoked by Alex Patient")
             expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
             expect(item.get_by_role("button")).to_have_count(0)
+            assert len(revokes) == 1
     assert store.list_grants(patient)[0]["revoke_reason"] == "Done for now"
 
 
@@ -1764,6 +1856,9 @@ def test_a_double_click_on_make_grant_makes_one_grant(browser_peer):
             posts = []
             page.on("request", lambda request: posts.append(request.url) if request.method == "POST" and request.url.endswith("/api/grants") else None)
             page.get_by_role("link", name="Grants", exact=True).click()
+            page.get_by_role("button", name="Make grant").click()  # no person yet: the page says so and sends nothing (R19)
+            expect(page.locator(".notice", has_text="Choose a person.")).to_be_visible()
+            assert posts == []
             fill_grant(page, "<img src=x onerror=alert(1)>", "<b>City</b> of AI")
             page.get_by_role("button", name="Make grant").dblclick()
             expect(page.locator(".grants-given .grant-item")).to_have_count(1)
@@ -1831,15 +1926,38 @@ def test_a_hurried_double_click_on_revoke_only_opens_the_ask(browser_peer, viewp
             page.wait_for_timeout(600)
             expect(item).to_contain_text(f"Revoke {made['short']}?")
     assert store.list_grants(patient)[0]["revoked"] is None
+
+
+def test_any_room_you_share_sends_the_star_and_a_room_made_after_sign_in_is_offered(browser_peer):
+    """G21's "Any room you share with them" sends `rooms: "*"`, and the grant says so (S1 of the plan review). Entering the
+    page reads the rooms again, so a room made after sign-in is offered (R21)."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            sent = []
+            page.on("request", lambda request: sent.append(request.post_data_json) if request.method == "POST" and request.url.endswith("/api/grants") else None)
+            store.create_room(patient, "Made after sign-in", [doctor])
+            page.get_by_role("link", name="Grants", exact=True).click()
+            page.get_by_label("Person").select_option(label="<img src=x onerror=alert(1)>")
+            expect(page.get_by_label("Made after sign-in")).to_be_visible()
+            page.get_by_label("Serenity").check()
+            page.get_by_label("Any room you share with them").check()
+            page.get_by_role("button", name="Make grant").click()
+            expect(page.locator(".grants-given .grant-item")).to_contain_text("Rooms: Any room you share with them")
+            assert [body["rooms"] for body in sent] == ["*"]
+    assert store.list_grants(patient)[0]["rooms"] == "*"
 ```
 
 `settle` isn't used: the page has no click guard (R17), and every click waits on the locator it clicks.
-`double_click_apart` is the board tests' helper, already in the file.
+`double_click_apart` is the board tests' helper, already in the file. Test 20 presses Cancel before it revokes (plan
+review S2); the double-click test first presses "Make grant" with no person (N1); the last test chooses "Any room you
+share with them" (S1) in a room list read after sign-in (N1, R21).
 
 - [ ] **Step 2: Run the tests to see them fail**
 
-Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_browser.py -k "grant_is_made or make_grant_makes_one or admin_is_offered or another_person or double_click_on_revoke"`
-Expected, after about three minutes: `6 failed`, each with `playwright._impl._errors.TimeoutError: Locator.click: Timeout 30000ms exceeded.`
+Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_browser.py -k "grant_is_made or make_grant_makes_one or admin_is_offered or another_person or double_click_on_revoke or any_room"`
+Expected, after about three and a half minutes: `7 failed`, each with `playwright._impl._errors.TimeoutError: Locator.click: Timeout 30000ms exceeded.`
 on `get_by_role("link", name="Grants", exact=True)`.
 
 - [ ] **Step 3: Write the implementation**
@@ -1996,7 +2114,8 @@ async function makeGrant(form) {
   const draft = state.grantForm = readGrantForm(form), rooms = draft.anyRoom ? "*" : draft.rooms;
   const missing = !draft.grantee ? "Choose a person." : !draft.ships.length ? "Choose at least one ship." : rooms !== "*" && !rooms.length ? "Choose at least one room, or any room you share with them." : null;
   if (missing) { setFlash(missing, true); render(); return; }
-  // The station refuses a budget that isn't a whole number from 1 to 500, and says so.
+  // The budget field's own validation (min 1, max 500, step 1) stops an out-of-range or fractional budget before this
+  // runs; an empty field is sent as 0, which the station refuses with its own message.
   await grantWrite("/api/grants", { grantee: draft.grantee, targets: draft.ships, rooms, hours: draft.hours, budget: Number(draft.budget) },
                    (grant) => `Grant ${grant.short} made.`, () => { state.grantForm = null; });
 }
@@ -2124,8 +2243,8 @@ this:
 
 - [ ] **Step 4: Run the tests to see them pass**
 
-Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_browser.py -k "grant or admin_is_offered or another_person or double_click_on_revoke"`
-Expected: `7 passed` (Task 3's label test is selected too). The dry run ran them three more times: 7 passed each time.
+Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_browser.py -k "grant or admin_is_offered or another_person or double_click_on_revoke or any_room"`
+Expected: `8 passed` (Task 3's label test is selected too). The dry run ran them three more times: 8 passed each time.
 
 - [ ] **Step 5: Check the tests bite**
 
@@ -2144,7 +2263,15 @@ Apply each alone, run the test named (`-k` with its name), see it fail, restore:
 - `if (grant.revoked == null)` (Revoke on held grants too) → the same test;
 - `hours: 24` for `hours: 168` in `grantDraft` → the same test;
 - `?.value !== "listed"` for `?.value === "*"` in `readGrantForm` (any room first) → the same test;
-- `{}` for `{ reason: state.grantAsk.reason }` → the same test.
+- `{}` for `{ reason: state.grantAsk.reason }` → the same test;
+- the "grant-cancel" handler revoking (``await grantWrite(`/api/grants/${pathPart(target.dataset.id)}/revoke`, {}, () => "revoked");``
+  before `state.grantAsk = null;`) → the same test (S2);
+- drop `if (missing) { setFlash(missing, true); render(); return; }` → `test_a_double_click_on_make_grant_makes_one_grant`
+  (the station's own message, and a POST);
+- `?.value === "never"` for `?.value === "*"` in `readGrantForm` (the page never sends `"*"`) →
+  `test_any_room_you_share_sends_the_star_and_a_room_made_after_sign_in_is_offered` (S1);
+- `if (route === "grants") { await loadGrants(); }` (no reload of the home data) → the same test (the room made after
+  sign-in isn't offered).
 
 - [ ] **Step 6: Commit**
 
@@ -2292,8 +2419,8 @@ unlabelled.
 - [ ] **Step 2: Run the whole suites**
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider`
-Expected: everything passes: `932 passed, 1 skipped` (907 and 1 skipped at `6841ce0`, plus 25: 1 in test_signatures, 15
-in test_grant_tickets, 2 in test_ship_agent, 7 in test_browser), about six minutes.
+Expected: everything passes: `935 passed, 1 skipped` (907 and 1 skipped at the base, plus 28: 1 in test_signatures, 17 in
+test_grant_tickets, 2 in test_ship_agent, 8 in test_browser), about six minutes.
 
 Run: `cd agent && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 Expected: `753 passed` (751 plus 2).
@@ -2334,10 +2461,10 @@ git commit -m "Grants 3c: API.md's basis grant and the agent README's grant buil
 | Test 13 | 1: budget reads, the 24-hour edge, two ships share one budget |
 | Test 19 | 1: two ships, one build left |
 | G18, test 12 | 2: revoke before the ticket reads; after it 409, finished, a post with it 409, asked again 409; a re-send charges nothing (last build, 20th build); the real watcher's unlabelled fallback |
-| G18 re-check scope (R2) | 2: expiry, ownership, membership, policy, a missing grant; a member added keeps the ticket |
+| G18 re-check scope (R2) | 2: expiry, ownership, membership, policy, a missing grant, a missing issuer row; two links (the held grant's validity, the root issuer's membership); a member added keeps the ticket |
 | Test 18 | 2: a grant build isn't deferred; another person's mention is |
 | G17, test 17 | 3: footer and source; two links; the real watcher's footer and `source_label`; the web label; `source_label`'s odd values |
 | G19 | 4: the new sentence; a limited prompt says only why |
 | runs.py docstring | 4 (review) |
-| G20, G21, G22, test 20 | 5: make, given, held, revoke after the ask, HTML as text; one write at a time; an admin's own ships; the person switch; the hurried double click |
+| G20, G21, G22, test 20 | 5: make, given, held, Cancel changes nothing, revoke after the ask, HTML as text; one write at a time, and nothing sent without a person; an admin's own ships; the person switch; "Any room you share with them" sends `"*"`; a room made after sign-in is offered; the hurried double click |
 | G23 | 0 (the `current` line), 6 |
