@@ -352,6 +352,43 @@ def test_a_ship_reads_the_room_brief_through_the_real_station(env, tmp_path):
     assert 'Decisions D1-D9.' not in removed
 
 
+def test_a_ship_works_a_board_item_through_the_real_station(env, tmp_path):
+    """Work board 8.1, end to end: one of Andy's ships posts an item; another lists it, takes it with station_claim, links
+    a branch and marks it done with a commit, through the agent's tools against the real station. The claim is released,
+    and the room's history labels the lines. (Step 3 adds the session-start counts.)"""
+    from superyak_agent.mcp import Tools, handle
+    from superyak_agent.station import StationClient
+    app, clients, users, clock = env
+    store = app.state.store
+    serenity, serenity_key = docked_ship(store, users[0]['id'], 'serenity')
+    rio, rio_key = docked_ship(store, users[0]['id'], 'rio-grande')
+    room = clients[0].post('/api/chats', json={'title': 'All hands', 'member_ids': [serenity['id'], rio['id']]}).json()['id']
+
+    def call(ship_key, name, **arguments):  # not `key`: the board tools take a `key` argument of their own
+        tools = Tools(StationClient('http://testserver', ship_key, transport=transport_for(app)))
+        result = handle(tools, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': name, 'arguments': arguments}})['result']
+        assert not result['isError'], result['content'][0]['text']
+        return result['content'][0]['text']
+    posted = call(serenity_key, 'station_post_item', room='All hands', key='build:board-routes', title='[Pi] board routes', kind='build')
+    assert posted.startswith(f'Posted `build:board-routes` (build) on the board of room {room}; the room has been told.')
+    assert call(rio_key, 'station_board') == f'1 waiting, 0 taken in "All hands" ({room}); `station_board room={room}` lists them'
+    listed = call(rio_key, 'station_board', room=room)
+    assert listed.startswith(f'Board of room "All hands" ({room}): 1 waiting, 0 taken; 0 done or dropped in the last 7 days\n')
+    assert '- `build:board-routes` (build), waiting, posted by Serenity' in listed and listed.endswith('(see above).')
+    assert call(rio_key, 'station_claim', room=room, key='build:board-routes').endswith(
+        '\nThis takes the board item `build:board-routes`; station_done marks it done when its outcome exists.')
+    assert '(build), taken by Rio Grande until' in call(serenity_key, 'station_board', room=room)
+    assert call(rio_key, 'station_link_item', room=room, key='build:board-routes', link='branch:work-board-station') == (
+        f'Linked branch:work-board-station to `build:board-routes` in room {room} (1 of 8); the room has been told.')
+    assert call(rio_key, 'station_done', room=room, key='build:board-routes', outcome='commit:1ff0efb') == (
+        f'Marked `build:board-routes` done in room {room}, outcome commit:1ff0efb; the room has been told. '
+        'The claim held by "Rio Grande" is released.')
+    assert call(rio_key, 'station_claims', room=room) == '(no active claims in this room)'
+    assert call(rio_key, 'station_board') == '(no open items in your rooms)'
+    read = call(serenity_key, 'station_read', room=room)
+    assert read.count(' (board)\n') == 3 and read.count(' (claim)\n') == 1  # Posted, Linked, Done; Claimed
+
+
 def watched_room(env, tmp_path, monkeypatch):
     from superyak_agent.station import write_private
     app, clients, users, clock = env

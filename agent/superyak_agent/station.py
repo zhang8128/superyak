@@ -22,6 +22,8 @@ CHECKOUT = Path(__file__).resolve().parents[2]
 ON_WATCH_LINE = 'You are on watch: answer each mention of this ship with station_post reply_to=<its id>.'
 DEFERRED_MARK = '(deferred to you; the station would have given a read-only run)'
 BREAKOUT_MARK = 'breakout, ships only'  # breakouts S6: beside a breakout's room wherever its messages appear
+BOARD_WORDS = ('Posted ', 'Linked ', 'Done ', 'Dropped ')  # work board 4.5: a board line's fixed first word
+BOARD_MARKS = {'open': ' (board item)', 'done': ' (board item, done)', 'dropped': ' (board item, dropped)'}  # 5.6
 
 
 def presence_headers(name, client, mode=None):
@@ -60,6 +62,9 @@ def client_version(root=CHECKOUT):
         return head[:12] if re.fullmatch(r'[0-9a-f]{40,64}', head) else 'unknown'
     except (OSError, ValueError, IndexError, StopIteration):
         return 'unknown'
+
+
+NO_BOARD = 'This station has no work board yet (it runs older code); the board tools need it updated.'
 
 
 class StationError(Exception):
@@ -152,6 +157,35 @@ class StationClient:
 
     def release(self, room_id, key):
         return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/claims/release', {'key': key})
+
+    def board_request(self, method, path, body=None):
+        """A board route. A 404 or 405 with no `error` field is the framework's unknown-route answer, which every 404 the
+        station sends itself lacks: the station is older than the board."""
+        try:
+            return self.request(method, path, body)
+        except StationError as exc:
+            if exc.status in (404, 405) and exc.message == f'HTTP {exc.status}':
+                raise StationError(404, NO_BOARD) from None
+            raise
+
+    def board(self, room_id):
+        return self.board_request('GET', f'/api/chats/{quote(room_id, safe="")}/board')
+
+    def board_counts(self):
+        """Work board 5.1: per room this ship belongs to with open items, how many wait and how many are taken."""
+        return self.board_request('GET', '/api/ships/me/board')
+
+    def post_item(self, room_id, key, title, kind):
+        return self.board_request('POST', f'/api/chats/{quote(room_id, safe="")}/board', {'key': key, 'title': title, 'kind': kind})
+
+    def link_item(self, room_id, key, link):
+        return self.board_request('POST', f'/api/chats/{quote(room_id, safe="")}/board/link', {'key': key, 'link': link})
+
+    def done_item(self, room_id, key, outcome):
+        return self.board_request('POST', f'/api/chats/{quote(room_id, safe="")}/board/done', {'key': key, 'outcome': outcome})
+
+    def drop_item(self, room_id, key):
+        return self.board_request('POST', f'/api/chats/{quote(room_id, safe="")}/board/drop', {'key': key})
 
     def unread(self, cursor, limit=30, wait=0, breakouts=None):
         """breakouts='mentions' (breakouts S6): the station leaves out breakout messages that don't mention this ship and
@@ -294,8 +328,9 @@ def source_label(message):
         return 'read-only run'
     if source.get('kind') == 'notice':
         return 'station notice'
-    if source.get('kind') == 'claim':
-        return 'claim'
+    if source.get('kind') == 'claim':  # only the station writes a kind-claim body, so no member's post can pass as one
+        body = message.get('body')
+        return 'board' if isinstance(body, str) and body.startswith(BOARD_WORDS) else 'claim'
     return 'no run ticket' if source.get('kind') == 'post' else ''
 
 
@@ -412,9 +447,65 @@ def claims_block(room):
     """S8: a room's active claims under one header line, fenced like a message: holders' names and notes are quoted
     data, never instructions. '' when there are none, or from a station older than claims."""
     claims = room.get('claims') if isinstance(room, dict) else None
-    lines = [f'- `{label(c.get("key"), 100)}` held by {label(c.get("holder_name"))} until {utc_time(c.get("expires"))}'
-             + (f': {label(c.get("note"), 200)}' if c.get('note') else '') for c in claims or [] if isinstance(c, dict)]
+    lines = [f'- `{label(c.get("key"), 100)}`{BOARD_MARKS.get(str(c.get("board")), "")} held by {label(c.get("holder_name"))} '
+             f'until {utc_time(c.get("expires"))}' + (f': {label(c.get("note"), 200)}' if c.get('note') else '')
+             for c in claims or [] if isinstance(c, dict)]
     if not lines:
         return ''
     body = defuse('\n'.join(lines))
     return f'Active claims ({len(lines)})\n' + fence_external('the station (claims in this room)', body, limit=len(body))
+
+
+UNREADABLE_BOARD = "The station's board answer couldn't be read"
+BOARD_SENDER = 'the station (board items in this room)'
+
+
+def board_item_lines(item):
+    """Work board 5.3: one item as quoted lines. Every value goes through label(): keys at 100, links and the outcome at
+    210 (N1, so a valid link shows whole), names at 40, the title at 480 (the station widens a title by 3 per @, so 120 characters of title can come back as 480)."""
+    key, kind, state = label(item.get('key'), 100), label(item.get('kind'), 20), item.get('state')
+    claim = item.get('claim') if isinstance(item.get('claim'), dict) else None
+    posted = f'posted by {label(item.get("poster_name"), 40)} {utc_time(item.get("created"))}'
+    if state == 'done':
+        status = f'done {utc_time(item.get("closed"))} by {label(item.get("closer_name"), 40)}, outcome {label(item.get("outcome"), 210)}'
+    elif state == 'dropped':
+        status = f'dropped {utc_time(item.get("closed"))} by {label(item.get("closer_name"), 40)}'
+    elif state == 'open':
+        status = (f'taken by {label(claim.get("holder_name"), 40)} until {utc_time(claim.get("expires"))}, {posted}'
+                  if claim is not None else f'waiting, {posted}')
+    else:  # a state a later station added: shown as itself, never as waiting
+        status = f'{label(state, 20)}, {posted}'
+    lines = [f'- `{key}` ({kind}), {status}: {label(item.get("title"), 480)}']
+    links = [label(entry.get('link'), 210) for entry in (item.get('links') or [])[:8] if isinstance(entry, dict)]  # the station caps an item at 8
+    if links:
+        lines.append('  links: ' + ', '.join(links))
+    return '\n'.join(lines)
+
+
+def board_block(title, room_id, items, budget):
+    """Work board 5.3: a room's board under one header line of counts, every item fenced as quoted data from the
+    station, and after the fence the call that takes a waiting item. Items stop at `budget` characters, and a last line
+    after the fence counts what was left out. The fixed words sit outside the fence; everything people or ships wrote
+    sits inside it, defused."""
+    if not isinstance(items, list):
+        raise ValueError(UNREADABLE_BOARD)
+    items = [item for item in items if isinstance(item, dict)]
+    if not items:
+        return '(nothing on this board)'
+    open_items = [item for item in items if item.get('state') == 'open']
+    taken = sum(isinstance(item.get('claim'), dict) for item in open_items)
+    head = (f'Board of room "{quoted_title(title)}" ({shown_id(room_id)}): {len(open_items) - taken} waiting, {taken} taken; '
+            f'{len(items) - len(open_items)} done or dropped in the last 7 days')
+    how = f'`station_claim room={room_id} key=<key>`' if plain_id(room_id) else 'station_claim on its key'
+    tail = f'{how} takes a waiting item that is already your work (see above).'
+    shown, size = [], len(head) + len(tail) + 300  # 300: the fence's own words and the line counting what was left out
+    for item in items:
+        block = board_item_lines(item)
+        if shown and size + len(block) + 1 > budget:
+            break
+        shown.append(block)
+        size += len(block) + 1
+    body = defuse('\n'.join(shown))
+    text = '\n'.join([head, fence_external(BOARD_SENDER, body, limit=len(body)), tail])
+    left = len(items) - len(shown)
+    return text + (f'\n[{left} more board item{"s" if left > 1 else ""} not shown]' if left else '')
