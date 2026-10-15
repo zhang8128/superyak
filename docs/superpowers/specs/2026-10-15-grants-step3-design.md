@@ -4,7 +4,10 @@ Status: approved. Under the station law (section 3, D8), a fresh reviewer agent 
 and its summary and decisions are posted in "Superyak: city of AI". Andy can veto anything. Revision 1 (6483e3d) was
 reviewed: APPROVE WITH CHANGES, 1 must-fix, 10 should-fix and 11 nits, posted whole in the room (message 75396e96).
 Revision 2 (113f71a) made every one of them ("Review map" at the end says where), and the same reviewer's re-check
-approved it with 3 nits, which this revision 3 makes (G18, Known limits, test 9).
+approved it with 3 nits, which this revision 3 makes (G18, Known limits, test 9). Later notes, each narrowing or
+aligning, with no new D8 round: G4 (the identity is created at the first signature; plan review of merge 3a, M1);
+S6, G15 and G19 (the fresh owner mentions spec, approved under D8 at 1faeff8, bounds owner builds the same way, and
+its `_mention_stale` and basis values are shared).
 Base: `main` (6623845). Roadmap item 2.2 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`), claimed by
 Serenity as `build:grants`; Rio Grande reviews each merge under section 2.
 Amends: [spec A](2026-10-08-instruction-layers-and-grants-design.md) (approved 2026-10-08), its build order step 3
@@ -58,7 +61,7 @@ Each line is this spec's ruling. A fresh reviewer checks it; Andy can veto any o
 | S3 | `instruct` grants | Moved to step 4 with pins, follow, pending revisions, diffs, caps at grant creation and bracketed titles. | Shares its machinery with charter acceptance. |
 | S4 | Room-scoped grants | Not in step 3, and not in spec A. A grant such as `board` or `brief` (work board spec, ship room briefs spec) scopes a room the issuer owns, not ships, so it needs its own spec. | Different shape. |
 | S5 | Where a grant builds | Only in a room the issuer is in when the ticket is issued, whatever the grant lists. A grant that names room X covers the current room that replaced X, following `linked_room_id` forward, and never a replaced room, X included. | The issuer keeps sight of every build he granted (review M1: any person can open a room with any ship). Adding a member or bridging makes a new room id (`chats.py` `add_participants`; survey 3.2), and the issuer stays a member of the new room. Briefs, open board items and claims already carry forward. Without following forward, Andy bridging a room would silently end every grant in it. |
-| S6 | Old and answered mentions | A grant build needs a mention posted no earlier than the grant was created, at most 24 hours before the ticket, and not yet answered by the ship. Otherwise the ticket is `read`. Owner builds are unchanged. | HANDOFF's parked note: once acts spend build tickets, the station must refuse old or answered messages (survey 3.13). A grant must not reach back to words written before it. |
+| S6 | Old and answered mentions | A grant build needs a mention posted no earlier than the grant was created, at most 24 hours before the ticket, and not yet answered by the ship. Otherwise the ticket is `read`. Owner builds get the same bound from the fresh owner mentions spec (`2026-10-15-owner-mention-fresh-design.md`, approved under D8 at 1faeff8), which amends this line: its `_mention_stale` is the one check both use (G15). | HANDOFF's parked note: once acts spend build tickets, the station must refuse old or answered messages (survey 3.13). A grant must not reach back to words written before it. |
 | S7 | What the station signs | Grant records, revocations and instructions revisions. Each record has a fixed set of keys, including a `kind` and the station's peer id. A revision's record carries its audience. A revocation's signature gets its own column. | Spec A's records name no station or kind for grants and no audience for revisions (survey 3.8). A fixed key set keeps old signatures valid when later steps add columns, and a kind keeps one record from passing as another (review S1, S2). Rows never change except the revocation fields, so the revocation signature needs somewhere to go. |
 | S8 | Policy with no charter | One function returns spec A's no-charter defaults. Validity reads `max_expiry_hours` (720), `max_depth` (3) and the grantee set (unrestricted); tickets read `builds_per_ship_per_day` (20). A root's budget is 1 to 500 builds a day, and its depth is 0. | Step 4 swaps the charter in behind the same function without changing validity. A budget of 0 could never be spent. Depth only matters once delegation exists. |
 | S9 | Restoring a backup | With a usable replaced file, the reconcile revokes every grant revoked there or missing there, and adds the budget uses recorded there. Without one, it revokes every grant, with reason `restored`. | A restored copy must not bring back a revoked grant or a spent budget (backups spec S16, survey 3.14). |
@@ -213,14 +216,19 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   - when the ticket is issued, the author, the ship and G's root issuer are all members of R (S5);
   - G is valid now (G9), and no link in its chain says `confirm: each`;
   - G was created no later than the message (equal times count), the message was posted at most 24 hours before the
-    ticket (exactly 24 hours still counts), and the ship has not answered it (S6; `_answered`, whether or not the
+    ticket (exactly 24 hours still counts), and the ship has not answered it (S6; the age and answered parts are the
+    fresh owner mentions spec's `_mention_stale(db, ship_id, message)`, which returns None, `old` or `answered`;
+    `_answered`, whether or not the
     watcher asked for decisions);
   - the ship has had fewer than `builds_per_ship_per_day` grant build tickets in the last 24 hours, under any
     grant. Owner builds are not counted, as in spec A.
 
   When several grants qualify, the oldest one is used (by `created`, then `id`), so the choice never depends on the
   database's row order. A grant that fails a condition, for example one with no budget left, is skipped, and the
-  next oldest is tried.
+  next oldest is tried. When the only thing that keeps a grantee's mention from building is its age or an earlier
+  answer (`_mention_stale` returns `old` or `answered` and a grant would otherwise qualify), the `read` ticket's basis
+  is that value, as for an owner mention under the fresh owner mentions spec, so the labels agree; any other refusal
+  is basis `none`.
 - **G16.** The ticket records basis `grant`, `root_id` as the root's issuer, and `chain` as the grant ids, root
   first. The station inserts one `budget_uses` row per link in the same transaction. One message that mentions two
   ships under one grant charges it once per ship's ticket.
@@ -241,7 +249,9 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   run, and a revoke stops the watcher's retries. A run already under way when the grant
   is revoked runs to its end. Step 5 adds the refusal of acts that carry a revoked chain's `ticket_id`.
 - **G19.** The read-only run prompt (`agent/superyak_agent/watch.py`) says the author "can ask the ship's owner". It
-  now says the author "can ask the ship's owner for a grant, or check the Grants page". `agent/superyak_agent/runs.py`'s
+  now says the author "can ask the ship's owner for a grant, or check the Grants page". The fresh owner mentions spec
+  adds a reason line to the same prompt for `old` and `answered` tickets; whichever lands second keeps both, the
+  reason line first. `agent/superyak_agent/runs.py`'s
   docstring ("builder for the ship's owner") gains "or a person the owner granted". The watcher otherwise needs no
   change: it already runs in the ticket's mode and posts the ticket's footer. An old watcher without tickets keeps
   its local rule, under which only the owner builds, so nothing widens there.
