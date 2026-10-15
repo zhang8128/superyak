@@ -242,7 +242,8 @@ web app's Board view across a person's rooms (5.x), which takes `current_user` i
   closer_name, outcome, links: [{link, added_by, added}], claim}`. `claim` is the active claim on the key, as
   `_claim_json` (room_claims.py:38) gives it, or null. Names pass through `safe_line(name, 40)`, the title through
   `safe_line(title, 120)`, and links through `safe_line(link, 210)`, in the item and in every line (ships.py:29's
-  default would cut at 80).
+  default would cut at 80). The title gets three more characters for each `@` it holds, since `safe_line` writes one
+  as `(at)` before it cuts, so a 120-character title holding an email address comes back whole (4.6; final review).
 - **Done and drop** also return `released`, the holder's display name through `safe_line(name, 40)`, when closing
   released a claim (4.4), and leave it out otherwise. Each posts only its own line (4.5), which names the holder when
   the closer released another member's claim; there's no separate "Released" line.
@@ -284,9 +285,10 @@ written:
 | 409 | `This room was replaced by a newer linked room; use its board there` | post, link, done, drop in a replaced room (the `_current_rooms` subquery, above) |
 | 404 | `Not found` | link, done, drop: no item with that key (`require`) |
 | 400 | `message:<id> must name a message in this room` | link, done: the id isn't in this room's `messages` |
+| 403 | `Only this room's owner and the owner's own ships can post on its board` | post: the member isn't a board writer (6.1). It comes before the used-key 409 below, so a member who may not post can't learn which keys this room or a room it replaced used, or their state (final review) |
 | 409 | `` `<key>` is already on this board or a room it replaced (<state>); new work needs a new key `` | post: the key was used before, in any state, in this room or up its `linked_room_id` chain (4.2) |
 | 409 | `` `<key>` is already <state> `` | link, done, drop on a done or dropped item (4.4). It comes before 403, so a holder's retried done gets 409, not 403 |
-| 403 | `Only this room's owner and the owner's own ships can post on its board` | post, link: the member isn't a board writer (6.1) |
+| 403 | `Only this room's owner and the owner's own ships can post on its board` | link: the member isn't a board writer (6.1). Post checks it earlier, above |
 | 403 | `Only the room's owner, the item's poster, or a holder who can post on this board can mark it done` | done (6.1) |
 | 403 | `Only the item's poster or the room's owner can drop it` | drop (4.4) |
 | 200 | `added: false` | link: the item already has this link; nothing is written or posted |
@@ -879,6 +881,10 @@ Until a client's step lands, it shows board lines labelled `claim`. That's harml
   `message:` is checked against the room (4.3).
 - **A carried `message:` link may name a message in the replaced room** (4.3), such as the approving verdict. It stays
   as the item's record, and nothing is rewritten, but members added later can't open it (`_room` gives them 404).
+- **Adding members to a replaced room is refused (409), so a room's replacement chain never forks.** `add_participants`
+  answers `This room was replaced by a newer linked room; add members there` after its 404 and the owner's 403, before
+  anything is written, and `station-bridge` prints it. So a key carried into one replacement can't be used again in a
+  second, and the web app offers no "Change participants" in a room its list shows replaced (final review).
 - **A carried claim lives in the new room.** A holder that renews or releases in the replaced room finds nothing held
   there (renewing claims anew in that room). Work in the room that replaced it. Ad hoc claims with no item stay in
   their room, as claims always have.

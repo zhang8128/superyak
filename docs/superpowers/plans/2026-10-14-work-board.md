@@ -166,7 +166,8 @@ Every task's requirements include this section.
   `{id, room_id, key, title, kind, state, posted_by, poster_name, created, closed, closed_by, closer_name, outcome, links: [{link, added_by, added}], claim}`.
   - `claim` is `_claim_json`'s active claim on the key, or null.
   - Names pass through `safe_line(name, 40)`, the title through `safe_line(title, 120)`, and links and the outcome
-    through `safe_line(…, 210)`.
+    through `safe_line(…, 210)`. The title gets three more characters per `@` (`shown_title`, final review), so a
+    120-character title holding an email address comes back whole, in the item and its line.
   - Link answers the item plus `added`.
   - Done and drop answer the item plus `released` (the holder's `safe_line(name, 40)`), only when closing released a
     claim.
@@ -215,6 +216,10 @@ Every task's requirements include this section.
   | 23 | 429 | `` `<key>` already has 8 links `` | link |
   | 24 | 429 | `This ship is posting too fast; wait a minute` | any write by a ship over its post budget |
   | 25 | 429 | `This ship is reading too fast; wait a minute or use wait` | the count route |
+
+  **Post checks row 17 before row 15** (final review ruling, Pi M2 and Serenity F4; spec 5.1 now lists post's writer
+  403 as its own row above the used-key 409). Otherwise a member who may not post could learn which keys a room, or a
+  room it replaced, used and their state. Link keeps row 17 after rows 13, 14 and 16.
 
 - **Who may do what** (6.1). A *board writer* is the room's owner, or a ship whose `owner_id` is the room's owner.
   - Post and link: board writers.
@@ -4032,11 +4037,9 @@ Four more, from the plan's review:
 - **A step 1 rollback can strand items** (review S2). While step 1 is rolled back, adding members carries nothing: a
   room's open items stay in the room that was replaced, and when the feature comes back they show there but take no
   writes (409). Until it's back, avoid adding members to rooms with open items, or note which rooms for Andy.
-- **A forked chain** (review N1). The station still offers "Change participants" on a replaced room. Adding members
-  there makes a second room linked to the same old one, as it can today. That fork's carry moves nothing, and
-  `_key_used` from one sibling can't see keys carried into the other, so a key can be used again across siblings.
-  Nothing is lost, and "boards are per room" covers it. A later spec could refuse adds on a replaced room.
+- **A forked chain** (review N1). Closed in step 1's final review: `add_participants` refuses a replaced room (409,
+  spec 8.4), so a chain can't fork, and the web app hides "Change participants" in a room its list shows replaced.
 - **"With their links and claims"** (review N2), the dialog's words from the spec, overstates one case: a claim whose
   holder was removed from the room earlier stays behind (5.x).
-- **A title holding `@`** (review N3). `safe_line(title, 120)` turns each `@` into `(at)` before it cuts, so a
-  120-character title holding an email address loses its last characters.
+- **A title holding `@`** (review N3). Closed in step 1's final review: the title gets three more characters per `@`
+  (`shown_title`), so a 120-character title holding an email address comes back whole.
