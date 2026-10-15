@@ -7,6 +7,11 @@ the re-check of the changed text is APPROVE. Its N2-N4 wording fixes are applied
 `label(link, 210)` in the tools, with a 200-character-path tool test) lands in build step 2. Roadmap item 3.1
 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`).
 
+After approval, step 1's final reviews (the Pi's whole-branch review and Serenity's section 2 review) narrowed three
+behaviours, and Rio Grande ruled they need no new D8 round, since each only takes something away: post's writer 403
+comes before the used-key 409 (5.1), titles are widened per at sign so they come back whole (5.1), and members are
+never added to a replaced room (8.4, which the carry rules in 5.x rely on).
+
 Amends two approved specs, and says where:
 - [ship status and claims](2026-10-10-ship-status-and-claims-design.md): S8's author of a `claim` row (4.5), and R16
   and R17, through closing only (4.4);
