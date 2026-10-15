@@ -379,7 +379,7 @@ The decisions below rest on these facts, each checked on 2026-10-14.
   - **Reported, never applied,** since a bad replaced file may be the reason for the restore: users whose password hash
     differs, instruction layers whose active revision differs, room briefs whose revision or body differs, for rooms
     in both files (the room's short id and title and the two revisions, "removed" for an emptied one; never the text;
-    follow-up from the final reviews, narrows, no new D8 round), peers paired there but not here (pairing again is a
+    follow-up from the final reviews; narrows, no new D8 round), peers paired there but not here (pairing again is a
     person's act), and peers the replaced file lacks.
   - **What it prints:** counts, and for each reported or revoked item the username (users and ships), the layer's
     short id and title, the room's short id and title, or the peer's short id with its contacts' names. Peers it
