@@ -11,7 +11,7 @@ everyone reads the active charter's signed record, and the agent's status, draft
 activated in 4a; 4b (the signer's web views) and 4c (acceptance by other owners) are later merges.
 
 **Architecture:** A new module, `peer/superyak_peer/charter.py`, holds the policy schema (`full_policy`), the widened
-and narrowed paths (`changes`, `check_confirmed`), the draft checks (`check_draft`), `flat_policy`, and a `Charter`
+and narrowed paths (`widened_paths`, `narrowed_paths`, `confirm_paths`, `require_confirmed`), the draft checks (`check_draft`), `flat_policy`, and a `Charter`
 mixin on `Store` that finds the active charter (a layer whose active revision's snapshot has `charter: true`), checks a
 charter's activation, previews it, and gives the policy in force. `layers.py` runs the charter checks first in
 `_draft`, keeps a charter a charter (C6), and checks activation, withdrawal and narrowing. `instructions.py` puts the
@@ -40,12 +40,19 @@ moved anchor fails loudly instead of landing in the wrong place.
 
 **Dry run.** Every task was applied in order in a scratch worktree at `9f9683e`, each RED and GREEN run on the files
 named, and each mutation applied alone, seen failing the test it names, and restored with `git checkout`. At the end of
-that pass the agent suite ran `758 passed` (755 at the base, plus this plan's 3 tests) and the peer suite `961 passed`
-(936 at the base, plus 25; test 14 replaces one old test). Two changes followed, both replayed below: a local in
-`activate_layer` renamed from `stored` to `saved` (Task 3), and one assertion added to test 11, with its mutation (Task
-6). Then a second, clean replay of all fourteen tasks applied this file's own code blocks (the plan is rendered from the
-edits the replay applied, so its code is the code that ran), reproduced every RED and GREEN count below, and saw all 76
-mutations fail; its final tree differs from the first pass's by exactly those two changes.
+that first pass the agent suite ran `758 passed` (755 at the base, plus this plan's 3 tests) and the peer suite `961
+passed` (936 at the base, plus 25; test 14 replaces one old test). This revision then adopted merge 4c's interface names
+and seams (see Interfaces for 4c): `widened_paths`, `narrowed_paths`, `confirm_paths` and `require_confirmed` (Task 4),
+`_active_charter` as the layers row (Task 3), `_charter_pair` and `_own_layers` under `_binding_layers` (Task 7),
+`over_caps`, `CAPS_REFUSAL` and the charter caps checked once the revision is active (Task 8, ruling P14),
+`_may_read_charter_revision` (Task 10), `_charter_status` (Task 11) and `charter_line(charter)` (Task 12); it also
+renamed a local in `activate_layer` and added one assertion to test 11. A clean replay of all fourteen tasks then
+applied this file's own code blocks (the plan is rendered from the edits the replay applied, so its code is the code
+that ran): every RED and GREEN count below is unchanged from the first pass, all 78 mutations failed, and the fourteen
+peer test files the changes touch (`test_charter`, `test_instructions`, `test_layers`, `test_signatures`,
+`test_tickets`, `test_grant_tickets`, `test_grants`, `test_ship_agent`, `test_deferrals`, `test_breakouts`,
+`test_federation`, `test_restore`, `test_key_refusal`, `test_auth`) ran `409 passed` on the replayed tree. The whole
+suites were not run again; Task 14's step runs them.
 
 Tasks: 1 the policy schema; 2 charter drafts; 3 signing a charter (super admin, one at a time, a charter stays one, the
 full policy stored and signed); 4 widened paths confirmed at activation, and the preview; 5 withdrawal and narrowing;
@@ -117,6 +124,36 @@ Where the spec leaves a choice open, this plan decides; a fresh reviewer checks 
 | P11 | `status` brackets `label(title)` (80 characters, as today); the hook's `_header` brackets the station's title as sent (up to 200, as today). | Each keeps its existing length limit; only the brackets and the charter mark change. |
 | P12 | `GET /api/grants/policy` takes a person session, like every `/api/grants` route; a ship key gets 403. | Step 3's G14. |
 | P13 | A ship's charter draft answers with the same `{id, title, version, state, drafted_by}` as any draft; the tool's text says it is a charter. | "Routes" changes the request only. |
+| P14 | A charter's activation writes its revision and makes it active, then checks the caps (`_check_charter_caps`), then signs it, all in one transaction: a 409 rolls the write back before anything is signed. Every binding the caps measure is then the one tickets will read, and a converted layer counts once, its old revision no longer active. | It keeps one binding function with no stand-in for the charter, which is what merge 4c's `_charter_pair` builds on (its I9). The refusals' order is unchanged: nothing else can refuse a charter after step 5. |
+
+## Interfaces for 4c
+
+Merge 4c's plan (`origin/charter-4c` at `446e013`, "Interfaces 4c consumes from 4a") names the 4a functions it builds on.
+This plan adopts its names and signatures, and builds its four seams (I8, I10, I14, I16) as separately callable
+functions with no behaviour of their own. Two rows keep 4a's form, for the reasons given.
+
+| # | 4c's name | 4a's name and signature | Task |
+| --- | --- | --- | --- |
+| I1 | `charter.DEFAULT_POLICY` | the same | 1 |
+| I2 | `charter.widened_paths(baseline, policy)` | the same: `-> list[dict]`, `{path, before, after}`, sorted by path | 4 |
+| I3 | `charter.narrowed_paths(baseline, policy)` | the same | 4 |
+| I4 | `charter.confirm_paths(value)` | the same: `None` is `[]`, else 400 "confirm_widenings is a list of paths" | 4 |
+| I5 | `charter.require_confirmed(paths, widenings)` | the same: 409 "Confirm exactly these widenings: …" | 4 |
+| I6 | `instructions.over_caps(layers)`, `instructions.CAPS_REFUSAL` | the same; `CAPS_REFUSAL.format(ship=...)` | 8 |
+| I7 | `Instructions._layers_for(db, pairs)` | the same: recorded order, each dict with `charter` | 7 |
+| I8 | `Instructions._own_layers(db, ship, replace=None)` | the same; `replace` is `{layer_id, revision, snapshot, created}`, `revision` the next revision number | 7 |
+| I9 | `Instructions._charter_pair(db, ship)`, `_binding_layers` built on it | the same: `-> (layer_id, revision) \| None`; `_binding_layers(db, ship_id, replace=None)` = `_layers_for(db, [pair])` + `_own_layers(db, ship, replace)` | 7 |
+| I10 | `Instructions._charter_status(db, ship)` | the same: `-> {layer_id, revision, binding, accepted} \| None` | 11 |
+| I11 | `Layers._active_charter(db) -> sqlite3.Row \| None` | `_active_charter(db) -> sqlite3.Row \| None`, the layers row (`id`, `owner_id`, `active_revision`, ...) plus its active revision's `snapshot` as JSON text. Kept on the `Charter` mixin in `charter.py`, with the other charter rules: callers use `self._active_charter`, which `Store` resolves either way | 3 |
+| I12 | The charter activation, after `require_confirmed`, before the revision row is written | the end of `Charter._check_charter_activation(db, actor, key, snapshot, confirm=None)`, before `return policy`. 4a's own charter caps (`_check_charter_caps(db, signer_id)`) run later, once the revision is written and active (P14) | 4, 8 |
+| I13 | The ordinary activation, right after `self._check_instruction_caps(db, actor, key, snapshot)` | right after `self._check_instruction_caps(db, actor, key, snapshot, row['resource_version'] + 1)` in `Layers.activate_layer`. Kept with its `revision` argument: the caps measure the text the revision will render, its number included | 7 |
+| I14 | `Signatures._may_read_charter_revision(db, actor, layer, revision)` | the same: `-> bool`; `revision_signed` asks it only for a charter revision and a caller who doesn't own the layer | 10 |
+| I15 | Spec data and routes | as the spec gives them: the snapshot's `charter`, `audience_users: []` and full `policy`; `charter` and `policy` on drafts; `confirm_widenings` on activate and withdraw | 2-5 |
+| I16 | `superyak_agent.station.charter_line(charter)` | the same: `-> str \| None`, from the field's value; `status` calls it only when the answer has the field | 12 |
+
+Also in 4a, not in 4c's table: `charter.full_policy(db, raw)` takes `db`, since it checks that grantee ids are people
+(4c's stand-in has `full_policy(policy)`); `Charter._policy_in_force(db)` (Task 4) returns the full policy in force;
+`Instructions._check_charter_caps(db, signer_id)` (Task 8) has the stand-in's name and arguments.
 
 ## Known limits (beyond the spec's)
 
@@ -136,7 +173,8 @@ Where the spec leaves a choice open, this plan decides; a fresh reviewer checks 
 - Modify `peer/superyak_peer/layers.py` (Tasks 2-5, 7, 8): `FIELDS`, `_draft`, `save_layer`, `preview_layer`,
   `activate_layer`, `withdraw_layer`, `revoke_layer_routes`.
 - Modify `peer/superyak_peer/instructions.py` (Tasks 7-9, 11): the module docstring, `binding_entry`, `bracketed`,
-  `render_one`, `_layers_for`, `_binding_layers`, `_replacement`, the caps, `ship_instructions`, `ship_draft`.
+  `render_one`, `over_caps`, `CAPS_REFUSAL`, `_layers_for`, `_charter_pair`, `_own_layers`, `_binding_layers`, the caps,
+  `_charter_status`, `ship_instructions`, `ship_draft`.
 - Modify `peer/superyak_peer/grants.py` (Task 6), `signatures.py` (Tasks 3, 10), `tickets.py` (Task 9), `db.py`
   (Task 3), `app.py` (Tasks 4-6), `peer/pyproject.toml` (Task 1), `peer/API.md` (Task 14).
 - Modify `agent/superyak_agent/station.py` (Tasks 12, 13), `__main__.py` and `hook.py` (Task 12), `mcp.py` (Task 13),
@@ -855,7 +893,7 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 ### Task 3: Signing a charter: a super admin, one at a time, a charter stays one, the full policy stored and signed (R2-R5, R13)
 
 **Files:**
-- Modify: `peer/superyak_peer/charter.py` (`import json`, `check_draft`'s `sealed`, append `STAYS_A_CHARTER` and the `Charter` mixin: about 40 lines)
+- Modify: `peer/superyak_peer/charter.py` (`check_draft`'s `sealed`, append `STAYS_A_CHARTER` and the `Charter` mixin: about 35 lines)
 - Modify: `peer/superyak_peer/layers.py` (the import, `_draft`, `save_layer`, `activate_layer`: about 12 lines)
 - Modify: `peer/superyak_peer/signatures.py` (`_revision_record`, 3 lines)
 - Modify: `peer/superyak_peer/db.py` (the import and `Store`'s bases, 2 lines)
@@ -863,7 +901,7 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 
 **Interfaces:**
 - Consumes: `check_draft`, `full_policy`; `users.is_super_admin` and `activation_pending` (`auth.py`); `test_signatures.card_of`, `signature_rows`, `stored_record`.
-- Produces: `charter.STAYS_A_CHARTER`; `check_draft(db, draft, sealed=False)`; `class Charter` on `Store`: `_active_charter(db) -> {layer_id, owner_id, revision, snapshot} | None`, `_was_charter(db, layer_id) -> bool`, `_check_charter_activation(db, actor, key, snapshot) -> dict` (the full policy); `Layers._draft(db, actor, data, previous=None, stored=False, sealed=False)`; a charter revision's snapshot holds `charter: true`, `audience_users: []` and the full policy; `_revision_record`'s `policy`; test helper `crown(store, user)`.
+- Produces: `charter.STAYS_A_CHARTER`; `check_draft(db, draft, sealed=False)`; `class Charter` on `Store`: `_active_charter(db) -> sqlite3.Row | None` (the layers row, with its active revision's `snapshot` as JSON text), `_was_charter(db, layer_id) -> bool`, `_check_charter_activation(db, actor, key, snapshot) -> dict` (the full policy); `Layers._draft(db, actor, data, previous=None, stored=False, sealed=False)`; a charter revision's snapshot holds `charter: true`, `audience_users: []` and the full policy; `_revision_record`'s `policy`; test helper `crown(store, user)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1035,21 +1073,6 @@ Expected: `4 failed, 4 passed`. The four new tests fail: each charter activation
 In `peer/superyak_peer/charter.py`, replace
 
 ```python
-import copy
-from .common import Problem
-```
-
-with
-
-```python
-import copy
-import json
-from .common import Problem
-```
-
-In `peer/superyak_peer/charter.py`, replace
-
-```python
 def check_draft(db, draft):
     """Charter step 4's draft checks, before every other draft check, in the spec's order ("Routes", drafts; R1): the
     flag's type, instructions only, no ships, a policy only on a charter, then the policy's schema. A draft keeps its
@@ -1084,14 +1107,13 @@ class Charter:
     """The active charter, read from the layers' revisions: a charter revision's snapshot holds `charter: true`."""
 
     def _active_charter(self, db):
-        """Binding step 1: the one layer whose active revision is a charter revision, as {layer_id, owner_id, revision,
-        snapshot}, or None. Activation lets only one be active (R4)."""
-        row = db.execute('SELECT layers.id, layers.owner_id, layer_revisions.revision, layer_revisions.snapshot FROM layers '
-                         'JOIN layer_revisions ON layer_revisions.layer_id=layers.id AND layer_revisions.revision=layers.active_revision '
-                         "WHERE json_extract(layer_revisions.snapshot, '$.charter')=1 "
-                         'ORDER BY layer_revisions.created, layers.id LIMIT 1').fetchone()
-        return None if row is None else {'layer_id': row['id'], 'owner_id': row['owner_id'], 'revision': row['revision'],
-                                         'snapshot': json.loads(row['snapshot'])}
+        """Binding step 1: the layers row whose active revision is a charter revision, with that revision's `snapshot`
+        (JSON text), or None. Activation lets only one be active (R4). Merge 4c reads `id`, `owner_id` and
+        `active_revision` from it (its I11)."""
+        return db.execute('SELECT layers.*, layer_revisions.snapshot FROM layers JOIN layer_revisions '
+                          'ON layer_revisions.layer_id=layers.id AND layer_revisions.revision=layers.active_revision '
+                          "WHERE json_extract(layer_revisions.snapshot, '$.charter')=1 "
+                          'ORDER BY layer_revisions.created, layers.id LIMIT 1').fetchone()
 
     def _was_charter(self, db, layer_id):
         """C6: whether the layer has a charter revision, active or not; such a layer stays a charter."""
@@ -1105,7 +1127,7 @@ class Charter:
         if user is None or not user['is_super_admin'] or user['activation_pending']:
             raise Problem(403, "Only a super admin can sign the station's charter")
         active = self._active_charter(db)
-        if active is not None and active['layer_id'] != key:
+        if active is not None and active['id'] != key:
             raise Problem(409, 'Another charter is active; its owner must withdraw it first')
         return full_policy(db, snapshot.get('policy'))
 ```
@@ -1245,7 +1267,7 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 2. A one-charter check limited to other signers: the signer's second layer activates. In `peer/superyak_peer/charter.py`, replace
 
    ```python
-           if active is not None and active['layer_id'] != key:
+           if active is not None and active['id'] != key:
    ```
 
    with
@@ -1317,14 +1339,14 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 ### Task 4: Widened paths, confirmed at activation, and the preview (R6, R7)
 
 **Files:**
-- Modify: `peer/superyak_peer/charter.py` (`import hashlib`; `MAX_CONFIRMED`, `changes`, `check_confirmed`, `person_names`, `digest`; `_policy_in_force`, `_charter_preview`; the confirmation: about 75 lines)
+- Modify: `peer/superyak_peer/charter.py` (`import hashlib`, `import json`; `MAX_CONFIRMED`, `_changes`, `widened_paths`, `narrowed_paths`, `confirm_paths`, `require_confirmed`, `person_names`, `digest`; `_policy_in_force`, `_charter_preview`; the confirmation: about 75 lines)
 - Modify: `peer/superyak_peer/layers.py` (`preview_layer`, `activate_layer`: about 10 lines)
 - Modify: `peer/superyak_peer/app.py` (the activate route, 1 line)
 - Test: `peer/tests/test_charter.py` (about 120 lines)
 
 **Interfaces:**
 - Consumes: `full_policy`, `_active_charter`, `_check_charter_activation` (Task 3); `people` (Task 1's test helper).
-- Produces: `charter.MAX_CONFIRMED = 105`; `changes(base, policy) -> (widened, narrowed)`, each `[{path, before, after}]` sorted by path; `check_confirmed(confirm, widened)` (400, then 409 "Confirm exactly these widenings: …"); `person_names(db, *policies) -> {id: name}`; `digest(text) -> hex`; `Charter._policy_in_force(db) -> dict`; `Charter._charter_preview(db, actor, draft) -> {policy, widenings, narrowings, names, binds, sha256}`; `_check_charter_activation(db, actor, key, snapshot, confirm=None)`; `Layers.activate_layer(actor, key, version, space_versions=None, confirm_widenings=None)`; the preview's `charter`; test helpers `sign(client, layer, *confirm)`, `save(client, layer, **fields)`, `exactly(*paths)`.
+- Produces: `charter.MAX_CONFIRMED = 105`; `widened_paths(baseline, policy) -> list[dict]` and `narrowed_paths(baseline, policy) -> list[dict]`, each `[{path, before, after}]` sorted by path (both from `_changes`); `confirm_paths(value) -> list[str]` (None is `[]`, else 400 "confirm_widenings is a list of paths"); `require_confirmed(paths, widened) -> None` (409 "Confirm exactly these widenings: …"); `person_names(db, *policies) -> {id: name}`; `digest(text) -> hex`; `Charter._policy_in_force(db) -> dict`; `Charter._charter_preview(db, actor, draft) -> {policy, widenings, narrowings, names, binds, sha256}`; `_check_charter_activation(db, actor, key, snapshot, confirm=None)`; `Layers.activate_layer(actor, key, version, space_versions=None, confirm_widenings=None)`; the preview's `charter`; test helpers `sign(client, layer, *confirm)`, `save(client, layer, **fields)`, `exactly(*paths)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1472,7 +1494,6 @@ In `peer/superyak_peer/charter.py`, replace
 
 ```python
 import copy
-import json
 from .common import Problem
 ```
 
@@ -1497,7 +1518,7 @@ this, followed by two blank lines:
 MAX_CONFIRMED = 105  # four numbers, one action and 100 ids: the most widened paths the schema allows (C13)
 
 
-def changes(base, policy):
+def _changes(base, policy):
     """C13, "Data": (widened, narrowed) from a baseline policy to a full policy, each a list of {path, before, after}
     sorted by path in code point order. A number that grows, an action gained, a restricted grantee set made
     unrestricted, and with both restricted an id gained, are widenings; the same paths the other way are narrowings.
@@ -1523,16 +1544,32 @@ def changes(base, policy):
     return sorted(widened, key=lambda change: change['path']), sorted(narrowed, key=lambda change: change['path'])
 
 
-def check_confirmed(confirm, widened):
-    """C13: confirm_widenings (absent is []) is a list of at most 105 strings of at most 200 characters (400), holding
-    exactly the widened paths, each once, in any order (409 naming them)."""
-    confirm = [] if confirm is None else confirm
-    if (not isinstance(confirm, list) or len(confirm) > MAX_CONFIRMED
-            or any(not isinstance(path, str) or len(path) > 200 for path in confirm)):
+def widened_paths(baseline, policy):
+    """C13: the paths that widen from a baseline policy to a full policy, [{path, before, after}] sorted by path."""
+    return _changes(baseline, policy)[0]
+
+
+def narrowed_paths(baseline, policy):
+    """The preview's narrowings ("Routes"): the same paths where the policy is smaller or lacks a member."""
+    return _changes(baseline, policy)[1]
+
+
+def confirm_paths(value):
+    """confirm_widenings' shape ("Routes", activation step 5): absent is []; anything but a list of at most 105 strings
+    of at most 200 characters is 400."""
+    if value is None:
+        return []
+    if (not isinstance(value, list) or len(value) > MAX_CONFIRMED
+            or any(not isinstance(path, str) or len(path) > 200 for path in value)):
         raise Problem(400, 'confirm_widenings is a list of paths')
-    paths = [change['path'] for change in widened]
-    if len(set(confirm)) != len(confirm) or set(confirm) != set(paths):
-        raise Problem(409, 'Confirm exactly these widenings: ' + (', '.join(paths) or 'none'))
+    return value
+
+
+def require_confirmed(paths, widened):
+    """C13: the confirmed paths are exactly the widened ones, each once, in any order; 409 naming them otherwise."""
+    wanted = [change['path'] for change in widened]
+    if len(set(paths)) != len(paths) or set(paths) != set(wanted):
+        raise Problem(409, 'Confirm exactly these widenings: ' + (', '.join(wanted) or 'none'))
 
 
 def person_names(db, *policies):
@@ -1562,14 +1599,14 @@ with
     def _policy_in_force(self, db):
         """C5, C16: the active charter revision's policy, or the no-charter defaults when none is active."""
         active = self._active_charter(db)
-        return copy.deepcopy(DEFAULT_POLICY) if active is None else active['snapshot']['policy']
+        return copy.deepcopy(DEFAULT_POLICY) if active is None else json.loads(active['snapshot'])['policy']
 
     def _charter_preview(self, db, actor, draft):
         """The preview's `charter` ("Routes"): the full policy, its widened and narrowed paths against the policy in force
         (C5), the names of the people they list, the ships it would bind (in 4a the residents, with owner_name null, and
         the signer's ships), and the sha256 of the saved title and body."""
         base, policy = self._policy_in_force(db), full_policy(db, draft.get('policy'))
-        widened, narrowed = changes(base, policy)
+        widened, narrowed = widened_paths(base, policy), narrowed_paths(base, policy)
         binds = [dict(row) for row in db.execute(
             'SELECT ships.id, ships.name, owners.name AS owner_name FROM users AS ships LEFT JOIN users AS owners '
             "ON owners.id=ships.owner_id WHERE ships.kind='ship' AND (ships.owner_id IS NULL OR ships.owner_id=?) "
@@ -1596,7 +1633,7 @@ with
 ```python
             raise Problem(409, 'Another charter is active; its owner must withdraw it first')
         policy = full_policy(db, snapshot.get('policy'))
-        check_confirmed(confirm, changes(self._policy_in_force(db), policy)[0])
+        require_confirmed(confirm_paths(confirm), widened_paths(self._policy_in_force(db), policy))
         return policy
 ```
 
@@ -1671,13 +1708,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 1. Every revision compared with the defaults: r2's prose asks for max_depth again. In `peer/superyak_peer/charter.py`, replace
 
    ```python
-           check_confirmed(confirm, changes(self._policy_in_force(db), policy)[0])
+           require_confirmed(confirm_paths(confirm), widened_paths(self._policy_in_force(db), policy))
    ```
 
    with
 
    ```python
-           check_confirmed(confirm, changes(full_policy(db, None), policy)[0])
+           require_confirmed(confirm_paths(confirm), widened_paths(full_policy(db, None), policy))
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_a_charters_widenings_are_confirmed_path_by_path` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/charter.py`.
@@ -1699,13 +1736,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 3. A repeated path accepted. In `peer/superyak_peer/charter.py`, replace
 
    ```python
-       if len(set(confirm)) != len(confirm) or set(confirm) != set(paths):
+       if len(set(paths)) != len(paths) or set(paths) != set(wanted):
    ```
 
    with
 
    ```python
-       if set(confirm) != set(paths):
+       if set(paths) != set(wanted):
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_a_charters_widenings_are_confirmed_path_by_path` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/charter.py`.
@@ -1745,13 +1782,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 6. Any confirmation confirms every change. In `peer/superyak_peer/charter.py`, replace
 
    ```python
-       if len(set(confirm)) != len(confirm) or set(confirm) != set(paths):
+       if len(set(paths)) != len(paths) or set(paths) != set(wanted):
    ```
 
    with
 
    ```python
-       if confirm == [] and paths:
+       if not paths and wanted:
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_one_widened_number_among_twenty_changed_lines_is_refused_until_confirmed` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/charter.py`.
@@ -1810,7 +1847,7 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 - Test: `peer/tests/test_charter.py` (about 55 lines)
 
 **Interfaces:**
-- Consumes: `DEFAULT_POLICY`, `changes`, `check_confirmed` (Tasks 1, 4); `_active_charter`, `_policy_in_force`.
+- Consumes: `DEFAULT_POLICY`, `widened_paths`, `confirm_paths`, `require_confirmed` (Tasks 1, 4); `_active_charter`.
 - Produces: `Layers.withdraw_layer(actor, key, confirm_widenings=None)`; `revoke_layer_routes` 409 for a charter; the withdraw route reads an optional JSON body (empty is `{}`); test helper `in_force(store)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1885,7 +1922,7 @@ from .charter import STAYS_A_CHARTER, check_draft
 with
 
 ```python
-from .charter import DEFAULT_POLICY, STAYS_A_CHARTER, changes, check_confirmed, check_draft
+from .charter import DEFAULT_POLICY, STAYS_A_CHARTER, check_draft, confirm_paths, require_confirmed, widened_paths
 ```
 
 In `peer/superyak_peer/layers.py`, replace
@@ -1905,8 +1942,9 @@ with
             row = self._owned_layer(db, actor, key)
             if row['active_revision'] is not None:
                 active = self._active_charter(db)
-                if active is not None and active['layer_id'] == key:  # C15: its limits return to the defaults (R9)
-                    check_confirmed(confirm_widenings, changes(active['snapshot']['policy'], DEFAULT_POLICY)[0])
+                if active is not None and active['id'] == key:  # C15: its limits return to the defaults (R9)
+                    policy = json.loads(active['snapshot'])['policy']
+                    require_confirmed(confirm_paths(confirm_widenings), widened_paths(policy, DEFAULT_POLICY))
 ```
 
 In `peer/superyak_peer/layers.py`, replace
@@ -1962,7 +2000,7 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 1. A withdrawal that widens limits silently. In `peer/superyak_peer/layers.py`, replace
 
    ```python
-                       check_confirmed(confirm_widenings, changes(active['snapshot']['policy'], DEFAULT_POLICY)[0])
+                       require_confirmed(confirm_paths(confirm_widenings), widened_paths(policy, DEFAULT_POLICY))
    ```
 
    with
@@ -1976,13 +2014,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 2. The comparison the wrong way round: nothing to confirm. In `peer/superyak_peer/layers.py`, replace
 
    ```python
-                       check_confirmed(confirm_widenings, changes(active['snapshot']['policy'], DEFAULT_POLICY)[0])
+                       require_confirmed(confirm_paths(confirm_widenings), widened_paths(policy, DEFAULT_POLICY))
    ```
 
    with
 
    ```python
-                       check_confirmed(confirm_widenings, changes(DEFAULT_POLICY, active['snapshot']['policy'])[0])
+                       require_confirmed(confirm_paths(confirm_widenings), widened_paths(DEFAULT_POLICY, policy))
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_withdrawing_a_charter_confirms_what_returns_to_the_defaults` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/layers.py`.
@@ -2440,13 +2478,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 9. The policy read from the charter layer's draft, not its active revision. In `peer/superyak_peer/charter.py`, replace
 
    ```python
-           return copy.deepcopy(DEFAULT_POLICY) if active is None else active['snapshot']['policy']
+           return copy.deepcopy(DEFAULT_POLICY) if active is None else json.loads(active['snapshot'])['policy']
    ```
 
    with
 
    ```python
-           return copy.deepcopy(DEFAULT_POLICY) if active is None else full_policy(db, json.loads(db.execute('SELECT draft FROM layers WHERE id=?', (active['layer_id'],)).fetchone()['draft']).get('policy'))
+           return copy.deepcopy(DEFAULT_POLICY) if active is None else full_policy(db, json.loads(active['draft']).get('policy'))
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_policy_in_force_governs_making_validity_and_the_per_ship_cap` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/charter.py`.
@@ -2456,13 +2494,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 ### Task 7: Binding: the charter first for its signer's ships and the residents; the law converted in place (R14, R15)
 
 **Files:**
-- Modify: `peer/superyak_peer/instructions.py` (the docstring, `binding_entry`, `_layers_for`, `_binding_layers`, `_replacement`, `_check_instruction_caps`'s head: about 55 lines)
+- Modify: `peer/superyak_peer/instructions.py` (the docstring, `binding_entry`, `_layers_for`, `_charter_pair`, `_own_layers`, `_binding_layers`, `_check_instruction_caps`'s head: about 60 lines)
 - Modify: `peer/superyak_peer/layers.py` (the caps call, 1 line)
 - Test: `peer/tests/test_instructions.py` (test 14 replaces `test_a_resident_ship_has_no_instructions_in_this_step`; test 15; the oracle, test 23: about 150 lines); `peer/tests/test_charter.py` (test 7, about 45 lines)
 
 **Interfaces:**
 - Consumes: `_active_charter`'s rule (a snapshot with `charter: true`); `sign`, `save`, `revision_count` (Tasks 3, 4).
-- Produces: `instructions.binding_entry(layer_id, revision, snapshot, signer_id, signer_name, created) -> dict` with `charter`; `_binding_layers(db, ship_id, replace=None)`, `replace` being `{layer_id, owner_id, signer, revision, snapshot, created}`; `_replacement(db, actor, key, snapshot, revision)`; `_check_instruction_caps(db, actor, key, snapshot, revision)`; `_layers_for` in the order given.
+- Produces: `instructions.binding_entry(layer_id, revision, snapshot, signer_id, signer_name, created) -> dict` with `charter`; `Instructions._charter_pair(db, ship) -> (layer_id, revision) | None`; `Instructions._own_layers(db, ship, replace=None) -> list[dict]`, `replace` being `{layer_id, revision, snapshot, created}`; `_binding_layers(db, ship_id, replace=None)` = `_layers_for(db, [pair])` + `_own_layers(db, ship, replace)`; `_check_instruction_caps(db, actor, key, snapshot, revision)`; `_layers_for` in the order given.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2850,41 +2888,46 @@ In `peer/superyak_peer/instructions.py`, replace
 with
 
 ```python
+    def _charter_pair(self, db, ship):
+        """Binding step 2 in 4a: (layer_id, revision) of the active charter for a resident (no owner) or for a ship its
+        signer owns (C17), else None; merge 4c adds the owners who accept it. A withdrawn charter binds nothing."""
+        active = self._active_charter(db)
+        if active is not None and ship['owner_id'] in (None, active['owner_id']):
+            return active['id'], active['active_revision']
+        return None
+
+    def _own_layers(self, db, ship, replace=None):
+        """Binding step 3: the owner's own active non-charter instructions layers whose audience lists the ship, by
+        (created, layer_id). `replace` ({layer_id, revision, snapshot, created}) stands in for that layer's active
+        revision, as if activated now: an activation's caps check."""
+        if not ship['owner_id']:
+            return []
+        signer = db.execute('SELECT name FROM users WHERE id=?', (ship['owner_id'],)).fetchone()['name']
+        rows = [(r['layer_id'], r['revision'], json.loads(r['snapshot']), r['created']) for r in db.execute(
+            'SELECT layers.id AS layer_id, layer_revisions.revision, layer_revisions.snapshot, layer_revisions.created '
+            'FROM layers JOIN layer_revisions ON layers.id=layer_revisions.layer_id AND layers.active_revision=layer_revisions.revision '
+            'WHERE layers.owner_id=?', (ship['owner_id'],))]
+        if replace is not None:
+            rows = [r for r in rows if r[0] != replace['layer_id']] + [
+                (replace['layer_id'], replace['revision'], replace['snapshot'], replace['created'])]
+        found = [binding_entry(lid, rev, snap, ship['owner_id'], signer, created) for lid, rev, snap, created in rows
+                 if snap.get('kind') == 'instructions' and snap.get('charter') is not True
+                 and ship['id'] in snap.get('audience_users', [])]
+        return sorted(found, key=lambda l: (l['created'], l['layer_id']))
+
     def _binding_layers(self, db, ship_id, replace=None):
-        """Spec A rule 1 as charter step 4 amends it ("Binding"): first the charter pair, the active charter's revision
-        for a resident or for a ship its signer owns (C17, C22); then the owner's own active non-charter instructions
-        layers that list the ship, by (created, layer_id). A withdrawn charter binds nothing. `replace` ({layer_id,
-        owner_id, signer, revision, snapshot, created}) stands in for that layer's active revision, as if activated now,
-        so a converted layer is counted once, as what it becomes (the caps, C23)."""
+        """Spec A rule 1 as charter step 4 amends it ("Binding"): the charter pair first (C22), then the owner's own
+        layers. Tickets, the ship route and every caps check read a ship's binding here."""
         ship = require(db.execute('SELECT * FROM users WHERE id=?', (ship_id,)).fetchone())
         if ship['kind'] != 'ship':
             return []
-        rows = [dict(row, snapshot=json.loads(row['snapshot'])) for row in db.execute(
-            'SELECT layers.id AS layer_id, layers.owner_id, users.name AS signer, layer_revisions.revision, '
-            'layer_revisions.snapshot, layer_revisions.created FROM layers JOIN layer_revisions ON layers.id=layer_revisions.layer_id '
-            'AND layers.active_revision=layer_revisions.revision JOIN users ON users.id=layers.owner_id '
-            "WHERE layers.owner_id=? OR json_extract(layer_revisions.snapshot, '$.charter')=1", (ship['owner_id'] or '',))]
-        if replace is not None:
-            rows = [row for row in rows if row['layer_id'] != replace['layer_id']] + [replace]
-        rows.sort(key=lambda row: (row['created'], row['layer_id']))
-        charter = next((row for row in rows if row['snapshot'].get('charter') is True), None)
-        found = [charter] if charter is not None and ship['owner_id'] in (None, charter['owner_id']) else []
-        found += [row for row in rows if ship['owner_id'] is not None and row['owner_id'] == ship['owner_id']
-                  and row['snapshot'].get('kind') == 'instructions' and row['snapshot'].get('charter') is not True
-                  and ship_id in row['snapshot'].get('audience_users', [])]
-        return [binding_entry(row['layer_id'], row['revision'], row['snapshot'], row['owner_id'], row['signer'], row['created'])
-                for row in found]
-
-    def _replacement(self, db, actor, key, snapshot, revision):
-        """The stand-in _binding_layers takes: this layer's next revision, as if actor activated it now."""
-        signer = db.execute('SELECT name FROM users WHERE id=?', (actor,)).fetchone()['name']
-        return {'layer_id': key, 'owner_id': actor, 'signer': signer, 'revision': revision, 'snapshot': snapshot,
-                'created': self.clock()}
+        pair = self._charter_pair(db, ship)
+        return self._layers_for(db, [pair] if pair else []) + self._own_layers(db, ship, replace)
 
     def _check_instruction_caps(self, db, actor, key, snapshot, revision):
         if not snapshot['audience_users']:
             raise Problem(400, 'Choose at least one ship for these instructions')
-        replace = self._replacement(db, actor, key, snapshot, revision)
+        replace = {'layer_id': key, 'revision': revision, 'snapshot': snapshot, 'created': self.clock()}
         for ship_id in snapshot['audience_users']:
             row = db.execute('SELECT owner_id FROM users WHERE id=?', (ship_id,)).fetchone()
             if not row or row['owner_id'] != actor:
@@ -2923,13 +2966,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 1. No charter pair: the charter reached only through its empty audience, so lost. In `peer/superyak_peer/instructions.py`, replace
 
    ```python
-           found = [charter] if charter is not None and ship['owner_id'] in (None, charter['owner_id']) else []
+           pair = self._charter_pair(db, ship)
    ```
 
    with
 
    ```python
-           found = []
+           pair = None
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_instructions.py::test_the_charter_binds_its_signers_ships_and_the_residents_first` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/instructions.py`.
@@ -2937,13 +2980,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 2. The signer's own ships unbound (the signer's acceptance by signing, C17, forgotten). In `peer/superyak_peer/instructions.py`, replace
 
    ```python
-           found = [charter] if charter is not None and ship['owner_id'] in (None, charter['owner_id']) else []
+           if active is not None and ship['owner_id'] in (None, active['owner_id']):
    ```
 
    with
 
    ```python
-           found = [charter] if charter is not None and ship['owner_id'] is None else []
+           if active is not None and ship['owner_id'] is None:
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_instructions.py::test_binding_matches_an_independent_reading_of_the_rule` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/instructions.py`.
@@ -2951,13 +2994,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 3. Another owner's ship bound without accepting. In `peer/superyak_peer/instructions.py`, replace
 
    ```python
-           found = [charter] if charter is not None and ship['owner_id'] in (None, charter['owner_id']) else []
+           if active is not None and ship['owner_id'] in (None, active['owner_id']):
    ```
 
    with
 
    ```python
-           found = [charter] if charter is not None else []
+           if active is not None:
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_instructions.py::test_the_charter_binds_its_signers_ships_and_the_residents_first` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/instructions.py`.
@@ -2983,13 +3026,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 5. The charter sorted among the owner's layers by creation, not first. In `peer/superyak_peer/instructions.py`, replace
 
    ```python
-                   for row in found]
+           return self._layers_for(db, [pair] if pair else []) + self._own_layers(db, ship, replace)
    ```
 
    with
 
    ```python
-                   for row in sorted(found, key=lambda row: (row['created'], row['layer_id']))]
+           return sorted(self._layers_for(db, [pair] if pair else []) + self._own_layers(db, ship, replace), key=lambda l: (l['created'], l['layer_id']))
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_instructions.py::test_the_charter_binds_its_signers_ships_and_the_residents_first` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/instructions.py`.
@@ -3016,14 +3059,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 ### Task 8: The caps count the charter once, for every ship it binds (R16)
 
 **Files:**
-- Modify: `peer/superyak_peer/instructions.py` (`_check_instruction_caps`, `_check_charter_caps`, `_check_ship_caps`: about 20 lines)
-- Modify: `peer/superyak_peer/charter.py` (`_check_charter_activation`: the caps and `revision`, about 6 lines)
-- Modify: `peer/superyak_peer/layers.py` (the activation call, 2 lines)
+- Modify: `peer/superyak_peer/instructions.py` (`CAPS_REFUSAL`, `over_caps`, `_check_instruction_caps`, `_check_charter_caps`: about 25 lines)
+- Modify: `peer/superyak_peer/layers.py` (`activate_layer`: the revision made active, then the charter caps, then the signature; 4 lines)
 - Test: `peer/tests/test_charter.py` (about 55 lines)
 
 **Interfaces:**
-- Consumes: `_binding_layers`, `_replacement` (Task 7); `render_blocks`, `MAX_LAYERS`, `MAX_BYTES`.
-- Produces: `_check_charter_caps(db, actor, key, snapshot, revision)`; `_check_ship_caps(db, ship_id, name, replace)` (409 "<ship> would have more than 10 instruction layers or 48,000 bytes of them"); `_check_charter_activation(db, actor, key, snapshot, confirm, revision)`; test helper `full_ship(app, client, ship, count)`.
+- Consumes: `_binding_layers` (Task 7); `render_blocks`, `MAX_LAYERS`, `MAX_BYTES`.
+- Produces: `instructions.CAPS_REFUSAL = "{ship} would have more than 10 instruction layers or 48,000 bytes of them"`; `instructions.over_caps(layers) -> bool`; `Instructions._check_charter_caps(db, signer_id)`, run by `activate_layer` once the charter revision is written and active, before it is signed; test helper `full_ship(app, client, ship, count)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3090,6 +3132,34 @@ Expected: `2 failed, 17 passed`. The failures: test 16 (`'That ship would have�
 In `peer/superyak_peer/instructions.py`, replace
 
 ```python
+MAX_LAYERS, MAX_BYTES = 10, 48000
+```
+
+with
+
+```python
+MAX_LAYERS, MAX_BYTES = 10, 48000
+CAPS_REFUSAL = '{ship} would have more than 10 instruction layers or 48,000 bytes of them'  # R16: each 409 names the ship
+```
+
+In `peer/superyak_peer/instructions.py`, insert after
+
+```python
+def render_blocks(layers, station):
+    return PREAMBLE + '\n\n' + '\n\n'.join(render_one(l, station) for l in layers) if layers else ''
+```
+
+this, leaving two blank lines between them:
+
+```python
+def over_caps(layers):
+    """Spec A's caps (R16): more than MAX_LAYERS layers, or more than MAX_BYTES of their rendered blocks."""
+    return len(layers) > MAX_LAYERS or len(render_blocks(layers, 'x' * 12).encode()) > MAX_BYTES
+```
+
+In `peer/superyak_peer/instructions.py`, replace
+
+```python
         for ship_id in snapshot['audience_users']:
             row = db.execute('SELECT owner_id FROM users WHERE id=?', (ship_id,)).fetchone()
             if not row or row['owner_id'] != actor:
@@ -3106,69 +3176,37 @@ with
             row = db.execute('SELECT name, owner_id FROM users WHERE id=?', (ship_id,)).fetchone()
             if not row or row['owner_id'] != actor:
                 continue  # it does not bind a ship the activator does not own, so it cannot crowd that ship out
-            self._check_ship_caps(db, ship_id, row['name'], replace)  # its binding counts the charter (R16)
+            if over_caps(self._binding_layers(db, ship_id, replace=replace)):  # its binding counts the charter (R16)
+                raise Problem(409, CAPS_REFUSAL.format(ship=safe_line(row['name'])))
 
-    def _check_charter_caps(self, db, actor, key, snapshot, revision):
-        """C23 in 4a: a charter's activation changes the binding of every resident and of every ship its signer owns, so
-        each is checked with the new revision active, a converted layer counted once, as the charter pair."""
-        replace = self._replacement(db, actor, key, snapshot, revision)
+    def _check_charter_caps(self, db, signer_id):
+        """C23 in 4a: a charter's activation changes the binding of every resident and of every ship its signer owns. Each
+        is checked with the new revision already active, written in the activation's own transaction, so a 409 rolls
+        the write back, and a converted layer counts once, as the charter pair."""
         for ship in db.execute("SELECT id, name FROM users WHERE kind='ship' AND (owner_id IS NULL OR owner_id=?) "
-                               'ORDER BY name COLLATE NOCASE, id', (actor,)).fetchall():
-            self._check_ship_caps(db, ship['id'], ship['name'], replace)
-
-    def _check_ship_caps(self, db, ship_id, name, replace):
-        """Spec A's caps for one ship, with `replace` active: 409 naming the ship (R16)."""
-        layers = self._binding_layers(db, ship_id, replace=replace)
-        if len(layers) > MAX_LAYERS or len(render_blocks(layers, 'x' * 12).encode()) > MAX_BYTES:
-            raise Problem(409, f'{safe_line(name)} would have more than 10 instruction layers or 48,000 bytes of them')
-```
-
-In `peer/superyak_peer/charter.py`, replace
-
-```python
-    def _check_charter_activation(self, db, actor, key, snapshot, confirm=None):
-        """Activation step 5 for a charter, in the spec's order ("Routes"): 403 unless the caller is a super admin (C3),
-        409 while another charter layer is active (R4), 400 for a malformed confirm_widenings, then 409 unless it holds
-        exactly the paths that widen from the policy in force (C5, C13). Returns the full policy the revision stores
-        (C11, R2)."""
-```
-
-with
-
-```python
-    def _check_charter_activation(self, db, actor, key, snapshot, confirm, revision):
-        """Activation step 5 for a charter, in the spec's order ("Routes"): 403 unless the caller is a super admin (C3),
-        409 while another charter layer is active (R4), 400 for a malformed confirm_widenings, 409 unless it holds
-        exactly the paths that widen from the policy in force (C5, C13), then 409 naming a ship the new revision would
-        put over the caps (C23). Returns the full policy the revision stores (C11, R2)."""
-```
-
-In `peer/superyak_peer/charter.py`, replace
-
-```python
-        check_confirmed(confirm, changes(self._policy_in_force(db), policy)[0])
-        return policy
-```
-
-with
-
-```python
-        check_confirmed(confirm, changes(self._policy_in_force(db), policy)[0])
-        self._check_charter_caps(db, actor, key, {**snapshot, 'policy': policy}, revision)
-        return policy
+                               'ORDER BY name COLLATE NOCASE, id', (signer_id,)).fetchall():
+            if over_caps(self._binding_layers(db, ship['id'])):
+                raise Problem(409, CAPS_REFUSAL.format(ship=safe_line(ship['name'])))
 ```
 
 In `peer/superyak_peer/layers.py`, replace
 
 ```python
-                snapshot['policy'] = self._check_charter_activation(db, actor, key, snapshot, confirm_widenings)  # in full (R2)
+            db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, version, encode(snapshot), self.clock()))
+            self._sign_revision(db, key, revision)  # spec A step 3, G2: an instructions revision is signed as it is written
+            db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
+            self.emit(db, 'layer.activated', key, revision, {'owner_id': actor, 'draft_version': version})
 ```
 
 with
 
 ```python
-                snapshot['policy'] = self._check_charter_activation(db, actor, key, snapshot, confirm_widenings,
-                                                                    row['resource_version'] + 1)  # in full (R2)
+            db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, version, encode(snapshot), self.clock()))
+            db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
+            if snapshot.get('charter') is True:
+                self._check_charter_caps(db, actor)  # C23, with the new revision active: a 409 rolls this write back
+            self._sign_revision(db, key, revision)  # spec A step 3, G2: an instructions revision is signed as it is written
+            self.emit(db, 'layer.activated', key, revision, {'owner_id': actor, 'draft_version': version})
 ```
 
 - [ ] **Step 4: Run the tests to see them pass**
@@ -3179,7 +3217,7 @@ Expected: `43 passed`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add peer/superyak_peer/instructions.py peer/superyak_peer/charter.py peer/superyak_peer/layers.py peer/tests/test_charter.py
+git add peer/superyak_peer/instructions.py peer/superyak_peer/layers.py peer/tests/test_charter.py
 git commit -m "Charter 4a: the caps count the charter once for the residents and the signer's ships, and name the ship (R16, C23)"
 ```
 
@@ -3187,35 +3225,55 @@ git commit -m "Charter 4a: the caps count the charter once for the residents and
 
 After the commit, apply each mutation alone, run the one test named, see it fail, and restore the file with `git checkout -- <file>` before the next. Each was seen failing in the dry run.
 
-1. _check_instruction_caps reused: 400 for the empty audience. In `peer/superyak_peer/charter.py`, replace
+1. _check_instruction_caps reused: 400 for the empty audience. In `peer/superyak_peer/layers.py`, replace
 
    ```python
-           self._check_charter_caps(db, actor, key, {**snapshot, 'policy': policy}, revision)
+                   self._check_charter_caps(db, actor)  # C23, with the new revision active: a 409 rolls this write back
    ```
 
    with
 
    ```python
-           self._check_instruction_caps(db, actor, key, {**snapshot, 'policy': policy}, revision)
+                   self._check_instruction_caps(db, actor, key, snapshot, revision)
    ```
 
-   Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_caps_count_the_charter_once_for_every_ship_it_binds` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/charter.py`.
+   Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_caps_count_the_charter_once_for_every_ship_it_binds` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/layers.py`.
 
-2. A converted layer counted as both its old and its new revision. In `peer/superyak_peer/instructions.py`, replace
+2. Own layers read at each active layer's latest ordinary revision, so a converted layer counts as both its old revision and the charter. In `peer/superyak_peer/instructions.py`, replace
 
    ```python
-               rows = [row for row in rows if row['layer_id'] != replace['layer_id']] + [replace]
+               'FROM layers JOIN layer_revisions ON layers.id=layer_revisions.layer_id AND layers.active_revision=layer_revisions.revision '
    ```
 
    with
 
    ```python
-               rows = rows + [replace]
+               "FROM layers JOIN layer_revisions ON layers.id=layer_revisions.layer_id AND layers.active_revision IS NOT NULL AND layer_revisions.revision=(SELECT max(r.revision) FROM layer_revisions AS r WHERE r.layer_id=layers.id AND json_extract(r.snapshot, '$.charter') IS NOT 1) "
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_caps_count_the_charter_once_for_every_ship_it_binds` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/instructions.py`.
 
-3. The residents left unchecked. In `peer/superyak_peer/instructions.py`, replace
+3. The caps measured before the new revision is active, so they miss the charter. In `peer/superyak_peer/layers.py`, replace
+
+   ```python
+               db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, version, encode(snapshot), self.clock()))
+               db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
+               if snapshot.get('charter') is True:
+                   self._check_charter_caps(db, actor)  # C23, with the new revision active: a 409 rolls this write back
+   ```
+
+   with
+
+   ```python
+               if snapshot.get('charter') is True:
+                   self._check_charter_caps(db, actor)
+               db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, version, encode(snapshot), self.clock()))
+               db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
+   ```
+
+   Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_caps_count_the_charter_once_for_every_ship_it_binds` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/layers.py`.
+
+4. The residents left unchecked. In `peer/superyak_peer/instructions.py`, replace
 
    ```python
            for ship in db.execute("SELECT id, name FROM users WHERE kind='ship' AND (owner_id IS NULL OR owner_id=?) "
@@ -3229,32 +3287,30 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_a_charter_too_large_for_a_resident_is_refused_naming_it` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/instructions.py`.
 
-4. The charter not counted against the 10 layers. In `peer/superyak_peer/instructions.py`, replace
+5. The charter not counted against the 10 layers. In `peer/superyak_peer/instructions.py`, replace
 
    ```python
-           if len(layers) > MAX_LAYERS or len(render_blocks(layers, 'x' * 12).encode()) > MAX_BYTES:
-               raise Problem(409, f'{safe_line(name)} would
+       return len(layers) > MAX_LAYERS or len(render_blocks(layers, 'x' * 12).encode()) > MAX_BYTES
    ```
 
    with
 
    ```python
-           if len([l for l in layers if not l['charter']]) > MAX_LAYERS or len(render_blocks(layers, 'x' * 12).encode()) > MAX_BYTES:
-               raise Problem(409, f'{safe_line(name)} would
+       return len([l for l in layers if not l['charter']]) > MAX_LAYERS or len(render_blocks(layers, 'x' * 12).encode()) > MAX_BYTES
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_caps_count_the_charter_once_for_every_ship_it_binds` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/instructions.py`.
 
-5. A 409 that does not name the ship. In `peer/superyak_peer/instructions.py`, replace
+6. A 409 that does not name the ship. In `peer/superyak_peer/instructions.py`, replace
 
    ```python
-               raise Problem(409, f'{safe_line(name)} would have more than 10 instruction layers or 48,000 bytes of them')
+   CAPS_REFUSAL = '{ship} would have more than 10 instruction layers or 48,000 bytes of them'
    ```
 
    with
 
    ```python
-               raise Problem(409, 'That ship would have more than 10 instruction layers or 48,000 bytes of them')
+   CAPS_REFUSAL = 'That ship would have more than 10 instruction layers or 48,000 bytes of them'
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_caps_count_the_charter_once_for_every_ship_it_binds` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/instructions.py`.
@@ -3490,7 +3546,7 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 
    ```python
            active = self._active_charter(db)
-           charter = {'revision': active['revision']} if active else None
+           charter = {'revision': active['active_revision']} if active else None
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_a_build_footer_names_the_charter_revision_its_ticket_recorded` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/tickets.py`.
@@ -3514,12 +3570,12 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 ### Task 10: Every person reads the active charter revision's signed record (R19)
 
 **Files:**
-- Modify: `peer/superyak_peer/signatures.py` (`revision_signed`, about 10 lines)
+- Modify: `peer/superyak_peer/signatures.py` (`revision_signed`, `_may_read_charter_revision`: about 18 lines)
 - Test: `peer/tests/test_charter.py` (about 40 lines)
 
 **Interfaces:**
-- Consumes: `_active_charter` (Task 3).
-- Produces: `Signatures.revision_signed(actor, layer_id, revision)`: the active charter revision to any person, every other revision to the layer's owner, the same 404 for everything else.
+- Consumes: A charter revision's snapshot (`charter: true`, Task 3).
+- Produces: `Signatures.revision_signed(actor, layer_id, revision)`: the owner reads every revision; anyone else a charter revision that `Signatures._may_read_charter_revision(db, actor, layer, revision) -> bool` allows (in 4a, the layer's active revision); the same 404 for everything else.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3589,19 +3645,36 @@ with
 
 ```python
     def revision_signed(self, actor, layer_id, revision):
-        """G6 as charter step 4 amends it (C26): {station, record, signature}. The active charter revision goes to every
-        signed-in person; any other revision, a charter's or not, to the layer's owner (merge 4c adds the people whose
-        acceptance names a charter revision). Anyone else, and any revision without a signature (a note's, or one that
-        doesn't exist), gets the same 404, so the route never says whether a layer or a revision exists."""
+        """G6 as charter step 4 amends it (C26): {station, record, signature} for the layer's owner, and for a charter
+        revision whoever _may_read_charter_revision lets read it. Anyone else, and any revision without a signature (a
+        note's, or one that doesn't exist), gets the same 404, so the route never says whether a layer or a revision
+        exists."""
         with self.transaction() as db:
-            layer = db.execute('SELECT owner_id FROM layers WHERE id=?', (layer_id,)).fetchone()
+            layer = db.execute('SELECT * FROM layers WHERE id=?', (layer_id,)).fetchone()
             if layer is None or not 1 <= revision <= 2 ** 63 - 1:  # past SQLite's integers sqlite3 raises OverflowError
                 raise Problem(404, 'Not found')
             row = require(db.execute('SELECT signature FROM revision_signatures WHERE layer_id=? AND revision=?',
                                      (layer_id, revision)).fetchone())
-            active = self._active_charter(db)
-            if layer['owner_id'] != actor and (active is None or (active['layer_id'], active['revision']) != (layer_id, revision)):
+            charter = db.execute("SELECT 1 FROM layer_revisions WHERE layer_id=? AND revision=? AND "
+                                 "json_extract(snapshot, '$.charter')=1", (layer_id, revision)).fetchone()
+            if layer['owner_id'] != actor and (charter is None or not self._may_read_charter_revision(db, actor, layer, revision)):
                 raise Problem(404, 'Not found')
+```
+
+In `peer/superyak_peer/signatures.py`, insert after
+
+```python
+            return {'station': self._station_identity(db).peer_id, 'record': self._revision_record(db, layer_id, revision),
+                    'signature': row['signature']}
+```
+
+this, leaving one blank line between them:
+
+```python
+    def _may_read_charter_revision(self, db, actor, layer, revision):
+        """C26 in 4a: a person who doesn't own the layer reads a charter revision only while it is the layer's active
+        revision, which makes it the active charter; merge 4c adds the people whose acceptance names it."""
+        return layer['active_revision'] == revision
 ```
 
 - [ ] **Step 4: Run the tests to see them pass**
@@ -3623,13 +3696,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 1. Every revision of the active charter's layer opened. In `peer/superyak_peer/signatures.py`, replace
 
    ```python
-               if layer['owner_id'] != actor and (active is None or (active['layer_id'], active['revision']) != (layer_id, revision)):
+           return layer['active_revision'] == revision
    ```
 
    with
 
    ```python
-               if layer['owner_id'] != actor and (active is None or active['layer_id'] != layer_id):
+           return layer['active_revision'] is not None
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_active_charter_revision_is_signed_for_everyone_and_a_past_one_for_its_signer` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/signatures.py`.
@@ -3637,13 +3710,13 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 2. The active charter revision to no one but its signer. In `peer/superyak_peer/signatures.py`, replace
 
    ```python
-               if layer['owner_id'] != actor and (active is None or (active['layer_id'], active['revision']) != (layer_id, revision)):
+           return layer['active_revision'] == revision
    ```
 
    with
 
    ```python
-               if layer['owner_id'] != actor:
+           return False
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_active_charter_revision_is_signed_for_everyone_and_a_past_one_for_its_signer` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/signatures.py`.
@@ -3651,13 +3724,27 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 3. Every charter revision, withdrawn or past, opened to everyone. In `peer/superyak_peer/signatures.py`, replace
 
    ```python
-               if layer['owner_id'] != actor and (active is None or (active['layer_id'], active['revision']) != (layer_id, revision)):
+           return layer['active_revision'] == revision
    ```
 
    with
 
    ```python
-               if layer['owner_id'] != actor and not self._was_charter(db, layer_id):
+           return True
+   ```
+
+   Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_active_charter_revision_is_signed_for_everyone_and_a_past_one_for_its_signer` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/signatures.py`.
+
+4. An ordinary layer's active revision opened to everyone. In `peer/superyak_peer/signatures.py`, replace
+
+   ```python
+               if layer['owner_id'] != actor and (charter is None or not self._may_read_charter_revision(db, actor, layer, revision)):
+   ```
+
+   with
+
+   ```python
+               if layer['owner_id'] != actor and not self._may_read_charter_revision(db, actor, layer, revision):
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_active_charter_revision_is_signed_for_everyone_and_a_past_one_for_its_signer` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/signatures.py`.
@@ -3667,12 +3754,12 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 ### Task 11: The ship routes: the `charter` field, and ships drafting a charter (R20, R21, station side)
 
 **Files:**
-- Modify: `peer/superyak_peer/instructions.py` (`ship_instructions`, `ship_draft`: about 20 lines)
+- Modify: `peer/superyak_peer/instructions.py` (`ship_instructions`, `_charter_status`, `ship_draft`: about 25 lines)
 - Test: `peer/tests/test_instructions.py` (one answer gains `charter: None`); `peer/tests/test_charter.py` (about 65 lines)
 
 **Interfaces:**
-- Consumes: `_binding_layers`, `binding_entry`'s `charter` (Task 7); `_active_charter` (Task 3); `check_draft` (Task 2).
-- Produces: `GET /api/ships/me/instructions`: `layers[].charter`, and `charter: null | {layer_id, revision, binding, accepted}`; `POST /api/ships/me/drafts` takes `title`, `body`, `charter`, `policy`.
+- Consumes: `_binding_layers`, `_charter_pair`, `binding_entry`'s `charter` (Task 7); `_active_charter` (Task 3); `check_draft` (Task 2).
+- Produces: `Instructions._charter_status(db, ship) -> dict | None`; `GET /api/ships/me/instructions`: `layers[].charter`, and `charter: null | {layer_id, revision, binding, accepted}`; `POST /api/ships/me/drafts` takes `title`, `body`, `charter`, `policy`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3794,15 +3881,23 @@ with
         the ship's owner signed it, always true for a resident (merge 4c: or accepted it)."""
         with self.transaction() as db:
             layers = self._binding_layers(db, actor)
-            active = self._active_charter(db)
-        bound = next((l for l in layers if l['charter']), None)
-        charter = None if active is None else {'layer_id': active['layer_id'], 'revision': active['revision'],
-                                              'binding': bound['revision'] if bound else None, 'accepted': bound is not None}
+            charter = self._charter_status(db, require(db.execute('SELECT * FROM users WHERE id=?', (actor,)).fetchone()))
         return {'instructions': [[l['layer_id'], l['revision']] for l in layers],
                 'layers': [{'layer_id': l['layer_id'], 'revision': l['revision'], 'title': safe_line(l['title'], 200),
                             'signer_name': safe_line(l['signer_name']), 'charter': l['charter'],
                             'block': render_one(l, station)} for l in layers],
                 'blocks': render_blocks(layers, station), 'charter': charter}
+
+    def _charter_status(self, db, ship):
+        """R20: the ship route's `charter`, null while no charter is active, else {layer_id, revision, binding, accepted}:
+        the active revision, the revision binding this ship (or null), and whether its owner signed it, always true for
+        a resident; merge 4c adds the owners who accepted it."""
+        active = self._active_charter(db)
+        if active is None:
+            return None
+        pair = self._charter_pair(db, ship)
+        return {'layer_id': active['id'], 'revision': active['active_revision'], 'binding': pair[1] if pair else None,
+                'accepted': ship['owner_id'] in (None, active['owner_id'])}
 
     def ship_draft(self, actor, data):
         """A ship drafts an instructions layer in its owner's name, addressed to itself, or a charter, addressed to no
@@ -3859,13 +3954,15 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 2. The active revision said to bind another owner's ship. In `peer/superyak_peer/instructions.py`, replace
 
    ```python
-                                                 'binding': bound['revision'] if bound else None, 'accepted': bound is not None}
+           return {'layer_id': active['id'], 'revision': active['active_revision'], 'binding': pair[1] if pair else None,
+                   'accepted': ship['owner_id'] in (None, active['owner_id'])}
    ```
 
    with
 
    ```python
-                                                 'binding': active['revision'], 'accepted': True}
+           return {'layer_id': active['id'], 'revision': active['active_revision'], 'binding': active['active_revision'],
+                   'accepted': True}
    ```
 
    Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_charter.py::test_the_ship_route_marks_the_charter_and_says_which_revision_binds` → `1 failed`. Restore: `git checkout -- peer/superyak_peer/instructions.py`.
@@ -3910,7 +4007,7 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 
 **Interfaces:**
 - Consumes: `station.label`; the ship route's `layers[].charter` and `charter` (Task 11); the fake station's `instruction_state`.
-- Produces: `station.bracketed(title) -> str`, `station.layer_line(layer) -> str`, `station.charter_line(answer) -> str | None`; `hook._header(layer)` brackets and marks the charter.
+- Produces: `station.bracketed(title) -> str`, `station.layer_line(layer) -> str`, `station.charter_line(charter) -> str | None` (from the field's value); `hook._header(layer)` brackets and marks the charter.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4042,14 +4139,13 @@ def layer_line(layer):
     return f'{bracketed(label(layer.get("title")))} · {kind} {layer.get("revision")} · signed by {label(layer.get("signer_name"))}'
 
 
-def charter_line(answer):
-    """R20: the one charter line `status` prints from the instructions answer, or None from a station older than
-    charter step 4, whose answer has no `charter` field."""
-    if 'charter' not in answer:
-        return None
-    charter = answer['charter']
+def charter_line(charter):
+    """R20: `status`'s one charter line from the ship route's `charter` field (null: none active), or None for a value
+    that isn't one. A station older than charter step 4 sends no field, and `status` then prints no line."""
     if charter is None:
         return 'Charter: none active'
+    if not isinstance(charter, dict):
+        return None
     revision, binding = charter.get('revision'), charter.get('binding')
     if binding == revision:
         return f'Charter: revision {revision} binds this ship'
@@ -4084,7 +4180,7 @@ with
             answer = client.instructions()
             layers = answer.get('layers') or []
             lines = ['Instructions:'] + [f'  {layer_line(layer)}' for layer in layers] if layers else ['Instructions: none']
-            charter = charter_line(answer)  # R20: None from a station older than charter step 4
+            charter = charter_line(answer['charter']) if 'charter' in answer else None  # R20: none from an older station
             if charter:
                 lines.append(charter)
 ```
@@ -4178,21 +4274,19 @@ After the commit, apply each mutation alone, run the one test named, see it fail
 
    Run: `cd agent && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_status.py::test_status_brackets_titles_and_prints_one_charter_line` → `1 failed`. Restore: `git checkout -- agent/superyak_agent/station.py`.
 
-4. An older station's answer read as if it had the field: Instructions: unavailable ('charter'). In `agent/superyak_agent/station.py`, replace
+4. An older station's missing field read as null: it prints Charter: none active. In `agent/superyak_agent/__main__.py`, replace
 
    ```python
-       if 'charter' not in answer:
-           return None
-       charter = answer['charter']
+               charter = charter_line(answer['charter']) if 'charter' in answer else None  # R20: none from an older station
    ```
 
    with
 
    ```python
-       charter = answer['charter']
+               charter = charter_line(answer.get('charter'))
    ```
 
-   Run: `cd agent && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_status.py::test_status_brackets_titles_and_prints_one_charter_line` → `1 failed`. Restore: `git checkout -- agent/superyak_agent/station.py`.
+   Run: `cd agent && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_status.py::test_status_brackets_titles_and_prints_one_charter_line` → `1 failed`. Restore: `git checkout -- agent/superyak_agent/__main__.py`.
 
 5. An unaccepted charter said to bind the ship. In `agent/superyak_agent/station.py`, replace
 
