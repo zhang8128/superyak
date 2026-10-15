@@ -1306,3 +1306,36 @@ def test_lowering_a_role_bumps_role_version_and_records_a_change(tmp_path, capsy
         live.change_account_role(andy['id'], jenn['id'], 'admin', 5)
     assert stale.value.status == 409
     assert live.change_account_role(andy['id'], jenn['id'], 'admin', 6)['role_version'] == 7
+
+
+def test_reconcile_reports_briefs_changed_since_the_copy_without_their_text(tmp_path, capsys):
+    """Follow-up 4: a restore brings back a brief the owner changed or removed since the copy, or loses one written
+    since. By room, for rooms in both files, the report names the room's short id and title and the two revisions,
+    "reported, not applied", and never a word of any brief; nothing is written to the copy's briefs. Mutation: the
+    comparison dropped (nothing reported)."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    rooms = {name: store.create_room(andy['id'], name, []) for name in ('Edited', 'Removed', 'Written', 'Same')}
+    for name in ('Edited', 'Removed', 'Same'):
+        store.save_brief(andy['id'], rooms[name]['id'], f'old secret brief text of {name}', 0)
+    copy = staged(tmp_path, store)                                                # A
+    store.save_brief(andy['id'], rooms['Edited']['id'], 'new secret brief text of Edited', 1)
+    store.save_brief(andy['id'], rooms['Removed']['id'], '', 1)
+    store.save_brief(andy['id'], rooms['Written']['id'], 'secret brief written after the copy', 0)
+    after_copy = store.create_room(andy['id'], 'Later', [])                       # a room the copy lacks: not compared
+    store.save_brief(andy['id'], after_copy['id'], 'secret brief of a later room', 0)
+    with closing(sqlite3.connect(copy)) as db:
+        before = db.execute('SELECT room_id, revision, body FROM room_briefs ORDER BY room_id').fetchall()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        assert db.execute('SELECT room_id, revision, body FROM room_briefs ORDER BY room_id').fetchall() == before
+    line = next(line for line in out.splitlines() if line.startswith('Reported, not applied: room briefs'))
+    short = lambda name: rooms[name]['id'][:6]
+    for expected in (f'{short("Edited")} Edited (here revision 1, in the replaced file revision 2)',
+                     f'{short("Removed")} Removed (here revision 1, in the replaced file revision 2, removed)',
+                     f'{short("Written")} Written (here none, in the replaced file revision 1)'):
+        assert expected in line, line
+    assert 'Same' not in line and 'Later' not in line
+    assert 'secret' not in out and 'brief text of' not in out
+    assert not any(row.startswith(('Skipped', 'Not compared')) for row in out.splitlines()), out

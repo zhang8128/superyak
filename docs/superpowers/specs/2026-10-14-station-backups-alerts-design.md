@@ -377,7 +377,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
     nothing to fail closed to, and the runbook has Andy unpair by hand, before the lighthouse starts, any peer he had
     cut off since the copy.
   - **Reported, never applied,** since a bad replaced file may be the reason for the restore: users whose password hash
-    differs, instruction layers whose active revision differs, peers paired there but not here (pairing again is a
+    differs, instruction layers whose active revision differs, room briefs whose revision or body differs, for rooms
+    in both files (the room's short id and title and the two revisions, "removed" for an emptied one; never the text;
+    follow-up from the final reviews, narrows, no new D8 round), peers paired there but not here (pairing again is a
     person's act), and peers the replaced file lacks.
   - **What it prints:** counts, and for each reported or revoked item the username (users and ships), the layer's
     short id and title, the room's short id and title, or the peer's short id with its contacts' names. Peers it
@@ -791,3 +793,4 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 | The step-6 mark catches a skipped step 5 | The reconcile writes the mark above; step 6 refuses a copy without it | S16 ("The mark"), the runbook step 6, `test_step_6_*` |
 | R16: the existing unit files are not edited | The units test compares their bytes before and after `make station-units` and `station-units-remove` | R16, `test_station_units_install_and_remove_only_their_own_files` |
 | Role lowering leaves a trace | `role_version` bump and an `account_role_changes` row, as the station's role changes do | S16 ("With a usable replaced file"), `test_lowering_a_role_bumps_role_version_and_records_a_change` |
+| A restore brings back a changed or removed room brief | Reported by room short id and title, "reported, not applied", never the text | S16 ("Reported, never applied"), runbook step 7, `test_reconcile_reports_briefs_changed_since_the_copy_without_their_text` |

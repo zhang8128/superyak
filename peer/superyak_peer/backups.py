@@ -671,6 +671,17 @@ def _report_differences(db, old, now, report):
         for layer_id, active, draft in old.execute('SELECT id, active_revision, draft FROM layers ORDER BY id').fetchall():
             if (layer_id in here and here[layer_id] != active) or (layer_id not in here and active is not None):
                 report['layers'].append((layer_id[:6], _title(draft), here.get(layer_id), active))
+    if _usable(db, old, report, 'room_briefs.revision', 'room_briefs.body', 'rooms.title'):
+        # Follow-up 4: a restore brings back a brief the owner changed or removed since the copy (or loses one written since).
+        # By room, for rooms in both files; the text is compared and never printed.
+        def briefs(connection):
+            return {row[0]: (row[1], row[2]) for row in connection.execute('SELECT room_id, revision, body FROM room_briefs')}
+        here, there = briefs(db), briefs(old)
+        both = ({row[0] for row in db.execute('SELECT id FROM rooms')} & {row[0] for row in old.execute('SELECT id FROM rooms')})
+        for room_id in sorted(both):
+            if here.get(room_id) != there.get(room_id):
+                title = db.execute('SELECT title FROM rooms WHERE id=?', (room_id,)).fetchone()[0]
+                report['briefs'].append((room_id[:6], title, here.get(room_id), there.get(room_id)))
     if _usable(db, old, report, 'peers.paired'):  # revision 4: paired here and unpaired there was applied above
         here = dict(db.execute('SELECT peer_id, paired FROM peers').fetchall())
         there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
@@ -792,7 +803,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     _refuse(db_path, live_data_dir)
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
-              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],
+              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
               'not_compared': []}
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
@@ -887,6 +898,13 @@ def describe_reconcile(report):
         lines.append('Reported, not applied: law layers whose active revision differs: ' + '; '.join(
             f'{short} {safe_line(title)} (here {_revision(here)}, in the replaced file {_revision(there)})'
             for short, title, here, there in report['layers']) + '. Set them in the browser before the ships start.')
+    if report['briefs']:
+        def brief_state(state):
+            return 'none' if state is None else f'revision {state[0]}' + (', removed' if not state[1] else '')
+        lines.append('Reported, not applied: room briefs that differ from the replaced file: ' + '; '.join(
+            f'{short} {safe_line(title)} (here {brief_state(here)}, in the replaced file {brief_state(there)})'
+            for short, title, here, there in report['briefs']) + '. Their text is not shown. Read them in the browser and '
+            'save again the one you want before the ships start.')
     if report['peers'] or report['lacked']:
         def listed(items):
             return ', '.join(f'{short} ({people(names)})' if names else short for short, names, _ in items)
