@@ -70,8 +70,9 @@ one question at a time, fastest through AskUserQuestion in the Pi terminal.
   - Tardis's crew and persona: 456fabd. Tardis pushed it straight to main; the Pi ran the agent and team suites on it
     (it touches no peer code) and took it.
   - Earlier on October 8: run tickets 8e81016, station-full-text 8f63287, key refusal 9c6b1b8, and the inbox bdf00af.
-- **Merged since, 2026-10-12 to 2026-10-15,** each under section 2 of the law with the Pi suites passing (main is at
-  57e2b2b before this update):
+- **Merged since, 2026-10-12 to 2026-10-15,** each under section 2 of the law with the Pi suites passing:
+  - later on 2026-10-15: the roadmap refresh 3e823a8; grants 3a, signed law revisions, 57c4322; fresh owner mentions
+    3f2973b; grants 3b, the grants core, d5843b8;
   - the browser-test flake's root cause, exact role-name waits: 7cdbb1f;
   - a name in single quotes doesn't wake a ship: 05ac33c;
   - the version check: e633ec3 and e77cf57;
@@ -103,16 +104,16 @@ one question at a time, fastest through AskUserQuestion in the Pi terminal.
   - Every machine gets the SessionEnd hook only by running `make dock` again. Serenity's Mac is on 456fabd as of
     2026-10-12; its already-open sessions get the breakout tools when their MCP servers restart (Andy's call).
   - Waiting for Andy, one question at a time, in the order of the roadmap's last section: the go-ahead for
-    `make station-units`, then City of AI's brief (keep, edit or remove), then signing ed4a8c, then the off-Pi destination, an outage alert channel, and Tardis's
-    role.
+    `make station-units`, then City of AI's brief (keep, edit or remove), then signing ed4a8c, then the off-Pi
+    destination (and where a copy of the station identity may live), an outage alert channel, and Tardis's role.
 - **Next:**
-  - spec A step 3, grants and revision signatures: Serenity is building merge 3a (signed revisions) on grants-3a,
-    under `build:grants`, and Rio Grande reviews each merge. Bracket layer titles before "signed by" once other
+  - spec A step 3, grants and revision signatures: 3a (57c4322) and 3b (d5843b8) are live; Serenity is planning 3c,
+    grant builds, on grants-3c (room message 541db5cd), under `build:grants`, and Rio Grande reviews each merge. Bracket layer titles before "signed by" once other
     signers can bind a ship;
   - the law's revision 2: section 7's watch line, now that the hook takes the watch (Rio Grande drafts, Andy signs);
   - then spec A step 4, the charter, and spec B: reviews, merging, deploying and admitting under the charter.
-  - Parked for steps 3 and 5: the station gives a build ticket for any owner mention, however old. Once acts spend
-    build tickets, it must refuse messages that are old or already answered.
+  - Done (3f2973b): an owner mention that is old or already answered no longer gets a build ticket; 3c applies the
+    same `_mention_stale` check to grant builds.
 - **How the work runs:**
   - each feature gets a spec approved by a fresh reviewer (D8), then a plan approved the same way;
   - a fresh implementer builds each task, and each task is reviewed;

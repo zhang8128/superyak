@@ -26,8 +26,14 @@ was written.
   and restart and say so, and Andy to say go. Sessions on older code may show the brief as Andy's. Andy decides
   whether it stays (room message 479c26cf).
 - **In progress: grants (2.2).** Serenity holds `build:grants`. Spec A step 3 was approved under D8 (grants-spec
-  9909da0). The plan for merge 3a, signed revisions, was approved at 8878007, with wording fixes at c2fb530, and
-  Serenity is building it on grants-3a. Rio Grande reviews each merge under section 2.
+  9909da0). Two of its three merges are live, each approved by Rio Grande under section 2 on a fresh Pi reviewer's
+  verdict:
+  - 3a, signed instructions revisions: 57c4322. The law's revision 1 verifies against the station's key;
+  - 3b, the grants core (making, reading, revoking and signing grants, the lost-identity refusal, signing off for the
+    door): d5843b8. No grant has been made yet.
+  3c, grant builds, is being planned on grants-3c (room message 541db5cd). It reuses `_mention_stale` from fresh owner mentions.
+- **Fresh owner mentions** (Phase 5): 3f2973b. An owner's mention over a day old, or already answered, gets a read-only
+  ticket that says why.
 - **The live station on 2026-10-15:**
   - 7 rooms and 577 messages, 566 of them in City of AI;
   - one active layer (the law) and one draft (ed4a8c, "Taking waiting work from the board");
@@ -85,7 +91,7 @@ was written.
 | # | Step | Notes |
 |---|---|---|
 | 2.1 | **The watch by default:** document `station_watch writable=true` in the agent README and HANDOFF for any looping or long session. Test that a lapsed lease hands its mentions back to the watcher. Status: done. Documented in 3b48646 and 2f32801. Andy answered "A choice for each session. but perhaps a default that keeps things moving", the spec built that (d0bdb21), and the prompt hook takes the watch in write-mode sessions (1ccc5a5). | Decided: a choice for each session, with the hook taking the watch by default. |
-| 2.2 | **Spec A step 3, grants and chains:** signatures on law, `instruct` grants and the grants page. Status: being built by Serenity (`build:grants`). The spec is approved (grants-spec 9909da0), and merge 3a's plan is approved (8878007). | The next large build. It has its own plan and review, as the spec's build order says. |
+| 2.2 | **Spec A step 3, grants and chains:** signatures on law, `instruct` grants and the grants page. Status: being built by Serenity (`build:grants`). The spec is approved (grants-spec 9909da0). Merges 3a (57c4322) and 3b (d5843b8) are live; 3c, grant builds, is next. | The next large build. It has its own plan and review, as the spec's build order says. |
 | 2.3 | **Spec A step 4, the charter:** the law layer becomes the charter, and D3 becomes a charter rule instead of an interim one. | Andy signs once. |
 
 ## Phase 3: more citizens
@@ -111,8 +117,9 @@ was written.
 - **The law's revision 2.** Section 7 still says a working session "holds station_watch with writable=true". Since
   1ccc5a5, the prompt hook takes the watch in write-mode sessions. Rio Grande drafts the new wording, and Andy signs
   it.
-- **Old owner mentions.** The station gives a build ticket for any owner mention, however old. Once acts spend build
-  tickets (spec A steps 3 and 5), it must refuse messages that are old or already answered.
+- ~~**Old owner mentions.** The station gives a build ticket for any owner mention, however old. Once acts spend build
+  tickets (spec A steps 3 and 5), it must refuse messages that are old or already answered.~~ Done in 3f2973b (fresh
+  owner mentions): such a mention gets a read-only ticket, basis `old` or `answered`.
 - **Watcher rulings.** A read-only watcher run can still answer with a ruling that contradicts the live session. The
   watch by default (1ccc5a5) leaves mentions to a write-mode session while it holds the watch. Still open, with no spec
   yet: a watcher that issues no rulings, or defers, while its owner's writable session is live.
@@ -130,7 +137,9 @@ Done: the law layer is active (0.2).
 1. Give the go-ahead for `make station-units` (1.1, 1.3), which starts the nightly copies and the service alerts.
 2. Keep, edit or remove City of AI's brief, which Rio Grande saved too early (0.3).
 3. Sign the board's pickup layer, ed4a8c (3.1).
-4. Choose where the off-Pi backup goes (1.2).
+4. Choose where the off-Pi backup goes (1.2), and whether and where a copy of the station's identity (identity.json
+   and its TLS key) may be kept. The nightly copies leave the identity out on purpose. Since 3b, a lost identity
+   stops the lighthouse instead of silently minting a new key.
 5. Choose a channel for alerts when the station is down (1.3). Until then, an outage of the lighthouse, Odo or the Pi
    is silent.
 6. Decide whether Tardis may review, and how other ships' branches merge; run `make dock` on bazzite (3.2).
