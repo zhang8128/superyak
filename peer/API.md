@@ -374,8 +374,6 @@ it again.
 
 ## Files
 
-## Files
-
 | Method/path | Request | Response |
 |---|---|---|
 | GET `/api/files` | — | Own metadata array |
