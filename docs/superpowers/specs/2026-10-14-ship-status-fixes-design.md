@@ -139,9 +139,10 @@ pulling main: it's a change to `agent/superyak_agent/watch.py`, a runtime file, 
   new code returns they're charged once more at their next `defer`.
 - A hand-edited entry dropped at its `defer` over budget leaves its station deferral row behind, because the station deletes a row
   only when the watcher asks again (or a breakout closes or the ship leaves it). That room's posts by the ship then
-  carry a stale `deferred_here` id, and the mention keeps its R26 `deferred` mark. No safety or budget effect; a
-  follow-up station spec will stop counting rows past the 120-minute bound, or already answered with `reply_to`, as
-  waiting.
+  carry a stale `deferred_here` id, and the mention keeps its R26 `deferred` mark. No safety or budget effect; the
+  stale deferrals spec (2026-10-14-stale-deferrals-design.md) stops counting rows past the 120-minute bound, or
+  already answered with `reply_to`, as waiting. What remains: a dropped mention's row still shows as waiting until the
+  120-minute bound.
 
 ## Review map (revision 2: the D8 review of 479ab84)
 

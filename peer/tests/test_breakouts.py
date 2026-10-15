@@ -624,3 +624,22 @@ def test_an_unadvanced_flagged_read_loses_nothing(env):
     first = flagged(tardis, cursor='c', limit=20)
     again = flagged(tardis, cursor='c', limit=20)
     assert [m['body'] for m in again['messages']] == [m['body'] for m in first['messages']] == ['@tardis look here', person['body']]
+
+
+def test_the_read_that_closes_a_breakout_marks_no_fresh_deferral_in_it(env):
+    """Stale deferrals (plan re-check of d02fd26): the two-hour bound counts from the watcher's first ask, not from the
+    mention, so a mention posted at the start of a quiet week and first asked about near its end still waits when the
+    read that closes the breakout comes. That read drops the room's deferrals first (R6), so the item carries no mark."""
+    fleet = Fleet(env)
+    room = fleet.opened('serenity', 'Late', ['rio-grande', 'tardis'])
+    fleet.clock[0] += DAY
+    asked = say(fleet.ship('serenity'), room, 'a', '@rio-grande a question for later')
+    ends = fleet.clock[0] + 7 * DAY                       # the mention is the room's last ordinary message
+    fleet.clock[0] = ends - 100                           # a writable watch first asks about it late
+    watch(fleet, 'rio-grande')
+    assert ticket(fleet.ship('rio-grande'), asked['id']).json()['decision'] == 'defer'
+    fleet.clock[0] = ends + 10                            # the deferral is 110 s old: it would still wait
+    got = fleet.ship('rio-grande').post('/api/ships/me/unread', json={'cursor': 'late-look'}).json()['messages']
+    item = {m['message_id']: m for m in got}[asked['id']]
+    assert item['mentions_me'] and 'deferred' not in item
+    assert fleet.rows('SELECT closed FROM breakouts WHERE room_id=?', room) == [(ends,)]
