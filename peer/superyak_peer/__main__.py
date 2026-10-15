@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import sys
 from . import agent_version
 from .auth import password_hash
 from .common import Problem, text
@@ -192,6 +193,7 @@ def main(argv=None):
     card.add_argument('--endpoint', required=True)
     notices = commands.add_parser('station-notices', help='Trusted local listing of what Odo announces in Ops')
     notices.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    notices.add_argument('--backup-dir', type=Path, help='The backup rotation (default: backups/station beside the data dir)')
     pending = commands.add_parser('station-pending', help='Trusted local: list waiting dockings and access requests by short id')
     pending.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     pending.add_argument('--as', dest='person', help='Who would approve (make passes APPROVER), so a taken ship name says what approving does')
@@ -208,6 +210,25 @@ def main(argv=None):
         bridge.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
         bridge.add_argument('--id', required=True, help='Short id from station-rooms (at least 4 characters)')
         bridge.add_argument('--as', dest='person', required=True, help='The room owner; only they can change the members')
+    backup_cmd = commands.add_parser('station-backup', help='Trusted local: a checked copy of the station database into the rotation')
+    backup_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    backup_cmd.add_argument('--backup-dir', type=Path, help='The rotation (default: backups/station beside the data dir)')
+    backup_cmd.add_argument('--output', type=Path, help='One checked copy at this new path, outside the rotation; never replaces a file')
+    backup_cmd.add_argument('--copy-to', default='', help='A mounted directory on another disk for the copy off the Pi; empty does nothing')
+    reconcile_cmd = commands.add_parser('station-restore-reconcile', help='Trusted local: on a staged copy, take back what a restore revives (runbook step 5)')
+    reconcile_cmd.add_argument('--db', type=Path, required=True, help='The staged copy, named restored.sqlite3 as runbook step 5 stages it; any other name is refused, as is a file in a live data directory')
+    reconcile_cmd.add_argument('--replaced', type=Path, help='The peer.sqlite3 the restore replaces (runbook step 4 set it aside), opened read-only; any other name is refused')
+    reconcile_cmd.add_argument('--unpair', action='append', default=[], metavar='PEER', help="Unpair this peer (12-character id or full id) in the copy as the browser does; repeatable; the only way without a usable --replaced")
+    reconcile_cmd.add_argument('--live-data-dir', type=Path, help='The live data directory, which is refused (make passes STATION_DATA)')
+    restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
+    restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
+    restore_cmd.add_argument('--backup', type=Path, help='Test this copy instead of the newest one')
+    alert_cmd = commands.add_parser('station-alert', help='Run by systemd only: queue one alert line for Odo to post in Ops')
+    alert_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    alert_cmd.add_argument('--unit', required=True)
+    alert_cmd.add_argument('--monitor', action='store_true', help="As an OnFailure= handler: read systemd's MONITOR_* variables")
+    queue_cmd = commands.add_parser('station-alerts', help='Trusted local: show the alert queue and what is held back')
+    queue_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door = commands.add_parser('door', help='Public access-request door for tailscale funnel (two routes, loopback only)')
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
@@ -273,7 +294,70 @@ def main(argv=None):
             room, changed = Store(args.data_dir).station_bridge(args.person, args.id, bridge)
             print(describe_bridge(room, changed, bridge))
         elif args.command == 'station-notices':
-            print(json.dumps(Store(args.data_dir).station_notices(), indent=2))
+            import time
+            from .alerts import notices_beside
+            from .backups import default_backup_dir
+            extra = notices_beside(args.data_dir, args.backup_dir or default_backup_dir(args.data_dir), time.time())
+            if extra is None:  # R15: neither directory, so exactly today's output and today's failures
+                print(json.dumps(Store(args.data_dir).station_notices(), indent=2))
+            else:
+                try:
+                    listed = Store(args.data_dir).station_notices()
+                except Exception as error:  # noqa: BLE001 - S10: a damaged store must not silence the alerts
+                    print(f'station-notices: listing the queued alerts only; the store could not be read ({type(error).__name__})',
+                          file=sys.stderr)
+                    listed = []
+                print(json.dumps(listed + extra, indent=2))
+        elif args.command == 'station-backup':
+            from .backups import BackupError, default_backup_dir, run_backup
+            try:
+                written = run_backup(args.data_dir, args.backup_dir or default_backup_dir(args.data_dir),
+                                     output=args.output, copy_to=args.copy_to)
+            except BackupError as failed:
+                parser.exit(failed.code, f'station-backup: {failed.reason}\n')
+            print(f'Checked copy: {written}')
+        elif args.command == 'station-restore-reconcile':
+            from .backups import (ReconcileRefused, UnpairRefused, describe_reconcile, reconcile, refuse_misnamed_replaced,
+                                  refuse_unstaged_db)
+            try:
+                refuse_unstaged_db(args.db)  # both before reconcile() opens anything
+                refuse_misnamed_replaced(args.replaced)
+                report = reconcile(args.db, replaced=args.replaced, live_data_dir=args.live_data_dir, unpair=args.unpair)
+            except UnpairRefused as refused:
+                parser.exit(2, f'station-restore-reconcile: {refused}\n')
+            except ReconcileRefused:
+                raise  # a ValueError: the handler below prints it and exits 1
+            except Exception as error:  # noqa: BLE001 - the transaction rolled back, so the staged copy is unchanged
+                parser.exit(1, f'station-restore-reconcile: nothing was changed: {type(error).__name__}: {safe_line(error, 200)}\n')
+            print(describe_reconcile(report))
+        elif args.command == 'station-restore-test':
+            import signal
+            from .backups import BackupError, restore_test
+
+            def stopped(signum, frame):
+                raise SystemExit(128 + signum)  # S7 step 8: stopped by hand or by systemd, the finally blocks tear down
+
+            previous = {number: signal.signal(number, stopped) for number in (signal.SIGTERM, signal.SIGHUP)}
+            try:
+                tested = restore_test(args.backup_dir, args.backup)
+            except BackupError as failed:
+                parser.exit(failed.code, f'station-restore-test: {failed.reason}\n')
+            finally:
+                for number, handler in previous.items():
+                    signal.signal(number, handler)
+            users, rooms, messages = tested['counts']
+            print(f'Restore test passed: {tested["backup"].name} booted on 127.0.0.1:{tested["port"]}; '
+                  f'users {users}, rooms {rooms}, messages {messages}.')
+        elif args.command == 'station-alert':
+            from .alerts import Refused, station_alert
+            try:
+                station_alert(args.data_dir, args.unit, monitor=args.monitor, environ=os.environ)
+            except Refused as refused:
+                parser.exit(2, f'station-alert: {refused}\n')
+        elif args.command == 'station-alerts':
+            import time
+            from .alerts import describe_queue
+            print(describe_queue(args.data_dir / 'alerts', time.time()))
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
