@@ -1,7 +1,8 @@
 # Trails: Footpaths, Roads and Detours in the Category Graph
 
 **Date:** 2026-10-25
-**Status:** Revision 2, after the fresh reviewer's APPROVE WITH CHANGES (MF1–MF8, S1–S8, N1–N9 applied).
+**Status:** Revision 3. Approved by a fresh reviewer under station law section 3: the first verdict
+(MF1–MF8, S1–S8, N1–N9) and the re-check (RMF1–RMF3, S-a–S-d, N-a–N-d) are both applied.
 Observational; off by default.
 **Module:** new `trails.py`, plus a gated pass in `category_evolution.py`
 **Builds on:** `2026-08-07-evolving-category-memory-design.md` (v2 store, rewrites, epochs),
@@ -93,12 +94,14 @@ All of this is read from `graph.db` without writing to it.
 - the server uses the start of the pass;
 - the CLI uses the newest timestamp in the store, or `--as-of`.
 
-No derivation reads the wall clock, so results depend only on `graph.db` and `as_of`.
+No derivation reads the wall clock, so results depend only on `graph.db` and `as_of`. Rows newer
+than `as_of` are ignored.
 
 **Sessions.** A session is any distinct non-null `episodes.session_id`, or any
-`json_extract(memory_log.context, '$.session_id')` on an `event_type = 'recall'` row. A session
-is *closed* when its newest row is older than `as_of` minus one hour and it isn't the running
-server's own session. Only closed sessions get trails.
+`json_extract(memory_log.context, '$.session_id')` on an `event_type = 'recall'` row. Its
+*newest row* is the latest of those episodes and recall rows. A session is *closed* when its
+newest row is older than `as_of` minus one hour and it isn't the running server's own session.
+Only closed sessions get trails.
 
 **Wrote touches.** Every episode carrying that `session_id`. The time is `created_at`.
 Genome-synced episodes already have a null `session_id`, so they never appear. Forks are the real
@@ -111,7 +114,9 @@ drop instinct targets first. A target is a cited touch when either:
 - a later same-session `operation_log` row has an `operation` in `CITING_OPERATIONS` (imported
   from `hooks/sleep.py`: `mark_core`, `instinct_feedback`, `dream_react`) and lists the target in
   `target_ids`; or
-- the recall has exactly one remaining target.
+- the recall has exactly one target once instincts are removed. A target that no longer exists
+  still counts toward that number, so if B is pruned from a used recall [A, B], A is not credited
+  by this rule.
 
 This is the per-target form of `hooks/sleep.py auto_capture_outcomes`, with the same operation
 filter. Without the filter, `compress_commit`, `share` and `revive` would count as use.
@@ -164,20 +169,31 @@ unless `enabled = true`, and only an exact boolean `true` turns it on, matching 
 fail-closed parsing.
 
 **When it runs.** In the startup maintenance thread, before `prune`, so a backlog is read before
-its episodes move to cold storage. It never runs on the request path. The pass:
+its episodes move to cold storage. It never runs on the request path.
 
-- takes the lifecycle barrier per batch of 8 sessions, never for the whole pass;
-- processes at most 64 closed sessions, oldest first by their newest row;
-- proposes at most 64 roads and 32 detours.
+It runs only when `auto_commit` is exactly `false`. With any other value it writes nothing and
+counts a skipped pass. Otherwise, on a replayed store, startup consolidation would commit trail
+proposals and the compiler would start walking them (section 5, Activation).
 
-A backlog drains over several starts.
+The pass reads `graph.db` through its own `Storage.open_read_only` connection. It takes the
+lifecycle barrier only per batch, as a yield point for tool calls: per 8 sessions while it writes
+trail events, and per 16 proposals while it proposes. Each pass:
 
-**Trail events.** For each closed (session, lane), compute the trail. If its digest differs from
-the newest event for that pair, or no event exists yet, append one `trail_observed` event. The
+1. recomputes the trail digest of every closed (session, lane);
+2. writes events for at most 64 sessions that have no event or a changed digest, oldest first by
+   newest row;
+3. recounts support from current trail events and proposes at most 64 roads and 32 detours.
+
+New sessions and re-laned ones therefore get events within a few starts, and a backlog drains
+over several.
+
+**Trail events.** For each (session, lane) picked above, append one `trail_observed` event. The
 digest is SHA-256 over the canonical JSON of its touches.
 
-- **Event id:** the stable id of `(session_id, lane, digest)`. The current trail of a pair is its
-  newest event by rowid.
+- **Event id:** the stable id of `(session_id, lane, digest, superseded event id or null)`. A trail
+  can return to an earlier digest, for example when an episode is pruned and later revived with the
+  same id, or re-laned and re-laned back. Including the superseded event keeps every id new. The
+  current trail of a pair is its newest event by rowid.
 - **Payload:** `session_id`, `lane`, `context_id: null`, `truncated`, `ambiguous_used_recalls`,
   `rule_version: "trail-v1"`, and `touches` as a list of
   `{memory_id, layer, kind: "wrote" | "cited", at, recall_id | null, rank}`.
@@ -210,7 +226,9 @@ The road is one `create` rewrite:
   is the fixed label `trail step`, its source boundary is proxy(A) and its target is proxy(B). Its
   payload is `{lane, rule_version}`.
 - **Evidence:**
-  - `evidence_event_ids`: the supporting current trail events, earliest first, at most 31;
+  - `evidence_event_ids`: the supporting current trail events, at most 31. Always include the
+    earliest and latest supporting sessions' events, so the span can be replayed from the evidence,
+    then fill earliest first;
   - `cohesion_gain = 1 − 1/support` and `complexity_cost = 0.25`;
   - `persistence_score = min(1, span / 604,800 s)`.
 
@@ -243,7 +261,7 @@ rewrite:
 - **Witness ids:** the distinct roads of both sides, at most 16.
 - **Evidence:**
   - `evidence_event_ids`: the current trail events of sessions that ran either route as a
-    contiguous run, earliest first, at most 15;
+    contiguous run, at most 15. Always include the earliest and latest, then fill earliest first;
   - `cohesion_gain = (len(R1) − len(R2)) / len(R1)` and `complexity_cost = 0.25`;
   - `persistence_score = min(1, (latest − earliest) / 604,800 s)`, over those sessions' first-touch
     times in whole seconds.
@@ -251,17 +269,21 @@ rewrite:
 That keeps the rewrite at 1 output, 16 witnesses and 15 evidence ids: 32 members, the limit.
 
 **Activation.** In step 1, roads and detours are **pending evidence only**. They are never compiled
-and never change recall. The current code can't activate them:
+and never change recall. That is enforced, not just expected:
 
-- A store the observer created has no epoch unless legacy replay made one, and
-  `_consolidate_startup` returns when there is none.
-- Proxy 0-cells are created outside any rewrite, so they are never active, and no rewrite can
-  activate them. The compiler's neighbor walk would stop at them.
+- The pass refuses to run unless `auto_commit` is exactly `false`, so no startup consolidation can
+  commit its proposals.
+- A store the observer created has no epoch, and `_consolidate_startup` returns when there is none.
+  Its proxy 0-cells are created outside any rewrite, so they are never active.
+- A store built by legacy replay is different. Replay puts every legacy proxy into the root epoch,
+  and trail roads reuse those proxies. With `auto_commit = true`, consolidation there would commit
+  trail roads, and the compiler would walk memory → road → memory on every recall. That is why the
+  pass needs `auto_commit = false`.
 - `consolidate` orders by gain minus cost, so a detour could commit before its roads.
 
 Compiler traversal of roads needs its own later spec: proxy activation, an epoch for
-observer-created stores, and road-before-detour commit order. That holds even with
-`auto_commit = true`.
+observer-created stores, road-before-detour commit order, and how the pass and `auto_commit`
+coexist.
 
 **Diagnostics.** `reflect(focus="category_evolution")` gains a `trails` block holding only counts:
 
@@ -279,8 +301,8 @@ memories whose current lane is that lane. Its edges come from one of two sources
 - **`graph.db` mode** (the default): every step derived as in section 4, co-cited ones included.
 - **`--categories` mode:** footpaths come from `graph.db` as above. Road status comes from the
   stored road cells, and detours from the stored level-2 cells, read with `mode=ro` from a
-  `categories_v2.db` copy through `cat_boundaries` and `validate_path`. Cells failing the current-lane
-  check are dropped.
+  `categories_v2.db` copy through `cat_boundaries` and `validate_path`. A cell counts unless its
+  rewrite's latest disposition is `rejected`. Cells failing the current-lane check are dropped.
 
 The search:
 
@@ -322,11 +344,15 @@ is its other pre-cutoff memories.
 **3. Graphs,** built from training data only:
 
 - **T, the trail graph:** training steps as directed edges, costed as in section 6.
-- **S, shuffled trails:** the order-free ablation. Each training trail's touches are permuted with
-  a recorded seed, then the same rules apply. S has T's popularity without its order.
+- **S, shuffled trails:** the order-free ablation. Each training trail is shuffled in blocks: all
+  touches cited from one recall form one block and keep their delivered order, and every other touch
+  is a block of one. Then the same rules apply. S has T's popularity and co-retrieval without the
+  agent's order. Each session's S score is the mean over K = 10 shuffles, with seeds derived from
+  the recorded seed, so one lucky shuffle can't decide the gate.
 - **B, nearest neighbors:** the similarity-only baseline. Each node of T is linked, undirected, to
   its 8 nearest nodes of T by angle, with edge cost equal to the angle. Building B over T's nodes,
-  not every memory, means T can't win on popularity alone.
+  not every memory, means T can't win on popularity alone. A node without a vector has no
+  neighbors in B, so sessions whose `s` or `g` lacks a vector are left out of the gate and counted.
 
 **4. Routing.** Route `s → g` in all three graphs with the same A*, using the expansion bound
 only. Wall-time truncations are reported separately and don't affect the score, so results don't
@@ -383,7 +409,8 @@ Nothing crosses a store boundary in this step. These rules keep the next step fr
   Session ids, touch times and context ids never leave.
 - **Forks are not independent.** `cli.py fork` copies every session, so a fork and its parent derive
   the same roads. Published support may count only sessions whose first touch comes after the
-  store's fork. `stamp_fork` records no fork time today, so the publication spec must add one. Rail
+  store's fork. `stamp_fork` records no fork time in the store, but `instances.json` already
+  records `forked_at` (`federation.py`), and the publication spec can take it from there. Rail
   agreement must not count a store and its fork as two lighthouses.
 - **Detours are publishable** only when every road on both sides is.
 - **Permissions.** Comparing or routing over another lighthouse's roads will need its own Lighthouse
@@ -464,24 +491,35 @@ Nothing crosses a store boundary in this step. These rules keep the next step fr
   - A third session a day later proposes an eligible road.
   - A second pass treats the existing rewrite id as done.
   - Equal-length detours are never proposed.
+  - Evidence always contains the earliest and latest supporting sessions, even past the cap.
+- **Event ids (RMF1).** Prune a touched episode, then revive it. The session's trail returns to an
+  earlier digest, the pass appends a new event with a new id and no key error, and it becomes the
+  current trail.
+- **Session picking (S-a).** With more than 64 sessions pending, later passes reach the newer ones,
+  and a re-laned old session is re-emitted.
 - **Detours (MF4).** For overlapping routes X→A→B→Y and X→A→Y, the only candidate is the
   vertex-disjoint pair. No duplicate-member error, a 32-member limit that holds, and both sides
   passing `validate_path`.
 - **Parity (MF6).** Run `observe_trails` on a synthetic store, then route in `graph.db` mode and in
   `--categories` mode. Road status and edges must agree, and the listed detour ids must equal the
-  stored level-2 cell ids.
+  stored level-2 cell ids. Parity is required only when no per-pass cap was hit and no trail
+  changed after the pass, and the test sets things up that way.
 - **A\*.** Optimal on a hand-built graph. Consistency: no node is re-expanded at a lower cost,
   within an epsilon of 1e-9. Correct behavior with missing vectors. Hitting a bound returns
   `truncated`.
 - **Evaluation (MF7).**
   - A synthetic store with planted ordered routes passes.
   - A synthetic store with popularity skew but no order fails the T − S comparison.
+  - A synthetic store whose only structure is co-retrieval (RMF2) fails the T − S comparison.
   - With fewer than 30 qualifying sessions, the result is "not evaluable".
   - No training touch at or after the cutoff enters T.
 - **Read-only CLI.** Every database's SHA-256 is unchanged, and `total_changes` is 0.
 - **Gate off.** First open the store once with the same flags (so first-open vector provisioning
-  doesn't count), with `trails = false` or `enabled = false` and `auto_commit = false`. After
-  startup, `categories_v2.db` is byte-identical.
+  doesn't count). After startup, `categories_v2.db` must be byte-identical in each of these cases:
+  - `trails = false` with `auto_commit = false`;
+  - `enabled = false`;
+  - `trails = true` with `auto_commit = true` (RMF3), on a store built by legacy replay. This case
+    also records a skipped pass.
 - **Barrier.** The pass releases the lifecycle barrier between batches.
 
 ## 13. Left to the builder
