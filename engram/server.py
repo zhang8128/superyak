@@ -1516,6 +1516,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
         _clipboard = None
 
     _initialized = True
+    _after_share(fold=True)
 
 
 def _apply_recall_bias(query_embedding: list[float],
@@ -1979,8 +1980,48 @@ def _agent_ref() -> str:
     return "agent:" + (_instance_name or "default")
 
 
-def _after_share() -> None:
-    """The placement sweep runs here (Task 24); until then nothing."""
+def _permission_now() -> int:
+    """Integer UTC seconds for the sweep and the receipt fold; a seam for tests."""
+    return int(time.time())
+
+
+def _after_share(*, fold: bool = False) -> None:
+    """P 10: sweep the published house after a share, an unshare, a permissions command and at startup, under
+    `shadow` and `enforce` only. With `fold`, also fold receipts past 400 days (P 9.1, "Retention"). A failure is
+    logged and never changes the caller's reply or stops startup (ledger ruling FS1)."""
+    try:
+        gate = _permission_gate()
+    except Exception:
+        logger.warning("The placement sweep could not read the gate", exc_info=True)
+        return
+    if gate.mode not in ("shadow", "enforce"):
+        return
+    now = _permission_now()
+    try:
+        import sharing
+        from permission_ledger import Ledger
+        with _published_house_storage() as (_path, house):
+            if house is not None:
+                led = Ledger.open(ENGRAM_HOME)
+                try:
+                    report = sharing.sweep_placements(published_storage=house, ledger=led, mode=gate.mode, now=now)
+                finally:
+                    led.close()
+                if any((report.relinked, report.removed, report.would_remove, report.settled)):
+                    logger.info("Placement sweep: %s", report)
+    except Exception:
+        logger.warning("The placement sweep failed", exc_info=True)
+    if fold:
+        try:
+            from permission_uses import Uses, uses_path
+            if uses_path(ENGRAM_HOME).is_file():
+                uses = Uses.open(ENGRAM_HOME)
+                try:
+                    uses.fold(now=now)
+                finally:
+                    uses.close()
+        except Exception:
+            logger.warning("The receipt fold failed", exc_info=True)
 
 
 def _store_id() -> str | None:

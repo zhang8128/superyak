@@ -2519,36 +2519,67 @@ def _entry_covers(state: State, entry: str, audience: str, layer: str) -> bool:
     return entry.startswith("place:") and audience.startswith("place:") and entry in dominators(state, audience)
 
 
+def _cover_probe(owner: str, obj: str, at: int) -> Use:
+    return Use(requester=owner, place=home_of(owner), obj=obj, copy="store:share-cover", action="recall",
+               purpose="share-cover", at=at)
+
+
+def _counts_for_share(state: State, r: Record, layer: str, at: int, probe: Use) -> bool:
+    """Is `r` an effective allow in `layer` that covers the probe's object for `recall`, `read` and
+    `inject_context`? Everything `share_cover` asks of a record except its audience."""
+    sel = r.selector
+    if (r.layer != layer or r.effect != "allow" or _revoked(state, r) or not _in_interval(r, at)
+            or not all(_star_or_in(sel.actions, a) for a in ("recall", "read", "inject_context"))):
+        return False
+    try:
+        if r.backing.startswith("grant:") and not grant_validity(state, r.backing[len("grant:"):], at)[0]:
+            return False
+        return bool(_object_dims(state, sel, layer, r.anchor, probe, "recall", False, frozenset(), True))
+    except RuleError:
+        return False
+
+
+def _share_rank(state: State, r: Record):
+    end = effective_end(state, r, [])
+    return (end is not None, -(end or 0), _units(r.id))
+
+
+def placement_still_counts(state: State, record_id: str, *, owner: str, obj: str, at: int) -> bool:
+    """P 10: does the record a placement is linked to still count as an effective allow covering `obj`?"""
+    r = state.records.get(record_id)
+    return r is not None and _counts_for_share(state, r, home_of(owner), at, _cover_probe(owner, obj, at))
+
+
+def relink_cover(state: State, *, old_id: str, owner: str, obj: str, audience: str, at: int) -> str | None:
+    """P 10, P29: another effective allow of the same layer that covers `obj`, reaches every audience entry the
+    old record reached, and maps to the same placement `audience` (`placement_audience`); chosen as `share_cover`
+    chooses. None when there is none (or the old record is unknown)."""
+    old = state.records.get(old_id)
+    if old is None:
+        return None
+    layer = home_of(owner)
+    probe = _cover_probe(owner, obj, at)
+    wanted = [layer if e == "self" else e for e in old.selector.audience]
+    found = [r for r in state.records.values()
+             if r.id != old_id and _counts_for_share(state, r, layer, at, probe)
+             and placement_audience(state, r) == audience
+             and all(any(_entry_covers(state, e, w, layer) for e in r.selector.audience) for w in wanted)]
+    return min(found, key=lambda r: _share_rank(state, r)).id if found else None
+
+
 def share_cover(state: State, *, owner: str, obj: str, audience: str, at: int) -> str | None:
     """P 12.1: the id of an effective allow in the owner's home layer that covers `obj` for `recall`, `read` and
     `inject_context`, for some purpose and for `audience` (a `place:` or `group:` ref), chosen as `decide` chooses
     (latest effective end, a null end first, then the smallest id); else None. It is a structural check of the
     record, its grant and its memberships; `decide` at each use is still the authority."""
     layer = home_of(owner)
-    probe = Use(requester=owner, place=layer, obj=obj, copy="store:share-cover", action="recall",
-                purpose="share-cover", at=at)
-    found = []
-    for r in state.records.values():
-        sel = r.selector
-        if (r.layer != layer or r.effect != "allow" or _revoked(state, r) or not _in_interval(r, at)
-                or not any(_entry_covers(state, e, audience, layer) for e in sel.audience)
-                or not all(_star_or_in(sel.actions, a) for a in ("recall", "read", "inject_context"))):
-            continue
-        try:
-            if r.backing.startswith("grant:") and not grant_validity(state, r.backing[len("grant:"):], at)[0]:
-                continue
-            if not _object_dims(state, sel, layer, r.anchor, probe, "recall", False, frozenset(), True):
-                continue
-        except RuleError:
-            continue
-        found.append(r)
+    probe = _cover_probe(owner, obj, at)
+    found = [r for r in state.records.values()
+             if any(_entry_covers(state, e, audience, layer) for e in r.selector.audience)
+             and _counts_for_share(state, r, layer, at, probe)]
     if not found:
         return None
-
-    def rank(r):
-        end = effective_end(state, r, [])
-        return (end is not None, -(end or 0), _units(r.id))
-    return min(found, key=rank).id
+    return min(found, key=lambda r: _share_rank(state, r)).id
 
 
 # ---------------------------------------------------------------- who may set what (P 4.4, 7.1, 7.2, 7.6)
