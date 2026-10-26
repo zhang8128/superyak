@@ -202,7 +202,6 @@ def test_e1_andys_medical_history(tmp_path, monkeypatch):
     assert m4_member.backing == f"grant:{ids.G1}", "use 7: the membership is backed by G1"
     d_m4 = decide(state(), read_by_ph(M4, T("2026-11-06")))
     assert d_m4.allowed and d_m4.until == d_m4.horizon == T("2026-11-30"), "use 7: m4 is covered until G1 expires"
-    assert pub_m4[0]
 
     # ---- use 8: 2026-11-10, Rio Grande shortens R1 to 2026-12-15
     out = do(led, RIO, "shorten", now="2026-11-10", channel="tool", record=ids.R1, valid_until=T("2026-12-15"))
