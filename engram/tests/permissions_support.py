@@ -2,6 +2,7 @@
 import calendar
 import hashlib
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import dataclasses
 
@@ -12,6 +13,10 @@ _OBJ = ("kinds", "stores", "layers", "lanes", "collections", "memories")
 
 
 M1 = "mem:S/episode/m1"
+M2, M3, M4 = "mem:S/episode/m2", "mem:S/episode/m3", "mem:S/episode/m4"
+HOME = "place:home/andy"
+CLINIC_3 = "place:la-county/public-health/clinic-3"
+MEDICAL = "collection:andy/medical-history"
 
 
 def T(text: str) -> int:
@@ -418,3 +423,237 @@ def sample_uses(rng, w, n):
         out.append(use(agent, place, rng.choice(_OBJS), purpose=rng.choice(_PURPOSES), copy="store:S",
                        at=T("2026-10-20") + rng.randint(0, 100) * _DAY))
     return out
+
+
+# ---------------------------------------------------------------- Task 5 builders (PF28: 5A reuses them)
+
+def andy_world() -> World:
+    """county_world plus Andy's store S and the published house `house`, both at his home."""
+    w = county_world()
+    w.store("S", owner="person:andy", place=HOME)
+    w.store("house", owner="person:andy", place=HOME)
+    return w
+
+
+def _self_allow(w, actions=("recall",), **kw):
+    return w.allow(HOME, audience=["self"], actions=list(actions), **kw)
+
+
+def _case(w, obj=M1, at="2026-11-02", legacy=(), **kw):
+    return w.state(), home_use(obj, T(at), **kw), tuple(legacy)
+
+
+def unregistered_agent_use():
+    w = andy_world()
+    _self_allow(w)
+    return w.state(), use("agent:ghost", HOME, M1, at=T("2026-11-02")), ()
+
+
+def retired_subject_home_use():
+    w = andy_world()
+    w.subject(M1, "person:jenn")
+    w.retire_person("jenn")
+    _self_allow(w)
+    return _case(w)
+
+
+def no_subject_use():
+    w = andy_world()
+    _self_allow(w)
+    return _case(w, obj="mem:Z/episode/m5")        # store Z has no `stores` row
+
+
+def nine_subjects_use():
+    w = andy_world()
+    for i in range(8):
+        w.person(f"p{i}")
+        w.subject(M1, f"person:p{i}")
+    _self_allow(w)
+    return _case(w)
+
+
+def dated_deny_use():
+    w = andy_world()
+    _self_allow(w)
+    w.deny(HOME, audience=["self"], actions=["recall"], valid_from=T("2026-12-01"))
+    return _case(w, at="2026-12-02")
+
+
+def ended_allow_use():
+    w = andy_world()
+    _self_allow(w, valid_until=T("2026-11-10"))
+    return _case(w, at="2026-11-20")
+
+
+def one_grant_backed_record(valid_from=None, valid_until=None, revoked_grant=False):
+    """(state, u): one allow in Andy's home backed by a grant to rio-grande; u(at=...) is Rio Grande's recall of m1."""
+    w = andy_world()
+    envelope = parse_selector({
+        "audience": ["self"], "requesters": "*",
+        "objects": {k: ["memory"] if k == "kinds" else "*" for k in _OBJ},
+        "actions": ["recall"], "purposes": "*"})
+    g = w.put_grant(w.grant_draft(issuer="person:andy", grantee="agent:rio-grande", layer=HOME, ops={"share"},
+                                  envelope=envelope, max_days=30, depth=0, hours=720))
+    kw = {k: v for k, v in (("valid_from", valid_from), ("valid_until", valid_until)) if v is not None}
+    _self_allow(w, backing=f"grant:{g.id}", **kw)
+    if revoked_grant:
+        w.revoke_grant(g.id)
+    return w.state(), lambda at: home_use(M1, at)
+
+
+def revoked_grant_use():
+    s, u = one_grant_backed_record(revoked_grant=True)
+    return s, u(T("2026-11-10")), ()
+
+
+def future_allow_use():
+    w = andy_world()
+    _self_allow(w, valid_from=T("2026-12-01"))
+    return _case(w, at="2026-11-20")
+
+
+def silent_layer_use():
+    return _case(andy_world())
+
+
+def legacy_refusal_use():
+    from permissions import LegacyLayer
+    w = andy_world()
+    _self_allow(w)
+    return _case(w, legacy=[LegacyLayer("publisher", lambda u, x: False)])
+
+
+def object_in_unregistered_store():
+    s, u, _ = no_subject_use()
+    return s, u
+
+
+def placement_without_source_instance_id():
+    w = andy_world()
+    _self_allow(w)
+    return w.state(), home_use("mem:/episode/m1", T("2026-11-02"))
+
+
+def copy_in_unregistered_house():
+    w = andy_world()
+    _self_allow(w)
+    return w.state(), home_use(M1, T("2026-11-02"), copy="store:ghost-house")
+
+
+def one_ref_two_houses():
+    """(state, at_home, at_clinic): Rio Grande imprints m1 into Andy's house, then into a house at clinic-3,
+    whose layer allows nothing."""
+    w = andy_world()
+    w.store("clinic-house", owner="person:ph-steward", place=CLINIC_3)
+    imprint = ["recall", "read", "imprint"]
+    _self_allow(w, imprint)
+    for place in ("place:la-county", "place:la-county/public-health"):
+        w.allow(place, audience=["commons"], actions=imprint)
+    at = T("2026-11-02")
+    return (w.state(), home_use(M1, at, action="imprint", copy="store:house"),
+            home_use(M1, at, action="imprint", copy="store:clinic-house"))
+
+
+R1_ACTIONS = ["recall", "read", "inject_context"]
+
+
+def _r1(w, **kw):
+    fields = dict(audience=["place:la-county/public-health"], collections=[MEDICAL], actions=R1_ACTIONS,
+                  purposes=["care-coordination"], valid_from=T("2026-11-01"), valid_until=T("2027-01-31"))
+    return w.allow(HOME, **{**fields, **kw})
+
+
+def co_subject_world(register_amy: bool):
+    """(state, use): m1 has Amy as co-subject; ph-coordinator recalls it at clinic-3 under R1."""
+    w = andy_world()
+    if register_amy:
+        w.person("amy")
+    w.subject(M1, "person:amy")
+    _r1(w)
+    return w.state(), use("agent:ph-coordinator", CLINIC_3, M1, at=T("2026-11-02"))
+
+
+def two_owner_imprint_use():
+    """(world, use): station-imprints, for Andy at his home, imprints Sam's m1 into an imprint held at his home."""
+    w = andy_world()
+    w.person("sam")
+    w.store("SAM", owner="person:sam", place="place:home/sam")
+    w.store("c0a8", owner="person:andy", place=HOME, imprint_of="SAM")
+    w.agent("station-imprints", HOME, at=HOME)
+    imprint = ["recall", "read", "imprint"]
+    w.allow("place:home/sam", audience=[HOME], stores=["SAM"], actions=imprint)
+    w.allow(HOME, audience=["self"], stores=["S"], actions=imprint)         # Andy's own: none names Sam's store
+    return w, use("agent:station-imprints", HOME, "mem:SAM/episode/m1", copy="imprint:peer-1/c0a8",
+                  action="imprint", purpose="imprint-keep", at=T("2026-11-02"))
+
+
+def sorted_actions(needs) -> tuple:
+    """The actions the first need (the object) asks, in ACTIONS order."""
+    from permissions import ACTIONS
+    return tuple(a for a in ACTIONS if a in needs[0].actions)
+
+
+def e1_world(through_use: int):
+    """P 13 through the acts of use `through_use` (1 to 10). Uses 7 to 10 are ledger acts, at 11-05, 11-10,
+    11-12 and 11-20; the others write nothing. Returns (World, ids)."""
+    from permissions import KINDS
+    w = andy_world()
+    ids = SimpleNamespace(M1=M1, M2=M2, M3=M3, M4=M4, R1P=None, G1=None, D1=None)
+    w.subject(M3, "person:jenn")
+    w.now = T("2026-10-01")
+    everything = list(KINDS)
+
+    def rule(layer, audience, actions, purposes, until=None):
+        return w.allow(layer, audience=[audience], kinds=everything, actions=actions, purposes=purposes,
+                       valid_from=T("2026-10-01"), valid_until=until)
+    ph, pr, sw = "place:la-county/public-health", "place:la-county/parks-and-rec", "place:la-county/summer-wellness"
+    both = ["care-coordination", "program-operations"]
+    ids.C1 = rule("place:la-county", "place:la-county", ["recall", "read", "inject_context", "route"], both,
+                  T("2027-12-31"))
+    ids.H1 = rule(ph, ph, R1_ACTIONS, ["care-coordination"])
+    ids.H2 = rule(ph, sw, ["recall"], ["program-operations"])
+    ids.K1 = rule(pr, pr, ["recall", "read", "inject_context", "route"], ["program-operations"])
+    ids.K2 = rule(pr, sw, ["recall", "read"], ["program-operations"])
+    ids.W1 = rule(sw, sw, ["recall", "read"], ["program-operations"])
+    ids.L1 = rule(CLINIC_3, CLINIC_3, R1_ACTIONS, ["care-coordination"])
+    w.now = w.start
+    ids.R1 = _r1(w)
+    ids.G1 = w.grant("person:andy", "agent:rio-grande", HOME, ops=["share", "withdraw", "shorten", "narrow", "collect",
+                                                                    "uncollect"],
+                     envelope=selector_json(R1_ENVELOPE), max_days=120, depth=0, expires=T("2026-11-30"))
+    if through_use >= 7:
+        w.now = T("2026-11-05")
+        w.collect(MEDICAL, [M4], backing=f"grant:{ids.G1}")
+    if through_use >= 8:
+        w.now = T("2026-11-10")
+        ids.R1P = _r1(w, valid_until=T("2026-12-15"), replaces=ids.R1, anchor=w.record(ids.R1).anchor,
+                      set_by="agent:rio-grande", under_grant=ids.G1)
+        w.revoke(ids.R1)
+    if through_use >= 9:
+        w.now = T("2026-11-12")
+        ids.D1 = w.deny(HOME, audience=[ph], memories=[M2], valid_from=T("2026-12-01"))
+    if through_use >= 10:
+        w.now = T("2026-11-20")
+        w.revoke_grant(ids.G1)
+    return w, ids
+
+
+def _ph_use(obj, at, action="recall"):
+    return use("agent:ph-coordinator", CLINIC_3, obj, action=action, at=at)
+
+
+def e1_use_1():
+    w, _ = e1_world(1)
+    return w.state(), _ph_use(M1, T("2026-11-02"), "inject_context")
+
+
+def e1_after_use_7():
+    return e1_world(7)[0].state(), _ph_use
+
+
+def e1_after_use_9():
+    return e1_world(9)[0].state(), _ph_use
+
+
+def e1_after_use_10():
+    return e1_world(10)[0].state(), lambda at: _ph_use(M4, at, "read")

@@ -7,8 +7,8 @@ from __future__ import annotations
 import json
 import re
 from collections import namedtuple
-from dataclasses import dataclass, field
-from typing import Iterable, Mapping, NamedTuple, Sequence
+from dataclasses import dataclass, field, replace
+from typing import Callable, Iterable, Mapping, NamedTuple, Sequence
 
 from lighthouse_protocol import canonical_json
 
@@ -1037,3 +1037,404 @@ def record_candidate(state: State, record: Record, use: Use, action: str) -> boo
         return False
     return (_chain_ok(state, record, use, action, False, False)
             and _grant_ok(state, record, use, action, False, False))
+
+
+# ---------------------------------------------------------------- need, subjects, layers, the decision (P 6.3 to 6.5)
+
+@dataclass(frozen=True)
+class Need:
+    """One object and the actions the use asks of it (P 6.4)."""
+    obj: str
+    actions: tuple
+
+
+_CLOSURE = {"recall": ("recall",), "read": ("recall", "read"),
+            "inject_context": ("recall", "read", "inject_context"), "route": ("route",),
+            "imprint": ("recall", "read", "imprint")}
+
+
+def _kind_of(ref: str) -> str | None:
+    try:
+        return parse_object_ref(ref).kind
+    except RuleError:
+        return None
+
+
+def needs(use: Use) -> tuple[Need, ...]:
+    """P 6.4's table, then for a road or trail the memories it names, in ref order: `recall` on each, and `read`
+    and `inject_context` on each whose content the answer shows (a shown memory is a named one)."""
+    if use.action not in _CLOSURE:
+        raise RuleError("6.4 need", f"{use.action!r} is not an action")
+    out = [Need(use.obj, _CLOSURE[use.action])]
+    if _kind_of(use.obj) in ("road", "trail"):
+        for m in sorted(set(use.names) | set(use.shows), key=_units):
+            out.append(Need(m, ("recall", "read", "inject_context") if m in use.shows else ("recall",)))
+    return tuple(out)
+
+
+def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = ()) -> tuple[str, ...]:
+    """P 6.3 item 1 and 7.4: the object's store's owner and its co-subjects in force at `at`, those of each
+    source up the `copies` chain (at most MAX_COPY_CHAIN links), and for a road or trail those of the memories
+    it names. Sorted. An object whose ref names no registered store has none of its own."""
+    out: set[str] = set()
+
+    def own(ref: str) -> None:
+        try:
+            parsed = parse_object_ref(ref)
+        except RuleError:
+            return
+        store = state.stores.get(parsed.instance_id)
+        if store is not None and store.imprint_of is None:     # an imprint's owner is never a default subject
+            out.add(store.owner)
+        for row in state.subjects.get(ref, ()):
+            if _in_force(state, row.added_seq, row.removed_seq, at):
+                out.add(row.subject)
+
+    def with_sources(ref: str) -> None:
+        seen, cur = set(), ref
+        for _ in range(MAX_COPY_CHAIN + 1):
+            if cur is None or cur in seen:
+                return
+            seen.add(cur)
+            own(cur)
+            cur = state.copies.get(cur)
+
+    with_sources(obj)
+    for name in names:
+        with_sources(name)
+    return tuple(sorted(out, key=_units))
+
+
+@dataclass(frozen=True)
+class Layer:
+    id: str
+    kind: str       # consent, restriction, legacy or outside
+
+
+@dataclass(frozen=True)
+class LegacyLayer:
+    """A layer kept outside the ledger and decided afresh on every request: a ConnectionPolicy (R7)."""
+    name: str
+    allows: Callable[[Use, str], bool]
+
+
+def holding_place(state: State, copy: str) -> str | None:
+    """H, the place of the copy h that serves a use (P 6.1); None when no `stores` row gives it one."""
+    try:
+        ref = parse_copy_ref(copy)
+    except RuleError:
+        return None
+    store = state.stores.get(ref.instance_id)
+    return None if store is None else store.place
+
+
+def _subject_layer(state: State, subject: str) -> str:
+    if subject.startswith("person:"):
+        row = state.persons.get(subject)
+        return row.home if row is not None else home_of(subject)
+    return subject
+
+
+def required_layers(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
+                    outside: Mapping | None = None) -> tuple[Layer, ...]:
+    """Req(u) in P 6.5 step 2's order, each layer once: subjects by id, the requester's places by id, the holding
+    places by id (a holding place with no `stores` row is a layer that does not exist, named by the copy), the
+    legacy layers, the agent's restriction layer. A place id in `outside` is an `outside` layer there."""
+    outside = outside or {}
+    out: list[Layer] = []
+    seen: set = set()
+
+    def add(layer_id: str, kind: str) -> None:
+        key = (kind == "legacy", kind == "restriction", layer_id)
+        if key not in seen:
+            seen.add(key)
+            out.append(Layer(layer_id, "outside" if kind == "consent" and layer_id in outside else kind))
+
+    for s in subjects_of(state, use.obj, use.at, use.names):
+        add(_subject_layer(state, s), "consent")
+    for p in sorted(ancestors(state, use.place), key=_units):
+        add(p, "consent")
+    held = holding_place(state, use.copy)
+    if held is None:
+        add(use.copy, "consent")
+    else:
+        for p in sorted(ancestors(state, held), key=_units):
+            add(p, "consent")
+    for layer in legacy:
+        add(layer.name, "legacy")
+    add(use.requester, "restriction")
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class Cited:
+    layer: str
+    kind: str
+    action: str
+    verdict: str
+    records: tuple = ()
+
+    def to_json(self, *, multi: bool = False, version: int | None = None) -> dict:
+        out = {"layer": self.layer, "kind": self.kind, "action": self.action, "verdict": self.verdict}
+        if multi:
+            out["records"] = list(self.records)
+        else:
+            out["record"] = self.records[0] if self.records else None
+        out["version"] = version
+        return out
+
+
+@dataclass(frozen=True)
+class Refusal:
+    code: str
+    layer: str | None = None
+    action: str | None = None
+
+    def to_json(self) -> dict:
+        return {"code": self.code, "layer": self.layer, "action": self.action}
+
+
+@dataclass(frozen=True)
+class Decision:
+    allowed: bool
+    at: int
+    ledger_seq: int
+    action: str
+    cited: tuple
+    refusal: Refusal | None
+    until: int | None
+    horizon: int | None
+    versions: Mapping[str, int]
+    multi: bool = False         # a road or trail: `cited` holds `records` (R8)
+
+    def to_json(self) -> dict:
+        return {"allowed": self.allowed, "at": self.at, "ledger_seq": self.ledger_seq, "action": self.action,
+                "cited": [c.to_json(multi=self.multi, version=self.versions.get(c.layer)) for c in self.cited],
+                "refusal": None if self.refusal is None else self.refusal.to_json(),
+                "until": self.until, "horizon": self.horizon}
+
+
+def _layer_index(state: State):
+    """({layer: its records sorted by id}, {layer: its grants}), built once per State."""
+    def compute():
+        records: dict[str, list] = {}
+        for r in state.records.values():
+            records.setdefault(r.layer, []).append(r)
+        grants: dict[str, list] = {}
+        for g in state.grants.values():
+            grants.setdefault(g.layer, []).append(g)
+        return ({k: tuple(sorted(v, key=lambda r: _units(r.id))) for k, v in records.items()}, grants)
+    return state._memo(("layer-index",), compute)
+
+
+def _prefilter(state: State, layer_id: str, use: Use, action: str) -> list:
+    """P 6.5, "How it is computed": the layer's records whose requesters, actions, purposes and audience can
+    match this requester, place, action and purpose, before any object test."""
+    out = []
+    for r in _layer_index(state)[0].get(layer_id, ()):
+        sel = r.selector
+        if not (_star_or_in(sel.requesters, use.requester) and _star_or_in(sel.actions, action)
+                and _star_or_in(sel.purposes, use.purpose)):
+            continue
+        deny = r.effect == "deny"
+        if any(_audience_entry(state, v, r.layer, use, r.anchor, deny) for v in sel.audience):
+            out.append(r)
+    return out
+
+
+def layer_version(state: State, layer_id: str) -> int:
+    """The highest seq that touches the layer: its records and grants (made, revoked), and the place's own
+    creation, retirement and stewards."""
+    best = 0
+    records, grants = _layer_index(state)
+    for r in records.get(layer_id, ()):
+        best = max(best, r.created_seq, r.revoked_seq or 0)
+    for g in grants.get(layer_id, ()):
+        best = max(best, g.created_seq, g.revoked_seq or 0)
+    for row in (state.places.get(layer_id), state.agents.get(layer_id)):
+        if row is not None:
+            best = max(best, row.created_seq, row.retired_seq or 0)
+    for st in state.place_stewards.get(layer_id, ()):
+        best = max(best, st.added_seq, st.removed_seq or 0)
+    return best
+
+
+def _grant_terms(state: State, gid: str, t: int):
+    """(chain, valid): the chain's grants, or () if unreadable, and whether it is valid at t."""
+    try:
+        chain = grant_chain(state, gid)
+        return chain, grant_validity(state, gid, t)[0]
+    except RuleError:
+        return (), False
+
+
+def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool) -> tuple[int | None, bool]:
+    """(effective end, grant chain invalid at t) of an allow for this use (P 6.5 step 5 and the codes). The end
+    is the earliest of the record's `valid_until`, those of its `replaces` chain, the `expires` of every grant in
+    its own chain, and, for each selector with a collections list, the matching membership's: when the object is
+    in the collection by a person-backed row there is none, else the best such grant-backed row's earliest
+    `expires`. With valid_only, only memberships that count with their chains valid are read."""
+    t = use.at
+    ends: list[int] = []
+    invalid = False
+    selectors = [(record.selector, record.layer)]
+    if record.valid_until is not None:
+        ends.append(record.valid_until)
+    cur, n = record.replaces, 0
+    while cur is not None and n < MAX_REPLACES:
+        r = state.records.get(cur)
+        if r is None:
+            break
+        if r.valid_until is not None:
+            ends.append(r.valid_until)
+        selectors.append((r.selector, r.layer))
+        cur, n = r.replaces, n + 1
+    if record.backing.startswith("grant:"):
+        gid = record.backing[len("grant:"):]
+        chain, ok = _grant_terms(state, gid, t)
+        invalid = invalid or not ok
+        ends.extend(g.expires for g in chain)
+        selectors.extend((g.envelope, record.layer) for g in chain)
+    for sel, layer in selectors:
+        if sel.collections == STAR:
+            continue
+        rows = [m for m in state.member_of.get(use.obj, ())
+                if m.collection in sel.collections
+                and _membership_counts(state, m, layer, record.anchor, use, action, False, frozenset(), valid_only)]
+        if not rows or any(not m.backing.startswith("grant:") for m in rows):
+            continue
+        best, all_invalid = None, True
+        for m in rows:
+            chain, ok = _grant_terms(state, m.backing[len("grant:"):], t)
+            if chain:
+                end = min(g.expires for g in chain)
+                best = end if best is None else max(best, end)
+            all_invalid = all_invalid and not ok
+        if best is not None:
+            ends.append(best)
+        invalid = invalid or all_invalid
+    return (min(ends) if ends else None), invalid
+
+
+def _not_yet(state: State, record: Record, t: int) -> bool:
+    cur, n = record, 0
+    while cur is not None and n <= MAX_REPLACES:
+        if cur.valid_from > t:
+            return True
+        cur, n = (state.records.get(cur.replaces) if cur.replaces else None), n + 1
+    return False
+
+
+def _ledger_verdict(state: State, layer: Layer, use: Use, action: str) -> tuple[str, tuple]:
+    """(verdict, cited record ids) of a consent or restriction layer for one action (P 6.5 steps 3 and 5)."""
+    exists = layer.id in (state.agents if layer.kind == "restriction" else state.places)
+    if not exists:
+        return "missing", ()
+    candidates = _prefilter(state, layer.id, use, action)
+    if any(r.effect == "deny" and record_matches(state, r, use, action) for r in candidates):
+        return "deny", ()
+    if layer.kind == "restriction":
+        return "silent", ()               # a restriction layer is only its denies
+    allows = [r for r in candidates if r.effect == "allow" and record_matches(state, r, use, action)]
+    if not allows:
+        return "silent", ()
+
+    def rank(r):
+        end = _terms(state, r, use, action, True)[0]
+        return (end is not None, -(end or 0), _units(r.id))
+    return "allow", (min(allows, key=rank).id,)
+
+
+def layer_verdict(state: State, layer: Layer, use: Use, action: str) -> str:
+    """`allow`, `deny`, `silent` or `missing` for a ledger layer (consent or restriction)."""
+    if layer.kind not in ("consent", "restriction"):
+        raise RuleError("6.3 layers", f"{layer.kind} layer {layer.id} is decided by its own callable")
+    return _ledger_verdict(state, layer, use, action)[0]
+
+
+def _silent_code(state: State, layer: Layer, use: Use, action: str) -> str:
+    """P 6.5 step 8 for a consent layer with no matching allow: read every candidate (and its chains)."""
+    expired = invalid = not_yet = False
+    for r in _prefilter(state, layer.id, use, action):
+        if not record_candidate(state, r, use, action):
+            continue
+        end, bad = _terms(state, r, use, action, False)
+        expired = expired or (end is not None and end <= use.at)
+        invalid = invalid or bad
+        not_yet = not_yet or _not_yet(state, r, use.at)
+    return "EXPIRED" if expired else "GRANT_INVALID" if invalid else "NOT_YET" if not_yet else "NO_ALLOW"
+
+
+def _requester_ok(state: State, use: Use) -> bool:
+    row = state.agents.get(use.requester)
+    if row is None or row.retired_seq is not None:
+        return False
+    return any(r.place == use.place and _in_force(state, r.added_seq, r.removed_seq, use.at)
+               for r in state.agent_places.get(use.requester, ()))
+
+
+def _subject_retired(state: State, subject: str) -> bool:
+    row = state.persons.get(subject)
+    return row is not None and (row.retired_seq is not None or place_retired(state, row.home))
+
+
+def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
+           outside: Mapping | None = None) -> Decision:
+    """P 6.5 steps 1 to 5 and 8 (`until` and `horizon` are Task 6's). Every decision in need(u) is made, the
+    object first, then the memories it names in ref order; the refusal is the first failing one."""
+    outside = outside or {}
+    by_name = {layer.name: layer for layer in legacy}
+    multi = _kind_of(use.obj) in ("road", "trail")
+    entries: dict = {}
+    versions: dict[str, int] = {}
+    failure: tuple | None = None
+
+    def result() -> Decision:
+        cited = tuple(Cited(layer.id, layer.kind, action, verdict, tuple(sorted(recs, key=_units)))
+                      for (layer, action, verdict, _, recs) in entries.values())
+        return Decision(allowed=failure is None, at=use.at, ledger_seq=state.seq, action=use.action, cited=cited,
+                        refusal=None if failure is None else Refusal(*failure), until=None, horizon=None,
+                        versions=versions, multi=multi)
+
+    if not _requester_ok(state, use):
+        failure = ("UNKNOWN_REQUESTER", None, None)
+        return result()
+    held = holding_place(state, use.copy)
+    if place_retired(state, use.place) or (held is not None and place_retired(state, held)):
+        failure = ("RETIRED", None, None)
+        return result()
+    for need in needs(use):
+        sub = use if need.obj == use.obj else replace(use, obj=need.obj, names=(), shows=frozenset())
+        subjects = subjects_of(state, sub.obj, sub.at, sub.names)
+        code = ("RETIRED" if any(_subject_retired(state, s) for s in subjects) else
+                "NO_LAYER" if not subjects else "BOUND" if len(subjects) > MAX_SUBJECTS else None)
+        if code is not None:
+            failure = failure or (code, None, None)
+            break
+        for layer in required_layers(state, sub, legacy=legacy, outside=outside):
+            if layer.kind in ("consent", "restriction"):
+                versions[layer.id] = layer_version(state, layer.id)
+            for action in need.actions:
+                if layer.kind == "outside":
+                    verdict, recs = outside[layer.id](sub, action), ()
+                    if verdict not in ("allow", "deny", "silent"):
+                        raise RuleError("6.1 outside layer", f"layer {layer.id} answered {verdict!r}")
+                elif layer.kind == "legacy":
+                    verdict, recs = ("allow" if by_name[layer.id].allows(sub, action) else "deny"), ()
+                else:
+                    verdict, recs = _ledger_verdict(state, layer, sub, action)
+                passes = verdict == "allow" or (layer.kind == "restriction" and verdict == "silent")
+                key = (layer.id, action)
+                if key not in entries:
+                    entries[key] = (layer, action, verdict, passes, set(recs))
+                else:       # the same (layer, action) over several objects: the first failing verdict, all records
+                    _, _, was, was_passes, held_recs = entries[key]
+                    keep = was_passes and not passes
+                    entries[key] = (layer, action, verdict if keep else was, was_passes and passes,
+                                    held_recs | set(recs))
+                if not passes and failure is None:
+                    code = ("NO_LAYER" if verdict == "missing" else
+                            "LEGACY_DENY" if layer.kind == "legacy" else "DENIED" if verdict == "deny" else
+                            "NO_ALLOW" if layer.kind == "outside" else _silent_code(state, layer, sub, action))
+                    failure = (code, layer.id, action)
+    return result()
