@@ -2568,3 +2568,88 @@ def genome_world(root, mode):
                 actor=ANDY, channel="terminal", now=t)
     led.perform(Act("gate", {"mode": mode}), actor=ANDY, channel="terminal", now=t)
     return led, genome_path, instance, ids
+
+
+# ---------------------------------------------------------------- Task 26: the CLI's fixtures (PF28)
+
+CLI_STORE_ID = "cli-store"
+CLI_M1 = f"mem:{CLI_STORE_ID}/episode/m1"
+CLI_M1_CREATED_AT = T("2026-10-01")
+
+
+class FakeTty:
+    """A FIFO standing in for /dev/tty. The fixture holds it open both ways, so a line written here waits in the
+    pipe until `confirm` reads it, one byte at a time, and a confirm with no answer waits TTY_WAIT seconds, not
+    forever. `_code` is fixed so a test can answer the printed code."""
+    code = "abc234"
+
+    def __init__(self, path):
+        import os
+        os.mkfifo(path)
+        self.path = path
+        self.fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+
+    def answer(self, text):
+        import os
+        os.write(self.fd, (text + "\n").encode())
+
+    def answer_the_printed_code(self):
+        self.answer(self.code)
+
+    def close(self):
+        import os
+        os.close(self.fd)
+
+
+@_pytest.fixture
+def fake_tty(tmp_path_factory, monkeypatch):
+    import permission_cli
+    tty = FakeTty(tmp_path_factory.mktemp("tty") / "tty")
+    monkeypatch.setattr(permission_cli, "TTY", str(tty.path))
+    monkeypatch.setattr(permission_cli, "TTY_WAIT", 5)
+    monkeypatch.setattr(permission_cli, "_code", lambda: tty.code)
+    yield tty
+    tty.close()
+
+
+@_pytest.fixture
+def cli_home(tmp_path, monkeypatch, fake_tty):
+    """ENGRAM_HOME at tmp_path, the Unix login `andy`, and a ledger made by `init`. Returns the home."""
+    import getpass
+    import permission_cli
+    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
+    monkeypatch.setattr(getpass, "getuser", lambda: "andy")
+    fake_tty.answer_the_printed_code()
+    assert permission_cli.main(["init"]) == 0
+    return tmp_path
+
+
+@_pytest.fixture
+def cli_home_with_store(cli_home, fake_tty):
+    """`cli_home` plus `.engram/graph.db`, store CLI_STORE_ID, holding CLI_M1 (personal, made at CLI_M1_CREATED_AT),
+    registered through `store add`."""
+    import permission_cli
+    from storage import Storage
+    store = Storage(str(cli_home / ".engram" / "graph.db"))
+    store.conn.execute("UPDATE meta SET value = ? WHERE key = 'instance_id'", (CLI_STORE_ID,))
+    store.add_episode(id="m1", session_id=None, content="a note", lane="personal")
+    store.conn.execute("UPDATE episodes SET created_at = '2026-10-01T00:00:00+00:00' WHERE id = 'm1'")
+    store.conn.commit()
+    store.close()
+    fake_tty.answer_the_printed_code()
+    assert permission_cli.main(["store", "add", CLI_STORE_ID, "--name", "main", "--place", HOME]) == 0
+    return cli_home
+
+
+def ledger_bytes(home):
+    return (home / ".engram" / "permissions.db").read_bytes()
+
+
+def log_rows(home):
+    import sqlite3
+    con = sqlite3.connect(home / ".engram" / "permissions.db")
+    con.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in con.execute("SELECT * FROM ledger_log ORDER BY seq")]
+    finally:
+        con.close()
