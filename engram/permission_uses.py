@@ -27,6 +27,9 @@ from permissions import (BulkUse, Decision, GUARD_RECEIPTS, GUARD_SECONDS, RETEN
                          Use, dominators, holding_place, person_of_home)
 
 ZERO = "0" * 64
+# The digest form (PRAGMA user_version): 2 puts a receipt's use_subjects rows in its digest. A file of an earlier
+# form (0, from before Task 16B) is refused, not misread.
+DIGEST_FORM = 2
 BUSY_MS = 5000
 
 _SCHEMA = (
@@ -36,6 +39,7 @@ _SCHEMA = (
   refusal TEXT, until INTEGER, horizon INTEGER, returned TEXT, filtered INTEGER, content_digest TEXT,
   shadow INTEGER NOT NULL DEFAULT 0, prev_digest TEXT NOT NULL, digest TEXT NOT NULL)""",
     """CREATE TABLE use_subjects(use_seq INTEGER NOT NULL, subject TEXT NOT NULL, object TEXT NOT NULL)""",
+    """CREATE INDEX use_subjects_use ON use_subjects(use_seq)""",
     """CREATE TABLE uses_anchor(through_seq INTEGER PRIMARY KEY, digest TEXT NOT NULL)""",
     """CREATE TABLE uses_monthly(month TEXT NOT NULL, subject TEXT NOT NULL, place TEXT NOT NULL, action TEXT NOT NULL,
   purpose TEXT NOT NULL, outcome TEXT NOT NULL, n INTEGER NOT NULL,
@@ -100,8 +104,13 @@ def _digest(prev: str, entry: dict) -> str:
     return hashlib.sha256((prev + "\n" + canonical_json(entry)).encode("utf-8")).hexdigest()
 
 
-def _entry(row) -> dict:
-    return {"seq": row["seq"], **{c: row[c] for c in _COLUMNS}}
+def _pairs(subjects: Iterable[tuple[str, str]]) -> list[list[str]]:
+    """A receipt's (subject, object) rows in the canonical order the digest covers."""
+    return sorted([subject, obj] for subject, obj in subjects)
+
+
+def _entry(row, subjects: Iterable[tuple[str, str]]) -> dict:
+    return {"seq": row["seq"], **{c: row[c] for c in _COLUMNS}, "subjects": _pairs(subjects)}
 
 
 # ---------------------------------------------------------------- rows from decisions
@@ -188,6 +197,13 @@ class Uses:
         except sqlite3.Error as e:
             raise UsesUnreadable(f"{path}: {e}") from e
 
+    @staticmethod
+    def _refuse_old_form(conn: sqlite3.Connection, path: Path) -> None:
+        if conn.execute("PRAGMA user_version").fetchone()[0] != DIGEST_FORM:
+            conn.close()
+            raise UsesUnreadable(f"{path}: the receipts file is of an earlier digest form (its subject rows are not "
+                                 f"in the chain); this version will not read it")
+
     @classmethod
     def open(cls, engram_home) -> "Uses":
         """Open for writing, creating the file and its four tables when there are none."""
@@ -200,6 +216,7 @@ class Uses:
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE name='uses'").fetchone() is None:
                     for statement in _SCHEMA:
                         conn.execute(statement)
+                    conn.execute(f"PRAGMA user_version={DIGEST_FORM}")
                 conn.execute("COMMIT")
             except BaseException:
                 if conn.in_transaction:
@@ -208,6 +225,7 @@ class Uses:
         except sqlite3.Error as e:
             conn.close()
             raise UsesUnreadable(f"{path}: {e}") from e
+        cls._refuse_old_form(conn, path)
         return cls(conn, path, False)
 
     @classmethod
@@ -221,6 +239,7 @@ class Uses:
         except sqlite3.Error as e:
             conn.close()
             raise UsesUnreadable(f"{path}: {e}") from e
+        cls._refuse_old_form(conn, path)
         return cls(conn, path, True)
 
     def close(self) -> None:
@@ -237,14 +256,17 @@ class Uses:
 
     def append(self, row: UseRow, subjects: Iterable[tuple[str, str]]) -> str:
         """One receipt and its (subject, object) rows in one BEGIN IMMEDIATE. Returns the receipt's id."""
+        if not row.ledger_id:
+            raise ValueError("receipt: ledger_id is empty (a receipt carries the ledger id of the station that wrote it)")
         rid = row.id or "u-" + os.urandom(16).hex()
+        subjects = list(subjects)
         values = {c: getattr(row, c) for c in _COLUMNS}
         values["id"] = rid
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             top, prev = self._tail()
             seq = top + 1
-            digest = _digest(prev, {"seq": seq, **values})
+            digest = _digest(prev, {"seq": seq, **values, "subjects": _pairs(subjects)})
             self.conn.execute(
                 f"INSERT INTO uses(seq, {', '.join(_COLUMNS)}, prev_digest, digest) "
                 f"VALUES({', '.join('?' * (len(_COLUMNS) + 3))})",
@@ -291,7 +313,10 @@ class Uses:
     # ---------------------------------------------------------------- the chain
     def _check(self, rows, prev: str, expect: int) -> int | None:
         for row in rows:
-            if row["seq"] != expect or row["prev_digest"] != prev or row["digest"] != _digest(prev, _entry(row)):
+            subjects = [(s["subject"], s["object"]) for s in self.conn.execute(
+                "SELECT subject, object FROM use_subjects WHERE use_seq=?", (row["seq"],))]
+            if (row["seq"] != expect or row["prev_digest"] != prev
+                    or row["digest"] != _digest(prev, _entry(row, subjects))):
                 return expect
             prev, expect = row["digest"], expect + 1
         return None
@@ -332,7 +357,7 @@ class Uses:
                 outcome = "allowed" if row["allowed"] else "refused"
                 subjects = {s[0] for s in self.conn.execute(
                     "SELECT subject FROM use_subjects WHERE use_seq=?", (row["seq"],))}
-                for subject in sorted(subjects):
+                for subject in sorted(subjects) or ["(none)"]:
                     self.conn.execute(
                         "INSERT INTO uses_monthly VALUES(?,?,?,?,?,?,1) ON CONFLICT(month, subject, place, action, "
                         "purpose, outcome) DO UPDATE SET n = n + 1",

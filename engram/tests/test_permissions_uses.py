@@ -15,6 +15,7 @@ A, B = M1, M2
 HOUSE = "store:house"
 ROADS = tuple(f"road:S/r{i}" for i in range(5))
 DAY = 86400
+LEDGER = "ledger-test"
 
 
 # ---------------------------------------------------------------- helpers (the test file's, per the brief)
@@ -34,7 +35,8 @@ def recall_row(*, returned, filtered, at=None, shadow=False):
     base = home_use(M1, at, action="recall")
     decisions = [decide(s, home_use(m, at, action="recall")) for m in returned]
     assert all(d.allowed for d in decisions)
-    return row_for_recall(decisions, base, acting_for=HOME, returned=returned, filtered=filtered, shadow=shadow)
+    return row_for_recall(decisions, base, acting_for=HOME, returned=returned, filtered=filtered, shadow=shadow,
+                          ledger_id=LEDGER)
 
 
 def five_road_world():
@@ -60,7 +62,7 @@ def write_read_of_three_items(tmp_path, *, content, query):
         u = home_use(m, T("2026-11-02"), action="read")
         d = decide(s, u)
         assert d.allowed
-        uses.append(row_for_decision(d, u, acting_for=HOME, content_digest=digest), subjects=[("person:andy", m)])
+        uses.append(row_for_decision(d, u, acting_for=HOME, content_digest=digest, ledger_id=LEDGER), subjects=[("person:andy", m)])
     return uses
 
 
@@ -74,7 +76,7 @@ def write_named_batch(tmp_path, objects):
     bulk = bulk_use(objects, action="read", named=True)
     d = decide_bulk(s, bulk)
     assert d.allowed
-    uses.append(row_for_bulk(d, bulk, acting_for=HOME), subjects=[("person:andy", o) for o in objects])
+    uses.append(row_for_bulk(d, bulk, acting_for=HOME, ledger_id=LEDGER), subjects=[("person:andy", o) for o in objects])
     [row] = rows(uses)
     return row
 
@@ -154,7 +156,7 @@ def test_u22_five_roads_are_five_route_uses_with_five_receipts(tmp_path):
         u = route(road, names=(A, B), shows={A})
         d = decide(s, u)
         assert d.allowed, road
-        uses.append(row_for_decision(d, u, acting_for=HOME),
+        uses.append(row_for_decision(d, u, acting_for=HOME, ledger_id=LEDGER),
                     subjects=[(p, road) for p in subjects_of(s, road, u.at, u.names)])
     route_rows = [r for r in rows(uses) if r["action"] == "route"]
     assert [r["object"] for r in route_rows] == list(ROADS) and len({r["id"] for r in route_rows}) == 5
@@ -168,7 +170,7 @@ def test_u22_a_counted_bulk_use_writes_one_receipt_naming_no_object(tmp_path):
     bulk, _ = allowed_bulk_route(3)
     d = decide_bulk(road_world(), bulk)
     assert d.allowed
-    uses.append(row_for_bulk(d, bulk, acting_for=HOME), subjects=[("person:andy", HOUSE)])
+    uses.append(row_for_bulk(d, bulk, acting_for=HOME, ledger_id=LEDGER), subjects=[("person:andy", HOUSE)])
     [row] = rows(uses)
     assert row["object"] is None and json.loads(row["returned"]) == {"count": 3} and row["copy"] == HOUSE
     assert [r["object"] for r in subject_rows(uses)] == [HOUSE]
@@ -245,7 +247,7 @@ def test_a_refused_decision_row_holds_the_refusal_and_a_read_only_open_cannot_ap
     u = home_use("mem:S/episode/m9", T("2026-11-02"), action="inject_context")
     d = decide(s, u)
     assert not d.allowed
-    row = row_for_decision(d, u, acting_for=HOME, shadow=True)
+    row = row_for_decision(d, u, acting_for=HOME, shadow=True, ledger_id=LEDGER)
     uses = Uses.open(tmp_path)
     uses.append(row, subjects=[("person:andy", u.obj)])
     [r] = rows(uses)
@@ -255,3 +257,103 @@ def test_a_refused_decision_row_holds_the_refusal_and_a_read_only_open_cannot_ap
     assert ro.verify() is None
     with pytest.raises(sqlite3.OperationalError):
         ro.append(row, subjects=[])
+
+
+# ---------------------------------------------------------------- Task 16B: the hardening
+
+def _three(tmp_path):
+    uses = Uses.open(tmp_path)
+    for i in range(3):
+        uses.append(recall_row(returned=[M1, M2], filtered=0, at=T("2026-11-02") + i),
+                    subjects=[("person:andy", M1), ("person:jenn", M2)])
+    return uses
+
+
+def _sql(tmp_path, statement, params=()):
+    conn = sqlite3.connect(uses_path(tmp_path))
+    try:
+        conn.execute(statement, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_16b_changing_a_subject_row_fails_verify_at_that_receipt(tmp_path):
+    _three(tmp_path)
+    _sql(tmp_path, "UPDATE use_subjects SET subject='person:eve' WHERE use_seq=2 AND subject='person:jenn'")
+    assert Uses.open(tmp_path).verify() == 2
+
+
+def test_16b_adding_a_subject_row_fails_verify_at_that_receipt(tmp_path):
+    _three(tmp_path)
+    _sql(tmp_path, "INSERT INTO use_subjects VALUES(3, 'person:eve', ?)", (M1,))
+    assert Uses.open(tmp_path).verify() == 3
+
+
+def test_16b_deleting_a_subject_row_fails_verify_at_that_receipt(tmp_path):
+    _three(tmp_path)
+    _sql(tmp_path, "DELETE FROM use_subjects WHERE use_seq=1 AND subject='person:andy'")
+    assert Uses.open(tmp_path).verify() == 1
+
+
+def test_16b_the_order_subjects_are_given_does_not_change_the_digest(tmp_path):
+    from dataclasses import replace
+    first, second = Uses.open(tmp_path / "a"), Uses.open(tmp_path / "b")
+    row = replace(recall_row(returned=[M1, M2], filtered=0), id="u-" + "11" * 16)
+    first.append(row, subjects=[("person:andy", M1), ("person:jenn", M2)])
+    second.append(row, subjects=[("person:jenn", M2), ("person:andy", M1)])
+    assert first.conn.execute("SELECT digest FROM uses").fetchone()[0] == second.conn.execute(
+        "SELECT digest FROM uses").fetchone()[0]
+    assert first.verify() is None and second.verify() is None
+
+
+def test_16b_a_file_of_the_old_digest_form_is_refused_with_a_clear_error(tmp_path):
+    Uses.open(tmp_path).conn.close()
+    _sql(tmp_path, "PRAGMA user_version=0")
+    from permission_uses import UsesUnreadable
+    with pytest.raises(UsesUnreadable, match="digest form"):
+        Uses.open(tmp_path)
+    with pytest.raises(UsesUnreadable, match="digest form"):
+        Uses.open_read_only(tmp_path)
+
+
+def test_16b_fold_counts_a_receipt_with_no_subject_rows_under_none(tmp_path):
+    uses = Uses.open(tmp_path)
+    start = T("2026-11-01")
+    for d in range(420):
+        subjects = [] if d % 3 == 0 else [("person:andy", M1)]
+        uses.append(recall_row(returned=[M1], filtered=0, at=start + d * DAY), subjects=subjects)
+    folded = uses.fold(now=start + 420 * DAY)
+    assert folded > 0
+    assert sum(m["n"] for m in monthly_counts(uses)) == folded
+    none_rows = [m for m in monthly_counts(uses) if m["subject"] == "(none)"]
+    assert none_rows and sum(m["n"] for m in none_rows) == len([d for d in range(folded) if d % 3 == 0])
+    assert uses.verify() is None
+
+
+def test_16b_the_chain_with_subjects_verifies_from_the_anchor_after_a_fold(tmp_path):
+    uses = rows_spanning_days(tmp_path, days=420)
+    folded = uses.fold(now=T("2026-11-01") + 420 * DAY)
+    assert uses.verify() is None
+    uses.append(recall_row(returned=[M1], filtered=0, at=T("2027-12-30")), subjects=[("person:andy", M1)])
+    assert uses.verify() is None
+    _sql(tmp_path, "UPDATE use_subjects SET subject='person:eve' WHERE use_seq=?", (folded + 2,))
+    assert Uses.open(tmp_path).verify() == folded + 2
+
+
+def test_16b_append_refuses_a_local_receipt_with_an_empty_ledger_id_naming_the_field(tmp_path):
+    uses = Uses.open(tmp_path)
+    row = recall_row(returned=[M1], filtered=0)
+    from dataclasses import replace
+    with pytest.raises(ValueError, match="ledger_id"):
+        uses.append(replace(row, ledger_id=""), subjects=[("person:andy", M1)])
+    assert rows(uses) == [] and subject_rows(uses) == []
+
+
+def test_16b_an_imported_row_keeps_its_own_ledger_id(tmp_path):
+    uses = Uses.open(tmp_path)
+    uses.append_imported(_imported(), subjects=[("person:andy", "imprint:peer-station/i1")])
+    assert rows(uses)[0]["ledger_id"] == "peer-station"
+    from dataclasses import replace
+    with pytest.raises(ValueError, match="ledger_id"):
+        uses.append_imported(_imported(id="u-" + "ee" * 16, ledger_id=""), subjects=[])
