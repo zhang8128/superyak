@@ -229,3 +229,28 @@ def test_pt6_a_replacement_never_matches_what_its_chain_does_not():
                     matched += 1
                     assert all(selector_and_interval_match(s, w.record(r), u, x) for r in chain), (SEED, case)
     assert matched > 0, (SEED, "PT6 never saw a match")
+
+
+def test_9b_removed_group_membership_never_counts_for_an_allow_but_still_for_a_deny():
+    w = county_world()
+    w.group("group:g9", "person:andy", ["agent:rio-grande"])
+    w.tick(86400 * 2)
+    deny = w.deny("place:home/andy", audience=["group:g9"], actions=["recall"], anchor=T("2026-11-01"))
+    allow = w.allow("place:home/andy", audience=["group:g9"], actions=["recall"])
+    before = w.seq
+    w.tick(86400 * 2)
+    w._find("group_members", group_id="group:g9", agent="agent:rio-grande", removed_seq=None)[
+        "removed_seq"] = w._bump()
+    s, u = w.state(), home_use(M1, T("2026-11-04"))        # t is before the removal; the removal is in the state
+    assert not record_matches(s, w.record(allow), u, "recall")
+    assert not record_candidate(s, w.record(allow), u, "recall")
+    assert record_matches(s, w.record(deny), u, "recall")
+    assert record_matches(w.state_at(before), w.record(allow), u, "recall")
+
+
+def test_9b_an_allow_naming_a_place_never_reads_the_agents_removed_place_membership():
+    w = county_world()
+    r = w.allow("place:home/andy", audience=["place:home/andy"], actions=["recall"])
+    w.tick(86400 * 2)
+    w.leave("agent:rio-grande")                              # the agent's place row is removed after t
+    assert record_matches(w.state(), w.record(r), home_use(M1, T("2026-11-02")), "recall")

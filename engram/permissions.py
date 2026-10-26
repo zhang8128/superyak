@@ -435,6 +435,7 @@ class State:
     grants: Mapping[str, tuple]
     proposals: Mapping[str, tuple]
     copies: Mapping[str, str]
+    copy_seqs: Mapping[str, int]         # the seq each copy was added at, written back by to_tables
     place_parents: Mapping[str, tuple]
     place_stewards: Mapping[str, tuple]
     agent_places: Mapping[str, tuple]
@@ -472,6 +473,7 @@ class State:
         for table, key, attr in _KEYED:
             kw[attr] = {getattr(r, key): r for r in rows[table]}
         kw["copies"] = {r.object: r.source for r in rows["copies"]}
+        kw["copy_seqs"] = {r.object: r.added_seq for r in rows["copies"]}
         for table in _MULTI:
             first = _COLUMNS[table][0]
             grouped: dict[str, list] = {}
@@ -501,7 +503,8 @@ class State:
         tables: dict[str, list] = {}
         for table, _key, attr in _KEYED:
             tables[table] = dump(table, getattr(self, attr).values())
-        tables["copies"] = [{"object": o, "source": s, "added_seq": 0} for o, s in self.copies.items()]
+        tables["copies"] = [{"object": o, "source": s, "added_seq": self.copy_seqs[o]}
+                            for o, s in self.copies.items()]
         for table in _MULTI:
             tables[table] = dump(table, (r for g in getattr(self, table).values() for r in g))
         return tables
@@ -902,8 +905,8 @@ def _audience_entry(state: State, v: str, layer: str, use: Use, anchor: int, den
             if not any(_meets(state, r.added_seq, r.removed_seq, anchor, t) for r in members):
                 return False
             return True
-        if not any(_in_force(state, r.added_seq, r.removed_seq, t) for r in members):
-            return False
+        if not any(r.removed_seq is None and _in_force(state, r.added_seq, r.removed_seq, t) for r in members):
+            return False        # a removed membership is never counted for an allow (P 6.5)
         group = state.groups.get(v)
         return group is not None and home_of(group.owner) in dominators(state, use.place)
     if v.startswith("place:"):
@@ -1962,6 +1965,8 @@ def _audience_boxes(state: State, v: str, layer: str, anchor: int, deny: bool,
         return [(places(lambda x: layer_place in dominators(state, x)), who, TIME_FULL)]
     if v.startswith("group:"):
         rows = [r for r in state.group_members.get(v, ()) if r.agent in state.agents]
+        if not deny:
+            rows = [r for r in rows if r.removed_seq is None]        # a removed membership never counts (P 6.5)
         if deny:
             return [(where, ag, ts) for ts, ag in _by_time(
                 (_row_times(state, r.added_seq, r.removed_seq, anchor), r.agent) for r in rows)]
@@ -2156,6 +2161,7 @@ def _analyse(state: State, place: str, want_delta: bool) -> GluingReport:
     try:
         delta: list[Box] = []
         ineff: list[Box] = []
+        secs: list[list[Box]] = []
         if len(parents) >= 2:
             own, secs = _sections(state, place)
             union = _cap(b for s in secs for b in s)
@@ -2177,7 +2183,9 @@ def _analyse(state: State, place: str, want_delta: bool) -> GluingReport:
         return GluingReport(place, (), (), True, stewards(state, place, *parents))
     notify = frozenset()
     if delta:
-        notify |= stewards(state, place, *parents)     # each parent allows or refuses every point of Δ
+        # P 8: the stewards of J and of each parent whose chain refuses part of Δ, not one that allows all of it
+        refusing = [q for q, sec in zip(parents, secs) if _list_minus(delta, sec)]
+        notify |= stewards(state, place, *refusing)
     if ineff:
         notify |= stewards(state, place)
     return GluingReport(place, tuple(delta), tuple(ineff), False, notify)

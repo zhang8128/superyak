@@ -293,7 +293,7 @@ def test_d5_the_oracle_cuts_copies_rows_at_the_decision_seq():
     w, s0, u = _d5()
     s = w.state()
     t, seq_at = s.to_tables(), dict(s.seq_at)
-    t["copies"] = [dict(r) for r in w.rows["copies"]]       # State drops a copy's seq; the ledger's table has it
+    assert [r["added_seq"] for r in t["copies"]] == [s0 + 1]     # to_tables writes the copy's own seq
     assert oracle_allowed(t, seq_at, use_json(u), seq=s0) is True
     assert oracle_allowed(t, seq_at, use_json(u), seq=s.seq) is False
 
@@ -925,3 +925,27 @@ def test_pt11_collection_fixture():
     other = pt[:6] + ("mem:S/episode/m9",) + pt[7:]
     assert not any(box_contains(b, other) for b in r.delta)
     assert r.notify == stewards_of(s, "place:j", "place:b")
+
+
+def test_9b_a_copy_keeps_its_added_seq_through_the_tables():
+    w, s0, u = _d5()
+    s = w.state()
+    assert s.to_tables()["copies"] == [{"object": "mem:H2/episode/c1", "source": M1, "added_seq": s0 + 1}]
+    again = State.from_tables(s.to_tables(), seq=s.seq, seq_at=s.seq_at, meta=s.meta, names=s.names)
+    assert again == s
+    earlier = State.from_tables(s.to_tables(), seq=s0, seq_at=s.seq_at, meta=s.meta, names=s.names)
+    assert earlier.copies == {} and decide(earlier, u).allowed
+
+
+def test_9b_a_removed_group_membership_never_counts_for_an_allow_in_decide_and_the_oracle():
+    w = andy_world()
+    w.group("group:g9", "person:andy", ["agent:rio-grande"])
+    w.allow(HOME, audience=["group:g9"], actions=["recall"])
+    w.tick(DAY)
+    u = home_use(M1, w.now)
+    s_before = w.state()
+    w.tick(DAY)
+    w._find("group_members", group_id="group:g9", agent="agent:rio-grande", removed_seq=None)["removed_seq"] = w._bump()
+    for s, want in ((s_before, True), (w.state(), False)):
+        j = Judge(s)
+        assert j.both(u) is want

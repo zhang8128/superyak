@@ -258,7 +258,8 @@ class _View:
                 return any(r["group_id"] == v and r["agent"] == a and self.meets(r, anchor, t)
                            for r in self.group_members)
             g = self.groups.get(v)
-            if g is None or not any(r["group_id"] == v and r["agent"] == a and self.in_force(r, t)
+            if g is None or not any(r["group_id"] == v and r["agent"] == a and r.get("removed_seq") is None
+                                    and self.in_force(r, t)
                                     for r in self.group_members):
                 return False
             owner = self.persons.get(g["owner"])
