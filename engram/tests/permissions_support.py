@@ -1769,3 +1769,65 @@ def proposal_act(led, proposal_id) -> Act:
     import json
     body = json.loads(led.state().proposals[proposal_id].body)["act"]
     return Act(body["kind"], body["args"])
+
+
+# ---------------------------------------------------------------- real stores and migration 029 (Task 16)
+
+def house_dir(root, name):
+    """`root/.engram/instances/<name>/`, made: `Storage` makes no directory."""
+    from pathlib import Path
+    path = Path(root) / ".engram" / "instances" / name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def insert_share(store, memory_id="a", content="x"):
+    store.conn.execute(
+        "INSERT INTO shared_memories (share_id, memory_id, source_instance, source_id, layer, audience, reason, "
+        "content_digest, shared_at) VALUES (?, ?, 'src', ?, 'home', 'aud', 'why', ?, '2026-11-01')",
+        (f"s-{memory_id}", memory_id, memory_id, content))
+    store.conn.commit()
+
+
+def update_one_share(store):
+    store.conn.execute("UPDATE shared_memories SET reason = 'changed' WHERE rowid = (SELECT min(rowid) FROM shared_memories)")
+    store.conn.commit()
+
+
+def delete_one_share(store):
+    store.conn.execute("DELETE FROM shared_memories WHERE rowid = (SELECT min(rowid) FROM shared_memories)")
+    store.conn.commit()
+
+
+def house_before_029(root, name):
+    """A real house built with a copy of migrations 001 to 028 only (SF4); closed, its path returned."""
+    import shutil
+    from pathlib import Path
+    from storage import Storage
+    src = Path(__file__).resolve().parent.parent / "migrations"
+    dst = Path(root) / "m028"
+    dst.mkdir(exist_ok=True)
+    for f in sorted(src.glob("*.sql")):
+        if int(f.name.split("_", 1)[0]) <= 28:
+            shutil.copy(f, dst / f.name)
+    path = house_dir(root, name) / "graph.db"
+    Storage(str(path), migrations_dir=str(dst)).close()
+    return path
+
+
+def share_columns(path) -> set:
+    import sqlite3
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return {r[1] for r in con.execute("PRAGMA table_info(shared_memories)")}
+    finally:
+        con.close()
+
+
+def counter_row(path):
+    import sqlite3
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return con.execute("SELECT count FROM shared_memories_changes WHERE id = 1").fetchone()[0]
+    finally:
+        con.close()

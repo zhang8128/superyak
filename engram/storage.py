@@ -228,6 +228,8 @@ class Storage:
                 self.conn.executescript("BEGIN IMMEDIATE;\n" + sql)
                 if ver == 28:
                     self._assign_instance_id(created_now)
+                if ver == 29:
+                    self._mark_house_for_ledger(created_now)
                 self.conn.execute(
                     "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
                     (ver, _now_iso()),
@@ -256,6 +258,23 @@ class Storage:
             "Store identity %s (%s)",
             identity.get("instance_id"), identity.get("instance_id_origin"),
         )
+
+    def _mark_house_for_ledger(self, created_now: bool) -> None:
+        """Mark a house created by this open with the permissions ledger's id, inside migration 029's transaction
+        (P 12.3, 'A house made later'). A house 029 merely upgrades was not created now and is left unmarked: one
+        restored from before the raise stays closed until the gate act marks it."""
+        if not created_now:
+            return
+        from permission_ledger import house_mark  # deferred: the ledger module is not needed to open a store
+        mark = house_mark(Path(self.db_path))
+        if mark is not None:
+            self.conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('permissions_ledger_id', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (mark,))
+
+    def placement_changes(self) -> int:
+        """The count of inserts, updates and deletes on shared_memories since migration 029 (P 12.2)."""
+        return self.conn.execute("SELECT count FROM shared_memories_changes WHERE id = 1").fetchone()[0]
 
     def instance_identity(self) -> dict:
         """The identity keys in ``meta`` (``instance_id``, origin, basis, fork)."""
