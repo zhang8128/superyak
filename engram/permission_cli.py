@@ -18,6 +18,7 @@ import getpass
 import hmac
 import json
 import os
+import re
 import select
 import sqlite3
 import sys
@@ -25,11 +26,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _seconds, _words_kind, effective_gate,
-                               houses, ledger_path)
+from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
+                               effective_gate, houses, ledger_path)
 from permissions import (CODE_CHARS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse, RuleError, Use,
                          affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
-                         home_of, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
+                         home_of, parse_copy_ref, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
                          resolve_prefix, selector_json, share_cover, stewards)
 
 TTY = "/dev/tty"
@@ -355,17 +356,23 @@ class _Stores:
 
 # ---------------------------------------------------------------- the commands
 
-def _init(args) -> int:
-    root = _home()
-    path = ledger_path(root)
-    if path.exists():
-        raise RuleError("4.4 create a ledger", f"a ledger already exists at {path}")
+def _owner_login() -> str:
+    """R24: the owner's handle is the Unix login."""
     try:
         login = getpass.getuser()
         check_id("person", "person:" + login)
     except (RuleError, OSError, KeyError) as e:
         raise RuleError("24 the owner is the login", f"the Unix login name is not a person handle ({e}); "
                         "a handle is lowercase letters, digits, - and _") from e
+    return login
+
+
+def _init(args) -> int:
+    root = _home()
+    path = ledger_path(root)
+    if path.exists():
+        raise RuleError("4.4 create a ledger", f"a ledger already exists at {path}")
+    login = _owner_login()
     owner = "person:" + login
     words = (f"Create a ledger owned by {owner}. You become its owner and its only admin, and a person on it, "
              f"with the home place {home_of(owner)}.")
@@ -742,6 +749,309 @@ def _place_show(a) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- migrate (P 12.3 step 2)
+
+COLLECT_CHUNK = 500                       # memories added by one `collect` act, so one log row stays small
+_SOURCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_LEGACY_ACTIONS = ["inject_context", "read", "recall"]
+
+
+def _store_id_ok(iid) -> str | None:
+    """`iid` when it is a store id the ledger can register, else None."""
+    if not iid:
+        return None
+    try:
+        parse_copy_ref("store:" + iid)
+    except RuleError:
+        return None
+    return iid
+
+
+def _house_id(path: Path) -> str | None:
+    """A house's `meta.instance_id`, read with mode=ro; None when it has none or it cannot be registered."""
+    from store_identity import read as read_identity
+    try:
+        con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        return _store_id_ok(read_identity(con).get("instance_id"))
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+
+
+class _Sources:
+    """The source stores a share row can name (`default`, or an instance name), each opened read-only once."""
+
+    def __init__(self, root: Path):
+        self.base = root / ".engram"
+        self._open: dict[str, tuple] = {}
+
+    def _find(self, name: str) -> tuple:
+        """(store, instance_id), or (None, why)."""
+        from storage import Storage
+        if name != "default" and (_SOURCE_NAME.fullmatch(name) is None or name in (".", "..")):
+            return None, "its source instance name is not a store name"
+        path = self.base / "graph.db" if name == "default" else self.base / "instances" / name / "graph.db"
+        if not path.is_file():
+            return None, f"no store {name!r} on this machine (the share fell back to another store)"
+        try:
+            store = Storage.open_read_only(path)
+        except (FileNotFoundError, sqlite3.Error):
+            return None, f"the store {name!r} cannot be opened"
+        from store_identity import read as read_identity
+        try:
+            iid = _store_id_ok(read_identity(store.conn).get("instance_id"))
+        except sqlite3.Error:
+            iid = None
+        if iid is None:
+            store.close()
+            return None, f"the store {name!r} has no usable instance_id"
+        return store, iid
+
+    def check(self, row) -> tuple[dict | None, str | None]:
+        """P 12.3: the named store has the source memory with the row's `content_digest`. Returns the facts the
+        migration needs (instance id, lane, created_at) or the reason it fails."""
+        from lighthouse_protocol import content_digest
+        name = row["source_instance"]
+        if name not in self._open:
+            self._open[name] = self._find(name)
+        store, iid = self._open[name]
+        if store is None:
+            return None, iid
+        got = store.get_episode(row["source_id"]) if row["layer"] == "episode" else store.get_semantic(row["source_id"])
+        if got is None:
+            return None, f"the source {row['layer']} is not in the store {name!r}"
+        if content_digest(got.get("content", ""))["value"] != row["content_digest"]:
+            return None, f"the source {row['layer']} in {name!r} no longer has the shared content"
+        try:
+            created = _seconds(got.get("created_at"))
+        except (ValueError, TypeError):
+            return None, "its source has no readable created_at"
+        return {"instance_id": iid, "lane": got.get("lane") or "personal", "created_at": created}, None
+
+    def close(self) -> None:
+        for store, _ in self._open.values():
+            if store is not None:
+                store.close()
+        self._open.clear()
+
+
+def _migrate_receivers(root: Path, notes: list[str]) -> list[str]:
+    """The receivers the publisher policies' rules name (`urn:engram:<receiver>`), sorted."""
+    from lighthouse_validation import load_owned_policy
+    found: set[str] = set()
+    instances = root / ".engram" / "instances"
+    for policy_path in sorted(instances.glob("*/lighthouse-policy.json")) if instances.is_dir() else []:
+        publisher = policy_path.parent.name
+        try:
+            policy = load_owned_policy(policy_path, publisher)
+        except Exception as e:                                   # PolicyError, and whatever a hostile file raises
+            notes.append(f"note: the policy of {publisher} cannot be read ({getattr(e, 'code', e)}); "
+                         "its receivers are not registered")
+            continue
+        for rule in policy.rules:
+            for urn in rule.get("publishers") or ():
+                name = urn[len("urn:engram:"):] if urn.startswith("urn:engram:") else None
+                try:
+                    if name is None or "*" in name:
+                        raise RuleError("4.1", "not an agent")
+                    check_id("agent", "agent:" + name)
+                except RuleError:
+                    notes.append(f"note: {_clean(urn)} in the policy of {publisher} is not one receiver; "
+                                 "no agent is registered for it")
+                    continue
+                found.add(name)
+    return sorted(found)
+
+
+def _migrate_rows(root: Path, house: Path, groups: dict) -> tuple[list[dict], list[dict]]:
+    """(migrated, unmatched): every share row of the published house, read one at a time, each source checked."""
+    from sharing import validate_audience
+    con = sqlite3.connect(f"{house.resolve().as_uri()}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    sources = _Sources(root)
+    migrated: list[dict] = []
+    unmatched: list[dict] = []
+    try:
+        try:
+            cursor = con.execute("SELECT share_id, memory_id, source_instance, source_id, layer, audience, "
+                                 "content_digest FROM shared_memories ORDER BY shared_at, share_id")
+        except sqlite3.OperationalError as e:
+            raise RuleError("12.3 migrate", f"{house} has no shared_memories ({e}); an engram server opens it "
+                                            "once to run its migrations") from e
+        for row in cursor:
+            def lost(why, row=row):
+                unmatched.append({"share_id": row["share_id"], "memory_id": row["memory_id"],
+                                  "audience": row["audience"], "source_instance": row["source_instance"],
+                                  "layer": row["layer"], "source_id": row["source_id"], "why": why})
+            audience = row["audience"]
+            try:
+                validate_audience(audience)
+            except (TypeError, ValueError):
+                lost("its audience is neither commons nor group:<name>")
+                continue
+            if audience != "commons" and audience[len("group:"):] not in groups:
+                lost(f"{audience} is not a group of groups.toml")
+                continue
+            if row["layer"] not in ("episode", "semantic"):
+                lost("its layer is not shareable")
+                continue
+            info, why = sources.check(row)
+            if info is None:
+                lost(why)
+                continue
+            ref = f"mem:{info['instance_id']}/{row['layer']}/{row['source_id']}"
+            try:
+                parse_object_ref(ref)
+            except RuleError:
+                lost("its source id is not a memory id the ledger can name")
+                continue
+            collection = ("legacy-commons" if audience == "commons" else "legacy-group-" + audience[len("group:"):])
+            migrated.append({"share_id": row["share_id"], "memory_id": row["memory_id"], "audience": audience,
+                             "collection": collection, "object": ref, "source_instance": row["source_instance"],
+                             "source_instance_id": info["instance_id"], "layer": row["layer"],
+                             "source_id": row["source_id"], "lane": info["lane"], "created_at": info["created_at"]})
+    finally:
+        sources.close()
+        con.close()
+    return migrated, unmatched
+
+
+def _migrate_groups(path: Path) -> dict[str, list[str]]:
+    """The groups of `groups.toml`; no file means no groups. A file that does not load is a refusal."""
+    from policy_gen import load_groups
+    if not path.is_file():
+        return {}
+    try:
+        return load_groups(path)
+    except ValueError as e:
+        raise RuleError("12.3 migrate", f"{path} is not a valid groups file ({e})") from e
+
+
+def _legacy_selector(owner_login: str, audience: str, collection: str) -> str:
+    return _selector(json.dumps({
+        "audience": [audience], "requesters": "*", "actions": _LEGACY_ACTIONS, "purposes": "*",
+        "objects": {"kinds": ["memory"], "stores": "*", "layers": "*", "lanes": "*",
+                    "collections": [f"collection:{owner_login}/{collection}"], "memories": "*"}}))
+
+
+def _forget_ledger(path: Path) -> None:
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        with contextlib.suppress(OSError):
+            path.with_name(path.name + suffix).unlink()
+
+
+def _migrate(args) -> int:
+    from storage import Storage
+    root = _home()
+    path = ledger_path(root)
+    if path.exists():
+        raise RuleError("12.3 migrate", f"a ledger already exists at {path}: migrate runs once, before any ledger. "
+                        "A row shared since can be shared again with `share`, which links it, or added with "
+                        "`collection add`")
+    login = _owner_login()
+    owner, home = "person:" + login, home_of("person:" + login)
+    house = root / PUBLISHED_HOUSE
+    if not house.is_file():
+        raise RuleError("12.3 migrate", f"there is no published house at {house}; shares are made into it")
+    notes: list[str] = []
+    receivers = _migrate_receivers(root, notes)
+    groups = _migrate_groups(root / ".engram" / "groups.toml")
+    migrated, unmatched = _migrate_rows(root, house, groups)
+    counts: dict[str, int] = {}
+    for item in migrated:
+        counts[item["audience"]] = counts.get(item["audience"], 0) + 1
+    lacking = [str(p) for p in houses(root) if p.resolve() != house.resolve() and _lacks_029(p)]
+    at = _now()
+    plan_path = root / ".engram" / f"permissions-migrate-{datetime.fromtimestamp(at, timezone.utc):%Y%m%dT%H%M%SZ}.json"
+    plan_path.write_text(json.dumps({"at": at, "owner": owner, "rows": migrated, "unmatched": unmatched},
+                                    indent=1, sort_keys=True), encoding="utf-8")
+    shown = unmatched[:REPORT_ROWS]
+    lines = [f"change: create the ledger {path} owned by {owner}, channel migration",
+             f"  agents in {home}, acting for {owner}: {', '.join(receivers) or '(none named by a policy)'}",
+             f"  groups from groups.toml: {', '.join(sorted(groups)) or '(none)'}",
+             "  shares migrated, by audience:"]
+    lines += [f"    {a}: {n}" for a, n in sorted(counts.items())] or ["    (none)"]
+    lines.append(f"  unmatched, left unmigrated: {len(unmatched)}")
+    lines += [f"    unmatched {_clean(u['memory_id'])}: {u['why']} (to {_clean(u['audience'])}, source "
+              f"{_clean(u['source_instance'])} {_clean(u['layer'])} {_clean(u['source_id'])})" for u in shown]
+    if len(unmatched) > len(shown):
+        lines.append(f"    ... and {len(unmatched) - len(shown)} more (all are in the file below)")
+    lines += [f"  houses without migration 029 (not migrated; an engram server opens each once): {h}"
+              for h in lacking]
+    lines += notes
+    lines.append(f"  every row it will migrate: {plan_path}")
+    words = (f"Migrate today's shares into a new permissions ledger owned by {owner}: {len(migrated)} shares become "
+             f"members of {len(counts)} collections, each opened to its audience by one allow inside {home}; "
+             f"{len(unmatched)} shares cannot be matched to their source and stay as they are.")
+    try:
+        said_yes = confirm(words, "\n".join(lines))
+    except BaseException:
+        plan_path.unlink(missing_ok=True)
+        raise
+    if not said_yes:
+        plan_path.unlink(missing_ok=True)
+        print("That was not the code. Nothing was written.", file=sys.stderr)
+        return 3
+    published = Storage(str(house))                 # the full open: migrations up to 029 run on it (R27)
+    try:
+        ids: dict[str, str] = {}
+        for p in houses(root):
+            iid = _house_id(p)
+            if iid:
+                ids.setdefault(iid, "default" if p.parent.name == ".engram" else p.parent.name)
+        led = Ledger.create(root, login, now=at, channel="migration")
+        try:
+            def do(kind, **a):
+                out = led.perform(Act(kind, a), actor=owner, channel="migration", now=at)
+                if out.status != "done":
+                    raise RuleError("12.3 migrate", f"{kind} was not done: it is a {out.status}")
+                return out
+            for receiver in receivers:
+                do("register-agent", agent=f"agent:{receiver}", acts_for=home)
+                do("put-agent", agent=f"agent:{receiver}", place=home)
+            for iid, name in sorted(ids.items(), key=lambda kv: kv[1]):
+                do("register-store", instance_id=iid, name=name, owner=owner, place=home, imprint_of=None)
+            for g, members in sorted(groups.items()):
+                do("group", group=f"group:{g}", members=[f"agent:{m}" for m in members if m in receivers])
+            record_of: dict[str, str] = {}
+            for collection in sorted({m["collection"] for m in migrated}):
+                cid = f"collection:{login}/{collection}"
+                mine = {m["object"]: m for m in migrated if m["collection"] == collection}
+                do("make-collection", collection=cid)
+                refs = sorted(mine)
+                for i in range(0, len(refs), COLLECT_CHUNK):
+                    chunk = refs[i:i + COLLECT_CHUNK]
+                    do("collect", collection=cid, objects=chunk,
+                       lanes={r: {"lane": mine[r]["lane"], "created_at": mine[r]["created_at"]} for r in chunk})
+                audience = home if collection == "legacy-commons" else "group:" + collection[len("legacy-group-"):]
+                record_of[collection] = do("allow", layer=home, selector=_legacy_selector(login, audience, collection),
+                                           valid_from=at, valid_until=None, reason="legacy share").ref
+        except BaseException:
+            led.close()
+            _forget_ledger(path)
+            raise
+        led.close()
+        try:
+            with published.transaction():
+                for m in migrated:
+                    published.conn.execute(
+                        "UPDATE shared_memories SET source_instance_id = ?, record_id = ? WHERE share_id = ?",
+                        (m["source_instance_id"], record_of[m["collection"]], m["share_id"]))
+        except sqlite3.Error as e:
+            raise RuleError("12.3 migrate", f"the ledger was made, but the published house could not be filled "
+                            f"({e}); share each row again with `share`") from e
+    finally:
+        published.close()
+    print(f"Migrated {len(migrated)} shares into {len(record_of)} collections, each with one allow. The ledger is "
+          f"at {path}; the gate is off. {len(unmatched)} unmatched shares were left as they were.")
+    print("Next: `engram-permissions gate shadow`, then `engram-permissions report shadow`.")
+    return 0
+
+
 # ---------------------------------------------------------------- report shadow (P 12.3, 12.1)
 
 def _legacy_agreed(row) -> bool:
@@ -938,6 +1248,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(func=func)
         return p
 
+    leaf(top, "migrate", _migrate, "turn today's shares into collections and allows (once, before any ledger)")
     init = top.add_parser("init", help="create the ledger, owned by the Unix login", allow_abbrev=False)
     init.set_defaults(func=_init)
 

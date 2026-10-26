@@ -193,12 +193,12 @@ class Ledger:
         return cls(conn, path, False)
 
     @classmethod
-    def create(cls, engram_home: Path, owner_handle: str, *, now: int) -> "Ledger":
+    def create(cls, engram_home: Path, owner_handle: str, *, now: int, channel: str = "terminal") -> "Ledger":
         owner = check_id("person", "person:" + owner_handle)
         home = "place:home/" + owner_handle
         check_id("place", home)
         led = cls._blank(engram_home, str(uuid.uuid4()))
-        led._append("register-person", owner, owner, "terminal", {
+        led._append("register-person", owner, owner, channel, {
             "meta": {"owner": owner, "admins": owner},
             "insert": [
                 {"table": "persons", "row": {"id": owner, "home": home, "is_admin": 1, "created_seq": "@seq"}},
