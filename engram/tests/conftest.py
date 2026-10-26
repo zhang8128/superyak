@@ -111,3 +111,15 @@ def _deterministic_rng():
     else:
         np.random.seed(1729)
 
+
+
+@pytest.fixture(autouse=True)
+def _restore_ledger_busy_ms():
+    """Task 19's tests lower the daemon's ledger busy timeout; put it back."""
+    import sys
+    module = sys.modules.get("lighthouse_daemon")
+    saved = getattr(module, "LEDGER_BUSY_MS", None)
+    yield
+    module = sys.modules.get("lighthouse_daemon")
+    if module is not None and saved is not None:
+        module.LEDGER_BUSY_MS = saved

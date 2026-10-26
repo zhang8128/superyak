@@ -48,6 +48,10 @@ from storage import Storage, vec0_distance_to_similarity
 
 logger = logging.getLogger("engram.lighthouse_daemon")
 
+# The busy timeout of the daemon's read-only ledger open (R19); a module constant so a test can lower it.
+LEDGER_BUSY_MS = 5000
+OUTSIDE_HOME = "group:outside-home"
+
 PROFILE = "urn:lighthouse:profile:engram-recall-trace"
 DOMAIN = "memory.recall"
 CLAIM_TYPE = "application/vnd.engram.recall-rank-claim+json"
@@ -153,8 +157,15 @@ class PublisherStore:
         return disclosure_id
 
 
-def _allowed_audiences(policy: Policy, receiver: str) -> frozenset[str]:
-    """Read audience grants from the operation's validated policy snapshot."""
+def _allowed_audiences(
+    policy: Policy, receiver: str, *, mode: str = "off"
+) -> frozenset[str]:
+    """Read audience grants from the operation's validated policy snapshot.
+
+    ``group:outside-home`` is reserved (P29): it is stripped from whatever the
+    policy lists, under every gate and with no ledger, and added back only
+    under ``enforce`` for a receiver some rule of the policy names.
+    """
     try:
         extensions = policy.artifact.get("extensions")
         if not isinstance(extensions, dict):
@@ -165,7 +176,14 @@ def _allowed_audiences(policy: Policy, receiver: str) -> frozenset[str]:
         values = mapping.get(receiver)
         if not isinstance(values, list):
             return frozenset()
-        return frozenset(validate_audience(value) for value in values)
+        allowed = {validate_audience(value) for value in values}
+        allowed.discard(OUTSIDE_HOME)
+        if mode == "enforce" and any(
+            isinstance(rule, dict) and receiver in (rule.get("publishers") or ())
+            for rule in policy.rules
+        ):
+            allowed.add(OUTSIDE_HOME)
+        return frozenset(allowed)
     except (TypeError, ValueError):
         return frozenset()
 
@@ -298,11 +316,13 @@ class PublisherDaemon:
         socket_path: Path,
         embeddings,
         *, clock=None,
+        engram_home: Path | None = None,
     ):
         self.publishers = publishers
         self.socket_path = Path(socket_path)
         self.embeddings = embeddings
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.engram_home = Path(engram_home) if engram_home is not None else None
         self._server: socketserver.ThreadingUnixStreamServer | None = None
         self._ready = threading.Event()
 
@@ -321,6 +341,16 @@ class PublisherDaemon:
             at=at if at.tzinfo else at.replace(tzinfo=timezone.utc),
         )
 
+    def _gate(self):
+        """The effective gate over every house this daemon serves (P 12.3), read afresh at every frame. A served
+        path with no file is left out by ``effective_gate`` (R32). With no engram home there is no ledger to read."""
+        from permission_ledger import Gate, effective_gate
+
+        if self.engram_home is None:
+            return Gate("off", None)
+        served = [self.publishers[name].db_path for name in sorted(self.publishers)]
+        return effective_gate(self.engram_home, served, busy_ms=LEDGER_BUSY_MS)
+
     def handle_frame(self, frame: dict) -> dict:
         try:
             validate_frame(frame)
@@ -336,6 +366,7 @@ class PublisherDaemon:
                     "PUBLISHER_UNAVAILABLE",
                     "no such publisher or store unavailable",
                 )
+            gate = self._gate()
             # Never retain action permissions between requests or reread the
             # artifact for audiences: concurrent edits must not combine grants
             # from different policy snapshots.
@@ -349,23 +380,38 @@ class PublisherDaemon:
             if not publisher.open():
                 return error_frame("PUBLISHER_UNAVAILABLE", "store unavailable")
             if frame["kind"] == "recall":
-                return self._recall(publisher, frame, policy)
+                return self._recall(publisher, frame, policy, gate)
             if frame["kind"] == "read":
-                return self._read(publisher, frame, policy)
+                return self._read(publisher, frame, policy, gate)
         except FrameError as error:
             return error_frame(error.code, "")
         except Exception:
             logger.warning("frame handling failed", exc_info=True)
             return error_frame("PUBLISHER_UNAVAILABLE", "internal failure")
 
-    def _recall(self, publisher: PublisherStore, frame: dict, policy: Policy) -> dict:
+    @staticmethod
+    def _closed(gate, publisher: PublisherStore) -> bool:
+        """Under a closed gate nothing is served; the cause is logged once per request."""
+        if gate.mode != "closed":
+            return False
+        logger.warning(
+            "permissions gate closed, serving nothing from %s: %s",
+            publisher.name,
+            gate.cause,
+        )
+        return True
+
+    def _recall(
+        self, publisher: PublisherStore, frame: dict, policy: Policy, gate
+    ) -> dict:
         decision = policy.decide(self._request(frame, "recall"))
         turn_id = str(uuid.uuid4())
         candidates: list[dict] = []
-        if decision.effect == "allow":
+        if decision.effect == "allow" and not self._closed(gate, publisher):
             allowed_audiences = _allowed_audiences(
                 policy,
                 f"urn:engram:{frame['receiver']}",
+                mode=gate.mode,
             )
             candidates = retrieve(
                 publisher.storage,
@@ -398,15 +444,18 @@ class PublisherDaemon:
             disclosure_id=disclosure_id,
         )
 
-    def _read(self, publisher: PublisherStore, frame: dict, policy: Policy) -> dict:
+    def _read(
+        self, publisher: PublisherStore, frame: dict, policy: Policy, gate
+    ) -> dict:
         decision = policy.decide(self._request(frame, "read"))
         items = []
         delivered: list[str] = []
         allowed_audiences = frozenset()
-        if decision.effect == "allow":
+        if decision.effect == "allow" and not self._closed(gate, publisher):
             allowed_audiences = _allowed_audiences(
                 policy,
                 f"urn:engram:{frame['receiver']}",
+                mode=gate.mode,
             )
         for memory_id in frame["memoryIds"]:
             content = None
@@ -538,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
         build_publishers(engram_home, config["publishers"]),
         socket_path,
         create_embedding_provider(),
+        engram_home=engram_home,
     )
     logging.basicConfig(level=os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
     logger.info("publishing %s on %s", ", ".join(config["publishers"]), socket_path)

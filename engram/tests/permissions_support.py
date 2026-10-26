@@ -1,4 +1,5 @@
 """Test support for the permissions model: a World that writes table rows directly and checks nothing."""
+import contextlib
 import calendar
 import hashlib
 from datetime import datetime, timezone
@@ -1830,4 +1831,142 @@ def counter_row(path):
     try:
         return con.execute("SELECT count FROM shared_memories_changes WHERE id = 1").fetchone()[0]
     finally:
+        con.close()
+
+
+# ---------------------------------------------------------------- the daemon's gate (Task 19; PF28: Tasks 20 and 21 reuse these)
+
+OUTSIDE_HOME = "group:outside-home"
+DAEMON_RECEIVER = "engram"
+
+
+def _daemon_frame_kwargs(pub):
+    from tests.test_lighthouse_daemon import CONTEXT
+    return dict(receiver=DAEMON_RECEIVER, publisher=pub, context=CONTEXT, purpose="session-recall")
+
+
+def recall(pub, query="shared: rivers need bridges"):
+    from tests.test_lighthouse_daemon import NOW
+    from lighthouse_protocol import recall_frame
+    return recall_frame(**_daemon_frame_kwargs(pub), query=query, k=5, at=NOW)
+
+
+def read(pub, memory_id):
+    from lighthouse_protocol import read_frame
+    return read_frame(**_daemon_frame_kwargs(pub), turn_id="turn-1", memory_ids=[memory_id])
+
+
+def _daemon_over(root, publishers, busy_timeout_ms=None):
+    import lighthouse_daemon
+    from tests.test_lighthouse_daemon import FakeEmbeddings
+    if busy_timeout_ms is not None:
+        lighthouse_daemon.LEDGER_BUSY_MS = busy_timeout_ms     # conftest restores it after the test
+    return lighthouse_daemon.PublisherDaemon(
+        {p.name: p for p in publishers}, root / "s.sock", FakeEmbeddings(), engram_home=root)
+
+
+def _outside_home_house(root, name, audiences):
+    """A publisher whose only shared memory is an outside-home placement; the policy lists `audiences` for the
+    receiver by hand. Returns (publisher, the memory's id)."""
+    import uuid
+    from storage import Storage
+    from lighthouse_daemon import PublisherStore
+    from tests.test_lighthouse_daemon import insert_share, unit, write_policy
+    inst = house_dir(root, name)
+    store = Storage(str(inst / "graph.db"))
+    memory_id = str(uuid.uuid4())
+    content = "outside home: rivers need bridges"
+    store.add_episode(memory_id, "s", content, embedding=unit(content))
+    insert_share(store, memory_id=memory_id, content=content, audience=OUTSIDE_HOME)
+    store.close()
+    write_policy(inst / "lighthouse-policy.json", audience_map={f"urn:{'engram'}:{DAEMON_RECEIVER}": audiences})
+    return PublisherStore(name=name, db_path=inst / "graph.db", policy_path=inst / "lighthouse-policy.json",
+                          disclosures_path=inst / "lighthouse-disclosures.db"), memory_id
+
+
+def daemon_with_outside_home_placement(root, mode, hand_written_audiences, busy_timeout_ms=None):
+    """A daemon over house `why` holding one outside-home placement. `mode` is `no-ledger`, `off` (a ledger whose gate
+    was never raised), `shadow` or `enforce`. Returns (daemon, "why", the memory's id)."""
+    from permission_ledger import Ledger
+    pub, memory_id = _outside_home_house(root, "why", hand_written_audiences)
+    if mode != "no-ledger":
+        make_house(root, "lighthouse")
+        led = Ledger.create(root, "andy", now=T("2026-11-01"))
+        if mode != "off":
+            raise_gate(led, mode)
+        led.close()
+    return _daemon_over(root, [pub], busy_timeout_ms), "why", memory_id
+
+
+def raised_daemon(root, mode="enforce", busy_timeout_ms=None):
+    """A daemon over house `why` (one commons placement, so a recall finds it) under a ledger raised to `mode`.
+    Returns (daemon, "why")."""
+    from tests.test_lighthouse_daemon import build_publisher
+    pub = build_publisher(root, "why")
+    make_house(root, "lighthouse")
+    raised_ledger(root, houses=("lighthouse",), mode=mode).close()
+    return _daemon_over(root, [pub], busy_timeout_ms), "why"
+
+
+def add_publisher_house(daemon, root, name):
+    """A copy of a house that ran 029 before the raise: a real store with the ledger's id taken out, added to the
+    daemon's publishers."""
+    import json
+    import sqlite3
+    from lighthouse_protocol import artifact_digest
+    from tests.test_lighthouse_daemon import build_publisher
+    pub = build_publisher(root, name)
+    con = sqlite3.connect(pub.db_path)
+    con.execute("DELETE FROM meta WHERE key='permissions_ledger_id'")
+    con.commit()
+    con.close()
+    policy = json.loads(pub.policy_path.read_text())
+    policy["issuer"] = f"urn:engram:{name}"
+    policy.pop("digest")
+    policy["digest"] = artifact_digest(policy)
+    pub.policy_path.write_text(json.dumps(policy))
+    daemon.publishers[name] = pub
+    return name
+
+
+def add_publisher_without_store(daemon, root, name):
+    """A publisher named in the config whose `instances/<name>/` holds no `graph.db`."""
+    import dataclasses
+    from tests.test_lighthouse_daemon import build_publisher
+    donor = build_publisher(root, "donor-" + name)
+    inst = house_dir(root, name)
+    pub = dataclasses.replace(donor, name=name, db_path=inst / "graph.db", policy_path=inst / "lighthouse-policy.json",
+                              disclosures_path=inst / "lighthouse-disclosures.db")
+    daemon.publishers[name] = pub
+    return name
+
+
+def make_real_house(root, name):
+    """A house made now by Storage: migration 029 marks it with the raised ledger's id (Task 16)."""
+    from storage import Storage
+    house_dir(root, name)
+    Storage(str(_house_path(root, name))).close()
+
+
+def rerun_gate(root, mode):
+    """`perform(Act("gate", ...))` again: it marks every house on disk."""
+    from permission_ledger import Ledger
+    led = Ledger.open(root)
+    try:
+        raise_gate(led, mode, now="2026-11-03")
+    finally:
+        led.close()
+
+
+@contextlib.contextmanager
+def hold_ledger_lock(root, kind):
+    """Another connection to the ledger holding `BEGIN <kind>`, rolled back on exit."""
+    import sqlite3
+    from permission_ledger import ledger_path
+    con = sqlite3.connect(ledger_path(root), isolation_level=None)
+    con.execute(f"BEGIN {kind}")
+    try:
+        yield
+    finally:
+        con.execute("ROLLBACK")
         con.close()
