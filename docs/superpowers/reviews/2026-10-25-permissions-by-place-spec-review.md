@@ -677,3 +677,854 @@ claim about it. Notes below cite the new spec's sections.
   memories (6.4).
 
 Not checked: no engram tests were run. This is a spec revision, and no code changed.
+
+## Re-check (revision 2 after the interface pass), 2026-10-25
+
+Reviewer: a second fresh agent on the Pi. I took no part in writing, reviewing, revising or reconciling any of the
+three specs. I read the vision, this spec as it stands (revision 2 plus the uncommitted interface pass, which `git
+diff` shows touching 4.1, 6.4, 9.1, 11, 14, 15, 17 and 19), the first review and its response, the interface table
+(`docs/superpowers/reviews/2026-10-25-city-rail-interfaces.md`), and the parts of the imprint spec (I) and trail spec
+(T) that the table cites. I edited no spec. Spec citations are by section, with a spec line where it helps. Code is
+cited by file and line, read today.
+
+VERDICT: APPROVE WITH CHANGES
+
+All fourteen first-review must-fixes are resolved. One new must-fix remains, RMF1: an interface disagreement with
+the imprint spec about how a `route` use is counted and bounded. Approval holds once RMF1 is applied. Apply the RS
+items in the same pass. None of the items below decides the open question about memories that mention other people.
+
+### The first review's must-fixes
+
+- **MF1. Resolved.** P27, 7.1 (row "Revoke, shorten or narrow a deny"), 7.2 ("Which records the ops touch"), L3 ("None
+  of these ops may touch a deny"), L4 with `Sig⁻_π`, PT2, and use 9. In a consent layer an agent's ops reach allows
+  and memberships only.
+- **MF2. Resolved.** 5.3 rule 4 checks every chain record by selector and by validity interval. L3 and L4 rest on it.
+  PT6 draws random intervals.
+- **MF3. Resolved.** P26, 4.2 ("Roots stay roots"), 4.3, the 4.4 row, PT4, U2. I re-derived 4.3's argument: for a
+  non-root X, a new parent adds a set to the intersection, and every place below takes its `dom` by monotone unions
+  and intersections, so `dom` only shrinks.
+- **MF4. Resolved.** 6.5 steps 5 to 7 (effective end, `until`, horizon), L8, 12.2's cache, 10, the anti-goal, U19,
+  PT12. I checked uses 1, 7, 9 and 11 of section 13 by hand: the horizons come out as stated (2027-01-31, 2026-11-30,
+  2026-12-01).
+- **MF5. Resolved, all six parts.** P3 and 5.2 (`place:Z` needs `Z ∈ dom(P)` and `Z ∈ dom(act(a))`; `self` and groups
+  only at places the home dominates), 4.4 (the principal), 7.6 (the words), L5, P31 with its unique index (5.5), and
+  the example's `ph-coordinator` acting for clinic-3. Uses 3 and 4 still refuse.
+- **MF6. Resolved.** P25, 7.4 "Kept copies", the `copies` table, `stores.imprint_of`, PT7, U17. See RS5 for a gap
+  in the new rule.
+- **MF7. Resolved.** P32, 6.3 item 1, 6.5 step 1, 12.2, U21.
+- **MF8. Resolved.** 6.4's `need(route)`, L6, U22, and T 8 ("Summaries across a boundary need `read` and
+  `inject_context`").
+- **MF9. Resolved.** 7.6: the yes is `meta.owner`'s, no command names an actor, every CLI write needs the yes, one
+  table of widening acts, none of them through MCP tools, U18. I found no widening act missing from the table.
+- **MF10. Resolved.** 12.3: the gate is in the ledger, config can't set it, a raised gate fails closed, U16. See RS6
+  for one path the effective-gate rule leaves open.
+- **MF11. Resolved.** P29 and 12.1's mapping table, E1's hand-written legacy layers (13), U23. See RS1: the chosen
+  mapping needs one more daemon rule to hold.
+- **MF12. Resolved.** Section 8 expands collections into members, leaving 10 dimensions (a box difference is then at
+  most 10 boxes), and states what the check can miss. PT11 carries the review's fixture.
+- **MF13. Resolved.** 12.3 step 2: one collection and one allow per legacy audience, each source checked by
+  `content_digest`, unmatched rows listed and refused under `enforce`. `legacy-group-<g>` fits the 80-character name
+  (13 + 64 = 77). U13.
+- **MF14. Resolved.** P28 and 5.4's two shapes, P6 corrected, 5.2's statement that lanes and stores are set at write
+  time, U3.
+
+### Claims about code I checked and found true
+
+- Lane derivation at write time (`engram/server.py:1802-1822`; `engram/config.py:74`). `set_episode_lanes` is the only
+  writer of a lane after creation (`engram/storage.py:598-610`, the `UPDATE` at `:606`); its one caller is compression
+  review (`engram/compress.py:508-510`). No code updates a semantic's lane.
+- The store fallback (`engram/server.py:1302-1310`; `engram/config.py:388-409`) and `source_instance` as a name
+  (`engram/server.py:1976`). The `share` tool and its arguments (`engram/server.py:1949-1980`, `:1951-1956`). The
+  neighbors seam (`engram/server.py:2610-2618`; `engram/neighbors.py:170-171`, `:195`).
+- Copies are `personal` (`engram/sharing.py:147-159`; `engram/storage.py:562`, `:1084`). `unshare` deletes at
+  `engram/sharing.py:195-203`. `validate_audience` (`:41-46`) and the invalid-row checks (`:57-65`). The unique share
+  index (`engram/migrations/027_shared_memories.sql:14-15`). Migration 028 is the last, so 029 is free.
+- The daemon: the decider's clock (`engram/lighthouse_daemon.py:309-311`), the 0600 socket (`:476`), audiences
+  (`:156-170`), `_shared_audiences` (`:173-201`), the eligibility filter (`:227-239`), read items (`:411-440`), one
+  policy and sidecar per publisher (`:506-518`), the sidecar schema (`:57-62`).
+- The receivers: `engram/neighbors.py:82`, `:120`, `:132-143`; the client's exact key check
+  (`engram/lighthouse_client.py:315`); the context runtime (`engram/context_lighthouse.py:1-5`, `:16`, `:28-30`,
+  `:84`, `:94-104`, `:113-117`, `:166-170`; `engram/context_cli.py:90-91`).
+- ConnectionPolicy scoring and the deny-wins tie (`engram/lighthouse_policy.py:78-111`, `:146-156`). I re-scored 6.2's
+  counterexample: before narrowing, both rules score 3 and deny wins; after, A scores 4 and allows.
+- `canonical_json` and its UTF-16 key order (`engram/lighthouse_protocol.py:78`, `:114-121`), `artifact_digest`
+  (`:148-159`), recall frames fix `self` (`:232`). The policy generator (`engram/policy_gen.py:47-54`, `:68-88`, the
+  purpose at `:80`, `:97-101`). `effective_id` (`engram/store_identity.py:113-116`). Genome sync
+  (`engram/federation.py:155`), `SignalBus` (`:17-105`), `process_inbox` (`:211`). The export
+  (`engram/lighthouse_export.py:89-128`, `:299-342`). `meta` (`engram/migrations/001_initial.sql:8`).
+- Station code: `short_id` (`peer/superyak_peer/grants.py:32-34`), the defaults (`:54-58`), the chain walk
+  (`:72-122`), `_may_revoke` (`:284-287`); `RECORD_KEYS`, `sign_record`, `verify_record`
+  (`peer/superyak_peer/identity.py:76-83`, `:147`, `:189-199`); narrowing revisions and public layers
+  (`peer/superyak_peer/layers.py:143-166`, `:191-194`); space kinds (`peer/superyak_peer/spaces.py:19-22`).
+- Other specs: spec A's D7 (its line 36), "a session keeps whatever it has already read" (its line 357), the direct
+  confirmation view (its line 472); the layered lighthouse's lines 1-11 and its "proxy" sentence (lines 9-10).
+- Arithmetic. Two of 256 records share a 4-hex short form with probability 0.392. Even odds of a repeat come at 301
+  receipts with 4 hex and 77,163 with 8 (4.1). 8 + 16 + 16 + 2 + 1 = 43 (6.4, 15).
+- Mathematics. Section 8's sheaf is right: on the Alexandrov topology of down-sets, U ↦ 𝒫(uses at places in U) with
+  restriction by intersection is a sheaf of sets, and the `s_i ∩ own(J)` agree for all i and k exactly when Δ(J) = ∅.
+  Use 5's Δ = {read} × program-operations holds. L8 holds: at fixed σ, every time-dependent term of 5.3 and 5.5 is a
+  horizon term.
+
+### Must-fix
+
+**RMF1. The trail evaluation's `route` use breaks 6.4's per-edge rule and its bound of 32.**
+Where: spec 6.4 "Bounds" (lines 524-537) and 9.1 "A route" (line 933); I 8 "The decision" and "A finite check"; I 12
+(the aggregate row for roads and trails); T 7 steps 3 and 4, and T 7 step 10 ("trails of at most 512 touches").
+Interface rows 7, 8 and 29.
+
+- **Why.** 6.4 says a `route` use is one road or trail used as one edge, decided per object, with its own receipt.
+  A trail of more than 32 touches "can't be a `route` object", and "the use is allowed only when every one of its
+  decisions is". The interface pass wrote that rule for answers that reach an agent, and T 8 fits it. But the first
+  `route` use the vision plans is the trail evaluation on an imprint ("How the work runs", step 3). I 8's
+  `Need(trail-evaluation)` holds `route` on every road or trail derived from the imprint, decided once "by kind",
+  and I 12 writes one row for all of them. T 7 runs A* over those trails, up to 10,000 expansions per search, and T 7
+  step 10 allows trails of up to 512 touches.
+- **Failure.** A builder builds the permissions core first, as the vision orders. Its `decide` refuses any route use
+  on a derived trail of 33 touches with `BOUND`, so the whole evaluation is refused. I's check allows the same use.
+  The owner's use list then shows an allowed `route` use, imported "in this form" (9.1), that the owner's own
+  `engram-permissions explain` refuses. F1 can't pass for both.
+- **Fix.** 6.4 says how a `route` use is decided when no answer names or shows anything to an agent and only counts
+  leave. Pick one, as Rio Grande's call:
+  - (a) a **bulk use**: decided once per (object kind, action, purpose), with `need` over every object in it. The
+    32-memory bound applies to uses whose answer names memories, so not here. One receipt per use, with a count, as
+    I 12 writes. Say it in 6.4 and 9.1, and add it to U22 and F1. Or
+  - (b) **keep the bound**: I 8 decides per road or trail and leaves out any trail over 32 touches, and T 7 routes
+    only over trails that fit.
+  Either way, add the case to the interface table's row 8, which now has "none" in I's column.
+
+### Should-fix
+
+**RS1. `group:outside-home` is served today by any policy that lists it, so "a lowered gate fails closed" needs a
+daemon rule.**
+Where: 12.1, the paragraph after the mapping table (lines 1098-1102); P29; U23.
+
+- **Why.** The spec says "today's code never serves an outside-home placement". But `_allowed_audiences` takes every
+  value that passes `validate_audience` (`engram/lighthouse_daemon.py:156-170`, `:168`), and `group:outside-home`
+  passes `GROUP_RE` (`engram/sharing.py:19`, `:44`; I ran the regex). The policy schema puts no limit on
+  `extensions` values (`engram/schemas/lighthouse/connection-policy.schema.json`). Today's `load_groups` also accepts
+  a group named `outside-home` (`engram/policy_gen.py:13`, `:29`). And E1 writes policies by hand (13). So a
+  hand-written or edited policy that lists the name serves outside-home placements under `off` or `shadow`, where the
+  legacy path alone decides.
+- **Fix.** The daemon removes `group:outside-home` from a policy's audiences in every effective gate but `enforce`,
+  and only then adds it. U23 adds a hand-written policy that lists it under `shadow`.
+
+**RS2. A use has no holding house, but `Req(u)` needs one.**
+Where: 6.1 (`u = (a, P, o, x, p, t)`, line 456); 6.3 item 3 (line 492); 6.5's `decide(u, σ)`; 9.1 (`uses.copy`); 4.1.
+
+- **Why.** `Req(u)` reads `anc(H)`, "where H is the place of the house that serves the copy being used". H is not in
+  u. The same ref can be held in more than one house: the published house, an imprint (7.4 keeps source refs), a
+  kept copy. I 8's ceiling also restricts by "the copy the wrapper names, `imprint:<station peer id>/<imprint_id>`",
+  which is not a coordinate of P's 𝒰. The `uses.copy` column exists, but 4.1 gives no grammar for a copy ref.
+- **Fix.** Add the holding house to the use: `u = (a, P, o, h, x, p, t)`, with h a copy ref and H its place. Give 4.1
+  a grammar for copy refs, including `imprint:<station peer id>/<imprint id>`. F1's fixtures carry h.
+
+**RS3. The imported station receipts are not in 9.1's form, though 9.1 says they are.**
+Where: 9.1, the new bullet (lines 936-941), "An imprint writes one receipt per batch" (lines 934-935), "A route
+writes one receipt per road or trail" (line 933), and the `cited` bullet; I 12, "In the owner's own use list";
+interface row 21.
+
+- **Why.** I 12 writes one `uses` row per action per batch, three for an admission batch. 9.1 writes one receipt per
+  batch of an imprint. For roads and trails, I writes one row for all of them, and a `use_subjects` row naming the
+  copy, which is not an object. 9.1 writes one receipt per road or trail with its memories. I's `cited` is "the record
+  ids". 9.1's `cited` is one record per (layer, action) plus each layer's version, and the station has no ledger
+  versions. A `uses --action imprint` count then means different things for local and imported rows.
+- **Fix.** Name the imported form exactly in 9.1: rows per action, the aggregate row for derived roads and trails,
+  `cited` without layer versions, and `use_subjects` naming the copy (once RS2 defines copy refs). Or have I conform.
+  Rio Grande's call.
+
+**RS4. Only `route` on a road or trail needs the memories it names.**
+Where: the 6.4 `need` table (lines 508-512); 5.4's road-and-trail shape (lines 377-378).
+
+- **Why.** 5.4 says "a route is usable only between memories the audience may already recall, read or inject by other
+  records". The table makes that true for `route` only. `read` of a trail returns its content, which is its touches.
+  So `recall`, `read` or `imprint` on a trail can name memory ids the audience may not recall, an existence leak
+  (P23). I's filter keeps only log rows whose targets all ship (I 6.2), so imprints are safe today. A later use of a
+  trail allow would not be.
+- **Fix.** For every action on a road or trail, `need` adds `recall` on every memory it names, and `read` and
+  `inject_context` on every memory whose content it shows. I needs no change.
+
+**RS5. A kept copy's subjects are fixed when it is made.**
+Where: 7.4 "Kept copies" (lines 756-770); P25; PT7.
+
+- **Why.** The copy gets the source's subjects "in the same act". A co-subject recorded on the source later, such as
+  Jenn on m3, never reaches a copy made before. Adding a subject "only narrows" (L1), and a person expects it to
+  narrow every copy. Here the copy keeps moving without her yes.
+- **Fix.** On one ledger, a copy's subjects are its own plus its source's at decision time, read through `copies`,
+  with a bounded depth and the bound of 8. Say that a copy held on another ledger, such as an imprint at a station,
+  learns of later subjects only in step 2, and that the owner can withdraw meanwhile.
+
+**RS6. The effective-gate rule reads `off` when the published house is new.**
+Where: 12.3, the effective gate (lines 1150-1165); U16.
+
+- **Why.** Rule 1 gives `off` when there is no ledger and the published house has no `permissions_ledger_id`. The spec
+  doesn't say what a gate raise does when no published house exists yet, or what happens when the house is made
+  again after a raise. In both cases a ledger deleted by mistake reads as `off`, and `share` returns to "as today".
+  The daemon also serves a list of publishers (`engram/lighthouse_daemon.py:506-518`), and the rule names one house.
+- **Fix.** A raise refuses without a published house. A house created while a ledger exists gets its id at creation.
+  Name which houses carry the id. U16 covers both.
+
+**RS7. Refusal codes for a candidate that matched through a grant-backed membership.**
+Where: 6.5, the code table and the candidate (lines 574-586); use 10; U28; F1.
+
+- **Why.** After G1 is revoked (use 10), R1′ matches m4 only through G1's membership. With "every grant's validity
+  ignored", R1′ is a candidate. `GRANT_INVALID` asks whether "some candidate's grant chain is invalid". R1′ is
+  person-backed and has no chain of its own, so one reader gives `GRANT_INVALID` and another `NO_ALLOW`. F1 needs one
+  answer.
+- **Fix.** Say whether a candidate's chains include those of the memberships it matched through, and give use 10's
+  code.
+
+**RS8. The `remember` guard's limits are not all stated.**
+Where: 10, "Keeping it is an imprint" (lines 1016-1021); 15.
+
+- **Why.** The guard reads receipts from the last 24 hours, at most 200. After that a verbatim `remember` passes,
+  and the kept memory carries no source subjects. That is MF6's failure, by time. The guard also reads this machine's
+  receipts only, so it can't see deliveries decided elsewhere from step 2 on. In step 1 every real receiver is the
+  owner's own, so the harm is latent.
+- **Fix.** State both as known limits beside "copies, not paraphrases", and name the step 2 need.
+
+### Nits
+
+- **RN1.** Stale revision numbers. The header (line 20), 6.4 (line 515), 11 (line 1041) and 14 step 4 (line 1368) say
+  "trail spec revision 4". The trail spec is now revision 5.
+- **RN2.** 14 step 2 and I 8 drop "the ledger-only fields". 5.1 should name them: `created_seq`, `revoked`,
+  `revoked_by`, `revoke_reason`, `revoked_seq`.
+- **RN3.** `until` (P30) is not a lower bound when a legacy layer ends sooner, since policy rules carry
+  `validUntil`. Say that `until` and the horizon cover ledger layers only, and that the annotation shows that `until`.
+- **RN4.** 5.3 reads lanes "never from the published copy". I 8 reads an imprint's lanes from the imprint, fixed at
+  the build, so a re-lane at home after the yes doesn't reach it. Say how a copy held away from its source's ledger
+  reads lanes.
+- **RN5.** The P29 table says "all `group:g`". Say that an allow naming two groups maps to `group:outside-home`, which
+  fails closed under `off` and `shadow`.
+- **RN6.** `migrate` should register the published house as a store whose place is the owner's home. Use 1 assumes
+  that holding place, and an unregistered house makes `anc(H)` unknown, which refuses everything.
+- **RN7.** For Rio Grande, about T. T 6.6 still says "The permissions spec writes short ids with 4 (its section 4.1)".
+  P 4.1 now shows receipts with 8 hex and keeps 4 for records, as T 11 already says.
+- **RN8.** Section 19 could say plainly that this spec's default for an unrecorded mention, which moves on the
+  owner's yes alone, is weaker than I's D27 confirmation box for the same kind of yes. That is a fact for Andy's
+  answer, not a decision.
+
+### The interface table, row by row, from this spec's side
+
+- **Agree:** rows 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 30, 31
+  and 32. I checked r_M and r_T against 5.1, 5.2 and 5.4: the fields, sorted lists, the collection grammar
+  (`imprint-` plus a UUID is 44 characters), the finite `stores` list, purposes in the group grammar, and an end
+  within 366 days. In row 6, I's `Req` comes out as P's: the owner's home and the operator's home, counted once.
+- **Disagree:** row 8, with rows 7 and 29 (RMF1); row 21 (RS3).
+- **Underspecified in this spec:** row 6's copy (RS2), and row 1's "ledger-only fields" (RN2). Row 22 agrees, but T's
+  wording is stale (RN7).
+
+### Still open with Andy (unchanged)
+
+The license; one permission an agent may set on its own; what the county sets; pseudonyms; whether the terminal yes
+is enough in step 1; agent shares at home under `enforce`; the two departures from principle 5; who decides in the
+county steps; and memories that mention other people. On the last, this spec's default stands and is listed (19):
+a recorded co-subject must say yes, and a name detector may only add co-subjects. Nothing here changes it.
+
+Not checked: I ran no engram tests (the worktree has no `.venv`). I ran the group regex and the birthday arithmetic
+with the system Python. This is a review of specs, and no code changed.
+
+## Re-check response (revision 3), 2026-10-25
+
+The reviser applied the must-fix, all eight should-fix items and all eight nits, and declined none. RN7 is a note
+about the trail spec, which this pass may not edit, so it is recorded below for Rio Grande. The spec is now revision
+3. It keeps every section number. New decisions are P33 (bulk uses), P34 (the copy in a use) and P35 (every action
+on a road or trail needs its memories). P21, P25, P29 and P30 are restated. Every decision not quoted from Andy is
+marked Rio Grande's call. The imprints and trail specs were not edited. The interface table was updated where an
+interface changed (rows 1, 6, 7, 8, 18, 21, 25 and 29). Each of those rows says so under "Re-check pass".
+
+### Checked again while revising
+
+- **RS1's claim holds.** `_allowed_audiences` returns every value that passes `validate_audience`
+  (`engram/lighthouse_daemon.py:156-170`, the return at `:168`). `GROUP_RE` (`engram/sharing.py:19`, used at `:44`)
+  matches `group:outside-home`; I ran it with the system Python. The ConnectionPolicy schema's `extensions` takes any
+  JSON value under a namespaced key (`engram/schemas/lighthouse/connection-policy.schema.json`). `load_groups` accepts
+  any name matching `_NAME` (`engram/policy_gen.py:13`, `:29`). No engram code or test names `outside-home` today
+  (grep over `*.py`), so the new daemon rule changes no existing test.
+- **RS6's facts.** `_published_house_storage` opens `instances/lighthouse/graph.db` and never creates it
+  (`engram/server.py:1934-1946`). The daemon serves `instances/<name>/graph.db` for each configured publisher
+  (`engram/lighthouse_daemon.py:506-518`). A new store gets its `instance_id` inside migration 028's transaction
+  (`engram/storage.py:222-230`), which is the precedent for migration 029 marking a new house.
+- **RN3.** A ConnectionPolicy rule is active only between its `validFrom` and `validUntil`
+  (`engram/lighthouse_policy.py:138-143`).
+- **RS2.** An imprint's `instance_id` is its `imprint_id` (imprints spec section 11, `stamp_imprint`). So
+  `imprint:<station peer id>/<imprint id>` names one store, and a later ledger can find its `stores` row by that id.
+- **RMF1 and RS3.** I re-read imprints spec section 8 ("The decision", "A finite check") and section 12 ("In the
+  owner's own use list"), and trail spec section 7 (steps 4, 7 and 10) and section 8. The re-check describes them
+  correctly.
+
+### Must-fix
+
+- **RMF1. Applied, option (a), Rio Grande's call.** 6.4 defines a **bulk use** `U = (a, P, O, h, x, p, t)` over a
+  finite set of objects in one copy (P33). Its `need` is the union of the per-object needs. It is allowed exactly when
+  every per-object use would be, with only the bound of 32 named memories waived. Its refusal is the first failing
+  object's code, layer and action, and names no object. `cited` holds every distinct record per (layer, action);
+  `until` and `horizon` are the earliest across O. Only a use whose answer names no object and shows no content to any
+  agent may be bulk. Its size is at most 512 objects when the receipt names them (an imprint batch), or 100,000 when
+  they are derived and never named. The bound of 32 now applies to answer uses only. 6.4 says how the imprints spec's
+  `Need(trail-evaluation)` and `Need(admission)` are bulk uses, so this spec's `decide` and `explain` agree with that
+  spec's check. 9.1 gives the receipts, 15 the bound, and U22 and F1 the tests. Why (a) over (b): the bound of 32 limits
+  what an answer names to an agent, and the evaluation names nothing. Option (b) would also have required changes to
+  both other specs, and dropped trails of 33 to 512 touches from the first evaluation. Interface row 8 now has I 8 and
+  12 in I's column; rows 7 and 29 are updated too.
+
+### Should-fix
+
+- **RS1. Applied.** 12.1 now says revision 2's claim was wrong, with the citations above. The daemon removes
+  `group:outside-home` from every policy's audiences under every gate, with no ledger too, and adds it back only
+  under `enforce` (P29). `share` refuses the name as an argument. The `off` mode notes the exception (12.3). U23 adds a
+  hand-written policy that lists the name, under `shadow` and `off`.
+- **RS2. Applied.** A use is `u = (a, P, o, h, x, p, t)` (6.1, P34). 4.1 gives copy refs: `store:<instance_id>`, and
+  `imprint:<station peer id>/<imprint id>`. 6.1 defines H as h's place, and 6.3 item 3 refuses an unregistered `store:`
+  house with `NO_LAYER`. The same ref in two houses is two uses. The imprints spec's ceiling by copy is now a subset of
+  𝒰. No selector names h in this revision; section 8 says why h is not a box dimension. F1's fixtures carry h. 12.2 and
+  the worked example name h. Interface rows 6 and 25.
+- **RS3. Applied, by naming the form in 9.1** (Rio Grande's call). 9.1 lists the imported form's four differences
+  from a local receipt: one row per action; memories by batch of 512 with per-ref `use_subjects`; roads and trails as
+  one counted row with `use_subjects` (owner, h); `cited` without layer versions, with the station's peer id and the
+  receipt's chain position. `copy` is the imprint's ref on every row. The use list marks imported rows and counts them
+  apart (9.3). The imprints spec needs no change. Interface row 21.
+- **RS4. Applied.** 6.4: for every action on a road or trail, `need` adds `recall` on each memory it names, and
+  `read` and `inject_context` on each memory whose content it shows (P35). 5.4's road shape, L6, 12.1's trail row and
+  U22 follow. The imprints spec already meets it (its 6.2). Interface row 7.
+- **RS5. Applied.** 7.4: on one ledger, a copy's subjects at a decision include its source's at that decision, read
+  through `copies` up to 4 links. A deeper chain is refused when made. More than 8 subjects in the union refuses with
+  `BOUND`; adding a subject to a source is never refused because of its copies. A copy on another ledger learns of later
+  subjects only in step 2, and the owner can withdraw meanwhile. 6.3 item 1, P25, L6, section 14 step 2, use 12, PT7,
+  U17 and the constants follow. Interface row 18.
+- **RS6. Applied.** 12.3 names the houses: every store at `<root>/.engram/graph.db` or
+  `<root>/.engram/instances/<name>/graph.db`, which covers the published house and every daemon publisher. The raise
+  marks all of them and refuses without a published house. Migration 029 marks a house created while a raised ledger
+  exists, or writes `unreadable` if the ledger can't be read. `off` now needs no ledger and no marked house anywhere; a
+  served house without the id under a raised ledger reads closed. A reader reads at most 64 houses for the `off` rule
+  (a new constant). U16 covers each case.
+- **RS7. Applied.** 6.5: a candidate's grant chains include those of the grant-backed memberships it matched through.
+  Use 10's read of m4 is `GRANT_INVALID` at `place:home/andy`, action `recall`, until G1's expiry on 2026-11-30, and
+  `EXPIRED` after, since the table checks `EXPIRED` first. A removed membership counts for no candidate. U28 tests it.
+- **RS8. Applied.** Section 10 states both limits: the 24-hour, 200-receipt window, after which a verbatim `remember`
+  passes with no source subjects, and the guard seeing only this machine's receipts. Both are latent in step 1. Step 2
+  needs the receiving server to record each delivered item's digest and receipt from the delivery itself, kept at
+  least until the decision's `until`, or 400 days when there is none.
+
+### Nits
+
+- **RN1. Applied.** The header, 6.4, 11 and section 14's step 4 now say the trail spec is revision 5.
+- **RN2. Applied.** 5.1 names the five ledger-only fields, and section 14 step 2 points there. Interface row 1.
+- **RN3. Applied.** 6.5 step 6, P30 and section 11 say `until` and the horizon cover ledger layers only, and that a
+  legacy rule may end a use sooner, taking effect at the next request.
+- **RN4. Applied.** 5.3 says a copy held away from its source's ledger reads lanes from the copy, fixed at the yes. That
+  widens nothing, because outside-home allows reach memories only by ids and collections (P28). Later lane-limited
+  denies reach it in step 2.
+- **RN5. Applied.** The P29 table now says "exactly one group". An allow naming two groups maps to
+  `group:outside-home` and fails closed under `off` and `shadow`. U23 covers it.
+- **RN6. Applied.** `migrate` registers every house, the published house among them, and each source store, with
+  Andy's home as their place (12.3 step 2). The example says so, and U13 checks it.
+- **RN7. Recorded for Rio Grande, below.** The fix is in the trail spec, which this pass may not edit.
+- **RN8. Applied.** Section 19 states the fact for Andy: this spec's default moves an unrecorded mention on the
+  owner's yes alone, while the imprints spec also asks for its D27 confirmation. The question stays open.
+
+### Declined
+
+None.
+
+### For Rio Grande
+
+- **RN7.** The trail spec's 6.6 (its lines 793-794) still says "The permissions spec writes short ids with 4 (its
+  section 4.1)". This spec's 4.1 shows a receipt with 8 hex and keeps 4 for records, grants and proposals. The trail
+  spec's reviser should correct the sentence. Interface row 22's rule is already right.
+- **Per-copy rules in step 2.** No selector names h yet. In step 1 the imprints spec's ceiling and its ship-requested
+  refusal of one copy (its D17) live in code at the station, which has no ledger. When a station gets a ledger, it
+  needs records that can name a copy. Adding a selector dimension would change the key set of r_M and r_T, so it is
+  left for step 2, across all three specs.
+- **Bulk bound and I 12.** The imprints spec's one aggregate row for roads and trails fits a counted bulk use while
+  they number at most 100,000. An imprint holds at most 100,000 memories (its D36), but the number of derived trails
+  is bounded by sessions, not memories. If it can pass 100,000, I 12 would need one row per 100,000.
+- **Parallel work.** During this pass the trail spec's review file gained new text from another team. I did not read
+  it for interface effects. The interface rows I touched are listed above.
+
+### Still open with Andy (unchanged)
+
+The license; one permission an agent may set on its own; what the county sets; pseudonyms; whether the terminal yes
+is enough in step 1; agent shares at home under `enforce`; the two departures from principle 5; who decides in the
+county steps; and memories that mention other people. On the last, this spec's default is unchanged: a recorded
+co-subject must say yes, and a name detector may only add co-subjects. RN8 adds a fact to the question, not an
+answer.
+
+Not checked: no engram tests were run, since this is a spec revision and no code changed. I ran the group regex with
+the system Python.
+
+## Final check (revision 3), 2026-10-25
+
+Reviewer: a fresh agent on the Pi, making the final check in Andy's place (station law section 3). I took no part in
+writing, reviewing, revising or reconciling any of the three specs. I read the vision, the spec as it stands in the
+worktree, this file, the interface table, and the parts of the imprints spec (I) and trail spec (T) that RMF1 names. I
+edited no spec. Spec citations are by section, with working-copy lines where they help. Code is cited by file and line,
+read today.
+
+VERDICT: APPROVE WITH CHANGES
+
+The design of the RMF1 fix is right, and it agrees with I and T. But the spec file in the worktree is cut off after
+section 14's first later step. Sections 15 to 19 are gone, and with them the U22, F1 and section 15 parts of RMF1's
+fix. That is FMF1, below. Approval holds once the lost part is restored exactly and checked as FMF1 says. Do not merge
+the file as it stands. Nothing here decides the open question about memories that mention other people.
+
+### RMF1: partly resolved in the file, fully resolved in the text the reviser wrote
+
+**Present and correct.** P33 (section 3, line 149). In 6.4: "Answer uses name at most 32 memories" with "One use per
+edge", "An `imprint` batch" as a bulk use, and "Bulk uses" (need, allowed, refused, the decision, which uses may be
+bulk, size, one receipt, how it is computed), with its last paragraph on I's `Need(trail-evaluation)` and
+`Need(admission)` (lines 580-640). 6.5's "How it is computed" (lines 702-705). L6 (lines 769-775). 9.1's bulk receipts
+and the imported form's item 3 (lines 1068-1104). The header's change list (lines 31-33). Option (a) is marked Rio
+Grande's call.
+
+I checked them against the other two specs:
+
+- I 8 "The decision" defines R(I) and both `Need` sets. I 8 "Bulk uses" calls admission and evaluation P's bulk uses,
+  with the 32 waived and P's other bounds kept: 100,000 derived objects per counted use, 8 subjects, 43 layers. I 8 "A
+  finite check" is P 6.4's grouping shortcut. I 12 "In the owner's own use list" writes the counted row P 9.1 item 3
+  names.
+- Every memory a trail in R(I) names is in objects(I) (I 8). So a bulk `route` over R(I), whose `need` adds `recall`
+  on every named memory, is covered by I's `(recall, trail-evaluation)` term.
+- T 4 caps a trail at 512 touches (line 264). T 7's report is "counts and rates only, never content or ids" (step 7,
+  line 1062). So the evaluation meets P's test for a bulk use: it names no object and shows no content to any agent.
+- T 8 keeps answers that cross a boundary per road, under the 32. Interface row 8's I column now names I 8 and 12.
+
+So P's `decide` and `explain` now give I's verdict on the first evaluation, and F1 can hold for both.
+
+**Missing from the file.** RMF1 asked to "add it to U22 and F1". U22 and F1 are in section 17, which the file no
+longer has. Section 15's bound for bulk uses is gone too. Interface row 8 cites "6.4, 9.1, 15, U22, F1"; three of the
+five are not in the file. So I can't mark RMF1 resolved until FMF1 is fixed.
+
+### Must-fix
+
+**FMF1. The spec file is cut off after section 14's later step 1.**
+Where: the end of the file. It stops at line 1583 with "The imprints spec's transport lands here." and no final
+newline. It has lost section 14's later steps 2 to 4, its Non-goals and its Anti-goals, and all of sections 15
+(Constants), 16 (Components), 17 (Tests), 18 (Left to the builder) and 19 (Open for Andy). That is about 290 lines.
+
+- **Evidence.** `grep -c '^## 1[5-9]'` on the file gives 0. The committed revision 2 (`git show HEAD:<spec>`) has those
+  sections at its lines 1372-1583. The file still cites what it lost: sections 15, 16, 18 and 19 (lines 473, 951, 1129,
+  1154, 1185, 1416), and tests U1, U13, U24, PT11, E1 and F1 (lines 521, 620, 640, 705, 1028, 1191, 1327, 1410, 1454).
+- **Cause, verified in the reviser's session transcript** (`agent-a2e57399a5dd29943.jsonl` under this session's
+  `subagents/workflows/wf_090deadc-568/`). At 02:42:23Z (19:42 PDT), a rewrap script defined a helper whose last line
+  was a chain of conditional expressions:
+  `return s[:i] + out.lstrip(" ") if False else s[:i] + out[len(indent):] if out.startswith(indent) and indent else ...`.
+  With `indent="   "` the branch taken is `s[:i] + out[len(indent):]`, which drops `s[j:]`. Its third call, on later
+  step 1, deleted everything after "transport lands here.". The output it printed right after the write ends there.
+  Every later edit was above the cut, so no later check noticed.
+- **Why it is a must-fix.**
+  - RMF1's U22 and F1 parts and section 15's bound are gone (above).
+  - **The open question is no longer listed.** Section 19 held "Memories that mention other people", with this spec's
+    default and RN8's fact. Each spec must list it (interface row 20). 7.4 still states the default: a memory about
+    two people needs both yeses, and a name detector may only add co-subjects. So the default is unchanged, but the
+    file no longer says the question is open.
+  - **Interfaces are broken.** I 20 (its line 1913) and T 14 (its line 1659) point to this spec's section 19. T cites
+    this spec's non-goal for a store's own use (its lines 67 and 878), which was in the lost Non-goals. Interface rows
+    3, 8, 22 and 29 cite P 15, row 8 cites U22 and F1, row 20 cites P 19, and row 30 cites P 14's non-goals. None of
+    these is in the file.
+  - **A builder can't build or test from the file.** The constants every bound on the Pi rests on, the components,
+    every test (PT1-PT12, U1-U28, E1, F1), the anti-goals, and the rest of section 19 (the license, the county,
+    pseudonyms, the step-1 yes, agent shares at home, the two departures from principle 5, who decides in the county
+    steps) are all gone.
+  - The header (line 9) and the Re-check response say revision 3 changed 14, 15, 16, 17 and 19. That is untrue of the
+    file.
+- **Fix.** Restore the lost part. Whether to restore from the rebuilt file below or write it again by hand is Rio
+  Grande's call. A rebuilt copy is at
+  `/tmp/claude-1000/-home-andy-superyak/48274ab7-ef35-4006-a317-fad27acbcfa1/scratchpad/permissions-by-place-rev3-reconstructed.md`
+  (SHA-256 `65bd50be815c4e4409447b76869f44147a4e34c2bf225d46e4daef2ef88625e2`). It is in a session scratchpad under
+  `/tmp`, so copy it out before it is cleaned.
+  - **How I rebuilt it.** I took the reviser's five reads of the whole spec at the start of its pass (02:28Z, lines
+    1 to 1616). Then I replayed every Edit and every Python script of that pass, in order, in the scratchpad. I changed
+    one line, the helper's return, to `return s[:i] + (out[len(indent):] if indent and out.startswith(indent) else out)
+    + s[j:]`.
+  - **Why it can be trusted.** The current file is a byte-for-byte prefix of the rebuilt one (130,597 of 155,388
+    characters). Two scripts failed in the replay. One, at 02:37:37Z, failed the same way in the original session. The
+    other, at 02:43:46Z, writes only the interface table. The rebuilt tail differs from the committed revision 2 only
+    by changes the interface pass and the Re-check response name: later step 4's revision number; section 15's rows
+    for answer uses, bulk uses, the `copies` chain, the guard's limits, the 64 houses and the 8-hex receipt; section
+    16's rows for `permissions.py`, the ledger, the daemon, `sharing.py` and `server.py`, `storage.py` and migration
+    029 (copy refs, bulk `decide`, houses and the gate, `group:outside-home`); PT7, U10, U13, U16, U17, U21, U22,
+    U23, U28 and F1; and section 19's question about memories that mention other people, with RN8's fact.
+  - **The restore.** Append everything after "lands here." from the rebuilt file, and end the file with a newline. Then
+    check that: `grep -c '^## 1[5-9]'` gives 5; the file's first 130,597 characters are unchanged; and every section
+    and test the file cites exists.
+
+**What the restore brings back, checked.** Section 15's rows "Memories named per answer use on a road or trail: 32;
+bulk uses waive it" and "Objects per bulk use: 512 when its receipt names them, 100,000 when derived and never named"
+match 6.4. U22 tests:
+
+- the answer bound, a trail of 33 touches used as one edge, and 5 roads as 5 uses;
+- a bulk `route` over 3 trails of 40 touches, allowed with one counted receipt naming no object, and refused with
+  `BOUND` as answer uses;
+- a failing object's refusal naming no object;
+- 100,001 derived objects, or 513 named ones, refused with `BOUND`;
+- I's `Need(trail-evaluation)` and `Need(admission)` on a fixture imprint, giving I's verdicts.
+
+F1 carries h on every use and includes bulk uses, the trail evaluation among them. Section 19 lists the question and
+decides nothing. That is what RMF1 asked. With the restore, RMF1 is resolved.
+
+### No new must-fix in the rest of revision 3
+
+- **A requester can't ask for a bulk use.** The daemon decides `recall` per placement and `read` per item (12.2). Only
+  the spec that runs a use may call it bulk, a showing to an agent is per object under the 32, and a `remember` is
+  never bulk (6.4). `need(U)` is the union of the per-object needs, so waiving the 32 changes no verdict (L6), and a
+  bulk refusal names no object (P23).
+- 100,000, the bulk bound for derived objects, is the collection bound (5.4). 512, the bound for named ones, is the
+  `memories` list bound (5.2).
+- **Code claims checked today, all true.** `engram/neighbors.py:82` (`recall` before asking), `:120` (all three before
+  reading), `:138` (all three again at delivery). `engram/lighthouse_policy.py:138-143` (a rule is active only between
+  `validFrom` and `validUntil`, both ends included). `engram/lighthouse_daemon.py:156-170` (`_allowed_audiences`
+  returns every audience that validates, at `:168`) and `:309-311` (the decider's clock). `engram/sharing.py:19`
+  (`GROUP_RE`), `:41-46` (`validate_audience`), `:147-159` (copies written `personal`), `:195-203` (the deletes).
+  `engram/storage.py:222-230` (the instance id inside 028's transaction). `engram/server.py:1934-1946` (the published
+  house is never created). `engram/store_identity.py:113-116` (`effective_id`). `peer/superyak_peer/identity.py:76-83`
+  (`RECORD_KEYS`) and `:189-199` (`verify_record`).
+
+### Should-fix
+
+**FS1. Which trails the admission's bulk `imprint` covers.**
+Where: 6.4, the paragraph before "Bounds" (lines 577-578, "the trails whose log rows it keeps") and the last paragraph
+(line 639); interface row 13's note for this spec's next revision.
+
+- **Why.** I 8 defines R(I) as the roads and trails derivable from the package's session ids and log rows. A session
+  that wrote two episodes has a trail with no log row (T 2 and 4). The verdicts agree, since r_T covers every road and
+  trail of the store. But a builder writing F1's fixture from this spec would count fewer objects in that bulk use,
+  and its receipt's `returned` count would differ from I's.
+- **Fix.** Say "the roads and trails derivable from its session ids and log rows" in both places, as row 13 asks.
+
+### Nits
+
+- **FN1.** 9.1 calls a named bulk use "an imprint batch of at most 512 objects". 6.4's last paragraph and I 8 also make
+  the evaluation's `read` batches named bulk uses. Say "such as an imprint batch".
+- **FN2.** 6.5 step 1 refuses with `BOUND` "if o would have more than 8 subjects". For a bulk use, say "any o ∈ O".
+- **FN3.** A bulk `decide` over 100,000 derived objects is bounded by count, but no Pi time is given for it, and U24
+  measures only the eligible-set rebuild. 6.4 says the evaluator "may" group objects. Saying it does, or adding a slow
+  Pi test for `explain` on a bulk use, would keep principle 4 measurable.
+
+### For Rio Grande
+
+- I 12 writes "one row" for all roads and trails, while I 8 and this spec's 9.1 split them into one counted use per
+  100,000. I 12 should say so (the Re-check response's "Bulk bound and I 12" asked the same). That is I's to change.
+- T 11's line about this spec ("Its `route` decision is per road or trail, at most 32 memories each") is still true of
+  answer uses. T could add that its evaluation on an imprint is decided as I's bulk uses. Optional.
+- Process, Rio Grande's call: comparing a spec's `## ` headings before and after each pass would have caught FMF1.
+
+### The interface table, from this spec's side
+
+- **Agree in the text present:** rows 7, 8 and 29 in 6.4, and row 21 in 9.1, as checked above.
+- **Broken until FMF1 is fixed:** rows 3, 8, 20, 22, 29 and 30. Each cites P 15, U22, F1, P 19 or P 14's non-goals.
+- I did not re-check the other rows beyond seeing that they cite sections the file still has.
+
+### Still open with Andy (unchanged)
+
+Memories that mention other people: this spec's default stands in 7.4 (a recorded co-subject must say yes, and a name
+detector may only add co-subjects), and the restored section 19 lists the question. Nothing here changes it. Also the
+license, one permission an agent may set on its own, what the county sets, pseudonyms, whether the terminal yes is
+enough in step 1, agent shares at home under `enforce`, the two departures from principle 5, and who decides in the
+county steps.
+
+Not checked: I ran no engram tests, since this is a spec review and no code changed. I ran Python only to rebuild the
+spec from the reviser's transcript, in my scratchpad. I committed nothing, pushed nothing and posted nothing.
+
+## Repair after FMF1, 2026-10-25
+
+Rio Grande restored the lost text (section 14 from later step 2 onward, and sections 15 to 19) from the committed
+revision 2. So those sections came back as they were before the interface pass and the re-check fixes. This pass
+brings sections 14 to 19 up to date with the spec as it now stands. I edited only sections 14 to 19, with targeted
+edits. Lines 1 to 1547 (sections 1 to 13) are unchanged. No cross-reference above section 14 was wrong once 15 to 19
+were brought up to date, so none was edited.
+
+**How.** I read this file's "Response", "Re-check", "Re-check response" and "Final check", the interface table, and
+the whole spec body. The final check's rebuilt copy was still in the scratchpad, with the SHA-256 it records
+(`65bd50be…25e2`). Its lines 1 to 1547 equal the current file's. I used its tail only as a list of what the reviser
+had written, and checked each item against the body before applying it. Then I compared the body's constants,
+components, tests and open items with 15 to 19, and added what was still missing.
+
+### What changed
+
+- **Section 14, step 1.**
+  - The CLI list gains `rebuild`, which 5.6 names as a command.
+  - The daemon line names each placement's copy h (12.2), the `group:outside-home` rule (12.1), and the effective
+    gate over its houses (12.3).
+  - `share` refuses `group:outside-home` as an argument.
+  - Kept copies read their subjects through `copies` (7.4).
+  - Migration 029 marks a house made while a raised ledger exists (12.3).
+- **Section 14, later steps.** Step 4 (data classes) points to section 19 for memories that mention other people.
+  "Routes on the rail" no longer names a trail spec revision (see "Left as it is" below).
+- **Section 14, non-goals.** One added: a selector that names the copy h (6.1, section 8).
+- **Section 14, anti-goals.**
+  - "Existence leaks": a bulk refusal names no object.
+  - New, "A showing decided in bulk": a use decided in bulk must not name an object or show content to an agent
+    (P33).
+  - "Failing open" adds a house without the ledger's id (P21), and a lowered gate that serves an outside-home
+    placement (P29).
+- **Section 15.**
+  - "Memories per route decision" becomes the answer-use bound of 32, which bulk uses waive (RMF1).
+  - "Objects per imprint batch" becomes "Objects per bulk use": 512 named, 100,000 derived. Both are marked fixed to
+    match 5.2 and 5.4.
+  - New rows: the `copies` chain of 4 links (RS5), the 64 houses for the `off` rule (RS6), the use list's 200 rows
+    (9.3), and the receipt short form of `#` and 8 hex (interface row 22).
+  - "Subjects per object" counts a kept copy's union with its source's subjects (RS5).
+  - The `remember` guard points to its known limits in section 10 (RS8).
+- **Section 16.**
+  - `permissions.py`: copy-ref grammars, `need` with named memories, `decide` for single and bulk uses, and a
+    candidate's grant chains (RS2, RS4, RMF1, RS7).
+  - `permission_ledger.py`: the gate over houses, marking houses at the raise, and a copy's subjects through `copies`
+    (RS6, RS5).
+  - `permission_uses.py`: bulk receipts, and the owner view marking imported station rows and counting them apart
+    (RS3). The imported rows are written by the imprints spec's `import-receipts` (its section 15).
+  - `permission_cli.py`: `gate` refuses a raise without a published house, and `explain` takes bulk uses.
+  - `lighthouse_daemon.py`: each placement's copy h, and the `group:outside-home` strip (RS1).
+  - `sharing.py` and `server.py`: refusing the reserved name, and the effective gate over the published house.
+  - `storage.py`: 029's step that marks a new house. It sits in the migration loop, as 028's `_assign_instance_id`
+    does. Checked today: `engram/storage.py:224` (`created_now`), `:228-230` (each migration runs in `BEGIN IMMEDIATE`,
+    and 028 calls `_assign_instance_id` inside it), `:235` (the commit).
+  - Migration 029's SQL row says the marking is `Storage`'s step, because it reads the ledger, which is another file.
+- **Section 17.**
+  - PT7: later subjects reach copies, up to 4 links.
+  - U5: the `BOUND` case for a copy's subject union.
+  - U8: every receipt carries h; imported rows are marked and counted apart; `--action` and `--object` work on them.
+  - U10: 8 hex.
+  - U13: houses and source stores registered (RN6).
+  - U16: the house cases of 12.3, the 64-house case among them (RS6).
+  - U17: a later co-subject reaches a kept copy.
+  - U19: a legacy end that comes before `until` (RN3).
+  - U21: an unregistered copy h, and one ref held in two houses (RS2).
+  - U22: rewritten for P35, answer uses, one use per edge, bulk uses, named bulk receipts, the bulk bounds, and I's
+    `Need(trail-evaluation)` and `Need(admission)` (RS4, RMF1).
+  - U23: two groups, a hand-written policy, no ledger, and `share` refusing the name (RN5, RS1).
+  - U28: use 10's `GRANT_INVALID`, then `EXPIRED` (RS7).
+  - E1 and F1 carry h. F1 includes bulk uses, the trail evaluation among them.
+- **Section 18.** The property-test generators must reach copy chains and bulk uses.
+- **Section 19.** "Memories that mention other people" is listed again, with this spec's default, the imprints
+  spec's stricter one, the trail spec's matching item, and RN8's fact. It decides nothing. I checked the D27 box text
+  it quotes against the imprints spec's section 8. I 20 and T 14 point here, and that pointer now resolves.
+
+### Checked after editing
+
+- `grep -c '^## 1[5-9]'` gives 5, and every heading from `## 1.` to `## 19.` is present once.
+- The file ends with a newline.
+- Sections 15 to 17 hold every test the body names (U1, U13, U24, PT11, E1, F1) and every test from PT1 to PT12 and
+  U1 to U28.
+- The interface rows that cite P 15, U22, F1, P 19 and P 14's non-goals (rows 3, 8, 20, 22, 29 and 30) now cite text
+  the file has.
+- With this repair, RMF1 is resolved as the final check described, and FMF1 is fixed.
+
+### Left as it is
+
+- **FS1, FN1, FN2 and FN3** of the final check fall in sections 6.4, 6.5 and 9.1. None is a broken cross-reference,
+  so this pass did not apply them. They remain for the next revision. FN3's Pi time for a bulk `explain` would also
+  need a new calibration constant in section 15.
+- **The trail spec's revision.** The trail spec is now revision 6 (its status line). The body calls it revision 5 in
+  the header, 6.4 and 11. Those tags were right when written, and I did not check whether revision 6 changes what
+  those sentences say. 14's "Routes on the rail" now names no revision, so it can't go stale.
+- **Who warns about `[permissions]` in `config.toml`.** 12.3 says the section is ignored with a warning, and 16 says
+  `engram/config.py` gains nothing. No component is named for the warning. That is how revision 2 had it. It is left
+  to the next revision, or to the builder.
+- **For Rio Grande, about T.** T 7 (its line 914) cites "this narrows mistakes, not malice" as this spec's section
+  14. The words are in 7.6's known limits, which 14 points to. T's reviser may cite 7.6 instead. Optional.
+
+### Still open with Andy (unchanged)
+
+The license; one permission an agent may set on its own; what the county sets; pseudonyms; whether the terminal yes
+is enough in step 1; agent shares at home under `enforce`; the two departures from principle 5; who decides in the
+county steps; and memories that mention other people. On the last, this spec's default is unchanged (7.4), and
+section 19 lists the question again.
+
+Not checked: I ran no engram tests, since this is a spec repair and no code changed. I committed nothing, pushed
+nothing and posted nothing.
+
+## Final check after repair, 2026-10-25
+
+Reviewer: a fresh agent on the Pi, making the final check in Andy's place (station law section 3). I took no part in
+writing, reviewing, fixing or repairing this spec or the other two. I read the vision, the whole spec as it stands,
+this file, the interface table, and the parts of the imprints spec (I) and trail spec (T) that cite this spec or that
+the table names. I edited no spec. Spec lines are the working copy's. I and T are cited by section, since I was being
+edited while I read it (below). Code is cited by file and line, read today.
+
+VERDICT: APPROVE
+
+FMF1 is fixed and RMF1 is resolved. Sections 14 to 19 agree with the body. Every interface row holds from this spec's
+side. I found no new must-fix. Three should-fix items and five nits remain. None blocks the plan, but AS1 should be
+fixed before E1 is written. Nothing here decides whether imprints may include memories that mention other people.
+
+### FMF1: fixed
+
+- Every heading from `## 1.` to `## 19.` is present, once each (grep, one count per heading). The file ends with a
+  newline. It has 1,898 lines.
+- Lines 1 to 1,556 are byte-identical to the cut file (`permissions-truncated.md` in the session scratchpad). The
+  first difference is at line 1,557, in section 14's step 1, which the repair edited on purpose and recorded. I diffed
+  the cut file's section 14 against the current one: every changed line adds text, and none of the cut text is lost.
+  So the final check's literal test, "the file's first 130,597 characters are unchanged", fails, but only because of
+  those recorded edits. The first 128,270 characters are unchanged.
+- The rebuilt copy is still in the scratchpad, with the SHA-256 the final check records (`65bd50be…25e2`). Its lines 1
+  to 1,547 equal the current file's. I diffed its tail against the repaired tail. Every line the reviser wrote is in
+  the repaired tail, the same or extended. So the restore from revision 2 lost nothing of revision 3.
+- Every test the body cites is defined: PT1 to PT12, U1 to U28, E1 and F1, 42 in all. Every section the body cites
+  exists.
+
+### RMF1: resolved
+
+- **In the file.** P33. In 6.4: answer uses, one use per edge, bulk uses, and the last paragraph on I's `Need` sets.
+  6.5's "How it is computed". L6. 9.1's bulk receipts and the imported form. Section 15's rows "Memories named per
+  answer use on a road or trail: 32 … bulk uses waive it" and "Objects per bulk use: 512 … 100,000". U22's bulk cases:
+  - a bulk `route` over 3 trails of 40 touches;
+  - a named bulk receipt;
+  - a failing object whose refusal names no object;
+  - 100,001 derived or 513 named objects refused with `BOUND`;
+  - I's `Need(trail-evaluation)` and `Need(admission)` giving I's verdicts.
+
+  F1 carries h on every use and includes bulk uses.
+- **Against the others.** Interface row 8's P column (6.4, 9.1, 15, U22, F1) now cites text the file has. I 8 "Bulk
+  uses" calls admission and evaluation this spec's bulk uses, with the 32 waived and the other bounds kept. T 4 caps a
+  trail at 512 touches. T 8 keeps cross-boundary answers per road, under the 32. So this spec's `decide` and `explain`
+  agree with I's check on the first evaluation.
+
+### Sections 14 to 19 against the body
+
+I checked each line of 14 to 19 against the section it rests on.
+
+- **14, step 1** names every command and part the body names: `rebuild` (5.6), `explain` single or bulk (6.4), each
+  placement's copy h (12.2), the `group:outside-home` rule (12.1), the effective gate over houses (12.3), `share`
+  refusing the name (12.1), subjects through `copies` (7.4), and 029 marking a new house (12.3).
+- **14, later steps.** Step 2's notices for later subjects and lane-limited denies match 5.3 and 7.4, and its guard
+  need matches 10. Step 3's question matches 9.4 and 6.3. Step 4 points to 19. "One edge per answer use" matches 6.4.
+- **Non-goals and anti-goals** match 6.1, 8, 6.4, 9.4, P21, P29 and P33.
+- **15.** Every value matches its source:
+  - 256 records (5.4); 32, 64 and 512 per selector (5.2); 16 purposes (5.2); 8 subjects (5.4, 7.4); 100,000
+    members (5.4); 80 characters (4.1; `legacy-group-` plus a 64-character group is 77).
+  - 1,024 places, 4 parents, 8 segments (4.4, 4.2, 4.1); 16 ancestors, and 8 + 16 + 16 + 2 + 1 = 43 (4.2, 6.4).
+  - 32 per answer use, 512 and 100,000 per bulk use (6.4); 4 `copies` links (7.4).
+  - 366 days (5.4); 3 links and 720 hours (7.2); 16 `replaces` (5.1); 7 days (P11).
+  - 4,096 boxes, `64 × (1 + k)`, 64 joint places (8); 256 per sweep (10); 64 cache entries, 20,000 placements, 2 s
+    (12.2).
+  - 200 receipts and 24 hours for the guard (10); 64 houses (12.3); 400 days (9.1); 200 rows (9.3); 240 and 32
+    characters (11); 6 characters (7.6); 4-hex prefixes and 8-hex receipts (4.1).
+- **16** names a component for every module in the header and every part of 14's step 1. One exception, carried from
+  the repair: the `[permissions]` warning of 12.3 has no component.
+- **17's** tests cover the body's rules, revision 3's included.
+- **18 and 19** match. Section 19 lists the question about memories that mention other people: this spec's default
+  (7.4), I's stricter one, T's matching item, and RN8's fact. It decides nothing. The box text it quotes is word for
+  word I 8's ("The owner's check about other people"). I 20 and T 14 point to this spec's 19, which now exists.
+
+### Code claims checked today, all true
+
+- **Sections 14 to 16.**
+  - `engram/storage.py:224` (`created_now`), `:228` (each migration in `BEGIN IMMEDIATE`), `:229-230` (028 calls
+    `_assign_instance_id` inside it), and `:235` (the commit).
+  - `peer/superyak_peer/identity.py:76-83` (`RECORD_KEYS`), `:147` (`sign_record`, a `PeerIdentity` method), and
+    `:189-199` (`verify_record`).
+  - `engram/pyproject.toml:31` (`[project.scripts]`) and `:40` (`py-modules`).
+  - `engram/CLAUDE.md` has no rule that agents never run the person's commands, as 7.6 says (grep for "permission"
+    and "never run" finds nothing). No license file is in `engram/` or the repository root, as 19 says.
+- **The body, beyond the earlier lists.**
+  - `engram/sharing.py:18-20`, `:99-101`, `:147-159`, `:195-203`.
+  - `engram/lighthouse_policy.py:1-7`, `:18-27`, `:138-143`; `engram/lighthouse_validation.py:25-34`;
+    `engram/lighthouse_receipts.py:1-6`; `engram/lighthouse_receiver_config.py:13`.
+  - `engram/storage.py:128-161`, `:562`, `:598-610`, `:1084`.
+  - `engram/server.py:1302-1310`, `:1934-1946`, `:1949-1956`, `:1976`, `:2610-2618`.
+  - `engram/policy_gen.py:13`, `:29`, `:80`; `engram/config.py:74`, `:388-409`.
+  - `engram/federation.py:155` (`sync_genome`, which records `origin_instance_id`); `engram/store_identity.py:113-116`.
+  - `engram/lighthouse_daemon.py:156-170`, `:309-311`, `:476`, `:506-518`; `engram/neighbors.py:82`, `:120`, `:138`;
+    `engram/lighthouse_client.py:315`; `engram/context_lighthouse.py:28-30`; `engram/lighthouse_protocol.py:232`.
+
+### Must-fix
+
+None.
+
+I looked for wrong code claims, broken mathematics, privacy holes (anything about a person moving without their yes,
+an agent widening a permission) and Pi bounds. The meet, the lattice, L1 to L8, the gluing check and the bulk-use rule
+hold. A bulk use's `need` is a set union, so a bulk `route` over R(I) adds at most one `recall` per memory of the
+imprint, not one per touch: at most 200,000 uses per counted bulk use. Both privacy items below are latent in step 1.
+
+### Should-fix
+
+**AS1. Worked example use 13 says a verbatim `remember` is refused, but the guard's window has passed.**
+Where: 13, use 13 (lines 1532-1535); 10, "Known limit: time" (lines 1184-1187); section 15's guard row; E1.
+
+- **Why.** Use 1 delivered m1 on 2026-11-02. The example names no delivery of m1 after use 11, on 2026-12-01. Use 13
+  is at 2026-12-15T00:00:00Z. The guard reads only allowed `inject_context` receipts from the last 24 hours (10), so it
+  finds none. A verbatim `remember` then passes, and the kept memory carries no source subjects. Section 10 states this
+  limit (the re-check's RS8, revision 3). Use 13 was written before it and says the opposite.
+- **Failure.** E1 runs "Section 13, every step". A builder writes "remember refused" for use 13, and an implementation
+  that follows sections 10 and 15 fails it. And Andy, reading the example about his medical history, is told of a
+  protection that doesn't hold after 24 hours.
+- **Fix.** Use 13 says what the spec does: within 24 hours of a delivery, the verbatim `remember` is refused; on
+  2026-12-15 it passes, which is section 10's known limit, latent in step 1 because `ph-coordinator` is a fixture. E1
+  checks both. No rule changes.
+
+**AS2. A refusal's layer can name a co-subject, and 9.2 doesn't keep it from the agent or from a place's stewards.**
+Where: 9.2, rows "A place's stewards" and "The agents in a place" (lines 1120-1121); 9.1, `refusal` (line 1103); 6.4,
+a bulk refusal (line 617); 12.2 ("no reason beyond 'not allowed'"); use 2.
+
+- **Why.** Use 2 is refused with `NO_ALLOW` at `place:home/jenn`, and the receipt holds that layer. 9.2 lets the
+  agents in a place read "their own receipts: … refused reads of ids they named", and doesn't say which fields. So
+  `ph-coordinator` could learn that m3 is about Jenn, without Jenn's yes. Use 2 and 12.2 say the agent gets no reason,
+  so the intent is clear, but 9.2 doesn't carry it. A steward's view shows the "outcome". A home named in a refusal
+  names a subject, while 9.2 shows stewards subjects only as pseudonyms.
+- **Latent.** In step 1 no county agent reads receipts. `permissions(focus="uses")` returns the owner's list to the
+  owner's agents only (9.3), and the county agents are E1's fixtures. Steps 2 and 3 build these views from 9.2.
+- **Fix.** 9.2: an agent sees its own refused read as "not allowed", with no code, layer or action. A steward sees a
+  refusal's layer when it is a place, and a pseudonym when it is a home. U8 tests both.
+
+**AS3. Which trails the admission's bulk `imprint` covers** (the final check's FS1, carried).
+6.4 still says "the trails whose log rows it keeps" (lines 577-578 and 639). I 8 defines R(I) as the roads and trails
+derivable from the package's session ids and log rows. The verdicts agree, but a fixture's count would differ. Say "the
+roads and trails derivable from its session ids and log rows" in both places, as interface row 13 asks.
+
+### Nits
+
+- **AN1.** The status line (line 4) still says "Revision 3, answering the second fresh reviewer's re-check". It could
+  add the final check and the repair after FMF1. Its list of changed sections leaves out 18, which the repair changed.
+- **AN2.** The header (line 23), 6.4 (line 574) and 11 (lines 1216-1217) say "trail spec revision 5". T is revision
+  6. I checked those sentences against revision 6. T 8 still shows a stop's summary only with `read` and
+  `inject_context`, still calls the `route` record the separate opt-in, and still keeps the support of 3. T 6.5 still
+  fills `laid_by` for roads and trails. So the content holds and only the tag is stale.
+- **AN3.** 6.4 (line 628) says 100,000 is "a collection's bound (5.4), the most memories an outside-home allow can
+  reach". An outside-home allow may name up to 64 collections (5.2) plus 512 memories, so it can reach about 6.4
+  million. The bound is fine and the reason is wrong. Say "the most memories one collection holds, and so the most an
+  imprint holds (imprints spec D36)".
+- **AN4.** 7.6 (line 951) names five commands for `engram/CLAUDE.md`'s new rule: `sign`, `allow`, `grant`, `migrate`
+  and `gate`. Every CLI write needs the yes (7.6), and the table there lists more widening acts. The rule could say
+  "any `engram-permissions` command that writes".
+- **AN5.** Carried: the final check's FN1, FN2 and FN3, and the repair's `[permissions]` warning with no component.
+
+### The interface table, from this spec's side
+
+All 32 rows hold. I checked each row's P column against the sections it cites. I checked the I and T columns where
+they make a claim about this spec, against I and T as they stand.
+
+- Rows 3, 8, 20, 22, 29 and 30, broken before the repair, now resolve: P 15, U22, F1, P 19 and P 14's non-goals exist.
+- Row 22: T 6.6 (its lines 826-828) shows receipts with 8 hex, as P 4.1 does.
+- Rows 6 and 25: I 8 names h_I and its holding place as P 6.1 fixes them. See the first item below.
+- Row 13 holds in its verdicts; AS3 is this spec's wording.
+
+### For Rio Grande
+
+- **I 8, an owner who is also the operator.** I 8 shows that the station's check is this spec's meet, with `Req` = {the
+  owner's home layer, the operator's home layer}. When the owner is the operator, this spec's 6.3 counts that one home
+  layer once. I 8 allows that case ("unless the owner is the operator"), and Andy's own store on his own Pi is the
+  likely first imprint. A consent layer here is the union of its allows minus its denies. So if the ceiling were read
+  as one more allow in that layer, after a ship's withdrawal this spec's meet would be wider than I's check. No verdict
+  is wrong in step 1: the station's code computes the intersection (I 8, "The decision"), and step 2 moves withdrawn
+  records in revoked (I 17). I 8 should say that when the owner is the operator, the home layer at the station is
+  defined as the owner's records met with the ceiling, as P 6.1 lets a layer kept outside a ledger be. That is I's to
+  change.
+- **I 12** still writes "one row" for all roads and trails, while I 8 and P 9.1 split them per 100,000. Carried.
+- **Parallel work.** I was being revised during this check. Its status line now says revision 4, answering its own
+  final check's FS1 to FS3. I read its uncommitted diff: it changes calibration's paths analysis, D7, D16, D29, D41
+  and the sections they touch, and no rule this spec owns. I checked the interface rows against I as it stood at about
+  20:31 PDT. The same pass then updated I's side of interface rows 13, 14, 24, 27 and 28 ("Imprint final-check
+  pass"). This spec's columns and rules in those rows are unchanged, and row 13 still carries AS3's wording for this
+  spec's next revision.
+- **T 7** (its line 914) cites this spec's 14 for "narrows mistakes, not malice". The words are in 7.6. Carried,
+  optional.
+
+### Still open with Andy (unchanged)
+
+The license; one permission an agent may set on its own; what the county sets; pseudonyms; whether the terminal yes is
+enough in step 1; agent shares at home under `enforce`; the two departures from principle 5; who decides in the county
+steps; and memories that mention other people. On the last, this spec's default stands in 7.4, and section 19 lists
+the question. Nothing here changes it.
+
+Not checked: I ran no engram tests, since this is a spec review and no code changed. I ran Python only to compare the
+spec with the scratchpad files. I edited no spec, and I committed nothing, pushed nothing and posted nothing.
