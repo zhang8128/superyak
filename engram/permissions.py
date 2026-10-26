@@ -57,6 +57,7 @@ REASON_CHARS = 200
 
 STAR = "*"
 ACTIONS = ("recall", "read", "inject_context", "route", "imprint")
+GRANT_OPS = ("share", "deny", "withdraw", "shorten", "narrow", "collect", "uncollect")
 KINDS = ("memory", "road", "trail")
 LAYERS = ("episode", "semantic")
 LANES = ("personal", "work")
@@ -623,3 +624,164 @@ def check_new_parent(state: State, place: str, parent: str) -> None:
     if _too_deep(state, place, parent):
         raise RuleError("4.2 bounded ancestry",
                         f"a place has at most {MAX_ANCESTORS} ancestors, itself included")
+
+
+# ---------------------------------------------------------------- grants (P 7.2)
+
+@dataclass(frozen=True)
+class Grant:
+    id: str
+    issuer: str
+    grantee: str
+    layer: str
+    parent_id: str | None
+    ops: frozenset
+    envelope: Selector
+    max_days: int
+    depth: int
+    expires: int
+    created: int
+    created_seq: int = 0
+    revoked: int | None = None
+    revoked_by: str | None = None
+    revoke_reason: str | None = None
+    revoked_seq: int | None = None
+
+
+def _grant_of(row) -> Grant:
+    ops, env = row.ops, row.envelope
+    if isinstance(ops, str):
+        ops = json.loads(ops)
+    if isinstance(env, str):
+        env = json.loads(env)
+    if not isinstance(env, Selector):
+        env = parse_selector(env)
+    d = row._asdict()
+    d["ops"], d["envelope"] = frozenset(ops), env
+    return Grant(**d)
+
+
+def grant_chain(state: State, grant_id: str) -> tuple[Grant, ...]:
+    """The grant and every grant above it, root first."""
+    out, seen, gid = [], set(), grant_id
+    while gid is not None:
+        row = state.grants.get(gid)
+        if row is None:
+            raise RuleError("7.2 grants", f"{gid} is not a grant")
+        if gid in seen:
+            raise RuleError("7.2 grants", f"grant {gid} is its own ancestor")
+        seen.add(gid)
+        out.append(_grant_of(row))
+        gid = row.parent_id
+    return tuple(reversed(out))
+
+
+def _is_steward(state: State, place: str, person: str) -> bool:
+    return any(r.person == person and r.removed_seq is None for r in state.place_stewards.get(place, ()))
+
+
+def grant_validity(state: State, grant_id: str, at: int) -> tuple[bool, str | None]:
+    """From the grant up to its root, link by link: revoked, expired, too long; then the root's issuer a steward."""
+    chain = grant_chain(state, grant_id)
+    for link in reversed(chain):
+        if link.revoked_seq is not None and link.revoked_seq <= state.seq:
+            return False, "revoked"
+        if at >= link.expires:
+            return False, "expired"
+        if len(chain) > MAX_GRANT_LINKS:
+            return False, "too-long"
+    root = chain[0]
+    if not _is_steward(state, root.layer, root.issuer):
+        return False, "not-steward"
+    return True, None
+
+
+def _agent_of(state: State, agent: str, what: str):
+    row = state.agents.get(agent)
+    if row is None or row.retired_seq is not None:
+        raise RuleError("7.2 grants", f"{what} {agent} is not a registered agent")
+    return row
+
+
+def selector_within(state: State, inner: Selector, outer: Selector) -> bool:
+    """P 7.2: each list a subset, "*" only where the outer has "*", each audience entry within an outer entry."""
+    for f in ("requesters", *_OBJ_KEYS, "actions", "purposes"):
+        a, b = getattr(inner, f), getattr(outer, f)
+        if b == STAR:
+            continue
+        if a == STAR or not set(a) <= set(b):
+            return False
+
+    def entry_ok(v: str) -> bool:
+        for o in outer.audience:
+            if o == v or o == "commons":
+                return True
+            if o.startswith("place:") and v.startswith("place:") and o in dominators(state, v):
+                return True
+        return False
+    return all(entry_ok(v) for v in inner.audience)
+
+
+def _grant_fields(grant: Grant) -> None:
+    rule = "7.2 grants"
+    if not set(grant.ops) <= set(GRANT_OPS) or not grant.ops:
+        raise RuleError(rule, f"ops must be a non-empty subset of {', '.join(GRANT_OPS)}")
+    if not isinstance(grant.envelope, Selector):
+        raise RuleError(rule, "the envelope must be one selector")
+    if not 0 <= grant.depth <= MAX_GRANT_DEPTH:
+        raise RuleError(rule, f"depth is 0 to {MAX_GRANT_DEPTH}")
+    if grant.max_days < 1:
+        raise RuleError(rule, "max_days must be at least 1")
+    if not grant.created < grant.expires <= grant.created + MAX_GRANT_HOURS * 3600:
+        raise RuleError(rule, f"a grant lasts at most {MAX_GRANT_HOURS} hours")
+
+
+def check_root_grant(state: State, grant: Grant) -> None:
+    """P 7.2: a steward of the layer issues it to an agent that acts for them."""
+    rule = "7.2 grants"
+    if grant.parent_id is not None:
+        raise RuleError(rule, "a root grant has no parent")
+    _grant_fields(grant)
+    if grant.layer not in state.places:
+        raise RuleError(rule, f"{grant.layer} is not a registered place")
+    person = state.persons.get(grant.issuer)
+    if person is None or person.retired_seq is not None:
+        raise RuleError(rule, f"{grant.issuer} is not a registered person")
+    if not _is_steward(state, grant.layer, grant.issuer):
+        raise RuleError(rule, f"{grant.issuer} is not a steward of {grant.layer}")
+    if _agent_of(state, grant.grantee, "grantee").acts_for != person.home:
+        raise RuleError(rule, f"{grant.grantee} does not act for {grant.issuer}")
+
+
+def check_child_grant(state: State, parent: Grant, child: Grant) -> None:
+    """P 7.2: the parent's grantee issues it to another agent of the same person; a subset in every field."""
+    rule = "7.2 grants"
+    links = 1
+    up = parent.parent_id
+    while up is not None and links <= MAX_GRANT_LINKS:
+        links += 1
+        row = state.grants.get(up)
+        up = row.parent_id if row is not None else None
+    if parent.depth < 1 or links + 1 > MAX_GRANT_LINKS:
+        raise RuleError(rule, f"a chain has at most {MAX_GRANT_LINKS} links")
+    if child.parent_id != parent.id:
+        raise RuleError(rule, "the child names another parent")
+    if child.layer != parent.layer:
+        raise RuleError(rule, "a child stays in its parent's layer")
+    if child.issuer != parent.grantee:
+        raise RuleError(rule, "a child is issued by its parent's grantee")
+    holder = _agent_of(state, parent.grantee, "issuer")
+    other = _agent_of(state, child.grantee, "grantee")
+    if child.grantee == child.issuer or other.acts_for != holder.acts_for:
+        raise RuleError(rule, f"{child.grantee} is not another agent acting for the same person")
+    _grant_fields(child)
+    if not child.ops <= parent.ops:
+        raise RuleError(rule, "a child's ops are a subset of its parent's")
+    if not selector_within(state, child.envelope, parent.envelope):
+        raise RuleError(rule, "a child's envelope lies within its parent's")
+    if child.max_days > parent.max_days:
+        raise RuleError(rule, "a child's max_days is at most its parent's")
+    if child.depth >= parent.depth:
+        raise RuleError(rule, "a child's depth is below its parent's")
+    if child.expires > parent.expires:
+        raise RuleError(rule, "a child expires no later than its parent")
