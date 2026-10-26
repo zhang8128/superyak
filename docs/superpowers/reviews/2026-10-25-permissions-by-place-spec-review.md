@@ -1528,3 +1528,356 @@ the question. Nothing here changes it.
 
 Not checked: I ran no engram tests, since this is a spec review and no code changed. I ran Python only to compare the
 spec with the scratchpad files. I edited no spec, and I committed nothing, pushed nothing and posted nothing.
+
+## Response to the final check after repair (revision 4), 2026-10-25
+
+The reviser applied AS1, AS2 and AS3, the nits AN1 to AN5, and the items the "Repair after FMF1" left: FS1 (which is
+AS3), FN1, FN2, FN3, the trail spec's revision tag (AN2) and the `[permissions]` warning with no component. None was
+declined. The spec is now revision 4 and keeps every section number. I edited the spec with targeted edits only, and
+this file. I did not edit the imprints spec, the trail spec or the interface table, since others are editing them.
+The rows the table's owner should update are listed below, for Rio Grande. Nothing here decides whether memories that
+mention other people may move at all.
+
+### Checked again while revising
+
+- **`[permissions]` today.** `load_config` warns only about unknown keys inside the sections it loads
+  (`engram/config.py:318-327`). `permissions` is not one of them (`:332-356`), so today the section is dropped with no
+  warning. So 12.3's warning needs a component, and `config.py` is it.
+- **What a refused read item carries.** The daemon decides the legacy frame once, before any item
+  (`engram/lighthouse_daemon.py:402`), and every item gets that decision (`:433-440`). Its JSON holds only `effect`,
+  `ruleId` and `code` (`engram/lighthouse_policy.py:65-67`). So the item names no item's layer. Only the receipt views
+  of 9.2 could, which AS2 fixes.
+- **`engram/CLAUDE.md`** still has no rule about agents running the person's commands (grep for "permission" and
+  "never run" finds nothing), as 7.6 says.
+- **The imprints spec (read, not edited).** I 8 defines R(I) as "the roads and trails of S that can be derived from I:
+  from its episodes' session ids and its log rows". I D36 says an imprint holds at most 100,000 memories, the
+  collection bound.
+- **The trail spec (read, not edited).** Its status line says revision 6. T 8 still shows a stop's summary only when
+  `read` and `inject_context` are allowed, still calls the `route` record the separate opt-in, and keeps the support
+  of 3. T 6.5 fills `laid_by` for roads and trails, and a route has at most 64 stops (T R11, 6.5). So only the tag was
+  stale, as AN2 said.
+
+### Should-fix
+
+- **AS1. Applied.** Use 13 now says what sections 10 and 15 say. A verbatim `remember` of m1 by `ph-coordinator`
+  within 24 hours of an allowed delivery of m1, such as just after use 1, is refused. On 2026-12-15 it passes: no
+  delivery of m1 in the example falls in the 24 hours before, so the guard finds no receipt, and the kept memory
+  carries no source subjects. That is section 10's known limit, latent in step 1 because `ph-coordinator` is a fixture.
+  E1 checks both cases. No rule changed.
+- **AS2. Applied.** 9.2 now says:
+  - the agents in a place see their own refusals only as the id, the time and "not allowed", with no code, layer,
+    action or cited record; their allowed items show the annotation of section 11;
+  - the requester's refused item carries no reason (12.2);
+  - a place's stewards see a refusal's code and action, and its layer as the place's id when the place is not a home;
+    a home's layer, cited or refusing, shows as the pseudonym that view gives the home's person, with no record ids;
+    a legacy or restriction layer shows as `legacy` or `restriction`.
+
+  A new paragraph under the table says why, with use 2: `NO_ALLOW` at `place:home/jenn` would tell `ph-coordinator`
+  that m3 is about Jenn. The owner and the owner's agents still see the layer, which is how Andy's list says "m3: needs
+  Jenn's yes". 9.1's `refusal`, 6.4's bulk refusal and section 11 point to 9.2. 12.2 records that the legacy frame
+  decision names no item's layer (checked above). Use 2 says what the agent and the stewards see. U8 tests the
+  agent's view, single and bulk, against the owner's, and the steward's view of a place, a home and a home's records.
+  E1 checks use 2's views.
+- **AS3. Applied.** 6.4 now says the imprints spec uses `imprint` "on the roads and trails derivable from the session
+  ids and log rows it keeps", and that `Need(admission)` has "one counted bulk `imprint` on the roads and trails
+  derivable from the package's session ids and log rows (that spec's R(I))". I wrote "the package's" where row 13 has
+  "its", because "its" there could be read as this spec's. The meaning is row 13's.
+
+### Nits
+
+- **AN1. Applied.** The status line says revision 4, names the final check, the repair after FMF1 and the final check
+  after repair, adds 18 to the repair's sections, and lists what revision 4 changed and why.
+- **AN2. Applied.** The header, 6.4 and 11 say trail spec revision 6. The header's "Revisions 2 and 3 keep every
+  section number" now says 2 to 4, and its list of changes that reach the other specs gains a revision 4 item.
+- **AN3. Applied.** 6.4's "Size" says 100,000 is "the most memories one collection holds (5.4), and so the most an
+  imprint holds (imprints spec D36)". The bound is unchanged.
+- **AN4. Applied.** 7.6's rule for `engram/CLAUDE.md` is now "any `engram-permissions` command that writes, such as
+  `sign`, `allow`, `grant`, `migrate` or `gate`", since every CLI write needs the yes. Section 16's `engram/CLAUDE.md`
+  row says the same.
+- **AN5. Applied, all four parts.**
+  - **FN1.** 9.1 says "a named bulk use of at most 512 objects, such as an imprint batch or one of the evaluation's
+    `read` batches". 6.4's "Size" says "such as an imprint batch".
+  - **FN2.** 6.5 step 1 now says how a bulk use runs it: the tests on a, P, `anc(P)` and `anc(H)` once, then U's size
+    bound, before any object; then each o ∈ O in ref order, with its own tests first in its decision. So any o ∈ O with
+    no subject refuses with `NO_LAYER`, and any with more than 8 subjects with `BOUND`, unless an earlier object
+    failed first. 6.4's "Refused" says an oversized U is refused before any object is decided. The old text didn't
+    say where the size bound falls, and F1 needs one answer. Testing the size first costs nothing and decides no
+    object. This order is the reviser's proposal for Rio Grande's call; it changes no verdict, only which code an
+    oversized bulk use with another fault gets. U22 tests it.
+  - **FN3.** I took the reviewer's second option, since grouping can't bound the worst case: objects may all differ.
+    6.4 gains "Its Pi budget", and section 15 a calibration hypothesis: one bulk `imprint` of 100,000 derived objects
+    whose `need` names 100,000 memories takes at most 40 s on the station's Raspberry Pi 5. That is the eligible-set
+    rebuild's rate: 2 s for 20,000 (object, action) decisions there, and at most 400,000 here (three actions on each
+    derived object, and `recall` on each memory). U24 now measures `explain` on such a use, with objects that don't
+    group. Marked slow, and run on the Pi.
+  - **The `[permissions]` warning.** `engram/config.py` gets a row in section 16: `load_config` warns when
+    `config.toml` has a `[permissions]` section, which it ignores, and names `engram-permissions gate`. 12.3 says so,
+    with the code citations above. The header's module list names `config.py`. The sentence "`engram/config.py` gains
+    nothing" is gone. U16 checks the one warning.
+
+### Beyond the letter of the items
+
+Each of these narrows what someone sees, or states what the code already does. None widens a permission.
+
+- The stewards' view no longer shows a home's record ids. Revision 3 said "the place records cited", which could be
+  read to include R1 in Andy's home. 9.4 keeps home rules readable only by their person, and the fix asks that
+  stewards see homes only as pseudonyms.
+- A legacy or restriction layer shows to stewards by its kind alone. The publisher's ConnectionPolicy belongs to a
+  person's house, so its id could point at a person.
+- An agent's own allowed receipts show the annotation it was already given, and no more.
+
+### Declined
+
+None.
+
+### Noticed, not changed
+
+These are outside the items, and I did not decide them.
+
+- **What one subject sees of another's home.** 9.2's first row lets a subject see "records" and "outcome" on every
+  receipt that names them. So a co-subject, such as Jenn, would see the layer and record ids of Andy's home when it
+  refused or allowed a use of m3. 9.4 keeps home rules readable only by their person. This is latent in step 1: no
+  other person can read receipts or write a layer on this ledger (7.6). Step 2 should decide whether a subject sees
+  another subject's home only as "another subject".
+- **An allowed item's annotation names every allowing home** (section 11). Once co-subjects can say yes (step 2), an
+  agent shown a memory about Andy and Jenn learns both homes from the line. Each said yes to the use, but not
+  necessarily to being named. It is latent in step 1 for the same reason. It touches the open question about memories
+  that mention other people, so it is left for Andy with that question.
+
+### For Rio Grande
+
+**Interface rows to bring to the table's owner.** I did not edit the table.
+
+- **Row 13.** P 6.4 now has the wording the row asks for in both places (with "the package's" for "its"). The note
+  "For P's next revision: P 6.4's last paragraph says ..." can be marked applied.
+- **Row 21 (Receipts; P 9.2).** P 9.2 now says what each reader sees of a refusal: the agent that asked sees "not
+  allowed" alone; stewards see a place's id, or a home as its person's pseudonym, and no home's record ids. The agreed
+  rule doesn't describe views, and I and T show no refusal layer to any agent (grep finds none), so no rule changes.
+  The row could note it under a "Permissions final-check pass".
+- **Row 29 (Pi bounds; P 15).** P 15 gains "Bulk decision: 40 s on the station's Raspberry Pi 5" for one bulk
+  `imprint` of 100,000 derived objects naming 100,000 memories, and U24 measures it. I's station decides by its own
+  finite check, so I is unaffected. The agreed rule could add the budget.
+- **Row 8 (bulk uses; P 6.5, U22).** A bulk use tests its requester, places and size before any object, then decides
+  objects in ref order (P 6.5 step 1). No verdict changes. The agreed rule could add one line.
+- Rows 3 and 23 cite text that changed only in its reason (P 6.4's 100,000) or its reach (P 7.6's `engram/CLAUDE.md`
+  rule). Their agreed rules are unchanged.
+- The table's "What changed, by spec" could gain a line: "Permissions, final-check pass (revision 4; header, 6.4, 6.5,
+  7.6, 9.1, 9.2, 11, 12.2, 12.3, 13, 15, 16, 17): rows 8, 13, 21 and 29."
+
+**Carried, for the other specs' revisers** (unchanged by this pass):
+
+- **I 8, an owner who is also the operator.** As the final check after repair says: I 8 should define the home layer
+  at the station, when the owner is the operator, as the owner's records met with the ceiling.
+- **I 12** still writes one row for all roads and trails (its section 12, "An action on roads and trails ... gets one
+  row"), while I 8 and P 9.1 split them per 100,000.
+- **T 7** (its line 914) still cites this spec's section 14 for "this narrows mistakes, not malice". The words are in
+  7.6. Optional.
+
+### Checked after editing
+
+- Every heading from `## 1.` to `## 19.` is present once (grep, one count per heading).
+- The spec ends with a newline. It has 1,952 lines.
+- `git diff` on the spec shows only the hunks listed above. No other line changed.
+- No "revision 5" remains in the spec.
+
+### Still open with Andy (unchanged)
+
+The license; one permission an agent may set on its own; what the county sets; pseudonyms; whether the terminal yes
+is enough in step 1; agent shares at home under `enforce`; the two departures from principle 5; who decides in the
+county steps; and memories that mention other people. On the last, this spec's default stands in 7.4, and section 19
+lists the question. Nothing here changes it.
+
+Not checked: I ran no engram tests, since this is a spec revision and no code changed. I committed nothing, pushed
+nothing and posted nothing.
+
+## Check of the follow-up revision (revision 4), 2026-10-25
+
+Reviewer: a fresh agent on the Pi, checking revision 4 in Andy's place (station law section 3). I took no part in
+writing, reviewing, repairing or changing this spec. I checked only what revision 4 changed: the "Response to the final
+check after repair" above, and `git diff HEAD` on the spec (98 lines added, 44 removed). I read the parts of the
+imprints spec (I) and trail spec (T) that the changes cite, and interface rows 3, 8, 13, 21, 23 and 29. I edited no
+spec and not the table. Spec lines are the working copy's. Code is cited by file and line, read today.
+
+VERDICT: APPROVE
+
+AS1 to AS3 and AN1 to AN5 are resolved. The file is complete. I found no new must-fix. Three should-fix items and four
+nits remain. All are latent in step 1, and none blocks the plan. Nothing here decides whether memories that mention
+other people may move at all.
+
+### The file is complete
+
+- Every heading from `## 1.` to `## 19.` is present once (grep, one count per heading).
+- The file ends with a newline. It has 1,952 lines. HEAD has 1,898, and 1,898 + 98 − 44 = 1,952.
+- Every hunk of the diff is one the response lists. No other line changed. No "revision 5" is left.
+- Sections 18 and 19 are unchanged. Section 19 still lists the question about memories that mention other people,
+  and decides nothing.
+
+### AS1 to AS3: resolved
+
+- **AS1.** Use 13 (lines 1570-1578) now matches section 10 (lines 1209-1218) and section 15's guard row. On
+  2026-11-02, R1 lists no `imprint`, so a verbatim `remember` just after use 1 is refused. On 2026-12-15 the guard
+  finds no allowed delivery in the last 24 hours, so the `remember` passes. Use 11 (2026-12-01) is 14 days earlier.
+  Use 12 is a refused imprint, not a delivery. Use 13's own delivery is refused, and the guard reads only allowed
+  receipts. E1 (line 1905) checks both cases. No rule changed.
+- **AS2.** 9.2 (lines 1141-1154) now keeps a refusal's layer from the agent that asked, in its receipts and at the
+  point of use (11, 12.2). Stewards see a home only as its person's pseudonym, with no record ids. Each change narrows
+  what someone sees. None widens a permission. Use 2 (lines 1526-1530) is right. The first failing pair is
+  (`place:home/jenn`, `recall`), since Andy's home comes first in 6.5's order and allows `recall`. U8 and E1 test the
+  views. I and T show no refusal layer to any agent. I gives refusal codes only to the owner's use list (I 8, its
+  lines 1025-1027).
+- **AS3.** 6.4 (lines 591-592 and 655-657) now says "the roads and trails derivable from" the session ids and log
+  rows. That matches I 8's R(I) (its line 980) and row 13's wording. "The package's" for row 13's "its" keeps the
+  meaning.
+
+### AN1 to AN5: resolved
+
+- **AN1.** The status line says revision 4, names the final check, the repair and the final check after repair, adds
+  18 to the repair's sections, and lists revision 4's changes with their sections.
+- **AN2.** The header, 6.4 and 11 say trail spec revision 6. T's status line says revision 6.
+- **AN3.** 6.4's "Size" gives the imprint bound as the reason. I D36 says an imprint holds at most 100,000 memories.
+- **AN4.** 7.6 (lines 972-975) and section 16 now cover any `engram-permissions` command that writes. 7.6 says every
+  CLI write needs the yes. `engram/CLAUDE.md` still has no such rule (grep for "permission" and "never run" finds
+  nothing).
+- **AN5.**
+  - FN1 is in 6.4 and 9.1.
+  - FN2, the bulk order in 6.5 step 1 (lines 671-674), is well defined. Requester and place tests run first, then
+    the size bound, then each object in ref order. A per-object fault is decided as in a single use. It changes only
+    which code a bulk use with two faults gets, never a verdict, so I 8's check still agrees in its verdicts (row 8).
+  - FN3's budget is sound arithmetic. A bulk `imprint` on R(I) needs `recall`, `read` and `imprint` on each derived
+    object, and `recall` on each memory named (6.4's table; I 8's `Need(admission)`). That is 300,000 + 100,000 =
+    400,000 (object, action) pairs. The recall eligible set is one action per placement (12.2), so the rebuild makes
+    20,000 pairs in 2 s, which is 10,000 a second, and 400,000 take 40 s. The largest of I's other uses is a bulk
+    `route`: 100,000 + 100,000 = 200,000. See BS2 for the case P doesn't bound.
+  - The `[permissions]` warning now has its component (section 16, `config.py`) and its test (U16).
+
+### Code claims checked today, all true
+
+- `engram/config.py:318-327`: `load_section` warns only about unknown keys inside a section it loads.
+  `:332-356`: the sections `load_config` loads. `permissions` is not among them, so today a `[permissions]` section is
+  dropped without a word. `:388-398`: the resolver's fallback, as 12.3 already said.
+- `engram/lighthouse_daemon.py:402`: the read frame's decision is made once, before the item loop. `:411-440`: the
+  loop. `:438`: every item gets that same `decision.to_json()`.
+- `engram/lighthouse_policy.py:65-67`: `to_json` holds only `effect`, `ruleId` and `code`.
+- So 12.2's new sentence holds. A refused item's `decision` is the same for every item of the frame and names no
+  item's layer.
+
+### Must-fix
+
+None.
+
+I looked for these:
+
+- anything about a person moving without their yes;
+- an agent widening a permission, or learning whose memory a refusal protected;
+- broken mathematics;
+- wrong claims about code;
+- broken interfaces.
+
+The new 9.2 rule closes the reads and receipts. The one point of use it doesn't name is BS1. That case is latent,
+and the spec doesn't say the guard names a layer.
+
+### Should-fix
+
+**BS1. The `remember` guard's reply to the agent isn't covered by 9.2's new rule.**
+Where: 10, "Keeping it is an imprint" (line 1209); 9.2's paragraph (lines 1149-1154); U17 (line 1852).
+
+- **Why.** 9.2 now says the agent learns only that it was refused, "at the point of use (12.2) and in its receipts
+  alike". The guard's receipt is covered by 9.2's table. Its reply to the `remember` call is not: section 10 doesn't
+  say what it tells the agent. Section 18 lets the builder word errors "as long as each refusal names its rule", and
+  that line is about the CLI.
+- **Failure.** Use 1 delivers m1 to `ph-coordinator`. Later that day Andy records `person:amy` as a co-subject of m1
+  (7.4 lets a later subject reach the next decision). Within 24 hours `ph-coordinator` calls `remember` with m1's
+  text. The guard decides `imprint`. Subjects come first in 6.5's order, sorted by id, and `person:amy` sorts before
+  `person:andy`, so the first failing layer is `place:home/amy`. If the reply names it, the agent learns that m1 is
+  about Amy, who never said yes. The annotation at delivery named only Andy's home, so this is new to the agent.
+  Latent: in step 1 every real receiver is one of the owner's own instances, and `ph-coordinator` is a fixture.
+- **Fix.** Section 10 says the guard tells an agent that doesn't act for the owner only that keeping this content is
+  not allowed, with no code, layer or action, as 9.2 says. U17 tests it with a co-subject recorded after the delivery.
+  No rule changes.
+
+**BS2. P doesn't bound how many memories a counted bulk use's `need` names, so "the largest size" isn't fixed.**
+Where: 6.4, "Size" and "Its Pi budget" (lines 641-651); section 15's "Bulk decision" row (line 1702); U24.
+
+- **Why.** 6.4 bounds the objects of a counted bulk use (100,000), and waives the bound of 32 named memories. It sets
+  no bound on the memories that `need` names across the objects. The budget row assumes 100,000, which holds only
+  because I D36 caps an imprint and every memory a road or trail of R(I) names is in objects(I) (I 8, line 980).
+- **Failure.** In P's own terms, a counted bulk use with h a store, over 100,000 derived trails of up to 512 touches
+  (T 4), could name up to 51.2 million memories. That is about 128 times the 400,000 pairs the budget covers.
+  `explain` on it runs far past 40 s on the Pi, and U24 passes without measuring that case. Latent: in step 1 the
+  only counted bulk uses are I's.
+- **Fix.** 6.4's "Size" adds that a counted bulk use's `need` names at most 100,000 memories (the collection bound,
+  as for objects), and a larger set is several bulk uses. Or 6.4 says the budget covers only such uses. Either is
+  Rio Grande's call. U22 gains the case that applies. No verdict in I changes.
+
+**BS3. The reviser's two "Noticed, not changed" items live only in this file.**
+Where: 14, later steps, step 2; 19, "Memories that mention other people".
+
+- **Why.** Both are for later steps or for Andy. A builder of step 2 reads the spec, and Andy reads section 19, not
+  the review history.
+  - The first item: a subject sees the records and outcome of every receipt that names them, so Jenn would see
+    Andy's home's layer and record ids, while 9.4 keeps home rules readable only by their person.
+  - The second item: an allowed item's annotation names every allowing home (11). That touches the open question.
+- **Fix.**
+  - Step 2 in 14 gains one line: decide what a subject sees of another subject's home in receipts (9.2).
+  - Section 19's item gains a fact, not a decision: once co-subjects can say yes, the annotation names each allowing
+    home, so an agent shown a memory about Andy and Jenn learns both homes.
+
+  Neither line decides whether such memories may move.
+
+### Nits
+
+- **BN1.** Section 15's "Objects per bulk use" row (line 1689) still says "(an imprint batch)". FN1's "such as", and
+  the evaluation's `read` batches, are in 6.4 and 9.1 only.
+- **BN2.** 6.4's "Refused" (line 632) says an oversized U "is refused with `BOUND` before any object is decided". By
+  6.5 step 1 (line 671) and U22 (line 1880), the requester and place tests come first, so an oversized U with an
+  unregistered requester gets `UNKNOWN_REQUESTER`. It could say "once its requester and places pass".
+- **BN3.** 9.2's paragraph (line 1152) says the ledger owner and the owner's agents see the layer, but the table has
+  no row for them. An agent acting for the owner that was refused would read two rows: its own receipts ("not
+  allowed") and the owner's list through `permissions(focus="uses")` (9.3), which shows the layer. Both are meant. A
+  row "The ledger owner, and agents acting for the owner: the owner's list (9.3), with layers" would make the table
+  say it.
+- **BN4.** 9.2's agents row (line 1145) shows a refusal as "the id, the time and 'not allowed'". A counted bulk use
+  names no id (9.1: `object` null), while U8 tests "single or bulk". It could say what a bulk refusal shows, such as
+  the count, or the batch's digest for a named one.
+
+### The interface table, from this spec's side
+
+Rows 3, 8, 13, 21, 23 and 29 hold. I read them and did not edit the table.
+
+- **Row 13.** P 6.4 now has the wording the note asks for, in both places. The note can be marked applied.
+- **Rows 8, 21 and 29.** Their agreed rules are still true. The reviser's suggested lines are accurate:
+  - row 8: bulk order in 6.5 step 1;
+  - row 21: 9.2's views of a refusal;
+  - row 29: the 40 s budget.
+
+  If BS2 adds a bound on named memories, row 8's and row 29's agreed rules should name it.
+- **Rows 3 and 23.** Only a reason (6.4's 100,000) and a reach (7.6's rule) changed. The agreed rules are unchanged.
+
+### For Rio Grande
+
+- The response's list of table updates is accurate. The table's owner can apply it as written.
+- Carried for the other specs' revisers, checked today and unchanged:
+  - **I 8** still allows an owner who is the operator (its line 864) without defining that home layer at the station
+    as the owner's records met with the ceiling.
+  - **I 12** still gives roads and trails one row (its line 1621).
+  - **T 7** (its line 914) still cites this spec's 14 for "narrows mistakes, not malice". The words are in 7.6.
+- BS2's choice between a bound and a narrower budget is Rio Grande's.
+
+### Still open with Andy (unchanged)
+
+These are still open:
+
+- the license;
+- one permission an agent may set on its own;
+- what the county sets;
+- pseudonyms;
+- whether the terminal yes is enough in step 1;
+- agent shares at home under `enforce`;
+- the two departures from principle 5;
+- who decides in the county steps;
+- memories that mention other people.
+
+On the last, this spec's default stands in 7.4, and section 19 lists the question. Nothing here changes it.
+
+Not checked: I ran no engram tests, since this is a check of a spec revision and no code changed. I edited no spec
+and not the interface table. I committed nothing, pushed nothing and posted nothing.

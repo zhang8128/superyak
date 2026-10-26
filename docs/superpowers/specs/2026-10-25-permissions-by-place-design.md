@@ -1,26 +1,37 @@
 # Permissions by Place
 
 **Date:** 2026-10-25
-**Status:** Revision 3, answering the second fresh reviewer's re-check
-([review](../reviews/2026-10-25-permissions-by-place-spec-review.md), verdict approve with changes; its "Re-check
-response" says what changed). Revision 2 answered the first fresh review. An interface pass across the three
-city-rail specs then changed 4.1, 6.4, 9.1, 11, 14, 15, 17 and 19
-([interfaces](../reviews/2026-10-25-city-rail-interfaces.md)). Revision 3 changes 3, 4.1, 5.1, 5.3, 5.4, 6.1, 6.3,
-6.4, 6.5, 6.6, 7.4, 8, 9.1, 9.3, 10, 11, 12.1, 12.2, 12.3, 13, 14, 15, 16, 17 and 19, and keeps every section
-number.
-No change in either pass widens a permission. Nothing here is built.
+**Status:** Revision 4, answering the final check after repair
+([review](../reviews/2026-10-25-permissions-by-place-spec-review.md), verdict approve; its "Response to the final
+check after repair" says what changed). Revision 2 answered the first fresh review. An interface pass across the
+three city-rail specs then changed 4.1, 6.4, 9.1, 11, 14, 15, 17 and 19
+([interfaces](../reviews/2026-10-25-city-rail-interfaces.md)). Revision 3 answered the second fresh reviewer's
+re-check. It changed 3, 4.1, 5.1, 5.3, 5.4, 6.1, 6.3, 6.4, 6.5, 6.6, 7.4, 8, 9.1, 9.3, 10, 11, 12.1, 12.2, 12.3, 13,
+14, 15, 16, 17 and 19. Its final check found the file cut off after section 14's first later step. The repair after
+that restored the rest and brought 14, 15, 16, 17, 18 and 19 up to date, and the final check after repair approved
+it. Revision 4 applies that check's AS1 to AS3 and AN1 to AN5, and the items the repair left:
+- use 13 says the `remember` guard refuses only within 24 hours of a delivery (13, E1; AS1);
+- a refusal tells the agent that asked no code, layer or action, and stewards see a home only as a pseudonym (9.1,
+  9.2, 11, 12.2, use 2, U8; AS2);
+- the admission's bulk `imprint` covers the roads and trails derivable from session ids and log rows (6.4; AS3);
+- the trail spec is revision 6 (header, 6.4, 11; AN2); the reason for 100,000 is the imprint bound (6.4; AN3); the
+  `engram/CLAUDE.md` rule covers every CLI write (7.6, 16; AN4);
+- "such as an imprint batch" (6.4, 9.1); a bulk use's step-1 order (6.5, U22); a Pi budget for a bulk decision (6.4,
+  15, U24); and `config.py` warns about `[permissions]` (header, 12.3, 16, U16) (AN5).
+
+Every revision keeps every section number. No change in any pass widens a permission. Nothing here is built.
 **Contract:** [the city rail vision](../../city-rail-vision.md). Its principles and its "Permissions by place"
 section bind this spec. Rio Grande wrote them from Andy's words. Where they go past a quote, they are Rio Grande's
 call carried by the contract, and this spec says so.
 **Modules:** new `engram/permissions.py`, `engram/permission_ledger.py`, `engram/permission_uses.py`,
 `engram/permission_cli.py`; changes to `lighthouse_daemon.py`, `neighbors.py`, `lighthouse_client.py`,
-`context_lighthouse.py`, `sharing.py`, `server.py`, `storage.py`, `federation.py`, `policy_gen.py`, and migration
-`029`.
+`context_lighthouse.py`, `sharing.py`, `server.py`, `storage.py`, `federation.py`, `policy_gen.py`, `config.py` (one
+warning, 12.3), and migration `029`.
 **Builds on:** [lighthouse local city](../../../engram/docs/superpowers/specs/2026-09-01-lighthouse-local-city-design.md),
 [layered lighthouse](../../../engram/docs/superpowers/specs/2026-09-02-layered-lighthouse-design.md),
 [memory lanes](../../../engram/docs/superpowers/specs/2026-06-12-memory-lanes-design.md),
 [spec A](2026-10-08-instruction-layers-and-grants-design.md), [grants step 3](2026-10-15-grants-step3-design.md).
-**Depended on by:** the imprints spec and trail spec revision 5. Both cite sections 5, 6 and 11. Revisions 2 and 3
+**Depended on by:** the imprints spec and trail spec revision 6. Both cite sections 5, 6 and 11. Revisions 2 to 4
 keep every section number, but line numbers moved. These changes reach them:
 
 - `route` also needs `read` and `inject_context` on every memory whose content a route answer shows (6.4). From
@@ -31,6 +42,9 @@ keep every section number, but line numbers moved. These changes reach them:
 - Revision 3: a use that shows nothing to any agent and lets only counts leave, such as the trail evaluation on an
   imprint, may be decided as one **bulk use** (6.4, P33). The bound of 32 named memories doesn't apply to it.
 - Revision 3: 9.1 names the exact form of the station receipts the imprints spec imports.
+- Revision 4: the agent that asked sees a refused read only as "not allowed", and a place's stewards see a home in
+  a refusal only as its person's pseudonym (9.2). A bulk use tests its requester, places and size before any object
+  (6.5, step 1), and a bulk decision has a Pi budget (15, U24). No rule either spec relies on changes.
 
 ## 1. Why
 
@@ -571,11 +585,11 @@ audience may not recall, which P23 forbids. The imprints spec already meets the 
 every target of the row ships (its section 6.2).
 
 This matches today's receiver: `recall` before asking, and all three before reading and delivering
-(`engram/neighbors.py:82`, `:120`, `:138`). The trail spec (revision 5) uses `route` in place of its work-lane rule,
+(`engram/neighbors.py:82`, `:120`, `:138`). The trail spec (revision 6) uses `route` in place of its work-lane rule,
 and its section 8 already shows a stop's summary only when `inject_context` is allowed on that memory, naming the id
 alone otherwise. Its "separate owner opt-in to route publication" is a `route` record. Its minimum published support
-of 3 stays in the trail spec. The imprints spec uses `imprint` on the memories it keeps, and on the trails whose log
-rows it keeps (its D7 and D10).
+of 3 stays in the trail spec. The imprints spec uses `imprint` on the memories it keeps, and on the roads and trails
+derivable from the session ids and log rows it keeps (its D7 and D10).
 
 **Bounds.** A use on one object reads at most 43 layers (8 subjects, 16 requester places, 16 holding places, 2
 legacy, 1 restriction). A use on a road or trail is one decision for the road or trail and one for each memory it
@@ -614,7 +628,8 @@ and this spec's `explain` would refuse what the imprints spec's check allows. So
   per-object use would be allowed, except that the bound of 32 named memories doesn't apply. Nothing else is
   waived: 43 layers per object, 8 subjects per road or trail.
 - **Refused** when any per-object decision is. The refusal is the first failing per-object decision, objects in ref
-  order. It holds the code, layer and action only, never the object (P23).
+  order. It holds the code, layer and action only, never the object (P23). What each reader sees of it is 9.2. A U
+  over more objects than **Size** below allows is refused with `BOUND` before any object is decided (6.5, step 1).
 - **The decision.** `cited` holds, for each (layer, action), every distinct record cited for it across O, sorted by
   id. `until` and `horizon` are the earliest across O, and null when every one is null. `decide` gives one result for
   U, and F1 fixes it.
@@ -623,21 +638,24 @@ and this spec's `explain` would refuse what the imprints spec's check allows. So
   qualifies: what it keeps stays in the copy h, and nothing of it reaches an agent. If the same run shows an object
   to an agent, that showing is an ordinary use, decided per object under the bound of 32. A `remember` of delivered
   content (section 10) is never bulk: it is decided per item.
-- **Size.** At most 512 objects when the receipt names them (an imprint batch). At most 100,000 when the deciding
-  party derives the objects and never names them, such as the roads and trails derived from an imprint. 100,000 is a
-  collection's bound (5.4), the most memories an outside-home allow can reach. A larger set is several bulk uses,
-  each with its own receipt.
+- **Size.** At most 512 objects when the receipt names them, such as an imprint batch. At most 100,000 when the
+  deciding party derives the objects and never names them, such as the roads and trails derived from an imprint.
+  100,000 is the most memories one collection holds (5.4), and so the most an imprint holds (imprints spec D36). A
+  larger set is several bulk uses, each with its own receipt.
 - **One receipt** per bulk use (9.1).
 - **How it is computed.** Objects that agree on every attribute the pre-filtered records read (6.5) get the same
   decision: kind, store, layer, lane history, collection memberships, whether a record lists them in `memories`, and
   subjects. So the evaluator may decide each such group once. The imprints spec's finite check is this shortcut:
   every object of one kind in an imprint matches the same records (its section 8, "A finite check").
+- **Its Pi budget.** With or without grouping, one bulk decision at the largest size must fit the budget in section
+  15, which U24 measures. `explain` on a bulk use runs the same decision.
 
 So the imprints spec's `Need(trail-evaluation)` is bulk uses with h = `imprint:<station peer id>/<imprint id>`:
 `read` on the shipped memories, in batches of 512 (its `need` adds `recall`), and one `route` on all the roads and
 trails derived from them (its `need` adds `recall` on every memory they name). Its `Need(admission)` is imprint
-batches on the memories and, with `route`, one bulk `imprint` on the trails whose log rows it keeps. This spec's
-`decide` and `explain` then agree with the station's check, and F1 holds for both.
+batches on the memories and, with `route`, one counted bulk `imprint` on the roads and trails derivable from the
+package's session ids and log rows (that spec's R(I)). This spec's `decide` and `explain` then agree with the
+station's check, and F1 holds for both.
 
 ### 6.5 The decision
 
@@ -650,6 +668,10 @@ decide(u, σ) → {allowed, at, ledger_seq, action, cited: [{layer, kind, action
    with `RETIRED` if P, a place in `anc(P)` or `anc(H)`, or the home of a subject is retired. Then with `NO_LAYER` if
    o has no subject. Then with `BOUND` if a bound of 6.4 would be passed, or if o would have more than 8 subjects,
    which a kept copy can reach through its source (7.4).
+   **For a bulk use U** (6.4), the tests on a, P, `anc(P)` and `anc(H)` run once, and then U's size bound, before any
+   object. Then each o ∈ O is decided in ref order, and its own tests here (a retired subject's home, no subject, more
+   than 8 subjects) come first in its decision. So any o ∈ O with no subject refuses U with `NO_LAYER`, and any o ∈ O
+   with more than 8 subjects with `BOUND`, unless an earlier object failed first.
 2. **The order.** Compute `Req(u)` and sort it: subjects by id, then the requester's places by id, then the holding
    places by id, then legacy layers, then the restriction layer. Actions take `need`'s order: `recall`, `read`,
    `inject_context`, `route`, `imprint`.
@@ -948,8 +970,9 @@ decide which agents those are."
 
 **Known limits.** The person and their agents share one Unix account, so this narrows mistakes, not malice. An agent
 that fakes a terminal and runs `sign` is acting against the law, not by mistake. `engram/CLAUDE.md` gains the rule
-that agents never run the person's commands (`sign`, `allow`, `grant`, `migrate`, `gate`) for them (section 16); it
-has no such rule today. The daemon's frames name
+that agents never run, for the person, any `engram-permissions` command that writes, such as `sign`, `allow`,
+`grant`, `migrate` or `gate` (section 16). Every such command needs the yes (above). `engram/CLAUDE.md` has no such
+rule today. The daemon's frames name
 their `receiver` without authentication, so any process under that account can claim to be any registered agent.
 Step 2 moves every outside-home yes to the browser, and requesters authenticate as station ships.
 
@@ -1068,8 +1091,9 @@ CREATE TABLE uses_monthly(month TEXT NOT NULL, subject TEXT NOT NULL, place TEXT
 - **An answer use on a road or trail** (6.4), such as one `route` edge, writes one receipt per road or trail, listing
   the memories it named, at most 32.
 - **A bulk use** (6.4, P33) writes one receipt, with `object` null and `copy` = h.
-  - A *named* bulk use, an imprint batch of at most 512 objects, holds in `returned` the count and the SHA-256 of
-    the sorted object list. Its objects are in `use_subjects`.
+  - A *named* bulk use of at most 512 objects, such as an imprint batch or one of the evaluation's `read` batches
+    (6.4), holds in `returned` the count and the SHA-256 of the sorted object list. Its objects are in
+    `use_subjects`.
   - A *counted* bulk use, over objects the deciding party derives and never names, holds the count in `returned`.
     It has one `use_subjects` row per distinct subject of its objects, with the copy ref h in the `object` column.
     No object is named anywhere.
@@ -1100,8 +1124,8 @@ CREATE TABLE uses_monthly(month TEXT NOT NULL, subject TEXT NOT NULL, place TEXT
 - `use_subjects` has one row per (subject, object) the receipt names, written at the time of the use. For a counted
   bulk use, the object column holds the copy ref h.
 - `cited` holds the record cited per (layer, action) and every layer's version (`ledger_seq`); for a bulk use, every
-  distinct record cited per (layer, action) (6.4). `refusal` holds the code, the layer and the action. `copy` holds h
-  (6.1) on every receipt.
+  distinct record cited per (layer, action) (6.4). `refusal` holds the code, the layer and the action. Which readers
+  see which of them is 9.2: the agent that asked sees none. `copy` holds h (6.1) on every receipt.
 - A receipt never holds content or query text, as today's receipts (local-city spec, section 4.6). `session_label`
   is the client's declared label: provenance, never authority (spec A, D7). In step 1 the frame carries none, so it is
   null.
@@ -1117,10 +1141,17 @@ CREATE TABLE uses_monthly(month TEXT NOT NULL, subject TEXT NOT NULL, place TEXT
 | Reader | Sees |
 |---|---|
 | A subject (and agents acting for them) | Every receipt whose `use_subjects` names them, as written at the time of the use: requester, place, action, purpose, records, time, outcome. A later claim to be a subject gives no access to earlier uses. |
-| A place's stewards, and the stewards of every place that dominates it | Receipts for uses at the place, or of copies it holds: requester, action, purpose, outcome, the place records cited, time. Each subject appears as a pseudonym. Filtered counts. |
-| The agents in a place | Their own receipts: allowed items, and refused reads of ids they named. No filtered counts, which would tell them refused memories exist (P23). |
-| The requester | Its own allowed items, with the annotation of section 11. |
+| A place's stewards, and the stewards of every place that dominates it | Receipts for uses at the place, or of copies it holds: requester, action, purpose, outcome, time, and the records cited in the layers of places that are not homes. Each subject appears as a pseudonym, and so does every home: a home's layer, cited or refusing, shows as the pseudonym this view gives the home's person, with no record ids. A refusal shows its code and action, and its layer as the place's id when that place is not a home, or as `legacy` or `restriction`. Filtered counts. |
+| The agents in a place | Their own receipts: allowed items, with the annotation of section 11, and refusals of ids they named. A refusal shows only the id, the time and "not allowed": no code, layer, action or cited record. No filtered counts, which would tell them refused memories exist (P23). |
+| The requester | Its own allowed items, with the annotation of section 11. A refused item carries no reason (12.2). |
 | Anyone else | Nothing. |
+
+**A refusal names no layer to the agent that asked** (the final check after repair, AS2). A refusal's layer can name
+a person: `NO_ALLOW` at `place:home/jenn` would tell `ph-coordinator` that m3 is about Jenn, without her yes (use 2).
+So the agent learns only that it was refused, at the point of use (12.2) and in its receipts alike, and a place's
+stewards see that home only as Jenn's pseudonym. The ledger owner and the agents acting for the owner see the layer:
+that is how Andy's list says "m3: needs Jenn's yes" (9.3). An allowed item's annotation still names the layers that
+allowed it (section 11).
 
 A pseudonym is the first 16 hex of `HMAC-SHA256(places.pseudonym_salt, subject id)`. It is stable within one place,
 so a place's stewards can count uses per person without the name on the screen. It is different across places.
@@ -1214,7 +1245,7 @@ The agent sees one line. `neighbors.py` prints nothing; it returns JSON, which t
 `laid by andy (engram) · allowed by home/andy #7f3a, la-county #0b9e · until 2027-01-31 · receipt #5e21a9c0`
 
 - `laid_by`: who made it. For a memory, its store's owner and instance name. For a road or trail, the trail spec
-  (revision 5) fills it in the same field.
+  (revision 6) fills it in the same field.
 - `allowed_by`: each consent layer's cited records, in the order of 6.5, step 2. Each layer shows its place's short
   name and the short ids of its distinct cited records, joined by `+`.
 - `until`: the decision's `until`, as a date. It covers ledger layers only (6.5, step 6): a legacy policy rule may
@@ -1231,7 +1262,7 @@ and gains `permission`.
 
 A requester never learns that a refused memory exists (P23). Refused copies are filtered before ranking, as the daemon
 filters by audience today (`engram/lighthouse_daemon.py:227-239`). A refused read returns no content and no reason
-beyond "not allowed" (12.2).
+beyond "not allowed" (12.2), and the agent's receipts give it none later (9.2).
 
 ## 12. How it maps onto what exists
 
@@ -1330,7 +1361,9 @@ files a proposal, and says which.
   client checks read items' keys strictly (`engram/lighthouse_client.py:315`), so it accepts `permission` with that
   shape and still rejects any other member. Both ends are engram's own code, so the protocol version stays `0.1`.
 - **A refused item** looks like an unshared item today: `content: null`, `audiences: []`, and `decision` the legacy
-  frame decision, with no `permission` member (`engram/lighthouse_daemon.py:411-440`).
+  frame decision, with no `permission` member (`engram/lighthouse_daemon.py:411-440`). That decision is made once per
+  frame, before any item (`:402`), and holds only `effect`, `ruleId` and `code` (`engram/lighthouse_policy.py:65-67`).
+  So it is the same for every item of the frame and names no item's layer (9.2).
 - **Modes.** With the gate at `enforce`, an item is served only when the legacy path and the new decision both allow
   it. With `shadow`, the legacy path alone decides, and both decisions go to the receipts with `shadow = 1`.
 - **Bounds.** `share` refuses the 20,001st placement in a house, with the bound in its reason. Under `enforce`, a
@@ -1379,6 +1412,9 @@ by running `engram-permissions gate <current mode>` again, with the yes.
 Closed means fail closed: the daemon serves nothing, `share` and `permit` refuse, and the `remember` guard refuses
 as under `enforce`. Each says why. A `[permissions]` section in `config.toml` is ignored with a warning: config
 can't lower the gate, or set it at all. Lowering the gate is the owner's terminal act like any other move.
+`load_config` logs the warning, naming `engram-permissions gate` (section 16). Today it warns only about unknown keys
+inside the sections it loads (`engram/config.py:318-327`), and `permissions` is not one of them (`:332-356`), so the
+section would be dropped without a word.
 
 1. **Off.** No ledger: everything behaves exactly as today, which is deny-by-default already, except that the
    daemon never serves `group:outside-home` and `share` refuses that name (12.1).
@@ -1489,7 +1525,9 @@ place (12.3, step 2). So every use below names h = `store:<the house's instance_
    2027-01-31 · receipt #…`.
 2. *Same agent, m3.* The recall filtered m3, so the agent asks for it by an id Andy gave it. m3's subjects are Andy
    and Jenn. Jenn's home layer allows nothing. **Refused**, `NO_ALLOW` at `place:home/jenn`. The agent gets
-   `content: null` and no reason. Andy's list says "m3: needs Jenn's yes".
+   `content: null` and no reason. Andy's list says "m3: needs Jenn's yes". The agent's own receipts show the read only
+   as "not allowed", so it can't learn from the layer that m3 is about Jenn. Clinic-3's stewards, and those above it,
+   see `NO_ALLOW` at Jenn's pseudonym, never `place:home/jenn` (9.2).
 3. *`parks-planner` recalls for program-operations.* R1's audience doesn't dominate parks-and-rec, where the agent
    works and which it acts for. m1 to m3 are filtered before ranking. **Refused**; the recall receipt counts them as
    filtered, with no subject named. This is A2. A public-health steward can't change that alone. Putting
@@ -1531,8 +1569,13 @@ place (12.3, step 2). So every use below names h = `store:<the house's instance_
     subject Andy recorded on m1 later would reach the copy at its next decision, since both are on this ledger (7.4).
 13. *2026-12-15T00:00:00Z.* R1′ ends. The next delivery of m1 is **refused** with `EXPIRED`: R1′ is a candidate whose
     effective end has passed, and R1 is revoked, so it is not one. The sweep removes the placements within a pass.
-    The content delivered in use 1 is still in that session's context, and the receipt says so. If `ph-coordinator`
-    tries to `remember` it verbatim, that is refused, since no `imprint` is allowed.
+    The content delivered in use 1 is still in that session's context, and the receipt says so. A verbatim
+    `remember` of m1 by `ph-coordinator` (section 10):
+    - within 24 hours of an allowed delivery of m1, such as just after use 1 on 2026-11-02, is refused, since no
+      `imprint` is allowed;
+    - at this use's time, passes. No delivery of m1 in this example falls in the 24 hours before
+      2026-12-15T00:00:00Z, so the guard finds no receipt, and the kept memory carries no source subjects. That is
+      section 10's known limit on time. It is latent in step 1, because `ph-coordinator` is a fixture (section 10).
 14. *Andy lists his uses.* `engram-permissions uses --collection collection:andy/medical-history` shows:
     - `ph-coordinator`'s allowed recall of m1 and m2;
     - the allowed delivery of m1;
@@ -1656,6 +1699,7 @@ limits.
 | Eligible-set cache | 64 entries | bounds daemon memory |
 | Placements per published house | 20,000 | bounds a cache rebuild on a Pi |
 | Eligible-set rebuild | 2 s on the station's Raspberry Pi 5 | the Pi budget (12.2) |
+| Bulk decision | 40 s on the station's Raspberry Pi 5, for a bulk `imprint` of 100,000 derived objects whose `need` names 100,000 memories | the Pi budget for one bulk use at its largest (6.4), and so for `explain` on one (U24). It is the rebuild's rate: the rebuild makes 20,000 (object, action) decisions in 2 s, and this use at most 400,000 (three actions on each derived object, and `recall` on each memory) |
 | `remember` guard | 200 receipts, 24 hours | bounds the check on each `remember`; its known limits are in section 10 |
 | Houses read for the `off` rule | 64 | bounds the effective gate (12.3); with more houses, a reader reads closed |
 | Receipt retention | 400 days, then monthly counts | Open for Andy for the county |
@@ -1686,9 +1730,8 @@ the local city's two policy evaluators must agree (local-city spec, section 4.4)
 | `engram/policy_gen.py` | Refuses a group named `outside-home`. |
 | `engram/migrations/029_share_identity.sql` | `shared_memories.source_instance_id`, `shared_memories.record_id`, and the placements' change counter with its triggers. Marking a new house is `Storage`'s step for 029 (row above), since it reads the ledger, another file. |
 | `engram/tests/test_permissions*.py`, fixtures in `engram/tests/fixtures/permissions/` | Section 17. |
-| `engram/CLAUDE.md` | A "Permissions" paragraph, Key Files rows, and the rule that agents never run the person's commands. |
-
-`engram/config.py` gains nothing. The ledger's path is fixed (5.5) and the gate lives in the ledger (12.3).
+| `engram/config.py` | `load_config` warns when `config.toml` has a `[permissions]` section, which it ignores, and names `engram-permissions gate` (12.3). Nothing else: the ledger's path is fixed (5.5) and the gate lives in the ledger (12.3). |
+| `engram/CLAUDE.md` | A "Permissions" paragraph, Key Files rows, and the rule that agents never run, for the person, any `engram-permissions` command that writes (7.6). |
 
 ## 17. Tests the builder must include
 
@@ -1757,7 +1800,10 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   see no filtered counts; home rules are not exported; the hash chains verify and one changed byte fails; every
   receipt carries its copy h; rows in 9.1's imported form are marked with their station and counted apart from local
   ones, `uses --action X` matches each row's own action, and `uses --object` finds an imported memory row (9.1,
-  9.3).
+  9.3); an agent's view of its own refused read, single or bulk, shows "not allowed" with no code, layer, action or
+  cited record, while the owner's list shows the layer; a steward's view shows a refusal's layer as the place's id
+  when the place is not a home, and as the person's pseudonym when it is a home, and shows no home's record ids
+  (9.2; the final check after repair, AS2).
 - **U9** Daemon: `enforce` needs both decisions; `shadow` delivers by the legacy path and records both; the ledger's
   bytes are unchanged and `total_changes` is 0; a frame's `at` in the future extends nothing; the cache recomputes on
   a new `seq`, a new change count, and at the horizon; refused copies never appear among candidates; a refused read
@@ -1789,7 +1835,8 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   the check reruns after a registry change; hitting the box cap reports "could not check".
 - **U16** Gate:
   - with no ledger, the existing daemon, neighbor and sharing tests pass unchanged;
-  - a `[permissions]` section in `config.toml`, or a config that fails to parse, changes no mode;
+  - a `[permissions]` section in `config.toml`, or a config that fails to parse, changes no mode, and the section
+    logs one warning that names `engram-permissions gate`;
   - once the gate has been raised, each of these fails closed: a deleted ledger, an unreadable ledger, a ledger with
     another `ledger_id`, and an unknown `meta.gate`;
   - closed serves nothing and refuses `share`;
@@ -1830,7 +1877,10 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
     with their `use_subjects` rows (9.1);
   - a bulk use with one failing object is refused with that object's code, layer and action, and the refusal names
     no object; its `cited`, `until` and `horizon` follow 6.4;
-  - a bulk use of 100,001 derived objects, or a named one of 513, is refused with `BOUND`;
+  - a bulk use of 100,001 derived objects, or a named one of 513, is refused with `BOUND` before any object is
+    decided, and with `UNKNOWN_REQUESTER` when its requester is also unregistered;
+  - a bulk use with an object that has no subject is refused with `NO_LAYER`, and one with an object of 9 subjects
+    with `BOUND`, unless an earlier object in ref order fails first (6.5, step 1);
   - the imprints spec's `Need(trail-evaluation)` and `Need(admission)` on a fixture imprint, decided by this spec's
     `decide`, give that spec's verdicts (P33; the re-check's RMF1).
 - **U23** Placement audience: each row of the mapping table in 12.1, including an allow naming two groups (the
@@ -1838,7 +1888,9 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   when a hand-written policy lists `group:outside-home` for the receiver (the re-check's RS1); `share` refuses the
   name as an argument; `policy_gen.py` refuses a group named `outside-home`.
 - **U24** The Pi budget: on a generated fixture of 20,000 placements and 43 layers of 256 records, one eligible-set
-  rebuild takes at most 2 s on the station's Raspberry Pi 5. Marked slow, and run on the Pi.
+  rebuild takes at most 2 s on the station's Raspberry Pi 5. On a fixture of 100,000 derived roads and trails that
+  name 100,000 memories, against the same layers, `explain` on one bulk `imprint` takes at most 40 s there, with
+  objects that don't group (the final check's FN3). Marked slow, and run on the Pi.
 - **U25** Lane notes: a failed `UPDATE` settles to the old lane; a crash between the two calls leaves a pending note
   that allows read as neither lane and denies as both; a memory with no note matches no lane-limited allow.
 - **U26** Ids: the CLI takes full ids and unique prefixes, and refuses an ambiguous prefix with its matches.
@@ -1851,7 +1903,9 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
 **End to end and conformance**
 
 - **E1** Section 13, every step, under `enforce`, with its legacy fixtures, each use's copy h, expected decision,
-  refusal code, `until`, horizon, receipt and annotation.
+  refusal code, `until`, horizon, receipt and annotation. Use 2 checks what the agent and the stewards see of the
+  refusal (9.2). Use 13 checks both `remember` cases: refused within 24 hours of a delivery of m1, and passing on
+  2026-12-15 with no source subjects (section 10's known limit; the final check after repair, AS1).
 - **F1** Fixtures: JSON files of a ledger state, uses and expected decisions (`allowed`, `cited`, `refusal`, `until`,
   `horizon`), which any implementation can run. Every use carries its copy h. The fixtures include bulk uses, among
   them the trail evaluation on an imprint of section 6.4's last paragraph.
