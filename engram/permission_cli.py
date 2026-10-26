@@ -22,19 +22,22 @@ import select
 import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _seconds, effective_gate, houses,
-                               ledger_path)
-from permissions import (CODE_CHARS, Act, RuleError, check_id, disagreement_words, home_of, parse_object_ref,
-                         proposal_words)
+from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _seconds, _words_kind, effective_gate,
+                               houses, ledger_path)
+from permissions import (CODE_CHARS, Act, RuleError, allow_words, check_id, disagreement_words, home_of,
+                         parse_object_ref, parse_selector, proposal_words, resolve_prefix, selector_json)
 
 TTY = "/dev/tty"
 TTY_WAIT = None          # seconds to wait for an answer; None waits for the person (a seam for tests)
 _ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 _RULE_YES = "7.6 the person's yes"
 _LINE_BYTES = 64
+SELECTOR_FILE_BYTES = 4 * 1024 * 1024     # a selector file larger than this is refused unread (bounded memory)
+PROPOSALS_SHOWN = 50
+_TIME_KEYS = frozenset({"valid_from", "valid_until", "expires"})
 
 
 class NoTerminal(Exception):
@@ -146,6 +149,19 @@ def _words(state, act: Act) -> str:
     }
     if act.kind in own:
         return own[act.kind]()
+    if act.kind in ("revoke", "shorten", "narrow") and a.get("record") in state.records:
+        rec = state.records[a["record"]]
+        kind = _words_kind(state, act)
+        if kind == "withdraw":
+            return f"Withdraw the allow {rec.id}. It was: {allow_words(state, rec)}"
+        try:
+            return proposal_words(state, kind, a)
+        except (RuleError, KeyError, TypeError, ValueError):
+            return f"Make the change {kind} to {rec.id}."
+    if act.kind == "revoke-grant" and a.get("grant") in state.grants:
+        g = state.grants[a["grant"]]
+        return (f"Revoke the grant {g.id} to {g.grantee} in {g.layer}. A grant that is revoked is never valid "
+                f"again, and what was done under it stops.")
     try:
         return proposal_words(state, act.kind, a)
     except (RuleError, KeyError, TypeError, ValueError):
@@ -163,9 +179,24 @@ def _change(act: Act) -> str:
         elif isinstance(value, dict):
             lines.append(f"  {key}:" + ("" if value else " (none)"))
             lines += [f"    {k}: {json.dumps(v, sort_keys=True)}" for k, v in sorted(value.items())]
+        elif key in _TIME_KEYS:
+            lines.append(f"  {key}: {_time_text(value)}")
         else:
-            lines.append(f"  {key}: {value}")
+            lines.append(f"  {key}: {_clean(value)}")
     return "\n".join(lines)
+
+
+def _clean(value) -> str:
+    """One line with no control characters: text from an agent is data, and must not move the cursor."""
+    return "".join(c if c.isprintable() else "?" for c in str(value))
+
+
+def _time_text(value) -> str:
+    if value is None:
+        return "none (no end)"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return f"{value} ({datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})"
+    return str(value)
 
 
 # ---------------------------------------------------------------- after a write: reports and the sweep
@@ -215,24 +246,33 @@ def run_sweep(led: Ledger, now: int) -> None:
         print(f"warning: the receipt fold failed: {e}", file=sys.stderr)
 
 
-def _perform(led: Ledger, owner: str, acts: list[Act], notes: list[str]) -> int:
-    """Print words and the full change, ask the yes, then perform each act as the owner on `terminal`."""
+def _perform(led: Ledger, owner: str, acts: list[Act], notes: list[str], words: str | None = None) -> int:
+    """Print words and the full change, ask the yes, then perform each act as the owner on `terminal`. `words`
+    replaces the acts' own words (a proposal's, with who filed it)."""
     state = led.state()
-    words = " ".join(_words(state, act) for act in acts)
+    words = words or " ".join(_words(state, act) for act in acts)
     change = "\n".join([_change(act) for act in acts] + notes)
     if not confirm(words, change):
         print("That was not the code. Nothing was written.", file=sys.stderr)
         return 3
     now = _now()
     outcomes = [led.perform(act, actor=owner, channel="terminal", now=now) for act in acts]
-    for out in outcomes:
-        if out.status == "proposal":
+    for act, out in zip(acts, outcomes):
+        if act.kind in ("sign", "decline"):
+            if out.status == "proposal":
+                print(f"Signed {out.ref}. It still needs the other stewards' signatures (log {out.seq}).")
+            else:
+                print(f"Done: {out.ref} (log {out.seq}).")
+        elif out.status == "proposal":
             print(f"Filed proposal {out.ref}. Each steward it needs signs it with `engram-permissions sign "
                   f"{out.ref}`.")
         else:
             print(f"Done: {out.ref} (log {out.seq}).")
     state = led.state()
     for out in outcomes:
+        if out.lacking_029:
+            print("These houses lack migration 029 and serve nothing under `shadow` or `enforce` until an engram "
+                  "server opens them once:\n" + "\n".join(f"  - {h}" for h in out.lacking_029))
         _print_reports(state, out.reports, owner)
         if out.pending_checks:
             shown = ", ".join(out.pending_checks[:10])
@@ -433,6 +473,141 @@ def _subject(kind):
     return run
 
 
+# ---------------------------------------------------------------- records, grants and proposals (P 7.1 to 7.7)
+
+def _selector(text: str) -> str:
+    """A selector as canonical JSON, from JSON text or `@file` (read at most SELECTOR_FILE_BYTES)."""
+    if text.startswith("@"):
+        path = text[1:]
+        try:
+            with open(path, "rb") as f:
+                raw = f.read(SELECTOR_FILE_BYTES + 1)
+        except OSError as e:
+            raise RuleError("5.2 selector", f"{path} cannot be read ({e.strerror or e})") from e
+        if len(raw) > SELECTOR_FILE_BYTES:
+            raise RuleError("5.2 selector", f"{path} is too large: a selector file is at most "
+                                            f"{SELECTOR_FILE_BYTES:,} bytes")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise RuleError("5.2 selector", f"{path} is not UTF-8 text") from None
+    return selector_json(parse_selector(text))
+
+
+def _record_note(rec, heading: str) -> str:
+    return "\n".join([f"{heading} {rec.id}:", f"  effect: {rec.effect}", f"  layer: {rec.layer}",
+                       f"  selector: {selector_json(rec.selector)}", f"  valid_from: {_time_text(rec.valid_from)}",
+                       f"  valid_until: {_time_text(rec.valid_until)}"])
+
+
+def _record_write(effect: str):
+    def run(a):
+        def make(led, st, owner):
+            args = {"layer": a.layer, "selector": _selector(a.selector),
+                    "valid_from": _now() if a.valid_from is None else a.valid_from, "valid_until": a.until,
+                    "reason": a.reason}
+            return [Act(effect, args)], []
+        return _write(make)
+    return run
+
+
+def _record_edit(kind: str):
+    def run(a):
+        def make(led, st, owner):
+            rid = resolve_prefix(st.records, a.id)
+            args: dict = {"record": rid, "reason": a.reason}
+            if kind == "shorten":
+                args["valid_until"] = a.until
+            if kind == "narrow":
+                args["selector"] = _selector(a.selector)
+            note = _record_note(st.records[rid], "replaces record" if kind != "revoke" else "ends record")
+            return [Act(kind, args)], [note]
+        return _write(make)
+    return run
+
+
+def _grant(a):
+    def make(led, st, owner):
+        args: dict = {"grantee": _qualify("agent", a.to), "ops": sorted({o for t in a.ops for o in t.split(",") if o}),
+                      "envelope": _selector(a.envelope), "max_days": a.max_days, "depth": a.depth, "hours": a.hours}
+        if a.parent:
+            args["parent"] = resolve_prefix(st.grants, a.parent)
+        if a.layer or not a.parent:
+            args["layer"] = _qualify("place", a.layer) if a.layer else home_of(owner)
+        return [Act("grant", args)], []
+    return _write(make)
+
+
+def _revoke_grant(a):
+    def make(led, st, owner):
+        gid = resolve_prefix(st.grants, a.id)
+        g = st.grants[gid]
+        note = (f"grant {gid}:\n  grantee: {g.grantee}\n  layer: {g.layer}\n  ops: {', '.join(json.loads(g.ops))}\n"
+                f"  envelope: {g.envelope}")
+        return [Act("revoke-grant", {"grant": gid, "reason": a.reason})], [note]
+    return _write(make)
+
+
+def gate_plan_lines(plan: dict) -> list[str]:
+    """What a `gate` act would use if applied now (R26, R27), for `sign` here and `gate` in Task 27."""
+    lines = [f"gate plan, read now (the yes reads the houses again):",
+             f"  published house: {plan['published_house']}", "  every house it will mark:"]
+    lines += [f"    - {h}" for h in plan["houses"]] or ["    (none)"]
+    if plan["lacking_029"]:
+        lines.append("  houses that lack migration 029: each serves nothing under `shadow` or `enforce` until an "
+                     "engram server opens it once:")
+        lines += [f"    - {h}" for h in plan["lacking_029"]]
+    return lines
+
+
+def _proposal_of(led: Ledger, st, given: str, owner: str):
+    pid = resolve_prefix(st.proposals, given)
+    p = st.proposals[pid]
+    if p.status != "pending":
+        raise RuleError("7.7 proposals", f"{pid} is not pending: it is {p.status}")
+    if p.expires <= _now():
+        raise RuleError("7.7 proposals", f"{pid} has expired")
+    body = json.loads(p.body)
+    return p, body, Act(body["act"]["kind"], dict(body["act"]["args"]))
+
+
+def _on_proposal(kind: str):
+    def run(a):
+        with _ledger() as led:
+            owner = led.meta()["owner"]
+            st = led.state()
+            p, body, inner = _proposal_of(led, st, a.id, owner)
+            what = _words(st, inner)
+            verb = "Sign" if kind == "sign" else "Decline"
+            words = f"{verb} proposal {p.id}, filed by {p.by_agent}. {what}"
+            notes = [f"proposal {p.id} would make this change:"]
+            notes += ["  " + line for line in _change(inner).splitlines()]
+            if body.get("needs") is not None:
+                notes.append(f"needs: {json.dumps(body['needs'], sort_keys=True)}")
+            if kind == "sign" and inner.kind == "gate":
+                notes += gate_plan_lines(led.gate_plan())
+            return _perform(led, owner, [Act(kind, {"proposal": p.id})], notes, words=words)
+    return run
+
+
+def _proposals(a) -> int:
+    with _ledger() as led:
+        rows = led.proposals(now=_now())
+    if not rows:
+        print("No open proposals.")
+        return 0
+    for row in rows[:PROPOSALS_SHOWN]:
+        print(f"{row['id']}  {row['kind']}  from {_clean(row['by_agent'])}  expires {_time_text(row['expires'])}")
+        print(f"  {_clean(row['words'])}")
+        if row["signatures"]:
+            print(f"  signed by: {', '.join(_clean(s) for s in row['signatures'])}")
+        if row["reason"]:
+            print(f"  the agent's reason (its words, not ours): {_clean(row['reason'])}")
+    if len(rows) > PROPOSALS_SHOWN:
+        print(f"... and {len(rows) - PROPOSALS_SHOWN} more.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="engram-permissions", allow_abbrev=False,
@@ -505,6 +680,39 @@ def build_parser() -> argparse.ArgumentParser:
         p = leaf(subjects, verb, _subject(kind))
         p.add_argument("ref")
         p.add_argument("subject")
+    for effect in ("allow", "deny"):
+        p = leaf(top, effect, _record_write(effect), f"write a {effect}")
+        p.add_argument("--layer", required=True)
+        p.add_argument("--selector", required=True, help="JSON, or @file")
+        p.add_argument("--from", dest="valid_from", type=_when, help="default: now")
+        p.add_argument("--until", type=_when, help="default: no end")
+        p.add_argument("--reason", default="")
+    p = leaf(top, "revoke", _record_edit("revoke"), "withdraw a record")
+    p.add_argument("id")
+    p.add_argument("--reason", default="")
+    p = leaf(top, "shorten", _record_edit("shorten"), "end a record sooner")
+    p.add_argument("id")
+    p.add_argument("--until", type=_when, required=True)
+    p.add_argument("--reason", default="")
+    p = leaf(top, "narrow", _record_edit("narrow"), "replace a record's selector with a narrower one")
+    p.add_argument("id")
+    p.add_argument("--selector", required=True, help="JSON, or @file")
+    p.add_argument("--reason", default="")
+    p = leaf(top, "grant", _grant, "give an agent a grant")
+    p.add_argument("--to", required=True)
+    p.add_argument("--ops", required=True, action="append", help="comma-separated")
+    p.add_argument("--envelope", required=True, help="JSON, or @file")
+    p.add_argument("--max-days", type=int, required=True)
+    p.add_argument("--depth", type=int, default=0)
+    p.add_argument("--hours", type=int, default=24)
+    p.add_argument("--parent")
+    p.add_argument("--layer", help="default: the owner's home, or the parent's layer")
+    p = leaf(top, "revoke-grant", _revoke_grant, "revoke a grant")
+    p.add_argument("id")
+    p.add_argument("--reason", default="")
+    leaf(top, "sign", _on_proposal("sign"), "say yes to an agent's proposal").add_argument("id")
+    leaf(top, "decline", _on_proposal("decline"), "say no to a proposal").add_argument("id")
+    leaf(top, "proposals", _proposals, "list the open proposals (no yes needed)")
     return parser
 
 

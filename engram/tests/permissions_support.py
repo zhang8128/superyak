@@ -2641,6 +2641,15 @@ def cli_home_with_store(cli_home, fake_tty):
     return cli_home
 
 
+@_pytest.fixture
+def cli_home_with_house(cli_home):
+    """`cli_home` plus the published house `instances/lighthouse/graph.db`, made through `Storage` (Task 26A)."""
+    from storage import Storage
+    house_dir(cli_home, "lighthouse")
+    Storage(str(cli_home / ".engram" / "instances" / "lighthouse" / "graph.db")).close()
+    return cli_home
+
+
 def ledger_bytes(home):
     return (home / ".engram" / "permissions.db").read_bytes()
 
