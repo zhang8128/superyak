@@ -27,8 +27,10 @@ from pathlib import Path
 
 from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _seconds, _words_kind, effective_gate,
                                houses, ledger_path)
-from permissions import (CODE_CHARS, Act, RuleError, allow_words, check_id, disagreement_words, home_of,
-                         parse_object_ref, parse_selector, proposal_words, resolve_prefix, selector_json)
+from permissions import (CODE_CHARS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse, RuleError, Use,
+                         affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
+                         home_of, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
+                         resolve_prefix, selector_json, share_cover, stewards)
 
 TTY = "/dev/tty"
 TTY_WAIT = None          # seconds to wait for an answer; None waits for the person (a seam for tests)
@@ -37,6 +39,9 @@ _RULE_YES = "7.6 the person's yes"
 _LINE_BYTES = 64
 SELECTOR_FILE_BYTES = 4 * 1024 * 1024     # a selector file larger than this is refused unread (bounded memory)
 PROPOSALS_SHOWN = 50
+REPORT_ROWS = 200                         # rows `report shadow` lists of each kind; the counts are always whole
+MAX_OBJECT_LINES = MAX_BULK_DERIVED + 1   # `explain --objects` reads this many lines at most, enough to be refused
+_OBJECT_LINE_BYTES = 1024
 _TIME_KEYS = frozenset({"valid_from", "valid_until", "expires"})
 
 
@@ -121,9 +126,9 @@ def _qualify(kind: str, value: str) -> str:
 
 
 @contextlib.contextmanager
-def _ledger():
+def _ledger(read_only: bool = False):
     try:
-        led = Ledger.open(_home())
+        led = Ledger.open_read_only(_home()) if read_only else Ledger.open(_home())
     except FileNotFoundError as e:
         raise RuleError("5.5 storage", f"there is no ledger at {e}; make one with `engram-permissions init`") from e
     try:
@@ -224,9 +229,11 @@ def _sweep_house(led: Ledger, mode: str, now: int):
         house.close()
 
 
-def run_sweep(led: Ledger, now: int) -> None:
+def run_sweep(led: Ledger, now: int):
     """R18: after a command that writes, sweep the published house under `shadow` and `enforce`, and fold receipts
-    past their retention. A failure is a warning and never changes the exit code (ledger ruling FS1)."""
+    past their retention. A failure is a warning and never changes the exit code (ledger ruling FS1). Returns the
+    sweep's report, or None when the gate is off or the sweep did not run."""
+    report = None
     try:
         house = led.root / PUBLISHED_HOUSE
         gate = effective_gate(led.root, [house])
@@ -247,6 +254,7 @@ def run_sweep(led: Ledger, now: int) -> None:
                 uses.close()
     except Exception as e:
         print(f"warning: the receipt fold failed: {e}", file=sys.stderr)
+    return report
 
 
 def _perform(led: Ledger, owner: str, acts: list[Act], notes: list[str], words: str | None = None) -> int:
@@ -478,22 +486,25 @@ def _subject(kind):
 
 # ---------------------------------------------------------------- records, grants and proposals (P 7.1 to 7.7)
 
+def _read_text(path: str, rule: str, what: str) -> str:
+    """A small text file, read at most SELECTOR_FILE_BYTES (a larger one is refused unread-whole)."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(SELECTOR_FILE_BYTES + 1)
+    except OSError as e:
+        raise RuleError(rule, f"{path} cannot be read ({e.strerror or e})") from e
+    if len(raw) > SELECTOR_FILE_BYTES:
+        raise RuleError(rule, f"{path} is too large: a {what} file is at most {SELECTOR_FILE_BYTES:,} bytes")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise RuleError(rule, f"{path} is not UTF-8 text") from None
+
+
 def _selector(text: str) -> str:
     """A selector as canonical JSON, from JSON text or `@file` (read at most SELECTOR_FILE_BYTES)."""
     if text.startswith("@"):
-        path = text[1:]
-        try:
-            with open(path, "rb") as f:
-                raw = f.read(SELECTOR_FILE_BYTES + 1)
-        except OSError as e:
-            raise RuleError("5.2 selector", f"{path} cannot be read ({e.strerror or e})") from e
-        if len(raw) > SELECTOR_FILE_BYTES:
-            raise RuleError("5.2 selector", f"{path} is too large: a selector file is at most "
-                                            f"{SELECTOR_FILE_BYTES:,} bytes")
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            raise RuleError("5.2 selector", f"{path} is not UTF-8 text") from None
+        text = _read_text(text[1:], "5.2 selector", "selector")
     return selector_json(parse_selector(text))
 
 
@@ -611,6 +622,306 @@ def _proposals(a) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- the gate, and the commands that only read (P 14)
+
+def _gate(a) -> int:
+    with _ledger() as led:
+        owner = led.meta()["owner"]
+        notes = gate_plan_lines(led.gate_plan())
+        return _perform(led, owner, [Act("gate", {"mode": a.mode})], notes)
+
+
+def _rebuild(a) -> int:
+    with _ledger(read_only=True) as led:
+        try:
+            dest = led.rebuild(Path(a.out))
+        except FileExistsError as e:
+            raise RuleError("5.6 rebuild", f"a ledger already exists at {e}; --out names a directory with none") \
+                from e
+    print(f"Rebuilt the ledger at {ledger_path(dest)}. Its tables are the log's replay.")
+    return 0
+
+
+def _stamp(value) -> str:
+    return "none" if value is None else _time_text(value)
+
+
+def _use_line(r: dict) -> list[str]:
+    who = r.get("agent") or r.get("requester")
+    what = f"{r['action']} {r['object']}" if r.get("object") else f"{r['action']} ({r.get('kind') or r.get('count')})"
+    lines = [f"{_stamp(r['at'])}  {r['outcome']}  {_clean(who)}  {_clean(what)}  at {_clean(r['place'])}  "
+             f"for {_clean(r['purpose'])}  [{r['id']}]"]
+    if r.get("refusal"):
+        ref = r["refusal"]
+        lines.append(f"    refused: {_clean(ref.get('code'))} at {_clean(ref.get('layer'))}")
+    lines += [f"    note: {_clean(n)}" for n in r.get("notes") or ()]
+    return lines
+
+
+def _uses(a) -> int:
+    from permission_uses import Uses, uses_path
+    with _ledger(read_only=True) as led:
+        state = led.state()
+        owner = state.meta["owner"]
+        place = _qualify("place", a.place) if a.place else None
+        if not uses_path(led.root).is_file():
+            shown = None
+        else:
+            uses = Uses.open_read_only(led.root)
+            try:
+                filters = dict(since=a.since, until=a.until, action=a.action, purpose=a.purpose,
+                               collection=a.collection and _qualify("collection", a.collection), obj=a.object,
+                               refused=a.refused)
+                if place is not None and place in state.places and owner in stewards(state, place):
+                    shown = uses.place_view(state, place, **filters)            # a place he stewards: P 9.2's view
+                else:
+                    shown = uses.owner_list(state, place=place, **filters)
+            finally:
+                uses.close()
+    counts, rows = (shown.counts, shown.rows) if shown else ({"total": 0, "local": 0, "imported": 0}, [])
+    if a.json:
+        print(json.dumps({"counts": counts, "rows": rows}, sort_keys=True))
+        return 0
+    if not rows:
+        print("No uses.")
+        return 0
+    print(f"{counts['total']} uses ({counts['local']} local, {counts['imported']} imported); "
+          f"showing the newest {len(rows)}.")
+    for r in rows:
+        for line in _use_line(r):
+            print(line)
+    return 0
+
+
+def _check(a) -> int:
+    with _ledger(read_only=True) as led:
+        state = led.state()
+        if a.place:
+            place = _qualify("place", a.place)
+            if place not in state.places:
+                raise RuleError("8 the check", f"{place} is not a registered place")
+            places = [place]
+        else:
+            places = list(affected_joints(state, {REGISTRY}))
+        said = 0
+        for place in places:
+            words = disagreement_words(state, gluing(state, place))
+            if words:
+                said += 1
+                print(words)
+    if not said:
+        print("No disagreement found" + (f" in {places[0]}." if a.place else " in any joint place."))
+    return 0
+
+
+def _sweep(a) -> int:
+    with _ledger() as led:
+        mode = effective_gate(led.root, houses(led.root)).mode
+        report = run_sweep(led, _now())
+    if report is None:
+        print(f"The gate is {mode}: nothing to sweep." if mode not in ("shadow", "enforce") else
+              "Placement sweep: nothing to change.")
+    return 0
+
+
+def _place_show(a) -> int:
+    place = _qualify("place", a.place)
+    with _ledger(read_only=True) as led:
+        art = led.place_rules(place, now=_now())
+    if a.json:
+        print(json.dumps(art, sort_keys=True))
+        return 0
+    p = art["payload"]
+    print(f"{p['place']}" + (" (retired)" if p["retired"] else "") + f" at ledger seq {p['ledgerSeq']}")
+    print(f"  parents: {', '.join(p['parents']) or '(none)'}")
+    print(f"  stewards: {', '.join(p['stewards']) or '(none)'}")
+    print(f"  records: {len(p['records'])}")
+    for r in p["records"]:
+        print(f"    {r['id']}  {r['effect']}  {json.dumps(r['selector'], sort_keys=True)}  "
+              f"from {_stamp(r['valid_from'])} until {_stamp(r['valid_until'])}")
+    return 0
+
+
+# ---------------------------------------------------------------- report shadow (P 12.3, 12.1)
+
+def _legacy_agreed(row) -> bool:
+    """A refused shadow receipt the legacy path did not refuse: no cited legacy layer denies it, and the refusal is
+    not the legacy path's own."""
+    try:
+        cited = json.loads(row["cited"])
+        refusal = json.loads(row["refusal"]) if row["refusal"] else None
+    except (TypeError, ValueError):
+        return False
+    if refusal and refusal.get("code") == "LEGACY_DENY":
+        return False
+    return not any(isinstance(c, dict) and c.get("kind") == "legacy" and c.get("verdict") != "allow" for c in cited)
+
+
+def _shadow_disagreements() -> tuple[int, list[dict]]:
+    from permission_uses import Uses, uses_path
+    if not uses_path(_home()).is_file():
+        return 0, []
+    uses = Uses.open_read_only(_home())
+    count, rows = 0, []
+    try:
+        for r in uses.conn.execute("SELECT * FROM uses WHERE shadow = 1 AND allowed = 0 ORDER BY seq"):
+            if _legacy_agreed(r):
+                count += 1
+                if len(rows) < REPORT_ROWS:
+                    refusal = json.loads(r["refusal"]) if r["refusal"] else None
+                    rows.append({"id": r["id"], "at": r["at"], "agent": r["agent"], "place": r["place"],
+                                 "action": r["action"], "purpose": r["purpose"], "object": r["object"],
+                                 "copy": r["copy"], "refusal": refusal})
+    finally:
+        uses.close()
+    return count, rows
+
+
+def _uncovered_placements(state, now: int) -> tuple[int, list[dict]]:
+    """The placements of the published house that `share` under `enforce` would have answered `needs-allow`."""
+    from sharing import AUDIENCE_COMMONS, GROUP_RE
+    from storage import Storage
+    house = _home() / PUBLISHED_HOUSE
+    if not house.is_file():
+        return 0, []
+    owner = state.meta["owner"]
+    store = Storage.open_read_only(house)
+    count, rows = 0, []
+    try:
+        cursor = store.conn.execute(
+            "SELECT share_id, layer, audience, source_id, source_instance_id, record_id FROM shared_memories "
+            "ORDER BY shared_at, share_id")
+        for r in cursor:
+            if r["source_instance_id"] and r["source_id"]:
+                obj = f"mem:{r['source_instance_id']}/{r['layer']}/{r['source_id']}"
+                if r["record_id"] and placement_still_counts(state, r["record_id"], owner=owner, obj=obj, at=now):
+                    continue
+                audience = (home_of(owner) if r["audience"] == AUDIENCE_COMMONS else r["audience"]
+                            if GROUP_RE.fullmatch(r["audience"]) or r["audience"].startswith("place:") else None)
+                if audience is None:
+                    continue                   # `share` would answer an unknown audience with an error, not needs-allow
+                try:
+                    if share_cover(state, owner=owner, obj=obj, audience=audience, at=now) is not None:
+                        continue
+                except RuleError:
+                    pass
+                why = "no record" if not r["record_id"] else "its record no longer counts"
+            else:
+                obj, why = None, "no object"
+            count += 1
+            if len(rows) < REPORT_ROWS:
+                rows.append({"share_id": r["share_id"], "object": obj, "audience": r["audience"],
+                             "record_id": r["record_id"], "why": why})
+    except sqlite3.OperationalError as e:
+        raise RuleError("12.3 report shadow", f"{house} cannot be read as a published house ({e}); an engram "
+                                              "server opens it once to run migration 029") from e
+    finally:
+        store.close()
+    return count, rows
+
+
+def _report_shadow(a) -> int:
+    with _ledger(read_only=True) as led:
+        state = led.state()
+    n_dis, disagreements = _shadow_disagreements()
+    n_need, needing = _uncovered_placements(state, _now())
+    if a.json:
+        print(json.dumps({"disagreements": disagreements, "disagreement_count": n_dis,
+                          "would_need_a_proposal": needing, "would_need_count": n_need}, sort_keys=True))
+        return 0
+    print(f"{n_dis} shadow uses the legacy path allowed and the ledger refused.")
+    for r in disagreements:
+        ref = r["refusal"] or {}
+        print(f"  {r['id']}  {_stamp(r['at'])}  {_clean(r['agent'])} {r['action']} {_clean(r['object'])}  "
+              f"{_clean(ref.get('code'))} at {_clean(ref.get('layer'))}")
+    print(f"{n_need} shares that would have needed a proposal under `enforce`.")
+    for s in needing:
+        print(f"  {s['share_id']}  {_clean(s['object'] or '(no object)')}  to {_clean(s['audience'])}  ({s['why']})")
+    for n, rows, what in ((n_dis, disagreements, "disagreements"), (n_need, needing, "shares")):
+        if n > len(rows):
+            print(f"... and {n - len(rows)} more {what} (the first {REPORT_ROWS} are listed).")
+    return 0
+
+
+# ---------------------------------------------------------------- explain (P 6.4, 6.5, 14)
+
+def _object_lines(path: str) -> tuple[str, ...]:
+    """One ref per line, blank lines skipped, at most MAX_OBJECT_LINES read (a larger file is then refused by the
+    bound) and no line longer than _OBJECT_LINE_BYTES."""
+    out: list[str] = []
+    try:
+        with open(path, "rb") as f:
+            while len(out) < MAX_OBJECT_LINES:
+                raw = f.readline(_OBJECT_LINE_BYTES + 1)
+                if not raw:
+                    break
+                if len(raw) > _OBJECT_LINE_BYTES:
+                    raise RuleError("6.4 bulk uses", f"{path} has a line longer than {_OBJECT_LINE_BYTES} bytes")
+                text = raw.decode("utf-8", "replace").strip()
+                if text:
+                    out.append(text)
+    except OSError as e:
+        raise RuleError("6.4 bulk uses", f"{path} cannot be read ({e.strerror or e})") from e
+    return tuple(out)
+
+
+def _names_file(path: str | None):
+    if path is None:
+        return None
+    try:
+        data = json.loads(_read_text(path, "6.4 names", "names"))
+    except ValueError as e:
+        raise RuleError("6.4 names", f"{path} is not JSON ({e})") from e
+    if isinstance(data, list) and all(isinstance(x, str) for x in data):
+        return data
+    if isinstance(data, dict) and all(isinstance(v, list) and all(isinstance(x, str) for x in v)
+                                      for v in data.values()):
+        return data
+    raise RuleError("6.4 names", f"{path} must be a list of memory refs, or an object of road or trail refs to lists")
+
+
+def _explain(a) -> int:
+    names = _names_file(a.names)
+    with _ledger(read_only=True) as led:
+        state = led.state()
+    agent = _qualify("agent", a.agent)
+    place = _qualify("place", a.place)
+    at = _now() if a.at is None else a.at
+    if a.object:
+        if isinstance(names, dict):
+            listed = tuple(names.get(a.object, ()))
+        else:
+            listed = tuple(names or ())
+        use = Use(agent, place, a.object, a.copy, a.action, a.purpose, at, names=listed)
+        decision = decide(state, use)
+        subject = a.object
+    else:
+        if names is not None and not isinstance(names, dict):
+            raise RuleError("6.4 names", "for --objects, --names is an object of road or trail refs to lists")
+        table = names or {}
+        bulk = BulkUse(agent, place, _object_lines(a.objects), a.copy, a.action, a.purpose, at,
+                       named=not a.counted, names=lambda o: table.get(o, ()))
+        decision = decide_bulk(state, bulk)
+        subject = f"{len(bulk.objects)} objects"
+    if a.json:
+        print(json.dumps(decision.to_json(), sort_keys=True))
+        return 0
+    print(f"{'allowed' if decision.allowed else 'refused'}: {agent} may {'' if decision.allowed else 'not '}"
+          f"{a.action} {_clean(subject)} at {place} for {a.purpose} on {_stamp(at)} "
+          f"(ledger seq {decision.ledger_seq}).")
+    if decision.refusal is not None:
+        ref = decision.refusal
+        print(f"  refused: {ref.code}" + (f" at {_clean(ref.layer)}" if ref.layer else "")
+              + (f" for {ref.action}" if ref.action else ""))
+    print("  layers cited:")
+    for c in decision.cited:
+        recs = ", ".join(c.records) or "no record"
+        print(f"    {_clean(c.layer)} ({c.kind}) {c.action}: {c.verdict}, {recs}")
+    if decision.allowed:
+        print(f"  until: {_stamp(decision.until)}; horizon: {_stamp(decision.horizon)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="engram-permissions", allow_abbrev=False,
@@ -666,6 +977,9 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("place")
         p.add_argument("person")
     leaf(places, "retire", _place_retire).add_argument("place")
+    p = leaf(places, "show", _place_show, "print the place's published rules (no yes needed)")
+    p.add_argument("place")
+    p.add_argument("--json", action="store_true")
 
     groups = group("group", "set a group's members")
     p = leaf(groups, "set", _group_set)
@@ -716,6 +1030,39 @@ def build_parser() -> argparse.ArgumentParser:
     leaf(top, "sign", _on_proposal("sign"), "say yes to an agent's proposal").add_argument("id")
     leaf(top, "decline", _on_proposal("decline"), "say no to a proposal").add_argument("id")
     leaf(top, "proposals", _proposals, "list the open proposals (no yes needed)")
+    p = leaf(top, "gate", _gate, "move the gate: off, shadow or enforce")
+    p.add_argument("mode", choices=["off", "shadow", "enforce"])
+    leaf(top, "rebuild", _rebuild, "replay the log into a fresh ledger (no yes needed)").add_argument(
+        "--out", required=True, help="a directory that holds no ledger yet; the file lands in .engram/ under it")
+    p = leaf(top, "uses", _uses, "list the uses (no yes needed)")
+    p.add_argument("--since", type=_when)
+    p.add_argument("--until", type=_when)
+    p.add_argument("--place")
+    p.add_argument("--action")
+    p.add_argument("--purpose")
+    p.add_argument("--collection")
+    p.add_argument("--object")
+    p.add_argument("--refused", action="store_true")
+    p.add_argument("--json", action="store_true")
+    leaf(top, "check", _check, "check the joint places for disagreement (no yes needed)").add_argument(
+        "place", nargs="?")
+    leaf(top, "sweep", _sweep, "make the published house follow the ledger (no yes needed)")
+    p = leaf(top, "explain", _explain, "decide a described use, single or bulk, and say why (no yes needed)")
+    p.add_argument("--agent", required=True)
+    p.add_argument("--place", required=True)
+    what = p.add_mutually_exclusive_group(required=True)
+    what.add_argument("--object", help="one object")
+    what.add_argument("--objects", help="a file of refs, one per line: a bulk use")
+    p.add_argument("--counted", action="store_true", help="a bulk use whose objects are derived and counted")
+    p.add_argument("--copy", required=True)
+    p.add_argument("--action", required=True)
+    p.add_argument("--purpose", required=True)
+    p.add_argument("--at", type=_when, help="default: now")
+    p.add_argument("--names", help="JSON: the memories a road or trail names (a list, or an object by ref)")
+    p.add_argument("--json", action="store_true")
+    report = group("report", "reports")
+    p = leaf(report, "shadow", _report_shadow, "the disagreements and the shares that would need a proposal")
+    p.add_argument("--json", action="store_true")
     return parser
 
 
