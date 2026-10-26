@@ -2949,3 +2949,57 @@ def proposal_words(state: State, kind: str, body: Mapping) -> str:
     if kind not in templates:
         raise RuleError("7.7 proposal words", f"no template for a proposal of kind {kind!r}")
     return templates[kind]()
+
+
+# ---------------------------------------------------------------- what an agent sees at the point of use (P 11)
+
+def annotation(state: State, decision: Decision, *, laid_by: str, receipt_id: str) -> dict:
+    """P 11's `permission` object for an allowed read item: who laid it, each consent layer's distinct cited records
+    in step 2's order (the order `cited` holds them), the decision's `until` as an RFC 3339 date or None, and the
+    receipt's full id. Legacy and restriction layers are not "allowed by" a place, so they are left out."""
+    layers: dict[str, list[str]] = {}
+    for cited in decision.cited:
+        if cited.kind not in ("consent", "outside") or cited.verdict != "allow":
+            continue
+        records = layers.setdefault(cited.layer, [])
+        records.extend(r for r in cited.records if r not in records)
+    until = None if decision.until is None else datetime.fromtimestamp(
+        decision.until, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"laid_by": laid_by, "allowed_by": [{"place": layer, "records": sorted(records, key=_units)}
+                                                for layer, records in layers.items() if records],
+            "until": until, "receipt": receipt_id}
+
+
+def _cut(name: str) -> str:
+    return name if len(name) <= ANNOTATION_NAME_CHARS else name[:ANNOTATION_NAME_CHARS - 1] + "…"
+
+
+def _short_place(place: str) -> str:
+    rest = place.removeprefix("place:")
+    return rest if rest.startswith("home/") else rest.rsplit("/", 1)[-1]
+
+
+def annotation_line(obj: Mapping) -> str:
+    """P 11's one line, at most ANNOTATION_CHARS: `laid by X · allowed by A #r1+#r2, B #r3 · until D · receipt #u`.
+    A place shows its last segment (`home/<handle>` for a home); two places in the line that share a last segment
+    both show their full id without `place:`. A name over ANNOTATION_NAME_CHARS is cut to one less and `…`. Over
+    the limit, `allowed_by` entries are dropped from the end and `, +N` closes the list."""
+    entries = list(obj.get("allowed_by", ()))
+    shorts = [_short_place(e["place"]) for e in entries]
+    entries = [(_cut(e["place"].removeprefix("place:") if shorts.count(s) > 1 else s),
+                "+".join(short_id(r) for r in e["records"])) for e, s in zip(entries, shorts)]
+    head = f"laid by {_cut(obj['laid_by'])}"
+    tail = ([f"until {obj['until'][:10]}"] if obj.get("until") else []) + [f"receipt {receipt_short(obj['receipt'])}"]
+
+    def build(kept: int) -> str:
+        shown = [f"{name} {ids}" for name, ids in entries[:kept]]
+        if kept < len(entries):
+            shown.append(f"+{len(entries) - kept}")
+        parts = [head] + ([f"allowed by {', '.join(shown)}"] if shown else []) + tail
+        return " · ".join(parts)
+
+    for kept in range(len(entries), -1, -1):
+        line = build(kept)
+        if len(line) <= ANNOTATION_CHARS:
+            return line
+    return line[:ANNOTATION_CHARS]

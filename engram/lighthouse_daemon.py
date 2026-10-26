@@ -225,8 +225,10 @@ def _rank_shared_layer(
     vector: list[float],
     k: int,
     allowed_audiences: frozenset[str],
+    eligible_ids: frozenset[str] | None = None,
 ) -> list[tuple[float, str, str, dict, list[str]]]:
-    """Rank every intact authorized copy, with bounded queries and working set."""
+    """Rank every intact authorized copy, with bounded queries and working set. With ``eligible_ids`` only those
+    memory ids are ranked."""
     packed_vector = struct.pack(f"<{len(vector)}f", *vector)
     best: list[tuple[float, str, str, dict, list[str]]] = []
     after = ""
@@ -245,6 +247,8 @@ def _rank_shared_layer(
         eligible = {}
         for record in rows:
             row = dict(record)
+            if eligible_ids is not None and row["id"] not in eligible_ids:
+                continue
             audiences = sorted(
                 _shared_audiences(
                     store, memory_id=row["id"], layer=layer,
@@ -278,16 +282,18 @@ def retrieve(
     query: str,
     k: int,
     allowed_audiences: frozenset[str],
+    eligible: frozenset[str] | None = None,
 ) -> list[dict]:
-    """Return audience-visible episodes and semantics ranked by similarity."""
-    if not allowed_audiences:
+    """Return audience-visible episodes and semantics ranked by similarity. With ``eligible`` (the memory ids the
+    permission decisions allow) a copy outside it is refused before ranking, not dropped after it."""
+    if not allowed_audiences or eligible == frozenset():
         return []
     vector = embeddings.embed([query], prefix="search_query")[0]
     scored: list[tuple[float, str, str, dict, list[str]]] = []
     for layer in PUBLISHED_LAYERS:
         try:
             scored.extend(_rank_shared_layer(
-                store, layer, vector, k, allowed_audiences,
+                store, layer, vector, k, allowed_audiences, eligible,
             ))
         except Exception:
             logger.debug("vector search failed for %s", layer, exc_info=True)
@@ -307,6 +313,205 @@ def retrieve(
             scored[:k], start=1
         )
     ]
+
+
+_COPY_EXISTS = (
+    "SELECT s.memory_id, s.layer, s.source_instance_id, s.source_id FROM shared_memories AS s WHERE "
+    "(s.layer = 'episode' AND EXISTS (SELECT 1 FROM episodes AS e WHERE e.id = s.memory_id "
+    "AND e.lane IN ('personal', 'work'))) OR "
+    "(s.layer = 'semantic' AND EXISTS (SELECT 1 FROM semantics AS m WHERE m.id = s.memory_id "
+    "AND m.lane IN ('personal', 'work')))"
+)
+
+
+def _house_lacks_029(storage: Storage) -> bool:
+    """R27: ``shared_memories`` lacks ``source_instance_id`` or ``record_id``, or there is no change counter."""
+    columns = {row[1] for row in storage.conn.execute("PRAGMA table_info(shared_memories)")}
+    counter = storage.conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'shared_memories_changes'"
+    ).fetchone()
+    return not {"source_instance_id", "record_id"} <= columns or counter is None
+
+
+def _object_of(layer: str, source_instance_id, source_id) -> str | None:
+    """A placement's object, ``mem:<source_instance_id>/<layer>/<source_id>``; None for a row without a source."""
+    if not source_instance_id or not source_id:
+        return None
+    return f"mem:{source_instance_id}/{layer}/{source_id}"
+
+
+@dataclass
+class _Placed:
+    """What the permission decisions say of every placed copy of a house, for one recall."""
+    eligible: frozenset
+    objects: dict          # memory id -> its distinct objects (None for a row without a source)
+    decisions: dict        # object -> Decision (None when the object could not be decided)
+    filtered: int
+
+
+class _LedgerSide:
+    """One frame's permission decisions and receipts (P 12.2). Built per frame from the ledger read-only; nothing
+    is kept between frames (the eligible-set cache is Task 21's)."""
+
+    def __init__(self, daemon: "PublisherDaemon", publisher: "PublisherStore", frame: dict, mode: str,
+                 frame_decision, state, ledger_id: str, now: datetime):
+        from permission_uses import Uses  # noqa: F401  (opened lazily by ``_uses``)
+        from permissions import LegacyLayer, acts_for_place, agent_place_at
+        self.daemon, self.publisher, self.frame, self.mode = daemon, publisher, frame, mode
+        self.state, self.ledger_id, self.now = state, ledger_id, now
+        self.t = int(now.timestamp())
+        self.agent = f"agent:{frame['receiver']}"
+        self.place = agent_place_at(state, self.agent, self.t) or ""
+        row = state.agents.get(self.agent)
+        self.acting_for = "" if row is None else row.acts_for
+        identity = publisher.storage.instance_identity().get("instance_id") or publisher.name
+        self.copy = f"store:{identity}"
+        self.shadow = mode == "shadow"
+        self._uses = None
+        self._receiver = self._load_receiver_policy()
+        self._receiver_verdicts: dict[str, bool] = {}
+        self.legacy = (
+            LegacyLayer("publisher", lambda use, action: frame_decision.effect == "allow"),
+            LegacyLayer("receiver", self._receiver_allows),
+        )
+
+    # ------------------------------------------------------------ the receiver's legacy layer (P 6.3 item 4)
+    def _load_receiver_policy(self):
+        """The receiver's own policy, read the way the receiver finds it (``neighbors.py:183-184``), at every
+        frame. None when it has no settings file, is disabled or fails to load: its layer then refuses."""
+        from lighthouse_receiver_config import load_receiver_policy, load_settings
+        receiver = self.frame["receiver"]
+        try:
+            settings = load_settings(
+                self.daemon.engram_home / ".engram" / "instances" / receiver / "lighthouse-receiver.toml")
+            if settings is None:
+                return None
+            return load_receiver_policy(settings["policy_path"], receiver)
+        except Exception as error:
+            logger.warning("receiver %s policy unavailable: %s", receiver, error)
+            return None
+
+    def _receiver_allows(self, use, action: str) -> bool:
+        if self._receiver is None:
+            return False
+        if action not in self._receiver_verdicts:
+            self._receiver_verdicts[action] = self._receiver.decide(PolicyRequest(
+                publisher=f"urn:engram:{self.frame['publisher']}", profile=PROFILE, domain=DOMAIN, action=action,
+                context_id=self.frame["context"]["id"], claim_type=CLAIM_TYPE, purpose=self.frame["purpose"],
+                audience="self", at=self.now)).effect == "allow"
+        return self._receiver_verdicts[action]
+
+    # ------------------------------------------------------------ deciding
+    def _use(self, obj: str, action: str):
+        from permissions import Use
+        return Use(requester=self.agent, place=self.place, obj=obj, copy=self.copy, action=action,
+                   purpose=self.frame["purpose"], at=self.t)
+
+    def decide(self, obj: str, action: str):
+        from permissions import RuleError, decide
+        try:
+            return decide(self.state, self._use(obj, action), legacy=self.legacy)
+        except RuleError:
+            logger.warning("permission: %s is not a decidable object in %s", obj, self.publisher.name)
+            return None
+
+    def recall_set(self) -> _Placed:
+        """Decide ``recall`` for each placed copy that has a copy to rank, before ranking (P 12.2)."""
+        objects: dict[str, set] = {}
+        for row in self.publisher.storage.conn.execute(_COPY_EXISTS):
+            objects.setdefault(row["memory_id"], set()).add(
+                _object_of(row["layer"], row["source_instance_id"], row["source_id"]))
+        decisions: dict = {}
+        eligible = set()
+        for memory_id, objs in objects.items():
+            allowed = True
+            for obj in objs:
+                if obj is None:
+                    allowed = False
+                    continue
+                if obj not in decisions:
+                    decisions[obj] = self.decide(obj, "recall")
+                if decisions[obj] is None or not decisions[obj].allowed:
+                    allowed = False
+            if allowed:
+                eligible.add(memory_id)
+        return _Placed(frozenset(eligible), objects, decisions, len(objects) - len(eligible))
+
+    # ------------------------------------------------------------ receipts
+    def _append(self, row, subjects) -> str | None:
+        """Write one receipt; None (after a warning) when it cannot be written."""
+        from permission_uses import Uses
+        try:
+            if self._uses is None:
+                self._uses = Uses.open(self.daemon.engram_home)
+            return self._uses.append(row, subjects)
+        except Exception as error:
+            logger.warning("permission receipt not written for %s: %s", self.publisher.name, error)
+            return None
+
+    def close(self) -> None:
+        if self._uses is not None:
+            try:
+                self._uses.close()
+            except Exception:
+                pass
+            self._uses = None
+
+    def receipt_recall(self, candidates: list[dict], placed: _Placed) -> bool:
+        """One receipt for a recall: the object refs it returned and how many copies were filtered. False when it
+        could not be written."""
+        from dataclasses import replace
+        from permission_uses import row_for_recall
+        from permissions import subjects_of
+        returned = sorted({obj for c in candidates for obj in placed.objects.get(c["memoryId"], ()) if obj})
+        decisions = [placed.decisions[o] for o in returned if placed.decisions.get(o) is not None]
+        row = replace(row_for_recall(decisions, self._use("", "recall"), acting_for=self.acting_for,
+                                     returned=returned, filtered=placed.filtered, shadow=self.shadow,
+                                     ledger_id=self.ledger_id), ledger_seq=self.state.seq)
+        subjects = [(s, o) for o in returned for s in subjects_of(self.state, o, self.t)]
+        return self._append(row, subjects) is not None
+
+    def read_item(self, memory_id: str, content: str | None) -> tuple[bool, dict | None]:
+        """Decide one read item as ``inject_context`` and write its receipt. ``content`` is what the legacy path
+        would deliver (None if it refuses). Returns (deliver, permission): under ``enforce`` an item is delivered
+        only when both paths allow it and its receipt is written; under ``shadow`` the legacy path decides."""
+        from dataclasses import replace
+        from permission_uses import row_for_decision
+        from permissions import Refusal, annotation, subjects_of
+        legacy_delivers = content is not None
+        objs = sorted({o for o in (_object_of(r["layer"], r["source_instance_id"], r["source_id"])
+                                   for r in self.publisher.storage.conn.execute(
+                                       "SELECT layer, source_instance_id, source_id FROM shared_memories "
+                                       "WHERE memory_id = ?", (memory_id,))) if o})
+        decided = [(o, self.decide(o, "inject_context")) for o in objs]
+        if not decided or any(d is None for _, d in decided):
+            return (legacy_delivers and self.shadow), None        # no object to name: no receipt
+        obj, decision = next(((o, d) for o, d in decided if not d.allowed), decided[0])
+        if decision.allowed and not legacy_delivers:
+            # The audience check is the publisher's policy refusing: the receipt must not say "allowed".
+            decision = replace(decision, allowed=False, refusal=Refusal("LEGACY_DENY", "publisher", "inject_context"))
+        from lighthouse_protocol import content_digest as _digest
+        row = row_for_decision(
+            decision, self._use(obj, "inject_context"), acting_for=self.acting_for,
+            content_digest=_digest(content)["value"] if legacy_delivers and (decision.allowed or self.shadow) else None,
+            shadow=self.shadow, ledger_id=self.ledger_id)
+        receipt = self._append(row, [(s, obj) for s in subjects_of(self.state, obj, self.t)])
+        if self.shadow:
+            deliver = legacy_delivers
+        else:
+            deliver = legacy_delivers and decision.allowed and receipt is not None
+        if not (deliver and decision.allowed and receipt is not None):
+            return deliver, None
+        return deliver, annotation(self.state, decision, laid_by=self._laid_by(obj), receipt_id=receipt)
+
+    def _laid_by(self, obj: str) -> str:
+        """``<owner handle> (<store name>)`` from the source store's ``stores`` row."""
+        from permissions import parse_object_ref
+        iid = parse_object_ref(obj).instance_id
+        store = self.state.stores.get(iid)
+        if store is None:
+            return f"unknown ({iid})"
+        return f"{store.owner.removeprefix('person:')} ({store.name})"
 
 
 class PublisherDaemon:
@@ -389,6 +594,39 @@ class PublisherDaemon:
             logger.warning("frame handling failed", exc_info=True)
             return error_frame("PUBLISHER_UNAVAILABLE", "internal failure")
 
+    def _ledger_side(self, publisher: PublisherStore, frame: dict, gate, frame_decision):
+        """Under ``shadow`` and ``enforce``, this frame's permission decisions. Returns (side, serve_nothing):
+        ``side`` is None when there is nothing to decide with, and ``serve_nothing`` says the frame must answer
+        with no candidates and null content (R27, the placement bound, an unreadable ledger under ``enforce``)."""
+        if gate.mode not in ("shadow", "enforce"):
+            return None, False
+        enforce = gate.mode == "enforce"
+        if _house_lacks_029(publisher.storage):
+            logger.warning(
+                "house %s lacks migration 029 (source_instance_id, record_id or the change counter): serving "
+                "nothing; an engram server must open it once", publisher.name)
+            return None, True
+        from permissions import MAX_PLACEMENTS
+        count = publisher.storage.conn.execute("SELECT COUNT(*) FROM shared_memories").fetchone()[0]
+        if count > MAX_PLACEMENTS:
+            logger.warning(
+                "house %s holds %d placements, more than %s: %s", publisher.name, count, f"{MAX_PLACEMENTS:,}",
+                "serving nothing" if enforce else "deciding by the legacy path alone")
+            return None, enforce
+        from permission_ledger import Ledger
+        try:
+            ledger = Ledger.open_read_only(self.engram_home, LEDGER_BUSY_MS)
+            try:
+                state, ledger_id = ledger.state(), ledger.meta()["ledger_id"]
+            finally:
+                ledger.close()
+            now = self.clock()
+            return _LedgerSide(self, publisher, frame, gate.mode, frame_decision, state, ledger_id,
+                               now if now.tzinfo else now.replace(tzinfo=timezone.utc)), False
+        except Exception as error:
+            logger.warning("permission ledger unreadable while serving %s: %s", publisher.name, error)
+            return None, enforce
+
     @staticmethod
     def _closed(gate, publisher: PublisherStore) -> bool:
         """Under a closed gate nothing is served; the cause is logged once per request."""
@@ -408,18 +646,13 @@ class PublisherDaemon:
         turn_id = str(uuid.uuid4())
         candidates: list[dict] = []
         if decision.effect == "allow" and not self._closed(gate, publisher):
-            allowed_audiences = _allowed_audiences(
-                policy,
-                f"urn:engram:{frame['receiver']}",
-                mode=gate.mode,
-            )
-            candidates = retrieve(
-                publisher.storage,
-                self.embeddings,
-                frame["query"],
-                int(frame["k"]),
-                allowed_audiences,
-            )
+            side, serve_nothing = self._ledger_side(publisher, frame, gate, decision)
+            try:
+                if not serve_nothing:
+                    candidates = self._rank_recall(publisher, frame, policy, gate, side)
+            finally:
+                if side is not None:
+                    side.close()
         disclosure_id = publisher.record_disclosure(
             {
                 "receiver": frame["receiver"],
@@ -444,6 +677,24 @@ class PublisherDaemon:
             disclosure_id=disclosure_id,
         )
 
+    def _rank_recall(self, publisher, frame, policy, gate, side) -> list[dict]:
+        """Rank the copies the policy and the audiences allow. With a ledger side, ``recall`` is decided for each
+        placement first: under ``enforce`` the refused are left out before ranking, under ``shadow`` they are only
+        counted. The receipt is written before the reply, so a reply never names a candidate whose receipt failed
+        (under ``enforce``, a recall with no receipt returns nothing)."""
+        placed = None if side is None else side.recall_set()
+        candidates = retrieve(
+            publisher.storage,
+            self.embeddings,
+            frame["query"],
+            int(frame["k"]),
+            _allowed_audiences(policy, f"urn:engram:{frame['receiver']}", mode=gate.mode),
+            eligible=placed.eligible if placed is not None and gate.mode == "enforce" else None,
+        )
+        if side is not None and not side.receipt_recall(candidates, placed) and gate.mode == "enforce":
+            return []
+        return candidates
+
     def _read(
         self, publisher: PublisherStore, frame: dict, policy: Policy, gate
     ) -> dict:
@@ -451,42 +702,39 @@ class PublisherDaemon:
         items = []
         delivered: list[str] = []
         allowed_audiences = frozenset()
+        side, serve_nothing = None, False
         if decision.effect == "allow" and not self._closed(gate, publisher):
             allowed_audiences = _allowed_audiences(
                 policy,
                 f"urn:engram:{frame['receiver']}",
                 mode=gate.mode,
             )
-        for memory_id in frame["memoryIds"]:
-            content = None
-            audiences: list[str] = []
-            if decision.effect == "allow" and allowed_audiences:
-                row = publisher.storage.get_episode(memory_id)
-                layer = "episode"
-                if row is None:
-                    row = publisher.storage.get_semantic(memory_id)
-                    layer = "semantic"
-                if row is not None and row.get("lane") in ("personal", "work"):
-                    audiences = sorted(
-                        _shared_audiences(
-                            publisher.storage,
-                            memory_id=memory_id,
-                            layer=layer,
-                            content=row.get("content", ""),
-                        )
-                        & allowed_audiences
-                    )
-                    if audiences:
-                        content = row.get("content", "")
-                        delivered.append(memory_id)
-            items.append(
-                {
+        if not self._closed(gate, publisher):
+            side, serve_nothing = self._ledger_side(publisher, frame, gate, decision)
+        try:
+            for memory_id in frame["memoryIds"]:
+                content, audiences = None, []
+                if decision.effect == "allow" and allowed_audiences and not serve_nothing:
+                    content, audiences = self._legacy_item(publisher, memory_id, allowed_audiences)
+                item_permission = None
+                if side is not None and not serve_nothing:
+                    deliver, item_permission = side.read_item(memory_id, content)
+                    if not deliver:
+                        content, audiences, item_permission = None, [], None
+                if content is not None:
+                    delivered.append(memory_id)
+                item = {
                     "memoryId": memory_id,
                     "content": content,
                     "audiences": audiences,
                     "decision": decision.to_json(),
                 }
-            )
+                if item_permission is not None:
+                    item["permission"] = item_permission
+                items.append(item)
+        finally:
+            if side is not None:
+                side.close()
         disclosure_id = publisher.record_disclosure(
             {
                 "receiver": frame["receiver"],
@@ -500,6 +748,29 @@ class PublisherDaemon:
             }
         )
         return read_result_frame(items=items, disclosure_id=disclosure_id)
+
+    @staticmethod
+    def _legacy_item(publisher, memory_id, allowed_audiences) -> tuple[str | None, list[str]]:
+        """The content and audiences the audience policy lets out for one item, as before the ledger."""
+        row = publisher.storage.get_episode(memory_id)
+        layer = "episode"
+        if row is None:
+            row = publisher.storage.get_semantic(memory_id)
+            layer = "semantic"
+        if row is None or row.get("lane") not in ("personal", "work"):
+            return None, []
+        audiences = sorted(
+            _shared_audiences(
+                publisher.storage,
+                memory_id=memory_id,
+                layer=layer,
+                content=row.get("content", ""),
+            )
+            & allowed_audiences
+        )
+        if not audiences:
+            return None, []
+        return row.get("content", ""), audiences
 
     def serve_forever(self) -> None:
         daemon = self

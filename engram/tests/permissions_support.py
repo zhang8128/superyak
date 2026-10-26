@@ -1856,30 +1856,289 @@ def read(pub, memory_id):
     return read_frame(**_daemon_frame_kwargs(pub), turn_id="turn-1", memory_ids=[memory_id])
 
 
-def _daemon_over(root, publishers, busy_timeout_ms=None):
+def _daemon_over(root, publishers, busy_timeout_ms=None, clock=None):
     import lighthouse_daemon
     from tests.test_lighthouse_daemon import FakeEmbeddings
     if busy_timeout_ms is not None:
         lighthouse_daemon.LEDGER_BUSY_MS = busy_timeout_ms     # conftest restores it after the test
     return lighthouse_daemon.PublisherDaemon(
-        {p.name: p for p in publishers}, root / "s.sock", FakeEmbeddings(), engram_home=root)
+        {p.name: p for p in publishers}, root / "s.sock", FakeEmbeddings(), engram_home=root,
+        clock=clock or at(DAEMON_CLOCK))
+
+
+# ---------------------------------------------------------------- the daemon's decisions (Task 20; PF28: Task 21 reuses)
+
+HOUSE_NAME, HOUSE_ID, SOURCE_ID = "why", STORE_HOUSE, STORE_S
+DAEMON_CLOCK = T("2026-11-02")
+M1_ID, M2_ID, M3_ID = (str(__import__("uuid").UUID(int=n)) for n in (1, 2, 3))
+M1_ITEM, M2_ITEM, M3_ITEM = M1_ID, M2_ID, M3_ID
+SHARED_ID = M1_ID
+M1_TEXT, M2_TEXT, M3_TEXT = "m1: shared: rivers need bridges", "m2: a visit at clinic 3", "m3: a note about Jenn"
+PURPOSES = ("session-recall", "care-coordination")
+
+
+def at(t):
+    """A clock fixed at `t` seconds."""
+    return lambda: datetime.fromtimestamp(t, tz=timezone.utc)
+
+
+def connection_policy(issuer, requesters, *, actions, purposes=PURPOSES, audience_map=None,
+                      valid_until="2028-01-01T00:00:00Z"):
+    """A ConnectionPolicy `issuer` owns: one allow rule for `requesters` (urn:engram:...), the audiences by hand."""
+    from lighthouse_protocol import artifact_digest
+    artifact = {
+        "kind": "ConnectionPolicy", "protocolVersion": "0.1", "id": f"urn:policy:{issuer}",
+        "issuedAt": "2026-09-01T00:00:00Z", "issuer": f"urn:engram:{issuer}",
+        "payloadMediaType": "application/vnd.lighthouse.connection-policy+json",
+        "payload": {"rules": [{
+            "id": "allow", "effect": "allow", "publishers": list(requesters),
+            "profiles": ["urn:lighthouse:profile:engram-recall-trace"], "domains": ["memory.recall"],
+            "actions": list(actions), "contexts": ["memory/technical"],
+            "claimMediaTypes": ["application/vnd.engram.recall-rank-claim+json"], "purposes": list(purposes),
+            "audiences": ["self"], "validFrom": "2026-01-01T00:00:00Z", "validUntil": valid_until,
+            "requiredEvidence": [], "requiredAttestations": []}]},
+        "extensions": {"engram:audiences": audience_map or {}},
+    }
+    artifact["digest"] = artifact_digest(artifact)
+    return artifact
+
+
+def write_receiver_settings(root, receiver, publishers=(HOUSE_NAME,)):
+    """The receiver's `lighthouse-receiver.toml`, as the receiver itself finds it (`neighbors.py:183-184`)."""
+    inst = house_dir(root, receiver)
+    (inst / "lighthouse-receiver.toml").write_text(
+        'enabled = true\npublishers = [%s]\nsocket_path = "lighthouse.sock"\n'
+        'policy_path = "lighthouse-receiver-policy.json"\n' % ", ".join(f'"{p}"' for p in publishers))
+
+
+def write_receiver_policy(root, receiver, *, actions=("recall", "read", "inject_context"), publisher=HOUSE_NAME,
+                          purposes=PURPOSES):
+    import json
+    inst = house_dir(root, receiver)
+    (inst / "lighthouse-receiver-policy.json").write_text(json.dumps(
+        connection_policy(receiver, [f"urn:engram:{publisher}"], actions=actions, purposes=purposes)))
+
+
+def write_receiver_files(root, receiver, **policy):
+    write_receiver_settings(root, receiver)
+    write_receiver_policy(root, receiver, **policy)
+
+
+def remove_receiver_settings(root, receiver):
+    (house_dir(root, receiver) / "lighthouse-receiver.toml").unlink()
+
+
+def make_placed_house(root, name=HOUSE_NAME, *, receiver=DAEMON_RECEIVER, legacy_allows=True, orphans=0,
+                      audience="commons", purposes=PURPOSES, house_id=HOUSE_ID):
+    """A real house (migration 029) whose instance id is `house_id`, holding episodes m1 to m3 placed to `audience`,
+    each linked to its source `mem:S/episode/mN`, and `orphans` more `shared_memories` rows naming no copy (older
+    code could leave them), written in one transaction. The publisher's policy lets `receiver` recall and read, or
+    only recall when `legacy_allows` is false. Returns the PublisherStore."""
+    import hashlib
+    import json
+    import uuid
+    from lighthouse_daemon import PublisherStore
+    from storage import Storage
+    from tests.test_lighthouse_daemon import unit
+    inst = house_dir(root, name)
+    store = Storage(str(inst / "graph.db"))
+    store.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('instance_id', ?)", (house_id,))
+    columns = ("share_id, memory_id, source_instance, source_id, layer, audience, reason, content_digest, shared_at, "
+               "source_instance_id, record_id")
+    rows = []
+    for n, (memory_id, text) in enumerate(((M1_ID, M1_TEXT), (M2_ID, M2_TEXT), (M3_ID, M3_TEXT)), start=1):
+        store.add_episode(memory_id, "s", text, embedding=unit(text))
+        rows.append((f"share-{n}", memory_id, "engram", f"m{n}", "episode", audience, "test",
+                     hashlib.sha256(text.encode()).hexdigest(), "2026-11-01", SOURCE_ID, None))
+    for i in range(orphans):
+        rows.append((f"orphan-{i}", str(uuid.uuid4()), "engram", f"o{i}", "episode", audience, "test", "0" * 64,
+                     "2026-11-01", SOURCE_ID, None))
+    store.conn.executemany(f"INSERT INTO shared_memories ({columns}) VALUES ({','.join('?' * 11)})", rows)
+    store.conn.commit()
+    store.close()
+    (inst / "lighthouse-policy.json").write_text(json.dumps(connection_policy(
+        name, [f"urn:engram:{receiver}"], actions=("recall", "read") if legacy_allows else ("recall",),
+        purposes=purposes, audience_map={f"urn:engram:{receiver}": [audience]})))
+    return PublisherStore(name=name, db_path=inst / "graph.db", policy_path=inst / "lighthouse-policy.json",
+                          disclosures_path=inst / "lighthouse-disclosures.db")
+
+
+def daemon_ledger(root, mode="enforce", *, receiver=DAEMON_RECEIVER, allow=True, only=None):
+    """A ledger at `root` with Andy's source store S, the house, `agent:<receiver>` at his home and, when `allow`,
+    one inside-home allow covering every memory of S (or just `only`, a set of refs); the gate raised to `mode`
+    unless that is `off`. The houses must exist first."""
+    from permission_ledger import Ledger
+    make_house(root, "lighthouse")
+    led = Ledger.create(root, "andy", now=T("2026-11-01"))
+    do(led, ANDY, "register-store", instance_id=SOURCE_ID, name="engram", owner=ANDY, place=HOME, imprint_of=None)
+    do(led, ANDY, "register-store", instance_id=HOUSE_ID, name="published house", owner=ANDY, place=HOME,
+       imprint_of=None)
+    do(led, ANDY, "register-agent", agent=f"agent:{receiver}", acts_for=HOME)
+    do(led, ANDY, "put-agent", agent=f"agent:{receiver}", place=HOME)
+    if allow:
+        memories = sorted(only) if only is not None else "*"
+        sel = parse_selector(_doc_of(["self"], kinds=["memory"], stores=[SOURCE_ID], memories=memories,
+                                     actions=R1_ACTIONS))
+        do(led, ANDY, "allow", layer=HOME, selector=sel, valid_from=T("2026-11-01"), valid_until=None,
+           reason="test")
+    if mode != "off":
+        raise_gate(led, mode)
+    led.close()
+
+
+class Rig:
+    """A daemon with the frames the tests send it."""
+
+    def __init__(self, daemon, root, receiver=DAEMON_RECEIVER, purpose="session-recall", pub=HOUSE_NAME):
+        self.daemon, self.root, self.receiver, self.purpose, self.pub = daemon, root, receiver, purpose, pub
+
+    def _kw(self):
+        from tests.test_lighthouse_daemon import CONTEXT
+        return dict(receiver=self.receiver, publisher=self.pub, context=CONTEXT, purpose=self.purpose)
+
+    def recall(self, query=M1_TEXT, k=5):
+        from lighthouse_protocol import recall_frame
+        from tests.test_lighthouse_daemon import NOW
+        return self.daemon.handle_frame(recall_frame(**self._kw(), query=query, k=k, at=NOW))
+
+    def read(self, memory_id, frame_at=None):
+        """The one item of a read of `memory_id`. `frame_at` is what a receiver might claim; the daemon ignores it."""
+        from lighthouse_protocol import read_frame
+        reply = self.daemon.handle_frame(read_frame(**self._kw(), turn_id="turn-1", memory_ids=[memory_id]))
+        [item] = reply["items"]
+        return item
+
+    def last_receipt(self):
+        return receipt_rows(self.root)[-1]["id"]
+
+
+def receipt_rows(root, action=None):
+    """The receipts written so far, oldest first."""
+    import sqlite3
+    from permission_uses import uses_path
+    path = uses_path(root)
+    if not path.is_file():
+        return []
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        sql, args = "SELECT * FROM uses", ()
+        if action is not None:
+            sql, args = sql + " WHERE action = ?", (action,)
+        return [dict(r) for r in con.execute(sql + " ORDER BY seq", args)]
+    finally:
+        con.close()
+
+
+def make_uses_file_unwritable(root):
+    import os
+    from permission_uses import Uses, uses_path
+    Uses.open(root).close()
+    os.chmod(uses_path(root), 0o444)
+
+
+def spy_on_retrieve(monkeypatch, rig):
+    """The `eligible` set each `retrieve` call is given, in order."""
+    import lighthouse_daemon
+    seen, real = [], lighthouse_daemon.retrieve
+
+    def spy(*args, **kw):
+        seen.append(kw.get("eligible"))
+        return real(*args, **kw)
+    monkeypatch.setattr(lighthouse_daemon, "retrieve", spy)
+    return seen
+
+
+def _mode_daemon(root, mode, legacy_allows, ledger_allows, ledger_allows_only, clock):
+    pub = make_placed_house(root, legacy_allows=legacy_allows)
+    daemon_ledger(root, mode, allow=ledger_allows, only=ledger_allows_only)
+    write_receiver_files(root, DAEMON_RECEIVER)
+    return Rig(_daemon_over(root, [pub], clock=clock), root)
+
+
+def enforce_daemon(root, legacy_allows=True, ledger_allows=True, ledger_allows_only=None, clock=None):
+    return _mode_daemon(root, "enforce", legacy_allows, ledger_allows, ledger_allows_only, clock)
+
+
+def shadow_daemon(root, legacy_allows=True, ledger_allows=True, ledger_allows_only=None, clock=None):
+    return _mode_daemon(root, "shadow", legacy_allows, ledger_allows, ledger_allows_only, clock)
+
+
+def e1_daemon_at(root, t, mode="enforce"):
+    """P 13's county, Andy's side and E1's rules in the ledger, `agent:ph-coordinator` asking house `why` at `t`
+    (seconds) for care-coordination; both ConnectionPolicy files written by hand. Returns (rig, ids)."""
+    receiver = "ph-coordinator"
+    pub = make_placed_house(root, receiver=receiver)
+    make_house(root, "lighthouse")
+    led = e1_county_ledger(root)
+    ids = led.ids
+    raise_gate(led, mode)
+    led.close()
+    write_receiver_files(root, receiver)
+    rig = Rig(_daemon_over(root, [pub], clock=at(t)), root, receiver=receiver, purpose="care-coordination")
+    ids.last_receipt = rig.last_receipt
+    return rig, ids
+
+
+def raised_daemon(root, mode="enforce", busy_timeout_ms=None, house=None, placements=None):
+    """A daemon over house `why` (three commons placements, so a recall finds them) under a ledger raised to `mode`,
+    with an inside-home allow covering them. `house(root, name)` builds the house instead (one made before 029);
+    `placements=n` makes the house hold n placement rows in all. Returns (daemon, "why")."""
+    if house is not None:
+        pub = _plain_house(root, house)
+    else:
+        pub = make_placed_house(root, orphans=0 if placements is None else max(placements - 3, 0))
+    daemon_ledger(root, mode)
+    write_receiver_files(root, DAEMON_RECEIVER)
+    return _daemon_over(root, [pub], busy_timeout_ms), HOUSE_NAME
+
+
+def _plain_house(root, builder):
+    """A house made by `builder(root, name)` (a path, closed) holding one commons placement of an episode."""
+    import hashlib
+    import json
+    from pathlib import Path
+    from lighthouse_daemon import PublisherStore
+    from storage import Storage
+    from tests.test_lighthouse_daemon import insert_share, unit, write_policy
+    Path(root).mkdir(parents=True, exist_ok=True)
+    path = Path(builder(root, HOUSE_NAME))
+    store = Storage(str(path), migrations_dir=str(Path(root) / "m028"))
+    store.add_episode(M1_ID, "s", M1_TEXT, embedding=unit(M1_TEXT))
+    insert_share(store, memory_id=M1_ID, content=M1_TEXT)
+    store.close()
+    write_policy(path.parent / "lighthouse-policy.json")
+    return PublisherStore(name=HOUSE_NAME, db_path=path, policy_path=path.parent / "lighthouse-policy.json",
+                          disclosures_path=path.parent / "lighthouse-disclosures.db")
+
+
+def daemon_with_no_ledger(root, house=None):
+    """As `raised_daemon`, but no ledger: the gate is off. Returns (daemon, "why")."""
+    pub = _plain_house(root, house) if house is not None else make_placed_house(root)
+    return _daemon_over(root, [pub]), HOUSE_NAME
 
 
 def _outside_home_house(root, name, audiences):
-    """A publisher whose only shared memory is an outside-home placement; the policy lists `audiences` for the
-    receiver by hand. Returns (publisher, the memory's id)."""
+    """A publisher whose only shared memory is an outside-home placement, linked to `mem:S/episode/outside`; the
+    policy lists `audiences` for the receiver by hand. Returns (publisher, the memory's id)."""
+    import json
     import uuid
-    from storage import Storage
     from lighthouse_daemon import PublisherStore
-    from tests.test_lighthouse_daemon import insert_share, unit, write_policy
+    from storage import Storage
+    from tests.test_lighthouse_daemon import insert_share, unit
     inst = house_dir(root, name)
     store = Storage(str(inst / "graph.db"))
+    store.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('instance_id', ?)", (HOUSE_ID,))
     memory_id = str(uuid.uuid4())
     content = "outside home: rivers need bridges"
     store.add_episode(memory_id, "s", content, embedding=unit(content))
     insert_share(store, memory_id=memory_id, content=content, audience=OUTSIDE_HOME)
+    store.conn.execute("UPDATE shared_memories SET source_instance_id = ?, source_id = 'outside'", (SOURCE_ID,))
+    store.conn.commit()
     store.close()
-    write_policy(inst / "lighthouse-policy.json", audience_map={f"urn:{'engram'}:{DAEMON_RECEIVER}": audiences})
+    (inst / "lighthouse-policy.json").write_text(json.dumps(connection_policy(
+        name, [f"urn:engram:{DAEMON_RECEIVER}"], actions=("recall", "read"),
+        audience_map={f"urn:engram:{DAEMON_RECEIVER}": audiences})))
     return PublisherStore(name=name, db_path=inst / "graph.db", policy_path=inst / "lighthouse-policy.json",
                           disclosures_path=inst / "lighthouse-disclosures.db"), memory_id
 
@@ -1887,25 +2146,11 @@ def _outside_home_house(root, name, audiences):
 def daemon_with_outside_home_placement(root, mode, hand_written_audiences, busy_timeout_ms=None):
     """A daemon over house `why` holding one outside-home placement. `mode` is `no-ledger`, `off` (a ledger whose gate
     was never raised), `shadow` or `enforce`. Returns (daemon, "why", the memory's id)."""
-    from permission_ledger import Ledger
     pub, memory_id = _outside_home_house(root, "why", hand_written_audiences)
     if mode != "no-ledger":
-        make_house(root, "lighthouse")
-        led = Ledger.create(root, "andy", now=T("2026-11-01"))
-        if mode != "off":
-            raise_gate(led, mode)
-        led.close()
+        daemon_ledger(root, mode)
+        write_receiver_files(root, DAEMON_RECEIVER)
     return _daemon_over(root, [pub], busy_timeout_ms), "why", memory_id
-
-
-def raised_daemon(root, mode="enforce", busy_timeout_ms=None):
-    """A daemon over house `why` (one commons placement, so a recall finds it) under a ledger raised to `mode`.
-    Returns (daemon, "why")."""
-    from tests.test_lighthouse_daemon import build_publisher
-    pub = build_publisher(root, "why")
-    make_house(root, "lighthouse")
-    raised_ledger(root, houses=("lighthouse",), mode=mode).close()
-    return _daemon_over(root, [pub], busy_timeout_ms), "why"
 
 
 def add_publisher_house(daemon, root, name):
