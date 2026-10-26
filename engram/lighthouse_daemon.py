@@ -510,8 +510,12 @@ class _LedgerSide:
             return (legacy_delivers and self.shadow), None        # no object to name: no receipt
         obj, decision = next(((o, d) for o, d in decided if not d.allowed), decided[0])
         if decision.allowed and not legacy_delivers:
-            # The audience check is the publisher's policy refusing: the receipt must not say "allowed".
-            decision = replace(decision, allowed=False, refusal=Refusal("LEGACY_DENY", "publisher", "inject_context"))
+            # The audience check is the publisher's policy refusing. Under enforce the receipt must not say
+            # "allowed" for an item not delivered; under shadow it keeps the ledger's verdict and only notes the
+            # legacy refusal, so the owner can see where the two paths disagree (P 12.3).
+            legacy_refusal = Refusal("LEGACY_DENY", "publisher", "inject_context")
+            decision = replace(decision, refusal=legacy_refusal) if self.shadow else replace(
+                decision, allowed=False, refusal=legacy_refusal)
         from lighthouse_protocol import content_digest as _digest
         row = row_for_decision(
             decision, self._use(obj, "inject_context"), acting_for=self.acting_for,
@@ -702,7 +706,8 @@ class PublisherDaemon:
         decision = policy.decide(self._request(frame, "recall"))
         turn_id = str(uuid.uuid4())
         candidates: list[dict] = []
-        if decision.effect == "allow" and not self._closed(gate, publisher):
+        closed = self._closed(gate, publisher)
+        if decision.effect == "allow" and not closed:
             side, serve_nothing = self._ledger_side(publisher, frame, gate, decision)
             try:
                 if not serve_nothing:
@@ -760,13 +765,14 @@ class PublisherDaemon:
         delivered: list[str] = []
         allowed_audiences = frozenset()
         side, serve_nothing = None, False
-        if decision.effect == "allow" and not self._closed(gate, publisher):
+        closed = self._closed(gate, publisher)
+        if decision.effect == "allow" and not closed:
             allowed_audiences = _allowed_audiences(
                 policy,
                 f"urn:engram:{frame['receiver']}",
                 mode=gate.mode,
             )
-        if not self._closed(gate, publisher):
+        if not closed:
             side, serve_nothing = self._ledger_side(publisher, frame, gate, decision)
         try:
             for memory_id in frame["memoryIds"]:

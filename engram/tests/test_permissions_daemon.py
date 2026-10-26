@@ -172,3 +172,41 @@ def test_more_than_20000_placements_serve_nothing_under_enforce(tmp_path, caplog
     assert d.handle_frame(recall(pub))["candidates"]                     # at the bound it still serves
     d, pub = raised_daemon(tmp_path / "shadow", mode="shadow", placements=MAX_PLACEMENTS + 1)
     assert d.handle_frame(recall(pub))["candidates"]                     # shadow: the legacy path decides
+
+
+def _audience_refused(tmp_path, mode):
+    """Ledger allows M1; the publisher's audience list for the receiver omits the item's audience."""
+    d = (shadow_daemon if mode == "shadow" else enforce_daemon)(tmp_path)
+    from tests.permissions_support import write_publisher_policy
+    write_publisher_policy(tmp_path, receiver_audiences=["group:other"])
+    return d
+
+
+def test_shadow_receipt_keeps_the_ledgers_verdict_when_the_audience_path_refuses(tmp_path):
+    d = _audience_refused(tmp_path, "shadow")
+    item = d.read(M1_ITEM)
+    assert item["content"] is None                            # the legacy path still decides delivery
+    row = receipt_rows(tmp_path, action="inject_context")[-1]
+    assert row["shadow"] == 1 and row["allowed"] == 1         # the ledger's verdict
+    assert json.loads(row["refusal"]) == {"code": "LEGACY_DENY", "layer": "publisher", "action": "inject_context"}
+
+
+def test_enforce_receipt_says_not_allowed_when_the_audience_path_refuses(tmp_path):
+    d = _audience_refused(tmp_path, "enforce")
+    assert d.read(M1_ITEM)["content"] is None
+    row = receipt_rows(tmp_path, action="inject_context")[-1]
+    assert row["shadow"] == 0 and row["allowed"] == 0
+    assert json.loads(row["refusal"])["code"] == "LEGACY_DENY"
+
+
+@pytest.mark.parametrize("mode", ["enforce", "shadow"])
+def test_a_closed_gate_logs_its_cause_once_per_request(tmp_path, caplog, mode):
+    from tests.permissions_support import delete_ledger, read as read_frame
+    d, pub = raised_daemon(tmp_path, mode=mode)
+    delete_ledger(tmp_path)
+    for allowed in (True, False):
+        if not allowed:
+            write_receiver_policy(tmp_path, "ph-coordinator", actions=[])   # frame decision becomes deny
+        caplog.clear()
+        d.handle_frame(read_frame(pub, SHARED_ID))
+        assert sum("gate closed" in r.getMessage() for r in caplog.records) == 1
