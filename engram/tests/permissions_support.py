@@ -8,7 +8,7 @@ import copy as _copy
 import dataclasses
 from typing import NamedTuple
 
-from permissions import (ACTIONS, GRANT_OPS, BulkUse, Grant, Record, State, Use, _row, _units, home_of,
+from permissions import (ACTIONS, GRANT_OPS, Act, BulkUse, Grant, Record, State, Use, _row, _units, home_of,
                          parse_selector, selector_json)
 
 SEED = 20261025
@@ -1430,3 +1430,141 @@ U4_EXPECTED = {
 }
 U4_TABLE = [(column, row, expected) for row, cells in U4_EXPECTED.items()
             for column, expected in zip(U4_ACTORS, cells)]
+
+
+# ---------------------------------------------------------------- Task 11: ledgers built through `perform`
+
+SW = "place:la-county/summer-wellness"
+COUNTY = "place:la-county"
+STORE_S, STORE_HOUSE, STORE_K = "S", "HOUSE", "K"
+M5, M6 = "mem:S/episode/m5", "mem:S/episode/m6"
+COPY_OF_M3 = "mem:K/episode/c3"
+ANDY = "person:andy"
+
+
+def do(led, actor, kind, now="2026-11-01", channel="terminal", **args):
+    """One act through Ledger.perform, as `actor`, on channel `terminal` unless told otherwise."""
+    return led.perform(Act(kind, args), actor=actor, channel=channel, now=T(now))
+
+
+def county_ledger(tmp_path):
+    """P 13's county, its people and its agents, every row through `perform`. No store and no record."""
+    from permission_ledger import Ledger
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    for handle in ("county-steward", "ph-steward", "pr-steward", "sw-steward", "sw2", "jenn", "amy"):
+        do(led, ANDY, "register-person", person="person:" + handle)
+    do(led, ANDY, "register-place", place=COUNTY, name="LA County", stewards=["person:county-steward"])
+    do(led, "person:county-steward", "register-place", place=PH, name="Public Health",
+       stewards=["person:ph-steward"])
+    do(led, "person:county-steward", "register-place", place=PR, name="Parks and Recreation",
+       stewards=["person:pr-steward"])
+    do(led, "person:ph-steward", "register-place", place=CLINIC_3, stewards=["person:ph-steward"])
+    do(led, "person:ph-steward", "register-agent", agent="agent:ph-coordinator", acts_for=CLINIC_3)
+    do(led, "person:ph-steward", "put-agent", agent="agent:ph-coordinator", place=CLINIC_3)
+    do(led, "person:pr-steward", "register-agent", agent="agent:parks-planner", acts_for=PR)
+    do(led, "person:pr-steward", "put-agent", agent="agent:parks-planner", place=PR)
+    do(led, "person:pr-steward", "register-agent", agent="agent:parks-intern", acts_for=PR)
+    do(led, ANDY, "register-agent", agent="agent:rio-grande", acts_for=HOME)
+    do(led, ANDY, "put-agent", agent="agent:rio-grande", place=HOME)
+    return led
+
+
+def e1_ledger_through_andys_side(tmp_path):
+    """county_ledger, Andy's stores and collection, then R1 and G1 of P 13 through `_append` (Task 12 owns
+    the acts for them). The ids are on `led.ids`."""
+    from permission_ledger import new_id
+    led = county_ledger(tmp_path)
+    for iid, name in ((STORE_S, "engram"), (STORE_HOUSE, "published house"), (STORE_K, "keeper store")):
+        do(led, ANDY, "register-store", instance_id=iid, name=name, owner=ANDY, place=HOME, imprint_of=None)
+    do(led, ANDY, "make-collection", collection=MEDICAL)
+    personal = {"lane": "personal", "created_at": T("2026-10-01")}
+    do(led, ANDY, "collect", collection=MEDICAL, refs=[M1, M2, M3], lanes={r: personal for r in (M1, M2, M3)})
+    do(led, ANDY, "add-subject", object=M3, subject="person:jenn")
+    ids = SimpleNamespace(M1=M1, M2=M2, M3=M3, M4=M4, M5=M5, M6=M6, R1=new_id("r-"), G1=new_id("g-"))
+    at = T("2026-11-01")
+    led._append("allow", ids.R1, ANDY, "terminal", {"insert": [{"table": "records", "row": {
+        "id": ids.R1, "layer": HOME, "effect": "allow", "selector": selector_json(R1_ENVELOPE),
+        "valid_from": at, "valid_until": T("2027-01-31"), "anchor": at, "backing": "person", "set_by": ANDY,
+        "channel": "terminal", "reason": "R1", "created": at, "created_seq": "@seq"}}]}, at=at)
+    led._append("grant", ids.G1, ANDY, "terminal", {"insert": [{"table": "permission_grants", "row": {
+        "id": ids.G1, "issuer": ANDY, "grantee": "agent:rio-grande", "layer": HOME, "ops": [
+            "share", "withdraw", "shorten", "narrow", "collect", "uncollect"],
+        "envelope": selector_json(R1_ENVELOPE), "max_days": 120, "depth": 0, "expires": T("2026-11-30"),
+        "created": at, "created_seq": "@seq"}}]}, at=at)
+    led.ids = ids
+    return led
+
+
+def e1_county_ledger(tmp_path):
+    """e1_ledger_through_andys_side, the joint place and P 13's county records C1, H1, H2, K1, K2, W1, L1."""
+    from permission_ledger import new_id
+    led = e1_ledger_through_andys_side(tmp_path)
+    filed = do(led, "person:ph-steward", "register-place", place=SW, parents=[PH, PR], name="Summer Wellness",
+               stewards=["person:sw-steward"])
+    do(led, "person:pr-steward", "sign", proposal=filed.ref)
+    do(led, "person:sw-steward", "register-agent", agent="agent:sw-helper", acts_for=SW)
+    do(led, "person:sw-steward", "put-agent", agent="agent:sw-helper", place=SW)
+    at, ids = T("2026-11-01"), led.ids
+    both = ["care-coordination", "program-operations"]
+    rules = [("C1", "person:county-steward", COUNTY, COUNTY, ["recall", "read", "inject_context", "route"], both,
+              T("2027-12-31")),
+             ("H1", "person:ph-steward", PH, PH, R1_ACTIONS, ["care-coordination"], None),
+             ("H2", "person:ph-steward", PH, SW, ["recall"], ["program-operations"], None),
+             ("K1", "person:pr-steward", PR, PR, ["recall", "read", "inject_context", "route"],
+              ["program-operations"], None),
+             ("K2", "person:pr-steward", PR, SW, ["recall", "read"], ["program-operations"], None),
+             ("W1", "person:sw-steward", SW, SW, ["recall", "read"], ["program-operations"], None),
+             ("L1", "person:ph-steward", CLINIC_3, CLINIC_3, R1_ACTIONS, ["care-coordination"], None)]
+    for name, steward, layer, audience, actions, purposes, until in rules:
+        rid = new_id("r-")
+        setattr(ids, name, rid)
+        sel = parse_selector(_doc_of([audience], actions=actions, purposes=purposes))
+        led._append("allow", rid, steward, "terminal", {"insert": [{"table": "records", "row": {
+            "id": rid, "layer": layer, "effect": "allow", "selector": selector_json(sel),
+            "valid_from": T("2026-10-01"), "valid_until": until, "anchor": at, "backing": "person",
+            "set_by": steward, "channel": "terminal", "reason": name, "created": at,
+            "created_seq": "@seq"}}]}, at=at)
+    return led
+
+
+def copies_ledger(tmp_path, chain):
+    """county_ledger, stores K0 to K5 at Andy's home, and `chain` copies c1 <- ... made with record_copy."""
+    led = county_ledger(tmp_path)
+    for i in range(6):
+        do(led, ANDY, "register-store", instance_id=f"K{i}", name=f"keeper {i}", owner=ANDY, place=HOME,
+           imprint_of=None)
+    for i in range(1, chain + 1):
+        led.record_copy(f"mem:K{i}/episode/c{i}", f"mem:K{i - 1}/episode/c{i - 1}", now=T("2026-11-02"))
+    return led
+
+
+def add_subject(led, ref, subject, *, actor, channel="terminal", self_claimed=False, now="2026-11-03"):
+    out = do(led, actor, "add-subject", now=now, channel=channel, object=ref, subject=subject)
+    if self_claimed:
+        assert [r for r in led.state().subjects[ref] if r.subject == subject][-1].self_claimed
+    return out
+
+
+def remove_subject(led, ref, subject, *, actor, channel="terminal", now="2026-11-03"):
+    return do(led, actor, "remove-subject", now=now, channel=channel, object=ref, subject=subject)
+
+
+def read_by_ph(obj, at):
+    """ph-coordinator, at clinic-3, reads obj from the published house."""
+    return use("agent:ph-coordinator", CLINIC_3, obj, copy=f"store:{STORE_HOUSE}", action="read", at=at)
+
+
+def source_with_copy_at_8_subjects(led):
+    """(source, copy): the source has 7 subjects (Andy and six co-subjects); its copy, kept by sw2, holds 8."""
+    src, copy = "mem:S/episode/m7", "mem:K9/episode/c7"
+    for i in range(1, 7):
+        add_subject(led, src, f"person:p{i}", actor=ANDY)
+    do(led, "person:sw2", "register-store", now="2026-11-03", instance_id="K9", name="sw2 keeper",
+       owner="person:sw2", place="place:home/sw2", imprint_of=None)
+    led.record_copy(copy, src, now=T("2026-11-03"))
+    return src, copy
+
+
+def read_copy(copy):
+    """Rio Grande reads the kept copy from its keeper's store."""
+    return use("agent:rio-grande", HOME, copy, copy="store:K9", action="read", at=T("2026-11-05"))

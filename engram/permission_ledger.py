@@ -19,11 +19,17 @@ import json
 import os
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from lighthouse_protocol import canonical_json
-from permissions import State, RuleError, check_id, _COLUMNS, _NULLABLE
+from permissions import (
+    CHANNELS, JOINTS_PER_CHANGE, LANES, MAX_COPY_CHAIN, MAX_PLACES, MAX_SUBJECTS, PROPOSAL_DAYS, REGISTRY, Act,
+    Authority, State, RuleError, affected_joints, authorize, check_id, check_new_members,
+    check_new_parent, check_new_place, check_new_subject, gluing, home_of, parse_copy_ref, parse_object_ref,
+    person_of_home, subjects_of, _COLUMNS, _NULLABLE, _acts_for_person, _is_steward, _live,
+    _layer_steward, _own_subjects, _principals)
 
 SCHEMA_VERSION = "1"
 ZERO = "0" * 64
@@ -88,6 +94,18 @@ _HOT = ("This ledger has a hot journal from a writer that stopped mid-commit, wh
 
 class LedgerUnreadable(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """What `Ledger.perform` did: `done`, or `proposal` (a proposal was filed, or one signature was added).
+    `ref` is the thing written (or the proposal's id) and `seq` the log row. `reports` are the gluing reports of
+    up to JOINTS_PER_CHANGE joint places after a registry change (R5); `pending_checks` names the rest."""
+    status: str
+    ref: str
+    seq: int
+    reports: tuple = ()
+    pending_checks: tuple = ()
 
 
 def ledger_path(engram_home: Path) -> Path:
@@ -297,6 +315,138 @@ class Ledger:
         if table not in _COLUMNS:
             raise _bad(f"unknown table {table!r}")
 
+    # ---------------------------------------------------------------- acts (R3)
+    def perform(self, act: Act, *, actor: str, channel: str, now: int) -> Outcome:
+        """The one path for every act: authorize with the pure model, then write one log row and its projection.
+        A refused act raises RuleError and writes nothing. An act that needs more yeses is filed as a proposal."""
+        if self.read_only:
+            raise _bad("this ledger is open read-only")
+        if act.kind in ("sign", "decline"):
+            return self._on_proposal(act, actor, channel, now)
+        spec = _ACTS.get(act.kind)
+        if spec is None:
+            raise RuleError(_ACT, f"unknown act kind {act.kind!r}")
+        state = self.state()
+        args = spec.prepare(state, actor, dict(act.args))
+        act = Act(act.kind, args)
+        auth = spec.authority(state, actor, act, channel, now)
+        if auth.outcome == "proposal":
+            return self._file(state, act, actor, channel, now)
+        ref, body = spec.make(state, actor, args, auth, now)
+        seq = self._append(act.kind, ref, actor, channel, body, under_grant=auth.under_grant, at=now)
+        return self._outcome("done", ref, seq, act.kind)
+
+    def _outcome(self, status: str, ref: str, seq: int, kind: str) -> Outcome:
+        if kind not in _GLUED:
+            return Outcome(status, ref, seq)
+        state = self.state()
+        joints = affected_joints(state, {REGISTRY})
+        return Outcome(status, ref, seq, tuple(gluing(state, j) for j in joints[:JOINTS_PER_CHANGE]),
+                       tuple(joints[JOINTS_PER_CHANGE:]))
+
+    def _file(self, state: State, act: Act, actor: str, channel: str, now: int) -> Outcome:
+        pid = new_id("p-")
+        body: dict = {"act": {"kind": act.kind, "args": dict(act.args)}}
+        kind, for_person = act.kind, state.meta["owner"]
+        if not actor.startswith("agent:") and channel != "tool":
+            # a person's act that waits for the other stewards (P 4.4): each needs a signature (R6)
+            body["needs"] = _needs(act)
+            kind, for_person = ("joint-place" if act.kind == "register-place" else act.kind), actor
+        row = {"id": pid, "by_agent": actor, "for_person": for_person, "kind": kind, "body": body, "created": now,
+               "expires": now + PROPOSAL_DAYS * 86400, "status": "pending"}
+        seq = self._append("propose", pid, actor, channel, {"insert": [{"table": "proposals", "row": row}]},
+                           proposal_id=pid, at=now)
+        return Outcome("proposal", pid, seq)
+
+    def _signers(self, pid: str) -> list[str]:
+        return [r["actor"] for r in self.conn.execute(
+            "SELECT actor FROM ledger_log WHERE kind='proposal-sign' AND proposal_id=? ORDER BY seq", (pid,))]
+
+    def _on_proposal(self, act: Act, actor: str, channel: str, now: int) -> Outcome:
+        state = self.state()
+        if channel not in CHANNELS:
+            raise RuleError(_ACT, f"channel must be one of {', '.join(CHANNELS)}")
+        row = state.persons.get(actor)
+        if not actor.startswith("person:") or row is None or row.retired_seq is not None:
+            raise RuleError(_ACT, f"only a registered person can {act.kind} a proposal, not {actor}")
+        pid = check_id("proposal", act.args.get("proposal"))
+        p = state.proposals.get(pid)
+        if p is None:
+            raise RuleError(_ACT, f"{pid} is not a proposal")
+        if p.status != "pending":
+            raise RuleError(_ACT, f"{pid} is not pending: it is {p.status}")
+        body = json.loads(p.body)
+        needs = body.get("needs")
+        had = {p.by_agent, *self._signers(pid)}
+        if act.kind == "decline":
+            if actor not in had and actor != p.for_person and not (needs and _covers(state, needs, {actor})):
+                raise RuleError(_ACT, f"{actor} has no say in {pid}")
+            seq = self._append("proposal-decline", pid, actor, channel, {"update": [{
+                "table": "proposals", "where": {"id": pid}, "set": {"status": "declined", "decided_seq": "@seq"}}]},
+                proposal_id=pid, at=now)
+            return Outcome("done", pid, seq)
+        if channel == "tool":
+            raise RuleError("7.6 the person's yes", "a signature needs the terminal; the tools can give no yes")
+        if needs is None:
+            raise RuleError(_ACT, f"{pid} is signed by {p.for_person}, which this ledger cannot do yet")
+        spec_act = body["act"]
+        now_covered = _covers(state, needs, had | {actor})
+        if now_covered == _covers(state, needs, had):
+            raise RuleError(_ACT, f"{actor} adds no signature {pid} still needs")
+        if now_covered != frozenset(range(len(needs))):
+            seq = self._append("proposal-sign", pid, actor, channel, {}, proposal_id=pid, at=now)
+            return Outcome("proposal", pid, seq)
+        spec = _ACTS[spec_act["kind"]]
+        args = spec.prepare(state, p.by_agent, dict(spec_act["args"]))
+        ref, mbody = spec.make(state, p.by_agent, args, Authority("do", "person", None), now)
+        mbody = {**mbody, "update": [*mbody.get("update", ()), {
+            "table": "proposals", "where": {"id": pid}, "set": {"status": "signed", "decided_seq": "@seq"}}]}
+        seq = self._append(spec_act["kind"], ref, actor, channel, mbody, proposal_id=pid, at=now)
+        return self._outcome("done", ref, seq, spec_act["kind"])
+
+    # ---------------------------------------------------------------- kept copies and read accessors (P 7.4)
+    def record_copy(self, copy_ref: str, source_ref: str, *, now: int) -> None:
+        """The `copies` row and the source's subjects as co-subjects of the copy (`added_by` copy:<source>), in one
+        transaction, before the store write. Refused past MAX_COPY_CHAIN links or MAX_SUBJECTS subjects."""
+        if self.read_only:
+            raise _bad("this ledger is open read-only")
+        rule = "7.4 kept copies"
+        parse_object_ref(copy_ref)
+        parse_object_ref(source_ref)
+        state = self.state()
+        if copy_ref == source_ref:
+            raise RuleError(rule, "a memory is not a copy of itself")
+        if copy_ref in state.copies:
+            raise RuleError(rule, f"{copy_ref} is already recorded as a copy")
+        links, cur, seen = 1, source_ref, {copy_ref}
+        while cur in state.copies:
+            cur = state.copies[cur]
+            links += 1
+            if cur in seen:
+                raise RuleError(rule, f"{copy_ref} would make a cycle of copies")
+            seen.add(cur)
+        if links > MAX_COPY_CHAIN:
+            raise RuleError(rule, f"a copy chain is at most {MAX_COPY_CHAIN} links")
+        own = _own_subjects(state, copy_ref)
+        carried = sorted(set(subjects_of(state, source_ref, now)) - own)
+        if len(own) + len(carried) > MAX_SUBJECTS:
+            raise RuleError(rule, f"a copy has at most {MAX_SUBJECTS} subjects, with its source's")
+        by = "copy:" + source_ref
+        insert = [{"table": "copies", "row": {"object": copy_ref, "source": source_ref, "added_seq": "@seq"}}]
+        insert += [{"table": "subjects", "row": {"object": copy_ref, "subject": s, "added_seq": "@seq",
+                                                 "added_by": by, "self_claimed": 0}} for s in carried]
+        self._append("record-copy", copy_ref, by, "tool", {"insert": insert}, at=now)
+
+    def store_row(self, instance_id: str) -> dict | None:
+        r = self.conn.execute("SELECT instance_id, name, owner, place, imprint_of, created_seq FROM stores "
+                              "WHERE instance_id=?", (instance_id,)).fetchone()
+        return None if r is None else dict(r)
+
+    def cosubjects(self, ref: str) -> frozenset[str]:
+        """The effective co-subjects of ref, other than the default subject (its store's owner)."""
+        return frozenset(r["subject"] for r in self.conn.execute(
+            "SELECT subject FROM subjects WHERE object=? AND removed_seq IS NULL", (ref,)))
+
     # ---------------------------------------------------------------- rebuild
     def rebuild(self, dest: Path) -> Path:
         """Replay the log into a fresh ledger whose engram home is `dest`; the same tables. Returns `dest`."""
@@ -311,3 +461,469 @@ class Ledger:
         finally:
             new.close()
         return Path(dest)
+
+
+# ---------------------------------------------------------------- the registry acts (P 4.4, 7.4)
+
+_ACT = "7.1 who may set what"
+_REG = "4.4 who registers places and people"
+
+
+@dataclass(frozen=True)
+class _Act:
+    prepare: Callable      # (state, actor, args) -> args: shape, defaults and state rules; raises RuleError
+    make: Callable         # (state, actor, args, authority, now) -> (ref, log body)
+    authority: Callable = None   # (state, actor, act, channel, now) -> Authority; default: the pure model's
+
+
+def _text(args: Mapping, key: str) -> str:
+    v = args.get(key)
+    if not isinstance(v, str) or not v:
+        raise RuleError(_ACT, f"the act needs {key}")
+    return v
+
+
+def _texts(args: Mapping, key: str, *, at_least: int = 0) -> list[str]:
+    v = args.get(key)
+    if v is None:
+        v = []
+    if isinstance(v, (str, bytes)) or not isinstance(v, (list, tuple)) or not all(isinstance(x, str) for x in v):
+        raise RuleError(_ACT, f"{key} must be a list of strings")
+    out = list(dict.fromkeys(v))
+    if len(out) < at_least:
+        raise RuleError(_ACT, f"the act needs at least {at_least} in {key}")
+    return out
+
+
+def _live_person(state: State, person: str, what: str) -> str:
+    check_id("person", person)
+    row = state.persons.get(person)
+    if row is None or row.retired_seq is not None:
+        raise RuleError(_REG, f"{what} {person} is not a registered, unretired person")
+    return person
+
+
+def _live_agent(state: State, agent: str) -> str:
+    check_id("agent", agent)
+    row = state.agents.get(agent)
+    if row is None or row.retired_seq is not None:
+        raise RuleError(_REG, f"{agent} is not a registered, unretired agent")
+    return agent
+
+
+def _ins(table: str, **row) -> dict:
+    return {"table": table, "row": row}
+
+
+def _upd(table: str, where: Mapping, **sets) -> dict:
+    return {"table": table, "where": dict(where), "set": sets}
+
+
+def _salt() -> str:
+    return os.urandom(16).hex()
+
+
+# -- people
+
+def _prep_register_person(state, actor, args):
+    person = check_id("person", _text(args, "person"))
+    if person in state.persons or home_of(person) in state.places:
+        raise RuleError(_REG, f"{person} is already registered")
+    if len(state.places) >= MAX_PLACES:
+        raise RuleError(_REG, f"at most {MAX_PLACES:,} places per ledger")
+    return {"person": person}
+
+
+def _make_register_person(state, actor, args, auth, now):
+    person, home = args["person"], home_of(args["person"])
+    return person, {"insert": [
+        _ins("persons", id=person, home=home, is_admin=0, created_seq="@seq"),
+        _ins("places", id=home, is_root=1, created_seq="@seq", pseudonym_salt=_salt()),
+        _ins("place_stewards", place=home, person=person, added_seq="@seq")]}
+
+
+def _prep_retire_person(state, actor, args):
+    return {"person": _live_person(state, _text(args, "person"), "")}
+
+
+def _make_retire_person(state, actor, args, auth, now):
+    person = args["person"]
+    return person, {"update": [_upd("persons", {"id": person}, retired_seq="@seq"),
+                               _upd("places", {"id": state.persons[person].home}, retired_seq="@seq")]}
+
+
+# -- places
+
+def _prep_register_place(state, actor, args):
+    place = check_id("place", _text(args, "place"))
+    parents = check_new_place(state, place, _texts(args, "parents"))
+    stewards = _texts(args, "stewards")
+    if "stewards" not in args and actor.startswith("person:"):
+        stewards = [actor]                       # the registering steward, unless the act names others
+    if not stewards:
+        raise RuleError(_REG, "a place keeps at least one steward: the act needs stewards")
+    for s in stewards:
+        _live_person(state, s, "steward")
+    out = {"place": place, "parents": list(parents), "stewards": stewards}
+    name = args.get("name")
+    if name is not None:
+        if not isinstance(name, str) or not name.strip() or len(name) > 255:
+            raise RuleError(_REG, "a place's name is a non-empty text of at most 255 characters")
+        out["name"] = name.strip()
+    return out
+
+
+def _make_register_place(state, actor, args, auth, now):
+    place, parents = args["place"], args["parents"]
+    body = {"insert": [_ins("places", id=place, is_root=int(not parents), created_seq="@seq",
+                            pseudonym_salt=_salt())]}
+    body["insert"] += [_ins("place_parents", place=place, parent=q, added_seq="@seq") for q in parents]
+    body["insert"] += [_ins("place_stewards", place=place, person=s, added_seq="@seq") for s in args["stewards"]]
+    if "name" in args:
+        body["name"] = args["name"]
+    return place, body
+
+
+def _prep_add_parent(state, actor, args):
+    place, parent = _text(args, "place"), _text(args, "parent")
+    check_new_parent(state, place, parent)
+    return {"place": place, "parent": parent}
+
+
+def _make_add_parent(state, actor, args, auth, now):
+    return args["place"], {"insert": [_ins("place_parents", place=args["place"], parent=args["parent"],
+                                           added_seq="@seq")]}
+
+
+def _steward_args(state, args, *, adding):
+    place, person = check_id("place", _text(args, "place")), check_id("person", _text(args, "person"))
+    if person_of_home(place) is not None:
+        raise RuleError(_REG, "a home's only steward is its person, never changed")
+    if place not in state.places:
+        raise RuleError(_REG, f"{place} is not a registered place")
+    if adding:
+        _live(state, place, "place")
+        _live_person(state, person, "steward")
+        if _is_steward(state, place, person):
+            raise RuleError(_REG, f"{person} is already a steward of {place}")
+    elif not _is_steward(state, place, person):
+        raise RuleError(_REG, f"{person} is not a steward of {place}")
+    return {"place": place, "person": person}
+
+
+def _prep_add_steward(state, actor, args):
+    return _steward_args(state, args, adding=True)
+
+
+def _prep_remove_steward(state, actor, args):
+    return _steward_args(state, args, adding=False)
+
+
+def _make_add_steward(state, actor, args, auth, now):
+    return args["place"], {"insert": [_ins("place_stewards", place=args["place"], person=args["person"],
+                                           added_seq="@seq")]}
+
+
+def _make_remove_steward(state, actor, args, auth, now):
+    return args["place"], {"update": [_upd("place_stewards", {"place": args["place"], "person": args["person"],
+                                                              "removed_seq": None}, removed_seq="@seq")]}
+
+
+def _prep_retire_place(state, actor, args):
+    place = check_id("place", _text(args, "place"))
+    if place not in state.places:
+        raise RuleError(_REG, f"{place} is not a registered place")
+    if person_of_home(place) is not None:
+        raise RuleError(_REG, f"{place} is a home: retire its person instead")
+    if state.places[place].retired_seq is not None:
+        raise RuleError(_REG, f"{place} is already retired")
+    return {"place": place}
+
+
+def _make_retire_place(state, actor, args, auth, now):
+    return args["place"], {"update": [_upd("places", {"id": args["place"]}, retired_seq="@seq")]}
+
+
+# -- agents
+
+def _prep_register_agent(state, actor, args):
+    agent, place = check_id("agent", _text(args, "agent")), check_id("place", _text(args, "acts_for"))
+    if agent in state.agents:
+        raise RuleError(_REG, f"{agent} is already registered")
+    _live(state, place, "the place it acts for,")
+    return {"agent": agent, "acts_for": place}
+
+
+def _make_register_agent(state, actor, args, auth, now):
+    return args["agent"], {"insert": [_ins("agents", id=args["agent"], acts_for=args["acts_for"],
+                                           created_seq="@seq")]}
+
+
+def _prep_put_agent(state, actor, args):
+    agent, place = _live_agent(state, _text(args, "agent")), check_id("place", _text(args, "place"))
+    _live(state, place, "the place")
+    where = [r.place for r in state.agent_places.get(agent, ()) if r.removed_seq is None]
+    if where:
+        raise RuleError("P31", f"{agent} is in {where[0]}: an agent is in one place until it is removed from it")
+    return {"agent": agent, "place": place}
+
+
+def _make_put_agent(state, actor, args, auth, now):
+    return args["agent"], {"insert": [_ins("agent_places", agent=args["agent"], place=args["place"],
+                                           added_seq="@seq")]}
+
+
+def _prep_remove_agent(state, actor, args):
+    agent, place = _live_agent(state, _text(args, "agent")), check_id("place", _text(args, "place"))
+    if not any(r.place == place and r.removed_seq is None for r in state.agent_places.get(agent, ())):
+        raise RuleError(_REG, f"{agent} is not in {place}")
+    return {"agent": agent, "place": place}
+
+
+def _make_remove_agent(state, actor, args, auth, now):
+    return args["agent"], {"update": [_upd("agent_places", {"agent": args["agent"], "place": args["place"],
+                                                            "removed_seq": None}, removed_seq="@seq")]}
+
+
+# -- stores, groups, collections
+
+def _prep_register_store(state, actor, args):
+    iid = _text(args, "instance_id")
+    parse_copy_ref("store:" + iid)
+    if iid in state.stores:
+        raise RuleError(_REG, f"store {iid} is already registered")
+    place = check_id("place", _text(args, "place"))
+    _live(state, place, "the store's place")
+    imprint_of = args.get("imprint_of")
+    if imprint_of is not None:
+        parse_copy_ref("store:" + imprint_of)
+    name = args.get("name") or iid
+    if not isinstance(name, str):
+        raise RuleError(_REG, "a store's name is text")
+    return {"instance_id": iid, "name": name, "owner": _live_person(state, _text(args, "owner"), "owner"),
+            "place": place, "imprint_of": imprint_of}
+
+
+def _make_register_store(state, actor, args, auth, now):
+    return args["instance_id"], {"insert": [_ins("stores", created_seq="@seq", **args)]}
+
+
+def _prep_group(state, actor, args):
+    gid = check_id("group", _text(args, "group"))
+    row = state.groups.get(gid)
+    owner = row.owner if row is not None else args.get("owner") or (actor if actor.startswith("person:") else None)
+    if owner is None:
+        raise RuleError(_ACT, "the act needs owner")
+    members = [_live_agent(state, m) for m in _texts(args, "members")]
+    held = {r.agent for r in state.group_members.get(gid, ()) if r.removed_seq is None}
+    if row is not None and held == set(members):
+        raise RuleError(_ACT, f"{gid} already has these members")
+    return {"group": gid, "owner": _live_person(state, owner, "owner"), "members": members}
+
+
+def _make_group(state, actor, args, auth, now):
+    gid = args["group"]
+    held = {r.agent for r in state.group_members.get(gid, ()) if r.removed_seq is None}
+    want = set(args["members"])
+    body: dict = {"insert": [], "update": []}
+    if gid not in state.groups:
+        body["insert"].append(_ins("groups", id=gid, owner=args["owner"], created_seq="@seq"))
+    body["insert"] += [_ins("group_members", group_id=gid, agent=a, added_seq="@seq") for a in sorted(want - held)]
+    body["update"] += [_upd("group_members", {"group_id": gid, "agent": a, "removed_seq": None}, removed_seq="@seq")
+                       for a in sorted(held - want)]
+    return gid, {k: v for k, v in body.items() if v}
+
+
+def _prep_make_collection(state, actor, args):
+    cid = check_id("collection", _text(args, "collection"))
+    if cid in state.collections:
+        raise RuleError(_ACT, f"{cid} already exists")
+    return {"collection": cid, "owner": _live_person(state, "person:" + cid.split(":", 1)[1].split("/")[0],
+                                                     "the collection's owner")}
+
+
+def _make_make_collection(state, actor, args, auth, now):
+    return args["collection"], {"insert": [_ins("collections", id=args["collection"], owner=args["owner"],
+                                                created_seq="@seq")]}
+
+
+def _members(state, cid):
+    return {r.object for r in state.collection_members.get(cid, ()) if r.removed_seq is None}
+
+
+def _prep_collect(state, actor, args):
+    cid = _text(args, "collection")
+    if cid not in state.collections:
+        raise RuleError(_ACT, f"{cid} is not a collection")
+    objects = _texts(args, "refs" if "refs" in args else "objects", at_least=1)
+    for o in objects:
+        parse_object_ref(o)
+    new = [o for o in objects if o not in _members(state, cid)]
+    if not new:
+        raise RuleError(_ACT, f"every one is already in {cid}")
+    check_new_members(state, cid, len(new))
+    given = args.get("lanes") or {}
+    if isinstance(given, (list, tuple)):
+        if len(given) != len(objects):
+            raise RuleError(_ACT, "lanes must have one entry for each ref")
+        given = dict(zip(objects, given))
+    lanes = {}
+    for o in objects:
+        entry = given.get(o)
+        if entry is not None:
+            if (not isinstance(entry, Mapping) or entry.get("lane") not in LANES
+                    or not isinstance(entry.get("created_at"), int) or isinstance(entry.get("created_at"), bool)):
+                raise RuleError(_ACT, f"the lane of {o} is {{lane: personal or work, created_at: seconds}} or null")
+            entry = {"lane": entry["lane"], "created_at": entry["created_at"]}
+        lanes[o] = entry
+    out = {"collection": cid, "objects": objects, "lanes": lanes}
+    if args.get("grant") is not None:
+        out["grant"] = args["grant"]
+    return out
+
+
+def _make_collect(state, actor, args, auth, now):
+    cid = args["collection"]
+    held = _members(state, cid)
+    insert = []
+    for o in args["objects"]:
+        if o in held:
+            continue
+        insert.append(_ins("collection_members", collection=cid, object=o, backing=auth.backing,
+                           added_seq="@seq", added_by=actor))
+        entry = args["lanes"].get(o)
+        if entry is not None and not state.lane_notes.get(o):          # P 5.3: a first note, only for a memory with none
+            insert.append(_ins("lane_notes", object=o, lane=entry["lane"], at=entry["created_at"], seq="@seq"))
+    return cid, {"insert": insert}
+
+
+def _prep_uncollect(state, actor, args):
+    cid = _text(args, "collection")
+    if cid not in state.collections:
+        raise RuleError(_ACT, f"{cid} is not a collection")
+    objects = _texts(args, "refs" if "refs" in args else "objects", at_least=1)
+    for o in objects:
+        if o not in _members(state, cid):
+            raise RuleError(_ACT, f"{o} is not in {cid}")
+    out = {"collection": cid, "objects": objects}
+    if args.get("grant") is not None:
+        out["grant"] = args["grant"]
+    return out
+
+
+def _make_uncollect(state, actor, args, auth, now):
+    cid = args["collection"]
+    return cid, {"update": [_upd("collection_members", {"collection": cid, "object": o, "removed_seq": None},
+                                 removed_seq="@seq", removed_by=actor) for o in args["objects"]]}
+
+
+# -- subjects
+
+def _prep_add_subject(state, actor, args):
+    obj, subject = _text(args, "object"), check_id("person", _text(args, "subject"))
+    parse_object_ref(obj)
+    if subject in _own_subjects(state, obj):
+        raise RuleError(_ACT, f"{subject} is already a subject of {obj}")
+    check_new_subject(state, obj, subject)
+    return {"object": obj, "subject": subject}
+
+
+def _make_add_subject(state, actor, args, auth, now):
+    obj, subject = args["object"], args["subject"]
+    return obj, {"insert": [_ins("subjects", object=obj, subject=subject, added_seq="@seq", added_by=actor,
+                                 self_claimed=int(actor == subject))]}
+
+
+def _prep_remove_subject(state, actor, args):
+    return {"object": _text(args, "object"), "subject": _text(args, "subject")}
+
+
+def _make_remove_subject(state, actor, args, auth, now):
+    return args["object"], {"update": [_upd("subjects", {"object": args["object"], "subject": args["subject"],
+                                                         "removed_seq": None}, removed_seq="@seq",
+                                            removed_by=actor)]}
+
+
+# -- authority for the acts the pure model has no row for
+
+def _pure(state, actor, act, channel, now) -> Authority:
+    return authorize(state, actor, act, channel=channel, at=now)
+
+
+def _local(rule):
+    """A narrowing act with its own rule: refuse unless rule(state, actor, args) says so."""
+    def authority(state, actor, act, channel, now):
+        authorize_actor = state.agents.get(actor) if actor.startswith("agent:") else state.persons.get(actor)
+        if channel not in CHANNELS:
+            raise RuleError(_ACT, f"channel must be one of {', '.join(CHANNELS)}")
+        if authorize_actor is None or authorize_actor.retired_seq is not None:
+            raise RuleError(_ACT, f"{actor} is not a registered, unretired {'agent' if actor.startswith('agent:') else 'person'}")
+        rule(state, actor, act.args)
+        return Authority("do", "person", None)
+    return authority
+
+
+def _may_retire_person(state, actor, args):
+    if actor.startswith("agent:") or not (actor == args["person"] or state.persons[actor].is_admin):
+        raise RuleError(_ACT, "a person is retired by themself or by a ledger admin")
+
+
+def _may_retire_place(state, actor, args):
+    if actor.startswith("agent:") or not _is_steward(state, args["place"], actor):
+        raise RuleError(_ACT, f"{actor} is not a steward of {args['place']}")
+
+
+def _may_make_collection(state, actor, args):
+    owner = args["owner"]
+    if actor != owner and not (actor.startswith("agent:") and _acts_for_person(state, actor, owner)):
+        raise RuleError(_ACT, f"only {owner}, or an agent acting for them, makes their collection")
+
+
+_ACTS = {
+    "register-person": _Act(_prep_register_person, _make_register_person, _pure),
+    "retire-person": _Act(_prep_retire_person, _make_retire_person, _local(_may_retire_person)),
+    "register-place": _Act(_prep_register_place, _make_register_place, _pure),
+    "add-parent": _Act(_prep_add_parent, _make_add_parent, _pure),
+    "add-steward": _Act(_prep_add_steward, _make_add_steward, _pure),
+    "remove-steward": _Act(_prep_remove_steward, _make_remove_steward, _pure),
+    "retire-place": _Act(_prep_retire_place, _make_retire_place, _local(_may_retire_place)),
+    "register-agent": _Act(_prep_register_agent, _make_register_agent, _pure),
+    "put-agent": _Act(_prep_put_agent, _make_put_agent, _pure),
+    "remove-agent": _Act(_prep_remove_agent, _make_remove_agent, _pure),
+    "register-store": _Act(_prep_register_store, _make_register_store, _pure),
+    "group": _Act(_prep_group, _make_group, _pure),
+    "make-collection": _Act(_prep_make_collection, _make_make_collection, _local(_may_make_collection)),
+    "collect": _Act(_prep_collect, _make_collect, _pure),
+    "uncollect": _Act(_prep_uncollect, _make_uncollect, _pure),
+    "add-subject": _Act(_prep_add_subject, _make_add_subject, _pure),
+    "remove-subject": _Act(_prep_remove_subject, _make_remove_subject, _pure),
+}
+# the acts after which the gluing check reruns (R5): the registry of places, parents, agents, groups,
+# collections and stewards
+_GLUED = frozenset({"register-place", "add-parent", "add-steward", "remove-steward", "retire-place",
+                    "retire-person", "register-agent", "put-agent", "remove-agent", "group", "make-collection",
+                    "collect", "uncollect"})
+
+
+# -- proposals that wait for other stewards (R6): what each signature must cover
+
+def _needs(act: Act) -> list[dict]:
+    a = act.args
+    if act.kind == "register-place":
+        return [{"role": "steward", "of": q} for q in a["parents"]]
+    if act.kind == "add-parent":
+        return [{"role": "steward", "of": a["place"]}, {"role": "steward", "of": a["parent"]}]
+    if act.kind == "put-agent":
+        return [{"role": "steward", "of": a["place"]}, {"role": "principal", "of": a["agent"]}]
+    raise RuleError(_ACT, f"{act.kind} has no joint signatures")
+
+
+def _covers(state: State, needs: list[dict], persons) -> frozenset[int]:
+    """The indexes of `needs` that some person of `persons` can sign for now."""
+    def can(need, person):
+        if not person.startswith("person:"):
+            return False
+        if need["role"] == "steward":
+            return _layer_steward(state, person, need["of"])
+        return person in _principals(state, need["of"])
+    return frozenset(i for i, n in enumerate(needs) if any(can(n, p) for p in persons))
