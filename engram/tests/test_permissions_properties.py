@@ -949,3 +949,65 @@ def test_9b_a_removed_group_membership_never_counts_for_an_allow_in_decide_and_t
     for s, want in ((s_before, True), (w.state(), False)):
         j = Judge(s)
         assert j.both(u) is want
+
+
+# ---------------------------------------------------------------- Task 10: the ledger file
+
+_IDENTITY = {"persons": ("id",), "places": ("id",), "agents": ("id",), "records": ("id",),
+             "permission_grants": ("id",), "place_stewards": ("place", "person", "added_seq"),
+             "agent_places": ("agent", "place", "added_seq"), "group_members": ("group_id", "agent", "added_seq"),
+             "collection_members": ("collection", "object", "added_seq"),
+             "subjects": ("object", "subject", "added_seq")}
+
+
+def _world_into_ledger(home, w):
+    """Write a World's rows through Ledger._append, one log row per World seq; seq 1 is `create`'s."""
+    import json
+    from permission_ledger import Ledger
+    from permissions import _ADDED, _UNDONE, selector_json
+    led = Ledger.create(home, "andy", now=w.seq_at[1])
+    ops = {s: {"insert": [], "update": []} for s in range(2, w.seq + 1)}
+    for table, rows in w.rows.items():
+        assert table != "proposals"
+        for r in rows:
+            d = dict(r)
+            if table == "records":
+                d["selector"] = json.loads(selector_json(d["selector"]))
+            if table == "places":
+                d["pseudonym_salt"] = bytes(d["pseudonym_salt"]).hex()
+            added = d[_ADDED[table]]
+            if added == 1:
+                continue
+            if table in _UNDONE:
+                seq_col, clear = _UNDONE[table]
+                undone = {c: d.pop(c) for c in clear if d.get(c) is not None}
+                if undone:
+                    where = {c: d[c] for c in _IDENTITY[table]}
+                    ops[undone[seq_col]]["update"].append({"table": table, "where": where, "set": undone})
+            ops[added]["insert"].append({"table": table, "row": d})
+    for s in range(2, w.seq + 1):
+        led._append("world", f"s{s}", "person:andy", "terminal", {k: v for k, v in ops[s].items() if v},
+                    at=w.seq_at[s])
+    return led
+
+
+def test_pt10_determinism_after_replay(tmp_path):
+    from permission_ledger import Ledger
+    checked = 0
+    for case in range(25):
+        rng = _rng("pt10", case)
+        w = random_world(rng)
+        home = tmp_path / f"c{case}"
+        led = _world_into_ledger(home, w)
+        assert led.seq() == w.seq and led.verify() is None
+        rebuilt = Ledger.open(led.rebuild(tmp_path / f"r{case}"))
+        uses = sample_uses(rng, w, 6)
+        for s in sorted({w.seq, *(rng.randint(1, w.seq) for _ in range(4))}):
+            a, b, c = led.state(s), rebuilt.state(s), w.state_at(s)
+            for u in uses:
+                for x in _flat(u):
+                    da, db, dc = decide(a, x), decide(b, x), decide(c, x)
+                    assert da == db, (case, s, x)
+                    assert da.allowed == dc.allowed, (case, s, x)
+                    checked += 1
+    assert checked > 500
