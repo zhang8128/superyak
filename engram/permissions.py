@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
-from typing import Iterable, NamedTuple
+from collections import namedtuple
+from dataclasses import dataclass, field
+from typing import Iterable, Mapping, NamedTuple, Sequence
 
 from lighthouse_protocol import canonical_json
 
@@ -321,3 +322,304 @@ def short_id(full: str) -> str:
 
 def receipt_short(full: str) -> str:
     return "#" + full[2:2 + RECEIPT_SHORT_HEX]
+
+
+# ---------------------------------------------------------------- the State (P 5.5)
+
+_COLUMNS = {
+    "persons": ("id", "home", "is_admin", "created_seq", "retired_seq"),
+    "places": ("id", "is_root", "created_seq", "retired_seq", "pseudonym_salt"),
+    "place_parents": ("place", "parent", "added_seq"),
+    "place_stewards": ("place", "person", "added_seq", "removed_seq"),
+    "agents": ("id", "acts_for", "created_seq", "retired_seq"),
+    "agent_places": ("agent", "place", "added_seq", "removed_seq"),
+    "stores": ("instance_id", "name", "owner", "place", "imprint_of", "created_seq"),
+    "groups": ("id", "owner", "created_seq"),
+    "group_members": ("group_id", "agent", "added_seq", "removed_seq"),
+    "collections": ("id", "owner", "created_seq"),
+    "collection_members": ("collection", "object", "backing", "added_seq", "added_by", "removed_seq",
+                           "removed_by"),
+    "subjects": ("object", "subject", "added_seq", "added_by", "self_claimed", "removed_seq", "removed_by"),
+    "copies": ("object", "source", "added_seq"),
+    "lane_notes": ("object", "lane", "at", "seq"),
+    "records": ("id", "layer", "effect", "selector", "valid_from", "valid_until", "anchor", "backing",
+                "set_by", "channel", "under_grant", "proposal_id", "replaces", "reason", "created",
+                "created_seq", "revoked", "revoked_by", "revoke_reason", "revoked_seq"),
+    "permission_grants": ("id", "issuer", "grantee", "layer", "parent_id", "ops", "envelope", "max_days",
+                          "depth", "expires", "created", "created_seq", "revoked", "revoked_by",
+                          "revoke_reason", "revoked_seq"),
+    "proposals": ("id", "by_agent", "for_person", "kind", "body", "created", "expires", "status",
+                  "decided_seq"),
+}
+_NULLABLE = frozenset({
+    "retired_seq", "removed_seq", "removed_by", "imprint_of", "valid_until", "under_grant", "proposal_id",
+    "replaces", "revoked", "revoked_by", "revoke_reason", "revoked_seq", "parent_id", "decided_seq"})
+_ROW = {t: namedtuple(n, c) for t, n, c in [
+    ("persons", "Person", _COLUMNS["persons"]), ("places", "Place", _COLUMNS["places"]),
+    ("place_parents", "PlaceParent", _COLUMNS["place_parents"]),
+    ("place_stewards", "PlaceSteward", _COLUMNS["place_stewards"]),
+    ("agents", "Agent", _COLUMNS["agents"]), ("agent_places", "AgentPlace", _COLUMNS["agent_places"]),
+    ("stores", "Store", _COLUMNS["stores"]), ("groups", "Group", _COLUMNS["groups"]),
+    ("group_members", "GroupMember", _COLUMNS["group_members"]),
+    ("collections", "Collection", _COLUMNS["collections"]),
+    ("collection_members", "CollectionMember", _COLUMNS["collection_members"]),
+    ("subjects", "SubjectRow", _COLUMNS["subjects"]), ("copies", "CopyRow", _COLUMNS["copies"]),
+    ("lane_notes", "LaneNote", _COLUMNS["lane_notes"]),
+    ("permission_grants", "GrantRow", _COLUMNS["permission_grants"]),
+    ("proposals", "Proposal", _COLUMNS["proposals"])]}
+# a record carries its selector parsed (PF9)
+Record = namedtuple("Record", _COLUMNS["records"])
+_ROW["records"] = Record
+
+# keyed tables: (table, primary key, state attribute)
+_KEYED = (("persons", "id", "persons"), ("places", "id", "places"), ("agents", "id", "agents"),
+          ("stores", "instance_id", "stores"), ("groups", "id", "groups"),
+          ("collections", "id", "collections"), ("records", "id", "records"),
+          ("permission_grants", "id", "grants"), ("proposals", "id", "proposals"))
+# multi-row tables, grouped by their first key
+_MULTI = ("place_parents", "place_stewards", "agent_places", "group_members", "collection_members",
+          "subjects", "lane_notes")
+_ADDED = {"place_parents": "added_seq", "place_stewards": "added_seq", "agent_places": "added_seq",
+          "group_members": "added_seq", "collection_members": "added_seq", "subjects": "added_seq",
+          "copies": "added_seq", "lane_notes": "seq", "persons": "created_seq", "places": "created_seq",
+          "agents": "created_seq", "stores": "created_seq", "groups": "created_seq",
+          "collections": "created_seq", "records": "created_seq", "permission_grants": "created_seq"}
+# (seq column, columns that go back to null while the seq is in the future)
+_UNDONE = {
+    "persons": ("retired_seq", ("retired_seq",)), "places": ("retired_seq", ("retired_seq",)),
+    "agents": ("retired_seq", ("retired_seq",)),
+    "place_stewards": ("removed_seq", ("removed_seq",)), "agent_places": ("removed_seq", ("removed_seq",)),
+    "group_members": ("removed_seq", ("removed_seq",)),
+    "collection_members": ("removed_seq", ("removed_seq", "removed_by")),
+    "subjects": ("removed_seq", ("removed_seq", "removed_by")),
+    "records": ("revoked_seq", ("revoked", "revoked_by", "revoke_reason", "revoked_seq")),
+    "permission_grants": ("revoked_seq", ("revoked", "revoked_by", "revoke_reason", "revoked_seq")),
+}
+
+
+def _row(table: str, d) -> tuple:
+    cls = _ROW[table]
+    vals = {}
+    for c in _COLUMNS[table]:
+        if c in d:
+            vals[c] = d[c]
+        elif c in _NULLABLE:
+            vals[c] = None
+        else:
+            raise RuleError("5.5 storage", f"{table} row has no {c}")
+    if table == "places":
+        salt = vals["pseudonym_salt"]
+        if isinstance(salt, str):
+            salt = bytes.fromhex(salt)
+        vals["pseudonym_salt"] = bytes(salt)
+    if table == "records" and not isinstance(vals["selector"], Selector):
+        vals["selector"] = parse_selector(vals["selector"])
+    return cls(**vals)
+
+
+@dataclass(frozen=True)
+class State:
+    seq: int
+    seq_at: Mapping[int, int]
+    meta: Mapping[str, str]
+    names: Mapping[str, str]
+    persons: Mapping[str, tuple]
+    places: Mapping[str, tuple]
+    agents: Mapping[str, tuple]
+    stores: Mapping[str, tuple]
+    groups: Mapping[str, tuple]
+    collections: Mapping[str, tuple]
+    records: Mapping[str, Record]
+    grants: Mapping[str, tuple]
+    proposals: Mapping[str, tuple]
+    copies: Mapping[str, str]
+    place_parents: Mapping[str, tuple]
+    place_stewards: Mapping[str, tuple]
+    agent_places: Mapping[str, tuple]
+    group_members: Mapping[str, tuple]
+    collection_members: Mapping[str, tuple]
+    member_of: Mapping[str, tuple]       # collection_members by object
+    subjects: Mapping[str, tuple]
+    lane_notes: Mapping[str, tuple]      # ordered by (at, seq)
+    _cache: dict = field(default_factory=dict, compare=False, repr=False)
+
+    @classmethod
+    def from_tables(cls, tables: Mapping[str, Sequence], *, seq: int, seq_at: Mapping[int, int],
+                    meta: Mapping[str, str], names: Mapping[str, str] | None = None) -> "State":
+        unknown = set(tables) - set(_COLUMNS)
+        if unknown:
+            raise RuleError("5.5 storage", f"unknown tables: {', '.join(sorted(unknown))}")
+        rows: dict[str, list] = {}
+        for table in _COLUMNS:
+            out = []
+            for d in tables.get(table, ()):
+                r = _row(table, d)
+                added = _ADDED.get(table)
+                if added and getattr(r, added) > seq:
+                    continue
+                if table in _UNDONE:
+                    col, clear = _UNDONE[table]
+                    v = getattr(r, col)
+                    if v is not None and v > seq:
+                        r = r._replace(**{c: None for c in clear})
+                if table == "proposals" and r.decided_seq is not None and r.decided_seq > seq:
+                    r = r._replace(status="pending", decided_seq=None)
+                out.append(r)
+            rows[table] = out
+        kw = {}
+        for table, key, attr in _KEYED:
+            kw[attr] = {getattr(r, key): r for r in rows[table]}
+        kw["copies"] = {r.object: r.source for r in rows["copies"]}
+        for table in _MULTI:
+            first = _COLUMNS[table][0]
+            grouped: dict[str, list] = {}
+            items = rows[table]
+            if table == "lane_notes":
+                items = sorted(items, key=lambda r: (r.at, r.seq))
+            for r in items:
+                grouped.setdefault(getattr(r, first), []).append(r)
+            kw[table] = {k: tuple(v) for k, v in grouped.items()}
+        by_obj: dict[str, list] = {}
+        for r in rows["collection_members"]:
+            by_obj.setdefault(r.object, []).append(r)
+        kw["member_of"] = {k: tuple(v) for k, v in by_obj.items()}
+        given = dict(names or {})
+        kw["names"] = {p: given.get(p, p.rsplit("/", 1)[-1].removeprefix("place:")) for p in kw["places"]}
+        return cls(seq=seq, seq_at=dict(seq_at), meta=dict(meta), **kw)
+
+    def to_tables(self) -> dict:
+        def dump(table, items):
+            out = []
+            for r in items:
+                d = r._asdict()
+                if table == "records":
+                    d["selector"] = selector_json(r.selector)
+                out.append(d)
+            return out
+        tables: dict[str, list] = {}
+        for table, _key, attr in _KEYED:
+            tables[table] = dump(table, getattr(self, attr).values())
+        tables["copies"] = [{"object": o, "source": s, "added_seq": 0} for o, s in self.copies.items()]
+        for table in _MULTI:
+            tables[table] = dump(table, (r for g in getattr(self, table).values() for r in g))
+        return tables
+
+    def _memo(self, key, compute):
+        hit = self._cache.get(key)
+        if hit is None:
+            hit = self._cache[key] = compute()
+        return hit
+
+
+def _parents(state: State, place: str) -> list[str]:
+    return [r.parent for r in state.place_parents.get(place, ())]
+
+
+def ancestors(state: State, place: str) -> frozenset[str]:
+    """P 4.2: the place itself and every place above it by any path."""
+    def compute():
+        seen, stack = set(), [place]
+        while stack:
+            p = stack.pop()
+            if p in seen:
+                continue
+            seen.add(p)
+            stack.extend(_parents(state, p))
+        return frozenset(seen)
+    return state._memo(("anc", place), compute)
+
+
+def dominators(state: State, place: str) -> frozenset[str]:
+    """P 4.3: dom(X) = {X} for a root, else {X} + the intersection of dom(Q) over the parents."""
+    def compute():
+        parents = _parents(state, place)
+        if not parents:
+            return frozenset({place})
+        return frozenset({place}) | frozenset.intersection(*(dominators(state, q) for q in parents))
+    return state._memo(("dom", place), compute)
+
+
+def place_retired(state: State, place: str) -> bool:
+    """The place or any of its ancestors is retired."""
+    for p in ancestors(state, place):
+        row = state.places.get(p)
+        if row is not None and row.retired_seq is not None:
+            return True
+    return False
+
+
+def _live(state: State, place: str, what: str) -> None:
+    if place not in state.places:
+        raise RuleError("4.2 name rule", f"{what} {place} is not a registered place")
+    if place_retired(state, place):
+        raise RuleError("4.2 retiring a place", f"{what} {place} is retired")
+
+
+def _too_deep(state: State, place: str, new_parent: str) -> bool:
+    """Would adding new_parent give the place, or any place below it, more than 16 ancestors?"""
+    add = ancestors(state, new_parent)
+    for d in [p for p in state.places if place in ancestors(state, p)]:
+        if len(ancestors(state, d) | add) > MAX_ANCESTORS:
+            return True
+    return False
+
+
+def check_new_place(state: State, place: str, parents: Sequence[str]) -> tuple[str, ...]:
+    """P 4.2 and 4.4: the parents a new place would get, or a RuleError."""
+    check_id("place", place)
+    if place in state.places:
+        raise RuleError("4.4 register a place", f"{place} is already registered")
+    if len(state.places) >= MAX_PLACES:
+        raise RuleError("4.4 register a place", f"at most {MAX_PLACES:,} places per ledger")
+    parents = tuple(parents)
+    handle = person_of_home(place)
+    if handle is not None:
+        if parents:
+            raise RuleError("P26", f"{place} is a home, a root; it takes no parent")
+        if handle not in state.persons:
+            raise RuleError("4.4 register a person", f"{place} is the home of {handle}, who is not registered")
+        return ()
+    prefix = place.rpartition("/")[0]
+    if "/" not in place[len("place:"):]:
+        if parents:
+            raise RuleError("P26", f"{place} is a one-segment name, a root; it takes no parent")
+        return ()
+    if not parents:
+        parents = (prefix,)
+    if len(parents) > MAX_PARENTS:
+        raise RuleError("4.2 parents", f"a place has at most {MAX_PARENTS} parents")
+    if len(set(parents)) != len(parents):
+        raise RuleError("4.2 parents", "a parent is listed twice")
+    for q in parents:
+        check_id("place", q)
+        _live(state, q, "parent")
+    if prefix not in state.places:
+        raise RuleError("4.2 name rule", f"the prefix {prefix} of {place} is not a registered place")
+    dom = frozenset.intersection(*(dominators(state, q) for q in parents))
+    if prefix not in dom:
+        raise RuleError("4.2 name rule", f"the prefix {prefix} does not dominate {place}")
+    anc = {place}.union(*(ancestors(state, q) for q in parents))
+    if len(anc) > MAX_ANCESTORS:
+        raise RuleError("4.2 bounded ancestry", f"a place has at most {MAX_ANCESTORS} ancestors, itself included")
+    return parents
+
+
+def check_new_parent(state: State, place: str, parent: str) -> None:
+    """P 4.2: a parent edge on a place that already has a parent."""
+    check_id("place", place)
+    check_id("place", parent)
+    row = state.places.get(place)
+    if row is None:
+        raise RuleError("4.2 name rule", f"{place} is not a registered place")
+    if row.is_root or not _parents(state, place):
+        raise RuleError("P26", f"{place} is a root and stays a root")
+    _live(state, parent, "parent")
+    if parent in _parents(state, place):
+        raise RuleError("4.2 parents", f"{parent} is already a parent of {place}")
+    if place in ancestors(state, parent):
+        raise RuleError("4.2 no cycles", f"making {parent} a parent of {place} would make a cycle")
+    if len(_parents(state, place)) >= MAX_PARENTS:
+        raise RuleError("4.2 parents", f"a place has at most {MAX_PARENTS} parents")
+    if _too_deep(state, place, parent):
+        raise RuleError("4.2 bounded ancestry",
+                        f"a place has at most {MAX_ANCESTORS} ancestors, itself included")
