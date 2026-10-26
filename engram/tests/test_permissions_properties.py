@@ -781,3 +781,147 @@ def test_pt10_determinism_by_insertion_order():
             assert decide(s, x) == decide(s2, x), (case, x)
             checked += 1
     assert checked > 300
+
+
+# ---------------------------------------------------------------- Task 8: boxes and the gluing check (PT9, PT11)
+
+import itertools
+
+from permissions import (stewards as stewards_of, Box, FSet, TimeSet, box_and, box_contains, box_empty, box_minus, box_subset, gluing,
+                         ineffective, parse_object_ref, TooComplex)
+from tests.permissions_oracle import oracle_delta, oracle_ineffective
+from tests.permissions_support import _COLLECTIONS, _RW_PURPOSES, e1_county_rules
+
+_DIMS = ("place", "agent", "kind", "store", "layer", "lane", "memory", "action", "purpose")
+
+
+def _random_box(rng, universe) -> Box:
+    kw = {}
+    for dim in _DIMS:
+        values = [v for v in universe[dim] if v != "zz"]
+        items = frozenset(rng.sample(values, rng.randint(0, len(values))))
+        kw[dim] = FSet(items, rng.random() < 0.4)
+    cuts = sorted(rng.sample(range(0, 4), rng.randint(0, 3)))
+    intervals = []
+    for lo, hi in zip(cuts[::2], cuts[1::2] + [None]):
+        intervals.append((lo, hi))
+    kw["time"] = TimeSet.of(intervals if rng.random() < 0.8 else [(0, None)])
+    return Box(**kw)
+
+
+def _points(universe):
+    return itertools.product(*(universe[d] for d in _DIMS), universe["time"])
+
+
+def test_pt9_boxes():
+    rng = random.Random(SEED + 9)
+    for _ in range(N):
+        universe = {d: ["a", "b"][:rng.randint(0, 2)] + ["zz"] for d in _DIMS}      # "zz": no set names it
+        universe["time"] = [0, 1, 2, 3]
+        a, b = _random_box(rng, universe), _random_box(rng, universe)
+        pts = list(_points(universe))
+        in_a = {p for p in pts if box_contains(a, p)}
+        in_b = {p for p in pts if box_contains(b, p)}
+        both = box_and(a, b)
+        assert {p for p in pts if both is not None and box_contains(both, p)} == in_a & in_b
+        assert (both is None) == (not (in_a & in_b))
+        pieces = box_minus(a, b)
+        assert len(pieces) <= 10 and not any(box_empty(x) for x in pieces)
+        seen = [{p for p in pts if box_contains(x, p)} for x in pieces]
+        assert set().union(*seen) == in_a - in_b
+        assert sum(len(x) for x in seen) == len(in_a - in_b)                  # disjoint
+        assert box_empty(a) == (not in_a)
+        assert box_subset(a, b) == (in_a <= in_b)
+
+
+def _glue_points(rng, state, w, place, n):
+    c = w.cfg
+    objs = list(c.objects) + list(c.roads) + ["mem:W/semantic/w9"]
+    agents = list(c.agents) + ["agent:zz"]
+    purposes = list(_RW_PURPOSES) + ["zz-purpose"]
+    stamps = {0, 1}
+    for r in state.records.values():
+        stamps.update(x for x in (r.valid_from, r.valid_until, r.anchor) if x is not None)
+    for g in state.grants.values():
+        stamps.add(g.expires)
+    stamps.update(state.seq_at.values())
+    times = sorted(stamps | {x - 1 for x in stamps if x > 0} | {max(stamps) + 10 ** 6})
+    out = []
+    for _ in range(n):
+        obj = rng.choice(objs)
+        ref = parse_object_ref(obj)
+        notes = state.lane_notes.get(obj)
+        lane = notes[-1].lane if notes else "none"
+        out.append((place, rng.choice(agents), ref.kind, ref.instance_id, ref.layer or "", lane, obj,
+                    rng.choice(ACTIONS), rng.choice(purposes), rng.choice(times)))
+    return out
+
+
+def _guided(rng, boxes, base, n):
+    """Points built to lie inside a box, kept when the whole point is in it."""
+    out = []
+    for box in boxes:
+        for pt in rng.sample(base, min(n, len(base))):
+            pt = list(pt)
+            for i, dim in enumerate(_DIMS):
+                got = getattr(box, dim)
+                if not got.co and got.items and dim in ("agent", "action", "purpose") and rng.random() < 0.8:
+                    pt[i] = rng.choice(sorted(got.items))
+            for lo, hi in box.time.intervals[:1]:
+                if rng.random() < 0.8:
+                    pt[9] = lo
+            if box_contains(box, tuple(pt)):
+                out.append(tuple(pt))
+    return out
+
+
+def test_pt11_gluing():
+    rng = random.Random(SEED + 11)
+    checked = {"delta": 0, "ineffective": 0, "skipped": 0}
+    for _ in range(40):
+        w = random_world(rng)
+        state = w.state()
+        tables, seq_at = state.to_tables(), state.seq_at
+        for place in sorted(state.place_parents):
+            glue = gluing(state, place)
+            if glue.too_complex:
+                checked["skipped"] += 1
+                continue
+            base = _glue_points(rng, state, w, place, 150)
+            pts = base + _guided(rng, glue.delta[:6] + glue.ineffective[:6], base, 3)
+            want_delta = oracle_delta(tables, seq_at, place, pts, seq=state.seq)
+            got_delta = {p for p in pts if any(box_contains(b, p) for b in glue.delta)}
+            assert got_delta == want_delta, (place, sorted(got_delta ^ want_delta)[:3])
+            want_ineff = oracle_ineffective(tables, seq_at, place, pts, seq=state.seq)
+            got_ineff = {p for p in pts if any(box_contains(b, p) for b in glue.ineffective)}
+            assert got_ineff == want_ineff, (place, sorted(got_ineff ^ want_ineff)[:3])
+            checked["delta"] += bool(want_delta)
+            checked["ineffective"] += bool(want_ineff)
+            alone = ineffective(state, place)
+            assert alone.ineffective == glue.ineffective and alone.delta == ()
+    assert checked["delta"] >= 5 and checked["ineffective"] >= 5, checked
+
+
+def test_pt11_collection_fixture():
+    w = World()
+    w.person("st")
+    for p in ("place:a", "place:b"):
+        w.place(p, stewards=["st"])
+    w.place("place:j", parents=["place:a", "place:b"], stewards=["st"])
+    w.agent("x", "place:j", at="place:j")
+    m = "mem:S/episode/m1"
+    w.collect("collection:andy/c1", [m])
+    w.collect("collection:andy/c2", [m])
+    w.collect("collection:andy/c3", ["mem:S/episode/m9"])
+    w.allow("place:j", audience=["commons"], collections=["collection:andy/c1"])
+    w.allow("place:a", audience=["commons"], collections=["collection:andy/c2"])
+    w.allow("place:b", audience=["commons"], collections=["collection:andy/c3"])
+    s = w.state()
+    r = gluing(s, "place:j")
+    assert r.delta and not r.too_complex
+    at = w.start + 10
+    pt = ("place:j", "agent:x", "memory", "S", "episode", "none", m, "recall", "any", at)
+    assert any(box_contains(b, pt) for b in r.delta)
+    other = pt[:6] + ("mem:S/episode/m9",) + pt[7:]
+    assert not any(box_contains(b, other) for b in r.delta)
+    assert r.notify == stewards_of(s, "place:j", "place:b")

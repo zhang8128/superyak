@@ -1199,3 +1199,41 @@ def trails_of(n: int, touches: int, *, same_memories=False):
     refs = tuple(f"trail:S/t{i}" for i in range(n))
     index = {r: i for i, r in enumerate(refs)}
     return refs, (lambda o: memories(touches, 0 if same_memories else index[o] * touches))
+
+
+# ---------------------------------------------------------------- Task 8: the county's rules, and a joint past the cap
+
+def e1_county_rules(extra=None) -> State:
+    """C1, H1, H2, K1, K2, W1 and L1 of P 13 with the county's display names, and nothing else of Andy's
+    story that matters to the gluing check. extra=(place, action) adds one more allow to that place's layer:
+    the place itself, care-coordination, that one action."""
+    from permissions import KINDS
+    w, _ = e1_world(1)
+    if extra:
+        place, action = extra
+        w.now = T("2026-10-01")
+        w.allow(place, audience=[place], kinds=list(KINDS), actions=[action], purposes=["care-coordination"],
+                valid_from=T("2026-10-01"))
+        w.now = w.start
+    return w.state()
+
+
+def cap_world(n: int):
+    """A county with a joint place whose own layer holds n allows, one box each (distinct memories).
+    Returns (state, joint)."""
+    w = World()
+    w.person("st")
+    w.place("place:big", stewards=["st"], name="Big")
+    w.place("place:big/left", stewards=["st"], name="Left")
+    w.place("place:big/right", stewards=["st"], name="Right")
+    joint = "place:big/both"
+    w.place(joint, parents=["place:big/left", "place:big/right"], stewards=["st"], name="Both")
+    w.agent("worker", joint, at=joint)
+    for i in range(n):
+        w.allow(joint, audience=["commons"], memories=[f"mem:S/episode/c{i}"], actions=["recall"])
+    return w.state(), joint
+
+
+def cap_breaking_joint():
+    """More than 4,096 boxes in one layer: (state, joint)."""
+    return cap_world(4097)

@@ -638,3 +638,74 @@ def oracle_env(tables, seq_at, use, action, person, *, anchor, obj=None, seq=Non
                and v.grant_valid(g["id"], q[3])
                and v.sel_match(g["env"], home, anchor, q, obj or use["obj"], action, False)
                for g in v.grants.values())
+
+
+# ---------------------------------------------------------------- Task 8: the gluing check (P 8)
+
+class _GlueView(_View):
+    """The same reading with lanes at the current state only, as P 8 reads them: the lane of the last note, a
+    pending last note reads as no lane for an allow and as every lane for a deny, no note matches no allow and
+    every deny."""
+
+    def lane_ok(self, obj, lanes, anchor, t, deny):
+        notes = sorted((n for n in self.notes if n["object"] == obj), key=lambda n: (n["at"], n["seq"]))
+        if deny:
+            return not notes or notes[-1]["lane"] in set(lanes) | {"pending"}
+        return bool(notes) and notes[-1]["lane"] in set(lanes)
+
+
+def _glue_view(tables, seq_at, seq):
+    return _GlueView(tables, seq_at, seq)
+
+
+def _layer_set(v, layers, point):
+    """Does every layer of `layers` allow the point (place, agent, ..., object, action, purpose, time)?"""
+    place, agent, obj, action, purpose, t = point[0], point[1], point[6], point[7], point[8], point[9]
+    q = (agent, place, purpose, t)
+    return all(v.layer_allows(z, q, obj, action) for z in layers)
+
+
+def _sections_at(v, joint):
+    parents = sorted({r["parent"] for r in v.parents if r["place"] == joint})
+    return parents, [sorted(v.anc(q)) for q in parents]
+
+
+def oracle_delta(tables, seq_at, joint, points, *, seq=None) -> set:
+    """The points in Δ(J) = own(J) ∩ (⋃ s_i \\ ⋂ s_i), by asking each layer about each point."""
+    v = _glue_view(tables, seq_at, seq)
+    parents, chains = _sections_at(v, joint)
+    out = set()
+    for p in points:
+        if len(parents) < 2 or not _layer_set(v, [joint], p):
+            continue
+        got = [_layer_set(v, chain, p) for chain in chains]
+        if any(got) and not all(got):
+            out.add(p)
+    return out
+
+
+def _critical_times(tables, seq_at) -> list:
+    """One time from every stretch on which no condition of a record, grant or membership changes."""
+    stamps = {0}
+    stamps.update(seq_at.values())
+    for r in tables.get("records", ()):
+        stamps.update(x for x in (r["valid_from"], r["valid_until"], r["anchor"]) if x is not None)
+    for g in tables.get("permission_grants", ()):
+        stamps.add(g["expires"])
+    return sorted(stamps)
+
+
+def oracle_ineffective(tables, seq_at, place, points, *, seq=None) -> set:
+    """What the place's own layer allows that the places above it never allow, at any time: with one parent, the
+    meet of every ancestor but the place; at a joint place, what no parent's chain allows."""
+    v = _glue_view(tables, seq_at, seq)
+    parents, chains = _sections_at(v, place)
+    times = _critical_times(tables, seq_at)
+    out = set()
+    for p in points:
+        if not parents or not _layer_set(v, [place], p):
+            continue
+        above = [sorted(v.anc(place) - {place})] if len(parents) == 1 else chains
+        if not any(_layer_set(v, chain, p[:9] + (t,)) for chain in above for t in times):
+            out.add(p)
+    return out

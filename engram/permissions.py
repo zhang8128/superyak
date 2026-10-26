@@ -1727,3 +1727,522 @@ def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = 
         if not ok:
             break
     return run.result()
+
+
+# ---------------------------------------------------------------- overlaps between places: the gluing check (P 8)
+
+REGISTRY = "registry"          # affected_joints: a change to places, parents, agents, groups, collections, stewards
+
+
+class TooComplex(Exception):
+    """A layer or section would hold more than BOX_CAP boxes."""
+
+
+@dataclass(frozen=True)
+class FSet:
+    """A finite set of strings (co False) or the complement of one (co True)."""
+    items: frozenset
+    co: bool = False
+
+    def __contains__(self, value) -> bool:
+        return (value not in self.items) if self.co else (value in self.items)
+
+    @property
+    def empty(self) -> bool:
+        return not self.co and not self.items
+
+    def __and__(self, other: "FSet") -> "FSet":
+        if not self.co and not other.co:
+            return FSet(self.items & other.items)
+        if not self.co:
+            return FSet(self.items - other.items)
+        if not other.co:
+            return FSet(other.items - self.items)
+        return FSet(self.items | other.items, True)
+
+    def __invert__(self) -> "FSet":
+        return FSet(self.items, not self.co)
+
+    def __sub__(self, other: "FSet") -> "FSet":
+        return self & ~other
+
+
+FULL = FSet(frozenset(), True)
+
+
+def _fset(values) -> FSet:
+    return FSet(frozenset(values))
+
+
+def _star(value) -> FSet:
+    return FULL if value == STAR else _fset(value)
+
+
+def _norm(intervals) -> tuple:
+    spans = sorted((max(lo, 0), hi) for lo, hi in intervals if hi is None or hi > max(lo, 0))
+    out: list = []
+    for lo, hi in spans:
+        if out and (out[-1][1] is None or lo <= out[-1][1]):
+            if out[-1][1] is not None and (hi is None or hi > out[-1][1]):
+                out[-1] = (out[-1][0], hi)
+        else:
+            out.append((lo, hi))
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class TimeSet:
+    """A finite union of half-open integer intervals [lo, hi); hi None is unbounded. Times start at 0."""
+    intervals: tuple = ()
+
+    @classmethod
+    def of(cls, intervals) -> "TimeSet":
+        return cls(_norm(intervals))
+
+    def __contains__(self, t: int) -> bool:
+        return any(lo <= t and (hi is None or t < hi) for lo, hi in self.intervals)
+
+    @property
+    def empty(self) -> bool:
+        return not self.intervals
+
+    def __and__(self, other: "TimeSet") -> "TimeSet":
+        out = []
+        for lo, hi in self.intervals:
+            for lo2, hi2 in other.intervals:
+                a = max(lo, lo2)
+                b = hi2 if hi is None else hi if hi2 is None else min(hi, hi2)
+                if b is None or a < b:
+                    out.append((a, b))
+        return TimeSet.of(out)
+
+    def __invert__(self) -> "TimeSet":
+        out, cursor = [], 0
+        for lo, hi in self.intervals:
+            if lo > cursor:
+                out.append((cursor, lo))
+            if hi is None:
+                return TimeSet.of(out)
+            cursor = hi
+        out.append((cursor, None))
+        return TimeSet.of(out)
+
+    def __sub__(self, other: "TimeSet") -> "TimeSet":
+        return self & ~other
+
+
+TIME_FULL = TimeSet(((0, None),))
+DIMS = ("place", "agent", "kind", "store", "layer", "lane", "memory", "action", "purpose", "time")
+
+
+@dataclass(frozen=True)
+class Box:
+    """A product of one set per dimension (P 8). A point is a tuple in DIMS order."""
+    place: FSet = FULL
+    agent: FSet = FULL
+    kind: FSet = FULL
+    store: FSet = FULL
+    layer: FSet = FULL
+    lane: FSet = FULL
+    memory: FSet = FULL
+    action: FSet = FULL
+    purpose: FSet = FULL
+    time: TimeSet = TIME_FULL
+
+    @classmethod
+    def full(cls) -> "Box":
+        return cls()
+
+    def but(self, **dims) -> "Box":
+        return replace(self, **dims)
+
+
+def box_empty(b: Box) -> bool:
+    return any(getattr(b, d).empty for d in DIMS)
+
+
+def box_and(a: Box, b: Box) -> Box | None:
+    dims = {d: getattr(a, d) & getattr(b, d) for d in DIMS}
+    if any(v.empty for v in dims.values()):
+        return None
+    return Box(**dims)
+
+
+def box_minus(a: Box, b: Box) -> list[Box]:
+    """a \\ b as at most 10 disjoint boxes."""
+    if box_empty(a):
+        return []
+    if box_and(a, b) is None:
+        return [a]
+    pieces, cur = [], a
+    for d in DIMS:
+        left = getattr(cur, d) - getattr(b, d)
+        if not left.empty:
+            pieces.append(replace(cur, **{d: left}))
+        cur = replace(cur, **{d: getattr(cur, d) & getattr(b, d)})
+    return pieces
+
+
+def box_subset(a: Box, b: Box) -> bool:
+    return box_empty(a) or all((getattr(a, d) - getattr(b, d)).empty for d in DIMS)
+
+
+def box_contains(box: Box, point) -> bool:
+    return all(v in getattr(box, d) for d, v in zip(DIMS, point))
+
+
+def _cap(boxes: Iterable[Box]) -> list[Box]:
+    out = list(dict.fromkeys(b for b in boxes if not box_empty(b)))
+    if len(out) > BOX_CAP:
+        raise TooComplex(f"more than {BOX_CAP:,} boxes")
+    return out
+
+
+def _list_and(xs: Sequence[Box], ys: Sequence[Box]) -> list[Box]:
+    return _cap(c for x in xs for y in ys if (c := box_and(x, y)) is not None)
+
+
+def _list_minus(xs: Sequence[Box], ys: Sequence[Box]) -> list[Box]:
+    cur = list(xs)
+    for y in ys:
+        cur = _cap(p for x in cur for p in box_minus(x, y))
+        if not cur:
+            break
+    return cur
+
+
+def _only(boxes: Sequence[Box], **dims) -> list[Box]:
+    return _list_and(boxes, [Box(**dims)])
+
+
+def _row_times(state: State, added: int, removed: int | None, anchor: int | None) -> TimeSet:
+    """When a membership row counts: for an allow (anchor None) while in force; for a deny from the later of
+    its start and the record's anchor, if it did not end by the anchor."""
+    lo, hi = _span(state, added, removed)
+    if anchor is None:
+        return TimeSet.of([(lo, hi)])
+    if hi is not None and hi <= anchor:
+        return TimeSet()
+    return TimeSet.of([(max(anchor, lo), None)])
+
+
+def _by_time(rows: Iterable[tuple[TimeSet, str]]) -> list[tuple[TimeSet, FSet]]:
+    grouped: dict = {}
+    for ts, value in rows:
+        if not ts.empty:
+            grouped.setdefault(ts, set()).add(value)
+    return [(ts, _fset(v)) for ts, v in grouped.items()]
+
+
+def _audience_boxes(state: State, v: str, layer: str, anchor: int, deny: bool,
+                    at_place: str | None) -> list[tuple[FSet, FSet, TimeSet]]:
+    """(places, agents, times) of one audience entry, read as 5.2 and 5.3 read it at the current state. An
+    unregistered agent matches `commons` only."""
+    where = FULL if at_place is None else _fset([at_place])
+    candidates = list(state.places) if at_place is None else [at_place]
+    places = lambda ok: _fset(x for x in candidates if ok(x))
+    acts = {a: row.acts_for for a, row in state.agents.items()}
+    if v == "commons":
+        return [(where, FULL, TIME_FULL)]
+    layer_place = layer if layer.startswith("place:") else acts.get(layer)
+    if v == "self":
+        if layer.startswith("agent:"):
+            return [(where, _fset([layer]), TIME_FULL)] if layer in state.agents else []
+        if layer_place is None:
+            return []
+        who = _fset(a for a, p in acts.items() if p == layer_place)
+        if deny:
+            return [(where, who, TIME_FULL)]
+        return [(places(lambda x: layer_place in dominators(state, x)), who, TIME_FULL)]
+    if v.startswith("group:"):
+        rows = [r for r in state.group_members.get(v, ()) if r.agent in state.agents]
+        if deny:
+            return [(where, ag, ts) for ts, ag in _by_time(
+                (_row_times(state, r.added_seq, r.removed_seq, anchor), r.agent) for r in rows)]
+        group = state.groups.get(v)
+        if group is None:
+            return []
+        home = home_of(group.owner)
+        ok = places(lambda x: home in dominators(state, x))
+        return [(ok, ag, ts) for ts, ag in _by_time(
+            (_row_times(state, r.added_seq, r.removed_seq, None), r.agent) for r in rows)]
+    if v.startswith("place:"):
+        if not deny:
+            return [(places(lambda x: v in dominators(state, x)),
+                     _fset(a for a, p in acts.items() if v in dominators(state, p)), TIME_FULL)]
+        out = [(places(lambda x: v in ancestors(state, x)), FULL, TIME_FULL),
+               (where, _fset(a for a, p in acts.items() if v in ancestors(state, p)), TIME_FULL)]
+        placed = [(_row_times(state, r.added_seq, r.removed_seq, anchor), a)
+                  for a, rows in state.agent_places.items() if a in state.agents
+                  for r in rows if v in ancestors(state, r.place)]
+        out += [(where, ag, ts) for ts, ag in _by_time(placed)]
+        return [o for o in out if not o[0].empty and not o[1].empty]
+    return []
+
+
+def _grant_times(state: State, gid: str) -> TimeSet:
+    """When the grant chain is valid (grant_validity at each t): never past the earliest expiry."""
+    try:
+        chain = grant_chain(state, gid)
+    except RuleError:
+        return TimeSet()
+    if len(chain) > MAX_GRANT_LINKS or any(g.revoked_seq is not None for g in chain):
+        return TimeSet()
+    if not _is_steward(state, chain[0].layer, chain[0].issuer):
+        return TimeSet()
+    return TimeSet.of([(0, min(g.expires for g in chain))])
+
+
+def _member_parts(state: State, colls: tuple, layer: str, anchor: int, deny: bool, assume: frozenset,
+                  at_place: str | None) -> list[tuple[FSet, TimeSet, list[Box] | None]]:
+    """The memories a collections list names, as (refs, times, extra boxes the use must also lie in). An allow
+    counts a membership not removed and in force; a grant-backed one only while its chain is valid and inside
+    every envelope of that chain. A deny counts every membership since its anchor (P 5.3)."""
+    simple: list[tuple[TimeSet, str]] = []
+    parts: list = []
+    for c in colls:
+        for r in state.collection_members.get(c, ()):
+            if deny:
+                simple.append((_row_times(state, r.added_seq, r.removed_seq, anchor), r.object))
+                continue
+            if r.removed_seq is not None:
+                continue                 # a removed membership is never counted for an allow
+            times = _row_times(state, r.added_seq, r.removed_seq, None)
+            if not r.backing.startswith("grant:") or r in assume:
+                simple.append((times, r.object))
+                continue
+            gid = r.backing[len("grant:"):]
+            times = times & _grant_times(state, gid)
+            if times.empty:
+                continue
+            try:
+                chain = grant_chain(state, gid)
+            except RuleError:
+                continue
+            extra = [Box.full()]
+            for g in chain:
+                extra = _list_and(extra, _selector_boxes(state, g.envelope, layer, anchor, False, assume | {r},
+                                                         at_place))
+            if extra:
+                parts.append((_fset([r.object]), times, extra))
+    return [(refs, ts, None) for ts, refs in _by_time(simple)] + parts
+
+
+def _selector_boxes(state: State, sel: Selector, layer: str, anchor: int, deny: bool, assume: frozenset,
+                    at_place: str | None) -> list[Box]:
+    lanes = FULL if sel.lanes == STAR else _fset(sel.lanes)
+    if deny and sel.lanes != STAR:
+        lanes = _fset([*sel.lanes, "pending", "none"])      # a pending move or no note reads as every lane
+    base = Box(agent=_star(sel.requesters), kind=_star(sel.kinds), store=_star(sel.stores),
+               layer=_star(sel.layers), lane=lanes, memory=_star(sel.memories), action=_star(sel.actions),
+               purpose=_star(sel.purposes))
+    parts = ([(FULL, TIME_FULL, None)] if sel.collections == STAR
+             else _member_parts(state, sel.collections, layer, anchor, deny, assume, at_place))
+    out: list[Box] = []
+    for v in sel.audience:
+        for places, agents, times in _audience_boxes(state, v, layer, anchor, deny, at_place):
+            for refs, part_times, extra in parts:
+                box = box_and(base, Box(place=places, agent=agents, memory=refs, time=times & part_times))
+                if box is None:
+                    continue
+                if extra is None:
+                    out.append(box)
+                else:
+                    out.extend(c for e in extra if (c := box_and(box, e)) is not None)
+                if len(out) > BOX_CAP:
+                    out = _cap(out)
+    return _cap(out)
+
+
+def _interval(record) -> TimeSet:
+    return TimeSet.of([(record.valid_from, record.valid_until)])
+
+
+def _record_boxes(state: State, record: Record, at_place: str | None) -> list[Box]:
+    """P 5.3 rules 1 to 5 as boxes: interval, selector, the replaces chain, the grant chain."""
+    deny = record.effect == "deny"
+    cur = _selector_boxes(state, record.selector, record.layer, record.anchor, deny, frozenset(), at_place)
+    cur = _only(cur, time=_interval(record))
+    link, n = record.replaces, 0
+    while link is not None and cur:
+        n += 1
+        r = state.records.get(link)
+        if r is None or n > MAX_REPLACES:
+            return []
+        cur = _only(cur, time=_interval(r))
+        cur = _list_and(cur, _selector_boxes(state, r.selector, r.layer, record.anchor, deny, frozenset(),
+                                             at_place))
+        link = r.replaces
+    if cur and record.backing.startswith("grant:"):
+        gid = record.backing[len("grant:"):]
+        cur = _only(cur, time=_grant_times(state, gid))
+        try:
+            chain = grant_chain(state, gid)
+        except RuleError:
+            return []
+        for g in chain:
+            if not cur:
+                break
+            cur = _list_and(cur, _selector_boxes(state, g.envelope, record.layer, record.anchor, deny,
+                                                 frozenset(), at_place))
+    return cur
+
+
+def layer_boxes(state: State, layer: str, *, at_place: str | None = None) -> list[Box]:
+    """What the layer allows, as boxes: its allows minus its denies, at the current state. With at_place, only
+    the uses at that place. Raises TooComplex past BOX_CAP."""
+    def compute():
+        allows: list[Box] = []
+        denies: list[Box] = []
+        for rec in state.records.values():
+            if rec.layer != layer or rec.revoked_seq is not None:
+                continue
+            (denies if rec.effect == "deny" else allows).extend(_record_boxes(state, rec, at_place))
+            if len(allows) > BOX_CAP:
+                allows = _cap(allows)
+            if len(denies) > BOX_CAP:
+                denies = _cap(denies)
+        return tuple(_list_minus(_cap(allows), _cap(denies)))
+    return list(state._memo(("lbox", layer, at_place), compute))
+
+
+def stewards(state: State, *places: str) -> frozenset[str]:
+    """The persons who steward any of the places now."""
+    return frozenset(r.person for p in places for r in state.place_stewards.get(p, ())
+                     if r.removed_seq is None)
+
+
+@dataclass(frozen=True)
+class GluingReport:
+    place: str
+    delta: tuple
+    ineffective: tuple
+    too_complex: bool
+    notify: frozenset
+
+
+def _ever(boxes: Sequence[Box]) -> list[Box]:
+    """The same boxes at every time: a use class allowed at some time. A parent's rule that merely ends does
+    not make the place's own rule ineffective; only what no parent ever allows does (ruling, P 13 use 5)."""
+    return _cap(b.but(time=TIME_FULL) for b in boxes)
+
+
+def _distinct_parents(state: State, place: str) -> list[str]:
+    return sorted(set(_parents(state, place)))
+
+
+def _sections(state: State, joint: str) -> tuple[list[Box], list[list[Box]]]:
+    """own(J), and s_i for each parent Q_i: the meet of anc(Q_i)'s layers at J."""
+    own = layer_boxes(state, joint, at_place=joint)
+    secs = []
+    for q in _distinct_parents(state, joint):
+        s = [Box.full()]
+        for z in sorted(ancestors(state, q)):
+            s = _list_and(s, layer_boxes(state, z, at_place=joint))
+            if not s:
+                break
+        secs.append(s)
+    return own, secs
+
+
+def _analyse(state: State, place: str, want_delta: bool) -> GluingReport:
+    parents = _distinct_parents(state, place)
+    try:
+        delta: list[Box] = []
+        ineff: list[Box] = []
+        if len(parents) >= 2:
+            own, secs = _sections(state, place)
+            union = _cap(b for s in secs for b in s)
+            ineff = _list_minus(own, _ever(union))
+            if want_delta:
+                meet = secs[0]
+                for s in secs[1:]:
+                    meet = _list_and(meet, s)
+                delta = _list_and(own, _list_minus(union, meet))
+        elif len(parents) == 1:
+            own = layer_boxes(state, place, at_place=place)
+            meet = [Box.full()]
+            for z in sorted(ancestors(state, place) - {place}):
+                meet = _list_and(meet, layer_boxes(state, z, at_place=place))
+                if not meet:
+                    break
+            ineff = _list_minus(own, _ever(meet))
+    except TooComplex:
+        return GluingReport(place, (), (), True, stewards(state, place, *parents))
+    notify = frozenset()
+    if delta:
+        notify |= stewards(state, place, *parents)     # each parent allows or refuses every point of Δ
+    if ineff:
+        notify |= stewards(state, place)
+    return GluingReport(place, tuple(delta), tuple(ineff), False, notify)
+
+
+def gluing(state: State, joint: str) -> GluingReport:
+    """P 8: Δ(J) and the ineffective part of J's own rules, with who is told."""
+    return _analyse(state, joint, True)
+
+
+def ineffective(state: State, place: str) -> GluingReport:
+    """P 8: the part of the place's own rules that the places above it do not allow."""
+    return _analyse(state, place, False)
+
+
+def affected_joints(state: State, changed: Iterable[str]) -> tuple[str, ...]:
+    """The joint places to check after a change: those whose own layer, a parent's or an ancestor's changed, or
+    all of them after a REGISTRY change, in id order. The caller takes the first JOINTS_PER_CHANGE."""
+    changed = set(changed)
+    joints = sorted(p for p in state.places if len(_distinct_parents(state, p)) >= 2
+                    and not place_retired(state, p))
+    if REGISTRY in changed:
+        return tuple(joints)
+    return tuple(j for j in joints if ancestors(state, j) & changed)
+
+
+def _name(state: State, place: str) -> str:
+    return state.names.get(place, place)
+
+
+def _and_list(items: Sequence[str]) -> str:
+    items = list(items)
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _action_values(boxes: Sequence[Box]) -> list[str]:
+    return [a for a in ACTIONS if any(a in b.action for b in boxes)]
+
+
+def _purposes(boxes: Sequence[Box]) -> str:
+    if any(b.purpose.co for b in boxes):
+        return "any purpose"
+    return _and_list(sorted({p for b in boxes for p in b.purpose.items}, key=_units))
+
+
+def disagreement_words(state: State, report: GluingReport) -> str:
+    """The sentence of P 8 for the stewards ("" when there is nothing to say)."""
+    place = report.place
+    here = _name(state, place)
+    if report.too_complex:
+        return (f"could not check: too complex to compare {here} with the places above it "
+                f"(more than {BOX_CAP:,} boxes). The meet still decides every use.")
+    out = []
+    if report.delta:
+        own, secs = _sections(state, place)
+        parents = _distinct_parents(state, place)
+        allow = [_name(state, q) for q, s in zip(parents, secs) if _list_and(report.delta, s)]
+        refuse = [_name(state, q) for q, s in zip(parents, secs) if _list_minus(report.delta, s)]
+        meet = own
+        for s in secs:
+            meet = _list_and(meet, s)
+        left = _action_values(meet)
+        only = f"may only {_and_list(left)}" if left else "may do nothing"
+        out.append(f"{_and_list(allow)} {'allows' if len(allow) == 1 else 'allow'} "
+                   f"{_and_list(_action_values(report.delta))} in {here} for {_purposes(report.delta)}; "
+                   f"{_and_list(refuse)} {'does' if len(refuse) == 1 else 'do'} not. "
+                   f"Until one of you changes your rules, {here} {only}.")
+    if report.ineffective:
+        out.append(f"{here} asks for {_and_list(_action_values(report.ineffective))} in {here} for "
+                   f"{_purposes(report.ineffective)} that the places above it do not allow, so that part has "
+                   f"no effect.")
+    return " ".join(out)
