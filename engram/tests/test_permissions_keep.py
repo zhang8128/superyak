@@ -1,6 +1,7 @@
 """Task 25: the `remember` guard and kept copies (P 7.4, 10; U17, R10, R11, P25)."""
 import json
 import logging
+import sqlite3
 
 import pytest
 
@@ -147,6 +148,42 @@ def test_closed_refuses_a_delivered_content_and_keeps_anything_else(keep_world):
     make_ledger_unreadable(keep_world.root)
     assert server.remember(content=M1_TEXT) == REFUSED
     assert server.remember(content="a note that was never delivered").get("episode_id")
+
+
+def _break_copy_record(monkeypatch, how):
+    import permission_ledger
+    if how == "raises":
+        def boom(self, *a, **k):
+            raise sqlite3.OperationalError("disk I/O error")
+        monkeypatch.setattr(permission_ledger.Ledger, "record_copy", boom)
+    else:
+        monkeypatch.setattr(server, "_store_id", lambda: None)
+
+
+@pytest.mark.parametrize("how", ["raises", "no_store_id"])
+def test_an_unrecordable_kept_copy_refuses_the_remember_under_enforce(keep_world_with_imprint_allowed, monkeypatch,
+                                                                      caplog, how):
+    deliver_m1_through(keep_world_with_imprint_allowed, "neighbors")
+    before = server._storage.conn.execute("SELECT count(*) FROM episodes").fetchone()[0]
+    _break_copy_record(monkeypatch, how)
+    with caplog.at_level(logging.WARNING):
+        out = server.remember(content=M1_TEXT)
+    assert out == REFUSED
+    assert server._storage.conn.execute("SELECT count(*) FROM episodes").fetchone()[0] == before
+    assert ledger_state().copies == {}
+    assert "kept copy" in caplog.text
+
+
+@pytest.mark.parametrize("how", ["raises", "no_store_id"])
+def test_an_unrecordable_kept_copy_is_kept_with_would_refuse_under_shadow(keep_world_with_imprint_allowed,
+                                                                         monkeypatch, caplog, how):
+    deliver_m1_through(keep_world_with_imprint_allowed, "neighbors")
+    set_gate(keep_world_with_imprint_allowed, "shadow")
+    _break_copy_record(monkeypatch, how)
+    with caplog.at_level(logging.WARNING):
+        out = server.remember(content=M1_TEXT)
+    assert out.get("episode_id") and out["would_refuse"] is True
+    assert "kept copy" in caplog.text
 
 
 def test_genome_sync_records_kept_copy_subjects_under_shadow(tmp_path, monkeypatch):

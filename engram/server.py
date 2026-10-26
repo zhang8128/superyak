@@ -1912,7 +1912,10 @@ def remember(
     )
     episode_id = str(uuid.uuid4())
     embedding = _embeddings.embed([content], prefix="search_document")[0]
-    keep.record_copy(episode_id)
+    if not keep.record_copy(episode_id):
+        if not keep.shadow:
+            return _keep_reply(None, _agent_ref(), cause="the kept copy could not be recorded")
+        keep.would_refuse = True
 
     _storage.add_episode(
         id=episode_id,
@@ -1991,22 +1994,28 @@ class _Keep:
     reply: dict | None = None
     would_refuse: bool = False
     source: str | None = None
+    shadow: bool = False
 
-    def record_copy(self, episode_id: str) -> None:
-        """P25: the kept episode is a copy of the delivered item; recorded before the episode is written."""
+    def record_copy(self, episode_id: str) -> bool:
+        """P25: the kept episode is a copy of the delivered item; recorded before the episode is written. False
+        when it could not be recorded (the kept episode would carry none of the source's subjects)."""
         if self.source is None:
-            return
+            return True
         from permission_ledger import Ledger
         sid = _store_id()
         if sid is None:
-            return
-        led = Ledger.open(ENGRAM_HOME)
+            logger.warning("Could not record the kept copy of %s: the store has no id", self.source)
+            return False
         try:
-            led.record_copy(f"mem:{sid}/episode/{episode_id}", self.source, now=_permission_now())
+            led = Ledger.open(ENGRAM_HOME)
+            try:
+                led.record_copy(f"mem:{sid}/episode/{episode_id}", self.source, now=_permission_now())
+            finally:
+                led.close()
         except Exception:
             logger.warning("Could not record the kept copy of %s", self.source, exc_info=True)
-        finally:
-            led.close()
+            return False
+        return True
 
 
 def _keep_reply(state, agent: str, refusal=None, cause: str | None = None) -> dict:
@@ -2121,7 +2130,7 @@ def _decide_keep(deliveries, *, agent: str, now: int, shadow: bool) -> _Keep:
         return _Keep(would_refuse=True) if shadow else _Keep(reply=_keep_reply(state, agent, refused[1].refusal))
     if not written and not shadow:
         return _Keep(reply=_keep_reply(state, agent, cause="the receipt could not be written"))
-    return _Keep(source=decided[0][0].obj)
+    return _Keep(source=decided[0][0].obj, shadow=shadow)
 
 
 def _keep_check(content: str, *, agent: str, now: int, raw: str | None = None) -> dict | None:
