@@ -206,6 +206,13 @@ def test_a_placement_whose_record_still_counts_is_left_alone(tmp_path):
     assert report == SweepReport(0, 0, 0, 0) and copies_left(house) == 2
 
 
+def test_a_placement_naming_a_record_the_ledger_does_not_hold_is_left_alone(tmp_path):
+    house, led = _world(tmp_path, "enforce", 1)
+    _place(house, led, led.eps[0], "r-" + "0" * 32)
+    report = sweep_placements(published_storage=house, ledger=led, mode="enforce", now=NOW)
+    assert report == SweepReport(0, 0, 0, 0) and copies_left(house) == 1
+
+
 # ---------------------------------------------------------------- the server
 
 def _published_house(tmp_path):

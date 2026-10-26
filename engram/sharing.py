@@ -293,6 +293,8 @@ def sweep_placements(*, published_storage, ledger, mode: str, now: int, limit: i
     for row in rows:
         if relinked + removed + would_remove >= limit:
             break
+        if row["record_id"] not in state.records:
+            continue            # not a record of this ledger: the sweep cannot judge it, and a use is refused anyway
         obj = f"mem:{row['source_instance_id']}/{row['layer']}/{row['source_id']}"
         try:
             if placement_still_counts(state, row["record_id"], owner=owner, obj=obj, at=now):
