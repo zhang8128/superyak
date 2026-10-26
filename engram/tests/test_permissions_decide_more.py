@@ -145,13 +145,16 @@ def test_a_road_is_decided_for_itself_then_each_named_memory_in_ref_order():
     u = home_use(ROAD, T("2026-11-02"), action="route", names=[M2, M1])
     d = decide(s, u)
     assert d.refusal.action == "recall"             # the road's route is allowed; the first memory's recall is not
-    assert [(c.action, c.verdict) for c in d.cited if c.layer == HOME] == [("route", "allow"), ("recall", "silent")]
+    assert [(c.action, c.verdict) for c in d.cited if c.layer == HOME] == [("recall", "silent"), ("route", "allow")]
     w.allow(HOME, audience=["self"], actions=["recall"], memories=[M2])
     d = decide(w.state(), u)
-    assert not d.allowed and d.cited[-1].verdict == "silent"         # m1 still fails after m2 passes
+    assert not d.allowed and [(c.action, c.verdict) for c in d.cited if c.layer == HOME][0] == ("recall", "silent")
+    assert d.refusal.action == "recall"                               # m1 still fails after m2 passes
     w.allow(HOME, audience=["self"], actions=["recall"], memories=[M1])
     d = decide(w.state(), u)
     assert d.allowed
+    layers = [c.layer for c in d.cited]
+    assert layers == sorted(layers, key=layers.index)               # layer-major: a layer's entries are contiguous
     assert json.loads(json.dumps(d.to_json()))["cited"][0]["records"] is not None   # R8: `records` on a road
 
 

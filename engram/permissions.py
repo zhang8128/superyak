@@ -1387,11 +1387,13 @@ def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
     multi = _kind_of(use.obj) in ("road", "trail")
     entries: dict = {}
     versions: dict[str, int] = {}
+    layer_pos: dict[str, int] = {}      # layers in required_layers order, the object's first, then the memories'
     failure: tuple | None = None
 
     def result() -> Decision:
+        order = sorted(entries.values(), key=lambda e: (layer_pos[e[0].id], ACTIONS.index(e[1])))
         cited = tuple(Cited(layer.id, layer.kind, action, verdict, tuple(sorted(recs, key=_units)))
-                      for (layer, action, verdict, _, recs) in entries.values())
+                      for (layer, action, verdict, _, recs) in order)
         return Decision(allowed=failure is None, at=use.at, ledger_seq=state.seq, action=use.action, cited=cited,
                         refusal=None if failure is None else Refusal(*failure), until=None, horizon=None,
                         versions=versions, multi=multi)
@@ -1412,6 +1414,7 @@ def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
             failure = failure or (code, None, None)
             break
         for layer in required_layers(state, sub, legacy=legacy, outside=outside):
+            layer_pos.setdefault(layer.id, len(layer_pos))
             if layer.kind in ("consent", "restriction"):
                 versions[layer.id] = layer_version(state, layer.id)
             for action in need.actions:
