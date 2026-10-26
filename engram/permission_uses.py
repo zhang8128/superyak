@@ -13,6 +13,7 @@ memories a road or trail named), {"count", "sha256"} (a named bulk use), {"count
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -22,7 +23,8 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from lighthouse_protocol import canonical_json
-from permissions import BulkUse, Decision, RETENTION_DAYS, Use
+from permissions import (BulkUse, Decision, GUARD_RECEIPTS, GUARD_SECONDS, RETENTION_DAYS, USE_LIST_ROWS, State,
+                         Use, dominators, holding_place, person_of_home)
 
 ZERO = "0" * 64
 BUSY_MS = 5000
@@ -39,6 +41,18 @@ _SCHEMA = (
   purpose TEXT NOT NULL, outcome TEXT NOT NULL, n INTEGER NOT NULL,
   PRIMARY KEY(month, subject, place, action, purpose, outcome))""",
 )
+
+
+def pseudonym(salt: bytes, subject: str) -> str:
+    """P 9.2: the first 16 hex of HMAC-SHA256(a place's salt, a subject id). A display convention, not a protection."""
+    return hmac.new(bytes(salt), subject.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+
+
+@dataclass
+class UseList:
+    """Counts first (`total`, `local`, `imported`, and in a place view `filtered`), then at most USE_LIST_ROWS rows."""
+    counts: dict
+    rows: list
 
 
 class UsesUnreadable(Exception):
@@ -332,3 +346,274 @@ class Uses:
                 self.conn.execute("ROLLBACK")
             raise
         return len(old)
+
+
+    # ---------------------------------------------------------------- views (P 9.2, 9.3)
+    def _query(self, where: str, params: Sequence, limit: int | None = USE_LIST_ROWS) -> list:
+        sql = f"SELECT * FROM uses WHERE {where} ORDER BY at DESC, seq DESC"
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+        return self.conn.execute(sql, tuple(params)).fetchall()
+
+    def _filters(self, state: State, *, scope=None, since=None, until=None, action=None, purpose=None,
+                 collection=None, obj=None, refused=False) -> tuple[list, list]:
+        """The WHERE terms the owner's list and a place view share. `scope` is (places, copies) a place view covers."""
+        terms, params = [], []
+        if since is not None:
+            terms.append("at >= ?")
+            params.append(since)
+        if until is not None:
+            terms.append("at < ?")
+            params.append(until)
+        for column, value in (("action", action), ("purpose", purpose)):
+            if value is not None:
+                terms.append(f"{column} = ?")
+                params.append(value)
+        if refused:
+            terms.append("allowed = 0")
+        if obj is not None:
+            terms.append("(object = ? OR EXISTS(SELECT 1 FROM use_subjects s WHERE s.use_seq = uses.seq "
+                         "AND s.object = ?))")
+            params += [obj, obj]
+        if collection is not None:
+            members = {r.object for r in state.collection_members.get(collection, ())}
+            self.conn.create_function("in_collection", 1, lambda o: o in members, deterministic=True)
+            terms.append("(in_collection(object) OR EXISTS(SELECT 1 FROM use_subjects s WHERE "
+                         "s.use_seq = uses.seq AND in_collection(s.object)))")
+        if scope is not None:
+            places, copies = scope
+            self.conn.create_function("in_places", 1, lambda p: p in places, deterministic=True)
+            self.conn.create_function("in_copies", 1, lambda c: c in copies, deterministic=True)
+            terms.append("(in_places(place) OR in_copies(copy))")
+        return terms, params
+
+    def _count(self, where: str, params: Sequence, ledger_id: str) -> dict:
+        total, imported, filtered = self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(ledger_id != ?), 0), COALESCE(SUM(filtered), 0) FROM uses "
+            f"WHERE {where}", (ledger_id, *params)).fetchone()
+        return {"total": total, "local": total - imported, "imported": imported, "filtered": filtered}
+
+    def _subjects_of_rows(self, rows) -> dict:
+        out: dict[int, list] = {r["seq"]: [] for r in rows}
+        for r in rows:
+            out[r["seq"]] = [(s["subject"], s["object"]) for s in self.conn.execute(
+                "SELECT subject, object FROM use_subjects WHERE use_seq = ? ORDER BY rowid", (r["seq"],))]
+        return out
+
+    def owner_list(self, state: State, *, since=None, until=None, place=None, action=None, purpose=None,
+                   collection=None, obj=None, refused=False) -> UseList:
+        """P 9.3: the ledger owner's uses, counts first, then at most USE_LIST_ROWS rows, newest first. A recall that
+        returned nothing is no use of any memory (9.1), so it is not listed. Rows from another ledger are imported
+        station receipts (R14): marked with their station and counted apart."""
+        ledger_id = state.meta.get("ledger_id", "")
+        terms, params = self._filters(state, scope=_scope(self, state, place) if place else None, since=since,
+                                      until=until, action=action, purpose=purpose, collection=collection, obj=obj,
+                                      refused=refused)
+        terms.append("NOT (object IS NULL AND COALESCE(returned, '') = '[]')")
+        where = " AND ".join(terms)
+        counts = self._count(where, params, ledger_id)
+        del counts["filtered"]
+        rows = self._query(where, params)
+        subjects = self._subjects_of_rows(rows)
+        claims = _self_claims(state)
+        return UseList(counts, [_owner_row(state, r, subjects[r["seq"]], claims, ledger_id) for r in rows])
+
+    def place_view(self, state: State, place: str, *, since=None, until=None, action=None, purpose=None,
+                   collection=None, obj=None, refused=False) -> UseList:
+        """P 9.2's stewards row: uses at the place and at every place it dominates, and uses of copies they hold.
+        Every pseudonym is this place's (R33)."""
+        row = state.places.get(place)
+        if row is None:
+            raise ValueError(f"{place} is not a registered place")
+        ledger_id = state.meta.get("ledger_id", "")
+        terms, params = self._filters(state, scope=_scope(self, state, place), since=since, until=until,
+                                      action=action, purpose=purpose, collection=collection, obj=obj,
+                                      refused=refused)
+        terms.append("shadow = 0")
+        where = " AND ".join(terms)
+        counts = self._count(where, params, ledger_id)
+        rows = self._query(where, params)
+        subjects = self._subjects_of_rows(rows)
+        return UseList(counts, [_steward_row(r, subjects[r["seq"]], row.pseudonym_salt, ledger_id) for r in rows])
+
+    def agent_view(self, agent: str) -> list[dict]:
+        """P 9.2's agents row: the agent's own receipts. A refusal is only the id (or the count of a bulk one) and
+        "not allowed". No filtered counts, which would tell it that refused memories exist (P23)."""
+        out: list[dict] = []
+        for r in self._query("agent = ? AND shadow = 0", (agent,)):
+            returned = _json(r["returned"])
+            outcome = "allowed" if r["allowed"] else "not allowed"
+            if r["object"] is not None:
+                out.append({"object": r["object"], "at": r["at"], "outcome": outcome})
+                continue
+            if isinstance(returned, list):          # a recall: one allowed item per memory it returned
+                out += [{"object": m, "at": r["at"], "outcome": outcome} for m in returned]
+                continue
+            row = {"at": r["at"], "outcome": outcome}
+            if isinstance(returned, dict):
+                row["count"] = returned["count"]
+                if "sha256" in returned:
+                    row["sha256"] = returned["sha256"]
+            out.append(row)
+        return out[:USE_LIST_ROWS]
+
+    def subject_view(self, subject: str) -> list[dict]:
+        """P 9.2's subject row: every receipt whose `use_subjects` named the subject when it was written."""
+        out = []
+        for r in self.conn.execute(
+                "SELECT * FROM uses WHERE shadow = 0 AND EXISTS(SELECT 1 FROM use_subjects s WHERE s.use_seq = "
+                "uses.seq AND s.subject = ?) ORDER BY at DESC, seq DESC LIMIT ?", (subject, USE_LIST_ROWS)):
+            row = {"id": r["id"], "requester": r["agent"], "place": r["place"], "action": r["action"],
+                   "purpose": r["purpose"], "records": sorted({rec for c in _cited(r) for rec in c["records"]}),
+                   "at": r["at"], "outcome": "allowed" if r["allowed"] else "refused"}
+            if r["object"] is not None:
+                row["object"] = r["object"]
+            else:
+                row["objects"] = sorted({o for (o,) in self.conn.execute(
+                    "SELECT object FROM use_subjects WHERE use_seq = ? AND subject = ?", (r["seq"], subject))})[:32]
+            out.append(row)
+        return out
+
+    def deliveries(self, agent: str, *, now: int) -> list[UseRow]:
+        """The agent's allowed `inject_context` receipts with now - GUARD_SECONDS < at <= now, at most
+        GUARD_RECEIPTS, newest first (the `remember` guard, section 10)."""
+        rows = self._query("agent = ? AND action = 'inject_context' AND allowed = 1 AND at > ? AND at <= ?",
+                           (agent, now - GUARD_SECONDS, now), limit=GUARD_RECEIPTS)
+        return [UseRow(**{c: r[c] for c in _COLUMNS}) for r in rows]
+
+
+# ---------------------------------------------------------------- view helpers
+
+def _json(text):
+    return None if text is None else json.loads(text)
+
+
+def _cited(r) -> list[dict]:
+    """A receipt's `cited` as layer dicts with a `records` list (the imported form holds record ids alone)."""
+    cited = _json(r["cited"]) or []
+    out = []
+    for c in cited:
+        if isinstance(c, str):
+            out.append({"layer": None, "kind": None, "action": r["action"], "verdict": None, "records": [c]})
+        else:
+            records = list(c["records"]) if "records" in c else ([c["record"]] if c.get("record") else [])
+            out.append({"layer": c["layer"], "kind": c["kind"], "action": c["action"], "verdict": c["verdict"],
+                        "records": records})
+    return out
+
+
+def _scope(uses: Uses, state: State, place: str) -> tuple[frozenset, frozenset]:
+    """The places P dominates (P itself always), and the copies those places hold."""
+    places = frozenset({place} | {q for q in state.places if place in dominators(state, q)})
+    copies = frozenset(c for (c,) in uses.conn.execute("SELECT DISTINCT copy FROM uses WHERE copy IS NOT NULL")
+                       if holding_place(state, c) in places)
+    return places, copies
+
+
+def _name(person: str) -> str:
+    handle = person.split(":", 1)[-1]
+    return handle[:1].upper() + handle[1:]
+
+
+def _short(obj: str | None) -> str:
+    return obj.rsplit("/", 1)[-1] if obj else ""
+
+
+def _kind(r, returned) -> str:
+    if r["ledger_id"] and r["copy"] and r["copy"].startswith("imprint:") and r["object"] is None:
+        return "memories" if isinstance(returned, dict) and "sha256" in returned else "roads-and-trails"
+    obj = r["object"]
+    if obj is None:
+        return "recall" if isinstance(returned, list) else "bulk"
+    return obj.split(":", 1)[0]
+
+
+def _count_of(r, returned):
+    if returned is None:
+        return "not counted" if r["object"] is None and r["copy"] and r["copy"].startswith("imprint:") else None
+    return len(returned) if isinstance(returned, list) else returned["count"]
+
+
+def _label(state: State, layer: str) -> str:
+    person = person_of_home(layer)
+    if person is not None:
+        return _name(person)
+    return state.names.get(layer, layer)
+
+
+def _refusal_note(state: State, r, refusal) -> str | None:
+    layer, action = refusal.get("layer"), r["action"]
+    if layer is None:
+        return None
+    head = f"{_short(r['object'])}: " if r["object"] else ""
+    person = person_of_home(layer)
+    if person is not None and person != state.meta.get("owner") and refusal.get("code") == "NO_ALLOW":
+        return f"{head}needs {_name(person)}'s yes"
+    return f"{head}{_label(state, layer)} does not allow {action}"
+
+
+def _self_claims(state: State) -> list:
+    """(object, "Jenn claimed m3 on 2026-11-03", the time of the claim) for each live self-claimed co-subject."""
+    out = []
+    for obj, rows in state.subjects.items():
+        for s in rows:
+            if s.self_claimed and s.removed_seq is None and s.added_seq in state.seq_at:
+                at = state.seq_at[s.added_seq]
+                day = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%d")
+                out.append((obj, f"{_name(s.subject)} claimed {_short(obj)} on {day}", at))
+    return out
+
+
+def _owner_row(state: State, r, subjects, claims, ledger_id: str) -> dict:
+    returned = _json(r["returned"])
+    refusal = _json(r["refusal"])
+    imported = r["ledger_id"] != ledger_id
+    notes = []
+    if not r["allowed"] and refusal:
+        note = _refusal_note(state, r, refusal)
+        if note:
+            notes.append(note)
+    named = {r["object"], *(o for _, o in subjects)} | (set(returned) if isinstance(returned, list) else set())
+    notes += [text for obj, text, at in claims if obj in named and r["at"] >= at]
+    row = {"id": r["id"], "at": r["at"], "agent": r["agent"], "place": r["place"], "acting_for": r["acting_for"],
+           "action": r["action"], "purpose": r["purpose"], "object": r["object"], "copy": r["copy"],
+           "allowed": bool(r["allowed"]), "outcome": "allowed" if r["allowed"] else "refused",
+           "cited": _cited(r), "refusal": refusal, "until": r["until"], "horizon": r["horizon"],
+           "kind": _kind(r, returned), "count": _count_of(r, returned), "imported": imported,
+           "shadow": bool(r["shadow"]), "notes": notes}
+    if imported:
+        row["station"] = r["ledger_id"]
+    return row
+
+
+def _steward_row(r, subjects, salt: bytes, ledger_id: str) -> dict:
+    def shield(layer, kind=None):
+        if layer is None:
+            return None
+        if kind in ("legacy", "restriction"):
+            return kind
+        person = person_of_home(layer)
+        return pseudonym(salt, person) if person is not None else layer
+
+    cited = _cited(r)
+    kinds = {c["layer"]: c["kind"] for c in cited}
+    refusal = _json(r["refusal"])
+    if refusal:
+        layer = refusal.get("layer")
+        kind = kinds.get(layer) or ("restriction" if layer and layer.startswith("agent:")
+                                    else "legacy" if layer and ":" not in layer else None)
+        refusal = {"code": refusal["code"], "layer": shield(layer, kind), "action": refusal["action"]}
+    returned = _json(r["returned"])
+    row = {"id": r["id"], "at": r["at"], "requester": r["agent"], "place": shield(r["place"]),
+           "action": r["action"], "purpose": r["purpose"], "allowed": bool(r["allowed"]),
+           "outcome": "allowed" if r["allowed"] else "refused",
+           "cited": [{"layer": shield(c["layer"], c["kind"]), "action": c["action"], "verdict": c["verdict"],
+                      "records": c["records"] if (c["layer"] or "").startswith("place:")
+                      and person_of_home(c["layer"]) is None else []} for c in cited],
+           "refusal": refusal, "subjects": sorted({pseudonym(salt, s) for s, _ in subjects if s.startswith("person:")}),
+           "count": _count_of(r, returned), "imported": r["ledger_id"] != ledger_id}
+    if row["imported"]:
+        row["station"] = r["ledger_id"]
+    if r["filtered"] is not None:
+        row["filtered"] = r["filtered"]
+    return row
