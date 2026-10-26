@@ -355,3 +355,281 @@ Every must-fix is applied. Every should-fix and nit is applied. Three are applie
 ### Counts that changed
 
 Task 6: 8 passed. Task 7: 14. Task 8: 18. Task 26: 7. Task 2's count is unchanged, since the rf1 test only changed.
+
+## Re-check
+
+Date: 2026-10-26. Reviewer: a fresh agent on the Pi (`smart`), re-checking in Andy's place. I took no part in
+writing, reviewing or revising the plan or its spec.
+
+- Plan: `engram/docs/superpowers/plans/2026-10-25-trail-arrows.md` as committed at `85595ed` (3,075 lines, read
+  whole).
+- Spec: revision 8 at `e737e02`. I read sections 4, 5, 6.4 to 6.6, 7 steps 7 and 8, 11, 12 and 13 closely, and the
+  rest for context.
+- Also read: this review and its response, the interface table, and the vision. From the imprints plan: Tasks 15,
+  19, 30 to 32, 35, 37 to 40 and 49, and its R10, R15 and R20. From the permissions plan: Tasks 9 to 11 and its
+  "Kept stable" list.
+
+I edited no file but this one. I changed no code and ran no engram test. I committed, pushed, merged, deployed and
+posted nothing. I ran one SQLite check in memory (N22).
+
+### Verdict
+
+**Approve.** No must-fix remains.
+
+- MF1 to MF4 are resolved, and on both sides of each seam.
+- I found three new should-fix items (RS1 to RS3), all in Tasks 26 and 27. Each makes a test fail loudly against a
+  correct implementation, or makes a task wait on another plan. None can let a wrong number pass a test.
+- Apply them before Task 26 starts. Nothing before Task 26 depends on them.
+
+### The four must-fix items
+
+**MF1, resolved.**
+
+- **The order.** TR9 and Task 6 step 3 now enter `batch_scope()` first and `self._lock` inside it, per batch. They
+  read `graph.db` outside both. Tool calls take the locks in the same order: `_server_operation` holds
+  `_server_lifecycle_lock` for the whole call (`engram/server.py:653-683`). Then `observe_recall` takes the
+  observer's `RLock` (`engram/category_evolution.py:909`, `:1052-1053`). `_current_trail_events()` is read only
+  inside a batch. Tasks 7 and 8 keep the same order.
+- **The new test.** I traced `test_lock_order_a_recall_between_batches_never_deadlocks` both ways.
+  - With the old order, the observer lock is held for the whole pass. The pass waits on the barrier for batch 2, and
+    the recall thread holds the barrier while it waits on the observer lock. Both threads are still alive after the
+    30 s joins, so the assertion fails. The test doesn't hang.
+  - With the new order, the recall runs between batches and both threads finish.
+- **Threads.** The observer's connection has `check_same_thread=False` (`:959-961`). The test opens `s.ro()` inside
+  the pass's own thread. So both threads use their connections legally.
+- **The barrier test.** It still sees `[8, 8, 4]`, since the first batch writes 8.
+
+**MF2, resolved.** I judge the five tests left small under "The items applied in part".
+
+- Every test that expects `pass` or `fail`, or compares numbers, now uses 200 sessions, so 40 are scored.
+- The two "fewer than 30" tests use 100, so 20 are scored.
+- The co-retrieval and T − N tests now assert `fail`, so they can't pass because nothing was decided.
+- `on_day` and `END = T(on_day(400))` give the large stores their own clock.
+
+**MF3, resolved.** `detour_store` now passes `create=True` on both walks.
+
+- With `d`, `e` and `t` created, the short trails are `x d e y` and `p t r`. The first saving is exactly 0.25, and the
+  second pair has equal lengths, so nothing is proposed.
+- The MF4 test's short walk creates no new memory.
+
+**MF4, resolved, and both plans agree.**
+
+- TR22's `check_as_of` runs first in `read_sessions`. So every reader refuses a `bool`, a non-`int`, or a value below
+  10¹⁴ µs. The new Task 4 test passes three bad values to four readers.
+- The imprints plan's Task 35 step 3 already says that `_trail_derive` passes `as_of * 10**6`.
+- Task 26's new test calls the real `count_roads_and_trails` at t₁ in seconds. It asserts that the result equals
+  trails' own count in microseconds and is above 0. So 0 = 0 = 0 can no longer pass.
+- Task 16's ledger `now`, Task 22's `now` and Task 27's shortened `valid_until` are all seconds.
+
+### The items applied in part
+
+The response says three items are applied in part, but labels only two, MF2 and SF5. I read the third as MF4. There
+the reviser chose the unit at the seam, which the review had left to Rio Grande.
+
+**MF2's five small tests: enough.** None of them asserts anything that depends on how many sessions qualify.
+
+- The two r19 tests assert "not evaluable: no embedder" and a null `embedder`. Task 24 now decides that before the
+  count. W's order is: no embedder, then mismatch, then fewer than 30.
+- `test_no_training_touch_…` checks the split and T's nodes.
+- `test_steered_…` asserts `steered == 5`, a count over the 16 held-out sessions of 80, and the graphs' flags.
+- The memory-cap test replaces `evaluate`.
+- One thing to know, with nothing to fix: a CLI run takes `as_of` as the newest timestamp, so the last session is
+  still open. That leaves 199 of 200 sessions closed, which still scores 40.
+
+**SF5's `during` mechanism: enough, and better than the review's example.**
+
+- Mutating and then exec'ing `trails.py` would let the start check read the changed allow file. A shortening still
+  ahead would then end 0.
+- Wrapping `trails.evaluate` puts the change between the start check and the end check, as Task 22's
+  `mutate_then_report` does.
+- The calls match the imprints plan: `imprint.use(..., now: Callable)` (its Task 38),
+  `shorten_imprint(principal, request_id, valid_until, *, root)` (Task 31),
+  `withdraw_imprint(principal, request_id, *, root)` (Task 30), and
+  `station-imprint-use-begin --id --use --as --imprints-dir` (Task 37).
+
+**SF5's D-I6 gap: not enough as written.** See RS2.
+
+**MF4's choice of unit: enough.**
+
+- Trails keeps microseconds inside, and every seam uses seconds. That is one rule, and the imprints plan already
+  holds its side.
+- A wrong bind fails loudly in two places: at admission, and in Task 26.
+- Rio Grande can still choose the other option. As the response says, that changes only TR22 and Task 4.
+
+### Should-fix (new)
+
+**RS1. Task 27's socket test can't pass against a correct implementation**
+(`test_unit_the_use_carries_the_socket_exactly_when_runtime_json_names_one`).
+
+- `unit_command` "splits it as the shell would", so it returns a list.
+- `superyak-peer station-imprint-unit-env` prints `-p UnsetEnvironment=ENGRAM_EMBEDDER_SOCKET`. The imprints plan's
+  own Task 40 test expects the split form, `["-p", "UnsetEnvironment=ENGRAM_EMBEDDER_SOCKET"]`.
+- `"-p UnsetEnvironment=ENGRAM_EMBEDDER_SOCKET" in cmd` asks whether one list item equals a string with a space in it.
+  The answer is always False, so the three cases without a socket fail.
+- **Fix.** Assert the pair, for example
+  `any(cmd[i:i + 2] == ["-p", "UnsetEnvironment=ENGRAM_EMBEDDER_SOCKET"] for i in range(len(cmd)))`. Keep the
+  `--setenv=…` check, which is one token.
+
+**RS2. Task 27 can stall on D-I6, and this plan's own rules keep its builder from unblocking it.**
+
+- Task 27 needs the imprints plan's peer builder `admitted(...)` to take an engram-built directory. If it can't, the
+  plan says Task 27 "asks that plan's owner".
+- But Part B may change only the files in "File Structure", and verification step 2 checks that. So the trails
+  builder can't add the keyword to `peer/tests/imprint_support.py`, and Task 27 waits on another branch.
+- One path needs no new keyword. The imprints plan's Task 49 admits a real engram-built imprint from start to end:
+  `station_decide`, `station_imprint_admit_begin`, `imprint.py admit` with its `PEER_VERIFY`, then
+  `station_imprint_sync`. Its one browser step is a test helper.
+- **Fix.** Name that path as Task 27's fallback. Or have Rio Grande add the keyword to the imprints plan's Task 37
+  tests before Part B starts.
+- **Also.** Give `build_imprint` its own `dest`, such as `tmp_path / "built"`, not the station root `R`. As written,
+  `HOME(R)` puts the owner's side, `home/imprints/<id>/`, inside the station's imprints directory.
+
+**RS3. Task 26's fixture must keep every source row more than an hour before t₁.**
+
+- The imprints spec decides "closed at t₁" from rows before t₁. It reads more row kinds than T does: every
+  `memory_log` event type, and `operation_log` (interface row 16).
+- Even with `route`, a session still open at t₁ ships with no session id and no log rows.
+- The fixture's note says only "no source row at or after t₁" (XS1). Take a session whose newest row, of any kind,
+  falls in [t₁ − 1 h, t₁). It is open at t₁ for the imprint, but closed at `T1 + 2 * HOUR` for the source.
+- Two tests would then fail against a correct implementation: `test_closed_sessions_keep_session_ids_and_wrote_touches`
+  and `test_lane_filtered_recalls_keep_their_touches_…`. The subset test still passes.
+- **Fix.** Say that `synthetic_source` writes every row, of every kind, before t₁ − 1 h, and assert it in the fixture.
+  Or compare only the sessions that are closed at t₁ by the imprints spec's rule.
+
+### Rulings
+
+I confirm all 23 rulings and four additions the plan makes without a number. I veto none. Reasons are given only where
+a ruling changed, is new, or needs a word.
+
+**Confirmed as the first review found:** TR1 to TR8, TR10 to TR14, TR16 to TR19 and TR21. TR1's parse holds:
+engram writes `datetime.now(timezone.utc).isoformat()` (`engram/storage.py:55-56`), so every stored time carries
+its offset.
+
+**Changed or new:**
+
+- **TR9 (changed): confirmed.** It matches the code's lock order (MF1 above).
+- **TR15 (extended by N4): confirmed.** Ignoring a repeat is what lets a repeated real id give one station, and it
+  only narrows.
+- **TR20: confirmed.** It counts full trails once per session and roads by T 5's eligibility, and counts no detours.
+  That matches the permissions spec's kinds and the imprints plan's `derive` seam.
+- **TR22 (new): confirmed.** T fixes no unit. Refusing a seconds value turns MF4's silent zero into a `ValueError` at
+  admission. Two edges are nits (N18).
+- **TR23 (new): confirmed.** It counts what the filter changed, and it pins MF8's test at 1. No touch is counted
+  twice: `revisit_trail` is built from the filtered full trail and takes no `counts`.
+
+**Unnumbered additions, confirmed:**
+
+- **W's verdict order (Task 24):** no embedder, then mismatch, then fewer than 30. T 7 step 8.2 settles the embedder
+  before any scoring, and the r19 tests need this order. Give it a number (N19).
+- **The imprint connection loads sqlite-vec:** `store_reader.connect(path, immutable=True, vec=True)` (Global
+  Constraints, Task 22). T 11 says "as `store_reader.connect(path, immutable=True)` does", but that call loads no
+  extension (`engram/store_reader.py:44-55`), and `--evaluate` reads `vec0` tables. The plan keeps the spec's intent.
+  Carry the words to T's next revision (N27).
+- **Which answers carry `cut` (Task 18):** every answer except errors, the not-ready note and `stale`. T 6.6: "the
+  answer says so when it cuts".
+- **The receipt's row id is the receipt id:** it is passed as `add_log_entry`'s `id`, the method's first parameter
+  (`engram/storage.py:1656-1680`). T 6.6: "`receipt_id` is the row's id".
+
+### Names and task numbers across the plans
+
+I checked them against both other plans as they stand today.
+
+- **Imprints plan.** These match:
+  - `make_plan` (Task 15) and `build(plan_id, *, home, now) -> Built` (Task 19);
+  - `withdraw_imprint` (Task 30), `shorten_imprint` (Task 31) and `store_reader.connect(..., vec=True)` (Task 32);
+  - `count_roads_and_trails(conn, *, lanes, as_of, derive=None)` and `_trail_derive` (Task 35);
+  - `station-imprint-use-begin` (Task 37), `imprint.use` (Task 38) and the sync (Task 39);
+  - `station-imprint-use-run` and `station-imprint-unit-env` (Task 40, R20), and XN2 (R15).
+
+  One thing does not match: the unit-env output form against Task 27's assertion (RS1).
+- **Permissions plan.** These match, and that plan's "Kept stable" list names each one for this plan:
+  - `ledger_path`, `Ledger.create(engram_home, owner_handle, *, now)`, `open_read_only` (raising
+    `FileNotFoundError` or `LedgerUnreadable`) and `close` (Task 10);
+  - `perform(act, *, actor, channel, now)`, `register-store` with `instance_id`, `name`, `owner`, `place` and
+    `imprint_of`, and `store_row` (Task 11);
+  - `Act(kind, args)` (Task 9), and the `permit` and `permissions` tools (Task 23).
+- **Test counts.** Every stated count agrees with the tests written: 6, 7 and 5 for Tasks 1 to 3; 8, 14 and 18 for
+  Tasks 6 to 8; 5, 6 and 3 for Tasks 10 to 12; 6, 6 and 5 for Tasks 14 to 16; 5 for Task 21; 8 for Task 23; and 7 for
+  Task 26.
+- **`-k` filters.** Each selects its task's tests. Task 7 step 2's `mf1` also selects Task 6's `test_rmf1_…`, which
+  does no harm.
+
+### Tests: real assertions
+
+Every new or changed test asserts a value that a wrong implementation would miss:
+
+- the lock-order test: no deadlock, and 20 events;
+- the hour-apart test: 2 events, no rewrite, no proxy, and 1 step not eligible;
+- the SF3 test: after one pass, no detour and no error; after four passes, four roads and one detour;
+- the seconds test: three bad values for each of four readers, then the right value gives 4;
+- the admission-count test: the two counts are equal and above 0;
+- the receipt-id test;
+- the N16 test: 3 stations, and `cut` names what was cut;
+- the rf4 test: 5 ignored, and a repeat counts once.
+
+No assertion is a placeholder. The one that can't pass at all is RS1's.
+
+### Nits
+
+- **N17.** The response says three items are applied in part, but labels only two.
+- **N18.** `count_roads_and_trails(conn, as_of, lanes=())` sums nothing and never reaches `read_sessions`, so it
+  takes a seconds value without complaint. Call `check_as_of` at the top of each public reader. Optionally, an upper
+  bound such as 10¹⁷ µs would also catch nanoseconds.
+- **N19.** W's verdict order is a choice T leaves open. Give it a ruling number (TR24).
+- **N20.** TR1's `rows_unparsed` is counted, but it isn't in Task 7's report block, so it never reaches `reflect`.
+  Review Focus 1 calls it counted. Add it to the block, or say where it shows.
+- **N21.** `test_sf3_…` patches `MAX_ROADS_PER_PASS` under a "TR13" comment, but doesn't first assert the constant's
+  value, as TR13 asks.
+- **N22.** On this Pi's SQLite 3.40.1, `json_valid(NULL)` returns 0, not NULL (checked today in memory). Task 1 step
+  3 already counts only "a context that is not NULL and not valid JSON". Say in the step that the code must test
+  `context IS NOT NULL` explicitly.
+- **N23.** In Task 27, a withdrawal removes the state directory, so the write of `result.json` in `imprint.use`'s
+  `finally` raises. `run_use` must catch that to report `trails_exit = None`.
+- **N24.** `build_imprint` passes `until=t1_s` but not the plan's `now`.
+  - Say that the plan's `now` is also t₁ in seconds, so `until` is never after `now`.
+  - The imprints plan's `make_plan` takes `home` and `now` as keyword-only arguments, so that plan's own
+    `make_plan(*plan_args(…))` can't pass them either. That is the imprints plan's to fix.
+  - The imprints plan never defines `roads_and_trails_by_hand`, which "Notes for the other plans" asks to convert.
+    A helper that doesn't convert fails loudly, so this is only a note for that plan.
+- **N25.** Task 28 commits this plan's own file, which "File Structure" doesn't list, so verification step 2 would
+  flag it. List it there.
+- **N26.** The pass's read-only connection isn't registered with `_register_server_cleanup`, while the build's is
+  (Task 17). T 5 doesn't require it, but the risk is now plainer:
+  - The derivation runs outside the barrier, and `_before_server_fork` takes only the barrier
+    (`engram/server.py:250-254`).
+  - So a fork can come in the middle of a derivation, and the child won't quarantine that connection.
+  - Registering it as Task 17 does costs one line.
+- **N27.** Add to G9 for T's next revision: T 11's "as `store_reader.connect(path, immutable=True)` does" needs
+  `vec=True`.
+
+### Code and system claims checked today
+
+True as the revised plan uses them:
+
+- **`engram/server.py`:**
+  - `:250-254` (`_before_server_fork` takes the lifecycle lock), `:653-683`, `:1097-1112`;
+  - `:1175-1185` (with persistence off, prune calls `_storage.prune_decayed`);
+  - `:1299` (`from storage import Storage`, so patching the class reaches `server._storage`);
+  - `:2089-2090`, `:4023-4033`.
+- **`engram/category_evolution.py`:**
+  - `:905` (`auto_commit is True`), `:909` (the observer's lock is an `RLock`), `:959-961`;
+  - `:1010-1020`, `:1043-1065`, `:369-371`;
+  - `:1145-1157` (proxy cells hold `external_id`, so `road_set(obs)` can map cells back to memory ids);
+  - `:1338-1408` (`report()` has `last_error`).
+- **`engram/categories.py:1724-1745`** (`validate_path` needs dimension-1 cells).
+- **`engram/embeddings.py`:**
+  - `:12`;
+  - `:73-84` (the in-process model loads in `__init__`);
+  - `:151-153` (the remote client stores only the path);
+  - `:179-196` (`_call` turns `OSError` into `EmbedderUnavailableError`);
+  - `:200-207`.
+- **fastembed 0.7.4.** With `local_files_only` and an empty cache it raises `ValueError` ("Could not load model … from
+  any source", `common/model_management.py:473`). So `open_embedder`'s `ValueError` catch is the offline path.
+- **`engram/store_reader.py:44-55`**, and **`engram/storage.py`** `:55-56`, `:127-128` and `:1656-1680`.
+- **`engram/config.py:301-358`.** The loader doesn't coerce types, so `auto_commit = 1` and `"false"` reach the server
+  as written, and the observer reads both as false.
+- **SQLite 3.40.1.** `CASE WHEN json_valid(x) THEN json_extract(x, …) END` on malformed text returns NULL and doesn't
+  abort the query.
+
+Not as the plan uses them: nothing in engram's code. The two mismatches are with the imprints plan: the unit-env
+output form (RS1) and `make_plan`'s keyword-only arguments (N24).

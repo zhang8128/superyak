@@ -332,3 +332,245 @@ which is not this plan's.
 
 - Task 35 now says `_trail_derive` passes `as_of * 10**6`, since the trails plan's TR22 has the trail functions take
   microseconds and names this adapter as the converter. It changes no seconds value this plan holds.
+
+## Re-check
+
+Date: 2026-10-26. Reviewer: a fresh agent on the Pi (`smart`), re-checking in Andy's place. I took no part in
+writing, reviewing or revising the plan or its spec. I read the plan as committed at `85595ed` (4,304 lines), the
+spec (revision 6), the review and response above, the interface table, the other two plans where they connect, and
+the code the revision cites. I edited no plan or spec, changed no code, ran no suite, and committed, deployed and
+posted nothing.
+
+### Verdict: APPROVE
+
+No must-fix remains. M1 is resolved. Each should-fix and nit the response claims is in the plan text, and the ones
+that cite code agree with the code. I found no new privacy defect: nothing more leaves a machine, and every new rule
+fails closed. Five should-fix items remain. Two are tests that can't pass as written (RS1 came in with the S1 fix;
+RS2 was there before). The other three are edges of R24 and of the import. Each is local to the tasks named.
+
+### M1, and RF1 as revised
+
+- **Resolved.** The admission unit gets `-p TimeoutStopSec=60` (Task 40, with a test). `ADMISSION_BOUND = 1860` is
+  in Global Constraints and Task 36. Rule 5 fails a begun row with no result once the bound has passed, and
+  `test_a_begun_admission_with_no_result_fails_once_its_bound_passes` checks both sides of it: still `approved` at
+  the bound, `failed` then `deleted` one second later. `--awaiting-admission` lists only never-begun rows. Begin
+  refuses a begun row and writes nothing (`test_only_an_admission_never_begun_awaits_and_a_begun_one_never_begins_again`).
+  The Makefile runs `imprint.py admit` only when begin exits 0 (`test_admit_runs_only_when_begin_allows`).
+- **The bound is sound.** `RuntimeMaxSec` counts from the unit's start. Begin writes `decided_at` inside the unit,
+  after that start. So at `decided_at` + 1,860 s the unit has used its 1,800 s and its 60 s stop timeout, and is
+  gone. A shortening keeps `decided_at` (Task 31's test checks it), so no shortening stretches the bound.
+- **The rule order holds.** Results come first, then a begin's refusal, then the end, then the bound. A begin refused
+  on the end writes one `failed` receipt, since rule 3 comes before rule 4. A run killed after its end gets term
+  `end` and reason `ended`. The sweep's end step skips `approved` rows, so every admission's end leaves the same two
+  receipts.
+- **Does "a begun admission is never resumed" meet the spec?** It meets I 10's failure rule ("exception, memory
+  limit, timeout, source changed ... fails admission"), D16 ("Any failure deletes the package") and D39 (every run
+  is decided at its start and checks the end and withdrawal before each write). A begun admission is decided once,
+  for its one run. I 16's "Admission after the end" test still holds, since it stops the unit before begin runs.
+  The rule departs from four sentences of the spec, each in the narrowing direction (it fails closed, and the owner
+  sends again):
+  1. I 10, hand-off step 4: "`make station-imprint-admit` with no ID starts one unit for each approved imprint
+     without a result, after a crash."
+  2. I 10, "Admission is decided again": "after a crash, `make station-imprint-admit` resumes, maybe days on."
+  3. I 10: "Each step is idempotent."
+  4. I 13: "`make station-imprint-admit  # resume an interrupted admission`".
+
+  Also, I 10's unit command has no `-p TimeoutStopSec=60`, I 14 has no bound, and I 12's `failed` row says "check
+  number".
+- **I confirm R24.** The reviser's reason is right. A resume inside the bound would need a second unit, which could
+  outlive the bound and be deleted while it runs. It would give the owner nothing they don't get by sending again.
+  The cost is a resend, and a new yes, after the Pi restarts during an admission. That is rare, and the owner sees
+  it as `failed` with `ADMISSION_STOPPED`.
+- **What the spec must say instead.** G15 names R24 but not the words. I propose:
+  - I 10, step 4: the unit also gets `-p TimeoutStopSec=60`. "`make station-imprint-admit` with no ID starts one
+    unit for each approved imprint whose admission never began (no `admission.json`): the unit did not start, or
+    stopped before its first step."
+  - I 10, "Admission is decided again": "A run may start much later, if the first never began. A begun admission
+    runs once. `station-imprint-admit-begin` refuses a row whose `admission.json` exists and writes nothing, and
+    nothing runs `imprint.py admit` for it again. If a begun admission leaves no `result.json`, the first sync more
+    than 1,860 s after `admission.json`'s `decided_at` fails it. That is `RuntimeMaxSec=1800` plus
+    `TimeoutStopSec=60`, so the unit has stopped: its memory cap or its time limit was reached, or the station
+    stopped. The sync writes a `failed` receipt with step `calibration` and a fixed message, then deletes the
+    imprint with reason `failed`. A shortening's rewrite of `admission.json` keeps `decided_at`."
+  - I 10: "Each step is idempotent" becomes "Each step can be rerun: begin refuses a begun admission without
+    writing, and the sync records each result once."
+  - I 13: `make station-imprint-admit  # start an admission that never began; decided again first (D39)`.
+  - I 14: a row "A begun admission with no result | failed 1,860 s after `decided_at`".
+  - I 16, "Calibration": "A begun admission with no `result.json` is still `approved` at `decided_at` + 1,860 s, and
+    is `failed`, then `deleted` (reason `failed`), one second later. A second begin of a begun admission writes
+    nothing."
+  - I 12, the `failed` row: R25's keys.
+
+### Should-fix
+
+**RS1. Task 29's new test calls `describe_decision` with two arguments.** It was added by the S1 fix.
+
+- `peer/superyak_peer/__main__.py:67` is `describe_decision(item, result, person, approve)`, and `:325-327` calls it
+  with four. Task 29 does not say it changes the signature. So
+  `test_an_approval_names_the_full_imprint_id_for_the_makefile` raises `TypeError` as written.
+- **Fix.** Pass `"andy", True`, or give the two parameters defaults and say so in Task 29's Interfaces. Also assert
+  that an approval the decision refuses (`test_a_refusal_at_approval_is_a_denial_naming_the_term`) prints no
+  `ADMIT:` line. Otherwise the Makefile would start a unit for a deleted imprint, and its begin would append a
+  receipt after `deleted` (RN3).
+
+**RS2. `make_plan` can't be called the way the tests and the trails plan call it.** This was there before the
+revision. The first review missed it.
+
+- Task 15's interface is `make_plan(store, sel, terms, ctx, context, *, home, now)`. Tasks 15, 16 and 18 to 21 call
+  `make_plan(*plan_args(...))`. The trails plan's Task 26 (`build_imprint`, its D-I1) does the same. Unpacking a
+  tuple can't fill the keyword-only `home` and `now`, so every such call raises `TypeError`.
+- **Fix.** Drop the `*`, so `home` and `now` are positional-or-keyword, in that order. List `plan_args`, `HOME` and
+  `CONTEXT` in Task 15's Produces, since the trails plan names them as this plan's builders.
+
+**RS3. "A begun admission runs once" holds only for runs that units start** (R24; Tasks 34, 36, 40, 48).
+
+- `make station-imprint-admit ID=<id>` is the unit's command, but anyone can also run it in a shell (I 10 names
+  it). Run by hand, it runs begin and then calibration outside the unit's `MemoryMax`, `MemorySwapMax` and
+  `RuntimeMaxSec`. Under R24 that is the admission's only run.
+  - Claude's Bash tool stops at 10 minutes, as I 10 notes. If Claude runs it on the Pi, it is killed during
+    calibration, and the sync fails the imprint at the bound. The owner must send again and give a new yes.
+  - A hand run longer than 1,860 s is deleted while it runs.
+- Begin's "only when none exists" is not stated as an exclusive create. A hand run and a unit can both pass the check,
+  and both run `imprint.py admit`.
+- `imprint.py admit` detects a second run only by `<id>.state/calibration/`. A run that died during verification
+  leaves nothing to detect.
+- **Fix.**
+  - Give the unit its own target, `station-imprint-admit-run ID=…`, as uses have `station-imprint-use-run`. Make
+    `station-imprint-admit ID=…` start the unit, as the no-ID form does.
+  - Begin creates `admission.json` with `O_CREAT | O_EXCL`.
+  - `imprint.py admit` claims its run with an exclusive marker in the state directory (say `admit.started`) before
+    verification, and refuses with `RERUN_REFUSED` when it exists.
+  - Task 48's CLAUDE.md lines say agents never run `imprint.py admit` by hand.
+  - The unit's command is named in I 10, so G15 notes the new target name.
+
+**RS4. An admission that never began waits silently until its end** (Tasks 36, 40).
+
+- M1 bounded a begun admission. A unit can also fail before begin runs, for example when the `uv` environment won't
+  sync after a pull. Then the row has no `admission.json`. Rules 4 and 5 don't apply until the effective end, up to
+  365 days away, and nothing tells Andy. `station-approve` has already printed "Admitting in the background".
+- This stays within the owner's yes, since the record allows keeping the copy until its end, so it is not a
+  must-fix. But the owner sees `approved` with no progress.
+- **Fix.** Once an `approved` row has had no `admission.json` for more than 10 minutes after its approval,
+  `station-imprints` marks it "admission has not started; run make station-imprint-admit", and Odo's notice says the
+  same, naming no one. Or give the unit an `OnFailure=` to the alert unit. Test whichever is chosen.
+
+**RS5. A failed admission never reaches the owner's use list** (Task 45; I 12).
+
+- Task 45 imports `admitted`, and imports `failed` or `denied` only when they name a term, as I 12 says.
+- A `failed` with a `step` (rule 2, or R24's rule 5) records an admission that the decision allowed. That admission
+  read the memories, for verification and for up to 30 minutes of calibration. `engram-permissions uses --object`
+  then finds no use of those memories, though P 9.1 records allowed uses. R24 adds one more such case.
+- **Fix.** Import a `failed` with `step` as an allowed admission use: the memory rows as for `admitted`, and, with
+  `route`, the null rows on roads and trails (there is no N). Add it to Task 45's test and to G15 (I 12's list). If
+  Rio Grande prefers the spec's list as it stands, say so in R25 and G15 instead.
+
+### Nits
+
+- **RN1.** The bounds use different comparisons: admission fails at more than 1,860 s, and a use is finished at 1,860
+  s or more (Task 39's test). Both are safe. One rule reads better.
+- **RN2.** Suppose begin refused a row but its sync has not yet deleted it. The row has no `admission.json`, so
+  `--awaiting-admission` lists it. A resume then decides it again and writes a second `failed {term}` receipt. Skip
+  rows that hold a `failed` receipt.
+- **RN3.** Begin on a row that is not `approved`, such as a hand run on a deleted imprint, appends `failed {term:
+  "status"}` after `deleted`, and Task 45 would import it as a refused admission. Refuse such a row and write no
+  receipt.
+- **RN4.** The units run `make` with the Makefile's default `APPROVER=andy`, not the approver's. G7 makes them the
+  same person. Pass `APPROVER=$(APPROVER)` in the unit's command to keep it that way.
+- **RN5.** Task 36 says each station command takes `--as`. The sweep runs the sync with no person, and the trails
+  plan's Task 27 calls `station-imprint-sync --imprints-dir R` with none. Say that the sync takes no `--as`.
+- **RN6.** The trails plan's D-I6 needs `admitted(tmp_path, route=True, ...)` to accept a directory that
+  `imprint.build` made. No task lists that builder. Add it to Task 37's Interfaces with that keyword.
+- **RN7.** `station-approve`'s recipe now captures the peer command's output. Say that it keeps that command's exit
+  status, so a refused approval still fails `make`, since the recipe runs under `/bin/sh` (dash on the Pi).
+- **RN8.** `calibrate._run` records an analysis error as `f"{type(e).__name__}: {e}"` with a traceback
+  (`engram/calibrate.py:236-241`), and `no_content` strips only `content` keys. I 16 asks for no text value from
+  the imprint in `report.json`. With `no_content`, keep the class name alone. This was there before the revision.
+- **RN9.** Task 1's import line omits `genome_with_parent`, `iid_of`, `GENOME_PARENT` and `fork_instance`, which its
+  last test uses. N9 fixed only the Interfaces.
+
+### Rulings
+
+All confirmed. None is vetoed.
+
+- **R1 to R6, R9, R12, R16 to R18, R20, R21, R23** are choices I 19 leaves to the builder, or the spec doesn't fix,
+  and none widens anything.
+- **R7** sends only the ship key, and returns the operator's username, which the ship's owner already meets as the
+  audience. Confirmed with S6's test.
+- **R8, R14, R15, R22** narrow.
+- **R10** fails closed until the trails plan's functions are on the Pi (G13).
+- **R11, R13 and R25** rename or split, and change no verdict. G15 carries them.
+- **R19** reuses the login path's limits.
+- **R24** is confirmed above, with the spec text it needs.
+- **Additions outside the table, also confirmed:**
+  - the sweep's end step skips `approved` rows, following I 10's "On 'ended'";
+  - `limits` in every `deleted` receipt (I 12, "Known limits, stated in every `deleted` receipt");
+  - the `cohesion:` and `event:` skip sets (S2; G15);
+  - step `calibration` for `ADMISSION_STOPPED`, since the station can't tell a cap from a crash;
+  - `RERUN_REFUSED`, with RS3;
+  - `_trail_derive`'s `as_of * 10**6`, which matches the trails plan's TR22.
+
+### Names and task numbers across the plans
+
+- **The trails plan** cites this plan correctly:
+  - Task 15 for `make_plan` and 19 for `build`;
+  - 30 and 31 for `withdraw_imprint` and `shorten_imprint`;
+  - 32 for `store_reader.connect(vec=True)`;
+  - 35 for `count_roads_and_trails`;
+  - 37, 38 and 39 for begin, `use` and the sync;
+  - 40 for the Makefile;
+  - R7, R15 and R20.
+
+  `imprint.use(imprint_id, use_id, *, root, lane, trails_cmd, now)` matches Task 38. Its
+  `roads_and_trails(conn, *, lane, as_of)` matches R10's seam, with seconds times 10⁶ (TR22, Task 35). N16 is
+  settled. The exceptions are RS2, RN5 and RN6.
+- **The permissions plan's** Tasks 1, 2, 7, 10, 11, 14, 15, 16, 17 and 27 and its R2 are named correctly.
+  - `decide_bulk(state, bulk, *, legacy=(), outside=None, group=True)` takes, in `outside`, callables that return
+    `allow`, `deny` or `silent` (its R7 and Task 5). That is the callable `ceiling_world` returns.
+  - `owner_list(state, *, ..., obj=...)` matches Task 45's call.
+
+### Tests
+
+- Every "N passed" matches the tests the task lists, file by file. Tasks 19, 33, 35, 39, 41 and 46 count their
+  file's earlier tests correctly.
+- There is no placeholder. The one `pass` is Task 41's lifespan block, and real assertions follow it.
+- Two tests can't pass as written: RS1 and RS2.
+
+### Code claims checked
+
+All hold, except the one under RS1:
+
+- **`peer/superyak_peer/signatures.py`.** `SIGNED_RECORDS` is at `:16-19`, with its comment from `:14`.
+  `holds_signed_records` and `refuse_a_lost_identity` read it, and `LOST_IDENTITY` names `identity.json` and
+  `station-new-identity`, so Task 23's regex matches.
+- **`engram/sheaf.py` and `engram/persistence.py`.**
+  - `sheaf.measure_all` (`:266-282`) calls `build_local_sheaf` by its module name.
+  - `persistence.build_filtration`, `split_band` and `classify_hubs` call `distance_matrix` by its module name.
+    So Task 5's spies see every dense matrix.
+  - `evaluate_prune` and `generativity_scores` build none.
+- **`engram/calibrate.py`.** `:251` creates its directory with `exist_ok=False`. `persistence_scores` is at
+  `:146-162`, `cohesion_report` at `:165-180` and `persistence_preview` at `:183-212`.
+- **`engram/store_identity.py`.** `KEYS` and `stamp_fork` (`:143-160`) are as Tasks 1 and 13 read them.
+- **`peer/superyak_peer/ships.py`.**
+  - `station_pending` is at `:191-199`.
+  - `station_decide` is at `:279-302`. It checks only that the name is a person (`_operator`), so Task 29's case
+    with `jenn` reaches the audience check.
+  - Notices are `{id, text}` (`:380-393`).
+- **`peer/superyak_peer/__main__.py`.** `describe_decision` is at `:67` (RS1). `:322-327` opens
+  `Store(signing=False)`.
+- **Others:**
+  - `peer/superyak_peer/db.py`: `BEGIN IMMEDIATE`, and the signing gate in `__init__`;
+  - `peer/superyak_peer/peer_routes.py:10-25`: the lifespan;
+  - `peer/superyak_peer/auth.py:80-100`: the 8 and 40 limits;
+  - `scripts/runtime.py:84-88` and `:592-597`;
+  - `engram/server.py:163`;
+  - `peer/pyproject.toml`: the sdist's `systemd/` entries at `:45-50`, its tests to `:137`, and the wheel's list
+    from `:141`;
+  - `peer/tests/test_station_units.py:88` and `peer/tests/test_ship_agent.py:10-13`.
+
+### Privacy and permissions
+
+- Nothing more leaves a machine.
+- R24 and R25 narrow or rename.
+- RS5 would make the owner's list show more, while nothing more leaves.
+- No defect I found lets a use happen outside I 8's check.
+- Whether memories that mention other people may move at all is still Andy's question (G14).

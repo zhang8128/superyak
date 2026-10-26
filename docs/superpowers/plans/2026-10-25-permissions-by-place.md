@@ -55,7 +55,8 @@ commit, so the spec travels with the code. Every path below is relative to that 
   `NOT_YET`, `NO_ALLOW`, `LEGACY_DENY`; grant ops `share`, `deny`, `withdraw`, `shorten`, `narrow`, `collect`,
   `uncollect`; channels `terminal`, `tool`, `migration`; backings `person` and `grant:<id>`; id prefixes `r-`, `g-`,
   `p-`, `u-` + 32 lowercase hex; the reserved group `group:outside-home`; collections
-  `collection:andy/legacy-commons` and `collection:andy/legacy-group-<g>`; MCP tools `permissions(focus="uses" |
+  `collection:andy/legacy-commons` and `collection:andy/legacy-group-<g>`, where `andy` is the owner's handle that
+  `migrate` takes from the login (R24); MCP tools `permissions(focus="uses" |
   "rules" | "proposals" | "grants", ...)` and `permit(op, ...)`; the read item member `permission`; the receipt
   extension key `engram:permissions`; the `PlaceRules` envelope of P 9.4 (`protocolVersion "0.1"`,
   `kind "PlaceRules"`, `payloadMediaType "application/vnd.engram.place-rules+json"`).
@@ -91,7 +92,10 @@ commit, so the spec travels with the code. Every path below is relative to that 
 - **Packaging.** Each new top-level module is added to `[tool.setuptools] py-modules` in `engram/pyproject.toml` in
   the task that creates it: `tests/test_packaging.py::test_wheel_contains_runtime_modules_and_assets` requires every
   `engram/*.py` in the wheel.
-- **Existing tests stay unchanged.** No task edits an existing test file. New tests go in new files.
+- **Existing tests stay unchanged, with one named exception.** No task edits an existing test file, except one line
+  under R29: Task 23 changes `tests/test_packaging.py:225`, in `test_installed_wheel_starts_outside_checkout`, from
+  `== 43` to `== 45`, because it adds the MCP tools `permit` and `permissions`. Nothing else in that file, and no other
+  existing test file, changes. New tests go in new files.
 - **Commits.** One per task, on `permissions-core` only, ending with the session's attribution line. No push, merge
   or deploy inside any task.
 
@@ -101,7 +105,7 @@ Choices the spec leaves to the builder (P 18) or does not fix. A reviewer checks
 
 | # | Ruling | Why |
 |---|---|---|
-| R1 | `permissions.db` and `permission-uses.db` keep SQLite's default rollback journal (`journal_mode=DELETE`), with `busy_timeout` 5000 ms. | A `mode=ro` reader of a WAL file may need to create `-shm`; with a rollback journal the daemon's read-only open never writes a byte (U9). |
+| R1 | `permissions.db` and `permission-uses.db` keep SQLite's default rollback journal (`journal_mode=DELETE`), with `busy_timeout` 5000 ms. A writer that dies mid-commit leaves a hot journal, which a `mode=ro` reader can't roll back (`SQLITE_READONLY_ROLLBACK`). Every reader then reads `closed` until a writer opens the file. The cause text says so and names a command that clears it: any writing open, such as `engram-permissions sweep`. | A `mode=ro` reader of a WAL file may need to create `-shm`; with a rollback journal the daemon's read-only open never writes a byte (U9). A hot journal fails closed. |
 | R2 | `permissions.State` is built from the ledger tables of P 5.5 (`State.from_tables`), which is also F1's JSON form. `Ledger.state(seq)` filters the tables by their `*_seq` columns. | One form for the ledger, the tests and other implementations (F1). |
 | R3 | Every act goes through one call, `Ledger.perform(act, *, actor, channel, now)`, which authorizes it with the pure `permissions.authorize` and then writes one log row and its projection. A refused act raises `RuleError`. | U4's table and U18's MCP refusals test one path. |
 | R4 | A place's display name ("Public Health") is kept in its `register-place` log body and read into `State.names`. The default is the last segment. | P 7.6 and 8 word places by name, and P 5.5's `places` table has no name column. The log is the source of truth (P 5.6), so no column is added. |
@@ -110,12 +114,12 @@ Choices the spec leaves to the builder (P 18) or does not fix. A reviewer checks
 | R7 | Legacy layers (ConnectionPolicy) and layers kept outside a ledger (I's station ceiling) are passed to `decide` as callables. Neither writes a ledger row, and neither enters `until` or the horizon. | P 6.1, 6.3 item 4, 6.5 steps 6 and 7. |
 | R8 | `Cited` has `records: tuple[str, ...]`. For a use on one memory it holds at most one id, and its JSON key is `record`. For a use on a road or trail, a bulk use, and a recall receipt, it holds every distinct record cited for that (layer, action), sorted, and its JSON key is `records`. A recall receipt's `until` and `horizon` are the earliest over what it returned. | P 6.4 "The decision" for bulk uses. A recall decides many placements. |
 | R9 | Under `shadow`, a read item that both the legacy path and the new decision allow gains `permission`. An item the legacy path delivers and the new decision refuses gets none. | P 12.3's mode table says the annotation runs in shadow, and only an allowed item has an annotation (P 11). |
-| R10 | The `remember` guard's use is: requester `agent:<instance>`, its one place, the delivery receipt's `object`, `copy` and `purpose`, action `imprint`, `t` = now. It writes one receipt for that decision. Its decision reads ledger layers only, no legacy layer. The guard compares two digests with each delivery's `content_digest`: that of the content as passed, and that of the stripped content `remember` keeps (`engram/server.py:1849` strips before anything else). | P 10 says it decides `imprint` for the delivered item. The ConnectionPolicy files decide the crossing (`recall`, `read`, `inject_context`), which has already happened, and today's files have no `imprint` rule: with them, every verbatim keep would be refused and P25's subjects never carried. Two digests, so surrounding whitespace doesn't let a verbatim copy through. |
-| R11 | Under `closed`, the guard refuses a `remember` whose content digest matches a delivery receipt. If `permission-uses.db` exists and can't be read, it refuses every `remember` and names the cause. With no receipts file it finds no delivery. | P 12.3: closed means fail closed, and the guard "refuses as under `enforce`". |
+| R10 | The `remember` guard's use is: requester `agent:<instance>`, its one place, the delivery receipt's `object`, `copy` and `purpose`, action `imprint`, `t` = now. It writes one receipt for that decision. Its decision reads ledger layers only, no legacy layer. So the guard ignores a legacy `imprint` rule, allow or deny: the ConnectionPolicy schema accepts any action string (`engram/schemas/lighthouse/connection-policy.schema.json`, `actions`), so a hand-written one is possible, and it changes nothing here. The guard compares two digests with each delivery's `content_digest`: that of the content as passed, and that of the stripped content `remember` keeps (`engram/server.py:1849` strips before anything else). | P 10 says it decides `imprint` for the delivered item. The ConnectionPolicy files decide the crossing (`recall`, `read`, `inject_context`), which has already happened, and under `enforce` both legacy layers allowed that delivery. Today's generated files (`engram/policy_gen.py:75`) and E1's hand-written ones have no `imprint` rule: with them, every verbatim keep would be refused and P25's subjects never carried. This departs from P 6.3 item 4 for the guard alone; the re-check confirmed it, and gate G11 has the spec record it. Two digests, so surrounding whitespace doesn't let a verbatim copy through. |
+| R11 | Under `closed`, the guard refuses a `remember` whose content digest matches a delivery receipt. If `permission-uses.db` exists and can't be read, it refuses every `remember` and names the cause, under `closed` and under `enforce` alike; under `shadow` it logs the cause, lets `remember` go on, and adds `"would_refuse": True`. With no receipts file it finds no delivery. | P 12.3: closed means fail closed, and the guard "refuses as under `enforce`". |
 | R12 | The terminal code is 6 characters from `abcdefghjkmnpqrstuvwxyz23456789`, drawn by rejection sampling from `os.urandom`. Exit codes: 0 done, 1 refused by a rule, 3 no terminal or a wrong code. Code 2 stays argparse's usage error. | P 7.6 fixes the length and source only. A script can then tell a missing yes from a typo in the command. |
 | R13 | An engram server's agent is `agent:<instance name>`, or `agent:default` when it has none, as `share` names its source (`engram/server.py:1976`). | `migrate` registers one agent per receiver name (P 12.3 step 2). |
 | R14 | A row of `permission-uses.db` is imported when its `ledger_id` differs from the local ledger's `ledger_id`. Its station is that `ledger_id`, the station's peer id. | P 9.1 imported form item 4. No column is added. |
-| R15 | `returned` is JSON. A recall: a sorted list of refs. A named bulk use or an imported memory batch: `{"count": n, "sha256": "<hex of the sorted refs, joined by \n>"}`. A counted bulk use: `{"count": n}`, or SQL null for an imported row refused before a count existed. `cited` and `refusal` are JSON too (Task 14 pins their shape). | P 9.1 names the content, not the encoding. |
+| R15 | `returned` is JSON. A recall: a sorted list of refs. An answer use on one road or trail: the sorted list of the memory refs it named, at most 32 (P 9.1). A named bulk use or an imported memory batch: `{"count": n, "sha256": "<hex of the sorted refs, joined by \n>"}`. A counted bulk use: `{"count": n}`, or SQL null for an imported row refused before a count existed. `cited` and `refusal` are JSON too (Task 14 pins their shape). | P 9.1 names the content, not the encoding. |
 | R16 | Pseudonym salts are 16 bytes from `os.urandom` at place registration. | P 5.5 `pseudonym_salt BLOB NOT NULL`. |
 | R17 | The raise writes `meta.permissions_ledger_id` into each house through plain `sqlite3` (not `Storage`), one `BEGIN IMMEDIATE` per house. | No vector extension or migration runs on a house the raise only marks. |
 | R18 | The sweep is `sharing.sweep_placements`. The server runs it at startup and after `share` and `unshare`; the CLI runs it after each command that writes, and as `sweep`. | P 10; P 16 puts the sweep in `sharing.py` and `server.py`. |
@@ -124,11 +128,16 @@ Choices the spec leaves to the builder (P 18) or does not fix. A reviewer checks
 | R21 | U24 runs only with `ENGRAM_PI_BUDGET=1`, so the default suite skips it. The reviewer runs it on the Pi (see "Verification before merge"). | P 17: "Marked slow, and run on the Pi". |
 | R22 | `decide_bulk(..., group=True)` may decide objects with equal attributes once (P 6.4, "How it is computed"). U24 measures with `group=False`. | P 6.4: "With or without grouping". |
 | R23 | U24's world pins its record mix (Task 31). Every memory has 8 subjects, so each decision meets 43 layers: 8 homes, 16 requester places, 16 holding places, 2 legacy layers and 1 restriction layer. Each of the 41 ledger layers holds 256 effective records. 32 pass the pre-filter for the measured (requester, place, action, purpose). The other 224 fail it, 56 each on `audience`, `requesters`, `actions` and `purposes`. Of the 32 that pass: 8 allows each name one of 8 collections that split the memories evenly (2,500 each for the rebuild), 8 allows each name a `memories` list of 512 refs, 8 allows name `lanes: ["work"]`, and 8 denies each name a `memories` list of 64 refs that hold no placed memory. So each placed memory, in each ledger layer, matches 1 collection allow, 0 or 1 list allow and 0 or 1 lane allow, and is checked against 8 denies that never match. Every placement is allowed, so no decision stops early. | P 12.2's 2 s is "with the pre-filter of 6.5". If every record passed it, the test would measure a case the spec doesn't budget. If none did, it would measure nothing. 32 of 256 is a calibration guess, like P 15's numbers. |
-| R24 | `init` and `migrate` take the owner's handle from the Unix login name (`getpass.getuser()`). It must fit the person-handle grammar, or they refuse and say so. The words of the yes name it ("Create a ledger owned by person:andy"). `Ledger.create(engram_home, owner_handle, *, now)` keeps its argument for the API and the fixtures. | P 7.6: no command takes an argument naming who acts. P 4.4: the owner is the person who runs `init`. The person sees the name before the yes. |
+| R24 | `init` and `migrate` take the owner's handle from the Unix login name (`getpass.getuser()`). It must fit the person-handle grammar, or they refuse and say so. The words of the yes name it ("Create a ledger owned by person:andy"). `Ledger.create(engram_home, owner_handle, *, now)` keeps its argument for the API and the fixtures. On a machine whose login isn't `andy`, the owner is `person:<login>` and nothing chooses otherwise; `migrate` names its legacy collections `collection:<owner handle>/legacy-…` to match. G3 runs on the machine whose `ENGRAM_HOME` holds the published house the daemon serves, and Andy checks there that the words name `person:andy` before the yes. | P 7.6: no command takes an argument naming who acts. P 4.4: the owner is the person who runs `init`. The person sees the name before the yes. |
 | R25 | Task 1 refuses a finite `layers`, `lanes`, `collections` or `memories` when `kinds` is `"*"`, as well as when it lists `road` or `trail`. So every allow that names a collection, a lane, a layer or memories lists `kinds: ["memory"]`. `migrate`'s legacy allows do (Task 28), and so do E1's R1 and every fixture's. | P 5.2 says it "for a road or trail". `"*"` covers roads and trails, so this reading is the one that never lets a memory-only dimension stand for a road. It is stricter than the letter, and a reviewer may relax it. |
-| R26 | `permit` takes the seven grant ops with their named arguments. It also takes the other P 7.6 acts that are one `Act`: `grant`, `group`, `register-agent`, `put-agent`, `add-steward`, `register-place`, `add-parent`, `register-store`, `remove-subject` and `gate`, with `args` holding that act's arguments (Tasks 11 to 13). For an agent, `authorize` on channel `tool` files each widening act as a proposal for the ledger owner, with the full `Act` in its body. `sign`, with the yes, completes every proposal kind `perform` can file: record proposals (`allow`, `deny`, and a deny's `revoke`, `shorten` or `narrow`), `collect`, `joint-place`, and each act kind named here. `migrate` is not an op. It is a CLI run over the files on disk, not one act, so no proposal can hold its change. `permit(op="migrate")` returns an error naming `engram-permissions migrate` and writes nothing. | P 7.6: the MCP tools can make none of these acts, and a tool call for one files a proposal. For `migrate` a proposal can't be written, and a refusal also makes nothing. |
+| R26 | `permit` takes the seven grant ops with their named arguments. It also takes the other P 7.6 acts that are one `Act`: `grant`, `group`, `register-agent`, `put-agent`, `add-steward`, `register-place`, `add-parent`, `register-store`, `remove-subject` and `gate`, with `args` holding that act's arguments (Tasks 11 to 13). For an agent, `authorize` on channel `tool` files each widening act as a proposal for the ledger owner, with the full `Act` in its body. `sign`, with the yes, completes every proposal kind `perform` can file: record proposals (`allow`, `deny`, and a deny's `revoke`, `shorten` or `narrow`), `collect`, `joint-place`, and each act kind named here. `migrate` is not an op. It is a CLI run over the files on disk, not one act, so no proposal can hold its change. `permit(op="migrate")` returns an error naming `engram-permissions migrate` and writes nothing. The `gate` act takes only `mode`. `perform` computes the published house and the houses to mark from the ledger's own root when it applies the act, so no caller and no proposal body names them, and `sign` of a gate proposal prints them, with R27's list of houses lacking 029, before the yes (Tasks 13 and 26A). | P 7.6: the MCP tools can make none of these acts, and a tool call for one files a proposal. For `migrate` a proposal can't be written, and a refusal also makes nothing. The same reason keeps a gate act's houses out of its arguments: which houses exist is a fact of the files at the time of the yes. |
 | R27 | Under `shadow` and `enforce`, the daemon serves nothing from a house whose `shared_memories` lacks `source_instance_id` or `record_id`, or that has no `shared_memories_changes` table. It warns, naming the house and saying an engram server must open it once. Under `off` such a house serves as today. `gate` (Task 27) and `migrate` (Task 28) list such houses before the yes. | Every real house predates 029, and neither the raise (R17) nor the daemon (`engram/lighthouse_daemon.py:82-113`) migrates. Without 029 a placement has no object and the cache has no counter, so the new decision can't be made. Failing closed shows the house; serving it by the legacy path alone under `shadow` would hide it from `report shadow`. |
 | R28 | The `permissions` tool answers in full only an agent whose registered principal is `meta.owner`. Any other registered agent gets its own `Uses.agent_view` for `focus="uses"`, and `{"error": "only agents acting for the ledger owner can read this"}` for the other focuses. An unregistered agent gets that error for every focus. P 9.2's subject row is not offered through the tool in step 1. | P 9.2 and AS2: the owner's list shows refusal layers, which can name a person. Task 25's `keep_world` runs a server as `agent:ph-coordinator`. |
+| R29 | Task 23 changes one line of an existing test: `tests/test_packaging.py:225`, `assert len(server.mcp._tool_manager.list_tools()) == 43`, becomes `== 45`. It is the only edit to an existing test file in this plan. Global Constraints and Verification step 2 name it. | `server.py` has 43 `@_server_tool()` today, and Task 23 decorates `permit` and `permissions`, which P 12.1 and 9.3 name as MCP tools. The test counts the tools a server registers at `_init()`, so a correct build changes the number. The trails plan adds none at import and says so. |
+| R30 | The daemon's two legacy layers answer per action as today's code does. The publisher's layer answers every action of `need` with this frame's one publisher decision: the policy decided once for `recall` (`engram/lighthouse_daemon.py:362`) or for `read` (`:402`). The receiver's layer decides each action of `need` with its own `PolicyRequest`, as the receiver does (`engram/neighbors.py:53-60`, asked for `recall`, `read` and `inject_context` at `:120` and `:138`). | P 12.2: the publisher's decision "is made once per frame". `policy_gen.py:75` and E1's publisher policy allow only `recall` and `read`, so asking the publisher's policy about `inject_context` would refuse every delivery under `enforce`, E1's use 1 among them, and under `shadow` every receipt would read as refused by the legacy path, so `report shadow` would list no disagreement. |
+| R31 | The daemon's eligible-set cache is keyed by (house, agent, place, purpose, action), at most `CACHE_ENTRIES` entries over all houses together. | P 12.2 keys it per (agent, place, purpose, action) for the placements of one house. One daemon serves several publishers, and an entry's validity reads that house's `placement_changes()`, so without the house in the key, an entry built for one house would be checked against another's counter and served for it. |
+| R32 | `effective_gate` leaves out a served path that is not a file. The daemon computes the gate after today's publisher check (`engram/lighthouse_daemon.py:331-337`), so the house a frame reads from is always a file and always in the gate. | P 12.3 defines a house as an engram store at those paths. A configured publisher whose `graph.db` doesn't exist yet serves nothing (`PUBLISHER_UNAVAILABLE`, as today); read as a house with no id it would close every frame for every publisher. |
+| R33 | `Uses.place_view(state, P)` covers uses at P and at every place P dominates, and uses of copies they hold, and gives every pseudonym with P's salt. | P 9.2 gives a place's receipts to its stewards "and the stewards of every place that dominates it", each subject as "the pseudonym this view gives". One salt per view keeps a person's pseudonym stable within a view and different across places (U8), and E1 use 14 has public health's stewards see clinic-3's uses. |
 
 ## Carried items
 
@@ -189,6 +198,7 @@ named.
 | `engram/server.py` | `share`, `permit`, `permissions`, the sweep calls, the lane listener, the `remember` guard, the gate over the published house. Tasks 17, 18, 23 to 25. |
 | `engram/federation.py` | Kept-copy subjects for synced genome episodes. Task 25. |
 | `engram/pyproject.toml` | Four `py-modules` entries and the `engram-permissions` script. Tasks 1, 10, 14, 26. |
+| `engram/tests/test_packaging.py` | One line: the MCP tool count at `:225`, 43 to 45 (R29). Task 23. The only existing test file this plan changes. |
 | `engram/CLAUDE.md` | The "Permissions" paragraph, Key Files rows and the agents rule. Task 32. |
 | `engram/tests/permissions_support.py` (new) | Test builders: `World`, `T`, `use`, `random_world`. Task 2, grown by later tasks. |
 | `engram/tests/permissions_oracle.py` (new) | The brute-force oracle. Task 5A, boxes added in Task 8. |
@@ -215,6 +225,11 @@ Kept stable after this plan merges. A change to any of these is a change to the 
   (Task 14).
 - **Both** depend on R15's encoding of `returned`, in particular a named batch's `{"count": n, "sha256": h}`, where h
   is the lowercase hex SHA-256 of the sorted refs joined by `"\n"` (no trailing newline), UTF-8.
+- **The imprints plan changes two of them**, in its Task 45: `Uses.owner_list` (Task 15) gains `copies: Sequence[dict]
+  = ()`, whose lines it puts first, and the `uses` command (Task 27) passes `imprint_copies.copies_held(...)`. Both stay
+  backward compatible: with no `copies`, the list is this plan's.
+- **Both build after this plan's R29**, so `tests/test_packaging.py:225` reads `== 45` when they start. The trails plan
+  adds no tool at import, and the imprints plan adds none.
 
 ---
 
@@ -362,7 +377,9 @@ git commit -m "Permissions: names, copy refs, short ids and selectors (P 4.1, 5.
     `store(instance_id, owner="person:andy", place="place:home/andy", name="engram", imprint_of=None)`,
     `group(gid, owner, members)`, `collect(cid, refs, backing="person")`, `uncollect(cid, ref)`,
     `subject(ref, subject, self_claimed=False)`, `copy(copy_ref, source_ref)`, `lane(ref, lane, at)`,
-    `allow(layer, **selector_and_fields) -> str`, `deny(layer, **...) -> str`, `record(rid) -> Record`,
+    `allow(layer, **selector_and_fields) -> str`, `deny(layer, **...) -> str` (both default `kinds` to `["memory"]`,
+    R25's form for a selector that names a lane, a collection, a layer or memories, so the oracle and `decide` never
+    read a selector the write rules refuse), `record(rid) -> Record`,
     `revoke(rid)`, `grant(...) -> str`, `revoke_grant(gid)`, `remove_steward(place, person)`,
     `tick(seconds) -> int`, `state() -> State`. `World` writes table rows directly with increasing `seq`s and checks
     nothing. `use(agent, place, obj, *, copy="store:house", action="recall", purpose="care-coordination", at=None,
@@ -401,7 +418,30 @@ def test_u2_name_rule_cycles_roots_and_bounds():
         w.place(f"place:la-county/p{i}")
     with pytest.raises(RuleError, match="4 parents"):
         check_new_place(w.state(), "place:la-county/j", [f"place:la-county/p{i}" for i in range(5)])
-    # and, each built with World in this test: a place that would have 17 ancestors, and the 1,025th place
+    # depth: at most 16 ancestors, the place itself included (P 4.2)
+    w = county()
+    for i in range(12):
+        w.place(f"place:la-county/p{i:02d}")
+    for j, parents in enumerate([(0, 1, 2, 3), (4, 5, 6, 7), (8, 9, 10, 11), (8, 9, 10)]):
+        w.place(f"place:la-county/j{j}", parents=[f"place:la-county/p{i:02d}" for i in parents])
+    s = w.state()
+    assert len(ancestors(s, "place:la-county/j0")) == 6                   # j0, p00 to p03, la-county
+    k16 = ["place:la-county/j0", "place:la-county/j1", "place:la-county/j3"]   # 1 + 3 + 8 + 3 + 1 = 16
+    assert check_new_place(s, "place:la-county/k16", k16) == tuple(k16)
+    with pytest.raises(RuleError, match="16 ancestors"):                  # 1 + 3 + 12 + 1 = 17
+        check_new_place(s, "place:la-county/k17", ["place:la-county/j0", "place:la-county/j1", "place:la-county/j2"])
+    w.place("place:la-county/k16", parents=k16)
+    with pytest.raises(RuleError, match="16 ancestors"):                  # k16, below j3, would reach 17
+        check_new_parent(w.state(), "place:la-county/j3", "place:la-county/p11")
+    # count: at most 1,024 places per ledger, homes included (P 4.4)
+    w = county()
+    while len(w.places()) < MAX_PLACES - 1:
+        w.place(f"place:la-county/q{len(w.places()):04d}")
+    check_new_place(w.state(), "place:la-county/the-1024th", [])
+    w.place("place:la-county/the-1024th")
+    assert len(w.places()) == MAX_PLACES
+    with pytest.raises(RuleError, match="1,024 places"):
+        check_new_place(w.state(), "place:la-county/the-1025th", [])
 
 def test_u2_retiring_a_place_stops_its_sub_places():
     w = county(); w.retire_place("place:la-county/public-health")
@@ -578,7 +618,12 @@ def test_u6_lanes_after_a_move():
     personal_deny = w.deny("place:home/andy", audience=["self"], lanes=["personal"], actions=["recall"],
                            anchor=T("2026-10-15"))
     assert record_matches(w.state(), w.record(personal_deny), home_use(M1, T("2026-11-04")), "recall")
-    # and a memory moved from work to personal stops being covered by the work-lane allow
+    # one moved from work to personal stops being covered by the work-lane allow
+    w2 = county_world(); w2.lane(M1, "work", T("2026-10-01"))
+    allow2 = w2.allow("place:home/andy", audience=["self"], lanes=["work"], actions=["recall"])   # anchored 2026-11-01
+    assert record_matches(w2.state(), w2.record(allow2), home_use(M1, T("2026-11-02")), "recall")   # in work since
+    w2.lane(M1, "pending", T("2026-11-03")); w2.lane(M1, "personal", T("2026-11-03"))
+    assert not record_matches(w2.state(), w2.record(allow2), home_use(M1, T("2026-11-04")), "recall")
 
 def test_u25_pending_reads_as_neither_lane_for_an_allow_and_both_for_a_deny():
     w = county_world(); w.lane(M1, "personal", T("2026-10-01")); w.lane(M1, "pending", T("2026-11-03"))
@@ -709,6 +754,14 @@ def test_u28_use_10_read_of_m4():
     assert decide(s, read_m4(T("2026-11-21"))).refusal == Refusal("GRANT_INVALID", "place:home/andy", "recall")
     assert decide(s, read_m4(T("2026-11-30"))).refusal == Refusal("EXPIRED", "place:home/andy", "recall")
 
+def test_u28_a_co_subject_is_no_allow_when_registered_with_an_empty_home_and_no_layer_when_not():
+    # P 7.4: "NO_ALLOW if they are registered with an empty home layer, NO_LAYER if not". person:amy sorts before
+    # person:andy, so her home is the first layer in step 2's order either way.
+    s, u = co_subject_world(register_amy=True)
+    assert decide(s, u).refusal == Refusal("NO_ALLOW", "place:home/amy", "recall")
+    s, u = co_subject_world(register_amy=False)
+    assert decide(s, u).refusal == Refusal("NO_LAYER", "place:home/amy", "recall")   # her layer is `missing`
+
 def test_u21_unregistered_store_no_source_and_unregistered_house_are_no_layer():
     for s, u in [object_in_unregistered_store(), placement_without_source_instance_id(),
                  copy_in_unregistered_house()]:
@@ -742,7 +795,10 @@ def test_an_outside_layer_is_that_layers_whole_verdict():
 `two_owner_imprint_use` and `sorted_actions` are added to `permissions_support.py`: the requester is
 `agent:station-imprints` acting for Andy at `place:home/andy`; the copy is `imprint:<peer>/c0a8` of sam's store, held
 at `place:home/andy`; sam's home layer allows the use; the agent's restriction layer is empty. `sorted_actions` lists
-the actions `needs(u)` asks of the object, in `ACTIONS` order.
+the actions `needs(u)` asks of the object, in `ACTIONS` order. `co_subject_world(register_amy)` is `county_world`
+plus Andy's store `S` and the house `house`, both at `place:home/andy`, R1 of P 13 in Andy's home, and `person:amy` as
+m1's co-subject; with `register_amy` it also registers `person:amy`, whose home layer stays empty. Its use is
+`ph-coordinator`'s recall of m1 at clinic-3 on 2026-11-02, for care-coordination, with copy `store:house`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -761,7 +817,7 @@ latest effective end, then smallest id (step 5). `versions` holds each ledger la
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 7 passed.
+Run: the command of step 2. Expected: PASS, 8 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -795,9 +851,9 @@ The number keeps the other plans' references to Tasks 6 to 32 valid.
 ```python
 def test_the_oracle_agrees_with_task_5s_hand_written_cases():
     for build in HAND_WRITTEN_CASES:                  # Task 5's U28, U21 and E1 builders, imported from its test file
-        s, u, legacy = build()
-        assert oracle_allowed(s.to_tables(), dict(s.seq_at), use_json(u), legacy_json(legacy)) \
-            is decide(s, u, legacy=legacy).allowed, build.__name__
+        for s, u, legacy in build():                  # each entry yields (state, use, legacy) triples
+            assert oracle_allowed(s.to_tables(), dict(s.seq_at), use_json(u), legacy_json(legacy)) \
+                is decide(s, u, legacy=legacy).allowed, build.__name__
 
 def test_random_world_reaches_every_op_and_membership_kind():
     seen = set()
@@ -806,6 +862,13 @@ def test_random_world_reaches_every_op_and_membership_kind():
     assert seen >= REQUIRED_FEATURES, REQUIRED_FEATURES - seen   # every op, membership kind, joint place, root,
                                                                  # pending note, 4-link copy chain, bulk use
 ```
+
+`HAND_WRITTEN_CASES` is a list of zero-argument callables, each returning a list of (state, use, legacy) triples, so
+the agreement test unpacks one shape. Task 5's builders return three shapes, and each entry adapts its builder: a
+U28 builder's `(s, u, legacy)` is one triple; an `(s, u)` builder (`co_subject_world`, the U21 builders,
+`two_owner_imprint_use`) gets legacy `()`; `one_ref_two_houses`'s `(s, at_home, at_clinic)` gives two triples; and a
+builder whose use is a function of time (`one_grant_backed_record`, `e1_after_use_10`) is called at each time its Task
+5 test uses.
 
 Then, each looping 500 cases over `random_world(rng)` and also asserting, for each sampled use,
 `decide(...).allowed == oracle_allowed(...)`:
@@ -839,7 +902,7 @@ as a new hand-written case before either side is changed.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_permissions_properties.py tests/test_permissions_decide.py`
-Expected: PASS, 8 + 7 passed.
+Expected: PASS, 8 + 8 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1413,7 +1476,9 @@ are written through `Ledger._append` (Task 10's projection covers them), with th
 stay that way after Task 12; Task 29 builds E1 through `perform` alone.
 
 - `county_ledger(tmp_path)`: `Ledger.create(tmp_path, "andy", now=T("2026-11-01"))`. As `person:andy`: register
-  persons `county-steward`, `ph-steward`, `pr-steward`, `sw-steward`, `sw2` and `jenn`, and the root
+  persons `county-steward`, `ph-steward`, `pr-steward`, `sw-steward`, `sw2`, `jenn` and `amy` (Amy's home layer stays
+  empty, so a use she is a subject of refuses with `NO_ALLOW` at `place:home/amy`, P 7.4; Task 11's U5 test and Task
+  25's U17 tests use this Amy), and the root
   `place:la-county` ("LA County", stewards `[person:county-steward]`). As `person:county-steward`: register
   `public-health` ("Public Health", `[person:ph-steward]`) and `parks-and-rec` ("Parks and Recreation",
   `[person:pr-steward]`). As `person:ph-steward`: register `clinic-3` (`[person:ph-steward]`); register
@@ -1519,8 +1584,53 @@ def test_u14_proposals(tmp_path):
     led.perform(Act("decline", {"proposal": third.ref}), actor="person:andy", channel="terminal", now=T("2026-11-04"))
     assert only_proposal_rows_changed(before, led.tables())
 
-def test_shortening_and_narrowing_write_a_replacement_inside_the_original(tmp_path): ...
-def test_an_agents_try_on_a_consent_deny_is_a_proposal(tmp_path): ...   # P27, E1 use 9
+def test_shortening_and_narrowing_write_a_replacement_inside_the_original(tmp_path):   # P 7.3, 5.3 rule 4, E1 use 8
+    led = e1_ledger_with_g1(tmp_path); ids = led.ids
+    out = led.perform(Act("shorten", {"record": ids.R1, "valid_until": T("2026-12-15")}), actor="agent:rio-grande",
+                      channel="tool", now=T("2026-11-10"))
+    s = led.state(); r1, r1p = s.records[ids.R1], s.records[out.ref]
+    assert out.status == "done" and r1.revoked_seq == r1p.created_seq                   # one transaction
+    assert (r1p.replaces, r1p.anchor, r1p.backing, r1p.set_by, r1p.under_grant) == (
+        ids.R1, r1.anchor, "person", "agent:rio-grande", ids.G1)                           # R1 was person-backed
+    assert (r1p.selector, r1p.valid_from, r1p.valid_until) == (r1.selector, r1.valid_from, T("2026-12-15"))
+    narrower = dataclasses.replace(r1p.selector, actions=("read", "recall"))              # inject_context dropped
+    out2 = led.perform(Act("narrow", {"record": out.ref, "selector": selector_json(narrower)}),
+                       actor="agent:rio-grande", channel="tool", now=T("2026-11-11"))
+    r1pp = led.state().records[out2.ref]
+    assert (r1pp.replaces, r1pp.anchor, r1pp.selector, r1pp.valid_until) == (out.ref, r1.anchor, narrower,
+                                                                              T("2026-12-15"))
+    assert led.state().records[out.ref].revoked_seq == r1pp.created_seq
+    before = led.tables()
+    wider_audience = dataclasses.replace(narrower, audience=("place:la-county/parks-and-rec",
+                                                             "place:la-county/public-health"))
+    for widening in (Act("shorten", {"record": out2.ref, "valid_until": T("2027-01-31")}),   # later than its end
+                     Act("narrow", {"record": out2.ref, "selector": selector_json(wider_audience)})):
+        with pytest.raises(RuleError):                     # check_narrower: not inside the record it replaces
+            led.perform(widening, actor="person:andy", channel="terminal", now=T("2026-11-12"))
+    assert led.tables() == before
+
+def test_an_agents_try_on_a_consent_deny_is_a_proposal(tmp_path):   # P27, E1 use 9
+    led, ids = e1_through_use_9(tmp_path)                      # D1 denies m2 from 2026-12-01; G1 meets it
+    d1 = led.state().records[ids.D1].selector               # audience public-health, memories [m2]
+    at_clinic = dataclasses.replace(d1, audience=("place:la-county/public-health/clinic-3",))
+    for act in (Act("revoke", {"record": ids.D1, "reason": "r"}),
+                Act("shorten", {"record": ids.D1, "valid_until": T("2026-12-10")}),
+                Act("narrow", {"record": ids.D1, "selector": selector_json(at_clinic)})):
+        before = led.tables()
+        out = led.perform(act, actor="agent:rio-grande", channel="tool", now=T("2026-11-13"))
+        assert out.status == "proposal" and only_proposal_rows_changed(before, led.tables()), act.kind
+        [p] = [p for p in led.proposals(now=T("2026-11-13")) if p["id"] == out.ref]
+        assert (p["by_agent"], p["for_person"]) == ("agent:rio-grande", "person:andy"), act.kind
+    assert led.state().records[ids.D1].revoked_seq is None
+    assert decide(led.state(), read_by_ph(M2, T("2026-12-01"))).refusal == Refusal("DENIED", "place:home/andy",
+                                                                                   "recall")
+    own = led.perform(Act("deny", {"layer": "agent:rio-grande", "selector": selector_json(d1),
+                                   "valid_from": T("2026-11-13"), "valid_until": None, "reason": "r"}),
+                      actor="agent:rio-grande", channel="tool", now=T("2026-11-13"))
+    revoked = led.perform(Act("revoke", {"record": own.ref, "reason": "r"}), actor="agent:rio-grande",
+                          channel="tool", now=T("2026-11-13"))
+    assert (own.status, revoked.status) == ("done", "done")   # its own restriction deny needs no one (P 7.1)
+
 def test_the_grantee_can_give_its_own_grant_up(tmp_path): ...            # U4's last sentence
 ```
 
@@ -1565,13 +1675,21 @@ git commit -m "Permission ledger: records, replacements, grants and proposals (P
   - `houses(engram_home: Path) -> list[Path]`: `.engram/graph.db` and every `.engram/instances/<name>/graph.db`
     that exists, sorted;
   - `Gate(mode: str, cause: str | None)` with mode `off`, `shadow`, `enforce` or `closed`;
-  - `effective_gate(engram_home: Path, served: Sequence[Path]) -> Gate`: P 12.3 rules 1 to 3, reading at most
-    `GATE_HOUSES` houses' `meta` for the `off` rule and `closed` past that;
-  - act kind `gate` (args `mode`, `published_house: str`, `houses: list[str]`): the first move above `off` sets
-    `gate_raised` and marks every house (R17), refusing when the published house
-    (`.engram/instances/lighthouse/graph.db`) does not exist; running it again marks houses that lack the id. From an
-    agent on channel `tool` it is filed as a proposal, which the owner's `sign` completes (R26). Its `Outcome` lists
-    the houses that lack migration 029 (R27), so the CLI can print them;
+  - `effective_gate(engram_home: Path, served: Sequence[Path], *, busy_ms: int = 5000) -> Gate`: P 12.3 rules 1 to 3,
+    reading at most `GATE_HOUSES` houses' `meta` for the `off` rule and `closed` past that. It opens the ledger with
+    `busy_ms` as its busy timeout (the daemon passes `LEDGER_BUSY_MS`, Task 19). A served path that is not a file is
+    left out (R32): it is no house and serves nothing;
+  - act kind `gate` (args `mode` only; any other argument is refused with `RuleError`): `perform` computes, when it
+    applies the act, the published house `<root>/.engram/instances/lighthouse/graph.db` and `houses(root)`, where
+    `root` is the `engram_home` the ledger was created or opened with. So whether the owner acts at the terminal or
+    signs an agent's proposal, the houses are those on disk at the yes, never ones named by a caller or held in a
+    proposal's body (R26). The first move above `off` sets `gate_raised` and marks every house (R17), refusing when the
+    published house does not exist; running it again marks houses that lack the id. Its log body records the mode and
+    the houses it marked. From an agent on channel `tool` it is filed as a proposal holding `{"mode": ...}` alone,
+    which the owner's `sign` completes (R26). Its `Outcome` lists the houses that lack migration 029 (R27), so the CLI
+    can print them;
+  - `Ledger.gate_plan() -> dict` with `published_house`, `houses` and `lacking_029`: what a `gate` act would use if
+    applied now. The CLI's `gate` (Task 27) and its `sign` of a gate proposal (Task 26A) print it before the yes;
   - `ledger_for_house(db_path: Path) -> Path | None` and `house_mark(db_path: Path) -> str | None` (the id to write
     into a house created now, `"unreadable"`, or `None` when no raised ledger exists), used by Task 16;
   - `Ledger.place_rules(place: str, *, now: int) -> dict`, P 9.4's artifact; it raises `RuleError` for a home.
@@ -1592,6 +1710,23 @@ def test_u16_the_raise_marks_every_house(tmp_path):
     led = raised_ledger(tmp_path, houses=("lighthouse", "why"))
     for house in houses(tmp_path):
         assert house_meta(house)["permissions_ledger_id"] == led.meta()["ledger_id"]
+    assert effective_gate(tmp_path, houses(tmp_path)).mode == "shadow"
+    absent = tmp_path / ".engram" / "instances" / "pending" / "graph.db"        # configured, not yet made (R32)
+    assert effective_gate(tmp_path, houses(tmp_path) + [absent]).mode == "shadow"
+
+def test_rs2_a_gate_proposal_holds_only_its_mode_and_sign_marks_the_houses_on_disk_at_the_yes(tmp_path):
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    make_house(tmp_path, "lighthouse"); register_default_agent_at_home(led)    # agent:default acts for Andy
+    with pytest.raises(RuleError, match="only mode"):
+        led.perform(Act("gate", {"mode": "shadow", "houses": []}), actor="agent:default", channel="tool",
+                    now=T("2026-11-02"))
+    out = led.perform(Act("gate", {"mode": "shadow"}), actor="agent:default", channel="tool", now=T("2026-11-02"))
+    assert out.status == "proposal" and proposal_act(led, out.ref) == Act("gate", {"mode": "shadow"})
+    make_house(tmp_path, "late")                       # made after the agent asked; no raised ledger yet, so no mark
+    assert led.gate_plan()["houses"] == houses(tmp_path)
+    led.perform(Act("sign", {"proposal": out.ref}), actor="person:andy", channel="terminal", now=T("2026-11-02"))
+    late = tmp_path / ".engram" / "instances" / "late" / "graph.db"
+    assert house_meta(late)["permissions_ledger_id"] == led.meta()["ledger_id"]
     assert effective_gate(tmp_path, houses(tmp_path)).mode == "shadow"
 
 def test_u16_after_the_raise_each_of_these_fails_closed(tmp_path):
@@ -1626,13 +1761,16 @@ Expected: FAIL, `ImportError: cannot import name 'effective_gate'`.
 - [ ] **Step 3: Implement the gate, the houses and `place_rules`**
 
 `effective_gate` opens the ledger read-only (Task 10) and each house's `meta` with `mode=ro`. Every cause is a short
-sentence the daemon and server print, for example `"ledger missing but house why carries its id"`.
+sentence the daemon and server print, for example `"ledger missing but house why carries its id"`. A hot journal left
+by a writer that died mid-commit reads `closed` (R1), with the cause "ledger has a hot journal; any writing open
+clears it, such as engram-permissions sweep".
 `place_rules`' payload is `{place, parents, stewards, retired, ledgerSeq, logDigest, records}` with every effective
-record in all fields; `issuer` is `urn:engram:<ledger_id>`.
+record in all fields; `issuer` is `urn:engram:<ledger_id>`. `register_default_agent_at_home` and `proposal_act` (the
+`Act` a proposal's body holds) are added to `permissions_support.py`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 7 passed.
+Run: the command of step 2. Expected: PASS, 8 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1654,7 +1792,8 @@ git commit -m "Permission ledger: the gate, the effective gate over houses, and 
   - `uses_path(engram_home) -> Path` (`.engram/permission-uses.db`);
   - `UseRow`, a frozen dataclass of P 9.1's `uses` columns other than `seq`, `prev_digest` and `digest`;
   - `row_for_decision(decision, use, *, acting_for, content_digest=None, shadow=False) -> UseRow` (one read or
-    delivery item); `row_for_recall(decisions, use, *, acting_for, returned: Sequence[str], filtered: int,
+    delivery item, or one answer use on a road or trail: `object` the road or trail ref, `returned` the memories it
+    named, R15); `row_for_recall(decisions, use, *, acting_for, returned: Sequence[str], filtered: int,
     shadow=False) -> UseRow` (R8); `row_for_bulk(decision, bulk, *, acting_for) -> UseRow` (named: count and SHA-256;
     counted: count) (R15);
   - `class Uses` with `open(engram_home) -> Uses`, `open_read_only(engram_home) -> Uses`, `append(row: UseRow,
@@ -1680,9 +1819,26 @@ def test_u8_a_read_writes_one_receipt_per_item_and_none_holds_content_or_query(t
     raw = uses_path(tmp_path).read_bytes()
     assert b"Jenn drove" not in raw and b"who drove" not in raw and all(r["copy"] for r in rows(uses))
 
-def test_u8_the_chain_verifies_and_one_changed_byte_fails(tmp_path): ...
+def test_u8_the_chain_verifies_and_one_changed_byte_fails(tmp_path):   # the receipts chain; Task 10 tests the log's
+    uses = Uses.open(tmp_path)
+    for i in range(10):
+        uses.append(recall_row(returned=[M1], filtered=0, at=T("2026-11-02") + i), subjects=[("person:andy", M1)])
+    assert uses.verify() is None
+    flip_one_byte(uses_path(tmp_path), table="uses", seq=4, column="cited")   # its own sqlite3 connection
+    assert Uses.open(tmp_path).verify() == 4
 
-def test_u22_five_roads_are_five_route_uses_with_five_receipts(tmp_path): ...
+def test_u22_five_roads_are_five_route_uses_with_five_receipts(tmp_path):
+    s = five_road_world()                         # roads ROADS[0] to ROADS[4], each naming A and B, all allowed
+    uses = Uses.open(tmp_path)
+    for road in ROADS:                            # one answer that walks five roads: five route uses
+        u = route(road, names=(A, B), shows={A})
+        d = decide(s, u)
+        assert d.allowed, road
+        uses.append(row_for_decision(d, u, acting_for=HOME),
+                    subjects=[(p, road) for p in subjects_of(s, road, u.at, u.names)])
+    route_rows = [r for r in rows(uses) if r["action"] == "route"]
+    assert [r["object"] for r in route_rows] == list(ROADS) and len({r["id"] for r in route_rows}) == 5
+    assert all(json.loads(r["returned"]) == sorted([A, B]) for r in route_rows)   # the memories each named (R15)
 
 def test_u22_a_counted_bulk_use_writes_one_receipt_naming_no_object(tmp_path):
     uses = Uses.open(tmp_path)
@@ -1719,7 +1875,10 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'permission_uses'`.
 P 9.1's four `CREATE TABLE` statements verbatim. Journal mode per R1. `append` reads the last digest inside its
 transaction. `fold` moves rows older than `RETENTION_DAYS` into `uses_monthly`, deletes them and their
 `use_subjects`, and writes one `uses_anchor` row with the last folded `seq` and digest; `verify` starts from the
-latest anchor. Add `"permission_uses"` to `py-modules`.
+latest anchor. Add `"permission_uses"` to `py-modules`. The test helpers `flip_one_byte(path, *, table, seq, column)`
+(changes one character of that row's column through its own `sqlite3` connection), `five_road_world` (Task 7's
+`road_world` with five roads `ROADS` in ref order, each naming A and B, and allows covering everything a `route`
+answer that shows A needs, P 6.4) and `recall_row(..., at=...)` live in the test file.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1776,8 +1935,27 @@ def test_u8_a_steward_sees_a_home_only_as_its_persons_pseudonym(tmp_path):
     assert all(not rec.startswith("r-") or rec in county_record_ids(state) for rec in cited_ids(view.rows))
     assert view.counts["filtered"] >= 1
 
-def test_u8_pseudonyms_are_stable_in_a_place_and_differ_across_places(tmp_path): ...
-def test_u8_agents_in_a_place_see_no_filtered_counts(tmp_path): ...
+def test_u8_pseudonyms_are_stable_in_a_place_and_differ_across_places(tmp_path):
+    uses, state = e1_receipts(tmp_path)
+    clinic = state.places["place:la-county/public-health/clinic-3"].pseudonym_salt
+    ph = state.places["place:la-county/public-health"].pseudonym_salt
+    jenn_at_clinic, jenn_at_ph = pseudonym(clinic, "person:jenn"), pseudonym(ph, "person:jenn")
+    assert re.fullmatch(r"[0-9a-f]{16}", jenn_at_clinic) and jenn_at_clinic == pseudonym(clinic, "person:jenn")
+    assert jenn_at_clinic != jenn_at_ph and jenn_at_clinic != pseudonym(clinic, "person:andy")
+    first = uses.place_view(state, "place:la-county/public-health/clinic-3").rows
+    assert uses.place_view(state, "place:la-county/public-health/clinic-3").rows == first        # stable
+    at_ph = json.dumps(uses.place_view(state, "place:la-county/public-health").rows)   # use 2 is at clinic-3, below it
+    assert jenn_at_clinic in json.dumps(first) and jenn_at_ph in at_ph and jenn_at_clinic not in at_ph
+
+def test_u8_agents_in_a_place_see_no_filtered_counts(tmp_path):
+    uses, state = e1_receipts(tmp_path)    # use 1's recall filtered m3; use 3's recall by parks-planner filtered 3
+    assert uses.place_view(state, "place:la-county/public-health/clinic-3").counts["filtered"] == 1   # stewards do
+    assert uses.place_view(state, "place:la-county/parks-and-rec").counts["filtered"] == 3
+    for agent in ("agent:ph-coordinator", "agent:parks-planner", "agent:station-imprints"):
+        view = uses.agent_view(agent)
+        assert all(set(r) <= {"object", "at", "outcome", "count", "sha256", "permission"} for r in view), agent
+        assert "filtered" not in json.dumps(view), agent
+    assert uses.agent_view("agent:parks-planner") == []    # its one receipt is a recall that returned nothing
 def test_u8_a_subject_sees_only_receipts_naming_them_at_the_time(tmp_path):
     # m5 read on 2026-11-02; Jenn added as m5's co-subject on 2026-11-03; m5 read again on 2026-11-04; m1 read on
     # 2026-11-04 (Andy's alone). Each read's use_subjects is written at the time of the use.
@@ -1823,9 +2001,13 @@ Expected: FAIL, `AttributeError: 'Uses' object has no attribute 'owner_list'`.
 
 - [ ] **Step 3: Implement the views**
 
-P 9.2's table row by row. A steward's view replaces every home layer, cited or refusing, with the pseudonym that place
-gives the home's person, and drops home record ids. The agent view of a refusal is exactly `{object, at, outcome:
-"not allowed"}`, or for a bulk refusal `{count, sha256?, at, outcome}`. `--collection C` matches rows whose
+P 9.2's table row by row. A place view of P covers uses at P and at every place P dominates, and uses of copies they
+hold, and gives every pseudonym with P's salt (R33). A steward's view replaces every home layer, cited or refusing, with the
+pseudonym that place gives the home's person, and drops home record ids. `e1_receipts(tmp_path)` writes, through
+`Uses.append`, the receipts of E1's uses 1 to 3 (use 1's recall that returned m1 and m2 and filtered m3, and its
+delivery of m1; use 2's refused read of m3; use 3's recall by `parks-planner` that returned nothing and filtered 3),
+plus one refused bulk use by `agent:station-imprints`, and returns them with the E1 state. The agent view of a
+refusal is exactly `{object, at, outcome: "not allowed"}`, or for a bulk refusal `{count, sha256?, at, outcome}`. `--collection C` matches rows whose
 `use_subjects` objects are C's members at any time.
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -1843,7 +2025,7 @@ git commit -m "Permission uses: owner, place, agent and subject views; pseudonym
 
 **Files:**
 - Create: `engram/migrations/029_share_identity.sql`
-- Modify: `engram/storage.py:225-235` (the migration loop), new method `Storage._mark_house_for_ledger`
+- Modify: `engram/storage.py:225-235` (the migration loop), new method `Storage._mark_house_for_ledger(created_now)`
 - Test: `engram/tests/test_permissions_migration_029.py`
 
 **Interfaces:**
@@ -1886,6 +2068,16 @@ def test_029_on_a_house_made_by_001_to_028_adds_its_columns_and_counter(tmp_path
     assert not {"source_instance_id", "record_id"} & share_columns(path)
     Storage(str(path), migrations_dir=MIGRATIONS_DIR).close()
     assert {"source_instance_id", "record_id"} <= share_columns(path) and counter_row(path) == 0
+
+def test_rs4_a_pre_029_house_restored_after_the_raise_stays_closed_when_a_server_opens_it(tmp_path):
+    led = raised_ledger(tmp_path, houses=("lighthouse",))
+    restored = house_before_029(tmp_path, "restored")  # as restored from a backup made before 029 and the raise
+    Storage(str(restored), migrations_dir=MIGRATIONS_DIR).close()   # 029 runs now, on a house it did not create
+    assert {"source_instance_id", "record_id"} <= share_columns(restored)
+    assert "permissions_ledger_id" not in house_meta(restored)       # no mark without the yes (P 12.3 rule 2)
+    assert effective_gate(tmp_path, [restored]).mode == "closed"
+    raise_gate(led, "shadow")                                         # gate again, with the yes, marks it
+    assert effective_gate(tmp_path, [restored]).mode == "shadow"
 ```
 
 `house_dir(root, name)` makes and returns `root/.engram/instances/<name>/`: `Storage` makes no directory
@@ -1903,8 +2095,12 @@ Expected: FAIL, the column assertion (`source_instance_id` missing).
 `029_share_identity.sql` holds the two `ALTER TABLE ... ADD COLUMN` lines, the counter table, `INSERT OR IGNORE` of its
 one row, and the three `CREATE TRIGGER IF NOT EXISTS ... BEGIN UPDATE shared_memories_changes SET count = count + 1
 WHERE id = 1; END;`. In `_run_migrations`, beside `if ver == 28: self._assign_instance_id(created_now)`, add
-`if ver == 29: self._mark_house_for_ledger()`, which imports `permission_ledger` inside the method, calls
-`house_mark(Path(self.db_path))`, and writes the result into `meta` inside 029's transaction.
+`if ver == 29: self._mark_house_for_ledger(created_now)`, with the same `created_now` (`engram/storage.py:224`,
+`:230`). It returns at once unless `created_now`: P 12.3 marks a house "when it is created", and a house 029 upgrades
+was not, so one restored from before the raise stays closed until `gate` marks it with the yes (P 12.3 rule 2). Every
+house that exists when the raise runs is marked by the raise itself (R17), 029 or no 029, so G3's order still works.
+For a new house it imports `permission_ledger` inside the method, calls `house_mark(Path(self.db_path))`, and writes
+the result into `meta` inside 029's transaction.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1937,8 +2133,10 @@ git commit -m "Migration 029: share identity columns, the placement change count
     `transaction()` (depth 0), it is called right after a write that `_commit` has just committed, so it runs
     `on_commit` at once. Inside `transaction()`, where `_commit` does nothing (`engram/storage.py:182-187`), it queues
     both on the outermost transaction: `on_commit` runs after that transaction's `self.conn.commit()` returns, and
-    `on_rollback` after its `self.conn.rollback()`, including a rollback caused by a failed commit. The queues are
-    cleared when the outermost block ends, either way. An `Exception` from a callback is logged and not raised, since
+    `on_rollback` on every exceptional exit from the outermost block, a failed commit included, whether or not
+    `rollback()` ran: `transaction()` rolls back only `if outermost and self.conn.in_transaction`
+    (`engram/storage.py:176-177`), and SQLite rolls back on its own after some errors. The queues are cleared when the
+    outermost block ends, either way. An `Exception` from a callback is logged and not raised, since
     the store's outcome is already final; the note it failed to write leaves `pending`, which the sweep settles (Task
     24). A `BaseException` such as `SystemExit` propagates, as a crash would. This is what makes the settling note
     follow the store's commit, not `_commit`'s call (P 5.3, L5): compression's one re-lane
@@ -2040,8 +2238,10 @@ Expected: FAIL, `ImportError: cannot import name 'LaneNoteError' from 'storage'`
 from it becomes `LaneNoteError` and nothing is updated; a `BaseException` such as `SystemExit` propagates), runs the
 `UPDATE` and `_commit`, then calls `self.after_outcome(lambda: listener("after", rows, lane), lambda:
 listener("failed", rows, lane))`. On an exception from the `UPDATE`, or from `_commit` at depth 0, it calls
-`"failed"` and re-raises. So the `"after"` note is written only once the outermost transaction has committed, and a
-rollback writes `"failed"` with the old lanes. `transaction()` runs the queued calls after its own `commit()` or
+`"failed"` and re-raises. At depth 0 it first rolls back when `self.conn.in_transaction`: a `COMMIT` that fails with
+`SQLITE_BUSY` leaves the transaction open, and a later `_commit` on that connection would otherwise commit the new
+lane after a settled note naming the old one. So the `"after"` note is written only once the outermost transaction
+has committed, and a rollback writes `"failed"` with the old lanes. `transaction()` runs the queued calls after its own `commit()` or
 `rollback()`. With no listener it behaves exactly as today, and with no queued call `transaction()` does too. In
 `compress.py`, the catch of R20 also sets `lane` back to the cluster's lane before `add_semantic` (`:563`).
 
@@ -2132,9 +2332,13 @@ git commit -m "Permissions edges: the [permissions] warning, a reserved group na
 - Produces: `PublisherDaemon(publishers, socket_path, embeddings, *, clock=None, engram_home: Path | None = None)`
   (R19); `_allowed_audiences(policy, receiver, *, mode: str = "off") -> frozenset[str]` strips
   `group:outside-home` under every mode, and with no ledger, and adds it back only when `mode == "enforce"` and the publisher policy has a rule
-  whose `publishers` names the receiver; `handle_frame` first computes the effective gate over every house the daemon
-  serves, `[p.db_path for p in self.publishers.values()]` in name order, as P 12.3 says ("the daemon over the houses
-  it serves"). So one served house that reads closed, such as one added to the config after the raise, closes every
+  whose `publishers` names the receiver; `handle_frame`, right after today's publisher check
+  (`engram/lighthouse_daemon.py:331-337`, which still answers `PUBLISHER_UNAVAILABLE` for an unknown publisher or a
+  missing store), computes the effective gate over every house the daemon serves, `[p.db_path for p in
+  self.publishers.values()]` in name order, as P 12.3 says ("the daemon over the houses it serves"), with
+  `busy_ms=LEDGER_BUSY_MS`. A served path with no file is left out (R32): a configured publisher whose `graph.db`
+  doesn't exist yet serves nothing and closes nothing, and the frame's own house, checked just before, is always in
+  the gate. So one served house that reads closed, such as one added to the config after the raise, closes every
   frame, whichever publisher it names. Under `closed` it answers a recall with no candidates and a read with every
   item's `content` null, logging the cause once per request. The gate is read again at every frame, never cached.
 
@@ -2168,12 +2372,23 @@ def test_rf2_locked_ledger_reads_closed(tmp_path):
     with hold_ledger_lock(tmp_path, "EXCLUSIVE"):        # what a commit or a cache spill holds
         assert daemon.handle_frame(recall(pub))["candidates"] == []
     assert daemon.handle_frame(recall(pub))["candidates"]               # once the lock is gone, it serves again
+
+def test_rs5_a_configured_publisher_with_no_store_yet_closes_nothing(tmp_path):
+    daemon, pub = raised_daemon(tmp_path, mode="enforce")
+    pending = add_publisher_without_store(daemon, tmp_path, "pending")   # configured; its graph.db does not exist
+    assert daemon.handle_frame(recall(pub))["candidates"]                # the gate leaves the missing path out
+    assert daemon.handle_frame(recall(pending))["code"] == "PUBLISHER_UNAVAILABLE"     # as today
+    make_house(tmp_path, "pending")                       # made now: 029 gives it the ledger's id (Task 16)
+    assert daemon.handle_frame(recall(pub))["candidates"]
 ```
 
 `add_publisher_house` restores a copy of a house that ran 029 before the raise, so it carries no id, and adds it to
 the daemon's publishers. `hold_ledger_lock(root, kind)` opens its own `sqlite3` connection to the ledger, runs
 `BEGIN <kind>`, yields, then rolls back. With R1's rollback journal, only `EXCLUSIVE` blocks a `mode=ro` reader
-(checked on this Pi by the reviewer, with `busy_timeout` 50 ms).
+(checked on this Pi by the reviewer, with `busy_timeout` 50 ms). `raised_daemon(..., busy_timeout_ms=50)` sets
+`LEDGER_BUSY_MS`, which reaches `effective_gate` as `busy_ms`, so a locked frame waits 50 ms, not 5 s.
+`add_publisher_without_store` adds a publisher named in the daemon's config whose `instances/<name>/` holds no
+`graph.db`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -2214,7 +2429,11 @@ git commit -m "Daemon: the effective gate, closed serves nothing, and group:outs
   - in the daemon, under `shadow` and `enforce`: the requester is `agent:<receiver>` in its one place; each placement's
     object is `mem:<source_instance_id>/<layer>/<source_id>` and its copy `store:<house instance_id>`; `recall` is
     decided per placement before ranking, and refused copies are filtered before ranking; a read frame is decided per
-    item as `inject_context` (P18); legacy layers are the publisher's and receiver's policy decisions of this frame;
+    item as `inject_context` (P18); the legacy layers are the publisher's and the receiver's (R30). The publisher's
+    layer is `LegacyLayer("publisher", lambda use, x: frame_decision.effect == "allow")`: it answers every action of
+    `need` with this frame's one publisher decision, the policy decided once for `recall` (`:362`) or `read` (`:402`),
+    as today. It never asks the publisher's policy about `inject_context`, which neither `policy_gen.py:75` nor E1's
+    publisher policy lists. The receiver's layer decides each action of `need` with its own `PolicyRequest`, below;
     one recall receipt and one receipt per read item go to `permission-uses.db`; an allowed item gains `permission`
     (R9); under `enforce` an item is served only when both paths allow it; under `shadow` the legacy path decides and
     every receipt has `shadow = 1`; a house with more than `MAX_PLACEMENTS` placements serves nothing under `enforce`
@@ -2223,9 +2442,10 @@ git commit -m "Daemon: the effective gate, closed serves nothing, and group:outs
     (`engram/lighthouse_daemon.py:342`). Under `shadow` and `enforce` it also reads the receiver's, at every frame and
     never cached, the way the receiver itself finds it: `load_settings(engram_home / ".engram" / "instances" /
     <receiver> / "lighthouse-receiver.toml")` (`engram/neighbors.py:183-184`), then
-    `load_receiver_policy(settings["policy_path"], receiver)`, with `engram_home` from R19. It decides the same
-    `PolicyRequest` the receiver makes (`engram/neighbors.py:53-60`: the publisher's urn, profile, `memory.recall`, the
-    action, the frame's context and purpose, audience `self`, `at` = t). A receiver with no settings file, a disabled
+    `load_receiver_policy(settings["policy_path"], receiver)`, with `engram_home` from R19. For each action x of
+    `need` it decides the same `PolicyRequest` the receiver makes (`engram/neighbors.py:53-60`: the publisher's urn,
+    profile, `memory.recall`, action x, the frame's context and purpose, audience `self`, `at` = t), as the receiver
+    asks for `recall`, `read` and `inject_context` (`:120`, `:138`). A receiver with no settings file, a disabled
     one, or one that fails to load has a legacy layer that refuses (`LEGACY_DENY`); under `shadow` that is only
     recorded. So E1's `cited` holds both legacy layers, as `LegacyLayer("publisher", ...)` and
     `LegacyLayer("receiver", ...)`;
@@ -2274,6 +2494,19 @@ def test_e1_cited_holds_the_publishers_and_the_receivers_legacy_layers(tmp_path)
     remove_receiver_settings(tmp_path, "ph-coordinator")
     assert d.read(M1_ITEM)["content"] is None         # with no receiver policy its legacy layer refuses
 
+def test_rs1_the_publishers_layer_answers_each_action_with_the_frames_one_decision(tmp_path):
+    d, ids = e1_daemon_at(tmp_path, T("2026-11-02"))  # under enforce; the publisher's policy allows recall and read
+    item = d.read(M1_ITEM)
+    assert item["content"] and item["permission"]     # E1's use 1 is delivered: inject_context was never asked of it
+    [row] = receipt_rows(tmp_path, action="inject_context")
+    publisher = [c for c in json.loads(row["cited"]) if c["kind"] == "legacy" and c["layer"] == "publisher"]
+    assert {(c["action"], c["verdict"]) for c in publisher} == {(x, "allow") for x in ("recall", "read",
+                                                                                       "inject_context")}
+    write_receiver_policy(tmp_path, "ph-coordinator", actions=["recall", "read"])   # the receiver drops inject_context
+    assert d.read(M1_ITEM)["content"] is None         # the receiver's layer answers per action
+    row = receipt_rows(tmp_path, action="inject_context")[-1]
+    assert json.loads(row["refusal"]) == {"code": "LEGACY_DENY", "layer": "receiver", "action": "inject_context"}
+
 def test_r27_a_house_without_029_serves_nothing_under_shadow_and_enforce_and_warns(tmp_path, caplog):
     for mode in ("shadow", "enforce"):
         d, pub = raised_daemon(tmp_path / mode, mode=mode, house=house_before_029)   # migrations 001 to 028 only
@@ -2304,8 +2537,21 @@ def test_rf1_no_receipt_no_content(tmp_path, caplog):
     s = shadow_daemon(tmp_path / "s", legacy_allows=True, ledger_allows=True); make_uses_file_unwritable(tmp_path / "s")
     assert s.read(M1_ITEM)["content"] and s.recall()["candidates"]    # shadow: the legacy path, with a warning
 
-def test_more_than_20000_placements_serve_nothing_under_enforce(tmp_path): ...
+def test_more_than_20000_placements_serve_nothing_under_enforce(tmp_path, caplog):   # P 12.2, "Bounds"
+    d, pub = raised_daemon(tmp_path / "over", mode="enforce", placements=MAX_PLACEMENTS + 1)
+    assert d.handle_frame(recall(pub))["candidates"] == []
+    assert all(i["content"] is None for i in d.handle_frame(read(pub, SHARED_ID))["items"])
+    assert "20,000" in caplog.text and pub in caplog.text
+    d, pub = raised_daemon(tmp_path / "at", mode="enforce", placements=MAX_PLACEMENTS)
+    assert d.handle_frame(recall(pub))["candidates"]                     # at the bound it still serves
+    d, pub = raised_daemon(tmp_path / "shadow", mode="shadow", placements=MAX_PLACEMENTS + 1)
+    assert d.handle_frame(recall(pub))["candidates"]                     # shadow: the legacy path decides
 ```
+
+`raised_daemon(..., placements=n)` makes the three placements m1 to m3 linked to one inside-home allow that covers
+every memory of the registered source store, then writes n − 3 more `shared_memories` rows by plain SQL in one
+transaction, as older code could leave them: each names its own `source_id` in that store and a `memory_id` with no
+copy, so `retrieve` never ranks it.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -2352,9 +2598,11 @@ git commit -m "Daemon: decisions before retrieval and read, receipts, and the pe
     `refusal` and `cited` are what `decide(state, use, legacy=legacy)` gives; `until` and `horizon` are unchanged
     (R7). The frame's legacy decision, the receiver's legacy layer (Task 20) and the legacy audience check
     (`_allowed_audiences`) run on every request, never cached (P 6.3 item 4);
-  - the daemon keeps at most `CACHE_ENTRIES` entries keyed by (agent, place, purpose, action), each valid while the
-    ledger's `seq` and the house's `placement_changes()` are unchanged and `entry.at <= t < entry.horizon` (Review
-    Focus 3 adds the lower bound). The rebuild runs at the first recall after a change. A house without 029's
+  - the daemon keeps at most `CACHE_ENTRIES` entries, over all houses together, keyed by (house, agent, place,
+    purpose, action) (R31), each valid while the ledger's `seq` and that house's `placement_changes()` are unchanged
+    and `entry.at <= t < entry.horizon` (Review Focus 3 adds the lower bound). The house is the publisher's
+    `db_path`, so an entry built from one house's placements is never checked against another's counter or served
+    for it. The rebuild runs at the first recall after a change. A house without 029's
     counter never gets an entry (R27).
 
 - [ ] **Step 1: Write the failing tests**
@@ -2367,6 +2615,13 @@ def test_u9_the_cache_recomputes_on_a_new_seq_a_new_change_count_and_at_the_hori
     write_any_ledger_row(led); d.recall(); assert d.rebuilds == 2
     insert_then_delete_a_placement(house); d.recall(); assert d.rebuilds == 3
     d.clock_to(d.cache_horizon()); d.recall(); assert d.rebuilds == 4
+    # two publishers, one agent: one entry per house (R31)
+    d2, (pub_a, house_a), (pub_b, house_b) = cached_daemon_two_publishers(tmp_path / "two")   # A places M1, B M5
+    assert d2.recall_ids(pub_a) == {M1} and d2.recall_ids(pub_b) == {M5} and d2.rebuilds == 2
+    assert d2.recall_ids(pub_a) == {M1} and d2.recall_ids(pub_b) == {M5} and d2.rebuilds == 2
+    insert_then_delete_a_placement(house_b)
+    assert d2.recall_ids(pub_a) == {M1} and d2.rebuilds == 2              # B's counter is not A's
+    assert d2.recall_ids(pub_b) == {M5} and d2.rebuilds == 3
 
 def test_e1_use_11_the_cache_entry_ends_at_its_horizon(tmp_path):
     d, ids = e1_daemon_after_use_10(tmp_path)               # no ledger write after 2026-11-20
@@ -2412,7 +2667,9 @@ matches each placement's object against only those records. The cache's horizon 
 At each recall the daemon takes the cached set, meets each placement's decision with this frame's legacy verdicts
 through `meet_legacy`, and keeps the placements whose hand-written audiences pass `_allowed_audiences` for this
 frame. The receipt's `cited` holds both the cached ledger citations and this frame's legacy ones.
-`d.rebuilds` is a counter the daemon keeps for tests and logs.
+`d.rebuilds` is a counter the daemon keeps for tests and logs. `cached_daemon_two_publishers` is `cached_daemon` with
+a second publisher house B, registered at `place:home/andy` like A, holding one placement of M5 that the same allow
+covers; `recall_ids(pub)` sends the recall frame to that publisher.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -2450,8 +2707,10 @@ git commit -m "Daemon: the eligible-set cache keyed on seq, placement changes an
   (`:180-181`), and `prepare_dispatch` drops any candidate whose version differs (`:208-210`). The re-read item holds
   the `permission` object, not the line, and each read writes a new receipt (P 9.1), so the line's `receipt #…`
   changes every read. Were `permission` in the version, under `shadow` and `enforce` every Lighthouse candidate would
-  fail that check and none would be delivered. The version still names the content and its source: a re-read whose
-  decision now refuses has `content: null`, so its version differs and the candidate is dropped, as today.
+  fail that check and none would be delivered. The version still names the content and its source. A re-read whose
+  decision now refuses has `content: null`, so `validate_read` skips it (`engram/lighthouse_client.py:324-325`), its
+  key is missing from `verified`, and `prepare_dispatch` drops the candidate (`engram/context_lighthouse.py:209-210`),
+  as today.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2527,13 +2786,15 @@ git commit -m "Receivers: accept and pass the permission line; the engram:permis
 - Modify: `engram/sharing.py:99-173` (`share` gains `source_instance_id`, `record_id`, the placement bound, and the
   existing-row path at `:118-129`), `engram/server.py:1949-2020` (`share`, `unshare`, and two new tools beside them),
   `engram/permissions.py` (`share_cover`)
+- Modify (R29, the one existing test line this plan changes): `engram/tests/test_packaging.py:225`, `== 43` to `== 45`
 - Test: `engram/tests/test_permissions_server.py`
 
 **Interfaces:**
 - Consumes: Tasks 9, 11 to 13, 15, 18.
 - Produces:
   - `sharing.share(..., source_instance_id: str | None = None, record_id: str | None = None)` writes both columns,
-    and refuses the 20,001st placement in a house with `ValueError` naming the bound. When the
+    and refuses the 20,001st placement in a house with `ValueError` naming the bound, in every mode. The bound is
+    checked after the existing-row path, since sharing an existing row again adds no placement. When the
     `(source_instance, source_id, audience)` row already exists (`engram/sharing.py:118-129`), it fills that row's
     `source_instance_id` and `record_id` where they are null and a value is given, in the same transaction, and
     never overwrites a value that is set. So a row `migrate` left unmatched is mended when Andy shares it again (P 12.3
@@ -2555,7 +2816,8 @@ git commit -m "Receivers: accept and pass the permission line; the engram:permis
     (R13), returning `{"status": "done" | "proposal", "ref", "under_grant"}`; refused under `closed`. `op` is one of
     the seven grant ops, with the named arguments, or one of R26's act kinds (`grant`, `group`, `register-agent`,
     `put-agent`, `add-steward`, `register-place`, `add-parent`, `register-store`, `remove-subject`, `gate`), with
-    `args` holding that act's arguments as Tasks 11 to 13 name them. Each of R26's kinds is always filed as a
+    `args` holding that act's arguments as Tasks 11 to 13 name them. For `gate` that is `{"mode": ...}` alone: the
+    agent names no house (R26, Task 13). Each of R26's kinds is always filed as a
     proposal for the owner. `op="migrate"` returns `{"error": "migrate is not a tool act; the person runs
     engram-permissions migrate in their terminal"}` and writes nothing. Any other `op` is an error;
   - `permissions(focus: str = "uses", since: str | None = None, until: str | None = None, action: str | None = None,
@@ -2578,9 +2840,45 @@ def test_u11_with_a_covering_allow_it_places_a_copy_with_the_placement_audience_
     row = placement_row(out["share_id"])
     assert row["audience"] == "group:outside-home" and row["record_id"] == rid and row["source_instance_id"]
 
-def test_u11_permit_inside_the_envelope_is_grant_backed_and_outside_is_a_proposal(enforce_server): ...
-def test_u11_unshare_always_works(enforce_server): ...
-def test_u9_the_20001st_placement_is_refused(tmp_path): ...
+def test_u11_permit_inside_the_envelope_is_grant_backed_and_outside_is_a_proposal(enforce_server):
+    gid = andy_grants_default(ops={"share"}, envelope=HOME_SELECTOR, max_days=30)   # a root grant, through perform
+    inside = server.permit(op="share", selector=HOME_SELECTOR, valid_until=now() + 30 * 86400, reason="r")
+    assert inside["status"] == "done" and inside["under_grant"] == gid
+    rec = ledger_state().records[inside["ref"]]
+    assert (rec.backing, rec.set_by, rec.channel) == (f"grant:{gid}", "agent:default", "tool")
+    before = ledger_tables()
+    outside = server.permit(op="share", selector=PUBLIC_HEALTH_SELECTOR, valid_until=now() + 30 * 86400, reason="r")
+    assert outside["status"] == "proposal" and outside["under_grant"] is None    # its audience is outside the envelope
+    assert only_proposal_rows_changed(before, ledger_tables())
+    [p] = [p for p in ledger_tables()["proposals"] if p["id"] == outside["ref"]]
+    assert (p["by_agent"], p["for_person"]) == ("agent:default", "person:andy")
+
+def test_u11_unshare_always_works(enforce_server, tmp_path):
+    rid = andy_allows(M_LOCAL, audience=["place:home/andy"])
+    first = server.share(memory_id=M_LOCAL, audience="commons", reason="r")["share_id"]
+    andy_allows(M_OTHER, audience=["place:home/andy"])
+    second = server.share(memory_id=M_OTHER, audience="commons", reason="r")["share_id"]
+    revoke_as_andy(rid)                                       # no allow covers the first one now
+    before = ledger_tables()
+    assert server.unshare(share_id=first) == {"removed": True} and placement_row(first) is None
+    assert (ledger_tables()["records"], ledger_tables()["proposals"]) == (before["records"], before["proposals"])
+    make_ledger_unreadable(tmp_path)                          # closed: share and permit refuse, unshare does not
+    assert server.unshare(share_id=second) == {"removed": True} and placement_row(second) is None
+
+def test_u9_the_20001st_placement_is_refused(tmp_path):     # P 12.2, "Bounds"; at the sharing layer, every mode
+    house, source, old = house_with_placements(tmp_path, n=MAX_PLACEMENTS)
+    new = source_episode(source, "a new memory")
+    with pytest.raises(ValueError, match="20,000"):
+        sharing.share(source_storage=source, published_storage=house, source_id=new, layer="episode",
+                      audience="commons", reason="r", source_instance="default")
+    assert placement_count(house) == MAX_PLACEMENTS
+    again = sharing.share(source_storage=source, published_storage=house, source_id=old, layer="episode",
+                          audience="commons", reason="r", source_instance="default")   # an existing row is no new one
+    assert again.share_id == share_id_of(house, old) and placement_count(house) == MAX_PLACEMENTS
+    sharing.unshare(published_storage=house, share_id=again.share_id)
+    sharing.share(source_storage=source, published_storage=house, source_id=new, layer="episode",
+                  audience="commons", reason="r", source_instance="default")         # below the bound again
+    assert placement_count(house) == MAX_PLACEMENTS
 def test_u16_closed_refuses_share_and_permit(enforce_server, tmp_path):
     make_ledger_unreadable(tmp_path)                                   # the gate now reads closed
     before = house_bytes(tmp_path)
@@ -2640,12 +2938,23 @@ The fixtures:
   `instances/lighthouse/graph.db` is made through `Storage` (with `house_dir`). `Ledger.create(tmp_path, "andy")`,
   then as `person:andy` on channel `terminal` through `perform`: `county_ledger`'s registry rows (so
   `place:la-county/public-health` exists); stores for the server's own store (`STORE_ID`, read from its `meta`) and
-  for the published house, both owned by Andy at `place:home/andy`; `agent:default` acting for Andy, at his home; and
-  `Act("gate", {"mode": "enforce", ...})`. `M_LOCAL` is an episode made through `server.remember`.
+  for the published house, both owned by Andy at `place:home/andy`; `agent:default` acting for Andy, at his home;
+  `make-collection collection:andy/local`; and `Act("gate", {"mode": "enforce"})`. `M_LOCAL` and `M_OTHER` are
+  episodes made through `server.remember`.
+- `HOME_SELECTOR`: audience `["place:home/andy"]`, kinds `["memory"]`, collections `["collection:andy/local"]`,
+  actions `recall`, `read` and `inject_context`, purposes `"*"`, every other field `"*"`. `PUBLIC_HEALTH_SELECTOR` is
+  the same with audience `["place:la-county/public-health"]` and purposes `["care-coordination"]`, outside home and
+  within P 5.4's rules. `andy_grants_default(ops, envelope, max_days)` performs a root `grant` to `agent:default` as
+  `person:andy` on channel `terminal` and returns its id; `revoke_as_andy(rid)` performs `revoke` the same way.
+- `house_with_placements(tmp_path, n)` makes a published house and a source store, places one source episode `old`
+  through `sharing.share`, then writes n − 1 more `shared_memories` rows by plain SQL in one transaction, each with its
+  own `source_id`, so the test needs no embedder. It returns `(house, source, old)`. `source_episode(source, text)`
+  adds an episode to the source; `placement_count` counts `shared_memories` rows; `share_id_of(house, source_id)`
+  reads that row's share id.
 - `WIDENING_THROUGH_PERMIT`: `share` outside any grant (a person-backed allow), `withdraw`, `shorten` and `narrow` on
   a consent deny, `collect` outside any grant, and R26's ten kinds: `grant` (a root grant), `group`,
   `register-agent`, `put-agent`, `add-steward`, `register-place`, `add-parent`, `register-store`, `remove-subject`
-  and `gate`, each with valid `args`.
+  and `gate`, each with valid `args` (for `gate`, `{"mode": "shadow"}` alone).
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -2655,6 +2964,8 @@ Expected: FAIL, `AttributeError: module 'server' has no attribute 'permit'`.
 - [ ] **Step 3: Implement the tools**
 
 Decorate `permit` and `permissions` with `@_server_tool()`, and `permit` also with `@_mutation_logged`, as `share` is.
+That makes 45 tools, so change `tests/test_packaging.py:225` from `== 43` to `== 45` (R29), and nothing else in that
+file.
 Each call runs the sweep afterwards (Task 24 adds it; until then a no-op hook `_after_share()`). `permissions`
 decides which answer to give from the ledger's `agents` row for `agent:<instance>`, read at each call.
 `test_r28_...` uses Task 25's `keep_world`: write that fixture in `permissions_support.py` here, and Task 25 reuses
@@ -2662,15 +2973,16 @@ it.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cd engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_permissions_server.py tests/test_share_tools.py tests/test_sharing.py`
-Expected: PASS.
+Run: `cd engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_permissions_server.py tests/test_share_tools.py tests/test_sharing.py tests/test_packaging.py::test_installed_wheel_starts_outside_checkout`
+Expected: PASS, the packaging test with 45 tools. Then `git diff -U0 -- engram/tests/test_packaging.py | grep '^[-+][^-+]'`
+prints exactly two lines, `-assert len(server.mcp._tool_manager.list_tools()) == 43` and the same line ending `== 45`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add engram/sharing.py engram/server.py engram/permissions.py engram/tests/test_permissions_server.py \
-        engram/tests/permissions_support.py
-git commit -m "Server: share through records under enforce, permit, and the read-only permissions tool (P 12.1)"
+        engram/tests/permissions_support.py engram/tests/test_packaging.py
+git commit -m "Server: share through records under enforce, permit, and the read-only permissions tool (P 12.1; R29: 45 tools)"
 ```
 
 ### Task 24: The sweep
@@ -2686,8 +2998,9 @@ git commit -m "Server: share through records under enforce, permit, and the read
   placement whose record no longer counts to another effective allow of the same subject covering the same object with
   the same placement audience, or removes it (and the copy and vector with its last share row, as `unshare` does);
   under `shadow` it only counts `would_remove`; it settles pending lane notes by reading the source store's lane
-  read-only. At most `limit` placements per pass, oldest first. The server's startup and the CLI's `sweep` also run
-  `Uses.fold(now=...)`, so receipts past 400 days are folded (P 9.1, "Retention").
+  read-only. At most `limit` placements per pass, oldest first. The server's startup, under `shadow` and `enforce`,
+  and the CLI's `sweep` also run `Uses.fold(now=...)`, so receipts past 400 days are folded (P 9.1, "Retention"). The
+  server reads that `now` from `server._permission_now()`, integer UTC seconds, a seam this task adds for its test.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2713,7 +3026,17 @@ def test_u12_after_an_expiry_a_placement_is_relinked_when_another_allow_covers_i
     assert (report.relinked, report.removed) == (0, 1) and copies_left(house) == 0     # `other` never relinks it
     assert other in led.state().records                                                 # and is left alone
 
-def test_u12_the_copy_goes_with_its_last_share_row(tmp_path): ...
+def test_u12_the_copy_goes_with_its_last_share_row(tmp_path):
+    house, led = enforce_house_with_placements(tmp_path, n=1, linked_to="R")   # one copy, its row linked to R
+    add_share_row_for_the_same_copy(house, led, audience="group:g1", linked_to="RG")   # a second row, same copy
+    revoke(led, "R")
+    report = sweep_placements(published_storage=house, ledger=led, mode="enforce", now=T("2026-11-05"))
+    assert report.removed == 1 and len(placement_rows(house)) == 1
+    assert copies_left(house) == 1 and vectors_left(house) == 1               # a row still holds the copy
+    revoke(led, "RG")
+    report = sweep_placements(published_storage=house, ledger=led, mode="enforce", now=T("2026-11-05"))
+    assert report.removed == 1 and placement_rows(house) == []
+    assert copies_left(house) == 0 and vectors_left(house) == 0               # its last row: copy and vector go
 def test_u12_the_sweep_settles_pending_lane_notes(tmp_path):
     house, led, store, ep = enforce_house_with_a_pending_note(tmp_path)    # the store committed `work`; no settling note
     report = sweep_placements(published_storage=house, ledger=led, mode="enforce", now=T("2026-11-05"))
@@ -2724,7 +3047,14 @@ def test_shadow_only_reports_what_it_would_remove(tmp_path):
     revoke(led, "R"); before = house_bytes(house)
     report = sweep_placements(published_storage=house, ledger=led, mode="shadow", now=T("2026-11-05"))
     assert (report.would_remove, report.removed, report.relinked) == (3, 0, 0) and house_bytes(house) == before
-def test_server_startup_folds_old_receipts(engram_server_env, tmp_path): ...
+def test_server_startup_folds_old_receipts(engram_server_env, tmp_path, monkeypatch):   # P 9.1, "Retention"
+    _published_house(tmp_path); raise_gate_through_perform(tmp_path, "shadow")
+    receipts_spanning_days(tmp_path, days=420)          # one receipt a day from 2026-11-01
+    monkeypatch.setattr(server, "_permission_now", lambda: T("2026-11-01") + 420 * 86400)
+    monkeypatch.setattr(server, "_initialized", False); server._init()
+    uses = Uses.open(tmp_path)
+    assert uses.verify() is None and monthly_counts(uses)
+    assert min(r["at"] for r in rows(uses)) >= T("2026-11-01") + 20 * 86400    # older than 400 days: folded
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2735,7 +3065,11 @@ Expected: FAIL, `ImportError: cannot import name 'sweep_placements'`.
 - [ ] **Step 3: Implement `sweep_placements` and its calls**
 
 The server runs it at startup (after the storage opens), in `_after_share`, and after `unshare`. A use is refused at
-once whether or not the sweep ran (P 10), so nothing waits on it.
+once whether or not the sweep ran (P 10), so nothing waits on it. The test helpers `add_share_row_for_the_same_copy`
+(a second `shared_memories` row naming the same copy, linked to its own allow), `vectors_left` (rows of
+`episode_vectors` in the house), `raise_gate_through_perform(root, mode)` (a ledger owned by Andy with the published
+house registered, raised through `perform`) and `receipts_spanning_days` (as Task 14's `rows_spanning_days`) live in
+the test file.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -2765,7 +3099,9 @@ git commit -m "Sharing: the sweep relinks or removes placements and settles pend
     a delivery `Uses.deliveries(agent, now=now)` finds, and `decide`, over ledger layers only, refuses `imprint` for
     that item (R10). Under `off` it returns `None`. Under `shadow` it returns `None`
     and `remember` adds `"would_refuse": True` to its response. Under `enforce` it refuses; under `closed` it refuses as
-    R11 says. To an agent that doesn't act for the owner the reply
+    R11 says. When `permission-uses.db` exists but can't be read, it refuses every `remember` under `enforce` and
+    `closed`, naming the cause, and under `shadow` logs the cause and lets it go on with `"would_refuse": True` (R11).
+    To an agent that doesn't act for the owner the reply
     is exactly `{"error": "keeping this content is not allowed", "layer": "rejected"}`; to the owner's agents it adds
     the refusal's code, layer and action. When `imprint` is allowed, `remember` calls `Ledger.record_copy` for the new
     episode's ref before writing it (P25);
@@ -2791,10 +3127,12 @@ def test_u17_a_co_subject_added_to_the_source_afterwards_refuses_the_kept_copys_
         keep_world_with_imprint_allowed):
     out = server.remember(content=M1_TEXT)
     kept = f"mem:{STORE_ID}/episode/{out['episode_id']}"
-    use = KEPT_USE(kept, at=now())                      # a read of the kept copy that both homes allow
+    use = KEPT_USE(kept, at=now())                      # a read of the kept copy that Andy's and ph-steward's homes allow
     assert decide(ledger_state(), use).allowed
-    add_subject(M1, "person:amy")                        # on the source, after the copy was kept
+    add_subject(M1, "person:amy")                        # by Andy, on the source, after the copy was kept
     assert "person:amy" in subjects_of(ledger_state(), kept, now())          # through `copies` (7.4)
+    # Amy is registered with an empty home (county_ledger, Task 11), so P 7.4 gives NO_ALLOW; Task 5's U28 case
+    # holds the unregistered one, NO_LAYER
     assert decide(ledger_state(), use).refusal == Refusal("NO_ALLOW", "place:home/amy", "recall")
 
 def test_u17_an_amy_co_subject_names_no_code_layer_or_action_to_the_agent(keep_world):
@@ -2819,7 +3157,25 @@ def test_the_guard_catches_a_verbatim_copy_with_surrounding_whitespace(keep_worl
     out = server.remember(content="  " + M1_TEXT + "\n")                # remember strips it before hashing
     assert out == {"error": "keeping this content is not allowed", "layer": "rejected"}
 
-def test_genome_sync_records_kept_copy_subjects_under_shadow(tmp_path): ...
+def test_genome_sync_records_kept_copy_subjects_under_shadow(tmp_path):   # P 12.1's genome sync row; P25
+    led, genome_path, instance, ids = genome_world(tmp_path, mode="shadow")
+    assert federation.sync_genome(str(genome_path), instance, ledger=led) == 1
+    [local] = [r["id"] for r in instance.conn.execute("SELECT id FROM episodes WHERE episode_type = 'genome_sync'")]
+    copy, source = f"mem:{ids.I}/episode/{local}", f"mem:{ids.G}/episode/{ids.g1}"
+    s = led.state()
+    assert s.copies[copy] == source
+    assert subjects_of(s, copy, T("2026-11-02")) == ("person:andy", "person:jenn")    # the source's, carried
+    assert {(r["subject"], r["added_by"]) for r in led.tables()["subjects"] if r["object"] == copy} == {
+        ("person:jenn", f"copy:{source}")}
+    assert federation.sync_genome(str(genome_path), instance, ledger=led) == 0 and led.state().copies == s.copies
+    plain = genome_world(tmp_path / "no-ledger", mode=None)                       # no ledger: as today
+    assert federation.sync_genome(str(plain[1]), plain[2]) == 1 and not ledger_path(tmp_path / "no-ledger").exists()
+
+def test_r11_an_unreadable_receipts_file_refuses_every_remember_under_enforce(keep_world, caplog):
+    make_uses_file_unreadable(ENGRAM_HOME)
+    out = server.remember(content="a note that was never delivered")
+    assert out == {"error": "keeping this content is not allowed", "layer": "rejected"}
+    assert "permission-uses.db" in caplog.text
 
 def test_off_has_no_guard(engram_server_env, tmp_path, monkeypatch):
     write_delivery_receipt(tmp_path, content=M1_TEXT, agent="agent:default")   # a receipts file, and no ledger
@@ -2830,14 +3186,23 @@ def test_off_has_no_guard(engram_server_env, tmp_path, monkeypatch):
 
 `keep_world` (written in Task 23, in `permissions_support.py`): `engram_server_env` with the server's instance name
 set to `ph-coordinator`, so its agent is `agent:ph-coordinator` (R13) and its store `instances/ph-coordinator/graph.db`
-(made with `house_dir`). The ledger is `e1_county_ledger`'s, plus that store registered as `PHC_STORE`, owned by
+(made with `house_dir`, then opened once with `Storage` before `_init`: `_init_unlocked` uses that path only when the
+file exists, `engram/server.py:1309`, and otherwise falls back to the default store, which `attach_neighbors` then
+refuses with `RECEIVER_STORE_MISMATCH`, `engram/neighbors.py:188-189`). The ledger is `e1_county_ledger`'s (so
+`person:amy` is registered, with an empty home), plus that store registered as `PHC_STORE`, owned by
 `person:ph-steward` at clinic-3, and the published house holding m1, m2 and m3 linked as P 13 says; both
 ConnectionPolicy files and the receiver's `lighthouse-receiver.toml` are written by hand as P 13 says; the gate is
 raised to `enforce` through `perform`. `deliver_m1_through(world, path)` runs E1's use 1 at 2026-11-02 through
 `neighbor_arm` or the context runtime against a `PublisherDaemon` on a socket in `tmp_path`, so the daemon writes the
 allowed `inject_context` receipt, and returns its `at`. `keep_world_with_imprint_allowed` adds allows for `imprint` of
-m1 in `place:home/andy`, la-county, public-health and clinic-3, and an allow in each home for `KEPT_USE`, a read of
-the kept copy by `agent:ph-coordinator` for care-coordination.
+m1 in `place:home/andy`, la-county, public-health and clinic-3, and an allow in Andy's home and in ph-steward's home
+(the kept copy's two subjects) for `KEPT_USE`, a read of the kept copy by `agent:ph-coordinator` for
+care-coordination; Amy's home stays empty. `add_subject(ref, subject)` performs `add-subject` as `person:andy` on
+channel `terminal`. `genome_world(root, mode)` makes a genome store G at `.engram/genome/graph.db` holding one core-2
+episode g1 and an empty instance store I; with a mode it also makes a ledger owned by Andy, raised to that mode
+through `perform`, with G and I registered as Andy's stores at his home and `person:jenn` as g1's co-subject, and it
+returns `(ledger or None, genome path, I's Storage, ids)`. `make_uses_file_unreadable` writes bytes that are not a
+SQLite file to `permission-uses.db`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -2973,7 +3338,10 @@ git commit -m "engram-permissions: the terminal yes, init and the registry comma
     `narrow <id> --selector`, `grant --to --ops --envelope --max-days --depth --hours [--parent]`,
     `revoke-grant <id>`, `sign <id>`, `decline <id>`. `allow` prints `allow_words`; every command prints the full
     change (selector in canonical JSON, `valid_from`, `valid_until`, the layer, the replaced record). `sign` prints
-    the proposal's words and the full change it will make, for every proposal kind of R26;
+    the proposal's words and the full change it will make, for every proposal kind of R26. For a gate proposal that
+    change is `Ledger.gate_plan()` at the time of the yes (Task 13): the published house, every house it will mark,
+    and each house that lacks migration 029, saying it serves nothing under `shadow` or `enforce` until an engram
+    server opens it once (R26, R27), as Task 27's `gate` prints;
   - a reading subcommand, no yes: `proposals`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -3004,12 +3372,28 @@ def test_u14_sign_prints_the_full_selector_before_asking(cli_home, fake_tty, cap
     assert out.index('"audience":["place:la-county/parks-and-rec"]') < out.index("code:")
     assert "valid_from" in out and "place:home/andy" in out
 
-def test_r26_sign_completes_each_kind_the_tool_files(cli_home, fake_tty):
-    for kind, pid in file_one_proposal_of_each_r26_kind(cli_home):      # through Ledger.perform on channel tool
+def test_r26_sign_completes_each_kind_the_tool_files(cli_home_with_house, fake_tty):   # gate needs the house
+    for kind, pid in file_one_proposal_of_each_r26_kind(cli_home_with_house):   # through Ledger.perform, channel tool
         fake_tty.answer_the_printed_code()
         assert main(["sign", pid]) == 0, kind
-    assert open_proposals(cli_home) == []
+    assert open_proposals(cli_home_with_house) == []
+
+def test_rs2_sign_of_a_gate_proposal_lists_the_houses_and_those_lacking_029_before_the_yes(
+        cli_home_with_house, fake_tty, capsys):
+    pid = file_gate_proposal(cli_home_with_house, mode="shadow")    # its body holds {"mode": "shadow"} alone
+    house_before_029(cli_home_with_house, "old")                    # made after the agent asked (Task 16's builder)
+    fake_tty.answer_the_printed_code(); assert main(["sign", pid]) == 0
+    out = capsys.readouterr().out
+    assert out.index("instances/old/graph.db") < out.index("code:") and "serves nothing" in out
+    assert out.index("instances/lighthouse/graph.db") < out.index("code:")
+    old = cli_home_with_house / ".engram" / "instances" / "old" / "graph.db"
+    assert house_meta(old)["permissions_ledger_id"] == Ledger.open(cli_home_with_house).meta()["ledger_id"]
 ```
+
+`cli_home_with_house` (written here; Task 27 uses it too) is `cli_home` plus the published house
+`instances/lighthouse/graph.db`, made through `Storage` with `house_dir`. `file_gate_proposal(home, mode)` registers
+`agent:default` acting for the owner, at his home, through `perform` as the owner, then files `Act("gate", {"mode":
+mode})` as that agent on channel `tool` and returns the proposal id.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -3018,8 +3402,9 @@ Expected: FAIL, `SystemExit: 2` from argparse (`invalid choice: 'allow'`).
 
 - [ ] **Step 3: Implement the subcommands**
 
-As Task 26's. `sign` resolves the proposal by prefix, prints `proposal_words` and the full `Act` it holds, asks the
-yes, then performs `sign`.
+As Task 26's. `sign` resolves the proposal by prefix, prints `proposal_words` and the full `Act` it holds, and for a
+gate proposal also `Ledger.gate_plan()`, asks the yes, then performs `sign`. A house made between the print and the
+yes is marked too, since `perform` reads the houses again when it applies the act.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -3085,11 +3470,26 @@ def test_report_shadow_lists_the_disagreements_and_the_shares_that_would_need_a_
     assert [r["id"] for r in out["disagreements"]] == [cli_shadow_world.refused_receipt]
     assert [s["share_id"] for s in out["would_need_a_proposal"]] == [cli_shadow_world.uncovered_share]
 
-def test_explain_agrees_with_decide_for_a_single_and_a_bulk_use(cli_e1_world, capsys): ...
+def test_explain_agrees_with_decide_for_a_single_and_a_bulk_use(cli_e1_world, capsys):   # P 14's `explain`
+    s = Ledger.open(cli_e1_world).state()
+    who = ["--agent", "agent:ph-coordinator", "--place", CLINIC_3, "--copy", HOUSE_COPY, "--purpose",
+           "care-coordination", "--at", "2026-11-02"]
+    assert main(["explain", *who, "--object", M3, "--action", "read", "--json"]) == 0      # E1 use 2: refused
+    assert json.loads(capsys.readouterr().out) == decide(s, Use("agent:ph-coordinator", CLINIC_3, M3, HOUSE_COPY,
+                                                                "read", "care-coordination", T("2026-11-02"))).to_json()
+    objects = write_objects_file(cli_e1_world, [M1, M2])
+    assert main(["explain", *who, "--objects", str(objects), "--counted", "--action", "recall", "--json"]) == 0
+    bulk = BulkUse("agent:ph-coordinator", CLINIC_3, (M1, M2), HOUSE_COPY, "recall", "care-coordination",
+                   T("2026-11-02"), named=False)
+    assert json.loads(capsys.readouterr().out) == decide_bulk(s, bulk).to_json()
 def test_place_show_prints_place_rules_and_refuses_a_home(cli_e1_county, capsys): ...
 def test_rebuild_writes_a_file_with_the_same_tables(cli_e1_world, tmp_path): ...
 def test_uses_json_matches_owner_list(cli_e1_world, capsys): ...
 ```
+
+`CLINIC_3` is `place:la-county/public-health/clinic-3`, `HOUSE_COPY` is `store:<the published house's instance_id>`
+in `cli_e1_world`, and `write_objects_file(home, refs)` writes one ref per line to a file in `home` and returns its
+path. `explain --json` prints the decision's `to_json()`, so the test compares it with `decide` and `decide_bulk`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -3098,9 +3498,10 @@ Expected: FAIL, `SystemExit: 2` from argparse (`invalid choice: 'gate'`).
 
 - [ ] **Step 3: Implement the subcommands**
 
-`gate` builds `Act("gate", {...})` with the published house `ENGRAM_HOME/.engram/instances/lighthouse/graph.db` and
-`houses(ENGRAM_HOME)`, and before the yes prints each house that lacks migration 029, saying it serves nothing under
-`shadow` or `enforce` until an engram server opens it once (R27). `uses --place P` shows `Uses.place_view` for a
+`gate` builds `Act("gate", {"mode": mode})` (R26: the act names no house), and before the yes prints
+`Ledger.gate_plan()`: the published house `ENGRAM_HOME/.engram/instances/lighthouse/graph.db`, every house of
+`houses(ENGRAM_HOME)` it will mark, and each house that lacks migration 029, saying it serves nothing under `shadow` or
+`enforce` until an engram server opens it once (R27). `uses --place P` shows `Uses.place_view` for a
 place the owner stewards (P 9.3) and otherwise the owner's list filtered by place. `report shadow` lists:
 
 - the disagreements: receipts with `shadow = 1` whose legacy verdicts all allow and whose `allowed` is 0;
@@ -3158,7 +3559,16 @@ def test_u13_shares_become_one_collection_and_one_allow_per_legacy_audience(lega
                                   "collection:andy/legacy-group-lab"}
     assert len([r for r in s.records.values() if r.reason == "legacy share"]) == 3
 
-def test_u13_more_than_256_shares_migrate(legacy_home_with_300_commons_shares, fake_tty): ...
+def test_u13_more_than_256_shares_migrate(legacy_home_with_300_commons_shares, fake_tty):
+    home = legacy_home_with_300_commons_shares
+    fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
+    led = Ledger.open(home); s = led.state()
+    members = [m for m in led.tables()["collection_members"] if m["collection"] == "collection:andy/legacy-commons"]
+    assert len(members) == 300 and {m["backing"] for m in members} == {"person"}
+    [allow] = [r for r in s.records.values() if r.reason == "legacy share"]   # one record, within the 256 bound
+    house = share_rows(home / ".engram/instances/lighthouse/graph.db")
+    assert len(house) == 300 and {r["record_id"] for r in house} == {allow.id}
+    assert all(r["source_instance_id"] for r in house)
 
 def test_u13_a_row_whose_source_fell_back_is_listed_and_refused_under_enforce(fallback_home, fake_tty, capsys):
     fake_tty.answer_the_printed_code(); main(["migrate"])
@@ -3200,10 +3610,27 @@ def test_migrate_refuses_when_a_ledger_exists(legacy_home, fake_tty, capsys):
     fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 1
     assert ledger_bytes(legacy_home) == before and "already" in capsys.readouterr().err
 
-def test_u13_each_source_store_is_byte_identical_while_source_instance_id_is_filled(legacy_home, fake_tty): ...
+def test_u13_each_source_store_is_byte_identical_while_source_instance_id_is_filled(legacy_home, fake_tty):
+    sources = source_store_paths(legacy_home)            # .engram/graph.db and instances/why/graph.db
+    before = {p: (p.read_bytes(), sorted(q.name for q in p.parent.iterdir())) for p in sources}
+    fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
+    assert {p: (p.read_bytes(), sorted(q.name for q in p.parent.iterdir())) for p in sources} == before
+    rows = share_rows(legacy_home / ".engram/instances/lighthouse/graph.db")
+    assert rows and all(r["source_instance_id"] == instance_id_of(source_for(legacy_home, r)) for r in rows)
 
-def test_u13_every_house_and_source_store_is_registered_at_andys_home_and_use_1s_holding_place_resolves(...):
-    ...   # the re-check's RN6
+def test_u13_every_house_and_source_store_is_registered_at_andys_home_and_use_1s_holding_place_resolves(
+        legacy_home, fake_tty):                          # 12.3 step 2; the re-check's RN6
+    fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
+    s = Ledger.open(legacy_home).state()
+    expected = {instance_id_of(p) for p in houses(legacy_home) + source_store_paths(legacy_home)}
+    assert expected <= set(s.stores)
+    assert {(s.stores[i].owner, s.stores[i].place) for i in expected} == {("person:andy", "place:home/andy")}
+    house_id = instance_id_of(legacy_home / ".engram/instances/lighthouse/graph.db")
+    receiver = receivers_named_in_policies(legacy_home)[0]
+    u = Use(requester=f"agent:{receiver}", place="place:home/andy", obj=migrated_ref(legacy_home, "commons"),
+            copy=f"store:{house_id}", action="recall", purpose="session-recall", at=now())
+    assert Layer("place:home/andy", "consent") in required_layers(s, u)   # the holding place resolves
+    assert decide(s, u).allowed                          # use 1's shape: a placement decided on its source ref, via h
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -3217,7 +3644,16 @@ Expected: FAIL, `invalid choice: 'migrate'`.
 with `Storage.open_read_only`. The published house is opened with `Storage`, so 029 runs, and is written only to fill
 `source_instance_id` and `record_id`, inside one transaction (`Storage.transaction()`) after the ledger rows commit.
 Other houses are read for their `instance_id` with `mode=ro` and are not migrated; those lacking 029 are listed
-(R27).
+(R27). Collections are named `collection:<owner handle>/legacy-commons` and `collection:<owner handle>/legacy-group-<g>`
+(R24); the tests set the login to `andy`.
+
+The fixtures, in the test file: `legacy_home` is an `ENGRAM_HOME` with a default store `.engram/graph.db`, an instance
+store `instances/why/graph.db`, the published house holding shares to `commons`, `group:team` and `group:lab` from
+both, `groups.toml`, and a generated publisher policy naming two receivers; every row matches its source.
+`legacy_home_with_300_commons_shares` is the same with 300 `commons` rows from the default store.
+`source_store_paths(home)` lists the source stores; `source_for(home, row)` is the store a row's `source_instance`
+names; `instance_id_of(path)` reads `meta.instance_id` with `mode=ro`; `migrated_ref(home, audience)` is the source
+ref, `mem:<source instance id>/<layer>/<source id>`, of one migrated row of that audience.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -3407,7 +3843,8 @@ Expected: one line.
 - [ ] **Step 3: Run every new test file and the suites they touch**
 
 Run: `cd engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_permissions_*.py tests/test_packaging.py`
-Expected: PASS, with U24's two tests skipped. Report the counts.
+Expected: PASS, with U24's two tests skipped, and `test_installed_wheel_starts_outside_checkout` counting 45 tools
+(R29). Report the counts.
 
 - [ ] **Step 4: Commit**
 
@@ -3429,8 +3866,11 @@ ship.
 1. **Up to date with main, by a merge, never a rebase.**
    `git merge-base --is-ancestor main HEAD || git merge --no-ff main -m "Merge main into permissions-core"`
 2. **The diff is what the plan says.** `git diff --stat main...HEAD` lists only the files in "File Structure".
-   `git diff --name-only --diff-filter=MDR main...HEAD -- engram/tests/` prints nothing: no existing test file
-   changed. `git diff --check main...HEAD` prints nothing.
+   `git diff --name-only --diff-filter=MDR main...HEAD -- engram/tests/` prints exactly `engram/tests/test_packaging.py`,
+   the one exception R29 allows, and no other existing test file. That file's change is one line:
+   `git diff -U0 main...HEAD -- engram/tests/test_packaging.py | grep '^[-+][^-+]'` prints exactly
+   `-assert len(server.mcp._tool_manager.list_tools()) == 43` and `+assert len(server.mcp._tool_manager.list_tools()) == 45`.
+   `git diff --check main...HEAD` prints nothing.
 3. **The engram suite on the Pi, capped** (engram's CLAUDE.md, "Testing"):
    `cd engram && LIGHTHOUSE_REPO="$(cd .. && pwd)/lighthouse" PYTHONDONTWRITEBYTECODE=1 systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 uv run --locked --extra dev python -m pytest -q -ra --tb=short -p no:cacheprovider`
    Expected: every test passes except any that also fail on `main` at the merge base. Run the same command on a
@@ -3462,12 +3902,13 @@ None of these is run by this plan. Each waits for the person named.
 |---|---|---|
 | G1 | The merge itself, under section 2 (above). | Station law. |
 | G2 | Engram servers in running Claude Code sessions, and any engram daemon on Andy's machines, load the new code only at their next start. Nothing restarts them. | Nothing live here. With no ledger they behave as today except the two fail-closed changes. |
-| G3 | `engram-permissions migrate` on Andy's machine, then `gate shadow`, then reading `report shadow`. Before `gate shadow`, each house that `migrate` and `gate` list as lacking 029 is opened once by its own engram server at its next start (G2), or it serves nothing under `shadow` (R27). | Andy's own terminal yes (P 7.6, 12.3). No agent runs them (Task 32's rule). |
+| G3 | `engram-permissions migrate` on Andy's machine, the one whose `ENGRAM_HOME` holds the published house the daemon serves, after he checks that the words of the yes name `person:andy` (R24), then `gate shadow`, then reading `report shadow`. Before `gate shadow`, each house that `migrate` and `gate` list as lacking 029 is opened once by its own engram server at its next start (G2), or it serves nothing under `shadow` (R27). | Andy's own terminal yes (P 7.6, 12.3). No agent runs them (Task 32's rule). |
 | G4 | Andy's home grant for his own agents (P 12.3 step 4), and his answer on agent shares at home lasting at most 720 hours. | Section 19, "Agent shares at home under `enforce`". |
 | G5 | `gate enforce`. | Andy's yes, after G3's report and G4; and his answer on whether the terminal yes is enough at home (P 19). |
 | G6 | The imprints plan's build: `import-receipts`, `pending(m)`, `cosubjects(m)` and D37 read this plan's files. | Build order: imprints after this merges. |
 | G7 | The trails step 1 plan's build: `laid_by` reads `stores.owner`. | Build order: trails after imprints. |
 | G8 | YN6's wording in P 9.1 item 1 ("per action and purpose") in the spec's next revision. | This plan edits no spec; the code already counts per (action, purpose). |
+| G11 | R10's departure in the spec's next revision: P 6.3 item 4 and section 10 say that the `remember` guard decides `imprint` from ledger layers only, ignoring any legacy `imprint` rule, allow or deny, and why (today's generated files and E1's give no `imprint`; both legacy layers already allowed the delivery under `enforce`; every person the memory is about still says yes in the ledger). | This plan edits no spec. The re-check confirmed R10 on this condition. |
 | G9 | Step 2's items: the browser yes and station signatures (P 14 step 2), what a subject sees of another subject's home (BS3), which item of `Req` holds a station ceiling (XN6), a copy held away reading lanes from the imprint (P 5.3), and the `remember` guard seeing deliveries decided elsewhere (P 10). | Later specs. Not built here. |
 | G10 | Section 19's open questions: the license, one permission an agent may set alone, what the county sets, pseudonyms, the two departures from principle 5, who decides in the county steps, and memories that mention other people. | Andy's. Each spec keeps its default. |
 
@@ -3529,3 +3970,8 @@ None of these is run by this plan. Each waits for the person named.
 | Carried YN6, XS2, XM1, XN3, AN4, AN5 | 15, 14 and 15, 5 and 7 (`outside`), 31, 32, 18 |
 | Plan review MF1, MF2 | 22 (`_version` leaves out `permission`), 17 (`after_outcome`) |
 | Plan review SF1 to SF14 | 5 and 7; 19; 19; 16, 20, 21, 27, 28 (R27); 12, 13, 23, 26A (R26); 23 (R28); 11; 23; 21; 7 and 31 (R23); 4, 15, 20, 22, 24, 25, 28 and the fixture builders of 11, 23, 25; 5A and 26A; 23; 20 and R10 |
+| Re-check RM1 (the tool count) | 23 (R29), Global Constraints, Verification step 2 |
+| Re-check RM2 (P 17's placeholders) | 2 (U2 depth and count), 4 (U6 work to personal), 14 (U8 receipts chain, U22 five roads), 15 (U8 pseudonyms, no filtered counts), 23 (U11 permit, U11 unshare, U9 20,001st), 24 (U12 last share row), 28 (U13 >256, bytes unchanged, registered at home) |
+| Re-check RM3 (Amy) | 11 (`county_ledger` registers her), 5 (U28: `NO_ALLOW` registered, `NO_LAYER` not), 25 |
+| Re-check RS1 to RS7 | 20 (R30); 13, 23, 26A, 27 (R26, `gate_plan`); 21 (R31); 16; 13 and 19 (R32); R10 and G11; 20, 25, 12, 12 |
+| Re-check nits, and the two other sole tests | 17, 22, R1 and 13, R24 and G3, 13 and 19 (`busy_ms`), 25 (`keep_world`), 2 (`World`), 5A, R11 and 25, "What the other plans use"; 24 (startup fold), 27 (`explain`); R33 (place views) |
