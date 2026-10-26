@@ -1136,10 +1136,11 @@ def _subject_layer(state: State, subject: str) -> str:
 
 
 def required_layers(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
-                    outside: Mapping | None = None) -> tuple[Layer, ...]:
+                    outside: Mapping | None = None, subjects: Sequence[str] | None = None) -> tuple[Layer, ...]:
     """Req(u) in P 6.5 step 2's order, each layer once: subjects by id, the requester's places by id, the holding
     places by id (a holding place with no `stores` row is a layer that does not exist, named by the copy), the
-    legacy layers, the agent's restriction layer. A place id in `outside` is an `outside` layer there."""
+    legacy layers, the agent's restriction layer. A place id in `outside` is an `outside` layer there. A caller
+    that has the use's subjects already (a bulk decision) passes them."""
     outside = outside or {}
     out: list[Layer] = []
     seen: set = set()
@@ -1150,7 +1151,7 @@ def required_layers(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (
             seen.add(key)
             out.append(Layer(layer_id, "outside" if kind == "consent" and layer_id in outside else kind))
 
-    for s in subjects_of(state, use.obj, use.at, use.names):
+    for s in (subjects_of(state, use.obj, use.at, use.names) if subjects is None else subjects):
         add(_subject_layer(state, s), "consent")
     for p in sorted(ancestors(state, use.place), key=_units):
         add(p, "consent")
@@ -1468,80 +1469,257 @@ def _horizon(state: State, t: int, layers: Sequence[str], objs: Sequence[str]) -
     return min(out) if out else None
 
 
+@dataclass(frozen=True)
+class BulkUse:
+    """A bulk use U = (a, P, O, h, x, p, t) (P 6.4, P33). `named` says the receipt names its objects (at most
+    MAX_BULK_NAMED); otherwise they are derived and counted (at most MAX_BULK_DERIVED). `names(o)` gives the
+    memories a road or trail o names; it is called again when the objects are decided, so the touches are
+    streamed and never held."""
+    requester: str
+    place: str
+    objects: tuple
+    copy: str
+    action: str
+    purpose: str
+    at: int
+    named: bool
+    names: Callable[[str], Iterable[str]] = lambda o: ()
+
+
+def _listed_memories(state: State) -> frozenset:
+    """Every memory ref that some record's or grant's selector lists in `memories`."""
+    def compute():
+        out: set = set()
+        for sel in [r.selector for r in state.records.values()] + [g.envelope for g in state.grants.values()]:
+            if sel.memories != STAR:
+                out.update(sel.memories)
+        return frozenset(out)
+    return state._memo(("listed-memories",), compute)
+
+
+class _Run:
+    """The accumulation of P 6.5 over one or many (object, action) pairs: each pair is decided once, however many
+    objects need it (P 6.4: need(U) is a union)."""
+
+    def __init__(self, state: State, proto: Use, legacy: Sequence[LegacyLayer], outside: Mapping | None, *,
+                 multi: bool, group: bool = False):
+        self.state, self.proto, self.legacy, self.multi, self.group = state, proto, tuple(legacy), multi, group
+        self.outside = outside or {}
+        self.by_name = {layer.name: layer for layer in legacy}
+        self.entries: dict = {}
+        self.versions: dict[str, int] = {}
+        self.layer_pos: dict[str, int] = {}     # layers in required_layers order, the first object's first
+        self.failure: tuple | None = None
+        self.ends: list[int] = []                # effective ends of the cited records (step 5)
+        self.ledger_layers: list[str] = []       # the required consent and restriction layers, first seen order
+        self._ledger_seen: set = set()
+        self.read: dict = {}                     # obj -> (use, [actions]) for each need(u) decided
+        self.objs: list[str] = []
+        self.done: set = set()                   # (obj, action) pairs already decided
+        self._subjects: dict = {}
+        self._retired: dict = {}
+        self._shared: dict = {}                  # group key -> (layers, {(ledger layer id, action): row})
+        self._read_groups: set = set()
+
+    # -- subjects, with one memo per ref
+    def subjects(self, obj: str, names: Sequence[str] = ()) -> tuple:
+        t = self.proto.at
+        if not names:
+            got = self._subjects.get(obj)
+            if got is None:
+                got = self._subjects[obj] = subjects_of(self.state, obj, t)
+            return got
+        out = set(self.subjects(obj))
+        for name in names:
+            out.update(self.subjects(name))
+        return tuple(sorted(out, key=_units))
+
+    def _any_retired(self, subjects: Sequence[str]) -> bool:
+        for s in subjects:
+            got = self._retired.get(s)
+            if got is None:
+                got = self._retired[s] = _subject_retired(self.state, s)
+            if got:
+                return True
+        return False
+
+    def group_key(self, ref: str, subjects: tuple):
+        """P 6.4, "How it is computed": what the pre-filtered records read of an object."""
+        try:
+            parsed = parse_object_ref(ref)
+        except RuleError:
+            return None
+        state = self.state
+        return (parsed.kind, parsed.instance_id, parsed.layer, tuple(state.lane_notes.get(ref, ())),
+                tuple(state.member_of.get(ref, ())), ref if ref in _listed_memories(state) else None, subjects)
+
+    # -- one row: a layer's verdict for one action
+    def _row(self, layer: Layer, sub: Use, action: str) -> tuple:
+        recs: tuple = ()
+        ends: list = []
+        if layer.kind == "outside":
+            verdict = self.outside[layer.id](sub, action)
+            if verdict not in ("allow", "deny", "silent"):
+                raise RuleError("6.1 outside layer", f"layer {layer.id} answered {verdict!r}")
+        elif layer.kind == "legacy":
+            verdict = "allow" if self.by_name[layer.id].allows(sub, action) else "deny"
+        else:
+            verdict, recs = _ledger_verdict(self.state, layer, sub, action)
+            for rid in recs:
+                end = _terms(self.state, self.state.records[rid], sub, action, True)[0]
+                if end is not None:
+                    ends.append(end)
+        passes = verdict == "allow" or (layer.kind == "restriction" and verdict == "silent")
+        return (layer, action, verdict, passes, recs, ends)
+
+    def _merge(self, row: tuple, sub: Use) -> None:
+        layer, action, verdict, passes, recs, ends = row
+        key = (layer.id, action)
+        if key not in self.entries:
+            self.entries[key] = (layer, action, verdict, passes, set(recs))
+        else:       # the same (layer, action) over several objects: the first failing verdict, all records
+            _, _, was, was_passes, held_recs = self.entries[key]
+            keep = was_passes and not passes
+            self.entries[key] = (layer, action, verdict if keep else was, was_passes and passes,
+                                 held_recs | set(recs))
+        self.ends.extend(ends)
+        if not passes and self.failure is None:
+            code = ("NO_LAYER" if verdict == "missing" else
+                    "LEGACY_DENY" if layer.kind == "legacy" else "DENIED" if verdict == "deny" else
+                    "NO_ALLOW" if layer.kind == "outside" else _silent_code(self.state, layer, sub, action))
+            self.failure = (code, layer.id, action)
+
+    def _register(self, layers: Sequence[Layer]) -> None:
+        for layer in layers:
+            self.layer_pos.setdefault(layer.id, len(self.layer_pos))
+            if layer.kind in ("consent", "restriction") and layer.id not in self._ledger_seen:
+                self._ledger_seen.add(layer.id)
+                self.ledger_layers.append(layer.id)
+                self.versions[layer.id] = layer_version(self.state, layer.id)
+
+    def process(self, sub: Use, actions: Sequence[str], subjects: tuple, *, bound: bool = False,
+                gkey=None) -> bool:
+        """Decide `actions` on sub.obj, each pair once. False when the object's own tests (a retired subject's
+        home, no subject, more than 8 subjects or a name count past the bound) stop the decision (P 6.5 step 1)."""
+        todo = [x for x in actions if (sub.obj, x) not in self.done]
+        if not todo:
+            return True
+        code = ("RETIRED" if self._any_retired(subjects) else "NO_LAYER" if not subjects else
+                "BOUND" if len(subjects) > MAX_SUBJECTS or bound else None)
+        if code is not None:
+            self.failure = self.failure or (code, None, None)
+            return False
+        self.done.update((sub.obj, x) for x in todo)
+        shared = self._shared.get(gkey) if gkey is not None else None
+        if shared is None:
+            layers = required_layers(self.state, sub, legacy=self.legacy, outside=self.outside, subjects=subjects)
+            self._register(layers)
+            if gkey is not None:
+                shared = self._shared[gkey] = (layers, set())
+        else:
+            layers = shared[0]
+        # the actions whose ledger verdicts this object (or, in a group, an earlier one) has not yet made
+        fresh = todo if shared is None else [x for x in todo if x not in shared[1]]
+        if fresh:
+            self.objs.append(sub.obj)
+            self.read.setdefault(sub.obj, (sub, []))[1].extend(fresh)
+        for layer in layers:
+            ledger = layer.kind in ("consent", "restriction")
+            for action in todo:
+                if ledger and action not in fresh:
+                    continue        # an object of the same group made this decision
+                self._merge(self._row(layer, sub, action), sub)
+        if shared is not None:
+            shared[1].update(todo)
+        return True
+
+    def result(self) -> Decision:
+        proto, state = self.proto, self.state
+        order = sorted(self.entries.values(), key=lambda e: (self.layer_pos[e[0].id], ACTIONS.index(e[1])))
+        cited = tuple(Cited(layer.id, layer.kind, action, verdict, tuple(sorted(recs, key=_units)))
+                      for (layer, action, verdict, _, recs) in order)
+        return Decision(allowed=self.failure is None, at=proto.at, ledger_seq=state.seq, action=proto.action,
+                        cited=cited, refusal=None if self.failure is None else Refusal(*self.failure),
+                        until=_until(state, proto.at, self.ends, self.ledger_layers, list(self.read.values())),
+                        horizon=_horizon(state, proto.at, self.ledger_layers, self.objs),
+                        versions=self.versions, multi=self.multi)
+
+    def before_any_object(self) -> bool:
+        """P 6.5 step 1, the tests on a, P, anc(P) and anc(H). False, with the failure set, when one fails."""
+        state, use = self.state, self.proto
+        if not _requester_ok(state, use):
+            self.failure = ("UNKNOWN_REQUESTER", None, None)
+            return False
+        held = holding_place(state, use.copy)
+        if place_retired(state, use.place) or (held is not None and place_retired(state, held)):
+            self.failure = ("RETIRED", None, None)
+            return False
+        return True
+
+
 def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
            outside: Mapping | None = None) -> Decision:
     """P 6.5 steps 1 to 8. Every decision in need(u) is made, the
-    object first, then the memories it names in ref order; the refusal is the first failing one."""
-    outside = outside or {}
-    by_name = {layer.name: layer for layer in legacy}
+    object first, then the memories it names in ref order; the refusal is the first failing one. A use on a road
+    or trail that names more than MAX_ANSWER_NAMES memories (the ones it shows are named ones) is refused with
+    BOUND, after the object's own tests (P 6.4)."""
     multi = _kind_of(use.obj) in ("road", "trail")
-    entries: dict = {}
-    versions: dict[str, int] = {}
-    layer_pos: dict[str, int] = {}      # layers in required_layers order, the object's first, then the memories'
-    failure: tuple | None = None
-    ends: list[int] = []                # effective ends of the cited records (step 5)
-    ledger_layers: list[str] = []       # the required consent and restriction layers, in first-seen order
-    read: list[tuple] = []              # (use, actions) for each need(u) decided
-    objs: list[str] = []
-
-    def result() -> Decision:
-        order = sorted(entries.values(), key=lambda e: (layer_pos[e[0].id], ACTIONS.index(e[1])))
-        cited = tuple(Cited(layer.id, layer.kind, action, verdict, tuple(sorted(recs, key=_units)))
-                      for (layer, action, verdict, _, recs) in order)
-        return Decision(allowed=failure is None, at=use.at, ledger_seq=state.seq, action=use.action, cited=cited,
-                        refusal=None if failure is None else Refusal(*failure),
-                        until=_until(state, use.at, ends, ledger_layers, read),
-                        horizon=_horizon(state, use.at, ledger_layers, objs),
-                        versions=versions, multi=multi)
-
-    if not _requester_ok(state, use):
-        failure = ("UNKNOWN_REQUESTER", None, None)
-        return result()
-    held = holding_place(state, use.copy)
-    if place_retired(state, use.place) or (held is not None and place_retired(state, held)):
-        failure = ("RETIRED", None, None)
-        return result()
+    run = _Run(state, use, legacy, outside, multi=multi)
+    if not run.before_any_object():
+        return run.result()
+    over = multi and len(set(use.names) | set(use.shows)) > MAX_ANSWER_NAMES
     for need in needs(use):
         sub = use if need.obj == use.obj else replace(use, obj=need.obj, names=(), shows=frozenset())
-        subjects = subjects_of(state, sub.obj, sub.at, sub.names)
-        code = ("RETIRED" if any(_subject_retired(state, s) for s in subjects) else
-                "NO_LAYER" if not subjects else "BOUND" if len(subjects) > MAX_SUBJECTS else None)
-        if code is not None:
-            failure = failure or (code, None, None)
+        if not run.process(sub, need.actions, run.subjects(sub.obj, sub.names), bound=over and sub is use):
             break
-        read.append((sub, need.actions))
-        objs.append(sub.obj)
-        for layer in required_layers(state, sub, legacy=legacy, outside=outside):
-            layer_pos.setdefault(layer.id, len(layer_pos))
-            if layer.kind in ("consent", "restriction"):
-                versions[layer.id] = layer_version(state, layer.id)
-                if layer.id not in ledger_layers:
-                    ledger_layers.append(layer.id)
-            for action in need.actions:
-                if layer.kind == "outside":
-                    verdict, recs = outside[layer.id](sub, action), ()
-                    if verdict not in ("allow", "deny", "silent"):
-                        raise RuleError("6.1 outside layer", f"layer {layer.id} answered {verdict!r}")
-                elif layer.kind == "legacy":
-                    verdict, recs = ("allow" if by_name[layer.id].allows(sub, action) else "deny"), ()
-                else:
-                    verdict, recs = _ledger_verdict(state, layer, sub, action)
-                    for rid in recs:
-                        end = _terms(state, state.records[rid], sub, action, True)[0]
-                        if end is not None:
-                            ends.append(end)
-                passes = verdict == "allow" or (layer.kind == "restriction" and verdict == "silent")
-                key = (layer.id, action)
-                if key not in entries:
-                    entries[key] = (layer, action, verdict, passes, set(recs))
-                else:       # the same (layer, action) over several objects: the first failing verdict, all records
-                    _, _, was, was_passes, held_recs = entries[key]
-                    keep = was_passes and not passes
-                    entries[key] = (layer, action, verdict if keep else was, was_passes and passes,
-                                    held_recs | set(recs))
-                if not passes and failure is None:
-                    code = ("NO_LAYER" if verdict == "missing" else
-                            "LEGACY_DENY" if layer.kind == "legacy" else "DENIED" if verdict == "deny" else
-                            "NO_ALLOW" if layer.kind == "outside" else _silent_code(state, layer, sub, action))
-                    failure = (code, layer.id, action)
-    return result()
+    return run.result()
+
+
+def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = (),
+                outside: Mapping | None = None, group: bool = True) -> Decision:
+    """P 6.4 "Bulk uses" and P 6.5 step 1's bulk order. The tests on a, P, anc(P) and anc(H) run once, then the
+    size bounds (the objects, and the distinct memories their roads and trails name, counted up to the bound plus
+    one), before any object. Then each object is decided in ref order by decide's per-object path with the bound
+    of 32 waived, each (memory, action) pair once however many objects need it. The refusal is the first failing
+    object's, and names no object. With `group`, the ledger layers' verdicts are shared by the objects that agree
+    on what the pre-filtered records read (P 6.4, "How it is computed"); legacy and outside layers are still
+    asked of every object."""
+    if bulk.action not in _CLOSURE:
+        raise RuleError("6.4 need", f"{bulk.action!r} is not an action")
+    proto = Use(requester=bulk.requester, place=bulk.place, obj="", copy=bulk.copy, action=bulk.action,
+                purpose=bulk.purpose, at=bulk.at)
+    run = _Run(state, proto, legacy, outside, multi=True, group=group)
+    if not run.before_any_object():
+        return run.result()
+    objects = sorted(set(bulk.objects), key=_units)
+    if len(objects) > (MAX_BULK_NAMED if bulk.named else MAX_BULK_DERIVED):
+        run.failure = ("BOUND", None, None)
+        return run.result()
+    named: set = set()
+    for obj in objects:
+        if _kind_of(obj) in ("road", "trail"):
+            for m in bulk.names(obj):
+                named.add(m)
+                if len(named) > MAX_BULK_MEMORIES:
+                    run.failure = ("BOUND", None, None)
+                    return run.result()
+    del named
+    closure = _CLOSURE[bulk.action]
+    for obj in objects:
+        if _kind_of(obj) in ("road", "trail"):
+            names = set(bulk.names(obj))
+            ok = run.process(replace(proto, obj=obj), closure, run.subjects(obj, tuple(names)))
+            fresh = sorted((m for m in names if (m, "recall") not in run.done), key=_units) if ok else ()
+            for m in fresh:
+                subjects = run.subjects(m)
+                ok = run.process(replace(proto, obj=m), ("recall",), subjects,
+                                 gkey=run.group_key(m, subjects) if group else None)
+                if not ok:
+                    break
+        else:
+            subjects = run.subjects(obj)
+            ok = run.process(replace(proto, obj=obj), closure, subjects,
+                             gkey=run.group_key(obj, subjects) if group and subjects else None)
+        if not ok:
+            break
+    return run.result()

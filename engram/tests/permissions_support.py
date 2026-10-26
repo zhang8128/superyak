@@ -8,8 +8,8 @@ import copy as _copy
 import dataclasses
 from typing import NamedTuple
 
-from permissions import (ACTIONS, GRANT_OPS, Grant, Record, State, Use, _row, _units, home_of, parse_selector,
-                         selector_json)
+from permissions import (ACTIONS, GRANT_OPS, BulkUse, Grant, Record, State, Use, _row, _units, home_of,
+                         parse_selector, selector_json)
 
 SEED = 20261025
 _OBJ = ("kinds", "stores", "layers", "lanes", "collections", "memories")
@@ -1139,3 +1139,54 @@ def sample_uses(rng, w, n):
             obj = rng.choice(c.objects + list(c.roads))
             out.append(one(agent, place, obj, copy, action, purpose, at))
     return out
+
+
+# ---------------------------------------------------------------- Task 7: roads, trails and bulk uses
+
+ROAD, TRAIL = "road:S/r1", "trail:S/t1"
+RIO = "agent:rio-grande"
+ALL_KINDS = ["memory", "road", "trail"]
+
+
+def memories(n: int, start: int = 0) -> tuple:
+    """n memory refs of store S, m<start> on."""
+    return tuple(f"mem:S/episode/m{start + i}" for i in range(n))
+
+
+def route(obj, names=(), shows=(), action="route"):
+    """Rio Grande's answer use on a road or trail (a single use, so the bound of 32 applies)."""
+    return home_use(obj, T("2026-11-02"), action=action, names=names, shows=shows)
+
+
+def trail_use(obj, action, names=()):
+    return home_use(obj, T("2026-11-02"), action=action, names=names)
+
+
+def road_world():
+    """Andy's home allows Rio Grande recall, read and route on memories, roads and trails, and inject_context
+    on M1 only. (A road r names M1 and M2.)"""
+    w = andy_world()
+    w.allow(HOME, audience=["self"], kinds=ALL_KINDS, actions=["recall", "read", "route"])
+    w.allow(HOME, audience=["self"], actions=["inject_context"], memories=[M1])
+    return w.state()
+
+
+def trail_world(blocked=None):
+    w = andy_world()
+    w.allow(HOME, audience=["self"], kinds=ALL_KINDS, actions=["recall", "read", "imprint", "route"])
+    if blocked is not None:
+        w.deny(HOME, audience=["self"], memories=[blocked], actions=["recall"])
+    return w.state()
+
+
+def bulk_use(objects, *, action="route", names=lambda o: (), named=False, requester=RIO, place=HOME,
+             copy="store:house", purpose="care-coordination", at=None) -> BulkUse:
+    return BulkUse(requester=requester, place=place, objects=tuple(objects), copy=copy, action=action,
+                   purpose=purpose, at=T("2026-11-02") if at is None else at, named=named, names=names)
+
+
+def trails_of(n: int, touches: int, *, same_memories=False):
+    """(trail refs, names) for n derived trails of S: each names `touches` memories, the same ones or its own."""
+    refs = tuple(f"trail:S/t{i}" for i in range(n))
+    index = {r: i for i, r in enumerate(refs)}
+    return refs, (lambda o: memories(touches, 0 if same_memories else index[o] * touches))
