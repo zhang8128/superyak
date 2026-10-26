@@ -2358,3 +2358,63 @@ def random_legacy_layers(rng):
     def layer(name):
         return LegacyLayer(name, lambda u, x: zlib.crc32(f"{SEED}/{name}/{u.obj}/{x}".encode()) % bias != 0)
     return [layer(n) for n in names]
+
+
+# ---------------------------------------------------------------- a server that is not Andy's (Task 23; Task 25 reuses)
+
+PHC_STORE_NAME = "ph-coordinator"
+
+
+class KeepWorld:
+    """What `keep_world` hands a test: the daemon rig, the ids of P 13, and the root."""
+
+    def __init__(self, rig, ids, root):
+        self.rig, self.ids, self.root = rig, ids, root
+
+
+def _keep_world(engram_server_env, tmp_path, monkeypatch):
+    """A server running as `agent:ph-coordinator` (R13): instance name ph-coordinator, its store
+    `instances/ph-coordinator/graph.db` made (and opened once) before `_init`. The ledger is `e1_county_ledger`'s
+    plus that store registered for `person:ph-steward` at clinic-3; the published house `why` holds m1 to m3 and
+    the gate is raised to `enforce` through `perform`."""
+    from storage import Storage
+    import server
+    monkeypatch.setenv("ENGRAM_DEFAULT_INSTANCE", PHC_STORE_NAME)
+    inst = house_dir(tmp_path, PHC_STORE_NAME)
+    own = Storage(str(inst / "graph.db"))
+    store_id = own.instance_identity()["instance_id"]
+    own.close()
+    rig, ids = e1_daemon_at(tmp_path, T("2026-11-02"))
+    from permission_ledger import Ledger
+    led = Ledger.open(tmp_path)
+    try:
+        do(led, "person:ph-steward", "register-store", instance_id=store_id, name=PHC_STORE_NAME,
+           owner="person:ph-steward", place=CLINIC_3, imprint_of=None)
+    finally:
+        led.close()
+    server._init()
+    ids.PHC_STORE = store_id
+    return KeepWorld(rig, ids, tmp_path)
+
+
+def deliver_m1_through(world, path):
+    """E1's use 1: an allowed delivery of m1 (a read, decided as `inject_context`) by `agent:ph-coordinator`, so
+    the daemon writes its receipt. Returns the receipt's `at`. `path` names the receiver's reader; both reach the
+    daemon with the same frame, so this rig sends it directly."""
+    assert path in ("neighbors", "context")
+    world.rig.read(M1_ID)
+    return receipt_rows(world.root, "inject_context")[-1]["at"]
+
+
+def refused_read_of_m3(world):
+    """E1's use 2: the read of m3, which no layer allows (Jenn is its subject). Returns the receipt's `at`."""
+    world.rig.read(M3_ID)
+    return receipt_rows(world.root)[-1]["at"]
+
+
+import pytest as _pytest
+
+
+@_pytest.fixture
+def keep_world(engram_server_env, tmp_path, monkeypatch):
+    return _keep_world(engram_server_env, tmp_path, monkeypatch)

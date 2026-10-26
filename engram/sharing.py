@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from lighthouse_protocol import content_digest
+from permissions import MAX_PLACEMENTS
 
 AUDIENCE_COMMONS = "commons"
 GROUP_RE = re.compile(r"group:[a-z][a-z0-9-]{0,63}\Z")
@@ -97,7 +98,7 @@ def _verify_reused_copy(*, source_row, published_storage, layer, memory_id) -> N
 
 
 def share(*, source_storage, published_storage, source_id, layer, audience, reason,
-          source_instance, now=None) -> ShareRecord:
+          source_instance, now=None, source_instance_id=None, record_id=None) -> ShareRecord:
     """Copy one episode or semantic into the published house.
 
     The source vector is carried with the copy when present. A semantic with no
@@ -126,7 +127,17 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
                 layer=layer,
                 memory_id=existing["memory_id"],
             )
+            # A row `migrate` left unmatched is mended here (P 12.3 step 2): fill what is null, never overwrite.
+            for column, value in (("source_instance_id", source_instance_id), ("record_id", record_id)):
+                if value is not None and existing[column] is None:
+                    published_storage.conn.execute(
+                        f"UPDATE shared_memories SET {column} = ? WHERE share_id = ? AND {column} IS NULL",
+                        (value, existing["share_id"]))
             return _record(existing)
+
+        placed = published_storage.conn.execute("SELECT COUNT(*) FROM shared_memories").fetchone()[0]
+        if placed >= MAX_PLACEMENTS:
+            raise ValueError(f"a house holds at most {MAX_PLACEMENTS:,} placements")
 
         sibling = published_storage.conn.execute(
             "SELECT memory_id FROM shared_memories WHERE source_instance = ? AND source_id = ? LIMIT 1",
@@ -166,9 +177,11 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
         )
         published_storage.conn.execute(
             "INSERT INTO shared_memories (share_id, memory_id, source_instance, source_id, layer,"
-            " audience, reason, content_digest, shared_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " audience, reason, content_digest, shared_at, source_instance_id, record_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (record.share_id, record.memory_id, record.source_instance, record.source_id,
-             record.layer, record.audience, record.reason, record.content_digest, record.shared_at),
+             record.layer, record.audience, record.reason, record.content_digest, record.shared_at,
+             source_instance_id, record_id),
         )
     return record
 

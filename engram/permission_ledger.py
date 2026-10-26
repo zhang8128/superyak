@@ -545,6 +545,21 @@ class Ledger:
         if insert:
             self._append("lane-note-" + phase, refs[0], "store:" + store_id, "tool", {"insert": insert}, at=now)
 
+    def note_first_lane(self, ref: str, lane: str, created_at, *, store_id: str, now: int) -> bool:
+        """P 5.3: a first note for a memory that has none, dated at its `created_at`, as `share` writes it when it
+        places a copy. Returns whether a note was written."""
+        if self.read_only:
+            raise _bad("this ledger is open read-only")
+        if lane not in LANES:
+            raise _bad(f"unknown lane {lane!r}")
+        parse_object_ref(ref)
+        if self.conn.execute("SELECT 1 FROM lane_notes WHERE object=? LIMIT 1", (ref,)).fetchone():
+            return False
+        self._append("lane-note-first", ref, "store:" + store_id, "tool",
+                     {"insert": [_ins("lane_notes", object=ref, lane=lane, at=_seconds(created_at), seq="@seq")]},
+                     at=now)
+        return True
+
     def latest_lane_note(self, ref: str) -> str | None:
         """The lane of the newest note on ref (by `at`, then seq), or None when it has none."""
         r = self.conn.execute("SELECT lane FROM lane_notes WHERE object=? ORDER BY at DESC, seq DESC, rowid DESC LIMIT 1",

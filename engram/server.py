@@ -27,6 +27,7 @@ from resonance import (
     surface_resonances as _surface_resonances,
 )
 from scoring import score_candidate
+from permissions import selector_json
 from sharing import (list_shares as _list_shares, share as _share_memory,
                      unshare as _unshare_memory)
 from storage import vec0_distance_to_similarity, _pack_embedding
@@ -1967,6 +1968,107 @@ def _published_house_storage():
         store.close()
 
 
+def _permission_gate():
+    """The effective gate over the published house. It reads no config and needs no `_init`."""
+    from permission_ledger import effective_gate
+    return effective_gate(ENGRAM_HOME, [ENGRAM_HOME / ".engram" / "instances" / "lighthouse" / "graph.db"])
+
+
+def _agent_ref() -> str:
+    """This server's agent (R13): `agent:<instance name>`, or `agent:default` when it has none."""
+    return "agent:" + (_instance_name or "default")
+
+
+def _after_share() -> None:
+    """The placement sweep runs here (Task 24); until then nothing."""
+
+
+def _store_id() -> str | None:
+    try:
+        return _storage.instance_identity().get("instance_id")
+    except Exception:
+        return None
+
+
+def _utc(t: int) -> str:
+    return datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _needs_allow(state, owner: str, obj: str, audience: str, reason: str, now: int) -> dict:
+    """The `permit` call and the CLI command that would make the allow `share` found missing (P 12.1)."""
+    from lighthouse_protocol import canonical_json
+    from permissions import home_of
+    home = home_of(owner)
+    outside = audience != home
+    end = now + 30 * 86400 if outside else None
+    sel = {"audience": [audience], "requesters": "*",
+           "objects": {"kinds": ["memory"], "stores": "*", "layers": "*", "lanes": "*", "collections": "*",
+                       "memories": [obj]},
+           "actions": ["recall", "read", "inject_context"],
+           "purposes": ["<purpose>"] if outside else "*"}
+    permit = {"op": "share", "selector": sel, "valid_from": now, "valid_until": end, "reason": reason}
+    cli = (f"engram-permissions allow --layer {home} --selector '{canonical_json(sel)}' --from {_utc(now)}"
+           + (f" --until {_utc(end)}" if end else "") + f" --reason '{reason}'")
+    out = {"status": "needs-allow", "permit": permit, "cli": cli}
+    if outside:
+        out["note"] = "an allow outside the home needs a finite purposes list: replace <purpose> with the purpose"
+    return out
+
+
+def _share_under_ledger(gate, house, memory_id: str, audience: str, reason: str, layer: str) -> dict:
+    """`share` under `shadow` and `enforce` (P 12.1): the columns are filled, the first lane note is written, and
+    under `enforce` no copy is placed without a covering allow, nor is a record ever written."""
+    from permission_ledger import Ledger, LedgerUnreadable
+    from permissions import RuleError, home_of, placement_audience, share_cover
+    from sharing import AUDIENCE_COMMONS, GROUP_RE
+    enforce = gate.mode == "enforce"
+    sid = _store_id()
+    getter = _storage.get_episode if layer == "episode" else _storage.get_semantic
+    row = getter(memory_id) if layer in ("episode", "semantic") else None
+    try:
+        led = Ledger.open(ENGRAM_HOME)
+    except (LedgerUnreadable, FileNotFoundError) as exc:
+        return {"error": f"the permissions ledger cannot be read: {exc}"}
+    try:
+        state = led.state()
+        owner = state.meta["owner"]
+        now = int(time.time())
+        obj = f"mem:{sid}/{layer}/{memory_id}" if sid else None
+        mapped = (home_of(owner) if audience == AUDIENCE_COMMONS
+                  else audience if GROUP_RE.fullmatch(audience) or audience.startswith("place:") else None)
+        cover = None
+        if obj is not None and mapped is not None:
+            try:
+                cover = share_cover(state, owner=owner, obj=obj, audience=mapped, at=now)
+            except RuleError:
+                cover = None
+        legacy = audience
+        if enforce:
+            if mapped is None:
+                return {"error": f"unknown audience: {audience!r}"}
+            if row is None:
+                return {"error": f"no {layer} {memory_id!r} in the source instance"}
+            if cover is None:
+                return _needs_allow(state, owner, obj, mapped, reason, now)
+            legacy = placement_audience(state, state.records[cover])
+        try:
+            record = _share_memory(
+                source_storage=_storage, published_storage=house, source_id=memory_id, layer=layer,
+                audience=legacy, reason=reason, source_instance=_instance_name or "default",
+                source_instance_id=sid, record_id=cover)
+        except (TypeError, ValueError) as exc:
+            return {"error": str(exc)}
+        if obj is not None and row is not None:
+            try:
+                led.note_first_lane(obj, row.get("lane") or "personal", row.get("created_at"),
+                                    store_id=sid, now=now)
+            except Exception:
+                logger.warning("Could not write the first lane note of %s", obj, exc_info=True)
+        return asdict(record)
+    finally:
+        led.close()
+
+
 @_server_tool()
 @_mutation_logged
 def share(
@@ -1985,9 +2087,16 @@ def share(
     )
     if audience == "group:outside-home":
         return {"error": "group name outside-home is reserved"}
+    gate = _permission_gate()
+    if gate.mode == "closed":
+        return {"error": f"the permissions gate is closed, so nothing is shared: {gate.cause}"}
     with _published_house_storage() as (path, published_storage):
         if published_storage is None:
             return {"error": f"no published house at {path}"}
+        if gate.mode != "off":
+            out = _share_under_ledger(gate, published_storage, memory_id, audience, reason, layer)
+            _after_share()
+            return out
         try:
             record = _share_memory(
                 source_storage=_storage,
@@ -1997,9 +2106,11 @@ def share(
                 audience=audience,
                 reason=reason,
                 source_instance=_instance_name or "default",
+                source_instance_id=_store_id(),
             )
         except (TypeError, ValueError) as exc:
             return {"error": str(exc)}
+        _after_share()
         return asdict(record)
 
 
@@ -2012,12 +2123,188 @@ def unshare(share_id: str) -> dict:
     with _published_house_storage() as (path, published_storage):
         if published_storage is None:
             return {"error": f"no published house at {path}"}
-        return {
-            "removed": _unshare_memory(
-                published_storage=published_storage,
-                share_id=share_id,
-            )
-        }
+        removed = _unshare_memory(published_storage=published_storage, share_id=share_id)
+    _after_share()
+    return {"removed": removed}
+
+
+_PERMIT_KINDS = ("grant", "group", "register-agent", "put-agent", "add-steward", "register-place", "add-parent",
+                 "register-store", "remove-subject", "gate")
+_OWNER_ONLY = {"error": "only agents acting for the ledger owner can read this"}
+
+
+def _memory_ref(memory: str) -> tuple[str, dict | None]:
+    """(object ref, the local row or None) of a `mem:` ref or a memory id of this store."""
+    if memory.startswith("mem:"):
+        return memory, None
+    sid = _store_id()
+    for layer, getter in (("episode", _storage.get_episode), ("semantic", _storage.get_semantic)):
+        row = getter(memory)
+        if row is not None:
+            return f"mem:{sid}/{layer}/{memory}", row
+    return f"mem:{sid}/episode/{memory}", None
+
+
+def _permit_act(state, op: str, selector, valid_from, valid_until, reason, record, collection, memory, args, now):
+    """The `Act` for a `permit` call: the seven grant ops by name, or one of R26's kinds with its `args`."""
+    from permission_ledger import _seconds
+    from permissions import Act, acts_for_place
+    agent = _agent_ref()
+    if op in _PERMIT_KINDS:
+        return Act(op, dict(args or {}))
+    start = now if valid_from is None else valid_from
+    if op == "share":
+        layer = acts_for_place(state, agent)
+        if layer is None:
+            raise ValueError(f"{agent} is not a registered agent")
+        return Act("allow", {"layer": layer, "selector": selector, "valid_from": start,
+                             "valid_until": valid_until, "reason": reason})
+    if op == "deny":
+        return Act("deny", {"layer": agent, "selector": selector, "valid_from": start,
+                            "valid_until": valid_until, "reason": reason})
+    if op == "withdraw":
+        return Act("revoke", {"record": record, "reason": reason})
+    if op == "shorten":
+        return Act("shorten", {"record": record, "valid_until": valid_until, "reason": reason})
+    if op == "narrow":
+        out = {"record": record, "selector": selector, "reason": reason}
+        if valid_until is not None:
+            out["valid_until"] = valid_until
+        return Act("narrow", out)
+    if op in ("collect", "uncollect"):
+        ref, row = _memory_ref(memory or "")
+        out = {"collection": collection, "objects": [ref]}
+        if op == "collect" and row is not None:
+            out["lanes"] = {ref: {"lane": row.get("lane") or "personal", "created_at": _seconds(row["created_at"])}}
+        return Act(op, out)
+    raise ValueError(f"unknown op {op!r}")
+
+
+@_server_tool()
+@_mutation_logged
+def permit(
+    op: str,
+    selector: dict | None = None,
+    valid_from: int | None = None,
+    valid_until: int | None = None,
+    reason: str = "",
+    record: str | None = None,
+    collection: str | None = None,
+    memory: str | None = None,
+    args: dict | None = None,
+) -> dict:
+    """Ask for a change to the permissions ledger as this server's agent. Inside a grant it is done; otherwise a
+    proposal is filed for the ledger owner to sign in a terminal."""
+    _init()
+    logger.info("Tool called: permit(op=%s)", op)
+    if op == "migrate":
+        return {"error": "migrate is not a tool act; the person runs engram-permissions migrate in their terminal"}
+    gate = _permission_gate()
+    if gate.mode == "closed":
+        return {"error": f"the permissions gate is closed, so nothing is changed: {gate.cause}"}
+    from permission_ledger import Ledger, LedgerUnreadable
+    from permissions import RuleError
+    if op not in ("share", "deny", "withdraw", "shorten", "narrow", "collect", "uncollect") + _PERMIT_KINDS:
+        return {"error": f"unknown op {op!r}"}
+    try:
+        led = Ledger.open(ENGRAM_HOME)
+    except FileNotFoundError:
+        return {"error": "there is no permissions ledger; the person runs engram-permissions init"}
+    except LedgerUnreadable as exc:
+        return {"error": f"the permissions ledger cannot be read: {exc}"}
+    try:
+        now = int(time.time())
+        try:
+            act = _permit_act(led.state(), op, selector, valid_from, valid_until, reason, record, collection,
+                              memory, args, now)
+            out = led.perform(act, actor=_agent_ref(), channel="tool", now=now)
+        except (RuleError, ValueError, TypeError, KeyError) as exc:
+            return {"error": str(exc)}
+        grant = None
+        if out.status == "done":
+            row = led.conn.execute("SELECT under_grant FROM ledger_log WHERE seq = ?", (out.seq,)).fetchone()
+            grant = row[0] if row else None
+        result = {"status": out.status, "ref": out.ref, "under_grant": grant}
+    finally:
+        led.close()
+    _after_share()
+    return result
+
+
+def _when(text: str | None) -> int | None:
+    if text is None:
+        return None
+    if str(text).isdigit():
+        return int(text)
+    value = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    return int((value if value.tzinfo else value.replace(tzinfo=timezone.utc)).timestamp())
+
+
+@_server_tool()
+def permissions(
+    focus: str = "uses",
+    since: str | None = None,
+    until: str | None = None,
+    action: str | None = None,
+    purpose: str | None = None,
+    obj: str | None = None,
+) -> dict:
+    """Read the permissions ledger: the uses of memories (`uses`), the `rules`, the open `proposals` or the
+    `grants`. An agent not acting for the ledger owner sees only its own receipts."""
+    _init()
+    logger.info("Tool called: permissions(focus=%s)", focus)
+    from permission_ledger import Ledger, LedgerUnreadable
+    from permission_uses import Uses, UsesUnreadable
+    from permissions import _principals
+    try:
+        led = Ledger.open_read_only(ENGRAM_HOME)
+    except FileNotFoundError:
+        return {"error": "there is no permissions ledger"}
+    except LedgerUnreadable as exc:
+        return {"error": f"the permissions ledger cannot be read: {exc}"}
+    try:
+        state = led.state()
+        agent = _agent_ref()
+        owner = state.meta["owner"] in _principals(state, agent)
+        if not owner and focus != "uses":
+            return dict(_OWNER_ONLY)
+        if not owner and agent not in state.agents:
+            return dict(_OWNER_ONLY)
+        if focus not in ("uses", "rules", "proposals", "grants"):
+            return {"error": "focus is one of uses, rules, proposals, grants"}
+        if focus == "rules":
+            return {"focus": focus, "rows": [
+                {"id": r.id, "layer": r.layer, "effect": r.effect, "selector": json.loads(selector_json(r.selector)),
+                 "valid_from": r.valid_from, "valid_until": r.valid_until, "backing": r.backing,
+                 "set_by": r.set_by, "reason": r.reason}
+                for r in sorted(state.records.values(), key=lambda r: (r.created_seq, r.id))
+                if r.revoked_seq is None]}
+        if focus == "proposals":
+            return {"focus": focus, "rows": led.proposals(now=int(time.time()))}
+        if focus == "grants":
+            return {"focus": focus, "rows": [
+                {"id": g.id, "issuer": g.issuer, "grantee": g.grantee, "layer": g.layer, "parent": g.parent_id,
+                 "ops": sorted(json.loads(g.ops) if isinstance(g.ops, str) else g.ops),
+                 "envelope": json.loads(g.envelope) if isinstance(g.envelope, str) else json.loads(selector_json(g.envelope)),
+                 "max_days": g.max_days, "depth": g.depth, "expires": g.expires}
+                for g in sorted(state.grants.values(), key=lambda g: (g.created_seq, g.id))
+                if g.revoked_seq is None]}
+        try:
+            uses = Uses.open_read_only(ENGRAM_HOME)
+        except FileNotFoundError:
+            return {"focus": "uses", "rows": []} if not owner else {"focus": "uses", "counts": {}, "rows": []}
+        except UsesUnreadable as exc:
+            return {"error": f"the receipts file cannot be read: {exc}"}
+        try:
+            if not owner:
+                return {"focus": "uses", "rows": uses.agent_view(agent)}
+            listed = uses.owner_list(state, since=_when(since), until=_when(until), action=action,
+                                     purpose=purpose, obj=obj)
+            return {"focus": "uses", "counts": listed.counts, "rows": listed.rows}
+        finally:
+            uses.close()
+    finally:
+        led.close()
 
 
 @_server_tool()

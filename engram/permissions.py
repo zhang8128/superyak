@@ -2509,6 +2509,48 @@ def placement_audience(state: State, record: Record | None, legacy_audience: str
     return RESERVED_GROUP
 
 
+def _entry_covers(state: State, entry: str, audience: str, layer: str) -> bool:
+    """Does one selector audience entry reach `audience`: the same entry, `commons`, `self` for the layer's own
+    home place, or a place that dominates the audience place."""
+    if entry == audience or entry == "commons":
+        return True
+    if entry == "self":
+        return audience == layer
+    return entry.startswith("place:") and audience.startswith("place:") and entry in dominators(state, audience)
+
+
+def share_cover(state: State, *, owner: str, obj: str, audience: str, at: int) -> str | None:
+    """P 12.1: the id of an effective allow in the owner's home layer that covers `obj` for `recall`, `read` and
+    `inject_context`, for some purpose and for `audience` (a `place:` or `group:` ref), chosen as `decide` chooses
+    (latest effective end, a null end first, then the smallest id); else None. It is a structural check of the
+    record, its grant and its memberships; `decide` at each use is still the authority."""
+    layer = home_of(owner)
+    probe = Use(requester=owner, place=layer, obj=obj, copy="store:share-cover", action="recall",
+                purpose="share-cover", at=at)
+    found = []
+    for r in state.records.values():
+        sel = r.selector
+        if (r.layer != layer or r.effect != "allow" or _revoked(state, r) or not _in_interval(r, at)
+                or not any(_entry_covers(state, e, audience, layer) for e in sel.audience)
+                or not all(_star_or_in(sel.actions, a) for a in ("recall", "read", "inject_context"))):
+            continue
+        try:
+            if r.backing.startswith("grant:") and not grant_validity(state, r.backing[len("grant:"):], at)[0]:
+                continue
+            if not _object_dims(state, sel, layer, r.anchor, probe, "recall", False, frozenset(), True):
+                continue
+        except RuleError:
+            continue
+        found.append(r)
+    if not found:
+        return None
+
+    def rank(r):
+        end = effective_end(state, r, [])
+        return (end is not None, -(end or 0), _units(r.id))
+    return min(found, key=rank).id
+
+
 # ---------------------------------------------------------------- who may set what (P 4.4, 7.1, 7.2, 7.6)
 
 CHANNELS = ("terminal", "tool", "migration")
