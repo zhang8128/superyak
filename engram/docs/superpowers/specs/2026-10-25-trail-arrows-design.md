@@ -1,13 +1,76 @@
 # Trails: Footpaths, Roads and Detours in the Category Graph
 
 **Date:** 2026-10-25
-**Status:** Revision 3. Approved by a fresh reviewer under station law section 3: the first verdict
-(MF1–MF8, S1–S8, N1–N9) and the re-check (RMF1–RMF3, S-a–S-d, N-a–N-d) are both applied.
-Observational; off by default.
-**Module:** new `trails.py`, plus a gated pass in `category_evolution.py`
+**Status:** Revision 5, for a second fresh reviewer under station law section 3. Revision 3 was approved: the
+first verdict (MF1–MF8, S1–S8, N1–N9) and the re-check (RMF1–RMF3, S-a–S-d, N-a–N-d) are both applied. Revision 4
+kept every approved decision except the ones it lists under "Changes to approved decisions". Its fresh review
+(`docs/superpowers/reviews/2026-10-25-trail-arrows-rev4-spec-review.md`) approved it with changes. Revision 5
+applies MF1–MF3, S1–S11 and N1–N16; that file's "Response" section lists each. Observational; every part is off by
+default.
+**Contract:** [the city rail vision](../../../../docs/city-rail-vision.md), "The traveler's view" and "Permissions by
+place". Rio Grande wrote the vision from Andy's words. Where it goes past a quote, it is Rio Grande's call carried by
+the contract, and this spec says so.
+**Module:** new `trails.py`; a gated pass in `category_evolution.py`; three gated read-only MCP tools in `server.py`.
 **Builds on:** `2026-08-07-evolving-category-memory-design.md` (v2 store, rewrites, epochs),
 `2026-09-29-path-signatures-design.md` (`paths.py`), `2026-09-29-lighthouse-sheaf-design.md`,
-`2026-09-01-lighthouse-local-city-design.md` (sharing, permissions, receipts).
+`2026-09-01-lighthouse-local-city-design.md` (sharing, permissions, receipts),
+[permissions by place](../../../../docs/superpowers/specs/2026-10-25-permissions-by-place-design.md) (its sections
+4.1, 5.2, 6.3–6.5, 9.1, 11 and 14) and [imprints](2026-10-25-store-imprint-design.md) (its sections 5.3, 6.2, 10, 11
+and 12). The last two are being written in parallel. This spec cites them by path and section, and section 11 lists
+what it needs from each.
+
+## Revision history
+
+| Revision | Commit | What changed |
+|---|---|---|
+| 1 | uncommitted draft | Footpaths, roads, detours, a read-only A*, the evaluation. Verdict: approve with changes (MF1–MF8, S1–S8, N1–N9). |
+| 2 | `ee90bff` | Applied the first verdict. Re-check: approve with changes (RMF1–RMF3, S-a–S-d, N-a–N-d). |
+| 3 | `3539102` | Applied the re-check. Approved. |
+| 4 | uncommitted draft | The vision's traveler's view: locate from context (6.2), route to a goal in words (6.3), forward lookup (6.4), short answers (6.5), three read-only tools (6.6), suggested touches (4), a goal-in-words measure (7, steps 8 and 9), the evaluation on an imprint (7), per-audience permissions in place of the work-lane rule (8), and a Raspberry Pi budget for every pass (10). Verdict: approve with changes (MF1–MF3, S1–S11, N1–N16). |
+| 5 | this file | Applied that verdict. Measure W embeds text the way the tools do (MF1). Imprinted recall rows keep their shipped targets (I4, MF2). `at_goal` means A* popped an entry (MF3). Every route node is rechecked, and a route has at most 64 stops (S1). A gate pass licenses one lane (S2). The answer bound is 6,000 bytes (S5). The allow-file check, the Pi budget, the evaluation's limits and the anchor patterns are tightened (S4, S9–S11). |
+
+## Decisions in revisions 4 and 5
+
+"Andy" means his own words, quoted exactly as the vision gives them. Every other line is Rio Grande's call.
+
+| # | Decision | Source |
+|---|---|---|
+| A1 | Agents travel this system, so the design starts from the agent's side. | Andy: "Take a step back. this is a system you will be traveling." |
+| A2 | Where the agent is comes from its context. | Andy: "The context gives the graph positions which surfaces sheaves as paths." |
+| A3 | Routes are plain A*. | Andy: "The lighthouses are shared sheaf graph systems that with the cohomologies form a railway layer that act as high speed rail you can just simple a* pathfinding algorithms for." |
+| A4 | Permissions are per audience and place, not per lane. | Andy: "I may share my medical history with the public health office but not the parks and rec." |
+| A5 | Stores from other computers come here as imprints, with permission. (That the evaluation of someone else's store runs only on an imprint is R13, Rio Grande's call built on these words.) | Andy: "We should make it easy to port engram stores with permission from other computers. to imprint it here." |
+| A6 | Free, open source, mathematics as the connector, a Raspberry Pi. | Andy: "I'm seeing this as free, open source, uses universal mathmatical principles as connector standards and runs on a raspberry pi." |
+| V1 | A* runs to the goal set {n : θ(n, q) ≤ r} with h(n) = max(0, θ(n, q) − r). | The vision's traveler's view (Rio Grande's call carried by the contract) |
+| V2 | Forward lookup, and short routes whose items carry who laid them, the rule and the receipt. (The vision calls the items "steps"; this spec calls them stops, 6.5.) | The vision's traveler's view (Rio Grande's call carried by the contract) |
+| R1 | Entry stations come from ids the agent holds, then anchor words, then nearest by angle; at most 6. | Rio Grande's call |
+| R2 | Entering at a station costs 2·θ(c, e), the cost of an untrodden footpath; 0 for an id the agent holds. | Rio Grande's call |
+| R3 | The goal radius is r = min(θ_min + 0.10, arccos 0.60), set for query-to-document angles: the context and goal are embedded with `search_query`, and the nodes' stored vectors were embedded with `search_document`. Nodes without vectors are never goals. | Rio Grande's call |
+| R4 | Angles use Kahan's form, 2·atan2(‖â − b̂‖, ‖â + b̂‖). | Rio Grande's call |
+| R5 | Forward lookup reads full trails and ranks by sessions, then recency, then id. | Rio Grande's call |
+| R6 | Every answer is at most 6,000 bytes of compact JSON, which `estimate_tokens` counts as 1,500 tokens, and every stop names a source holding who laid it, the rule and the receipt. | Rio Grande's call |
+| R7 | Three tools, `trail_locate`, `trail_route` and `trail_next`, registered only when `[trails] tools` is exactly `true`. | Rio Grande's call |
+| R8 | An answer's only write is one `route_shown` receipt row in `memory_log`. | Rio Grande's call |
+| R9 | A touch a tool suggested is marked, and a step with a suggested end adds no support and no detour run. A given id that an answer names counts too, which only removes support. | Rio Grande's call |
+| R10 | The tools read a graph built once per server process, from a read-only connection, within fixed bounds. | Rio Grande's call |
+| R11 | Before answering, a tool rechecks the current lane and existence of every node of the computed route, every entry and every other memory it would name. A route has at most 64 stops. | Rio Grande's call |
+| R12 | Measure W embeds the text of the session's first known memory and of its last written episode with `search_query`, through the tools' own functions, and routes to that goal set, against nearest to the goal (N) and similarity routing (B). The tools need both gates. | Rio Grande's call |
+| R13 | A store that isn't the runner's own is evaluated only through an imprint's `trail-evaluation` use, and `trails.py` refuses an imprint without a valid allow file in that imprint's own directory. An owner running it on a copy of their own store is their own use. | Rio Grande's call |
+| R14 | In step 1 the tools cite "own store" as the rule that allowed them. | Rio Grande's call, from the permissions spec's non-goal (its section 14) |
+| R15 | `rule_version` stays `trail-v1`. | Rio Grande's call: nothing is built, so no event of an older form exists |
+| R16 | The tools answer only the lanes in `[trails] lanes` (default `["work"]`), and a gate pass licenses only the lane it evaluated. | Rio Grande's call |
+| R17 | On an imprint, a used recall row keeps its shipped targets and one `cut` flag, so the trails keep the cited touches of memories that shipped (I4). | Rio Grande's call, for the imprint spec to reconcile |
+
+**Changes to approved decisions.** C1 and C5 are required by the vision. C2, C3 and C4 are Rio Grande's calls, made
+to serve it; the vision doesn't require them word for word.
+
+| # | Revision 3 said | Revisions 4 and 5 say | Why |
+|---|---|---|---|
+| C1 | "Only the work lane can ever leave." (section 8) | Roads, detours and trails leave a store only by a `route` permission for an audience (section 8). | Required by the vision's "Change to the trail spec" |
+| C2 | Excluding touches caused by route suggestions is a later spec (section 9, step 4). | It applies now (section 4), because the tools show routes to agents now. | Rio Grande's call, from the self-confirmation anti-goal (section 3), once the traveler's view shows routes to agents |
+| C3 | Every pass recomputes the digest of every closed (session, lane) pair (S-a). | A pass scans at most the 16,384 pairs with the newest rows (section 5). | Rio Grande's call: the number 16,384 is a calibration hypothesis, chosen to serve vision principle 4, "bounded passes" |
+| C4 | A session's newest row is the latest of its episodes and recall rows. | Its `route_shown` rows count too (section 4). An agent reading routes for an hour is still at work. | Rio Grande's call, once the tools exist |
+| C5 | "The evaluation runs read-only on a copy of a real store, and on synthetic stores in the tests." (`3539102`, its section 7) | Someone else's store is evaluated only through an imprint's `trail-evaluation` use, and the first evaluation runs on an imprint (section 7). An owner may still run it on a copy of their own store. | Required by the vision's "How the work runs", step 3: "Then the trail evaluation on an imprinted store whose owner agrees." |
 
 ## 1. Why
 
@@ -28,10 +91,16 @@ Today the category graph can't hold a route:
   composable routes (`validate_path`, `CategoryCompiler._is_interpretable`). Nothing creates them,
   and nothing outside the tests proposes a rewrite.
 
+**The traveler.** Andy: "Take a step back. this is a system you will be traveling." The agent that rides these
+trails starts every session with no memory, rarely knows its destination, pays for every result in context window,
+makes mistakes, and lays track for the next agent (vision, the traveler's view). Revision 3 recorded routes but gave
+the agent no way to use them. Revision 4 adds that way: find where the agent is from its context, route it to a goal
+it can state only in words, tell it what other sessions did next, and keep every answer short and accountable.
+
 This spec is step 1 of the superhighway. It records routes inside one store, firms them up as
-evidence, and measures whether they help. Compiling roads into recall, and rail across
-lighthouses, are later specs (section 9). The rest of this spec is written so those steps need no
-rework.
+evidence, measures whether they help, and offers them to the store's own agent once they do. Compiling roads into
+recall, and rail across lighthouses, are later specs (section 9). The rest of this spec is written so those steps
+need no rework.
 
 ## 2. Vocabulary
 
@@ -41,10 +110,17 @@ rework.
 | **Trail** | One session's touches in one lane, in order | the newest `trail_observed` event for that (session, lane) |
 | **Revisit trail** | The same trail keeping only memories that existed before the session's first touch | derived from the trail |
 | **Step** | A directed pair `A → B` of consecutive touches in a trail or revisit trail | derived |
+| **Stop** | One memory on a route an answer shows. A route of k stops has k − 1 steps (6.5) | derived per call |
 | **Footpath** | Any step. A* may use it | derived; never a cell |
 | **Road** | A step with support ≥ 2 whose evidence is eligible (section 5) | a level-1 cell, proposed by a `create` rewrite |
 | **Detour** | Two travelled road routes between the same two memories that share nothing else, where one saves more than a quarter of the hops | a level-2 cell, proposed by a `create` rewrite |
 | **Rail** | A road that independent lighthouses agree on | later spec (section 9) |
+| **Suggested touch** | A cited touch of a memory that a tool answer named earlier in the same session (section 4) | derived from `memory_log` |
+| **Entry station** | A memory on the trails where a search starts, found from the agent's context (6.2) | derived per call |
+| **Goal set** | The memories on the trails within angle `r` of the goal words' vector (6.3) | derived per call |
+| **Forward lookup** | What sessions that passed an entry station touched next, and where their trails ended (6.4) | derived per call |
+| **Tool graph** | The trails, steps and vectors the tools read, built once per server process (6.6) | server memory |
+| **Receipt** | The `route_shown` row a tool answer writes (6.6) | `memory_log` |
 
 Trails are an unnormalized, lane-keyed precursor of the v2 design's within-context memory kernel
 `K(m | m')`. They are learned only from confirmed use, which is that design's "self-confirmation"
@@ -64,7 +140,16 @@ rule. They are not the kernel itself: no normalization, no contexts, no soft res
    graphs on held-out sessions (section 7).
 5. Make sure a road published later reveals no memory content beyond what the audience already
    holds (section 8). Its support and span still come from private trails, which is why section 8
-   requires a separate opt-in.
+   requires its own `route` permission.
+6. Locate an agent from its context: turn the task, file paths, error text or memory ids in front of it into entry
+   stations (6.2).
+7. Route an agent to a goal given in words, with an A* heuristic proved never to overestimate (6.3).
+8. Answer "what did others do next from here", and where their trails ended (6.4).
+9. Answer in at most 6,000 bytes of compact JSON (`estimate_tokens` counts that as 1,500 tokens), with every stop
+   carrying who laid it, the rule that allowed it and the receipt for this use (6.5).
+10. Offer 6.2–6.4 as read-only MCP tools, off by default, and turned on for a store only by its owner after both
+    gates pass on it, for the lane that passed (6.6, section 7).
+11. Keep every pass within a Raspberry Pi's means: SQLite, Python with numpy, no GPU, bounded work (section 10).
 
 **Non-goals**
 
@@ -74,16 +159,25 @@ rule. They are not the kernel itself: no normalization, no contexts, no soft res
 - Sharing anything between stores. No new lighthouse protocol frames in this step.
 - Context-specific kernels. `context_id` is null throughout step 1.
 - Interpreting cells above dimension 2.
+- Routing over other stores or imprints from the tools. In step 1 the tools read the server's own store.
+- Detours in tool answers. The tools report roads and footpaths. Detours stay in the CLI and the stored cells.
+- Reading a memory in full through the tools. An answer carries one-line summaries, and the agent recalls a stop to
+  read it.
 
 **Anti-goals** (failure even if the code works)
 
-- **Self-confirmation.** A memory that was only surfaced never becomes a touch.
+- **Self-confirmation.** A memory that was only surfaced never becomes a touch. A touch made after a tool named
+  that memory never adds support (section 4).
 - **Content copies.** Cells and events hold memory ids, never memory content. Content stays in
   `graph.db`, the one authoritative store (v2 invariant).
 - **Mathematical theater.** Every stored level-2 cell is read by tested code: the `--categories`
   route explanation and its parity test (sections 6 and 12).
 - **Personal leakage.** A memory whose current lane is personal never appears in a work trail's
-  support, road, detour, route or evaluation (section 4, Current lane).
+  support, road, detour, route, tool answer or evaluation (section 4, Current lane; 6.6). That includes the stops a
+  long route hides in `{"skipped": k}`.
+- **Context flood.** A tool answer over 6,000 bytes of compact JSON (6.5).
+- **Widening.** A tool answer names a memory outside the lane asked for, or one that no longer exists (6.6). In later
+  steps, an answer names anything a permission refuses (section 8).
 
 ## 4. Touches and trails
 
@@ -99,7 +193,8 @@ than `as_of` are ignored.
 
 **Sessions.** A session is any distinct non-null `episodes.session_id`, or any
 `json_extract(memory_log.context, '$.session_id')` on an `event_type = 'recall'` row. Its
-*newest row* is the latest of those episodes and recall rows. A session is *closed* when its
+*newest row* is the latest of those episodes and recall rows, and of the session's `route_shown` rows (6.6; change
+C4). A `route_shown` row never makes a session by itself. A session is *closed* when its
 newest row is older than `as_of` minus one hour and it isn't the running server's own session.
 Only closed sessions get trails.
 
@@ -116,7 +211,8 @@ drop instinct targets first. A target is a cited touch when either:
   `target_ids`; or
 - the recall has exactly one target once instincts are removed. A target that no longer exists
   still counts toward that number, so if B is pruned from a used recall [A, B], A is not credited
-  by this rule.
+  by this rule. For the same reason, a recall row whose `context.cut` is `true` (a row an imprint cut, I4 in
+  section 11) is never credited by this rule.
 
 This is the per-target form of `hooks/sleep.py auto_capture_outcomes`, with the same operation
 filter. Without the filter, `compress_commit`, `share` and `revive` would count as use.
@@ -130,10 +226,20 @@ Some cases add no touch and are counted instead:
 A cited touch's time is the recall row's `timestamp`. Its rank is its position in `target_ids`,
 the delivered order.
 
+**Suggested touches.** A tool answer names memories, and its receipt row lists them (6.6). A cited touch of memory
+m in session S at time t is **suggested** when a `route_shown` row of S with a timestamp at or before t lists m in
+its `target_ids`. A wrote touch is never suggested: no answer can name an episode before it exists. This is the v2
+self-confirmation rule applied to routes. The agent went there because the system pointed there, so going there is
+no evidence that the route is good (change C2).
+
+An answer names the given ids it uses as entry stations (6.2), so they are in its receipt too. If the agent recalls
+one of them again later in the session, that touch counts as suggested, even though the agent brought the id. This is
+conservative: it can only remove support, never add it. Rio Grande's call (R9).
+
 **Current lane.** A touch's lane is the memory's lane in `graph.db` *now*, not when it was written.
 Compression review can re-lane episodes (`compress.py` into `storage.py`), so a memory can move
 between lanes. Every reader filters by the current lane: support counting, detour search, route,
-the evaluation, and any later publication. That includes the `--categories` reader, which drops a
+the tools, the evaluation, and any later publication. That includes the `--categories` reader, which drops a
 stored road or detour if any endpoint's current lane differs from the cell's lane.
 
 **Trail.** For one (session, lane):
@@ -152,13 +258,13 @@ write again. Without this view, a single `remember` between two citations would 
 repeat of the step, and roads would almost never form.
 
 **Steps.** Consecutive touches `(ti, ti+1)` of a trail or a revisit trail form a directed step.
-A step between two touches cited from the same recall is marked **`co_cited`**. A co-cited step is
-a footpath for A*, but it never counts toward support or detour runs: its order comes from the
-ranking, not from the agent.
+A step between two touches cited from the same recall is marked **`co_cited`**. A step whose first or second touch
+is suggested is marked **`suggested`**. Either kind is a footpath for A*, but it never counts toward support or
+detour runs: a co-cited step's order comes from the ranking, and a suggested step's from a tool, not from the agent.
 
 - A step's **time** is the time of its second touch.
 - **Support** of `A → B` (lane L) is the number of distinct closed sessions whose current trail or
-  revisit trail in L contains a non-co-cited `A → B`.
+  revisit trail in L contains an `A → B` that is neither co-cited nor suggested.
 - **Span** is the latest supporting session's step time minus the earliest one's, in whole
   seconds.
 
@@ -179,7 +285,10 @@ The pass reads `graph.db` through its own `Storage.open_read_only` connection. I
 lifecycle barrier only per batch, as a yield point for tool calls: per 8 sessions while it writes
 trail events, and per 16 proposals while it proposes. Each pass:
 
-1. recomputes the trail digest of every closed (session, lane);
+1. recomputes the trail digest of every closed (session, lane) pair, up to the 16,384 pairs with the newest rows
+   (change C3). Older pairs keep their current events and are counted as `pairs_not_scanned`. Readers still filter
+   by current lane (section 4), so an unscanned old event can never put a re-laned memory into a work answer. It can
+   only leave that event's support out of date;
 2. writes events for at most 64 sessions that have no event or a changed digest, oldest first by
    newest row;
 3. recounts support from current trail events and proposes at most 64 roads and 32 detours.
@@ -196,10 +305,11 @@ digest is SHA-256 over the canonical JSON of its touches.
   current trail of a pair is its newest event by rowid.
 - **Payload:** `session_id`, `lane`, `context_id: null`, `truncated`, `ambiguous_used_recalls`,
   `rule_version: "trail-v1"`, and `touches` as a list of
-  `{memory_id, layer, kind: "wrote" | "cited", at, recall_id | null, rank}`.
+  `{memory_id, layer, kind: "wrote" | "cited", at, recall_id | null, rank, suggested}`. `suggested` is a boolean
+  (section 4). The rule version stays `trail-v1`: nothing has been built, so no event of an older form exists (R15).
 
-A re-laned memory or a late outcome changes the digest, so the pass emits a new current event.
-Support counts sessions, not events, so nothing is counted twice.
+A re-laned memory, a late outcome or a new `route_shown` row before a touch changes the digest, so the pass emits a
+new current event. Support counts sessions, not events, so nothing is counted twice.
 
 Do the check and the insert inside one immediate transaction, as `_observe_recall` does. The
 observer's connection uses `timeout=0`, so a lock failure counts as a skipped pass, not an error.
@@ -242,8 +352,8 @@ hold:
 
 - each route is made of road cells only and has at most 8 steps;
 - the routes are internally vertex-disjoint: they share only X and Y, and so share no road;
-- each route appears as a contiguous, non-co-cited run in at least one session's current trail or
-  revisit trail, so it was actually travelled and not just composed;
+- each route appears as a contiguous run of steps that are neither co-cited nor suggested, in at least one session's
+  current trail or revisit trail, so it was actually travelled and not just composed or suggested;
 - with `R1` the longer route, `(len(R1) − len(R2)) / len(R1) > 0.25`, so the shorter one saves more
   than a quarter of the hops;
 - persistence ≥ 0.10 (below).
@@ -288,17 +398,22 @@ coexist.
 **Diagnostics.** `reflect(focus="category_evolution")` gains a `trails` block holding only counts:
 
 - sessions read and trail events written;
-- steps reaching support ≥ 2 in the full-trail view and in the revisit view, and co-cited steps;
+- steps reaching support ≥ 2 in the full-trail view and in the revisit view, co-cited steps and suggested steps;
 - `steps_supported_not_eligible`;
 - roads and detours proposed, and whether any committed;
-- truncations, ambiguous used recalls, skipped targets, lane filtering, and passes skipped on lock.
+- truncations, ambiguous used recalls, skipped targets, lane filtering, `pairs_not_scanned`, and passes skipped on
+  lock.
 
-## 6. Route (read-only A*)
+## 6. Route, locate and forward lookup (read-only)
+
+6.1 is revision 3's route between two memories. 6.2 to 6.6 are revision 4's traveler's view.
+
+### 6.1 Between two memories
 
 `route(start_id, goal_id, lane="work")` runs over a directed graph for one lane. Its nodes are
 memories whose current lane is that lane. Its edges come from one of two sources:
 
-- **`graph.db` mode** (the default): every step derived as in section 4, co-cited ones included.
+- **`graph.db` mode** (the default): every step derived as in section 4, co-cited and suggested ones included.
 - **`--categories` mode:** footpaths come from `graph.db` as above. Road status comes from the
   stored road cells, and detours from the stored level-2 cells, read with `mode=ro` from a
   `categories_v2.db` copy through `cat_boundaries` and `validate_path`. A cell counts unless its
@@ -309,27 +424,470 @@ The search:
 - **Edge `u → v`:** `support(e)` is that step's support, counting at least 1. In `graph.db` mode an
   edge is a road when its step is eligible under section 5. In `--categories` mode it is a road
   when a road cell exists. Only road status is reported; the cost uses support alone.
-- **Edge cost:** `θ(u, v) · (1 + 1/support)`. `θ` is the angle between the endpoints' stored vectors
-  after L2 normalization, with the cosine clipped to [−1, 1] before `arccos`. When either endpoint
-  has no vector, the cost is `π · (1 + 1/support)`.
+- **Angle:** `θ(a, b) = 2·atan2(‖â − b̂‖, ‖â + b̂‖)`, where `â = a / ‖a‖`, for two stored vectors. It is the angle
+  between them, in `[0, π]`, and in exact arithmetic it equals revision 3's `arccos` of the clipped cosine. Unlike
+  `arccos`, it keeps full precision near 0 and π, where near-duplicate memories sit and where `arccos` loses about
+  half its digits (R4). The consistency test's tolerance needs that (section 12).
+- **Edge cost:** `θ(u, v) · (1 + 1/support)`. When either endpoint has no vector, the cost is `π · (1 + 1/support)`.
 - **Heuristic:** `h(n) = θ(n, goal)`, or 0 when either vector is missing.
 - **Why it is optimal:** angle on the unit sphere obeys the triangle inequality, which 1 − cosine
   does not. Every edge costs at least its own angle, and at least π when a vector is missing, while
-  `h ≤ π`. So `h` is consistent and A* returns a cheapest route.
+  `h ≤ π`. So `h` is consistent and A* returns a cheapest route. 6.3 proves the general case.
+- **Order:** the open list is ordered by `(f, h, memory id)`, so ties resolve the same way every run.
 - **Bounds:** at most 10,000 node expansions (a calibration hypothesis, not a compiler limit). The
   route tool also stops at 500 ms of wall time. Hitting either bound returns `truncated` and no
-  route.
-- **Output:** memory ids only; a caller with store access looks up content itself. It lists:
+  route. In the tools, a cheapest route of more than 64 stops is `truncated` too (6.5).
+- **Output:** memory ids only; a caller with store access looks up content itself (the tools of 6.6 are such a
+  caller). It lists:
   - the route's memory ids, and each step's support and whether it is a road;
   - **detours avoided:** each detour whose endpoints X and Y the route visits, X before Y, and
     whose route between them is the detour's shorter side, with N, the number of sessions that
     travelled that shorter side.
 
+### 6.2 Locate from context
+
+Andy: "The context gives the graph positions which surfaces sheaves as paths." The vision: "'Where am I' comes from
+what is in front of the agent: the bug, the files, the error. The nearest memories are the entry stations."
+
+The search runs over one lane's tool graph `G_L` (6.6), whose node set is `V_L`: every memory in a current trail of
+lane L. Each node n may have a stored unit vector `v(n)`.
+
+**Inputs.** Context text `x` (may be empty), memory ids `H` the agent holds (at most 6, may be empty), and the lane.
+At least one of `x` and `H` must be non-empty. When `x` is non-empty, it is cut to 4,000 characters and embedded the
+way recall embeds a query, `embed([x], prefix="search_query")` (`server.py:2186`). Its unit vector is `c`. The
+nodes' stored vectors were embedded from their content with `search_document` (`remember`, `server.py:1867`), so
+every `θ(c, n)` is a query-to-document angle. `c` is undefined when `x` is empty or the embedder fails.
+
+**Three sources, in this order** (R1):
+
+1. **Given.** Each id in `H` that is a node of `V_L`, in the caller's order. `why: "given"`.
+2. **Words.** Anchors are matches in `x` of these patterns (Python `re`), each 3 to 128 characters long:
+   - a path with a slash, `(?:[\w.-]+/)+[\w.-]+`, or a file name, `[\w-]{2,}\.[A-Za-z][A-Za-z0-9]{0,4}\b`;
+   - an error name, `\b[A-Z][A-Za-z0-9]*(?:Error|Exception|Warning)\b`;
+   - a snake_case identifier, `\b_*[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b`, or a camelCase one,
+     `\b[a-z]+[A-Z][A-Za-z0-9]+\b`. The leading `_*` is needed: `_` is a word character, so without it `\b` can't
+     sit before the first letter of `_record_application`, and nothing would match it.
+
+   Overlaps: run every pattern over `x` with `finditer`, and drop each match whose span lies inside the span of a
+   longer match. Order what is left by start position, keep the first match of each distinct text, and take the
+   first 8. So `engram/server.py` yields `engram/server.py` and not also `server.py`, and `sqlite3.OperationalError`
+   yields `OperationalError`.
+
+   Each anchor is searched as one quoted phrase in `episode_fts` and `semantic_fts`, at most 64 ids per anchor per
+   table. Hits that are nodes of `V_L` and not already chosen are ordered by `θ(c, ·)` (nodes without a vector
+   last), then id, or by id alone when `c` is undefined, and the first 2 are taken. `why: "words"`. Words need no
+   embedder.
+   Why anchors and not the whole text: engram's FTS search quotes every token and joins them with an implicit AND
+   (`storage.py:64-74`, `:1062-1071`), so a whole error message almost never matches. A file path or an error name
+   does.
+3. **Near.** Nodes of `V_L` with a vector and `θ(c, n) ≤ r_max` (6.3), by `θ` and then id, until there are 6
+   stations. None when `c` is undefined. `why: "near"`.
+
+The **entry stations** `E` are what these give, at most 6. If `E` is empty, the answer says "nothing on the trails
+is near this context" and names nothing.
+
+**Entry cost** `w(e)` (R2):
+
+- 0 for a given id: the agent says it is there;
+- `2·θ(c, e)` for words and near: the cost of an untrodden footpath, since `1 + 1/1 = 2` (6.1). Walking to a station
+  should cost no less than walking an unwalked step;
+- `2π` when `c` is undefined or `e` has no vector.
+
+Each station reports `θ(c, e)` (null without `c` or a vector) and `through`, the number of sessions in the tool
+graph whose full trail touches it.
+
+### 6.3 Route to a goal given in words
+
+The vision: "If the agent knew which memory held the answer, it would recall it." So the goal is given in words,
+and A* runs to every memory close enough to them.
+
+**Definitions.**
+
+- Goal words `y`, cut to 4,000 characters, give the unit vector `q`, embedded as in 6.2. `trail_route` embeds `x`
+  (when non-empty) and `y` in one batch, `embed([x, y], prefix="search_query")`.
+- `θ_min = min θ(v(n), q)` over the nodes of `V_L` that have a vector.
+- The radius is `r = min(θ_min + δ, r_max)` with `δ = 0.10` and `r_max = arccos(0.60) ≈ 0.9273` (R3, below).
+- The **goal set** is `Γ = {n ∈ V_L : n has a vector and θ(v(n), q) ≤ r}`. It is empty exactly when no node has a
+  vector or `θ_min > r_max`.
+- The heuristic is `h(n) = max(0, θ(v(n), q) − r)` when n has a vector, and `h(n) = 0` when it has none.
+
+**The search.** A* starts from every entry at once: each `e ∈ E` enters the open list with `g(e) = w(e)` (6.2).
+Edges and their costs are those of 6.1. A node is a goal when it is in `Γ`. The search stops when it pops a goal,
+and returns the route from that goal back to its entry. The route's **cost** is `g` of the popped goal: its entry's
+`w(e)` plus the route's edge costs, the quantity Claim 3 minimizes. The open list is ordered by `(f, h, memory id)`.
+The bounds are 6.1's.
+
+**Lemma 1 (angle is a metric).** For unit vectors a, b and c: `θ(a, b) ≥ 0`, `θ(a, a) = 0`, `θ(a, b) = θ(b, a)`,
+and `θ(a, c) ≤ θ(a, b) + θ(b, c)`. This is the great-circle distance on the unit sphere. Every vector here, `q` and
+`c` included, lies on the same sphere, so the inequality holds whichever prefix embedded it.
+
+**Lemma 2 (every edge costs at least its angle).** For every edge `u → v`, `c(u → v) ≥ θ(u, v)` when both ends
+have vectors, and `c(u → v) ≥ π` when either lacks one. *Proof.* `support ≥ 1`, so `1 + 1/support ≥ 1`, and the
+cost is that factor times `θ ≥ 0` or times `π`. ∎
+
+**Claim 1 (h is consistent).** For every edge `u → v`, `h(u) ≤ c(u → v) + h(v)`. And `h(n) = 0` for every n in `Γ`.
+
+*Proof.* Three cases.
+
+- u has no vector. Then `h(u) = 0`, and `c ≥ 0`, `h(v) ≥ 0`.
+- u has a vector and v has none. Then `h(u) ≤ θ(u, q) ≤ π ≤ c(u → v)` by Lemma 2, and `h(v) = 0`.
+- Both have vectors. By Lemma 1, `θ(u, q) − r ≤ θ(u, v) + (θ(v, q) − r) ≤ θ(u, v) + h(v)`. Also
+  `0 ≤ θ(u, v) + h(v)`. So `h(u) = max(0, θ(u, q) − r) ≤ θ(u, v) + h(v) ≤ c(u → v) + h(v)` by Lemma 2.
+
+For n in `Γ`, `θ(n, q) ≤ r`, so `h(n) = 0`. ∎
+
+**Claim 2 (h never overestimates).** For every node n from which some goal is reachable, `h(n) ≤ h*(n)`, the cost
+of the cheapest path from n to any node of `Γ`.
+
+*Proof.* Take a cheapest such path `n = n_0 → n_1 → … → n_k`, with `n_k ∈ Γ`. Add Claim 1 along it:
+`h(n_0) − h(n_k) ≤ Σ c(n_i → n_{i+1}) = h*(n)`. Since `h(n_k) = 0`, `h(n) ≤ h*(n)`. ∎
+
+**Claim 3 (the route is cheapest).** Among all entries e and all goals, the route returned minimizes
+`w(e) + cost(path)`.
+
+*Proof.* Define reduced costs `c′(u → v) = c(u → v) − h(u) + h(v)`, which are `≥ 0` by Claim 1. A* with keys
+`f = g + h` is Dijkstra's algorithm on `c′` with start keys `w(e) + h(e)`. Along any path from e to a goal t, the
+reduced costs add up to `cost − h(e) + h(t) = cost − h(e)`, so t's key is `w(e) + cost`. Dijkstra pops keys in
+non-decreasing order, so the first goal popped has the least `w(e) + cost`. Equivalently: add a source with an edge of
+cost `w(e)` to each entry, and a sink with a zero-cost edge from each goal and `h = 0`. Claim 1 still holds on the
+new edges, and A* on that graph is the textbook case. ∎
+
+The proofs hold for every `q`, because `r` is fixed before the search starts. They are in exact arithmetic. Kahan's
+angle (6.1) keeps the floating-point error far below the test tolerance of 1e-9 (section 12).
+
+**Nodes without vectors.** A node without a vector is never a goal: closeness to words can't be judged without one.
+Its `h` is 0. It can be an entry (given, or found by words) and an interior node of a route, through edges that cost
+at least π.
+
+**Why this r** (Rio Grande's call, R3).
+
+- *A set, not a node.* Words name a goal less sharply than an id. Several memories sit about equally close to them,
+  and the trail should reach whichever it can. `δ = 0.10` rad is about 5.7°. Near `θ = 0.8` (cosine 0.70) that is a
+  band of about 0.07 in cosine.
+- *A ceiling.* Past `r_max`, nothing on the trails is about the goal, and recall is the right tool. Engram links two
+  memories at cosine 0.70 (`reinforce_threshold`, `config.py:44`; `suggest_edges`, `graph.py:461`), which is a
+  document-to-document measure (`vec0_distance_to_similarity`, `storage.py:23-28`). Goal words are embedded as a
+  query, and query-to-document cosines run lower, so the ceiling sits 0.10 below, at cosine 0.60.
+- *The regime.* So `r`, `δ` and `r_max` are set for query-to-document angles: `q` and `c` embedded with
+  `search_query`, the nodes' vectors stored with `search_document` (6.2). Anything that calibrates them must measure
+  that regime.
+- *Both are calibration hypotheses* (section 10). Measure W embeds its context and goal the way the tools do (section
+  7, step 8), and reports how often `Γ` was empty and the spread of `θ_min`. That is the evidence a later revision
+  would need. W's stored-vector diagnostic is document-to-document, so it is not evidence for `r`.
+
+**What the answer says** (`end`, 6.5):
+
+- `goal`: a route ending in `Γ`;
+- `at_goal`: the goal A* popped is itself an entry, so its `g` is its entry cost and the route is one stop with no
+  steps: recall it. An entry that is in `Γ` is not enough. If another entry reaches `Γ` more cheaply, A* pops that
+  route's goal first (Claim 3), and the answer is `goal`;
+- `no_goal`: `Γ` is empty. The answer names the nearest node and its angle, so the agent can recall it instead;
+- `no_route`: the open list ran empty with no goal popped, before any bound was hit. The answer names the goal-set
+  node nearest to `q`;
+- `truncated`: a bound was hit before a goal was popped, or the route found has more than 64 stops (6.5);
+- `stale`: the output-time check failed twice (6.6).
+
+*Example of `at_goal` against `goal`.* Entry e1 is in `Γ`, found near the context, with `w(e1) = 2θ(c, e1) = 1.0`.
+Entry e2 is a given id, not in `Γ`, with `w(e2) = 0`, and an edge `e2 → t` costing 0.3 leads to `t ∈ Γ`. A* pops e2,
+then t with key 0.3, before e1 with key 1.0. The answer is `goal`, route e2 → t, cost 0.3, as Claim 3 and the
+brute-force test in section 12 require.
+
+### 6.4 Forward lookup
+
+The vision: "Answer 'what did others do next from here'. Forward lookup along the trails that passed through the
+entry stations, and where they ended."
+
+For an entry e in lane L, take the current **full** trails of L in the tool graph that contain e: at most the 256
+sessions with the newest rows. For each such trail τ, let i be the position of the first occurrence of e.
+
+- **Next.** For every occurrence of e at a position j with a following touch, the successor is `x = τ[j+1]`. For
+  each x, `sessions(e → x)` is the number of distinct sessions with an `e → x` step that is neither co-cited nor
+  suggested, and `last(e → x)` is the latest such step's time. Successors are ranked by sessions, then by `last`,
+  newest first, then by id (R5). A successor whose steps are all co-cited or suggested comes after the rest, with
+  sessions 0 and its flag. The answer keeps the first 2. Each carries `kind`, `wrote` or `cited`, from the touch.
+- **Ends.** Each session's end is its trail's last touch, `τ[−1]`, reached `|τ| − 1 − i` hops after e. A session
+  whose trail ends at e counts toward `ended_here`. The other ends are ranked by distinct sessions, then by the
+  latest end time, then by id. The answer keeps the first 2, each with its sessions and median hops (the lower median
+  for an even count). A trail cut at 512 touches (`truncated`, section 4) didn't end at its last kept touch, so it
+  gives no end. It still gives next items, and it is counted in `ends_unknown`.
+
+**Why full trails.** A full trail includes what the session wrote. "What others did next" is often "they wrote down
+the fix", a brand-new episode that the revisit view drops (section 4).
+
+The tool applies this to the first 3 entry stations.
+
+### 6.5 Short answers
+
+The vision: "Return short routes. A list of steps with one-line summaries, each with who laid it, under which rules,
+and the receipt for this use."
+
+In this section an answer's list items are **stops**: memories, not the directed pairs that section 2 calls steps. A
+route of k stops has k − 1 steps.
+
+**Summary.** A memory's summary is the first non-empty line of its content, with whitespace collapsed to single
+spaces and control characters removed. It is cut to the longest prefix of whole characters whose compact JSON form
+is at most 160 bytes, with `…` appended (and counted) when cut. The tool reads it from `graph.db` when it answers,
+never from the cache.
+
+**Sources.** Every answer has a `sources` map, and every item it names points to one by key in `src` (R6). A source
+has three fields:
+
+- `laid_by`: who laid the track. `"<person> (<instance>)"` when the permissions ledger registers this store
+  (permissions spec section 5.5, its `stores` table), else `"this store (<instance>)"`. The person is `stores.owner`
+  for the row whose `instance_id` is this store's `meta.instance_id`. The tool graph build reads it once, from
+  `ENGRAM_HOME/.engram/permissions.db` opened with `mode=ro` and `query_only` (the ledger's path, permissions spec
+  5.5). A missing or unreadable ledger gives `"this store (<instance>)"`. The instance is the server's instance name,
+  or `default` (`server.py:1976`). This fills the permissions spec's `laid_by` for roads and trails (its section 11).
+- `allowed_by`: the rule. In step 1 every answer reads the server's own store for its own agent, which the
+  permissions spec does not check ("Checking a store's own sessions recalling their own store. That is the person's
+  own memory in their own home", its section 14). So the rule is `"own store"` (R14). Later steps fill the cited
+  records, as the permissions spec's annotation does (its section 11).
+- `receipt`: the short id of this answer's receipt (6.6).
+
+In step 1 there is one source, `h`. In later steps, stops from another store carry that store's source.
+
+**Per-stop provenance.** Each stop also carries `via` and, after the first, `walked`. Both describe the step that
+reaches the stop. The first stop's `via` is its entry kind, one of `entry:given`, `entry:words` or `entry:near`. A
+later stop's `via` is `road` or `footpath`, and `walked` is `"<support> sessions, last <YYYY-MM-DD>"` (`session`
+when the support is 1), where the date is the latest supporting session's step time. When that step has support 0,
+`walked` says `"footpath (co-cited)"`, `"footpath (suggested)"` or both.
+
+**Example.** A `trail_route` answer, with ids shortened here:
+
+```json
+{"tool":"trail_route","lane":"work","as_of":"2026-10-25T18:00:00Z",
+ "sources":{"h":{"laid_by":"andy (default)","allowed_by":"own store","receipt":"#5e21a9c0"}},
+ "goal":{"radius":0.6213,"nearest":0.5213,"size":3},
+ "route":[
+  {"id":"8c1d…","layer":"episode","summary":"recall() logs target_ids before uninvited results are added","via":"entry:near","angle":0.4102,"src":"h"},
+  {"id":"2b77…","layer":"semantic","summary":"a lane-filtered recall rewrites target_ids afterwards","via":"road","walked":"3 sessions, last 2026-10-20","src":"h"},
+  {"id":"f03a…","layer":"episode","summary":"fix: count exactly one target after instincts are removed","via":"footpath","walked":"1 session, last 2026-10-22","to_goal":0.5590,"src":"h"}],
+ "end":"goal","hops":2,"cost":1.9381}
+```
+
+`cost` includes the entry cost (6.3): here `w = 2 × 0.4102 = 0.8204`, and the two steps cost the other 1.1177.
+
+**Size.** Every answer is at most **6,000 bytes** of UTF-8 compact JSON (`separators=(",", ":")`,
+`ensure_ascii=False`). `category_compile.estimate_tokens` (`category_compile.py:195-197`: UTF-8 bytes plus 3, divided
+by 4) counts that as 1,500 tokens, which is how revision 4 stated it. It is a byte bound, not a token bound. A
+36-character UUID and CJK text cost more real tokens than a quarter of their bytes, so an answer can cost noticeably
+more than 1,500 tokens of an agent's context. The builder measures the largest test answers with the tokenizer of
+the model the agents use and records the ratio in the plan's results (section 12). If the largest answer comes to
+more than 2,000 real tokens, the next revision lowers the byte bound. Rio Grande's call (R6).
+
+These caps make the bound hold by construction:
+
+- a route has at most 64 stops; a cheapest route with more is answered `truncated` (6.3). It shows at most 12 stops.
+  A longer one shows its first 6 and last 6 around one `{"skipped": k}`, where k counts the stops left out;
+- `trail_locate` names at most 6 stations, and `trail_next` at most 3 stations with 2 next and 2 ends each;
+- summaries are at most 160 bytes, angles have 4 decimals, and there are no scores, session ids, or echoes of the
+  context or goal text.
+
+With 36-character ids, an item is at most about 340 bytes (the reviewer built a worst case of 338), so the largest
+answer, `trail_next`'s 15 items, comes to about 5,300 bytes with its header and sources. If an answer still exceeds
+the bound (for example, with ids longer than a UUID), the tool drops, in order: the summaries of items that are
+neither entries nor the last stop; then every summary; then every stop but the first 3 and last 3. A recall, by
+comparison, returns up to 20 matched memories with their full content (`server.py:2068`, `:2281-2286`), plus
+uninvited and resonant ones.
+
+### 6.6 The tools
+
+**Gate.** `[trails] tools = false` is the default, and only an exact boolean `true` turns the tools on, checked with
+`is True` as the observer's gates are (`server.py:2650`). When it is not exactly `true`, the tools are not
+registered at all, so agents see no tool definitions and pay no tokens for them (R7). Registration happens in
+`_initialize_pre_serving`, after `_init` has loaded the config and before `mcp.run()` (`server.py:4023-4038`),
+through `_server_tool()` (`server.py:690-697`), so every call holds the lifecycle barrier as every tool call does.
+
+The tools need nothing from `[category_evolution]`. They read `graph.db` only, so they do not depend on the v2
+observer, whose acceptance is false ("Evolving-category v2" in `engram/CLAUDE.md`). Rio Grande's call.
+
+**Lanes** (R16). `[trails] lanes` lists the lanes the tools answer. It defaults to `["work"]` when absent. A value
+that is not a list of distinct strings, each `work` or `personal`, enables no lane: every call answers
+`{"error": "lane not enabled"}`, and the build builds nothing and records `lanes_invalid`. A call for a valid lane
+that isn't listed answers `{"error": "lane not enabled: <lane>"}` and names nothing. The build builds only the
+listed lanes. A gate pass licenses the lane it evaluated (section 7, step 9), so an owner lists a lane only after
+that lane passes. Rio Grande's call.
+
+**The surface.**
+
+| Tool | Arguments | Answer |
+|---|---|---|
+| `trail_locate` | `context: str = ""`, `memory_ids: list[str] \| None = None`, `lane: str = "work"` | the entry stations (6.2) |
+| `trail_route` | `goal: str`, `context: str = ""`, `memory_ids: list[str] \| None = None`, `lane: str = "work"` | a route to the goal set (6.3) |
+| `trail_next` | `context: str = ""`, `memory_ids: list[str] \| None = None`, `lane: str = "work"` | the forward lookup (6.4) |
+
+- `lane` is `work` or `personal`, and anything else is an error, as in recall (`server.py:2089-2090`). The default
+  is `work`, as revision 3's `route` has it. A lane not in `[trails] lanes` is refused (above).
+- `memory_ids` holds at most 6 strings. More is an error. Ids that are not nodes of the lane are ignored and counted
+  as `ignored`.
+- `context` and `goal` are cut to 4,000 characters, and the answer says so when it cuts.
+- At least one of `context` and `memory_ids` must be non-empty. `trail_route` also needs a non-empty `goal`.
+- If the embedder fails, `trail_route` returns `{"error": "embedder unavailable"}`, since `q` needs it.
+  `trail_locate` and `trail_next` fall back to given ids and words, which need no embedder (6.2): word stations are
+  ordered by id and cost `2π`, there are no near stations, and the answer reports `degraded: ["embedding"]`.
+
+The descriptions agents see:
+
+- `trail_locate`: "Where am I on the trails? Give the task, file paths or error text, or memory ids you hold. Returns
+  up to 6 memories other sessions walked through."
+- `trail_route`: "Route along trails other sessions walked, from your context to a goal in words. Returns a short
+  list of stops. Recall a stop's id to read it in full."
+- `trail_next`: "What did other sessions do next from here, and where did they end? Give your context or memory ids."
+
+**The tool graph** (R10). It is built once per server process, as the last step of the deferred maintenance pass,
+after `persistence-score-refresh` and before the report is saved (`server.py:1279-1290`), and only when the tools
+are registered. It reads `graph.db` through its own `Storage.open_read_only` connection (`storage.py:127-161`),
+which never writes and needs no barrier, and takes the lifecycle barrier only to swap the finished graph in. Its
+`as_of` is the build's start. For each listed lane it holds:
+
+- the full and revisit trails of the 4,096 closed sessions with the newest rows, derived as in section 4;
+- the nodes, and each step's support, road status (section 5's eligibility), latest time and flags;
+- each step's angle `θ(u, v)`, computed once at build time (262,144 × 8 B ≈ 2 MB), so A* never takes a 768-term dot
+  product per expansion; a step with a vectorless end stores none and costs `π · (1 + 1/support)` (6.1);
+- for each node, the sessions whose full trails touch it (`through`, and the postings that 6.4 reads);
+- the unit vectors of the nodes, read from `episode_vectors` and `semantic_vectors` and held as float32, the form
+  they are stored in (`storage._pack_embedding`, `storage.py:59-61`; `paths._unpack_embedding`, `paths.py:43-44`).
+  Holding them as float32 loses nothing: each 4,096-row block is converted to float64 when a call uses it, which
+  gives the same numbers as converting all at once. At the bound that is 20,000 × 768 × 4 B ≈ 61 MB, not 123 MB.
+
+In all it holds at most 20,000 nodes and 262,144 distinct steps. The bounds are split equally among the listed lanes:
+one lane gets all of it, two lanes get half each, so one lane can't starve the other. If a lane's newest sessions
+would pass its share, the build stops that lane at the first session that would, keeps what it has, and records
+`truncated` for that lane. Until the graph is ready, a tool answers `{"note": "trail graph not ready"}` and names
+nothing. Building after `prune` is right here: the tools must not name memories that have moved to cold storage.
+
+The build registers its read-only connection with the server's cleanup coordinator,
+`_register_server_cleanup(conn, conn.close, "trail graph build")` (`server.py:835-838`), as the maintenance thread
+itself is registered (`server.py:4018`). Shutdown then closes it, and a forked child quarantines it with the rest of
+the generation's resources (`_before_server_fork` and `_after_server_fork_child`, `server.py:252-256`, `:374-379`).
+Between batches of 64 sessions the build asks the generation for admission, as each maintenance step does
+(`_admit_server_operation`, `server.py:807-817`, used by `_maintenance_step_scope`, `:1096-1112`). When it is
+refused because the generation is shutting down, the build stops and discards what it has.
+
+**One graph per process.** Claude Code runs one engram server per session, and each builds its own graph. With k
+sessions open, a machine holds k graphs: at most k × 256 MB at the bounds, on top of the roughly 320 MB that each
+server already peaks at with the shared embedder (`engram/CLAUDE.md`, measured 2026-10-02). For 4 sessions that is
+up to about 2.3 GB. Sharing one graph per machine is a later optimization, not step 1. Rio Grande's call.
+
+**Output-time check** (R11). Before it answers, a tool reads the current lane and existence of every node of the
+computed route (at most 64), every entry station it used (at most 6), and every other memory it would name, from the
+server's store: at most 70 rows. That includes the stops hidden in `{"skipped": k}`. A memory now in another lane, or
+gone, is removed from the cached graph with its edges, and the tool computes once more. If the second answer would
+also hold one, it returns `{"end": "stale"}` and names nothing. So a re-lane after the build never puts a personal
+memory anywhere in a work route, shown or skipped, and never shows a route the agent can't follow.
+
+**Receipts** (R8). Each answer that names at least one memory appends one `memory_log` row through
+`Storage.add_log_entry` (`storage.py:1656-1680`):
+
+- `event_type = 'route_shown'`, `layer = 'trail'`, `outcome` null;
+- `target_ids`: every memory id the answer names, in order;
+- `context`: `{receipt_id, session_id, tool, lane, as_of, graph_digest, rule_version}`.
+
+`receipt_id` is the row's id, a uuid4. Its short form is `#` and its first 8 hex characters. The permissions spec
+writes short ids with 4 (its section 4.1), but 4 hex characters give even odds of a repeat at about 300 receipts
+(the birthday bound over 65,536 values), and the short form is the agent's only handle on its receipt. 8 give even
+odds only near 77,000. Rio Grande's call. The row holds no context text, goal text or summary, since a receipt never
+holds content or query text (permissions spec section 9.1). `graph_digest` is the SHA-256 of the canonical JSON of
+the graph's `as_of`, its rule version and its sorted current trail digests. A reader can rebuild the graph from
+`graph.db` and `as_of`, and check against it that every id the receipt names is a node of the lane and every shown
+step an edge. A reader can't rebuild the answer itself: it also depends on `c` and `q`, which come from text the
+receipt deliberately doesn't hold, on FTS hits, and on any memories the output-time check removed from the cached
+graph after the digest was taken. A non-recall row in `memory_log` has precedents (`proximity_suggestion`,
+`graph.py:502-512`), and the per-session counters ignore event types they don't know (`storage.py:1765-1789`).
+
+**Read-only, precisely.** The receipt row is the tools' only write. They never:
+
+- change a memory, lane, vector, cell or event;
+- increment access counts, as recall does (`server.py:2389-2391`), since showing a route is not use, and access
+  feeds decay;
+- log an operation: they are not wrapped in `_mutation_logged` (`server.py:38-64`);
+- apply the dream bias (`_apply_recall_bias`, `server.py:1499`), so they have no dream-tilted scores to hide;
+- change recall output.
+
+They write the receipt for two reasons. Vision principle 5: "Every use of a memory leaves a receipt that its owner
+and the place's people can read." And section 4 needs it to mark suggested touches.
+
+**Diagnostics.** `reflect(focus="trails")` (dispatched beside the other focuses, `reflection.py:732-775`) returns
+counts only: the graph's `as_of`, sessions, nodes, steps, roads, `truncated` and `lanes_invalid`, build seconds and
+bytes; calls per tool; answers ending `no_goal`, `no_route`, `truncated` or `stale`; answers shrunk by 6.5's
+fallback; receipts written; and, from `graph.db`, `route_shown` rows and suggested touches in closed sessions.
+
+Where the counts live: the graph and the per-call counters are server memory, held in `server.py` beside the graph,
+and they start from zero in each process. The `Reflector` holds only storage and a few paths and configs
+(`reflection.py:53-66`), so it gets them the way it gets the category diagnostics: through a callable passed to its
+constructor, a new `trails_reporter` beside `category_reporter` (`reflection.py:60`, `:69-77`; `server.py:1418-1430`).
+Without one it answers `{"available": false}`, as `analyze_category_evolution` does. The `graph.db` counts it reads
+through its own storage.
+
 ## 7. Evaluation (decides whether anything is enabled)
 
-The evaluation runs read-only on a copy of a real store, and on synthetic stores in the tests.
-Every threshold below is fixed before the first run on real data, and a failure revises the
-design, not the thresholds.
+**Where it runs** (R13). A store that isn't the runner's own is evaluated only on an imprint whose owner agreed: an
+imprint admitted under the imprint spec whose permission lists the action `route` and the purpose `trail-evaluation`
+(imprint spec section 5.3 and its D10). The first evaluation is such a run (the vision's "How the work runs", step 3;
+change C5). It runs through that spec's `trail-evaluation` use (its section 12), which checks the permission, writes
+the use receipts, and runs `trails.py <imprint dir>/imprint.db --evaluate --seed N --json --imprint-use <use id>`.
+It also runs on synthetic stores in the tests. Every threshold below is fixed before the first run on real data, and
+a failure revises the design, not the thresholds.
+
+An owner may also run `trails.py --evaluate` on a plain copy of their own store. That is the person's own memory in
+their own home, the permissions spec's non-goal (its section 14), and it needs no imprint. `trails.py` doesn't check
+who owns a plain copy; it can't. A pass on the owner's own copy counts for that store as a pass on an imprint of it
+does (step 9).
+
+**The imprint check.** `trails.py` treats a file whose `meta.instance_id_origin` is `imprint` as an imprint. It:
+
+1. takes `--imprint-use <use id>`, a use id of at most 64 characters from `[A-Za-z0-9-]`, never a path, and reads
+   the allow file only at `<imprint dir>/uses/<use id>.allow.json`, where `<imprint dir>` is the directory holding
+   the opened `imprint.db` (imprint spec section 12, which writes `uses/<use id>.allow.json`). A symlink at any part
+   of that path is refused;
+2. refuses when `<imprint dir>/withdrawn.json` exists (imprint spec section 12: "refuses if `withdrawn.json`
+   exists");
+3. refuses unless the allow file names this file's `meta.instance_id`, the action `route`, the purpose
+   `trail-evaluation`, and an effective end later than now. The effective end is the imprint spec's `exp_eff`, the
+   minimum of `expires` and every `shortened` receipt's value (its section 12), as the allow file records it (I2);
+4. opens the file `mode=ro&immutable=1`, as `store_reader.connect(path, immutable=True)` does
+   (`store_reader.py:43-54`), and keeps the allow file's SHA-256;
+5. checks again when the run ends: the allow file is still there with the same SHA-256, `withdrawn.json` is still
+   absent, `imprint.db` is still at its path, and the effective end has not passed. If any check fails, the imprint
+   was withdrawn, shortened or ended during the run. `trails.py` then discards the report, prints nothing to
+   standard output, and exits with a distinct status, so the use writes no `use-finished` receipt with a report
+   (I2).
+
+**Known limit.** The allow file is unsigned. Any process running as the station's Unix user can write one. Like the
+permissions spec's terminal yes ("this narrows mistakes, not malice", its section 14), this check narrows mistakes,
+not malice: it keeps an evaluation from running on an imprint by accident, against the wrong imprint, or after a
+withdrawal. Rio Grande's call.
+
+**What an imprint changes.** The imprint keeps episodes whole, recall rows whose targets all ship (with `context`
+cut to `recall_id` and `session_id`, and the outcome normalized), and citing operations whose targets all ship
+(imprint spec section 6.2, D6 and D7). Cold storage never ships in step 1 (imprint spec section 6.3, and section 17,
+step 5).
+
+That removes much more than the memories left at home. A recall without a lane filters nothing: the lane filter
+runs only when a lane is given (`server.py:2332-2333`), and the row then logs all of up to 20 delivered ids
+(`max_results`, `server.py:2068`; logged at `:2380-2386`) from both lanes. So:
+
+- a work-lane imprint keeps a default recall only when every one of its up to 20 matches shipped, so it drops
+  nearly every recall that matched even one personal memory;
+- any imprint drops every recall with a target since pruned to cold storage;
+- each dropped row takes with it the cited touches of the memories that did ship.
+
+Revisit trails are made of cited touches only (section 4), so roads, detours and both gates thin out, and on a first
+imprint they may well come out "not evaluable". Revision 4 said "an imprint's trails are the source's trails without
+the memories left at home". That was wrong.
+
+The fix is I4 (section 11), Rio Grande's call for the imprint spec to reconcile. A used recall row keeps its shipped
+targets, in their delivered order, with `context.cut = true` when any non-instinct target stayed home. Section 4 never
+credits a cut row by the "exactly one target" rule, which is the one place the left-out targets mattered. With I4,
+an imprint's trails are the source's trails restricted to the memories that shipped, except for three things: a
+cited touch whose only evidence (a later episode or citing operation) stayed home is lost; a session's first touch,
+and so its revisit view, starts at its first shipped touch; and which of the newest sessions count as closed can
+differ, because the CLI's `as_of` is the newest timestamp in the copy (section 4). Touches that drop out join their
+neighbors into one step, as lane filtering already does (section 4). Until I4 lands, expect "not evaluable" from an
+imprint.
+
+The imprint carries no query text, so measure W can't replay what the agent typed. It embeds the stored text of
+memories instead (step 8).
 
 **1. Split.** Order closed sessions by first touch, and hold out the last 20%.
 
@@ -338,10 +896,13 @@ design, not the thresholds.
   it.
 
 **2. Qualifying sessions.** A held-out session qualifies when it touched at least 3 distinct
-pre-cutoff memories in one lane. Let `s` be the first and `g` the last; the session's *interior*
-is its other pre-cutoff memories.
+pre-cutoff memories in the evaluated lane (the CLI's `--lane`; revision 3 wrote "one lane"). Let `s` be the first
+and `g` the last; the session's *interior*
+is its other pre-cutoff memories. A held-out session with any `route_shown` row qualifies for neither measure, and
+is counted as `steered`: a tool pointed its way.
 
-**3. Graphs,** built from training data only:
+**3. Graphs,** built from training data only. In the evaluation, suggested steps are left out of T and S, and B is
+built over T's nodes, so no graph learns from the tools' own advice.
 
 - **T, the trail graph:** training steps as directed edges, costed as in section 6.
 - **S, shuffled trails:** the order-free ablation. Each training trail is shuffled in blocks: all
@@ -353,6 +914,12 @@ is its other pre-cutoff memories.
   its 8 nearest nodes of T by angle, with edge cost equal to the angle. Building B over T's nodes,
   not every memory, means T can't win on popularity alone. A node without a vector has no
   neighbors in B, so sessions whose `s` or `g` lacks a vector are left out of the gate and counted.
+
+**Seeds.** Every random stream derives from the recorded seed: the stream for purpose p uses
+`int.from_bytes(sha256(f"{seed}:{p}".encode()).digest()[:8], "big")` as a `numpy.random.default_rng` seed. The
+purposes are `shuffle:0` to `shuffle:9`, `bootstrap:route:T-B`, `bootstrap:route:T-S`, `bootstrap:goal:T-N` and
+`bootstrap:goal:T-B`. Rio Grande's call: revision 3 said only "derived", and the report's hash (step 7) needs one
+rule.
 
 **4. Routing.** Route `s → g` in all three graphs with the same A*, using the expansion bound
 only. Wall-time truncations are reported separately and don't affect the score, so results don't
@@ -371,9 +938,13 @@ The report also gives:
 
 - hop ratio, the route's hops divided by the session's own hops from `s` to `g`;
 - **detour hit rate:** over pairs of (held-out session, training detour) where the session visits X
-  and later Y, the share whose run between them is the detour's shorter side.
+  and later Y, the share whose run between them is the detour's shorter side;
+- **next hit** (reported, not gating): with the entry stations of step 8.3 over T's nodes, the share of qualifying
+  sessions whose next distinct pre-cutoff touch after `s` is among the forward lookup's next items (6.4) in T, and
+  the same in S, averaged over the K shuffles. When the embedder check of step 8.2 fails, the entries are the near
+  stations of the stored vector `v(s)` instead, and the report says which regime it used.
 
-**6. Gate (hypothesis).** All of these must hold:
+**6. The route gate (hypothesis).** All of these must hold:
 
 - at least 30 qualifying sessions. With fewer, the result is "not evaluable", neither pass nor fail;
 - T's reach is at least 0.20;
@@ -381,25 +952,146 @@ The report also gives:
   its paired bootstrap 95% interval (10,000 resamples, recorded seed) is above 0;
 - the same holds for T − S.
 
-**7. Report.** The CLI writes counts and rates only, never content or ids. A pass makes the case
-for turning `trails` on for one store. It does not enable anything; the store's owner decides.
+**7. Report.** The CLI writes counts and rates only, never content or ids, for both gates. The report is canonical
+JSON (sorted keys, no spaces) with every float rounded to 4 places, so the same imprint and seed give the same bytes
+when no deadline is hit (step 10), and anyone can check the report's SHA-256 in the imprint's `use-finished` receipt
+(imprint spec section 12) by running it again. A pass makes the case for turning something on for one store (step
+9). It does not enable anything; the store's owner decides.
+
+**8. The goal gate: routing to a goal given in words (measure W).** Rio Grande's call (R12). It asks the vision's
+question: does routing along trails to a goal in words find the pieces a session used better than recalling the
+goal words, and better than routing by similarity alone?
+
+1. *Qualifying.* A held-out session qualifies for W when it qualifies in step 2, is not steered, and wrote at least
+   one episode in the evaluated lane at or after its touch of `g`. Let `w` be the last such episode by
+   `(created_at, id)`. It is the session's own words about where it ended. `w` is created after the cutoff, so it is
+   in neither T nor B, and no training data holds it.
+2. *Text and the embedder* (Rio Grande's call, MF1). The tools embed the context and goal as queries (6.2, 6.3), and
+   `r` is set for that regime (R3). So W does the same. The context text is `x = content(s)` and the goal text is
+   `y = content(w)`, each cut to 4,000 characters, embedded in one batch with `prefix="search_query"` through the
+   same function the tools call. `c` and `q` are their unit vectors. The imprint ships episodes and semantics whole
+   (imprint spec section 6.2), so the text is on the Pi. The run reads it only to embed it and to find its anchors.
+   Nothing from it reaches the report. A session whose `x` or `y` is empty after 6.5's whitespace rule is left out
+   and counted as `empty_text`.
+   - *The embedder.* The run needs the store's embedding model: `nomic-ai/nomic-embed-text-v1.5`, 768 dimensions
+     (`embeddings.py:70-71`). It uses the provider `embeddings.create_embedding_provider()` returns
+     (`embeddings.py:200-207`): the shared embedder service when `ENGRAM_EMBEDDER_SOCKET` is set, whose model sits
+     outside the run's 4 GB cap and which refuses a different model (`embeddings.py:171-177`), or else the in-process
+     model, inside the cap (`engram/CLAUDE.md` measures about 1.8 GB for a server that loads its own). The run never
+     downloads a model. A missing model or an unreachable service makes W "not evaluable: no embedder".
+   - *Checked against the store's own.* The store records no model name, so the run checks the vectors instead.
+     Before scoring, it embeds with `search_document` the content of the 32 earliest episodes, by
+     `(created_at, id)`, in the evaluated lane that have stored vectors, as `remember` embeds them
+     (`server.py:1867`). The median cosine with their stored vectors must be at least 0.99, or W is "not evaluable:
+     embedder mismatch". Rio Grande's call; 0.99 is a calibration hypothesis.
+   - The route gate needs no embedder and runs either way.
+3. *Entries.* 6.2's locate over T's nodes with `x`, and no given ids, since an imprint carries no ids the agent held:
+   at most 2 stations from words, found by FTS in the imprint's own `episode_fts` and `semantic_fts` and kept only
+   when they are nodes of T, and the rest near, at most 6 in all, with 6.2's entry costs.
+4. *Goal set.* `Γ` over T's nodes by 6.3's rule with `q`.
+5. *Methods,* through the same functions the tools call:
+   - **T:** 6.3's A* over T from the entries to `Γ`;
+   - **B:** the same A* over B from the same entries to the same `Γ`;
+   - **N, nearest to the goal:** the n nodes of T outside the entries that are nearest to `q`, by angle and then id,
+     where n is the number of nodes T's route names outside the entries, or 4 when that number is 0 (T has no route,
+     or answers `at_goal`, where the tool tells the agent to recall). N spends the same context as T. It is not
+     engram's recall: it has no FTS, no recency, and no memories outside T. The report calls it "nearest to the
+     goal".
+
+   A T or B route of more than 64 stops counts as no route, as the tool would answer `truncated` (6.5).
+6. *Scores.* For each method, R is the set of nodes it names outside the entries. The truth U is the session's
+   distinct pre-cutoff touches in the lane, minus `s`, minus the entries. Precision is `|R ∩ U| / |R|`, coverage is
+   `|R ∩ U| / |U|`, and F1 their harmonic mean. All are 0 when R is empty or there is no route. A session whose U is
+   empty is left out and counted as `truth_inside_entries`. T's **goal reach** is the share of W-qualifying sessions
+   where `Γ` is not empty and T returns a route ending in it.
+7. *Gate (hypothesis).* All of these must hold:
+   - at least 30 W-qualifying sessions with a non-empty U. With fewer, W is "not evaluable";
+   - T's goal reach is at least 0.20;
+   - the paired per-session F1 difference T − N has a mean of at least 0.10, and the lower bound of its paired
+     bootstrap 95% interval (10,000 resamples) is above 0;
+   - the same holds for T − B.
+8. *Also reported:* the regime (`query-to-document`); how often `Γ` was empty; `θ_min` at p10, p50 and p90; the mean
+   size of `Γ`; how often `g` was in `Γ`; how often T answered `at_goal`; how often the entries met `{s} ∪ U`; the
+   mean hops of T's routes; and the embedder check's median cosine.
+9. *Diagnostic, never gating.* The same steps with the stored document vectors, `c = v(s)` and `q = v(w)`, for
+   sessions where both exist (the others are counted as `no_stored_vector`). The report gives its goal reach, F1
+   means, `Γ`-empty rate and `θ_min` spread beside W's, labelled `document-to-document`. It shows how far the regimes
+   differ. It is not evidence for `r` (6.3), and it runs even when W is not evaluable.
+
+Why N: the vision's premise is "If the agent knew which memory held the answer, it would recall it." The trails earn
+their place only if a route finds the session's pieces better than recalling the goal does, at the same cost. N,
+nearest to the goal over T's nodes, stands in for that recall inside the same graph. Why
+B: T must beat a route that ignores what agents did. S is not needed here, because the route gate already tests
+order against S.
+
+`w` is a hindsight summary: the session wrote it after it had found its pieces. That helps N and T alike, since both
+use the same `q`, so the T − N comparison stays fair. But it is an easier goal than a real agent's words before the
+work, so W's goal reach and F1 are likely higher than the tools will see in use.
+
+**9. What a pass enables.** Rio Grande's call.
+
+- A pass of the route gate (step 6) makes the case for `[category_evolution] trails`, the observer pass, on that
+  store, as revision 3 said.
+- The tools need both: the route gate and the goal gate pass on that store, or on an imprint of it.
+- A pass licenses only the lane it evaluated (`--lane`), and an imprint may hold only one lane. So it makes the case
+  for listing that lane in `[trails] lanes` (6.6, R16), and no other. Rio Grande's call.
+- Neither gate tests `trail_next`. Only the reported next hit (step 5) does, and it gates nothing. Turning the tools
+  on covers `trail_next` on the strength of that report alone. Rio Grande's call.
+- Nothing here turns anything on. The store's owner decides, and for Andy's stores that is Andy.
+
+**10. At the limits.** The run on an imprint is bounded by the imprint's calibration limits: 4 GB under
+`systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0`, and 30 minutes (imprint spec section 10). The worst
+case, per qualifying session, is:
+
+- 12 A* searches for the route gate: T, B, and the 10 shuffles of S;
+- 2 for W (T and B) and 2 for its stored-vector diagnostic (step 8.9);
+- each search up to 10,000 expansions, so up to 160,000 expansions per session;
+- 11 forward lookups for the next hit, in T and in each of the 10 shuffles. A lookup expands nothing. It reads at
+  most 3 stations × 256 trails of at most 512 touches;
+- one embedding batch of two texts, for W.
+
+On top of that come the 32 embeddings of the embedder check and 4 × 10,000 bootstrap resamples. `trails.py` takes
+`--deadline SECONDS` (the use passes 1,740, which is 29 minutes) and checks it between sessions. When it passes, the
+report says `"not evaluable: limit"` for both gates, and never a pass. So a report that decides a gate never depends
+on the machine's speed. A run killed by the memory cap or the use's 30-minute limit writes no report, and the use
+records it as "not evaluable: limit" (I2). Rio Grande's call. The Pi measurement (section 12) records expansions per
+second, so the worst case can be set against the limit before the first real run.
 
 ## 8. Built for the county's lighthouses
 
-Nothing crosses a store boundary in this step. These rules keep the next step from needing rework:
+Nothing crosses a store boundary in this step. These rules keep the next steps from needing rework.
 
-- **Only the work lane can ever leave.** Personal trails, roads and detours are local forever,
-  judged by current lane.
-- **Sharing a memory is not consent to sharing routes.** Publishing a road needs both of these:
-  - both endpoints already shared to that audience;
-  - a separate owner opt-in to route publication for that audience.
+Revision 3's first rule here was "Only the work lane can ever leave." Revision 4 replaces it with per-audience
+permissions from the permissions spec (change C1). Andy: "I may share my medical history with the public health
+office but not the parks and rec." His medical history is personal, and he shares it on purpose with one office, so
+a lane can't be the rule.
 
-  Support, span and direction are new metadata about how the owner worked. They are not in any
-  shared memory, so a minimum published support of 3 also applies.
-- **Where sharing lives.** `shared_memories` rows live in the published house
-  (`sharing.py` writes them to `published_storage`), not in the source `graph.db` that the trail
-  pass reads. A trail endpoint matches a share by (`source_instance`, `source_id`, `audience`).
-  The published copy has a different `memory_id`.
+- **Roads leave by permission, not by lane.** A road, detour or trail leaves its store only for an audience the
+  permissions spec allows. Using a road as an edge is the `route` action on object kind `road`, named
+  `road:<instance_id>/<cell id>` (permissions spec sections 4.1, 5.2 and 6.4). `route` needs `recall` on every
+  memory the road names, so both endpoints must already be recallable by that audience. The `route` record is the
+  separate opt-in revision 3 required: sharing a memory is still not consent to sharing routes. The decision is the
+  meet of every required layer, and deny wins (permissions spec sections 6.3 and 6.5). An agent can share only inside
+  the envelope of a grant, never past what a person signed (its section 7, and its L4).
+- **Summaries across a boundary need `inject_context`.** A stop's summary is up to 160 bytes of the memory's content
+  (6.5). `route` needs only `recall` on the memories a road names, and `recall` returns ids and digests (permissions
+  spec section 6.4). So a stop from another store shows its summary only when `inject_context` is allowed on that
+  memory (`need`: `recall`, `read`, `inject_context`). Otherwise the stop names the id alone.
+- **A road is about the people its endpoints are about, and about its store's owner.** The permissions spec's P24
+  gives a derived object the union of its sources' subjects plus its store's owner. That is the vision's "Count its
+  own trails as the person's": an agent's sessions are about the person it worked for, so sharing them is that
+  person's decision.
+- **Lanes stay inside.** Lanes still partition trails, roads and detours within a store, and every reader still
+  filters by the current lane (section 4). A permission may name a lane, and the permissions spec reads lanes so that
+  a re-lane never widens what is allowed (its section 5.3).
+- **Minimum published support of 3.** It stays in this spec (permissions spec section 6.4 leaves it here). Support,
+  span and direction are new metadata about how the owner worked. They are not in any shared memory.
+- **Where sharing lives.** `shared_memories` rows live in the published house (`sharing.py` writes them to
+  `published_storage`, `sharing.py:167-172`), not in the source `graph.db` that the trail pass reads. A trail
+  endpoint matches its placement by (`source_instance_id`, `source_id`) once the permissions spec's migration 029
+  fills that column (its section 12.1), and until then by (`source_instance`, `source_id`, `audience`). The
+  published copy has a different `memory_id` (`sharing.py:143-147`). A placement is not a permission (permissions
+  spec section 2).
 - **Published form (for the later spec):**
   - each endpoint's `content_digest`, so two lighthouses holding the same shared memory recognize
     the same endpoint, plus its vector (same embedding model);
@@ -407,36 +1099,52 @@ Nothing crosses a store boundary in this step. These rules keep the next step fr
   - the store's `instance_id` and `forked_from_instance_id`.
 
   Session ids, touch times and context ids never leave.
-- **Forks are not independent.** `cli.py fork` copies every session, so a fork and its parent derive
-  the same roads. Published support may count only sessions whose first touch comes after the
-  store's fork. `stamp_fork` records no fork time in the store, but `instances.json` already
-  records `forked_at` (`federation.py`), and the publication spec can take it from there. Rail
-  agreement must not count a store and its fork as two lighthouses.
-- **Detours are publishable** only when every road on both sides is.
-- **Permissions.** Comparing or routing over another lighthouse's roads will need its own Lighthouse
-  permission and receipt. The lighthouse sheaf spec already flags that `recall`, `read` and
-  `inject_context` don't cover it, and that a comparison must not become a channel for resharing.
+- **Forks and imprints are not independent.** `cli.py fork` copies every session (`cli.py:38-49`), so a fork and its
+  parent derive the same roads. Published support may count only sessions whose first touch comes after the store's
+  fork. `stamp_fork` records no fork time in the store (`store_identity.py:143-160`), but `instances.json` already
+  records `forked_at` (`federation.py:127-142`), and the publication spec can take it from there. An imprint gets a
+  new `instance_id` with `forked_from_instance_id` set to its source, and two stores are independent only when their
+  lineages don't meet (imprint spec section 11). An imprint has no sessions after its creation, so it adds no
+  support. Rail agreement must not count a store and its fork, or a store and its imprint, as two lighthouses.
+- **Detours are publishable** only when every road on both sides is allowed `route` for that audience.
+- **Receipts.** Each road used across a store boundary writes one receipt (permissions spec section 9.1). The
+  answer's source (6.5) then carries that receipt and the cited records in place of `"own store"`.
+- **Worked example.** Andy's record R1 lets public health recall, read and inject his medical-history collection
+  (permissions spec section 13). Suppose he also says yes to R2: allow, in `place:home/andy`, audience
+  `place:la-county/public-health`, object kind `road`, stores `[his store's instance_id]`, every other object
+  dimension `"*"`, action `route`, purpose `care-coordination`, ending with R1. A road m1 → m2 between two memories of
+  the collection, with published support of at least 3, then has Andy's yes for public health: R2 allows `route` on
+  the road, and R1 allows `recall` on m1 and m2. Public health's agents can route over it in the later publication
+  step only once public health's own rules also allow `route`. In the permissions spec's example they don't: its
+  records H1 and L1 list only recall, read and inject_context, and a place may refuse what a person allowed (its
+  section 7.5). A road through m3 ("Jenn drove me to the clinic") also needs Jenn's yes, because the road is about
+  Jenn too. Parks and Recreation can route over none of them: neither record reaches parks-and-rec, and no agent can
+  widen them.
 
 ## 9. Later steps (separate specs, in order)
 
 1. **Compiled roads.** Proxy activation, an epoch for observer-created stores, road-before-detour
    commit order, and how the compiler walks memory → road → memory.
-2. **Road publication.** A Lighthouse artifact kind for published roads, with a new permission
-   (working name `routes`), receipts, the opt-in, and fork time, built on the local-city daemon and
-   receiver.
+2. **Road publication.** A Lighthouse artifact kind for published roads, decided by the permissions spec's `route`
+   action, with its receipts, the minimum support of 3 and fork time, built on the local-city daemon and receiver.
 3. **Rail by agreement.** Run the lighthouse gluing per road instead of per topic. A road carried by
-   at least two independently governed lighthouses that are not forks of one another, with low
-   residual under topic-scoped trust, is rail. A high-residual road is an obstruction, reported and
-   never routed over. Triangles of lighthouses give H¹ for the obstructions that only show up
-   around a cycle.
-4. **Rail routing.** A* across lighthouses over rail and local roads, with the same angle heuristic.
-   Once routes are shown to agents, touches made because of a route suggestion must not count as
-   support (the v2 self-confirmation rule), or the system will just confirm its own advice.
+   at least two independently governed lighthouses that are not forks or imprints of one another (imprint spec
+   section 11), with low residual under topic-scoped trust, is rail. A high-residual road is an obstruction, reported
+   and never routed over. Triangles of lighthouses give H¹ for the obstructions that only show up around a cycle.
+   Agreement needs lighthouses to hold copies of roads. The permissions spec's `imprint` action ("Keeps a copy as
+   part of another store", its section 6.4) may be what that needs, rather than `route`. The rail spec decides.
+4. **Rail routing.** A* across lighthouses over rail and local roads, with the same angle heuristic and 6.3's goal
+   sets. The tools of 6.6 extend to remote roads: each remote stop carries its own source, with its cited records
+   and receipt (6.5). A remote stop shows its summary only when `inject_context` is allowed on that memory, and
+   otherwise names the id alone (section 8). Suggested touches (section 4) already keep the system from confirming
+   its own advice.
 5. **Non-identity restriction maps.** County systems that use other embedding models or schemas
    need learned or declared translations (the lighthouse sheaf spec's "AOC vs DOP" case).
 6. **Governance.** Each county station admits its own agents, and law there is signed by that
    institution's people. A connection to city data needs its own agreement. None of that is
    Superyak's to assume.
+7. **Tools over an imprint.** Once the imprint spec serves imprints through the lighthouse receiver (its section 17,
+   step 1), the tools can route over an imprint under `route` decisions and receipts.
 
 ## 10. Calibration hypotheses (provisional constants)
 
@@ -444,6 +1152,7 @@ Nothing crosses a store boundary in this step. These rules keep the next step fr
 |---|---|---|
 | Closed-session idle time | 1 hour before `as_of` | when a trail is built |
 | Sessions per pass / per barrier batch | 64 / 8 | bounds startup work and tool-call waits |
+| Pairs scanned per pass | the 16,384 with the newest rows | bounds the digest scan (C3) |
 | Road / detour proposals per pass | 64 / 32 | bounds startup work (not the commit budget) |
 | Touches per trail | 512 | bounds event size |
 | Road support | 2 sessions | eligibility; the gain test never binds |
@@ -453,33 +1162,134 @@ Nothing crosses a store boundary in this step. These rules keep the next step fr
 | Road-index threshold | 10,000 trail events | when the index becomes required |
 | A* expansions / route wall time | 10,000 / 500 ms | bounds; the evaluation uses expansions only |
 | Baseline neighbors | 8 | graph B |
-| Evaluation | last 20% held out, ≥ 30 qualifying, reach ≥ 0.20, ΔF1 ≥ 0.10 | gate validity |
+| Route gate | last 20% held out, ≥ 30 qualifying, reach ≥ 0.20, ΔF1 ≥ 0.10 against B and S | gate validity |
+| Entry stations | 6: given ids first, at most 2 from words, the rest near | 6.2 |
+| Word anchors | 8 per context, 3 to 128 characters, 64 hits per anchor per table | 6.2 |
+| Context and goal text | 4,000 characters | bounds the embedding call |
+| Entry cost | 0 given; 2·θ(c, e); 2π without a vector | 6.2 |
+| Goal band δ / ceiling r_max | 0.10 rad / arccos 0.60 ≈ 0.9273 rad | 6.3; r_max also bounds near entries |
+| Forward lookup | 3 stations; 2 next and 2 ends each; 256 newest sessions per station | 6.4 |
+| Route length | 64 stops; past that, `truncated` | 6.5, 6.6 |
+| Stops shown | 12, as the first 6 and last 6 of a longer route | 6.5 |
+| Summary | 160 bytes of compact JSON | 6.5 |
+| Answer size | 6,000 bytes of compact JSON (1,500 by `estimate_tokens`); measured against a real tokenizer | 6.5 |
+| Memory ids per call | 6 | 6.6 |
+| Rows rechecked per answer | 70: 64 route nodes and 6 entries | 6.6 |
+| Receipt short id | `#` and 8 hex characters | 6.6 |
+| Tool graph | 4,096 newest closed sessions per lane; 20,000 nodes and 262,144 steps, split equally among the listed lanes | 6.6 |
+| Goal gate (W) | ≥ 30 qualifying, goal reach ≥ 0.20, ΔF1 ≥ 0.10 against N and B; N takes 4 when T names nothing outside the entries | section 7, step 8 |
+| Embedder check | median cosine ≥ 0.99 over the 32 earliest episodes with vectors in the lane | section 7, step 8.2 |
+| Evaluation deadline | 1,740 s inside the use's 30-minute limit | section 7, step 10 |
 | Minimum published support | 3 | later publication |
+
+**The Raspberry Pi budget, per pass.** Vision principle 4: "SQLite, Python with numpy, no GPU, bounded passes." No
+pass needs a GPU. Two things embed text. A tool call embeds one batch of at most two texts (context and goal),
+through the server's existing provider on the agent's machine. The evaluation embeds two texts per W-qualifying
+session, plus 32 for its check, on the Pi (section 7, step 8.2).
+
+| Pass | Where it runs | What it reads | Bound | Memory | Needs |
+|---|---|---|---|---|---|
+| Observer pass (5) | startup thread | `graph.db` read-only; `categories_v2.db` | 16,384 pairs scanned; 64 sessions written, barrier per 8; 64 roads and 32 detours, barrier per 16; 512 touches per trail | digests and current events; the road index past 10,000 events | Python, `sqlite3`; no vectors |
+| Tool graph build (6.6) | last maintenance step | `graph.db` read-only; the permissions ledger's `stores` row, read-only, once (6.5) | 4,096 sessions per lane; 20,000 nodes; 262,144 steps; shutdown checked per 64 sessions | vectors as float32, 20,000 × 768 × 4 B ≈ 61 MB; step angles ≈ 2 MB; whole graph ≤ 256 MB per server process, so k × 256 MB for k sessions (6.6) | Python, numpy, `sqlite3` with sqlite-vec |
+| A tool call (6.2–6.6) | MCP request, under the barrier | the tool graph; at most 16 FTS lookups of 64 rows; at most 70 rows rechecked | one embedding batch of ≤ 2 texts; one angle pass over ≤ 20,000 nodes in blocks of 4,096 for `h` and `θ(c, ·)`; step angles precomputed; A* ≤ 10,000 expansions or 500 ms; one row written | a 4,096-row float64 block, about 25 MB | numpy |
+| CLI route, `--route-goal`, `--next` (6.1–6.4) | offline, on a copy | the copy, read-only | as a tool call, over the CLI's own derivation | as the tool graph | Python, numpy, sqlite-vec |
+| Evaluation (7) | the Pi, through the imprint's use | `imprint.db`, immutable | T ≤ 20,000 nodes, or "not evaluable: too large"; B's neighbors in blocks of 1,024 rows; S built one shuffle at a time; per qualifying session at most 16 A* searches of 10,000 expansions, 11 forward lookups and one embedding batch of 2 texts; 32 check embeddings; 4 × 10,000 bootstrap resamples; a 1,740 s deadline, past which both gates are "not evaluable: limit" (section 7, step 10) | `systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0`, 30 minutes, as the imprint's calibration runs (imprint spec section 10); an in-process model counts inside the cap, the shared embedder service doesn't | Python, numpy, sqlite-vec; the store's embedding model, through the shared embedder service or in process (I3). Without it, W is "not evaluable: no embedder" and the route gate still runs |
+
+**The newest-rows ranking.** The observer pass (C3) and the tool graph build both rank sessions by their newest row
+(section 4). Each time, that reads every `memory_log` row of event type `recall` or `route_shown`, which
+`idx_memory_log_event_type` selects (`migrations/002_v3_layers.sql:62`), with one `json_extract(context,
+'$.session_id')` per row, since no index covers it. It also reads every episode with a session id, and
+`episodes.session_id` has no index either (`migrations/001_initial.sql:46-52`). So both passes cost time in
+proportion to the whole log, not to the bound. The builder measures this on the Pi at the bounds (section 12). If it
+is too slow, the road index of section 5 is where a per-session newest row belongs.
+
+Time is a calibration hypothesis too: at most 20 s for the tool graph build and 1 s for a tool call at the bounds on
+a Raspberry Pi 5, **not counting embedding**. Embedding up to 2 × 4,000 characters on the Pi's CPU is measured
+separately and is likely the largest cost of a call. A recall already pays one such embedding (`server.py:2186`).
+The builder measures all of them on the Pi (section 12).
 
 ## 11. Components
 
 | Component | Responsibility |
 |---|---|
-| `trails.py` | Pure functions: touches, trails, revisit trails, steps, support, span, detour search, A* route, evaluation. Read-only CLI: `python trails.py /path/to/copy-of-graph.db [--categories /path/to/copy-of-categories_v2.db] [--lane work] [--as-of T] [--route A B] [--evaluate --seed N] [--json]`. It opens each database with `file:…?mode=ro` and `query_only`, and reports `total_changes` (always 0), like `paths.py`. |
-| `category_evolution.py` | `CategoryObserver.observe_trails(graph_conn, as_of)`: trail events, endpoint proxies, road and detour proposals, inside the existing quota and fail-closed rules. |
-| `server.py` | Calls `observe_trails` from the startup maintenance thread before `prune` when `trails` is on, taking the barrier per batch. A failure goes through `record_error` and never blocks startup or recall. |
-| `config.py` | `[category_evolution] trails = false`. |
-| `reflection.py` | The `trails` counts block. |
-| `tests/test_trails.py` and observer tests | Section 12. |
-| `engram/CLAUDE.md` | A "Trails" paragraph under Architecture and a row in Key Files. |
+| `trails.py` | Pure functions: touches, suggested touches, trails, revisit trails, steps, support, span, detour search, Kahan angles, anchors, entry stations from vectors, words hits and ids, the A* of 6.1 and 6.3, forward lookup, the short-answer builder (it takes summaries through a callback and the receipt id as an argument, so it stays pure), and both gates. Read-only CLI: `python trails.py /path/to/copy-of-graph.db [--categories /path/to/copy-of-categories_v2.db] [--lane work] [--as-of T] [--route A B] [--route-goal A G] [--next A] [--evaluate --seed N] [--imprint-use USE_ID] [--deadline SECONDS] [--json]`. `--route-goal A G` routes from A to the goal set of G's stored vector, and `--next A` runs the forward lookup from A; both print ids and counts only. It opens each database with `file:…?mode=ro` and `query_only`, loads sqlite-vec as `paths.connect_ro` does (`paths.py:397-409`), and reports `total_changes` (always 0), like `paths.py`. It runs the imprint check of section 7 on a file whose `meta.instance_id_origin` is `imprint`: the allow file only at `<imprint dir>/uses/<use id>.allow.json`, a refusal when `withdrawn.json` exists, the effective end, and the same checks again at the end of the run, discarding the report on a failure. With a valid one, the file opens with `mode=ro&immutable=1`, as `store_reader.connect(path, immutable=True)` does (`store_reader.py:43-54`). `--evaluate` embeds W's texts through `embeddings.create_embedding_provider()` (`embeddings.py:200-207`). |
+| `category_evolution.py` | `CategoryObserver.observe_trails(graph_conn, as_of)`: trail events with suggested touches, endpoint proxies, road and detour proposals, inside the existing quota and fail-closed rules, and the 16,384-pair scan. |
+| `server.py` | Calls `observe_trails` from the startup maintenance thread before `prune` when `trails` is on, taking the barrier per batch. Builds the tool graph, for the listed lanes only, as the last maintenance step when the tools are registered, with its connection registered through `_register_server_cleanup` and a shutdown check per 64 sessions (6.6). Reads `stores.owner` from the permissions ledger read-only, once per build (6.5). Registers `trail_locate`, `trail_route` and `trail_next` in `_initialize_pre_serving` only when `[trails] tools` is exactly `true`. The tools refuse lanes not in `[trails] lanes`, and do the embedding, anchors and FTS of 6.2, the output-time check, and the receipt row. Holds the per-call counters and passes `trails_reporter` to the `Reflector`. A failure goes through `record_error` and never blocks startup or recall. |
+| `storage.py` | `search_fts_ids(table, phrase, limit)`: one anchor phrase in `episode_fts` or `semantic_fts`, at most `limit` ids. Recall's own FTS calls stay as they are. |
+| `config.py` | `[category_evolution] trails = false`, and a new `[trails]` section with `tools = false` and `lanes = ["work"]`, parsed fail-closed (6.6). |
+| `reflection.py` | The `trails` counts block under `category_evolution`, and `reflect(focus="trails")` for the tools, through a new `trails_reporter` callable beside `category_reporter`. |
+| `tests/test_trails.py`, `tests/test_trail_tools.py` and observer tests | Section 12. |
+| `engram/CLAUDE.md` | A "Trails" paragraph under Architecture, a row in Key Files, and rows for the three tools under MCP Tools, marked off by default. |
+
+**Interfaces with the parallel specs.** These are for Rio Grande to reconcile, not for Andy.
+
+- **Permissions spec.** This spec uses its object kinds `road` and `trail` and their names (its sections 4.1 and
+  5.2), the `route`, `inject_context` and `imprint` actions and their `need` (6.4), L4, P24, its annotation's
+  `laid_by` for roads (11), which 6.5 fills, and its non-goal for a store's own use (14), which 6.5 cites as
+  `"own store"`. Step 1 reads one thing from it: `stores.owner` in the ledger, read-only, once per build (its 5.5),
+  for `laid_by`. A note for Rio Grande: its short ids of `#` and 4 hex characters (4.1) reach even odds of a repeat at
+  about 300 ids, the reason this spec's receipts show 8 (6.6).
+- **Imprint spec.** This spec uses its `route` action and `trail-evaluation` purpose (its section 5.3 and D10), its
+  `trail-evaluation` use (12), what its filter keeps (6.2), its calibration limits (10), and lineage (11). It needs
+  four things:
+  - **I1.** Its `memory_log` rule keeps only `recall` rows. It must also keep the `route_shown` rows of kept
+    sessions, with `target_ids` cut to the shipped memories and `context` cut to
+    `{receipt_id, session_id, tool, lane}`. Keep a row whose cut list is empty too: being steered is a fact about the
+    session. Without them, a session the tools steered looks unsteered on the imprint, and its suggested touches
+    count as support. This touches three places of that spec: the `memory_log` row of its 6.2, D6 (so a list can be
+    cut), and verification check 11, which today allows only recall rows with a non-empty target list and `context`
+    keys within {`recall_id`, `session_id`}. Until it lands, an evaluation on an imprint is valid only for a source
+    store whose tools were never on. That holds for the first evaluation, because the tools wait for its pass.
+  - **I2.** The use's allow file (its section 12) must name at least the imprint's `instance_id`, the action, the
+    purpose and the effective end `exp_eff`, so `trails.py --imprint-use` can check them. It must live at
+    `<imprint dir>/uses/<use id>.allow.json`, with `withdrawn.json` in the imprint directory, since `trails.py` reads
+    only those paths (that spec sets the imprint directory to 0555 after admission, so its use step writes there by
+    its own means). A `shortened` receipt during a use must rewrite or remove the use's allow file, since `trails.py`
+    can't read receipts. When `trails.py` exits with its withdrawn status or writes no report, the use writes no
+    `use-finished` receipt with a report's SHA-256, and records the run as withdrawn or "not evaluable: limit".
+  - **I3.** `trails.py` reads vectors through sqlite-vec, so the Pi's admission environment (its section 18) must
+    include sqlite-vec, as its calibration already does. Measure W also needs the store's embedding model on the Pi
+    (section 7, step 8.2): either the shared embedder service, reachable from the run, or `fastembed` and the model
+    files in the admission environment, present before the run, with the model loaded inside the 4 GB cap. And the
+    `trail-evaluation` use must cover reading memory text inside the run to embed it and find its anchors, with
+    nothing but counts and rates leaving the run.
+  - **I4.** Its whole-row rule for recall rows (6.2, D6, D7) removes far more than the memories left at home
+    (section 7, "What an imprint changes"). This spec asks, as Rio Grande's call: keep a recall row whose outcome
+    normalizes to `used` or `used: auto: cited` when at least one of its targets ships, with `target_ids` cut to the
+    shipped targets in delivered order, and with `context.cut = true` when any non-instinct target stayed home. Other
+    recall rows keep the whole-row rule, and so do citing operations, each of which acts on one memory id
+    (`mark_core`, `instinct_feedback`, `dream_react`: `server.py:3037`, `:2729`, `:3620`). This is an exception to D6
+    and D7, and check 11 must allow the `cut` key. It also touches D21 ("The manifest says nothing about what stayed
+    home"): a cut row says one bit, that something it matched stayed home. That is the least section 4 needs. The
+    reviewer suggested the original target count, which says more. The dry run should show the owner how many rows
+    are cut, before anything leaves. The other choice, keeping the whole-row rule and having the dry run show per lane
+    how many used recall rows and cited touches ship, only tells the owner the data is lost, so this spec doesn't
+    take it.
 
 ## 12. Tests the builder must include
 
 - **Determinism.** With `as_of` fixed, the same `graph.db` gives byte-identical trail payloads and
-  the same road and detour ids.
+  the same road and detour ids. With the same tool graph, the same `c` and `q`, and the receipt id injected (the
+  answer builder takes it as an argument, section 11), the tools' answers are byte-identical whenever no wall-time
+  bound is hit. Every answer carries a fresh uuid4 receipt id, and the 500 ms bound depends on the machine, so the
+  test pins the first and stays clear of the second.
 - **Touch rules:**
   - a surfaced but unused result is not a touch;
   - per-target citation works from episodes and from `CITING_OPERATIONS` only (a `compress_commit`
     or `share` naming the id doesn't count);
   - a used recall with a single target counts, judged after instincts are removed;
+  - a used recall with a single target and `context.cut = true` does not count by that rule (I4);
   - an ambiguous multi-target recall is counted, not touched.
 - **Co-citation (MF2).** A used recall that cites {A, B} orders them by delivered rank. The step is
   `co_cited`: it is a footpath, but it adds nothing to support or detour runs.
+- **Suggested touches (R9).**
+  - A session gets a `route_shown` row naming B, then recalls and uses B. Its steps into and out of B are
+    `suggested`: footpaths that add no support and no detour run.
+  - A `route_shown` row after the touch doesn't mark it, and one from another session doesn't either.
+  - A wrote touch is never suggested.
+  - A given id that an answer named, recalled and used later in the same session, is a suggested touch (R9).
+  - Adding a `route_shown` row before a touch changes the trail's digest, and the next pass emits a new current event.
+  - A `route_shown` row alone makes no session, but it moves a session's newest row (C4).
 - **Revisit view (MF3).** Two sessions each cite A, then write a new episode, then cite B. Their full
   trails share no step, their revisit trails both contain A → B, and a road forms.
 - **Lane rules (MF8).**
@@ -497,6 +1307,8 @@ Nothing crosses a store boundary in this step. These rules keep the next step fr
   current trail.
 - **Session picking (S-a).** With more than 64 sessions pending, later passes reach the newer ones,
   and a re-laned old session is re-emitted.
+- **Bounded scan (C3).** A store with more than 16,384 closed pairs scans the newest 16,384 and counts the rest as
+  `pairs_not_scanned`. A re-laned memory in an unscanned old trail still never reaches a work route or answer.
 - **Detours (MF4).** For overlapping routes X→A→B→Y and X→A→Y, the only candidate is the
   vertex-disjoint pair. No duplicate-member error, a 32-member limit that holds, and both sides
   passing `validate_path`.
@@ -507,12 +1319,106 @@ Nothing crosses a store boundary in this step. These rules keep the next step fr
 - **A\*.** Optimal on a hand-built graph. Consistency: no node is re-expanded at a lower cost,
   within an epsilon of 1e-9. Correct behavior with missing vectors. Hitting a bound returns
   `truncated`.
+- **Angles (R4).** On 10,000 seeded random triples of unit vectors in 768 dimensions, including near-duplicates
+  (`θ < 1e-6`) and near-antipodes, Kahan's θ is symmetric, 0 on identical vectors, within `[0, π]`, and satisfies the
+  triangle inequality within 1e-12.
+- **Goal sets (6.3).**
+  - On 500 seeded random graphs of up to 40 nodes with unit vectors in 8 dimensions, some nodes without vectors,
+    random supports, random entries with random entry costs, and random `q`: Claim 1 holds on every edge within
+    1e-12, `h` is 0 on `Γ`, and A*'s cost equals a brute-force Dijkstra from a super-source to `Γ` within 1e-9.
+  - The radius is `min(θ_min + 0.10, r_max)`, and `Γ` is empty exactly when `θ_min > r_max`.
+  - A node without a vector is never in `Γ`. When the goal A* pops is an entry, the answer is `at_goal`, one stop and
+    no steps. An empty `Γ` gives `no_goal` with the nearest node. An open list that runs empty gives `no_route`, and
+    a bound gives `truncated`.
+  - The planted case of 6.3: e1 ∈ `Γ` with `w(e1) = 1.0`; e2 ∉ `Γ` given, `w(e2) = 0`; an edge `e2 → t` costing 0.3
+    with `t ∈ Γ`. The answer is `goal`, route e2 → t, cost 0.3, equal to the brute-force Dijkstra, and not
+    `at_goal`. The random graphs above also include entries that lie in `Γ`.
+  - An answer's `cost` equals the popped goal's `g`, entry cost included.
+- **Locate (6.2).** Given ids come first, in the caller's order; at most 2 stations come from words; near stations
+  fill to 6 within `r_max`; ties break by id. Anchors, from these examples alone and from one text holding all of
+  them: `engram/server.py` gives `engram/server.py` (and not `server.py`), `paths.py` gives `paths.py`,
+  `sqlite3.OperationalError` gives `OperationalError`, `KeyError` gives `KeyError`, `_record_application` gives
+  `_record_application`, `observeTrails` gives `observeTrails`; at most 8 are kept, each text once. A whole error
+  message as one FTS query matches nothing that its anchors match. A personal memory is never a work station. With
+  the embedder failing, `trail_locate` still returns given stations at cost 0 and word stations ordered by id at
+  cost `2π`, no near stations, and `degraded: ["embedding"]`.
+- **Forward lookup (6.4).** On synthetic trails: next items rank by sessions, then newest, then id; co-cited and
+  suggested successors count 0 and come last; a write after the station appears as `kind: "wrote"`; ends exclude
+  the station and count `ended_here`; a trail cut at 512 touches gives next items but no end, and counts in
+  `ends_unknown`; median hops are right for odd and even counts; at most 256 sessions are read.
+- **Short answers (6.5).** On adversarial content (quotes, backslashes, control characters, four-byte characters,
+  CJK text, one-line contents of 100 KB) and a route of 64 stops, every answer is at most 6,000 bytes of compact
+  JSON. Summaries are at most 160 bytes of compact JSON. A 20-stop route shows 6, `{"skipped": 8}` and 6. A route of
+  65 stops answers `truncated`. Every named item has a `src` whose source holds `laid_by`, `allowed_by` and
+  `receipt`, and the receipt's short form has 8 hex characters. No answer contains the context or goal text. The
+  builder counts the largest answers' real tokens with the tokenizer of the model the agents use, and records the
+  ratio to `estimate_tokens` in the plan's results (6.5).
+- **`laid_by` (6.5).** With a ledger whose `stores` row names this store, `laid_by` is `"<owner> (<instance>)"`. With
+  no ledger, or no row, it is `"this store (<instance>)"`. The ledger file's SHA-256 is unchanged.
+- **Tools (6.6).**
+  - With `[trails] tools` missing, `false`, `"true"` or `1`, no trail tool is registered, and `memory_log` gains no
+    `route_shown` row.
+  - With it `true`, each answer that names memories writes exactly one `route_shown` row listing every id it named,
+    with no text from the call. An answer naming nothing writes none.
+  - Apart from that row, `graph.db` is unchanged: every other table's row count and every access count stay the
+    same, and `operation_log` gains nothing. `categories_v2.db` is byte-identical. With `uninvited=0` and no active
+    dream residue, recall answers are the same with the tools on and off.
+  - The tool graph is built through a read-only connection, the barrier is held only for the swap, and before it is
+    ready the tools answer "not ready".
+  - Above 4,096 sessions, 20,000 nodes or 262,144 steps, the build keeps the newest and records `truncated`. With
+    both lanes listed, each lane gets half the node and step bounds, and a lane with many sessions doesn't starve the
+    other.
+  - The vectors are held as float32, and every angle equals the one computed from a float64 copy.
+  - Re-laning a route node to personal after the build: the tool drops it and answers again. A second failure
+    answers `stale` and names nothing. The same holds for a node in the middle of a 20-stop route, one that the
+    answer hides in `{"skipped": 8}`, and for a node pruned to cold storage after the build.
+  - `[trails] lanes` missing gives `["work"]`. A call for `personal` then answers "lane not enabled: personal" and
+    writes no receipt. A malformed value (`"work"`, `["work", "work"]`, `["other"]`, `1`) enables no lane and records
+    `lanes_invalid`.
+  - Shutting the server generation down during a build stops the build, and the build's connection is closed. A
+    forked child quarantines the connection with the other resources.
+  - `reflect(focus="trails")` reports the per-call counts, and `{"available": false}` when the tools are off.
+  - Invalid lane, more than 6 ids, empty inputs, and an embedder failure each give the answer 6.6 states.
 - **Evaluation (MF7).**
   - A synthetic store with planted ordered routes passes.
   - A synthetic store with popularity skew but no order fails the T − S comparison.
   - A synthetic store whose only structure is co-retrieval (RMF2) fails the T − S comparison.
   - With fewer than 30 qualifying sessions, the result is "not evaluable".
   - No training touch at or after the cutoff enters T.
+  - Steered sessions qualify for neither gate, and suggested steps are in none of T, S and B.
+- **Goal gate (W).**
+  - A synthetic store whose sessions walk planted routes and end by writing a summary near their last memory passes.
+  - A store where the goal words sit next to every piece the session used (so nearest to the goal finds them) fails
+    T − N.
+  - With fewer than 30 W-qualifying sessions, W is "not evaluable".
+  - `w` is never a node of T or B, N's size matches T's route (4 when T names nothing outside the entries), and
+    sessions with empty U are counted, not scored.
+  - W embeds `content(s)` and `content(w)`, cut to 4,000 characters, with `search_query`, through the same function
+    the tools call: a fake provider records exactly those texts and that prefix, and W's numbers change when the
+    provider returns different query vectors while the stored vectors stay the same.
+  - With no provider, W is "not evaluable: no embedder" and the route gate is still decided. With a provider whose
+    vectors don't match the stored ones (median cosine below 0.99), W is "not evaluable: embedder mismatch".
+  - The stored-vector diagnostic is reported, labelled `document-to-document`, and changing it never changes W's
+    verdict.
+- **Synthetic imprint (MF2, I4).** Build a synthetic source store whose sessions make recalls without a lane, each
+  delivering memories of both lanes, cite work memories from them, and have one target pruned to cold storage. Then
+  build its work-lane imprint with the imprint spec's builder (imprints are built before trail step 1, the vision's
+  "How the work runs", step 3):
+  - under the whole-row rule, the imprint's work trails lose the cited touches of shipped memories, and the test
+    records how many, against the source's work trails;
+  - under I4's cut rule, the imprint's work trails equal the source's work trails restricted to shipped memories,
+    apart from the touches whose only evidence stayed home, which the test plants and expects to lose;
+  - a cut row never credits the "exactly one target" rule, and a recall with a target pruned to cold keeps its
+    shipped targets.
+- **Report.** The same store and seed give byte-identical report JSON and the same SHA-256, when no deadline is hit.
+- **Limits (section 7, step 10).** A run whose `--deadline` passes reports "not evaluable: limit" for both gates and
+  no pass. A run killed by the memory cap writes no report.
+- **Imprints (R13).** `trails.py` refuses an imprint without `--imprint-use`; with a use id holding `/` or `..`; with
+  an allow file anywhere but `<imprint dir>/uses/<use id>.allow.json`, or one reached through a symlink; with an
+  allow file for another imprint, another action, another purpose, or an effective end that has passed; and when
+  `withdrawn.json` exists. With a valid one, it opens the file immutable, and the file's SHA-256 is unchanged. If the
+  test writes `withdrawn.json`, removes the allow file, or rewrites it with an end now past while the run is going,
+  the run prints no report and exits with its withdrawn status.
 - **Read-only CLI.** Every database's SHA-256 is unchanged, and `total_changes` is 0.
 - **Gate off.** First open the store once with the same flags (so first-open vector provisioning
   doesn't count). After startup, `categories_v2.db` must be byte-identical in each of these cases:
@@ -521,15 +1427,30 @@ Nothing crosses a store boundary in this step. These rules keep the next step fr
   - `trails = true` with `auto_commit = true` (RMF3), on a store built by legacy replay. This case
     also records a skipped pass.
 - **Barrier.** The pass releases the lifecycle barrier between batches.
+- **Pi measurements.** On a Raspberry Pi 5, on a synthetic store at the tool graph's bounds: the build's time and
+  peak memory, and within it the newest-rows ranking's time over a `memory_log` of realistic size; a tool call's time
+  without embedding; the time to embed 2 × 4,000 characters on the Pi's CPU, through the shared service and in
+  process; A* expansions per second; and an evaluation at 20,000 nodes under `MemoryMax=4G`, with its embedding
+  included. The builder records them in the plan's results and compares them with section 10.
 
 ## 13. Left to the builder
 
 - The road index's schema, within the section 5 rule.
 - The design of the synthetic stores, as long as they plant known routes, noise and a popularity
-  skew without order.
+  skew without order, and, for W, sessions that end by writing a summary.
 - CLI output formatting.
+- The tool graph's data structures, within 6.6's bounds.
+- The anchor patterns' exact form, as long as section 12's examples still pass.
+- The tool descriptions' wording, within the sense 6.6 gives.
 
 ## 14. Open for Andy
 
-- **Which store to evaluate on.** Engram stores aren't on the Pi (`~/.engram` is absent), so the
-  evaluation needs a copy of a store whose owner agrees. The report holds only counts and rates.
+- **Which store to imprint first, and its owner's yes.** The first evaluation runs on an imprint whose owner agreed
+  (section 7; imprint spec section 20). Engram stores aren't on the Pi (`~/.engram` is absent), and the first imprint
+  creates one. The report holds only counts and rates, and it reaches no room unless the owner allows it (imprint
+  spec section 12).
+- **His act after a pass, not a question now.** If both gates pass on an imprint of one of his stores, setting
+  `[trails] tools = true` for that store, with the evaluated lane in `[trails] lanes`, is his decision as its owner.
+  This spec turns nothing on.
+- **The license** (vision principle 3). `trails.py` adds standard-library and numpy code to engram, which has no
+  license yet.
