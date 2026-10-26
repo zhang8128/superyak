@@ -1983,6 +1983,8 @@ def share(
         audience,
         layer,
     )
+    if audience == "group:outside-home":
+        return {"error": "group name outside-home is reserved"}
     with _published_house_storage() as (path, published_storage):
         if published_storage is None:
             return {"error": f"no published house at {path}"}
