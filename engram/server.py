@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import uuid
 from functools import wraps
 from datetime import datetime, timezone
@@ -1311,6 +1311,25 @@ def _lane_notes(phase: str, rows: list[dict], target: str) -> None:
         led.close()
 
 
+def _sync_genome_kept(sync_genome) -> int:
+    """Genome sync; under `shadow` and `enforce` it records each synced episode as a kept copy (P25)."""
+    from permission_ledger import Ledger
+    gate = _permission_gate_for_store()
+    if gate.mode not in ("shadow", "enforce"):
+        return sync_genome(str(_genome_db_path), _storage)
+    led = Ledger.open(ENGRAM_HOME)
+    try:
+        return sync_genome(str(_genome_db_path), _storage, ledger=led)
+    finally:
+        led.close()
+
+
+def _permission_gate_for_store():
+    """The effective gate over this server's own store (what `_lane_notes` reads)."""
+    from permission_ledger import effective_gate
+    return effective_gate(ENGRAM_HOME, [Path(_storage.db_path)])
+
+
 def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_maintenance: bool = False):
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_status, _category_atexit_callback
     global _framing_cfg, _sleep_maintenance_deferred
@@ -1470,7 +1489,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
             from federation import sync_genome, process_inbox, SignalBus
 
             if _genome_db_path.exists():
-                synced = sync_genome(str(_genome_db_path), _storage)
+                synced = _sync_genome_kept(sync_genome)
                 if synced:
                     logger.info("Synced %d genome items", synced)
 
@@ -1870,6 +1889,7 @@ def remember(
     _init()
 
     # Input validation — reject junk before it enters the system
+    raw_content = content
     content = content.strip()
     if len(content) < 10:
         return {"error": f"Content too short ({len(content)} chars). Minimum 10 characters.", "layer": "rejected"}
@@ -1878,6 +1898,10 @@ def remember(
         return {"error": "work-lane memories cannot be core or genome", "layer": "rejected"}
 
     logger.info("Tool called: remember(content_len=%d, core=%s, source=%s, work=%s)", len(content), core, source, work)
+
+    keep = _keep_decision(content, agent=_agent_ref(), now=_permission_now(), raw=raw_content)
+    if keep.reply is not None:
+        return keep.reply
 
     lane = _derive_lane(
         work,
@@ -1888,6 +1912,7 @@ def remember(
     )
     episode_id = str(uuid.uuid4())
     embedding = _embeddings.embed([content], prefix="search_document")[0]
+    keep.record_copy(episode_id)
 
     _storage.add_episode(
         id=episode_id,
@@ -1936,6 +1961,8 @@ def remember(
 
     _session_episode_count += 1
     result = {"episode_id": episode_id, "layer": "episode"}
+    if keep.would_refuse:
+        result["would_refuse"] = True
     if lane == "work":
         result["lane"] = "work"
 
@@ -1951,6 +1978,155 @@ def remember(
             logger.warning("Auto-compress failed", exc_info=True)
 
     return result
+
+
+
+_KEEP_REFUSED = {"error": "keeping this content is not allowed", "layer": "rejected"}
+
+
+@dataclass
+class _Keep:
+    """What the `remember` guard decided: a `reply` that refuses, `would_refuse` under shadow, and the delivered
+    object a kept episode is a copy of (`source`)."""
+    reply: dict | None = None
+    would_refuse: bool = False
+    source: str | None = None
+
+    def record_copy(self, episode_id: str) -> None:
+        """P25: the kept episode is a copy of the delivered item; recorded before the episode is written."""
+        if self.source is None:
+            return
+        from permission_ledger import Ledger
+        sid = _store_id()
+        if sid is None:
+            return
+        led = Ledger.open(ENGRAM_HOME)
+        try:
+            led.record_copy(f"mem:{sid}/episode/{episode_id}", self.source, now=_permission_now())
+        except Exception:
+            logger.warning("Could not record the kept copy of %s", self.source, exc_info=True)
+        finally:
+            led.close()
+
+
+def _keep_reply(state, agent: str, refusal=None, cause: str | None = None) -> dict:
+    """The guard's refusal. An agent not acting for the ledger owner gets the plain reply and nothing else; the
+    owner's agents also get the refusal's code, layer and action, or the cause."""
+    out = dict(_KEEP_REFUSED)
+    if state is not None:
+        from permissions import _principals
+        try:
+            owner = state.meta["owner"] in _principals(state, agent)
+        except Exception:
+            owner = False
+        if owner:
+            if refusal is not None:
+                out["refusal"] = refusal.to_json()
+            if cause:
+                out["cause"] = cause
+    return out
+
+
+def _keep_decision(content: str, *, agent: str, now: int, raw: str | None = None) -> _Keep:
+    """The `remember` guard (P 10; R10, R11). It acts only when the digest of the stripped or the raw content is
+    that of a delivery receipt of `agent` in the last 24 hours (the newest 200), and it asks the ledger layers
+    alone whether `imprint` of that item is allowed."""
+    try:
+        gate = _permission_gate()
+    except Exception as exc:
+        logger.warning("The remember guard could not read the gate: %s", exc)
+        return _Keep(reply=_keep_reply(None, agent))
+    if gate.mode == "off":
+        return _Keep()
+    shadow = gate.mode == "shadow"
+    from lighthouse_protocol import content_digest
+    from permission_uses import Uses, UsesUnreadable, uses_path
+    digests = {content_digest(content)["value"]}
+    if raw is not None:
+        digests.add(content_digest(raw)["value"])
+
+    def fail(cause: str) -> _Keep:
+        logger.warning("The remember guard could not read the receipts: %s", cause)
+        return _Keep(would_refuse=True) if shadow else _Keep(reply=_keep_reply(None, agent, cause=cause))
+
+    if not uses_path(ENGRAM_HOME).is_file():
+        return _Keep()
+    try:
+        uses = Uses.open_read_only(ENGRAM_HOME)
+        try:
+            deliveries = [d for d in uses.deliveries(agent, now=now) if d.content_digest in digests]
+        finally:
+            uses.close()
+    except (UsesUnreadable, sqlite3.Error, OSError) as exc:
+        return fail(f"{uses_path(ENGRAM_HOME)}: {exc}")
+    if not deliveries:
+        return _Keep()
+    if gate.mode == "closed":
+        return _Keep(reply=_keep_reply(None, agent))
+    return _decide_keep(deliveries, agent=agent, now=now, shadow=shadow)
+
+
+def _decide_keep(deliveries, *, agent: str, now: int, shadow: bool) -> _Keep:
+    """Decide `imprint` for each delivered item (ledger layers only, R10), write the receipt of each decision, and
+    refuse (or, under shadow, note) if any item's is refused."""
+    from dataclasses import replace
+    from permission_ledger import Ledger, LedgerUnreadable
+    from permission_uses import Uses, UsesUnreadable, row_for_decision
+    from permissions import RuleError, Use, agent_place_at, decide, subjects_of
+    try:
+        led = Ledger.open_read_only(ENGRAM_HOME)
+    except (LedgerUnreadable, FileNotFoundError) as exc:
+        logger.warning("The remember guard could not read the ledger: %s", exc)
+        return _Keep(would_refuse=True) if shadow else _Keep(reply=_keep_reply(None, agent))
+    try:
+        state = led.state()
+        ledger_id = led.meta().get("ledger_id", "")
+    except Exception as exc:
+        logger.warning("The remember guard could not read the ledger: %s", exc)
+        return _Keep(would_refuse=True) if shadow else _Keep(reply=_keep_reply(None, agent))
+    finally:
+        led.close()
+    place = agent_place_at(state, agent, now) or ""
+    row = state.agents.get(agent)
+    acting_for = "" if row is None else row.acts_for
+    decided, seen = [], set()
+    for d in deliveries:
+        if d.object is None or d.object in seen:
+            continue
+        seen.add(d.object)
+        use = Use(requester=agent, place=place, obj=d.object, copy=d.copy or "", action="imprint",
+                  purpose=d.purpose, at=now)
+        try:
+            decided.append((use, decide(state, use)))
+        except RuleError as exc:
+            logger.warning("The remember guard cannot decide %s: %s", d.object, exc)
+            return _Keep(would_refuse=True) if shadow else _Keep(reply=_keep_reply(state, agent, cause=str(exc)))
+    if not decided:
+        return _Keep()
+    written = True
+    try:
+        uses = Uses.open(ENGRAM_HOME)
+        try:
+            for use, decision in decided:
+                uses.append(replace(row_for_decision(decision, use, acting_for=acting_for, shadow=shadow,
+                                                      ledger_id=ledger_id), ledger_seq=state.seq),
+                            [(s, use.obj) for s in subjects_of(state, use.obj, now)])
+        finally:
+            uses.close()
+    except (UsesUnreadable, sqlite3.Error, OSError) as exc:
+        written = False
+        logger.warning("The remember guard could not write its receipt: %s", exc)
+    refused = next(((u, d) for u, d in decided if not d.allowed), None)
+    if refused is not None:
+        return _Keep(would_refuse=True) if shadow else _Keep(reply=_keep_reply(state, agent, refused[1].refusal))
+    if not written and not shadow:
+        return _Keep(reply=_keep_reply(state, agent, cause="the receipt could not be written"))
+    return _Keep(source=decided[0][0].obj)
+
+
+def _keep_check(content: str, *, agent: str, now: int, raw: str | None = None) -> dict | None:
+    """The reply that refuses a `remember`, or None to let it go on."""
+    return _keep_decision(content, agent=agent, now=now, raw=raw).reply
 
 
 @contextmanager

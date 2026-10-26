@@ -1249,7 +1249,7 @@ PR = "place:la-county/parks-and-rec"
 def draft(**kw) -> Record:
     """A Record that is not yet in the ledger (R25 form: kinds default to memory). Defaults: an allow in Andy's
     home for `self`, every other dimension "*", from 2026-11-01, no end."""
-    fields = dict(layer=HOME, effect="allow", valid_from=T("2026-11-01"), valid_until=None, backing="person",
+    fields = dict(layer=HOME, effect="allow", valid_from=T("2026-11-01"), valid_until=T("2027-10-01"), backing="person",
                   set_by="person:andy", channel="terminal", under_grant=None, proposal_id=None, replaces=None,
                   reason="test", id="r-" + "0" * 32, revoked=None, revoked_by=None, revoke_reason=None,
                   revoked_seq=None, created_seq=0)
@@ -2393,6 +2393,7 @@ def _keep_world(engram_server_env, tmp_path, monkeypatch):
     finally:
         led.close()
     server._init()
+    monkeypatch.setattr(server, "_permission_now", lambda: KEEP_NOW)
     ids.PHC_STORE = store_id
     return KeepWorld(rig, ids, tmp_path)
 
@@ -2418,3 +2419,152 @@ import pytest as _pytest
 @_pytest.fixture
 def keep_world(engram_server_env, tmp_path, monkeypatch):
     return _keep_world(engram_server_env, tmp_path, monkeypatch)
+
+
+# ---------------------------------------------------------------- Task 25: the remember guard and kept copies
+
+KEEP_NOW = T("2026-11-02") + 2 * 3600          # what `server._permission_now` reads in `keep_world` (R10: t = now)
+KEEP_LATER = T("2026-11-02") + 3600            # a change made after the delivery and before the remember
+
+
+def fails_the_test(*args, **kw):
+    raise AssertionError("this must not be called")
+
+
+def make_uses_file_unreadable(root):
+    """`permission-uses.db` holding bytes that are not a SQLite file."""
+    from permission_uses import uses_path
+    path = uses_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"this is not a sqlite file" * 40)
+
+
+def write_delivery_receipt(root, *, content, agent, at=None, obj=M1, copy=f"store:{HOUSE_ID}",
+                           purpose="care-coordination", place=CLINIC_3):
+    """An allowed `inject_context` receipt for `content`, written straight to the receipts file. Returns its `at`."""
+    import hashlib
+    from permission_ledger import ledger_path
+    from permission_uses import Uses, UseRow
+    from lighthouse_protocol import canonical_json
+    ledger_id = "ledger-test"
+    if ledger_path(root).is_file():
+        from permission_ledger import Ledger
+        led = Ledger.open_read_only(root)
+        try:
+            ledger_id = led.meta()["ledger_id"]
+        finally:
+            led.close()
+    at = T("2026-11-02") if at is None else at
+    uses = Uses.open(root)
+    try:
+        uses.append(UseRow(at=at, ledger_id=ledger_id, ledger_seq=1, agent=agent, place=place, acting_for=place,
+                           action="inject_context", purpose=purpose, allowed=1, cited=canonical_json([]),
+                           object=obj, copy=copy, content_digest=hashlib.sha256(content.encode()).hexdigest()), [])
+    finally:
+        uses.close()
+    return at
+
+
+def deliver_item_with_content(world, content):
+    """m1 delivered to `agent:ph-coordinator` with `content` exactly as given (whitespace and all)."""
+    return write_delivery_receipt(world.root, content=content, agent="agent:ph-coordinator")
+
+
+def deliver_other_items(world, n, *, at):
+    """`n` allowed deliveries to `agent:ph-coordinator` of other content, all at `at`."""
+    for i in range(n):
+        write_delivery_receipt(world.root, content=f"other delivered note number {i}", agent="agent:ph-coordinator",
+                               at=at, obj=M2)
+
+
+def _phc_allow(led, steward, layer, **kw):
+    sel = parse_selector(_doc_of(kw.pop("audience"), **kw.pop("dims"), actions=kw.pop("actions"),
+                                 purposes=["care-coordination"], kinds=["memory"]))
+    return led.perform(Act("allow", dict(layer=layer, selector=sel, valid_from=T("2026-11-01"), valid_until=T("2027-10-01"),
+                                         reason="test")), actor=steward, channel="terminal", now=T("2026-11-01"))
+
+
+KEPT_ID = "00000000-0000-0000-0000-00000000cafe"
+
+
+@_pytest.fixture
+def keep_world_with_imprint_allowed(keep_world, monkeypatch):
+    """`keep_world` plus allows for `imprint` of m1 in Andy's home and the three county layers, and an allow in
+    Andy's home and in ph-steward's home (the kept copy's two subjects) for a read of the kept copy. An allow
+    outside the home must name its memories (P28), so the first uuid the server draws, the kept episode's id, is
+    fixed at `KEPT_ID` for the allows to name. Amy's home stays empty."""
+    import uuid
+    from permission_ledger import Ledger
+    world = keep_world
+    kept = f"mem:{world.ids.PHC_STORE}/episode/{KEPT_ID}"
+    drawn = []
+
+    class _Uuid:
+        def __getattr__(self, name):
+            return getattr(uuid, name)
+
+        @staticmethod
+        def uuid4():
+            if not drawn:
+                drawn.append(1)
+                return uuid.UUID(KEPT_ID)
+            return uuid.uuid4()
+    monkeypatch.setattr(server_module(), "uuid", _Uuid())
+    led = Ledger.open(world.root)
+    try:
+        for steward, layer, audience in ((ANDY, HOME, PH), ("person:county-steward", COUNTY, COUNTY),
+                                         ("person:ph-steward", PH, PH), ("person:ph-steward", CLINIC_3, CLINIC_3)):
+            _phc_allow(led, steward, layer, audience=[audience], dims={"memories": [M1]}, actions=["imprint"])
+        for steward, layer in ((ANDY, HOME), ("person:ph-steward", "place:home/ph-steward")):
+            _phc_allow(led, steward, layer, audience=[PH], dims={"memories": [kept]},
+                       actions=R1_ACTIONS)
+    finally:
+        led.close()
+    return world
+
+
+def server_module():
+    import server
+    return server
+
+
+def KEPT_USE(kept, *, at):
+    """A read of the kept copy by `agent:ph-coordinator` at clinic-3 for care-coordination."""
+    from permissions import parse_object_ref
+    return use("agent:ph-coordinator", CLINIC_3, kept, copy=f"store:{parse_object_ref(kept).instance_id}",
+               action="read", at=at)
+
+
+def genome_world(root, mode):
+    """A genome store G at `.engram/genome/graph.db` holding one core-2 episode g1, and an empty instance store I.
+    With a `mode`, also a ledger owned by Andy, raised to that mode through `perform`, with G and I registered as
+    Andy's stores at his home and `person:jenn` as g1's co-subject. Returns (ledger or None, genome path, I's
+    Storage, ids)."""
+    from pathlib import Path
+    from permission_ledger import Ledger
+    from storage import Storage
+    root = Path(root)
+    genome_path = root / ".engram" / "genome" / "graph.db"
+    genome_path.parent.mkdir(parents=True, exist_ok=True)
+    genome = Storage(str(genome_path))
+    g1 = "00000000-0000-0000-0000-0000000000a1"
+    genome.add_episode(id=g1, session_id=None, content="a genome note that every instance keeps", episode_type="genome_write")
+    genome.mark_core(g1, tier=2)
+    genome.conn.commit()
+    ids = SimpleNamespace(G=genome.instance_identity()["instance_id"], g1=g1)
+    genome.close()
+    instance = Storage(str(house_dir(root, "inst") / "graph.db"))
+    ids.I = instance.instance_identity()["instance_id"]
+    if mode is None:
+        return None, genome_path, instance, ids
+    make_house(root, "lighthouse")
+    t = T("2026-10-01")
+    led = Ledger.create(root, "andy", now=t)
+    led.perform(Act("register-person", {"person": "person:jenn"}), actor=ANDY, channel="terminal", now=t)
+    for iid, name in ((ids.G, "genome"), (ids.I, "instance")):
+        led.perform(Act("register-store", dict(instance_id=iid, name=name, owner=ANDY, place=HOME, imprint_of=None)),
+                    actor=ANDY, channel="terminal", now=t)
+    led.perform(Act("add-subject", dict(object=f"mem:{ids.G}/episode/{g1}", subject="person:jenn")),
+                actor=ANDY, channel="terminal", now=t)
+    led.perform(Act("gate", {"mode": mode}), actor=ANDY, channel="terminal", now=t)
+    return led, genome_path, instance, ids

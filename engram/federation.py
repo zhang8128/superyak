@@ -3,12 +3,17 @@
 import hashlib
 import json
 import os
+import logging
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import store_identity
+
+logger = logging.getLogger(__name__)
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -152,7 +157,7 @@ class InstanceRegistry:
         return self._data.get(name)
 
 
-def sync_genome(genome_path: str, instance_storage) -> int:
+def sync_genome(genome_path: str, instance_storage, *, ledger=None) -> int:
     """Pull genome-core episodes not yet present in instance. Returns count synced.
 
     Each synced episode gets a new local id but keeps its provenance:
@@ -164,6 +169,10 @@ def sync_genome(genome_path: str, instance_storage) -> int:
     Note: Synced episodes are inserted without embeddings. The existing
     backfill_vectors step in server.py _init() runs after sync_genome and
     will embed any orphaned episodes (those without vectors).
+
+    With a permissions ``ledger`` each synced episode is recorded as a kept copy of its genome episode before it
+    is written (P 7.4, P25), so it carries the source's subjects. An episode whose copy cannot be recorded is not
+    written; the next sync tries it again.
     """
     genome_conn = sqlite3.connect(genome_path)
     genome_conn.row_factory = sqlite3.Row
@@ -177,6 +186,7 @@ def sync_genome(genome_path: str, instance_storage) -> int:
     finally:
         genome_conn.close()
 
+    instance_id = instance_storage.instance_identity()["instance_id"] if ledger is not None else None
     synced = 0
     for row in genome_rows:
         origin = {
@@ -194,6 +204,14 @@ def sync_genome(genome_path: str, instance_storage) -> int:
             continue
 
         local_id = str(uuid.uuid4())
+        if ledger is not None:
+            try:
+                ledger.record_copy(
+                    f"mem:{instance_id}/episode/{local_id}", f"mem:{genome_instance_id}/episode/{row['id']}",
+                    now=int(time.time()))
+            except Exception as error:
+                logger.warning("genome episode %s not synced: its copy could not be recorded: %s", row["id"], error)
+                continue
         instance_storage.add_episode(
             id=local_id, session_id=None,
             content=row["content"], episode_type="genome_sync",
