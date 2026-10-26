@@ -25,11 +25,12 @@ from typing import Callable, Mapping
 
 from lighthouse_protocol import canonical_json
 from permissions import (
-    CHANNELS, JOINTS_PER_CHANGE, LANES, MAX_COPY_CHAIN, MAX_PLACES, MAX_SUBJECTS, PROPOSAL_DAYS, REGISTRY, Act,
-    Authority, State, RuleError, affected_joints, authorize, check_id, check_new_members,
-    check_new_parent, check_new_place, check_new_subject, gluing, home_of, parse_copy_ref, parse_object_ref,
-    person_of_home, subjects_of, _COLUMNS, _NULLABLE, _acts_for_person, _is_steward, _live,
-    _layer_steward, _own_subjects, _principals)
+    CHANNELS, GRANT_OPS, JOINTS_PER_CHANGE, LANES, MAX_COPY_CHAIN, MAX_PLACES, MAX_REPLACES, MAX_SUBJECTS,
+    PROPOSAL_DAYS, REASON_CHARS, REGISTRY, Act, Authority, Grant, Record, Selector, State, RuleError,
+    affected_joints, authorize, check_child_grant, check_id, check_new_members, check_new_parent,
+    check_new_place, check_new_subject, check_record, check_root_grant, gluing, grant_chain, home_of,
+    parse_copy_ref, parse_object_ref, parse_selector, person_of_home, proposal_words, selector_json, subjects_of,
+    _COLUMNS, _NULLABLE, _acts_for_person, _date, _is_steward, _live, _layer_steward, _own_subjects, _principals)
 
 SCHEMA_VERSION = "1"
 ZERO = "0" * 64
@@ -329,29 +330,44 @@ class Ledger:
         state = self.state()
         args = spec.prepare(state, actor, dict(act.args))
         act = Act(act.kind, args)
+        if spec.check is not None:
+            spec.check(state, actor, args, now)
         auth = spec.authority(state, actor, act, channel, now)
         if auth.outcome == "proposal":
-            return self._file(state, act, actor, channel, now)
+            return self._file(state, spec, act, actor, channel, now)
         ref, body = spec.make(state, actor, args, auth, now)
+        body = _stamp(body, channel, None)
         seq = self._append(act.kind, ref, actor, channel, body, under_grant=auth.under_grant, at=now)
-        return self._outcome("done", ref, seq, act.kind)
+        return self._outcome("done", ref, seq, act.kind, args)
 
-    def _outcome(self, status: str, ref: str, seq: int, kind: str) -> Outcome:
-        if kind not in _GLUED:
+    def _outcome(self, status: str, ref: str, seq: int, kind: str, args: Mapping = ()) -> Outcome:
+        """After a registry change, or a rule written in a place's layer, the gluing reports of up to
+        JOINTS_PER_CHANGE joint places (R5)."""
+        if kind in _GLUED:
+            changed = {REGISTRY}
+        elif kind in _RECORD_ACTS:
+            state = self.state()
+            rec = state.records.get(args.get("record")) if "record" in args else None
+            changed = {rec.layer if rec is not None else args.get("layer")}
+        else:
             return Outcome(status, ref, seq)
         state = self.state()
-        joints = affected_joints(state, {REGISTRY})
+        joints = affected_joints(state, changed)
         return Outcome(status, ref, seq, tuple(gluing(state, j) for j in joints[:JOINTS_PER_CHANGE]),
                        tuple(joints[JOINTS_PER_CHANGE:]))
 
-    def _file(self, state: State, act: Act, actor: str, channel: str, now: int) -> Outcome:
+    def _file(self, state: State, spec: "_Act", act: Act, actor: str, channel: str, now: int) -> Outcome:
         pid = new_id("p-")
         body: dict = {"act": {"kind": act.kind, "args": dict(act.args)}}
-        kind, for_person = act.kind, state.meta["owner"]
+        kind, for_person = _words_kind(state, act), state.meta["owner"]
         if not actor.startswith("agent:") and channel != "tool":
             # a person's act that waits for the other stewards (P 4.4): each needs a signature (R6)
             body["needs"] = _needs(act)
             kind, for_person = ("joint-place" if act.kind == "register-place" else act.kind), actor
+        elif actor != for_person:
+            # the owner signs it alone, so the owner must be able to make it alone (P 7.6)
+            if spec.authority(state, for_person, act, "terminal", now).outcome != "do":
+                raise RuleError(_ACT, f"{for_person} could not make this change alone, so there is nothing to sign")
         row = {"id": pid, "by_agent": actor, "for_person": for_person, "kind": kind, "body": body, "created": now,
                "expires": now + PROPOSAL_DAYS * 86400, "status": "pending"}
         seq = self._append("propose", pid, actor, channel, {"insert": [{"table": "proposals", "row": row}]},
@@ -375,6 +391,8 @@ class Ledger:
             raise RuleError(_ACT, f"{pid} is not a proposal")
         if p.status != "pending":
             raise RuleError(_ACT, f"{pid} is not pending: it is {p.status}")
+        if now >= p.expires:
+            raise RuleError(_ACT, f"{pid} expired on {_date(p.expires)}: a proposal lasts {PROPOSAL_DAYS} days")
         body = json.loads(p.body)
         needs = body.get("needs")
         had = {p.by_agent, *self._signers(pid)}
@@ -388,7 +406,7 @@ class Ledger:
         if channel == "tool":
             raise RuleError("7.6 the person's yes", "a signature needs the terminal; the tools can give no yes")
         if needs is None:
-            raise RuleError(_ACT, f"{pid} is signed by {p.for_person}, which this ledger cannot do yet")
+            return self._sign_alone(state, p, body, actor, channel, now)
         spec_act = body["act"]
         now_covered = _covers(state, needs, had | {actor})
         if now_covered == _covers(state, needs, had):
@@ -399,10 +417,49 @@ class Ledger:
         spec = _ACTS[spec_act["kind"]]
         args = spec.prepare(state, p.by_agent, dict(spec_act["args"]))
         ref, mbody = spec.make(state, p.by_agent, args, Authority("do", "person", None), now)
-        mbody = {**mbody, "update": [*mbody.get("update", ()), {
-            "table": "proposals", "where": {"id": pid}, "set": {"status": "signed", "decided_seq": "@seq"}}]}
+        mbody = _signed(_stamp(mbody, channel, pid), pid)
         seq = self._append(spec_act["kind"], ref, actor, channel, mbody, proposal_id=pid, at=now)
-        return self._outcome("done", ref, seq, spec_act["kind"])
+        return self._outcome("done", ref, seq, spec_act["kind"], args)
+
+    def _sign_alone(self, state: State, p, body: Mapping, actor: str, channel: str, now: int) -> Outcome:
+        """The owner's yes to an agent's proposal: run its Act as the owner on the terminal (R26). Everything the
+        act checks, it checks again against the ledger as it is now; a refusal leaves the proposal open."""
+        if actor != p.for_person:
+            raise RuleError("7.6 the person's yes", f"{p.id} is signed by {p.for_person}, not by {actor}")
+        if channel != "terminal":
+            raise RuleError("7.6 the person's yes", "a signature needs the terminal")
+        kind, spec = body["act"]["kind"], _ACTS[body["act"]["kind"]]
+        args = spec.prepare(state, actor, dict(body["act"]["args"]))
+        act = Act(kind, args)
+        if spec.check is not None:
+            spec.check(state, actor, args, now)
+        auth = spec.authority(state, actor, act, "terminal", now)
+        if auth.outcome != "do":
+            raise RuleError(_ACT, f"{actor} cannot make this change alone")
+        ref, mbody = spec.make(state, actor, args, auth, now)
+        mbody = _signed(_stamp(mbody, "terminal", p.id), p.id)
+        seq = self._append(kind, ref, actor, channel, mbody, under_grant=auth.under_grant, proposal_id=p.id, at=now)
+        return self._outcome("done", ref, seq, kind, args)
+
+    def proposals(self, *, now: int) -> list[dict]:
+        """The open proposals (pending and not yet expired), oldest first. `words` come from the body by one
+        template per kind (P 7.7); the agent's `reason` is kept apart and is never in them."""
+        state = self.state()
+        out = []
+        for p in sorted(state.proposals.values(), key=lambda r: (r.created, r.id)):
+            if p.status != "pending" or p.expires <= now:
+                continue
+            body = json.loads(p.body)
+            act = body["act"]
+            kind = "register-place" if p.kind == "joint-place" else p.kind
+            try:
+                words = proposal_words(state, kind, act["args"])
+            except (RuleError, KeyError, TypeError, ValueError) as e:
+                words = f"(this proposal cannot be put into words now: {e})"
+            out.append({"id": p.id, "by_agent": p.by_agent, "for_person": p.for_person, "kind": p.kind,
+                        "act": act, "needs": body.get("needs"), "signatures": self._signers(p.id), "words": words,
+                        "reason": act["args"].get("reason"), "created": p.created, "expires": p.expires})
+        return out
 
     # ---------------------------------------------------------------- kept copies and read accessors (P 7.4)
     def record_copy(self, copy_ref: str, source_ref: str, *, now: int) -> None:
@@ -474,6 +531,7 @@ class _Act:
     prepare: Callable      # (state, actor, args) -> args: shape, defaults and state rules; raises RuleError
     make: Callable         # (state, actor, args, authority, now) -> (ref, log body)
     authority: Callable = None   # (state, actor, act, channel, now) -> Authority; default: the pure model's
+    check: Callable = None       # (state, actor, args, now) -> None: the write-time rules (P 5.4, 7.1, 7.2); raises
 
 
 def _text(args: Mapping, key: str) -> str:
@@ -879,6 +937,249 @@ def _may_make_collection(state, actor, args):
         raise RuleError(_ACT, f"only {owner}, or an agent acting for them, makes their collection")
 
 
+# -- records and grants (P 5.4, 7.1 to 7.3)
+
+_RECORD_ACTS = frozenset({"allow", "deny", "revoke", "shorten", "narrow"})
+_RECORD_COLUMNS = _COLUMNS["records"]
+
+
+def _stamp(body: Mapping, channel: str, proposal_id: str | None) -> dict:
+    """The channel and the proposal a record row was written through. `make` leaves both to its caller."""
+    out = dict(body)
+    out["insert"] = [{"table": i["table"], "row": {**i["row"], "channel": channel, "proposal_id": proposal_id}}
+                     if i["table"] == "records" else i for i in body.get("insert", ())]
+    return {k: v for k, v in out.items() if v != []}
+
+
+def _signed(body: Mapping, pid: str) -> dict:
+    return {**body, "update": [*body.get("update", ()), _upd("proposals", {"id": pid}, status="signed",
+                                                             decided_seq="@seq")]}
+
+
+# a record edit names its kind by the record's effect: P 7.1's rows for an allow and for a deny
+_EDIT_KIND = {("revoke", "allow"): "withdraw", ("shorten", "allow"): "shorten", ("narrow", "allow"): "narrow",
+              ("revoke", "deny"): "revoke-deny", ("shorten", "deny"): "shorten-deny", ("narrow", "deny"): "narrow-deny"}
+
+
+def _words_kind(state: State, act: Act) -> str:
+    """The kind of a proposal: the act's, except that a deny's revoke, shorten and narrow have their own templates."""
+    rec = state.records.get(act.args.get("record")) if act.kind in ("revoke", "shorten", "narrow") else None
+    return _EDIT_KIND[(act.kind, rec.effect)] if rec is not None else act.kind
+
+
+def _whole(args: Mapping, key: str, *, null_ok: bool = False):
+    v = args.get(key)
+    if v is None and null_ok and key in args:
+        return None
+    if not isinstance(v, int) or isinstance(v, bool):
+        raise RuleError(_ACT, f"{key} must be whole seconds{' or null' if null_ok else ''}")
+    return v
+
+
+def _reason(args: Mapping) -> str:
+    r = args.get("reason", "")
+    if not isinstance(r, str) or "\n" in r or "\r" in r or len(r) > REASON_CHARS:
+        raise RuleError(_ACT, f"a reason is one line of at most {REASON_CHARS} characters")
+    return r
+
+
+def _selector_arg(args: Mapping, key: str = "selector") -> str:
+    v = args.get(key)
+    if v is None:
+        raise RuleError(_ACT, f"the act needs {key}")
+    return selector_json(v if isinstance(v, Selector) else parse_selector(v))
+
+
+def _record_of(state: State, args: Mapping) -> Record:
+    rec = state.records.get(_text(args, "record"))
+    if rec is None:
+        raise RuleError(_ACT, f"{args['record']} is not a record")
+    return rec
+
+
+def _grant_arg(out: dict, args: Mapping) -> dict:
+    if args.get("grant") is not None:
+        out["grant"] = args["grant"]
+    return out
+
+
+def _prep_record(effect: str):
+    def prepare(state, actor, args):
+        layer = _text(args, "layer")
+        if layer.startswith("agent:"):
+            check_id("agent", layer)
+            if effect != "deny":
+                raise RuleError(_ACT, "a restriction layer holds only denies")
+        else:
+            check_id("place", layer)
+        return _grant_arg({"layer": layer, "selector": _selector_arg(args), "valid_from": _whole(args, "valid_from"),
+                           "valid_until": _whole(args, "valid_until", null_ok=True), "reason": _reason(args)}, args)
+    return prepare
+
+
+def _draft(state: State, **fields) -> Record:
+    base = dict(id="r-" + "0" * 32, anchor=fields.get("valid_from"), backing="person", set_by="", channel="tool",
+                under_grant=None, proposal_id=None, replaces=None, reason="", created=0, created_seq=state.seq + 1,
+                revoked=None, revoked_by=None, revoke_reason=None, revoked_seq=None)
+    base.update(fields)
+    base["selector"] = parse_selector(base["selector"]) if isinstance(base["selector"], str) else base["selector"]
+    return Record(**base)
+
+
+def _check_new_record(effect: str):
+    def check(state, actor, args, now):
+        check_record(state, _draft(state, layer=args["layer"], effect=effect, selector=args["selector"],
+                                   valid_from=args["valid_from"], valid_until=args["valid_until"], created=now))
+    return check
+
+
+def _make_new_record(effect: str):
+    def make(state, actor, args, auth, now):
+        rid = new_id("r-")
+        return rid, {"insert": [_ins(
+            "records", id=rid, layer=args["layer"], effect=effect, selector=args["selector"],
+            valid_from=args["valid_from"], valid_until=args["valid_until"], anchor=now, backing=auth.backing,
+            set_by=actor, under_grant=auth.under_grant, replaces=None, reason=args["reason"], created=now,
+            created_seq="@seq")]}
+    return make
+
+
+def _edit_authority(op: str):
+    def authority(state, actor, act, channel, now):
+        rec = _record_of(state, act.args)
+        return authorize(state, actor, Act(_EDIT_KIND[(op, rec.effect)], act.args), channel=channel, at=now)
+    return authority
+
+
+def _prep_revoke(state, actor, args):
+    return _grant_arg({"record": _record_of(state, args).id, "reason": _reason(args)}, args)
+
+
+def _make_revoke(state, actor, args, auth, now):
+    return args["record"], {"update": [_upd(
+        "records", {"id": args["record"]}, revoked="@at", revoked_by=actor, revoke_reason=args["reason"],
+        revoked_seq="@seq")]}
+
+
+def _prep_shorten(state, actor, args):
+    out = {"record": _record_of(state, args).id, "valid_until": _whole(args, "valid_until", null_ok=True),
+           "reason": _reason(args)}
+    if "valid_until" not in args:
+        raise RuleError(_ACT, "the act needs valid_until")
+    return _grant_arg(out, args)
+
+
+def _prep_narrow(state, actor, args):
+    out = {"record": _record_of(state, args).id, "selector": _selector_arg(args), "reason": _reason(args)}
+    if "valid_until" in args:
+        out["valid_until"] = _whole(args, "valid_until", null_ok=True)
+    return _grant_arg(out, args)
+
+
+def _replacement(state: State, args: Mapping, now: int, rid: str = "r-" + "0" * 32) -> tuple[Record, Record]:
+    """(old, new): the record and the one that narrows it. The pure model's `_replacement` rules (P 7.1)."""
+    old = _record_of(state, args)
+    new = old._replace(id=rid, replaces=old.id, created=now, created_seq=state.seq + 1, revoked=None,
+                       revoked_by=None, revoke_reason=None, revoked_seq=None, proposal_id=None,
+                       reason=args["reason"])
+    if "selector" in args:
+        new = new._replace(selector=parse_selector(args["selector"]))
+    if "valid_until" in args:
+        new = new._replace(valid_until=args["valid_until"])
+    return old, new
+
+
+def _check_replacement(state, actor, args, now):
+    old, new = _replacement(state, args, now)
+    check_record(state, new)
+    links, cur = 1, old
+    while cur is not None:
+        links += 1
+        cur = state.records.get(cur.replaces) if cur.replaces else None
+    if links > MAX_REPLACES:
+        raise RuleError("5.1 fields", f"a chain of replacements is at most {MAX_REPLACES} long")
+
+
+def _make_replacement(state, actor, args, auth, now):
+    """R is revoked and R' written, with `replaces` R, R's anchor and R's backing, in one transaction (P 7.3)."""
+    rid = new_id("r-")
+    old, new = _replacement(state, args, now, rid)
+    return rid, {
+        "insert": [_ins("records", id=rid, layer=old.layer, effect=old.effect, selector=selector_json(new.selector),
+                        valid_from=old.valid_from, valid_until=new.valid_until, anchor=old.anchor,
+                        backing=auth.backing, set_by=actor, under_grant=auth.under_grant, replaces=old.id,
+                        reason=args["reason"], created=now, created_seq="@seq")],
+        "update": [_upd("records", {"id": old.id}, revoked="@at", revoked_by=actor,
+                        revoke_reason=f"replaced by {rid}", revoked_seq="@seq")]}
+
+
+# -- grants
+
+def _prep_grant(state, actor, args):
+    parent = args.get("parent")
+    row = None
+    if parent is not None:
+        row = state.grants.get(check_id("grant", parent))
+        if row is None:
+            raise RuleError("7.2 grants", f"{parent} is not a grant")
+    layer = args.get("layer") or (row.layer if row is not None else None)
+    if not isinstance(layer, str) or not layer:
+        raise RuleError(_ACT, "the act needs layer")
+    ops = _texts(args, "ops", at_least=1)
+    if not set(ops) <= set(GRANT_OPS):
+        raise RuleError("7.2 grants", f"ops must be a non-empty subset of {', '.join(GRANT_OPS)}")
+    out = {"layer": check_id("place", layer), "grantee": check_id("agent", _text(args, "grantee")),
+           "ops": sorted(ops), "envelope": _selector_arg(args, "envelope"), "max_days": _whole(args, "max_days"),
+           "depth": _whole({"depth": args.get("depth", 0)}, "depth"),
+           "hours": _whole({"hours": args.get("hours", 24)}, "hours")}
+    if parent is not None:
+        out["parent"] = parent
+    return out
+
+
+def _grant_draft(state: State, actor: str, args: Mapping, now: int, gid: str = "g-" + "0" * 32) -> Grant:
+    """The Grant these arguments make if `actor` signs: a root grant is issued by a person (the ledger owner,
+    when an agent is only asking), a child by the holder of its parent."""
+    parent = args.get("parent")
+    issuer = actor if parent is not None or not actor.startswith("agent:") else state.meta["owner"]
+    return Grant(id=gid, issuer=issuer, grantee=args["grantee"], layer=args["layer"], parent_id=parent,
+                 ops=frozenset(args["ops"]), envelope=parse_selector(args["envelope"]), max_days=args["max_days"],
+                 depth=args["depth"], expires=now + args["hours"] * 3600, created=now, created_seq=state.seq + 1)
+
+
+def _check_grant(state, actor, args, now):
+    g = _grant_draft(state, actor, args, now)
+    if g.parent_id is None:
+        check_root_grant(state, g)
+    else:
+        check_child_grant(state, grant_chain(state, g.parent_id)[-1], g)
+
+
+def _make_grant(state, actor, args, auth, now):
+    gid = new_id("g-")
+    g = _grant_draft(state, actor, args, now, gid)
+    return gid, {"insert": [_ins(
+        "permission_grants", id=gid, issuer=g.issuer, grantee=g.grantee, layer=g.layer, parent_id=g.parent_id,
+        ops=sorted(g.ops), envelope=args["envelope"], max_days=g.max_days, depth=g.depth, expires=g.expires,
+        created=now, created_seq="@seq")]}
+
+
+def _prep_end_grant(state, actor, args):
+    gid = check_id("grant", _text(args, "grant"))
+    row = state.grants.get(gid)
+    if row is None:
+        raise RuleError("7.2 grants", f"{gid} is not a grant")
+    if row.revoked_seq is not None:
+        raise RuleError("7.2 grants", f"{gid} is already revoked: a revoked grant is never valid again")
+    return {"grant": gid, "reason": _reason(args)}
+
+
+def _make_end_grant(state, actor, args, auth, now):
+    return args["grant"], {"update": [_upd(
+        "permission_grants", {"id": args["grant"]}, revoked="@at", revoked_by=actor,
+        revoke_reason=args["reason"], revoked_seq="@seq")]}
+
+
 _ACTS = {
     "register-person": _Act(_prep_register_person, _make_register_person, _pure),
     "retire-person": _Act(_prep_retire_person, _make_retire_person, _local(_may_retire_person)),
@@ -897,6 +1198,14 @@ _ACTS = {
     "uncollect": _Act(_prep_uncollect, _make_uncollect, _pure),
     "add-subject": _Act(_prep_add_subject, _make_add_subject, _pure),
     "remove-subject": _Act(_prep_remove_subject, _make_remove_subject, _pure),
+    "allow": _Act(_prep_record("allow"), _make_new_record("allow"), _pure, _check_new_record("allow")),
+    "deny": _Act(_prep_record("deny"), _make_new_record("deny"), _pure, _check_new_record("deny")),
+    "revoke": _Act(_prep_revoke, _make_revoke, _edit_authority("revoke")),
+    "shorten": _Act(_prep_shorten, _make_replacement, _edit_authority("shorten"), _check_replacement),
+    "narrow": _Act(_prep_narrow, _make_replacement, _edit_authority("narrow"), _check_replacement),
+    "grant": _Act(_prep_grant, _make_grant, _pure, _check_grant),
+    "revoke-grant": _Act(_prep_end_grant, _make_end_grant, _pure),
+    "give-up-grant": _Act(_prep_end_grant, _make_end_grant, _pure),
 }
 # the acts after which the gluing check reruns (R5): the registry of places, parents, agents, groups,
 # collections and stewards

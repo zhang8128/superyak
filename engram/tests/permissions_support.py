@@ -1470,9 +1470,8 @@ def county_ledger(tmp_path):
 
 
 def e1_ledger_through_andys_side(tmp_path):
-    """county_ledger, Andy's stores and collection, then R1 and G1 of P 13 through `_append` (Task 12 owns
-    the acts for them). The ids are on `led.ids`."""
-    from permission_ledger import new_id
+    """county_ledger, Andy's stores and collection, then R1 and G1 of P 13 through `perform`. The ids are on
+    `led.ids`."""
     led = county_ledger(tmp_path)
     for iid, name in ((STORE_S, "engram"), (STORE_HOUSE, "published house"), (STORE_K, "keeper store")):
         do(led, ANDY, "register-store", instance_id=iid, name=name, owner=ANDY, place=HOME, imprint_of=None)
@@ -1480,17 +1479,12 @@ def e1_ledger_through_andys_side(tmp_path):
     personal = {"lane": "personal", "created_at": T("2026-10-01")}
     do(led, ANDY, "collect", collection=MEDICAL, refs=[M1, M2, M3], lanes={r: personal for r in (M1, M2, M3)})
     do(led, ANDY, "add-subject", object=M3, subject="person:jenn")
-    ids = SimpleNamespace(M1=M1, M2=M2, M3=M3, M4=M4, M5=M5, M6=M6, R1=new_id("r-"), G1=new_id("g-"))
-    at = T("2026-11-01")
-    led._append("allow", ids.R1, ANDY, "terminal", {"insert": [{"table": "records", "row": {
-        "id": ids.R1, "layer": HOME, "effect": "allow", "selector": selector_json(R1_ENVELOPE),
-        "valid_from": at, "valid_until": T("2027-01-31"), "anchor": at, "backing": "person", "set_by": ANDY,
-        "channel": "terminal", "reason": "R1", "created": at, "created_seq": "@seq"}}]}, at=at)
-    led._append("grant", ids.G1, ANDY, "terminal", {"insert": [{"table": "permission_grants", "row": {
-        "id": ids.G1, "issuer": ANDY, "grantee": "agent:rio-grande", "layer": HOME, "ops": [
-            "share", "withdraw", "shorten", "narrow", "collect", "uncollect"],
-        "envelope": selector_json(R1_ENVELOPE), "max_days": 120, "depth": 0, "expires": T("2026-11-30"),
-        "created": at, "created_seq": "@seq"}}]}, at=at)
+    ids = SimpleNamespace(M1=M1, M2=M2, M3=M3, M4=M4, M5=M5, M6=M6)
+    ids.R1 = do(led, ANDY, "allow", layer=HOME, selector=R1_ENVELOPE, valid_from=T("2026-11-01"),
+                valid_until=T("2027-01-31"), reason="R1").ref
+    ids.G1 = do(led, ANDY, "grant", layer=HOME, grantee="agent:rio-grande", ops=[
+        "share", "withdraw", "shorten", "narrow", "collect", "uncollect"], envelope=R1_ENVELOPE, max_days=120,
+        depth=0, hours=29 * 24).ref                          # expires 2026-11-30
     led.ids = ids
     return led
 
@@ -1568,3 +1562,98 @@ def source_with_copy_at_8_subjects(led):
 def read_copy(copy):
     """Rio Grande reads the kept copy from its keeper's store."""
     return use("agent:rio-grande", HOME, copy, copy="store:K9", action="read", at=T("2026-11-05"))
+
+
+# ---------------------------------------------------------------- Task 12: records, grants and proposals
+
+def e1_ledger_with_g1(tmp_path):
+    """Andy's side of P 13 with R1 and G1 written: R1 (person-backed) and G1 (rio-grande's grant) are on `led.ids`."""
+    return e1_ledger_through_andys_side(tmp_path)
+
+
+def parks_body() -> dict:
+    """The arguments of rio-grande's try to add parks-and-rec to R1 (E1 use 6): outside G1's envelope."""
+    return parks_proposal_body()
+
+
+def selector_of(**changes):
+    """R1's envelope with some fields replaced."""
+    return dataclasses.replace(R1_ENVELOPE, **changes)
+
+
+def d1_selector():
+    """D1 of E1 use 9: public health, memory m2, any action and purpose."""
+    return parse_selector({
+        "audience": ["place:la-county/public-health"], "requesters": "*",
+        "objects": {"kinds": ["memory"], "stores": "*", "layers": "*", "lanes": "*", "collections": "*",
+                    "memories": [M2]},
+        "actions": "*", "purposes": "*"})
+
+
+def e1_through_use_9(tmp_path):
+    """e1_county_ledger (Andy's side, G1 and the county's rules), then through `perform`: a share by rio-grande
+    under G1 (11-04), m4 collected under G1 (use 7, 11-05), R1 shortened to R1' (use 8, 11-10) and Andy's deny D1
+    (use 9, 11-12). `ids` gains SHARE, R1P and D1. Returns (ledger, ids)."""
+    led = e1_county_ledger(tmp_path)
+    ids = led.ids
+    share = do(led, RIO, "allow", now="2026-11-04", channel="tool", layer=HOME,
+               selector=selector_of(audience=(CLINIC_3,), actions=("recall", "read")),
+               valid_from=T("2026-11-04"), valid_until=T("2026-12-01"), reason="share with clinic-3")
+    ids.SHARE = share.ref
+    do(led, RIO, "collect", now="2026-11-05", channel="tool", collection=MEDICAL, objects=[M4])
+    ids.R1P = do(led, RIO, "shorten", now="2026-11-10", channel="tool", record=ids.R1,
+                 valid_until=T("2026-12-15")).ref
+    ids.D1 = do(led, ANDY, "deny", now="2026-11-12", layer=HOME, selector=d1_selector(),
+                valid_from=T("2026-12-01"), valid_until=None, reason="tell my doctor first").ref
+    return led, ids
+
+
+def only_proposal_rows_changed(before: dict, after: dict) -> bool:
+    """Of two `Ledger.tables()`, only the log and the proposals differ."""
+    return all(before[t] == after[t] for t in before if t not in ("ledger_log", "proposals"))
+
+
+R26_SAMPLE_ACTS = [
+    Act("register-place", {"place": "place:andy-lab", "stewards": ["person:andy"], "name": "Andy's Lab"}),
+    Act("register-place", {"place": "place:andy-lab/x", "parents": ["place:andy-lab"],
+                           "stewards": ["person:andy"]}),
+    Act("register-place", {"place": "place:andy-other", "stewards": ["person:andy"]}),
+    Act("add-parent", {"place": "place:andy-lab/x", "parent": "place:andy-other"}),
+    Act("add-steward", {"place": "place:andy-lab", "person": "person:jenn"}),
+    Act("register-agent", {"agent": "agent:rio-2", "acts_for": HOME}),
+    Act("put-agent", {"agent": "agent:rio-2", "place": "place:andy-lab"}),
+    Act("group", {"group": "group:g1", "owner": "person:andy", "members": ["agent:rio-grande"]}),
+    Act("register-store", {"instance_id": "Q", "name": "q", "owner": "person:andy", "place": HOME}),
+    Act("remove-subject", {"object": M3, "subject": "person:jenn"}),
+    Act("collect", {"collection": MEDICAL, "objects": [M4]}),      # G1 has expired by then: no grant covers it
+    Act("grant", {"layer": HOME, "grantee": "agent:rio-2", "ops": ["share"], "envelope": R1_ENVELOPE,
+                  "max_days": 30, "depth": 0, "hours": 24}),
+]
+
+
+def applied(state: State, act: Act) -> bool:
+    """Did `act` (one of R26_SAMPLE_ACTS) take effect in `state`?"""
+    a = act.args
+    live = lambda rows: [r for r in rows if r.removed_seq is None]
+    if act.kind == "grant":
+        return any(g.grantee == a["grantee"] and g.layer == a["layer"] for g in state.grants.values())
+    if act.kind == "group":
+        return {r.agent for r in live(state.group_members.get(a["group"], ()))} == set(a["members"])
+    if act.kind == "register-agent":
+        return a["agent"] in state.agents
+    if act.kind == "put-agent":
+        return any(r.place == a["place"] for r in live(state.agent_places.get(a["agent"], ())))
+    if act.kind == "add-steward":
+        return any(r.person == a["person"] for r in live(state.place_stewards.get(a["place"], ())))
+    if act.kind == "register-place":
+        return a["place"] in state.places
+    if act.kind == "add-parent":
+        return a["parent"] in [r.parent for r in state.place_parents.get(a["place"], ())]
+    if act.kind == "register-store":
+        return a["instance_id"] in state.stores
+    if act.kind == "remove-subject":
+        return not any(r.subject == a["subject"] for r in live(state.subjects.get(a["object"], ())))
+    if act.kind == "collect":
+        rows = live(state.collection_members.get(a["collection"], ()))
+        return all(any(r.object == o and r.backing == "person" for r in rows) for o in a["objects"])
+    raise AssertionError(act.kind)

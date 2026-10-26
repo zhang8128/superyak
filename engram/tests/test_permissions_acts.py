@@ -92,8 +92,8 @@ def test_a_refused_act_writes_nothing(tmp_path):
 
 def test_an_act_kind_this_task_does_not_know_is_refused_by_name(tmp_path):
     led = county_ledger(tmp_path)
-    with pytest.raises(RuleError, match="unknown act kind 'allow'"):
-        led.perform(Act("allow", {}), actor=ANDY, channel="terminal", now=T("2026-11-02"))
+    with pytest.raises(RuleError, match="unknown act kind 'frobnicate'"):
+        led.perform(Act("frobnicate", {}), actor=ANDY, channel="terminal", now=T("2026-11-02"))
 
 
 def test_registering_a_person_makes_a_home_with_an_empty_layer(tmp_path):

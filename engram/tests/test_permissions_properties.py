@@ -19,6 +19,7 @@ from tests.permissions_support import (
     use_json)
 
 N = 500
+PT2_CASES = 500
 DAY = 86400
 
 
@@ -966,6 +967,7 @@ def _world_into_ledger(home, w):
     from permission_ledger import Ledger
     from permissions import _ADDED, _UNDONE, selector_json
     led = Ledger.create(home, "andy", now=w.seq_at[1])
+    led.conn.execute("PRAGMA synchronous=OFF")             # a test ledger need not survive a power cut
     ops = {s: {"insert": [], "update": []} for s in range(2, w.seq + 1)}
     for table, rows in w.rows.items():
         assert table != "proposals"
@@ -978,7 +980,7 @@ def _world_into_ledger(home, w):
             added = d[_ADDED[table]]
             if added == 1:
                 continue
-            if table in _UNDONE:
+            if table in _UNDONE and d.get(_UNDONE[table][0]) is not None:   # a random row may name who, not when
                 seq_col, clear = _UNDONE[table]
                 undone = {c: d.pop(c) for c in clear if d.get(c) is not None}
                 if undone:
@@ -1011,3 +1013,124 @@ def test_pt10_determinism_after_replay(tmp_path):
                     assert da.allowed == dc.allowed, (case, s, x)
                     checked += 1
     assert checked > 500
+
+
+# ---------------------------------------------------------------- Task 12: PT2, the narrowing ops (P 7.2, P27)
+
+def _stewards_of(state, layer):
+    return sorted(r.person for r in state.place_stewards.get(layer, ()) if r.removed_seq is None)
+
+
+def _narrower(rng, sel):
+    """A selector inside `sel`: fewer audience entries, a finite or smaller actions and purposes list."""
+    changes = {}
+    if len(sel.audience) > 1 and rng.random() < 0.6:
+        changes["audience"] = tuple(sorted(rng.sample(sel.audience, rng.randint(1, len(sel.audience) - 1))))
+    for field, pool in (("actions", list(ACTIONS)), ("purposes", ["care-coordination", "research", "billing"])):
+        have = getattr(sel, field)
+        if rng.random() < 0.5:
+            if have == "*":
+                changes[field] = tuple(sorted(rng.sample(pool, rng.randint(1, 2))))
+            elif len(have) > 1:
+                changes[field] = tuple(sorted(rng.sample(have, rng.randint(1, len(have) - 1))))
+    return replace(sel, **changes)
+
+
+def _live_records(state, effect, *, place_layers=True):
+    return sorted((r for r in state.records.values() if r.effect == effect and r.revoked_seq is None
+                   and (r.layer.startswith("place:") == place_layers)), key=lambda r: r.id)
+
+
+def _random_narrowing(rng, led, w, now):
+    """(kind, actor, channel, Act): one of P 7.2's narrowing ops by someone who may make it, or None."""
+    from permissions import Act, home_of, selector_json
+    from tests.permissions_support import random_selector
+    s = led.state()
+    kind = rng.choice(("revoke", "shorten", "narrow", "deny", "add-subject", "uncollect"))
+    if kind in ("revoke", "shorten", "narrow"):
+        recs = [r for r in _live_records(s, "allow") if _stewards_of(s, r.layer)]
+        if not recs:
+            return None
+        r = rng.choice(recs)
+        actor = _stewards_of(s, r.layer)[0]
+        if kind == "revoke":
+            args = {"record": r.id, "reason": "pt2"}
+        elif kind == "shorten":
+            top = r.valid_until if r.valid_until is not None else r.valid_from + 120 * DAY
+            args = {"record": r.id, "valid_until": r.valid_from + rng.randint(1, max(1, (top - r.valid_from) // DAY))
+                    * DAY}
+        else:
+            args = {"record": r.id, "selector": selector_json(_narrower(rng, r.selector))}
+        return kind, actor, "terminal", Act(kind, args)
+    if kind == "deny":
+        layer = rng.choice(sorted(p for p in s.places if _stewards_of(s, p)))
+        return kind, _stewards_of(s, layer)[0], "terminal", Act("deny", {
+            "layer": layer, "selector": random_selector(rng), "valid_from": now - rng.randint(0, 20) * DAY,
+            "valid_until": None if rng.random() < 0.5 else now + rng.randint(1, 60) * DAY})
+    if kind == "add-subject":
+        ref = rng.choice(w.cfg.subjectable)
+        owner = s.stores[ref.split("/")[0].removeprefix("mem:")].owner
+        return kind, owner, "terminal", Act("add-subject", {"object": ref, "subject": rng.choice(w.cfg.subject_pool)})
+    live = [m for ms in s.collection_members.values() for m in ms if m.removed_seq is None]
+    if not live:
+        return None
+    m = rng.choice(sorted(live, key=lambda m: (m.collection, m.object)))
+    owner = s.collections[m.collection].owner
+    return kind, owner, "terminal", Act("uncollect", {"collection": m.collection, "objects": [m.object]})
+
+
+def test_pt2_narrowing_ops(tmp_path):
+    """P 7.2's narrowing list, applied through `perform` to a random ledger, never adds an allowed use (decide and
+    the oracle both judge it). An agent's try on a consent-layer deny is refused or filed as a proposal (P27)."""
+    from permissions import Act, RuleError, selector_json
+    from tests.permissions_support import only_proposal_rows_changed
+    applied, refused, flips = Counter(), Counter(), 0
+    p27 = Counter()
+    for case in range(PT2_CASES):
+        rng = _rng("pt2", case)
+        w = random_world(rng)
+        led = _world_into_ledger(tmp_path / f"c{case}", w)
+        now = max(w.seq_at.values()) + 3600
+        uses = sample_uses(rng, w, 12)
+        before = Judge(led.state())
+        pick = _random_narrowing(rng, led, w, now)
+        if pick is not None:
+            kind, actor, channel, act = pick
+            tables = led.tables()
+            try:
+                led.perform(act, actor=actor, channel=channel, now=now)
+            except RuleError:
+                refused[kind] += 1
+                assert led.tables() == tables, (case, kind)
+            else:
+                applied[kind] += 1
+                assert led.verify() is None
+                after = Judge(led.state())
+                for u in uses:
+                    was, then = before.both(u, f"{case} before {kind}"), after.both(u, f"{case} after {kind}")
+                    assert was or not then, (case, kind, u)
+                    flips += was and not then
+        # P27: an agent's narrowing op on a consent-layer deny is refused or becomes a proposal
+        s = led.state()
+        denies = _live_records(s, "deny")
+        if denies:
+            d = rng.choice(denies)
+            agent = rng.choice(w.cfg.agents)
+            op = rng.choice(("revoke", "shorten", "narrow"))
+            args = {"revoke": {"record": d.id}, "shorten": {"record": d.id, "valid_until": d.valid_from + DAY},
+                    "narrow": {"record": d.id, "selector": selector_json(_narrower(rng, d.selector))}}[op]
+            tables = led.tables()
+            try:
+                out = led.perform(Act(op, args), actor=agent, channel="tool", now=now + 60)
+            except RuleError:
+                p27["refused"] += 1
+                assert led.tables() == tables, (case, op)
+            else:
+                assert out.status == "proposal", (case, op, agent, d.id)
+                assert only_proposal_rows_changed(tables, led.tables()), (case, op)
+                p27["proposal"] += 1
+            assert led.state().records[d.id].revoked_seq is None, (case, op)
+        led.close()
+    assert all(applied[k] >= 3 for k in ("revoke", "shorten", "narrow", "deny", "add-subject", "uncollect")), (
+        applied, refused)
+    assert flips > 10 and p27["proposal"] > 5 and p27["refused"] > 0, (flips, p27)
