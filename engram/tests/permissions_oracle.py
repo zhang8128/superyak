@@ -3,16 +3,22 @@
 It walks every record of every required layer for every needed (object, action), with no pre-filter and no
 index. Tables are the JSON-ish rows of `State.to_tables()`; a use is a dict (see `use_json` in
 permissions_support.py): requester, place, obj, copy, action, purpose, at, names, shows. A bulk use is
-{"bulk": [use, ...]}: allowed when every per-object use is (P 6.4; the bound of 32 named memories is waived,
-and the oracle does not apply it to anything else either).
+{"bulk": [use, ...], "named": bool}: one use per object of O, decided together (P 6.4 and 6.5 step 1): the bound of
+32 named memories is waived, and the size bounds apply (512 objects when the receipt names them, 100,000 derived,
+100,000 named memories). `oracle_decide` gives the refusal (code, layer, action) of P 6.5 step 8, or None.
 
 Readings fixed where the spec leaves a choice (see the ledger's PF22 and Task 5's rulings):
 - a membership row (collection, group, agent place) and a subject row are in force over
   [at(added_seq), at(removed_seq)); a removal later than the decision's seq does not exist yet;
 - an allow counts a row when t is in that interval, a deny when the interval meets [anchor, t];
-- a lane at instant tau is that of the last note with at <= tau (ties by seq); a pending note reads as every lane
-  for a deny and as neither lane for an allow;
-- a legacy layer is (name, actions it allows for the use); it is applied to every action of every need.
+- an allow never counts a collection membership whose removal is in the state, at any t (P 6.5: "A removed
+  membership is never counted"); a deny reads memberships over [anchor, t], removed ones included (P 5.3);
+- a lane at instant tau is that of the last note with at <= tau (ties by seq), and every note of second tau is in
+  force at tau: a pending note reads as every lane for a deny and as neither lane for an allow, even when a note of
+  the same second settles it (P7, L5);
+- `self` in an agent's restriction layer is the agent itself (the spec is silent);
+- a legacy layer is (name, {object: actions it allows for that object as a use}); a bare set applies to every
+  object. It is applied to every action of every need.
 """
 import json
 
@@ -24,6 +30,9 @@ _CLOSURE = {"recall": ("recall",), "read": ("recall", "read"),
 MAX_SUBJECTS = 8
 MAX_NAMES = 32
 MAX_COPY_LINKS = 4
+MAX_BULK_NAMED = 512
+MAX_BULK_DERIVED = 100_000
+MAX_BULK_MEMORIES = 100_000
 MAX_GRANT_LINKS = 3
 _STAR = "*"
 
@@ -90,7 +99,7 @@ class _View:
         self.group_members = rows("group_members", "added_seq", rem)
         self.members = rows("collection_members", "added_seq", rem)
         self.subjects = rows("subjects", "added_seq", rem)
-        self.copies = {r["object"]: r["source"] for r in rows("copies")}
+        self.copies = {r["object"]: r["source"] for r in rows("copies", "added_seq")}
         self.notes = rows("lane_notes", "seq")
         rev = (("revoked_seq", ("revoked_seq",)),)
         self.records = {}
@@ -199,10 +208,19 @@ class _View:
     # -- lanes
     def lane_at(self, notes, tau):
         last = None
-        for n in notes:
+        for n in notes:                    # notes are ordered by (at, seq): the last one wins a tie
             if n["at"] <= tau:
                 last = n["lane"]
         return last
+
+    def lanes_at(self, notes, tau):
+        """The lanes in force at instant tau: that of the last note by (at, seq), and, since times are whole
+        seconds, every note of the same second (a pending note is never lost to the note that settles it)."""
+        out = {n["lane"] for n in notes if n["at"] == tau}
+        last = self.lane_at(notes, tau)
+        if last is not None:
+            out.add(last)
+        return out
 
     def lane_ok(self, obj, lanes, anchor, t, deny):
         notes = sorted((n for n in self.notes if n["object"] == obj), key=lambda n: (n["at"], n["seq"]))
@@ -212,8 +230,7 @@ class _View:
             lo = anchor
             instants = [lo] + [n["at"] for n in notes if lo < n["at"] <= t] if lo <= t else []
             for tau in instants:
-                lane = self.lane_at(notes, tau)
-                if lane is not None and (lane in lanes or lane == "pending"):
+                if self.lanes_at(notes, tau) & (set(lanes) | {"pending"}):
                     return True
             return False
         if not notes:
@@ -222,7 +239,7 @@ class _View:
         if start > t:
             return False
         for tau in [start] + [n["at"] for n in notes if start < n["at"] <= t]:
-            if self.lane_at(notes, tau) not in lanes:
+            if not self.lanes_at(notes, tau) <= set(lanes):
                 return False
         return True
 
@@ -233,6 +250,8 @@ class _View:
             return True
         act = self.act(a)
         if v == "self":
+            if layer.startswith("agent:"):          # a restriction layer: `self` is the agent itself
+                return layer == a
             return act == layer and (deny or layer in self.dom(P))
         if v.startswith("group:"):
             if deny:
@@ -253,31 +272,37 @@ class _View:
                        if r["agent"] == a and self.meets(r, anchor, t))
         return False
 
-    def collection_hit(self, obj, colls, layer, anchor, q, y, deny, assume):
-        t = q[3]
+    def counting_rows(self, obj, colls, layer, anchor, q, y, assume, strict):
+        """The memberships of obj in `colls` that count for an allow at q: not removed, in force at t, person-backed
+        or grant-backed with the chain valid (strict) and every envelope matched."""
+        t, out = q[3], []
         for i, r in enumerate(self.members):
             if r["object"] != obj or (colls != _STAR and r["collection"] not in colls):
                 continue
-            if deny:
-                if self.meets(r, anchor, t):
-                    return True
-                continue
             if i in assume:
-                return True
-            if not self.in_force(r, t):
+                out.append(r)
+                continue
+            if r.get("removed_seq") is not None or not self.in_force(r, t):
                 continue
             if r["backing"] == "person":
-                return True
+                out.append(r)
+                continue
             if self.person_members_only or not r["backing"].startswith("grant:"):
                 continue
             gid = r["backing"][len("grant:"):]
-            if self.grant_valid(gid, t) and all(
-                    self.sel_match(g["env"], layer, anchor, q, obj, y, False, assume | {i})
+            if gid in self.grants and (not strict or self.grant_valid(gid, t)) and all(
+                    self.sel_match(g["env"], layer, anchor, q, obj, y, False, assume | {i}, strict)
                     for g in self.grant_chain(gid)):
-                return True
-        return False
+                out.append(r)
+        return out
 
-    def sel_match(self, sel, layer, anchor, q, obj, y, deny, assume=frozenset()):
+    def collection_hit(self, obj, colls, layer, anchor, q, y, deny, assume, strict=True):
+        if deny:
+            return any(r["object"] == obj and (colls == _STAR or r["collection"] in colls)
+                       and self.meets(r, anchor, q[3]) for r in self.members)
+        return bool(self.counting_rows(obj, colls, layer, anchor, q, y, assume, strict))
+
+    def sel_match(self, sel, layer, anchor, q, obj, y, deny, assume=frozenset(), strict=True):
         a, P, p, t = q
         if not any(self.audience_entry(v, layer, anchor, q, deny) for v in sel["audience"]):
             return False
@@ -301,7 +326,7 @@ class _View:
         if o["lanes"] != _STAR and not self.lane_ok(obj, o["lanes"], anchor, t, deny):
             return False
         if o["collections"] != _STAR and not self.collection_hit(obj, o["collections"], layer, anchor, q, y,
-                                                                 deny, assume):
+                                                                 deny, assume, strict):
             return False
         return True
 
@@ -336,16 +361,85 @@ class _View:
                 return False
         return True
 
-    def layer_allows(self, layer, q, obj, y):
-        restriction = layer.startswith("agent:")
-        if not restriction and layer not in self.places:
-            return False
+    def verdict(self, layer, kind, q, obj, y):
+        """allow, deny, silent or missing for a ledger layer (kind consent or restriction), P 6.5 step 3."""
+        restriction = kind == "restriction"
+        if layer not in (self.agents if restriction else self.places):
+            return "missing"
         recs = [r for r in self.records.values() if r["layer"] == layer]
         if any(self.matches(r, q, obj, y) for r in recs if r["effect"] == "deny"):
-            return False
+            return "deny"
         if restriction:
-            return True
-        return any(self.matches(r, q, obj, y) for r in recs if r["effect"] == "allow")
+            return "silent"
+        return "allow" if any(self.matches(r, q, obj, y) for r in recs if r["effect"] == "allow") else "silent"
+
+    def layer_allows(self, layer, q, obj, y):
+        restriction = layer.startswith("agent:")
+        v = self.verdict(layer, "restriction" if restriction else "consent", q, obj, y)
+        return v == "allow" or (restriction and v == "silent")
+
+    # -- the code of a consent layer with no matching allow (P 6.5 step 8)
+    def candidate_terms(self, r, q, obj, y):
+        """None when r is not a candidate; else (effective end, grant chain invalid, not yet)."""
+        t = q[3]
+        if r["effect"] != "allow" or r.get("revoked_seq") is not None:
+            return None
+        chain, seen, cur = [r], {r["id"]}, r
+        while cur.get("replaces") is not None:
+            cur = self.records.get(cur["replaces"])
+            if cur is None or cur["id"] in seen:
+                break
+            seen.add(cur["id"])
+            chain.append(cur)
+        for link in chain:
+            if not self.sel_match(link["sel"], link["layer"], r["anchor"], q, obj, y, False, strict=False):
+                return None
+        sels = [(link["sel"], link["layer"]) for link in chain]
+        ends = [link["valid_until"] for link in chain if link["valid_until"] is not None]
+        invalid = False
+        if r["backing"].startswith("grant:"):
+            gid = r["backing"][len("grant:"):]
+            if gid not in self.grants:
+                return None
+            gchain = self.grant_chain(gid)
+            if not all(self.sel_match(g["env"], r["layer"], r["anchor"], q, obj, y, False, strict=False)
+                       for g in gchain):
+                return None
+            ends += [g["expires"] for g in gchain]
+            invalid = not self.grant_valid(gid, t)
+            sels += [(g["env"], r["layer"]) for g in gchain]
+        for sel, layer in sels:
+            colls = sel["objects"]["collections"]
+            if colls == _STAR:
+                continue
+            rows = self.counting_rows(obj, colls, layer, r["anchor"], q, y, frozenset(), False)
+            if not rows or any(not m["backing"].startswith("grant:") for m in rows):
+                continue
+            best = None
+            for m in rows:
+                gid = m["backing"][len("grant:"):]
+                gchain = self.grant_chain(gid)
+                if gchain:
+                    end = min(g["expires"] for g in gchain)
+                    best = end if best is None else max(best, end)
+            if best is not None:
+                ends.append(best)
+            invalid = invalid or all(not self.grant_valid(m["backing"][len("grant:"):], t) for m in rows)
+        not_yet = any(link["valid_from"] > t for link in chain)
+        return (min(ends) if ends else None), invalid, not_yet
+
+    def silent_code(self, layer, q, obj, y):
+        expired = invalid = not_yet = False
+        for r in self.records.values():
+            if r["layer"] != layer:
+                continue
+            got = self.candidate_terms(r, q, obj, y)
+            if got is None:
+                continue
+            end, bad, early = got
+            expired, invalid, not_yet = (expired or (end is not None and end <= q[3]), invalid or bad,
+                                         not_yet or early)
+        return "EXPIRED" if expired else "GRANT_INVALID" if invalid else "NOT_YET" if not_yet else "NO_ALLOW"
 
     def subject_layer(self, s):
         if s.startswith("person:"):
@@ -368,33 +462,106 @@ class _View:
         s = self.stores.get(key)
         return s["place"] if s else None
 
-    def allowed(self, u, legacy):
+    # -- the decision
+    @staticmethod
+    def legacy_allows(legacy, i, obj, y):
+        table = legacy[i][1]
+        return y in (table.get(obj, ()) if isinstance(table, dict) else table)
+
+    def layer_order(self, subs, u, H, legacy):
+        """Req(u) in P 6.5 step 2's order, each layer once: [(id, kind)]."""
+        out = []
+        for L in [self.subject_layer(s) for s in sorted(subs)] + sorted(self.anc(u["place"])) + (
+                [u["copy"]] if H is None else sorted(self.anc(H))):
+            if (L, "consent") not in out:
+                out.append((L, "consent"))
+        out += [(name, "legacy") for name, _ in legacy]
+        out.append((u["requester"], "restriction"))
+        return out
+
+    def before_any_object(self, u):
+        """Step 1 on a, P, anc(P) and anc(H): (refusal or None, H)."""
         a, P, t = u["requester"], u["place"], u["at"]
-        q = (a, P, u["purpose"], t)
         if a not in self.agents or self.agents[a].get("retired_seq") is not None or P not in self.agent_in(a, t):
-            return False
+            return ("UNKNOWN_REQUESTER", None, None), None
         H = self.holding_place(u["copy"])
         if self.place_retired(P) or (H is not None and self.place_retired(H)):
-            return False
+            return ("RETIRED", None, None), H
+        return None, H
+
+    def object_refusal(self, u, obj, actions, names, H, legacy, over=False, skip=frozenset()):
+        """The first refusal of one object's decision: its own tests, then the layers in order."""
+        todo = [y for y in actions if (obj, y) not in skip]
+        if not todo:
+            return None
+        q = (u["requester"], u["place"], u["purpose"], u["at"])
+        subs = self.subjects_of(obj, names, u["at"])
+        if any(self.subject_retired(s) for s in subs):
+            return ("RETIRED", None, None)
+        if not subs:
+            return ("NO_LAYER", None, None)
+        if len(subs) > MAX_SUBJECTS or over:
+            return ("BOUND", None, None)
+        for layer, kind in self.layer_order(subs, u, H, legacy):
+            for y in todo:
+                if kind == "legacy":
+                    i = [n for n, _ in legacy].index(layer)
+                    if not self.legacy_allows(legacy, i, obj, y):
+                        return ("LEGACY_DENY", layer, y)
+                    continue
+                v = self.verdict(layer, kind, q, obj, y)
+                if v == "missing":
+                    return ("NO_LAYER", layer, y)
+                if v == "deny":
+                    return ("DENIED", layer, y)
+                if v == "silent" and kind == "consent":
+                    return (self.silent_code(layer, q, obj, y), layer, y)
+        return None
+
+    def refusal(self, u, legacy):
+        """P 6.5 steps 1, 2, 3 and 8 for one use: the first failing (code, layer, action), or None."""
+        bad, H = self.before_any_object(u)
+        if bad:
+            return bad
+        names = u.get("names", ())
+        parsed = _parse_ref(u["obj"])
+        over = bool(parsed and parsed[0] != "memory" and len(set(names) | set(u.get("shows", ()))) > MAX_NAMES)
         for obj, actions in oracle_needs(u):
-            names = u.get("names", ()) if obj == u["obj"] else ()
-            subs = self.subjects_of(obj, names, t)
-            if not subs or len(subs) > MAX_SUBJECTS or any(self.subject_retired(s) for s in subs):
-                return False
-            if obj == u["obj"] and len(names) > MAX_NAMES:
-                return False
-            layers = {self.subject_layer(s) for s in subs} | set(self.anc(P))
-            if H is None:
-                return False
-            layers |= set(self.anc(H))
-            for y in actions:
-                if any(y not in allowed for _, allowed in legacy):
-                    return False
-                if not self.layer_allows(a, q, obj, y):          # the requester's own restriction layer
-                    return False
-                if not all(self.layer_allows(L, q, obj, y) for L in layers):
-                    return False
-        return True
+            got = self.object_refusal(u, obj, actions, names if obj == u["obj"] else (), H, legacy,
+                                      over=over and obj == u["obj"])
+            if got:
+                return got
+        return None
+
+    def bulk_refusal(self, uses, named, legacy):
+        """P 6.4 and 6.5 step 1 for a bulk use: tests once, size bounds, then each object in ref order with the
+        bound of 32 waived and each (object, action) pair decided once."""
+        proto = uses[0]
+        bad, H = self.before_any_object(proto)
+        if bad:
+            return bad
+        by_obj = {}
+        for x in uses:
+            by_obj.setdefault(x["obj"], x)
+        if len(by_obj) > (MAX_BULK_NAMED if named else MAX_BULK_DERIVED):
+            return ("BOUND", None, None)
+        memories = {m for o, x in by_obj.items() if _parse_ref(o) and _parse_ref(o)[0] != "memory"
+                    for m in x.get("names", ())}
+        if len(memories) > MAX_BULK_MEMORIES:
+            return ("BOUND", None, None)
+        done = set()
+        for obj in sorted(by_obj):
+            x = by_obj[obj]
+            roadlike = _parse_ref(obj) and _parse_ref(obj)[0] != "memory"
+            names = sorted(set(x.get("names", ()))) if roadlike else []
+            plan = [(obj, _CLOSURE[proto["action"]], tuple(names))]
+            plan += [(m, ("recall",), ()) for m in names]
+            for o, actions, nm in plan:
+                got = self.object_refusal(proto, o, actions, nm, H, legacy, skip=done)
+                if got:
+                    return got
+                done.update((o, y) for y in actions)
+        return None
 
 
 def _view(tables, seq_at, seq, person_members_only=False):
@@ -414,12 +581,18 @@ def _q(u):
     return (u["requester"], u["place"], u["purpose"], u["at"])
 
 
+def oracle_decide(tables, seq_at, use, legacy=(), *, seq=None):
+    """The refusal (code, layer, action) of P 6.5 step 8 for the use, or None when it is allowed."""
+    v = _view(tables, seq_at, seq)
+    legacy = list(legacy)
+    if "bulk" in use:
+        return v.bulk_refusal(use["bulk"], use.get("named", False), legacy)
+    return v.refusal(use, legacy)
+
+
 def oracle_allowed(tables, seq_at, use, legacy=(), *, seq=None) -> bool:
     """Is the use allowed at the state of `tables` (as of `seq`, default the last)?"""
-    v = _view(tables, seq_at, seq)
-    if "bulk" in use:
-        return all(v.allowed(x, legacy) for x in use["bulk"])
-    return v.allowed(use, legacy)
+    return oracle_decide(tables, seq_at, use, legacy, seq=seq) is None
 
 
 def oracle_layer_allows(tables, seq_at, use, layer, action, *, obj=None, seq=None) -> bool:

@@ -300,3 +300,9 @@ def test_u22_a_memory_that_is_both_an_object_and_named_is_decided_once():
                     named=True)
     assert decide_bulk(s, bulk, legacy=counting).allowed
     assert calls[(m0, "recall")] == calls[(m1, "recall")] == calls[(m0, "read")] == 1
+
+
+def test_a_bulk_use_is_decided_on_a_ledger_that_holds_grants():
+    from tests.permissions_support import one_grant_backed_record
+    s, u = one_grant_backed_record()
+    assert decide_bulk(s, bulk_use([u(T("2026-11-02")).obj], action="recall", named=True)).allowed

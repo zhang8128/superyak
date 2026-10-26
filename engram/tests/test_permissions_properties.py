@@ -5,14 +5,14 @@ import random
 from dataclasses import replace
 from collections import Counter
 
-from permissions import (ACTIONS, LegacyLayer, State, ancestors, decide, dominators, subjects_of)
+from permissions import (ACTIONS, BulkUse, LegacyLayer, State, ancestors, decide, decide_bulk, dominators, subjects_of)
 from tests.permissions_oracle import (
-    oracle_allowed, oracle_env, oracle_layer_allows, oracle_needs, oracle_record_matches, oracle_sig_minus,
+    oracle_allowed, oracle_decide, oracle_env, oracle_layer_allows, oracle_needs, oracle_record_matches, oracle_sig_minus,
     oracle_sig_plus)
 from tests.permissions_support import (
     HOME, M1, M2, M3, M4, REQUIRED_FEATURES, SEED, Bulk, T, World, andy_world, co_subject_world,
     copy_in_unregistered_house, dated_deny_use, e1_after_use_7, e1_after_use_9, e1_after_use_10, e1_use_1,
-    deny_naming_collection_before_its_anchor, ended_allow_use, features, future_allow_use, legacy_json, legacy_refusal_use, nine_subjects_use,
+    deny_naming_collection_before_its_anchor, ended_allow_use, features, future_allow_use, legacy_json, legacy_refusal_use, bulk_use, home_use, nine_subjects_use,
     no_subject_use, object_in_unregistered_store, one_grant_backed_record,
     one_ref_two_houses, placement_without_source_instance_id, random_world, retired_subject_home_use,
     revoked_grant_use, sample_uses, silent_layer_use, two_owner_imprint_use, unregistered_agent_use, use,
@@ -43,9 +43,14 @@ class Judge:
                                   seq=self.s.seq) for x in _flat(u))
 
     def both(self, u, ctx="") -> bool:
-        d, o = self.decide(u), self.oracle(u)
-        assert d is o, f"{ctx}: decide says {d}, the oracle says {o}, for {u}"
-        return d
+        """decide and the oracle agree on `allowed`, and on the refusal (code, layer, action) of each use."""
+        for x in _flat(u):
+            d = decide(self.s, x, legacy=self.legacy)
+            got = None if d.refusal is None else (d.refusal.code, d.refusal.layer, d.refusal.action)
+            want = oracle_decide(self.tables, self.seq_at, use_json(x), legacy_json(self.legacy, x),
+                                 seq=self.s.seq)
+            assert got == want, f"{ctx}: decide says {got}, the oracle says {want}, for {x}"
+        return self.decide(u)
 
 
 def _rng(name, case):
@@ -147,10 +152,265 @@ def test_the_oracle_agrees_with_task_5s_hand_written_cases():
         triples = build()
         assert triples, build.__name__
         for s, u, legacy in triples:
-            got = oracle_allowed(s.to_tables(), dict(s.seq_at), use_json(u), legacy_json(legacy, u))
-            assert got is decide(s, u, legacy=legacy).allowed, build.__name__
-            allowed, refused = allowed + got, refused + (not got)
+            d = decide(s, u, legacy=legacy)
+            want = oracle_decide(s.to_tables(), dict(s.seq_at), use_json(u), legacy_json(legacy, u))
+            got = None if d.refusal is None else (d.refusal.code, d.refusal.layer, d.refusal.action)
+            assert got == want, build.__name__
+            allowed, refused = allowed + (want is None), refused + (want is not None)
     assert allowed >= 5 and refused >= 20, (allowed, refused)       # the cases cover both answers
+
+
+# ---------------------------------------------------------------- Task 5B: the oracle's findings D1 to D5, pinned
+
+def _both_sides(s, u, legacy=(), seq=None):
+    """(decide's decision, the oracle's boolean) for one use at the state s (decided as of seq)."""
+    seq = s.seq if seq is None else seq
+    got = oracle_allowed(s.to_tables(), dict(s.seq_at), use_json(u), legacy_json(legacy, u), seq=seq)
+    return decide(s, u, legacy=legacy), got
+
+
+def _d1():
+    w = andy_world()
+    c = "collection:andy/fresh"
+    w.collect(c, [M1])
+    w.allow(HOME, audience=["self"], actions=["recall"], collections=[c])
+    w.now = T("2026-11-10")
+    w.uncollect(c, M1)
+    return w.state(), home_use(M1, T("2026-11-05"))
+
+
+def _d2_deny():
+    w = andy_world()
+    w.allow(HOME, audience=["self"], actions=["recall"])
+    w.lane(M1, "personal", T("2026-10-01"))
+    w.lane(M1, "pending", T("2026-11-05"))
+    w.lane(M1, "work", T("2026-11-05"))
+    w.now = T("2026-11-05")
+    w.deny(HOME, audience=["self"], actions=["recall"], lanes=["personal"])
+    return w.state(), home_use(M1, T("2026-11-06"))
+
+
+def _d2_allow():
+    w = andy_world()
+    w.now = T("2026-09-10")             # the allow's anchor lies before the pending note
+    w.allow(HOME, audience=["self"], actions=["recall"], lanes=["work"])
+    w.lane(M1, "work", T("2026-09-01"))
+    w.lane(M1, "pending", T("2026-10-05"))
+    w.lane(M1, "work", T("2026-10-05"))
+    return w.state(), home_use(M1, T("2026-11-02"))
+
+
+def _d3():
+    from permissions import LegacyLayer
+    w = andy_world()
+    w.allow(HOME, audience=["self"], kinds=["memory", "road"], actions=["recall"])
+    legacy = (LegacyLayer("publisher", lambda u, x: not u.obj.startswith("mem:")),)
+    return w.state(), home_use("road:S/r1", T("2026-11-02"), names=[M1]), legacy
+
+
+def _d4_state():
+    w = andy_world()
+    w.allow(HOME, audience=["self"], kinds=["memory", "road", "trail"], actions=["recall", "read", "imprint", "route"])
+    return w.state()
+
+
+def _mems(n):
+    return [f"mem:S/episode/m{i}" for i in range(n)]
+
+
+def test_d1_decide_refuses_a_removed_membership_for_an_allow_at_any_t():
+    s, u = _d1()
+    d = decide(s, u)
+    assert (d.allowed, d.refusal.code) == (False, "NO_ALLOW")
+
+
+def test_d1_the_oracle_refuses_a_removed_membership_for_an_allow_at_any_t():
+    s, u = _d1()
+    assert _both_sides(s, u)[1] is False
+
+
+def test_d2_decide_keeps_a_pending_note_at_the_second_of_its_settling_note():
+    d = decide(*_d2_deny())
+    assert (d.allowed, d.refusal.code) == (False, "DENIED")
+    d = decide(*_d2_allow())
+    assert (d.allowed, d.refusal.code) == (False, "NO_ALLOW")
+
+
+def test_d2_the_oracle_keeps_a_pending_note_at_the_second_of_its_settling_note():
+    assert _both_sides(*_d2_deny())[1] is False
+    assert _both_sides(*_d2_allow())[1] is False
+
+
+def test_d3_decide_judges_a_roads_named_memories_with_their_own_legacy_actions():
+    s, u, legacy = _d3()
+    d = decide(s, u, legacy=legacy)
+    assert (d.allowed, d.refusal.code) == (False, "LEGACY_DENY")
+
+
+def test_d3_the_oracle_judges_a_roads_named_memories_with_their_own_legacy_actions():
+    s, u, legacy = _d3()
+    assert _both_sides(s, u, legacy)[1] is False
+
+
+def test_d4_decide_bulk_waives_the_32_bound_and_applies_the_size_bounds():
+    s = _d4_state()
+    road = home_use("road:S/r1", T("2026-11-02"), names=_mems(33))
+    assert decide_bulk(s, bulk_use(["road:S/r1"], action="route", names=lambda o: _mems(33), named=True)).allowed
+    assert decide(s, road).refusal.code == "BOUND"
+    imprints = [f"mem:S/episode/n{i}" for i in range(513)]
+    assert decide_bulk(s, bulk_use(imprints, action="imprint", named=True)).refusal.code == "BOUND"
+    assert decide_bulk(s, bulk_use(imprints, action="imprint", named=False)).allowed
+
+
+def test_d4_the_oracle_waives_the_32_bound_and_applies_the_size_bounds():
+    s = _d4_state()
+    t, seq_at = s.to_tables(), dict(s.seq_at)
+    one = use_json(home_use("road:S/r1", T("2026-11-02"), action="route", names=_mems(33)))
+    assert oracle_allowed(t, seq_at, {"bulk": [one], "named": True}) is True
+    assert oracle_allowed(t, seq_at, one) is False
+    many = [use_json(home_use(f"mem:S/episode/n{i}", T("2026-11-02"), action="imprint")) for i in range(513)]
+    assert oracle_allowed(t, seq_at, {"bulk": many, "named": True}) is False
+    assert oracle_allowed(t, seq_at, {"bulk": many, "named": False}) is True
+
+
+def _d5():
+    w = andy_world()
+    w.store("H2", owner="person:andy", place=HOME)
+    w.subject(M1, "person:jenn")           # Jenn is not registered: M1 has a subject whose layer does not exist
+    w.allow(HOME, audience=["self"], actions=["recall"])
+    s0 = w.seq
+    w.copy("mem:H2/episode/c1", M1)
+    return w, s0, home_use("mem:H2/episode/c1", T("2026-11-02"))
+
+
+def test_d5_decide_reads_copies_at_the_decision_seq():
+    w, s0, u = _d5()
+    assert decide(w.state_at(s0), u).allowed
+    assert not decide(w.state(), u).allowed
+
+
+def test_d5_the_oracle_cuts_copies_rows_at_the_decision_seq():
+    w, s0, u = _d5()
+    s = w.state()
+    t, seq_at = s.to_tables(), dict(s.seq_at)
+    t["copies"] = [dict(r) for r in w.rows["copies"]]       # State drops a copy's seq; the ledger's table has it
+    assert oracle_allowed(t, seq_at, use_json(u), seq=s0) is True
+    assert oracle_allowed(t, seq_at, use_json(u), seq=s.seq) is False
+
+
+def test_a_use_naming_33_allowed_memories_is_refused_with_bound():
+    s = _d4_state()
+    for obj, action in (("road:S/r1", "route"), ("trail:S/t1", "recall")):
+        d = decide(s, home_use(obj, T("2026-11-02"), action=action, names=_mems(33)))
+        assert (d.allowed, d.refusal.code) == (False, "BOUND"), obj
+        assert decide(s, home_use(obj, T("2026-11-02"), action=action, names=_mems(32))).allowed or action == "route"
+
+
+def test_random_world_roads_name_up_to_40_memories_and_the_bound_is_exercised():
+    longest, bound_refusals = 0, Counter()
+    for case in range(60):
+        rng = _rng("roads40", case)
+        w = random_world(rng)
+        longest = max(longest, max(len(v) for v in w.cfg.roads.values()))
+        j = Judge(w.state())
+        for u in sample_uses(rng, w, 12):
+            for x in _flat(u):
+                d = decide(j.s, x)
+                j.both(x, f"{case}")
+                if d.refusal and d.refusal.code == "BOUND" and len(set(x.names) | set(x.shows)) > 32:
+                    bound_refusals[x.obj] += 1
+    assert longest == 40, longest
+    assert sum(bound_refusals.values()) >= 5, bound_refusals
+
+
+def test_the_agreement_tests_see_every_refusal_code_of_p_6_5():
+    codes = Counter()
+    for case in range(120):
+        rng = _rng("codes", case)
+        w = random_world(rng)
+        j = Judge(w.state(), (LegacyLayer("publisher", lambda u, a: a != "imprint"),))
+        for u in sample_uses(rng, w, 12):
+            for x in _flat(u):
+                d = decide(j.s, x, legacy=j.legacy)
+                j.both(x, f"{case}")
+                codes[d.refusal.code if d.refusal else "allowed"] += 1
+    assert set(codes) >= {"allowed", "UNKNOWN_REQUESTER", "RETIRED", "NO_LAYER", "BOUND", "DENIED", "NO_ALLOW",
+                          "LEGACY_DENY"}, codes
+
+
+def test_self_in_a_restriction_layer_matches_the_agent_itself():
+    w = andy_world()
+    w.allow(HOME, audience=["self"], actions=["recall", "read"])
+    w.deny("agent:rio-grande", audience=["self"], actions=["read"])
+    s = w.state()
+    j = Judge(s)
+    assert j.both(home_use(M1, T("2026-11-02")))                                    # recall passes
+    assert not j.both(home_use(M1, T("2026-11-02"), action="read"))
+    d = decide(s, home_use(M1, T("2026-11-02"), action="read"))
+    assert (d.refusal.code, d.refusal.layer, d.refusal.action) == ("DENIED", "agent:rio-grande", "read")
+
+
+def _same_second(first, second, *, allow, anchor="2026-09-10"):
+    """A memory whose lane is `work`, then notes `first` and `second` in the same second, in that order. An allow
+    wants the lane `work` throughout; a deny refuses the lane `personal`."""
+    w = andy_world()
+    w.now = T(anchor)
+    if allow:
+        w.allow(HOME, audience=["self"], actions=["recall"], lanes=["work"])
+    else:
+        w.allow(HOME, audience=["self"], actions=["recall"])
+        w.deny(HOME, audience=["self"], actions=["recall"], lanes=["personal"])
+    w.lane(M1, "work", T("2026-09-01"))
+    w.lane(M1, first, T("2026-10-05"))
+    w.lane(M1, second, T("2026-10-05"))
+    return w.state(), home_use(M1, T("2026-11-02"))
+
+
+def test_lane_notes_of_one_second_are_all_in_force_that_second_and_a_pending_note_is_kept():
+    # an allow wants `work` throughout and no pending move; a deny matches `personal` or a pending move at any time
+    for first, second in (("pending", "work"), ("pending", "personal"), ("work", "pending"), ("work", "personal"),
+                          ("personal", "work"), ("work", "work")):
+        for allow in (True, False):
+            s, u = _same_second(first, second, allow=allow)
+            got = Judge(s).both(u, f"{allow} {first} {second}")
+            assert got is ((first, second) == ("work", "work")), (allow, first, second)
+    # an allow written in the very second of the notes: its first instant has the pending note too
+    s, u = _same_second("pending", "work", allow=True, anchor="2026-10-05")
+    assert Judge(s).both(u, "anchor second") is False
+
+
+def _bulk_sides(j, b, named):
+    """decide_bulk's and the oracle's refusal for a Bulk, read as a bulk use: roads and trails name their memories,
+    and no answer is shown (a bulk use is not an answer)."""
+    first = b.uses[0]
+    names = {x.obj: tuple(x.names) for x in b.uses}
+    bulk = BulkUse(requester=first.requester, place=first.place, objects=tuple(x.obj for x in b.uses),
+                   copy=first.copy, action=first.action, purpose=first.purpose, at=first.at, named=named,
+                   names=lambda o: names[o])
+    d = decide_bulk(j.s, bulk, legacy=j.legacy)
+    plain = [replace(x, shows=frozenset()) for x in b.uses]
+    legacy = [(layer.name, {}) for layer in j.legacy]
+    for x in plain:
+        for (name, table), (_, one) in zip(legacy, legacy_json(j.legacy, x)):
+            table.update(one)
+    want = oracle_decide(j.tables, j.seq_at, {"bulk": [use_json(x) for x in plain], "named": named}, legacy,
+                         seq=j.s.seq)
+    return (None if d.refusal is None else (d.refusal.code, d.refusal.layer, d.refusal.action)), want
+
+
+def test_decide_bulk_and_the_oracle_agree_on_bulk_uses_and_their_refusals():
+    seen = Counter()
+    for case in range(150):
+        rng = _rng("bulk", case)
+        w = random_world(rng)
+        legacy = (LegacyLayer("publisher", lambda u, a: a != "imprint"),) if case % 3 == 0 else ()
+        j = Judge(w.state(), legacy)
+        for u in sample_uses(rng, w, 20):
+            if isinstance(u, Bulk):
+                got, want = _bulk_sides(j, u, named=True)
+                assert got == want, f"{case}: decide_bulk says {got}, the oracle says {want}, for {u}"
+                seen[got[0] if got else "allowed"] += 1
+    assert seen["allowed"] > 5 and len(seen) >= 4, seen
 
 
 def test_random_world_reaches_every_op_and_membership_kind():

@@ -709,8 +709,14 @@ def use_json(u: Use) -> dict:
 
 
 def legacy_json(legacy, u: Use) -> list:
-    """PF29: [(name, the actions the layer's callable allows for u)]; a callable can't be serialised without u."""
-    return [(layer.name, frozenset(a for a in ACTIONS if layer.allows(u, a))) for layer in legacy]
+    """PF29: [(name, {object: the actions the layer's callable allows for that object as a use})]. A callable can't
+    be serialised, so it is asked of the use's object (as the use) and of each memory a road or trail names (as a
+    use of its own, with no names), as `decide` asks it."""
+    subs = {u.obj: u}
+    for m in sorted(set(u.names) | set(u.shows)):
+        subs.setdefault(m, dataclasses.replace(u, obj=m, names=(), shows=frozenset()))
+    return [(layer.name, {o: frozenset(a for a in ACTIONS if layer.allows(x, a)) for o, x in subs.items()})
+            for layer in legacy]
 
 
 REQUIRED_FEATURES = frozenset({
@@ -930,6 +936,9 @@ def random_world(rng, *, places=12) -> World:
     c.roads = {"road:S/r1": (mems[0], mems[1]), "road:S/r2": (mems[2], mems[3], mems[4]),
                "road:Z/r3": (mems[5], mems[0])}
     w.bulk_sets = [rng.sample(mems, rng.randint(2, 5)), list(c.roads) + rng.sample(mems, 2), list(chain)]
+    # roads that name many memories, so the bound of 32 (P 6.4) is exercised: 40 is past it, 32 is the bound
+    c.roads["road:S/r4"] = tuple(f"mem:S/episode/x{i}" for i in range(40))
+    c.roads["road:S/r5"] = tuple(f"mem:S/episode/y{i}" for i in range(32))
     c.subject_pool = ["person:jenn", "person:sam", "person:andy", "person:late", "person:ghost", "place:county",
                       rng.choice(ids)]
     # October: collections, co-subjects and the first lane notes

@@ -127,8 +127,9 @@ def test_removed_membership_still_counts_for_a_deny_since_its_anchor():
     assert record_matches(s, w.record(deny), u, "recall")
     assert not record_matches(s, w.record(allow), u, "recall")
     assert not record_candidate(s, w.record(allow), u, "recall")   # a removed membership is never counted
-    # the membership still counts for the allow at a time before its removal
-    assert record_matches(s, w.record(allow), home_use(M1, T("2026-11-04")), "recall")
+    # nor for an allow at a time before its removal: a removed membership is never counted, at any t (Task 5B, D1)
+    assert not record_matches(s, w.record(allow), home_use(M1, T("2026-11-04")), "recall")
+    assert record_matches(w.state_at(17), w.record(allow), home_use(M1, T("2026-11-04")), "recall")   # before it
     # removed before the deny's anchor: it does not count
     late = w.deny("place:home/andy", audience=["self"], collections=[coll], actions=["recall"],
                   anchor=T("2026-11-08"))

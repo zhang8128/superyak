@@ -847,7 +847,9 @@ def _lane_at(notes: Sequence, tau: int) -> str | None:
 
 def lane_held(state: State, ref: str, lane: str, since: int, at: int) -> bool:
     """The allow reading: the memory has a note, and `lane` was its lane at every instant of
-    [max(since, first note's at), at], with no pending note in that interval."""
+    [max(since, first note's at), at], with no pending note in that interval. Times are whole seconds, so every
+    note of a second is in force in it: a pending note is not lost to the note that settles it in the same second
+    (P7, L5)."""
     notes = state.lane_notes.get(ref, ())
     if not notes:
         return False
@@ -856,7 +858,7 @@ def lane_held(state: State, ref: str, lane: str, since: int, at: int) -> bool:
         return False
     if _lane_at(notes, start) != lane:
         return False
-    return all(n.lane == lane for n in notes if start < n.at <= at)
+    return all(n.lane == lane for n in notes if start <= n.at <= at)       # every note of the first second too
 
 
 def lane_touched(state: State, ref: str, lane: str, anchor: int, at: int) -> bool:
@@ -944,6 +946,8 @@ def _membership_counts(state: State, row, layer: str, anchor: int, use: Use, act
     t = use.at
     if deny:
         return _meets(state, row.added_seq, row.removed_seq, anchor, t)
+    if row.removed_seq is not None and row.removed_seq <= state.seq:
+        return False        # a removed membership is never counted for an allow, at any t (P 6.5)
     if not _in_force(state, row.added_seq, row.removed_seq, t):
         return False
     if not row.backing.startswith("grant:"):
@@ -1490,7 +1494,7 @@ def _listed_memories(state: State) -> frozenset:
     """Every memory ref that some record's or grant's selector lists in `memories`."""
     def compute():
         out: set = set()
-        for sel in [r.selector for r in state.records.values()] + [g.envelope for g in state.grants.values()]:
+        for sel in [r.selector for r in state.records.values()] + [_grant_of(g).envelope for g in state.grants.values()]:
             if sel.memories != STAR:
                 out.update(sel.memories)
         return frozenset(out)
