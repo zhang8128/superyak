@@ -496,3 +496,619 @@ revision 2's.
 - **Trail spec I4** (keep partial recall rows with a `cut` flag). It changes D6, D7 and D21's promise that nothing
   tells about what stayed home. It came after this review, and it needs its own review and Rio Grande's call. Revision
   2 keeps whole-row dropping for episode and semantic targets.
+
+## Re-check (revision 2 with the interface pass), 2026-10-25
+
+Reviewer: a second fresh agent on the Pi, re-checking in Andy's place under station law section 3. I took no part in
+writing revision 1 or 2, the first review, its response, or the interface pass. I read the vision, the spec as it
+stands in the working tree (revision 2 at `3c022bf`, plus the uncommitted interface pass), the first review and its
+response, the interface table, and the sections of the permissions spec (P) and the trail spec (T) that the table
+names. I checked every code claim below by reading the code. Nothing here edits a spec. File:line references are
+relative to `/home/andy/superyak/.worktrees/trail-arrows/`. "Spec line" means a line of
+`engram/docs/superpowers/specs/2026-10-25-store-imprint-design.md` as it stands today.
+
+VERDICT: APPROVE WITH CHANGES
+
+One must-fix remains (RMF1). Approval holds once it is applied as written, or in another form that keeps the same
+property. Apply RS1–RS5 in the same revision. The nits are optional.
+
+### 1. The first review's must-fix items
+
+- **MF1. Resolved.** Instincts are gone from D8, 5.2 (Λ ⊆ {`episode`, `semantic`}), 6.2, checks 11–12 and the tests.
+  The audience is `place:home/<operator>` (D9, 5.3). The one requester is `agent:station-imprints` (section 8).
+  Actions are closed under P's `need`, quoted from P's current 6.4 (5.3). Purposes are a set, and times are integer
+  seconds, half-open (8). ⟦p⟧, the ceiling ⟦c⟧ and `allowed(k, t)` are defined, with P's inclusion order and
+  intersection meet (8). Uses reach the owner's `permission-uses.db` in P 9.1's form, under the source refs (12). P's
+  step 2 now names both imprint kinds (P section 14, P lines 1352-1355). Two new defects come from how it was applied:
+  RS1 (how r_M reads lanes) and RS2 (P's records don't name the copy).
+- **MF2. Resolved.** `meta.ancestry` and `ancestry_complete`, Lin = {id} ∪ ancestry, a three-valued `independent`,
+  the review's cases as a table, siblings never independent, `origin_instance_id` named (`engram/federation.py:182-186`),
+  and the tests in 16. One gap remains, for stores older than identity: RS4.
+- **MF3. Resolved.** L1–L4 (6.4), checks 16 and 17 on the Pi, a canary test that plants prefix-sharing FTS terms,
+  hyphen-split UUIDs and overflow-crossing UUIDs, and tests that L2 and L3 catch planted faults.
+- **MF4. Resolved, second option** (D19, 12). `station-approve` and `-deny` do open `Store(..., signing=False)`
+  (`peer/superyak_peer/__main__.py:322-327`). `signing=False` skips the key (`peer/superyak_peer/db.py:86-89`). API.md
+  states the contract (`peer/API.md:300-302`). The precedent exists (`peer/superyak_peer/signatures.py:159-166`, run at
+  start by `db.py:89`). `Store.transaction()` is `BEGIN IMMEDIATE` (`db.py:113`). The lifespan has a worker to sit
+  beside (`peer/superyak_peer/peer_routes.py:9-25`).
+- **MF5. Resolved** (D15, D26, D32; sections 3, 7.1, 9). The request's contents stay in staging, the manifest is sent
+  after the yes, and the retention table is there. Backups copy only `peer.sqlite3`
+  (`peer/superyak_peer/backups.py:167-176`), keep 14 days and 8 weeks (`:30`, `:109-119`), and prune an off-Pi copy
+  the same way (`:294-319`). Two things are left over: RS5 (rows kept with no end, which the owner isn't told about)
+  and RN3 (request fields the view doesn't show).
+- **MF6. Resolved** (D27; 5.2 `cosubjects`; 6.4 item 5; 8; 20). A memory with a recorded co-subject stays home, the
+  owner ticks the check, and the question stays open for Andy. This is the strictest default of the three specs. I
+  don't decide the question.
+- **MF7. Resolved** (D31; 10; 14). I redid the arithmetic: ⌊√((4 GiB − 512 MiB) / 60 B)⌋ = 7,914, and
+  7.5 × 7,500² × 8 B = 3.14 GiB, which leaves 512 MiB under 4 GiB. `build_filtration` holds `D`, the diagonal and
+  `off` (`engram/persistence.py:63-64`), and `_mst_edges` adds `floored` and a CSR copy (`:41-46`). The core set
+  (`:399-409`, called at `engram/calibrate.py:211`) and each hub's sources (`persistence.py:342-384`) are bounded too.
+
+### 2. Claims I checked and found true
+
+- calibrate: `out.mkdir(parents=True, exist_ok=False)` is at `engram/calibrate.py:251`. The analyses are at
+  `:286-296`. `source_unchanged` and side files are at `:302-305`. The snapshot is immutable without a WAL (`:61`).
+  `Storage(working)` runs only when migrations are pending (`:266-268`), so an imprint never reaches it.
+- Calibration reads no log rows. `memory_log` appears in none of `calibrate.py`, `persistence.py` or `paths.py`.
+  sheaf reads it only in `_rate_limited` (`engram/sheaf.py:285-299`), which only `:323` calls.
+- `Storage.__init__` loads sqlite-vec (`engram/storage.py:102-104`), then sets WAL (`:108`, `:122`), then migrates
+  (`:115`), then checks vec0 (`:118`). `open_read_only` loads sqlite-vec at `:153-156`. `_now_iso` writes `+00:00`
+  (`:55-56`).
+- `store_reader.connect` (`engram/store_reader.py:44-55`) loads no extension (`:7-9`). `read_episodes` reads only
+  episodes (`:188-210`).
+- `stamp_fork` is at `engram/store_identity.py:143-160`. `_write` skips null values (`:118-123`), so a fork of a store
+  with no identity has no `forked_from_instance_id` row, as section 11 assumes. `KEYS` is at `:43-49`.
+- `resolve_db_path(engram_home, project_root)` routes as the server does (`engram/config.py:373-409`;
+  `engram/server.py:1302-1311`).
+- `shared(m, A)`'s digest test is `_verify_reused_copy`'s (`engram/sharing.py:77-96`). `audiences_for` checks only the
+  published copy (`:236-254`).
+- Pruning copies episodes to cold (`engram/storage.py:734-747`) and deletes them (`:760`), and `semantic_sources`
+  cascades (`engram/migrations/002_v3_layers.sql:27`).
+- Late outcomes come from `update_log_outcome` (`engram/storage.py:1704-1708`) and the Stop hook
+  (`engram/hooks/sleep.py:137`). `AUTO_OUTCOME` and `CITING_OPERATIONS` are at `:43-44`. A resonance that forms again
+  only raises `co_occurrences` and `last_seen` (`engram/storage.py:2002-2010`).
+- A recall row's `id` is its own uuid, separate from `recall_id` (`engram/server.py:2370-2386`). So `recall_id` is no
+  primary key, and X*'s subtraction of recall ids (spec line 584) is harmless but subtracts nothing.
+- Peer: `canonical` and `parse` (`peer/superyak_peer/identity.py:20-48`), `RECORD_KEYS` (`:76-83`), the peer id as
+  SHA-256 of the key (`:94`), `sign_record` (`:147-151`), and `verify_record` never raises (`:189-200`). The username
+  grammar (`peer/superyak_peer/auth.py:34-35`). Person-only login and 8 / 40 attempts per 300 s (`auth.py:85`, `:90`,
+  `:94`). `_operator` checks only that the name is a person (`peer/superyak_peer/ships.py:201-206`). `APPROVER ?= andy`
+  (`Makefile:32`).
+- The embedder service answers with vectors and keeps no text (`engram/embedder_service.py:105-122`). It logs only at
+  `:84` and `:134`, its socket is the user's own (`:99`), and a failed request is answered without logging its text
+  (`:73-78`).
+- The installed lighthouse unit (`~/.config/systemd/user/superyak-lighthouse.service`) has no filesystem sandbox, so it
+  can remove `~/.engram/imprints/…` as withdrawal needs. Its `MemoryMax=1G` is enough for streamed joins and hashes.
+- Every example time and size holds. 1792951950 is 2026-10-25T18:12:30Z. Ninety days later is 1800727950
+  (2027-01-23T18:12:30Z). 1792956600 is 19:30:00Z. 43,188,224 bytes is 41.19 MiB in 11 parts. 1,300 refs make 3
+  batches of 512.
+- DS9 spec line 78 ("No patient or participant data") and station law lines 28-31 (only Andy admits).
+
+### 3. Must-fix
+
+**RMF1. Without `route`, the owner's footpaths still leave, through every episode's `session_id`.** Places: D6, D7,
+D10; 5.2 "Log rows" (spec lines 279-290); the dry run's "What stays here" (line 390); 6.2's `episodes` row and the
+scrubbed-column list (lines 469, 534-537); 8's `Need(admission)` (line 848); check 12 (line 1046); 16 "Log rows"
+(line 1466). Interface row 13. T section 12 (T line 1458).
+
+Row 13 rests on this premise: log rows are what the owner's trails are made of, so without `route` no trail leaves.
+The premise is false.
+- Every episode records the session that wrote it. `remember` writes `session_id=_session_id`
+  (`engram/server.py:1869-1876`; the column is `engram/migrations/001_initial.sql:48`). 6.2 copies episodes with every
+  column except `rowid`.
+- T builds trails from episodes alone. A session is "any distinct non-null `episodes.session_id`", and wrote touches
+  are "every episode carrying that `session_id`" (T lines 197-204). A trail needs two touches (T line 256). So every
+  shipped session that wrote two episodes in the lane has a trail on the imprint.
+- Calibration derives exactly these paths. `paths.report` groups episodes by `session_id` in `(created_at, id)` order
+  and computes each session's path and its "different routes" (`engram/paths.py:338-354`, `:418-423`), and admission
+  runs it (`engram/calibrate.py:295-296`). The spec's own example shows "31 session paths" (spec line 1093).
+
+What follows:
+- The dry run and the confirm view present trails as part of the `route` choice only. The dry run even lists "session
+  provenance" under what stays home (line 390). Yet the order in which the owner's sessions wrote their memories
+  leaves with every imprint.
+- Under P's `need(imprint)`, a kept trail needs `recall`, `read` and `imprint` on it (P 6.4). Without `route` there is
+  no r_T to cover it. `Need(admission)` names only "a trail of S whose log rows I holds" (line 848), so it leaves out
+  objects the package keeps.
+- T's test "built without `route`, … `trails.py` finds no trail on it" (T line 1458) fails on any fixture whose session
+  wrote two episodes.
+
+The vision says an agent's trails are the person's to share ("Count its own trails as the person's"), and T 8 says
+"sharing a memory is still not consent to sharing routes". Fix, as Rio Grande's call, one of:
+- **(a) The safest default, which I recommend.** Without `route`, set `episodes.session_id` to null in the package. Add
+  it to D6's scrubbed columns, to check 12 ("without `route`, every `episodes.session_id` is null") and to the dry run
+  ("which session wrote each memory stays here unless you choose route"). Calibration's `paths` analysis then reports
+  no sessions, and the report should say why. Row 13 and T's test then hold as written. One note for the builder: once
+  no session id ships, X*'s subtraction of the session ids that shipped rows keep (line 584) subtracts nothing, so an
+  episode whose text names a session id becomes a cross-reference (D23).
+- **(b)** Keep session ids, and say plainly that each session's writing order leaves with every imprint. r_T, with
+  `imprint`, `read` and `recall` on trails, is then part of every permission, `Need(admission)` covers wrote-touch
+  trails, the dry run and the confirm view say so, and T's test becomes "finds only wrote-touch trails".
+
+Either way, add a test: a package built without `route`, from a store whose session wrote two work episodes, has (a)
+no `session_id`, or (b) a permission that covers its trails.
+
+### 4. Should-fix
+
+**RS1. r_M names `lanes: ["work"]`, and the spec reads lanes in a way P rules out.** Places: spec line 755; 8, "The
+denotation" (lines 817-818); 17 step 1 (lines 1572-1576). Interface row 2.
+For an allow, P reads a memory's lane from the source's lane notes, "never from the published copy", and "a memory
+with no lane note matches no allow whose `lanes` is a list" (P 5.3, P lines 335 and 356). The spec reads the lane from
+the imprint and says this is "as that spec's 5.3 asks". It is not. Two effects:
+- If the owner, or their agent in compression review, moves a shipped memory from work to personal at home, P stops
+  matching r_M on it, but the station keeps allowing it. That differs from P in the wider direction, and the header
+  says P wins.
+- 17 step 1 moves the records "into that ledger unchanged". A station ledger has no lane notes for `mem:S/…` refs, so
+  P would then refuse every use under r_M.
+*Fix:* r_M reaches memories only through its collection (D36), and P28 lets lanes and layers only narrow. So set
+r_M's `lanes` and `layers` to `"*"`. Keep the scope's lanes in the request, the manifest and check 12. Drop the "read
+from the imprint" bullet, and keep item 6 of what P doesn't cover ("Later changes at home"). The signing test in 16
+then also checks `lanes: "*"`.
+
+**RS2. P's records don't name the copy. So ⟦p⟧ ∩ ⟦c⟧ is not P's meet once an owner has a second imprint, and a
+ship-withdrawn copy's records stay in force.** Places: 8 (lines 826-836 and 838-843); D17; 12 "Withdrawal"; 17 step 1
+(lines 1575-1576). Interface rows 6 and 24.
+- The interface pass moved the copy binding out of r_M and into the ceiling ("of the copy the wrapper names"). A P
+  use is `(a, P, o, x, p, t)`, with no copy (P 6.1, P line 456). P sees a copy only through the holding place H (P 6.3
+  item 3), and every imprint here has H = `place:home/<operator>`.
+- P's owner layer is the union of every effective allow in the owner's home (P line 462). When the ship withdraws, r_M
+  and r_T stay unrevoked until their end, by design (D17). So once the owner sends a second imprint of the same store,
+  the first copy's records also match uses of the second copy's memories by the same agent in the same place.
+  Example: copy 1 had `route` and the ship withdrew it; copy 2 has no `route`. Under P, r_M1 and r_T1 still allow a
+  trail evaluation on copy 2 until r_T1 ends.
+- Nothing widens in step 1, because the station decides with this imprint's records only. But "So ⟦p⟧ ∩ ⟦c⟧ is that
+  spec's meet over `Req`" (line 836) is false in general, and 17 step 1 would carry the wider result into step 2.
+*Fix:* Say that the station decides by the narrower per-imprint check, ⟦p_I⟧ ∩ ⟦c_I⟧ ⊆ P's meet, and why. Say that a
+use names its copy (P 9.1 has a `copy` column, and the import fills it). In 17 step 1, say that a record whose copy the
+ship withdrew, or which ended or was deleted, moves into a ledger revoked (the station refused it), never in force,
+and that the owner's `shortened` and `withdrawn` receipts become P replacements and revocations. Rio Grande's call.
+
+**RS3. Admission is decided once, at approval, and never checks the end again.** Places: 10, "Hand-off" step 4 and
+"Deletion wins" (lines 995-1016); 12 (line 1183).
+`station-approve` decides admission in its own transaction. The detached unit then checks only for a tombstone and for
+`approved.json`. `make station-imprint-admit` with no ID resumes approved imprints after a crash (line 1002), maybe
+days later. If the effective end passed in between, or the ship shortened it, calibration runs on a copy whose
+permission has ended, until the hourly sweep deletes it. P says "Time needs no act", and its anti-goal "Waiting
+caches" rules out an expiry that takes effect later than the next decision at or after its time (P lines 1001 and
+1391-1392). *Fix:* Admission reruns section 8's check, with the effective end and the ship's shortening, at its start
+and before each write. On failure it stops ("ended during admission") with a `failed` receipt. Add a test: approve,
+move the clock past the end, resume.
+
+**RS4. Stores older than identity count as complete roots, so an old copy can count as independent.** Place: 11
+(lines 1119-1120).
+A `retroactive` store took its id from its earliest episode (`engram/store_identity.py:84-102`). A fork made before
+identity existed is a full copy by backup (`engram/cli.py:15-49`) with no `forked_from_instance_id`. If one side pruned
+its earliest episode (`engram/storage.py:734-747`, `:760`) before both derived their ids, the ids differ. Both are then
+roots with ancestry [] and complete, and `independent` returns true for a store and its own copy. Such forks exist:
+`instances.json` records their `forked_from` (`engram/federation.py:127-142`). Genome-synced episodes carry
+`origin_instance_id` only since migration 028 (`engram/migrations/028_store_identity.sql:10-12`), so row-level
+provenance has the same gap. This is the anti-goal "False agreement". *Fix:* Give a `retroactive` store ancestry []
+and **incomplete**, since nothing recorded copies made before identity. `independent` then returns `unknown` for it,
+which never counts. Say so for the rail spec, and add a test. Rio Grande's call.
+
+**RS5. Some rows about the owner are kept with no end, and the owner is never told.** Places: D32 (line 188); section
+9's table (lines 957 and 959); the confirm view's retention text (lines 930-932); 7.1's terminal message (lines
+651-653).
+- The request row (ids, ship, owner, status, times) is "never" removed (line 957). That includes a request the owner
+  declined or let expire. After 400 days, each deleted imprint also leaves "a content-free row: id, ship, owner, final
+  status and times" for good (D32). Both are in nightly backups.
+- Tombstones keep the `withdrawn` and `deleted` receipts for good (line 959), with every removed file's path, size and
+  SHA-256.
+- The confirm view mentions only "400 days after the copy is deleted" and about 8 weeks of backups. The terminal
+  message before sending says nothing about the row a request leaves even when declined.
+That someone sent their memories to a station is about them, as D25 says. *Fix:* Either give these rows and tombstones
+an end (for example 400 days, the receipts' own), or say exactly what stays with no end in the terminal message before
+sending, in the confirm view and in `imprint-status`. Rio Grande's call.
+
+### 5. Nits
+
+- **RN1.** `covers` is never defined (check 11, line 1043; the admission test, line 1549). It is left over from an
+  earlier draft. Say "`scope.lanes`" and "the scope".
+- **RN2.** `contents` "counts every non-empty table except shadow tables and `sqlite_sequence`" (line 673). But `meta`,
+  `schema_version` and the FTS tables are non-empty too, and the example leaves them out. Section 14's "exactly the
+  section 7.1 keys, at every level" (line 1410) can't fix a key set that depends on the data. List the keys: the ten
+  digest tables of 5.4, each present only when non-empty.
+- **RN3.** Goal 3 and the anti-goal "Early bytes" allow no request field the view doesn't show. The request also holds
+  `kind`, `version`, `imprint_id` and the full 64-hex `plan_digest`. The view shows 8 hex of the digest and no imprint
+  id. They hold no content. Either show the imprint's short id and say the whole digest is sent, or restate the rule as
+  "only what the view shows, plus ids that hold no content". The test at line 1502 needs the same words.
+- **RN4.** The manifest's `source.ancestry` sends the ids of the stores the owner's store was copied from (the genome,
+  other instances). The view names only "the store id". Name the ancestry in the view, or on the terminal before the
+  manifest goes.
+- **RN5.** P 9.1 writes one receipt per imprint batch. The spec writes one row per action per batch (line 1314), and one
+  summary row for roads and trails whose `use_subjects` names the copy, which is not an object of any P kind (line
+  1325). Both suit privacy. Say they depart from P 9.1's form, as Rio Grande's call, so counts by `uses --action` are
+  read right.
+- **RN6.** P refuses a `route` use whose road or trail names more than 32 memories (`BOUND`, P 6.4). Section 8's finite
+  check (line 868) depends on o only through its kind, so a trail of up to 512 touches passes. Say whether the
+  evaluation's `route` objects are roads and steps only (two memories each), or that `BOUND` applies, so the station
+  and P agree.
+- **RN7.** In P's terms the ceiling ⟦c⟧ is the layer of `place:home/<operator>` (line 835), which is Andy's own consent
+  (P section 2, "Home place"). Say it is a fixed rule over the station's receipts (uses of copy I are refused after a
+  withdrawal receipt, and from the ship's shortened end), so no one edits a layer when the ship acts. Add a deploy gate
+  in which Andy accepts C as his home's rule for imprints.
+- **RN8.** With a permissions ledger present, a memory whose latest lane note is `pending` counts as neither lane for an
+  allow (P 5.3). base(m) reads the lane column (line 236). Leave such memories home and count them in the dry run.
+- **RN9.** The admission unit is named by the 4-hex short id (line 997), so two imprints with one short id would clash.
+  Use the full imprint id.
+- **RN10.** Withdrawal runs in the lighthouse and removes `~/.engram/imprints/…`. Section 15 doesn't say how the
+  lighthouse learns that root, since the Makefile's `IMPRINTS` reaches only the CLI. Name the flag or the environment
+  variable.
+
+### 6. The interface table, row by row
+
+The spec agrees with P and T as the table states on rows 1, 3, 4, 5, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20,
+21 (see RN5), 22, 23, 24 (see RS2 and RN7), 25, 26 (see RS4), 27, 28, 29, 30, 31 and 32.
+
+It disagrees, or the row is incomplete, on three:
+- **Row 13** (log rows are the owner's trails). The premise misses `episodes.session_id`. RMF1. T's test at its line
+  1458 changes with the fix.
+- **Row 2** (what an outside-home allow may name). r_M's shape passes P28, but naming `lanes: ["work"]` brings in P
+  5.3's lane-note rule, which the station can't meet. RS1.
+- **Row 6** (the meet). The ceiling's copy binding lies outside P's use tuple, so the decision equals P's meet only
+  while the owner holds one imprint permission at the station. RS2.
+
+I checked these in detail: the allow file's fields and path (I 12; T 7, items 2–6), the tombstone path, `valid_until`
+as the effective end, `--lane` and `--deadline 1740`, the 4G / 1,800 s detached unit (I 10 and 12; T 7 step 10 and its
+section 10 table), `laid_by` on an imprint (T line 645), the other-people question in all three specs (I 20; P 19, P
+lines 1609-1613; T 14, T lines 1500-1503), both imprint kinds in P's step 2 (P lines 1352-1355), and P 6.4's note on
+`imprint` over trails (P lines 518-519).
+
+### 7. Still open with Andy (this re-check changes none of them)
+
+- **Memories that mention other people.** Each spec keeps its safest default. The imprint spec's is the strictest: no
+  memory with a recorded co-subject leaves, and the owner ticks the check for the rest. I decide nothing here.
+- Which store to imprint first, and its owner's yes. Whether the station-signed browser yes is enough for step 1. The
+  license. One permission an agent may set on its own. What the county sets.
+
+## Re-check response (revision 3), 2026-10-25
+
+Reviser: a fresh agent on the Pi, working for Rio Grande. I took no part in writing revisions 1 or 2, either review,
+the first response or the interface pass. I read the vision, the spec, this file, the interface table, and the parts
+of P (now revision 3) and T (now revision 6) that the re-check names. Both were revised in parallel with this pass, so
+where they changed under the re-check I say so. I checked every new claim about code by reading the code; the new
+citations are listed at the end. Section numbers are revision 3's. Nothing here is committed, pushed or posted.
+
+I applied the must-fix, all five should-fix items and all ten nits. I declined none. Three are applied in another
+form than the re-check named: RS2 (stronger), RN4 (one of its two options) and RN6 (P's revision 3 form). Each line
+says why. Every decision below is Rio Grande's call unless it quotes Andy, station law or P.
+
+### Must-fix
+
+- **RMF1. Applied, option (a).** I confirmed the premise in code. `remember` writes `session_id=_session_id` on every
+  episode (`engram/server.py:1869-1876`; column at `engram/migrations/001_initial.sql:48`), and so does the nudge hook
+  (`engram/hooks/nudge.py:531-535`). `paths.report` counts distinct non-null ids and `session_paths` groups by them
+  (`engram/paths.py:338-354`, `:418-427`), run at `engram/calibrate.py:295-296`. What changed:
+  - D6 adds `episodes.session_id` to the scrubbed columns, and D7 says session ids leave only with `route`. D10 says
+    session ids and log rows. 5.2 is now "Log rows and session ids". 5.3's closure bullet names both.
+  - Without `route`, every shipped episode's `session_id` is null. One step narrower than asked: with `route`, an
+    episode keeps its id only when its session is closed at t₁, the same rule as its log rows. So a session still
+    open at t₁ leaves no mark at all, and T never sees a part-trail whose recalls stayed home.
+  - 5.4's episodes key is now `[id, lane, created_at, session_id as kept, …]`, so the digest and check 13 bind it. The
+    re-check didn't ask for this, but the spec claims the keys bind "every column the trails read".
+  - The dry run gains a "Session ids" line, "What stays here" now names the session registry instead of "session
+    provenance", and it adds a line for the case without `route`. "Permission you would give" and the confirm view say
+    that keeping which session wrote each memory is part of `route`. `make imprint-read` shows null where the package
+    will hold null (`engram/store_reader.py:37-41`).
+  - 6.2's `episodes` row and the scrubbed-column list name the scrub.
+  - 8: `Need(admission)` now ranges over R(I), the roads and trails derivable from the package's session ids and log
+    rows. Following P 6.4 (revision 3), it also adds `recall` on every memory they name. Admission is "with `route`,
+    also on their roads and trails" in section 12's table.
+  - Check 12 requires every `episodes.session_id` to be null without `route`. 10's calibration bullet makes the report
+    say "paths: no session ids, because route was not chosen" (`engram/paths.py:349`, `:423`). The "31 session
+    paths" example is marked as the `route` case.
+  - 6.4, item 1: as the re-check noted, without `route` nothing is subtracted from X*, so text naming a registered
+    session's id is a cross-reference. I also dropped the recall-id subtraction, which subtracted nothing. A recall id
+    is kept only inside `context` (`engram/server.py:2369-2384`), and the re-check's section 2 found the same.
+  - New anti-goal "Footpaths without `route`". New test "No footpath without `route`": a store with one closed
+    session that wrote two work episodes and made no recall. Built without `route` it has null ids, empty logs and no
+    session for a reader written from T 4. Built with `route` it has one two-touch trail. An open session keeps no id.
+    A hand-set id fails checks 12 and 13. The calibration test now holds for every section but `paths`.
+  - T's test (T section 12, "built without `route`") now holds as written. T's re-check pass already rewrote it, and
+    added R18 and I5, after reading this revision in progress.
+
+### Should-fix
+
+- **RS1. Applied.** r_M names `"*"` for `layers` and `lanes` (D36; section 8). P's own example of an allow by
+  collection does the same (P 5.2). One fact changed under the re-check: P revision 3 added "A copy held away from its
+  source's ledger" (P 5.3), which reads an imprint's lanes from the imprint. So the re-check's first effect, re-lanes
+  at home, is now P's stated rule rather than a disagreement. The second effect still held, since a step-2 ledger has
+  no lane notes for `mem:S/…` refs. `"*"` removes both. The denotation no longer reads lanes, and points to P's
+  paragraph for any later record that names lanes, so P's citation of I 8 still lands. The scope's lanes stay in the
+  request, the manifest and check 12. The signing test checks `"*"`. Interface row 2 is updated.
+- **RS2. Applied, in a stronger form.** P revision 3 now puts the copy h in every use (P 6.1), so a use names its copy
+  as the re-check asked. The re-check suggested only saying that the station's per-imprint check is narrower than P's
+  meet. I made the two equal instead. P says its `decide` and `explain` agree with the station's check (P 6.4, last
+  paragraph), and a known gap would break that. The ceiling is now one rule per copy I (D38; section 8, items 1–5): uses
+  of h_I only, on objects(I) or R(I), within I's own records' actions and purposes, from `valid_from` to I's effective
+  end, and before any `withdrawn` receipt of I. Section 8 then shows that for every use of copy I, P's meet over `Req`
+  is exactly ⟦c_I⟧ = ⟦p_I⟧ ∩ ⟦c_I⟧, however many imprints the owner holds. It is narrower only once a step-2 ledger adds
+  the owner's denies. I corrected the example: copy 1's r_M matches copy 2's uses only for memories copy 1 also held,
+  since its collection holds only copy 1's refs. 17 step 1 says what moves into a step-2 ledger:
+  - the owner's `shortened` and `withdrawn` receipts become P replacements and revocations;
+  - a record whose copy the ship withdrew, or that ended, or whose copy was deleted, moves in revoked or not at all,
+    never in force. Which of the two is P step 2's to say, since the station is no steward of the owner's home (P 7.1);
+  - the ceiling stays a layer kept outside the ledger (P 6.1).
+
+  New test "One ceiling per copy". It compares the station's check with P's `decide` on a fixture of two imprints.
+  Rows 6 and 24 are updated.
+- **RS3. Applied** (D39; 10, "Admission is decided again" and "Deletion and the end win"; 12; 13; 16).
+  - Every admission run, the first included, starts with the new `station-imprint-admit-begin`. It reruns section 8's
+    whole check at its own time, with the effective end and every shortening by the owner or the ship. If allowed, it
+    writes `<id>.state/admission.json` with the effective end. A shortening replaces that file atomically, as it does a
+    use's allow files.
+  - Admission checks the file, the tombstone and `approved.json` before each write and before calibration. The other
+    terms are fixed by signed records and code.
+  - A refusal or an end mid-run gives a `failed` receipt naming the term, and deletion with reason `ended`, before any
+    sweep.
+  - New test "Admission after the end": a resume past the end, a ship's shortening that has passed, and an end that
+    passes during calibration.
+- **RS4. Applied** (D13; 11; 16; 17 step 6; row 26). I confirmed it in code: the old `fork` is a whole backup copy
+  (`engram/cli.py:15-49`, the copy at `:42`); the retroactive id comes from the earliest episode
+  (`engram/store_identity.py:84-102`); pruning deletes episodes (`engram/storage.py:734-747`, `:760`); and only a
+  store this open created gets a random `creation` id (`engram/storage.py:246-254`). Now:
+  - A store of origin `retroactive`, or with no stored identity, has ancestry [] and is incomplete, so `independent`
+    is `unknown` and never counts. An imprint or fork of it inherits the incompleteness. `creation` roots stay
+    complete.
+  - Two new rows in the lineage table, and the lineage test covers the pruned-copy case.
+  - Also added: a `genome_sync` episode with a null `origin_instance_id` is a copy of unknown origin. A sync fills
+    the origin in only when the genome still holds an episode with the same content hash (`engram/federation.py:187-193`).
+  - Told the rail spec in 11 and 17: stores older than identity count for nothing until a later spec gives them a
+    complete ancestry.
+- **RS5. Applied, first option: everything has an end** (D32; 7.1; 9; 12; 14; 16; new anti-goal "Kept for good").
+  - The row, the permission, the receipts and the tombstone all go 400 days after `deleted`, the receipts' own term.
+    A declined or expired request's row goes after 30 days. That is long enough for a rerun of `make imprint-send`
+    to report the outcome, and the owner's machine keeps its own record.
+  - The terminal message before sending, the confirm view and `imprint-status` say exactly this, including the row a
+    decline leaves, and the backups' "about 8 weeks more".
+  - Since tombstones now end, restore reconciliation covers any live row whose files are gone. I checked the
+    rotation (`peer/superyak_peer/backups.py:30`, `:109-119`): a copy older than 400 days survives only if fewer than
+    8 weeks or 14 days since had a backup, and such a restored row is removed again.
+
+### Nits
+
+- **RN1. Applied.** `scope.lanes` in check 11, and "a lane outside `scope.lanes` or a time outside the scope" in the
+  admission test.
+- **RN2. Applied.** 7.1 lists the ten digest tables, each present only when non-empty. Section 14's check and the
+  request test say the same.
+- **RN3. Applied, both halves.** The view shows the imprint's short id, the request's short id, and the digest's first
+  8 characters with "the whole 64-character digest is sent". Goal 3, the anti-goal, D26, 7.1 and the test restate the
+  rule as "everything the view shows, plus the fixed labels `kind` and `version`".
+- **RN4. Applied, the view option.** The request now carries `source_ancestry` and `source_ancestry_complete`. The dry
+  run, the terminal and the confirm view name them, the manifest must equal them, and section 14 gives their formats.
+  The cost is that these ids reach the station before the yes. They are held only in staging `request.json`, deleted
+  at decline or expiry, and never in `peer.sqlite3`. I chose this over the terminal-only option so the yes binds what
+  the manifest later carries.
+- **RN5. Applied** (12). The imported rows are named as P 9.1's imported form, with its four differences from a local
+  receipt. P revision 3 now lists the same four. Row 21 is updated.
+- **RN6. Applied in P revision 3's form.** P now defines bulk uses (P 6.4, P33), so neither option the re-check named
+  is needed. Section 8 says admission and the evaluation are bulk uses: the 32 is waived, and P's other bounds hold
+  (100,000 derived objects per counted bulk use, 8 subjects, 43 layers). There is a test for a 40-touch trail. Row 8
+  is updated.
+- **RN7. Applied** (D38; 8; 18). The ceiling is stated as one rule over the station's records and receipts, so no one
+  edits a layer when the ship acts. New deploy gate: Andy accepts C and the five items as his home's rule before any
+  imprint is approved.
+- **RN8. Applied, slightly extended** (D40; 5.2 `pending(m)`; dry run; test). A memory whose latest lane note is
+  `pending` stays home. So does one whose latest note names a lane other than its column, which is a re-lane that
+  hasn't settled. Both only narrow.
+- **RN9. Applied** (10; test). The unit is `superyak-imprint-admit-<full imprint id>`.
+- **RN10. Applied** (10, "The imprints root"; 12; 15; 16; 18). One flag, `--imprints-dir`, on `superyak-peer serve`,
+  every station command that touches imprints, and `imprint.py`. No environment variable sets it. Other changes:
+  - The hand-off records the root in the request row, and every removal uses the recorded root.
+  - The lighthouse's installed unit (`~/.config/systemd/user/superyak-lighthouse.service`, read today: its
+    `ExecStart` passes `--data-dir`, `--host`, `--port`, `--proxy-headers`, `--origin` and `--share-link-file` only)
+    gains the flag, and a deploy gate checks that it names the Makefile's root.
+
+### The interface table
+
+I updated rows 2, 6, 8, 13, 21, 24 and 26, each with a note under "Imprint re-check pass", plus the I line in the
+header and "What changed, by spec". P's and T's re-check passes were editing the table at the same time. I appended to
+their text and changed none of it. Row 13 notes:
+- T's pass had listed three points pending in I: check 12, the calibration test and "31 session paths". All three
+  are applied.
+- One point for P's next revision. P 6.4's last paragraph says "the trails whose log rows it keeps"; it should read
+  "the roads and trails derivable from its session ids and log rows". The decisions agree either way, since r_T covers
+  every road and trail of the store.
+
+### Not taken in this pass
+
+T revision 6 also asks this spec for I2 (`use-finished` end codes, retiring a use's allow file, report and result file
+names, the use id format, always passing `--lane`), I3 (passing the embedder socket to the use's unit) and I6 (section
+16's recall-row assertion, which T says fails on any fixture with a mixed-lane recall). These come from T's re-check,
+not this one, and cover I's side of rows 14, 24, 27 and 28. I left them for Rio Grande to schedule. I6 matters most:
+T is the source of truth for trails, and it says a test assertion here is false, so it should be fixed before the
+plan.
+
+### Still open with Andy (unchanged)
+
+- **Memories that mention other people.** The default is unchanged and stays the strictest of the three specs: no
+  memory with a recorded co-subject leaves, and the owner ticks the check for the rest (D27; 6.4, item 5; section 20).
+  This pass decides nothing about it. RMF1 and RN8 only narrow what leaves.
+- Which store to imprint first, and its owner's yes. Whether the station-signed browser yes is enough for step 1. The
+  license. One permission an agent may set on its own. What the county sets.
+
+### New code citations in revision 3, each read for this pass
+
+`engram/server.py:1869-1876`, `:2369-2384`; `engram/migrations/001_initial.sql:48`; `engram/hooks/nudge.py:531-535`;
+`engram/paths.py:338-354`, `:349`, `:418-427`, `:423`; `engram/calibrate.py:295-296`; `engram/store_reader.py:37-41`;
+`engram/store_identity.py:84-102`; `engram/storage.py:246-254`, `:734-747`, `:760`; `engram/cli.py:15-49`, `:42`;
+`engram/federation.py:127-142`, `:187-193`; `peer/superyak_peer/backups.py:30`, `:109-119`; and the installed
+lighthouse unit's `ExecStart`.
+
+## Final check (revision 3), 2026-10-25
+
+Reviewer: a fresh agent on the Pi, making the final check in Andy's place under station law section 3. I took no part
+in writing revisions 1 to 3, the first review, the re-check, either response or the interface pass. I read the vision,
+the whole spec as it stands in the working tree (revision 3, uncommitted), this file, the interface table, and the
+parts of P (revision 3) and T (revision 6) that RMF1 and row 13 name. I checked every code claim below by reading the
+code today. File:line references are relative to `/home/andy/superyak/.worktrees/trail-arrows/`. "Spec line" means a
+line of `engram/docs/superpowers/specs/2026-10-25-store-imprint-design.md` as it stands today. Nothing here edits a
+spec. I committed, pushed and posted nothing.
+
+VERDICT: APPROVE
+
+RMF1 is resolved. The fixes add no must-fix defect and break no interface. Three should-fix items remain (FS1–FS3).
+FS3 is not from this pass: it is the trail spec's pending asks, and it must be scheduled before the plan. The nits are
+optional. Every fix named below is Rio Grande's call.
+
+### 1. RMF1: resolved, option (a)
+
+The premise holds in code. `remember` writes `session_id=_session_id` (`engram/server.py:1869-1876`). So do
+`challenge_instinct` and `retire_instinct` (`engram/server.py:2834-2836`, `:2885-2887`) and the nudge hook's own insert
+(`engram/hooks/nudge.py:531-535`). The column is `engram/migrations/001_initial.sql:48`. A session id is the Claude
+session id or a random UUID (`engram/server.py:1332`), so L1's UUID scan sees it.
+
+Each place RMF1 named:
+
+- **D6, D7, D10** (spec lines 176, 177, 180). `episodes.session_id` is a scrubbed column. Session ids leave only with
+  `route`, and then only for sessions closed at t₁. D10 names session ids beside log rows as what makes the trails.
+- **5.2, "Log rows and session ids"** (spec lines 302-327). It states the premise with the code above. Without `route`,
+  every episode's `session_id` is null. The closed-at-t₁ rule reads only rows before t₁, so it is the same at the plan
+  and the build. With `route`, a session open at t₁ keeps no session id either. That only narrows.
+- **The dry run** (spec lines 421-432, 446-448). A "Session ids" line appears only with `route`. "Session provenance"
+  is gone from the spec; "What stays here" names the session registry, and adds "Without route, which session wrote
+  each episode, and the recall log, would stay here too." The permission's words, and the confirm view's (spec lines
+  1060-1062), put keeping which session wrote each memory inside `route`.
+- **5.4** (spec lines 388, 398-399). The episodes key includes `session_id as kept`, so the digest and check 13 bind it.
+- **6.2** (spec lines 515, 580-583). The `episodes` row and the scrubbed-column list name the scrub.
+- **6.4, item 1** (spec lines 629-636). Without `route`, nothing is subtracted from X*. `session_registry` is keyed by
+  `session_id` (`engram/migrations/023_session_registry.sql:5`), so every registered session's id is in X*. With
+  `route`, the kept ids are subtracted, so the kept column is no cross-reference. Dropping the recall-id subtraction
+  loses nothing: no migration keys a table by `recall_id` (a grep of `engram/migrations/*.sql` finds none), and a
+  recall row's own `id` is a fresh uuid apart from `recall_id` (`engram/server.py:2369-2386`).
+- **8, `Need(admission)`** (spec lines 959-972). It ranges over R(I), the roads and trails derivable from the package's
+  session ids and log rows. R(I) is empty without `route`, and r_T exists exactly when it can be non-empty. Every pair
+  it needs is in C and in the matching record. See FS1 for the one use it still leaves out.
+- **Check 12** (spec lines 1222-1226). Without `route`, every `episodes.session_id` is null. "Each check fails" adds a
+  session id in a package without `route` (spec line 1810).
+- **Section 10** (spec lines 1254-1257, 1276-1281). `session_paths` selects only non-null ids (`engram/paths.py:349`)
+  and `report` counts only them (`:423`). The "31 session paths" example is marked as the `route` case.
+- **Tests** (spec lines 1698-1705). "No footpath without `route`" is the test RMF1 asked for, with an open session, a
+  hand-set id that fails checks 12 and 13, and the cross-reference case.
+- **T.** A session comes only from `episodes.session_id` or a recall row's `context.session_id`, and wrote touches
+  only from the first (T lines 204-211). Without `route` the package holds neither, so T's test now holds as written
+  (T lines 1607-1611; the re-check's T line 1458). T R18 (T line 71) and T 7 (T lines 919-938) state the same rule.
+- **Interface row 13.** Its premise is now true, and its "Imprint re-check pass" note matches the spec.
+
+No other episode column names a session. I checked every column the migrations add to `episodes` (001; 002:4-7;
+004:27; 006:3-4; 007:3; 013:3; 018:4; 022:5; 028:10-12) and every episode writer (`engram/server.py:1869`, `:2834`,
+`:2885`; `engram/engine.py:102`; `engram/deep_pass.py:283`; `engram/sheaf.py:366`; `engram/federation.py:197`, `:221`;
+`engram/hooks/nudge.py:531`). The writers' own `context` dicts hold no session id. A caller of `remember` could put one
+in `context`. If it names a registered session, it is a cross-reference without `route`, so the build refuses.
+
+### 2. Claims I checked and found true (new in revision 3)
+
+- `paths.session_paths` groups episodes by `session_id` in `(created_at, id)` order (`engram/paths.py:338-354`), and
+  `report` counts distinct non-null ids (`:418-427`). Calibration runs it (`engram/calibrate.py:295-296`) among its
+  analyses (`:286-296`).
+- Calibration reads no log row's content. sheaf's only `memory_log` read is `_rate_limited` (`engram/sheaf.py:283-298`),
+  called only at `:323`, in the sleep pass, which calibration doesn't run. `first_open_preview` reads only episodes
+  (`engram/calibrate.py:90-93`). See FS2 for the row counts.
+- `store_reader`'s episode fields include `session_id` (`engram/store_reader.py:37-41`), and `read_episodes` reads only
+  episodes (`:188-210`), as the `imprint-read` bullet says.
+- P's ceiling is a layer kept outside a ledger, which the meet treats like any other (P lines 501-503). P's `read`
+  "returns content to a program", and `imprint` needs `recall`, `read` and `imprint` on every object kept (P lines 557,
+  560). P counts a layer that appears twice once (P line 546).
+
+### 3. Must-fix
+
+None.
+
+### 4. Should-fix
+
+**FS1. With `route`, calibration reads the kept trails for purpose `calibration`, and no record allows that.** Places:
+r_T (spec lines 826-831); ceiling item 2 (spec lines 912-913); `Need(admission)` (spec lines 959-961); section 10's
+calibration bullet and example (spec lines 1254-1257, 1276-1281); section 12's table (spec line 1384).
+
+- Calibration always runs `paths.report` (`engram/calibrate.py:295-296`). With `route`, it turns the kept session ids
+  into each session's path (`engram/paths.py:348-354`). Its report names each session with its shape
+  (`"session": p.key`, `:446-449`) and the pairs of sessions that took "different routes" (`"a"`, `"b"`, `:328-330`).
+  T says calibration "reads exactly" the wrote-touch trails (T line 923). That is a `read` on R(I), in P's sense.
+- r_T allows only `trail-evaluation` (spec line 828). Item 2 takes the purpose for R(I) from r_T. `Need(admission)`
+  lists `read` on R(I) only for `trail-evaluation`. So admission does a use its `Need` leaves out. P would refuse it
+  (`NO_ALLOW`), and the owner's imported use rows name the trails' use as `trail-evaluation` only (section 12).
+- Nothing leaves a machine that the owner didn't send, and the report holds no content. That is why this isn't a
+  must-fix. It is also not new: revision 2's calibration read the same paths. Revision 3's `Need(admission)` made it
+  visible.
+
+*Fix, Rio Grande's call, one of:*
+- **(a) The safest default, which I recommend.** On an imprint, admission runs calibration without the paths analysis
+  (a `calibrate` flag beside `no_content`). The report says "paths: not measured at admission; trails are used only by
+  the trail evaluation". The dry run's words ("for the trail evaluation, keeping which session wrote each memory") stay
+  exact. The "31 session paths" example changes. T reads nothing from calibration's `paths` section (T lines 923-933
+  only note its cost), so T loses nothing.
+- **(b)** Add `calibration` to r_T's purposes and `read` on R(I) for `calibration` to `Need(admission)`. Say in the dry
+  run and the confirm view that calibration measures the shape of the kept sessions. C holds (`read`, `calibration`)
+  but not (`route`, `calibration`), so no `route` use for calibration follows.
+
+Either way, add a test: with `route`, every use admission performs is in its `Need`, and P's `decide` agrees with the
+station's check on each.
+
+**FS2. Calibration's report differs in more than `paths`, and its survey says "0 sessions" without saying why.**
+Places: 16, "Log rows" (spec lines 1695-1697); section 10's calibration bullet (spec lines 1254-1257); 5.2 (spec lines
+312-316).
+
+- Calibration surveys the snapshot (`engram/calibrate.py:258`). The survey counts every table's rows, the log tables'
+  included (`engram/store_reader.py:111-121`), and `COUNT(DISTINCT session_id)` over episodes (`:126-131`). report.md
+  prints it as "… N sessions" (`engram/calibrate.py:328-331`). Without `route` that is 0 sessions and 0 log rows. With
+  it, the example's 57 and 1,940. The `source` and `identity` sections also differ between any two packages, since
+  their bytes and imprint ids differ.
+- So the test "equals, in every section but `paths`" fails as written. T 7 already says the survey "counts no sessions
+  either" (T line 933), so I and T disagree on it.
+
+*Fix:* compare the analyses other than `paths` (`first_open`, `persistence_scores`, `cohesion`, `persistence`), and the
+survey apart from `episodes.sessions` and the log tables' row counts. Put the same "because route was not chosen" note
+beside the survey's session count. In 5.2, say that calibration reads no log row but counts the log tables' rows.
+
+**FS3. The trail spec's asks I2, I3 and I6 are still pending here** (interface rows 14, 24, 27 and 28). They are not
+from this re-check. The reviser left them for Rio Grande ("Not taken in this pass", above). Two make this spec's own
+text wrong today:
+
+- Section 12 (spec lines 1408-1411) records a use's end as "withdrawn" or "not evaluable". So a shortening during a run
+  would be recorded as a withdrawal (T's I2; row 24). Nothing retires a finished use's allow file, and the report's
+  file name isn't fixed, though T's rerun check reads it (T's I2; row 27).
+- 16, "Recall rows" (spec lines 1710-1711): "A trail derived from the package equals the trail derived from the source
+  restricted to M" fails on a mixed-lane recall (T's I6; row 14).
+- The use's unit doesn't pass `--setenv=ENGRAM_EMBEDDER_SOCKET` (T's I3; row 28).
+
+*Fix:* apply I2, I3 and I6 as T states them, before the plan. None of them lets more leave a machine.
+
+### 5. Nits
+
+- **FN1.** Without `route`, two records of use still leave. Resonances say which two shipped memories one recall
+  returned together, first and last when (`engram/server.py:2488-2492`; `engram/storage.py:2003-2010`). Each episode's
+  `last_accessed` is the time of its last recall (`engram/storage.py:628-638`). Neither names a session, T reads
+  neither, and 6.4 items 2 and 3 cover them, so the anti-goal holds as written. The dry run's "Without route" line could
+  say that they still leave, as T 7 states its write-time limit (T line 941).
+- **FN2.** Section 8's proof that the station's check is P's meet (spec lines 925-938) takes the owner's and the
+  operator's home layers as two layers. The spec allows the owner to be the operator (spec lines 848-849). Then both are
+  `place:home/andy`, and P counts that layer once (P line 546). Step 1 still decides with ⟦p_I⟧ ∩ ⟦c_I⟧, so nothing
+  widens. Say that the ceiling stays its own layer in `Req` then (P lines 501-503), so 17 step 1 carries that into a
+  ledger. This matters if the first imprint is Andy's own store.
+- **FN3.** For the next interface pass: row 13's first note still says "A test checks that calibration's report
+  doesn't change" (see FS2). P 6.4's last paragraph (P lines 638-639) still says "the trails whose log rows it keeps",
+  as row 13 already notes for P.
+
+### 6. The interface table
+
+Revision 3 updated rows 2, 6, 8, 13, 21, 24 and 26. I checked each against the spec:
+
+- Row 2: r_M names `"*"` lanes and layers and one collection (spec lines 816-820, 833-840).
+- Row 6: one ceiling per copy (spec lines 903-923), and the proof (spec lines 925-945). See FN2.
+- Row 8: admission and the evaluation are P's bulk uses (spec lines 985-994).
+- Row 13: matches. See FS1 and FS2.
+- Row 21: the imported rows' four departures from P's local form (spec lines 1546-1552).
+- Row 24: the ship acts through receipts (spec lines 950-955), and 17 step 1 (spec lines 1838-1852). Its end codes are
+  pending (FS3).
+- Row 26: a store older than identity is incomplete (spec lines 1308-1315).
+
+The fixes broke no interface. T's R18, I5 and its synthetic-imprint test rest on exactly what this spec now ships.
+P's `need(imprint)` on R(I) is met, apart from FS1's purpose. Rows 14, 27 and 28 are pending in this spec (FS3).
+
+### 7. Still open with Andy (this check changes none of them)
+
+- **Memories that mention other people.** The default is unchanged and stays the strictest of the three specs: no
+  memory with a recorded co-subject leaves, and the owner ticks the check for the rest (D27; 6.4, item 5; section 20).
+  I decide nothing here. RMF1's fix only narrows what leaves.
+- Which store to imprint first, and its owner's yes. Whether the station-signed browser yes is enough for step 1. The
+  license. One permission an agent may set on its own. What the county sets.

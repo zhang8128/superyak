@@ -1,17 +1,22 @@
 # Imprints: Porting an Engram Store Here with Its Owner's Permission
 
 **Date:** 2026-10-25
-**Status:** Revision 2, for a fresh reviewer under station law section 3. It applies the first review
-(`docs/superpowers/reviews/2026-10-25-store-imprint-spec-review.md`: approve with changes, MF1–MF7, S1–S16, N1–N14).
-That file's "Response" section lists each item and what was done with it. Nothing here is built.
+**Status:** Revision 3, answering the second fresh reviewer's re-check
+(`docs/superpowers/reviews/2026-10-25-store-imprint-spec-review.md`, "Re-check": approve with changes, RMF1, RS1–RS5,
+RN1–RN10). That file's "Re-check response" lists each item, what was done, and what was declined. Revision 2 applied
+the first review (MF1–MF7, S1–S16, N1–N14; that file's "Response"). An interface pass across the three city-rail specs
+then changed D7, D8, D10, D17, D35, sections 3, 5, 6.2, 8, 9, 10, 12, 13, 14, 16, 17, 18 and 20, and added D36 and D37
+(`docs/superpowers/reviews/2026-10-25-city-rail-interfaces.md`). Revision 3 changes D6, D7, D10, D13, D17, D26, D28,
+D32, D36, sections 2, 3 and 5 to 18, and adds D38–D40. It updates interface rows 2, 6, 8, 13, 21, 24 and 26. No revision lets more leave a machine than before. Revision 3 lets
+less leave: without `route`, no episode's session id leaves either. Nothing here is built.
 **Modules:** new `engram/imprint.py`; new `peer/superyak_peer/imprints.py`; small changes in `store_identity.py`,
 `storage.py`, `store_reader.py`, `calibrate.py`, `persistence.py`, `sharing.py`, `federation.py`, `cli.py`,
 `lighthouse_sheaf.py`, the peer's `identity.py`, `ships.py`, `app.py`, `peer_routes.py`, `__main__.py`, the agent, the
 Makefile and the CLAUDE.md files (section 15).
 **Contract:** `docs/city-rail-vision.md`, "Imprints: porting a store here" and "Permissions by place".
-**Source of truth for permissions:** `docs/superpowers/specs/2026-10-25-permissions-by-place-design.md` (revision 1,
-being reviewed in parallel). That spec says the imprints spec uses its sections 5, 6 and 11 "as they stand" (its line
-15). This spec does: the record and its selector (its 5.1–5.2), matching (5.3), uses and denotations (6.1), the order
+**Source of truth for permissions:** `docs/superpowers/specs/2026-10-25-permissions-by-place-design.md` (revision 3,
+whose uses name their copy h and whose bulk uses this spec's checks are; its 6.1 and 6.4).
+That spec says the imprints spec cites its sections 5, 6 and 11 (its header, "Depended on by"). This spec does: the record and its selector (its 5.1–5.2), matching (5.3), uses and denotations (6.1), the order
 and the lattice (6.2), and `need` (6.4). Section 8 says how an imprint permission is made of those records, and names
 the few imprint-only fields beside them. Where the two specs differ, the permissions spec wins and this one is revised.
 **Builds on:** `2026-10-03-ds9-station-design.md` (ships, docking, approval), `2026-10-15-grants-step3-design.md`
@@ -27,7 +32,9 @@ lists them all.
 | Revision | Commit | What changed |
 |---|---|---|
 | 1 | uncommitted draft | First draft. Verdict: approve with changes (MF1–MF7, S1–S16, N1–N14). |
-| 2 | this file | Adopts the permissions spec's records, uses, lattice and `need`; drops instincts; the audience is the operator's home. Lineage is a closure over a stored ancestry. Leak checks read values, FTS vocabularies and vec0 slots. Receipts from station commands are signed by the lighthouse. The request carries only what the confirm view shows. Other people in a store get a stated limit and an owner's check. Calibration's bound comes from a measurement. Plus the should-fix items and nits. |
+| 2 | `3c022bf` | Adopts the permissions spec's records, uses, lattice and `need`; drops instincts; the audience is the operator's home. Lineage is a closure over a stored ancestry. Leak checks read values, FTS vocabularies and vec0 slots. Receipts from station commands are signed by the lighthouse. The request carries only what the confirm view shows. Other people in a store get a stated limit and an owner's check. Calibration's bound comes from a measurement. Plus the should-fix items and nits. |
+| 2, interface pass | uncommitted | Log rows ship only with `route`, and r_T then lists `imprint`, `read` and `recall` too (D7, D10). r_M reaches memories through one collection, as P28 requires (D36). A `route_shown` row cut to nothing is dropped (D35); I4's cut flag is declined. The ship's withdrawal and shortening narrow the station's ceiling, never the owner's records (D17). The source store's ledger owner must be the ship's owner (D37). The owner's use list gets the permissions spec's receipt form, in batches of 512. `--lane` for the trail evaluation, and an embedder gate. |
+| 3 | this file | Answers the re-check. Without `route`, every shipped episode's `session_id` is null, so no footpath leaves; with it, only sessions closed at t₁ keep theirs (RMF1, option (a)). r_M names `"*"` lanes and layers (RS1). Uses name their copy, and the ceiling is per copy: a fixed rule over the station's own records and receipts, so the station's check is the permissions spec's meet however many imprints an owner holds (RS2, RN7). Admission is decided again at every start and checks its end before each write (RS3). Stores older than store identity have incomplete ancestry (RS4). Every row and file about an imprint or a request has an end, and the owner is told before sending (RS5). The nits: `scope.lanes`, the ten `contents` keys, the request's labels, ancestry in the request, the named departures from the permissions spec's receipts, bulk uses, the ceiling as Andy's rule, pending lane notes, full-id unit names, and the `--imprints-dir` flag. |
 
 ## 1. Why
 
@@ -72,10 +79,12 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 | **Selection** | The owner's choice of lanes, layers, dates, an optional shared-with audience, ids to leave out, and whether semantics with no recorded source may leave (section 5.2). |
 | **Plan** | A selection, the terms, and the exact list of rows that would leave, with its digest. Kept on the source machine. |
 | **Package** | `imprint.db` (the filtered copy) plus `manifest.json`, built from a plan. Neither leaves before the yes. |
-| **Request** | What the owner's machine sends to ask for the yes: only the facts the confirm view shows (section 7.1). |
+| **Request** | What the owner's machine sends to ask for the yes: only what the confirm view shows, plus two fixed labels (section 7.1). |
 | **Terms** | The permission the owner asks for: audience, actions, purposes, days (section 5.3). |
 | **Permission** | The terms after the owner's yes: a station-signed record holding permissions-spec records (section 8). |
-| **Use** | One act on one object, as the permissions spec defines it (its 6.1). |
+| **Use** | One act on one object held in one copy, as the permissions spec defines it (its 6.1). |
+| **Copy** | The house that serves a use. For an imprint I it is h_I = `imprint:<station peer id>/<imprint id>` (permissions spec 4.1). |
+| **Ceiling** | The station's own rule for the uses of one imprint, fixed in code and read from the station's records and receipts (section 8, D38). |
 | **Imprint** | An admitted package on the Pi: its own read-only store. |
 | **State directory** | A writable directory beside each imprint, for its calibration report and its uses (section 10). |
 | **Receipt** | A station record of one event in an imprint's life, hash-chained and signed (section 12). |
@@ -88,14 +97,17 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 1. The owner chooses what leaves, sees a dry run that lists exactly what would leave, and can read it first.
 2. The copy is filtered on the source machine. No byte of a memory the owner left out is in the package: not in a row,
    an FTS index, a vec0 chunk or a free page.
-3. No byte of `imprint.db`, and nothing the confirm view doesn't show, reaches the station before the owner says yes
-   in their browser. The request carries only what the confirm view shows, and the owner's terminal prints it before
-   it is sent.
+3. No byte of `imprint.db` reaches the station before the owner says yes in their browser. The request carries nothing
+   the confirm view doesn't show, except its two fixed labels, `kind` and `version`. The view shows the imprint's short
+   id and the plan digest's first 8 characters, and says that the whole digest is sent. None of these holds content.
+   The owner's terminal prints the request before it is sent, with what the station keeps, and for how long, if the
+   owner never says yes.
 4. The package travels over the tailnet to the station in bounded, resumable parts.
 5. Andy approves receipt. The station verifies the package, calibrates it with `calibrate.py`, and registers it as
    its own read-only store that is never merged into another.
 6. Every event after the yes leaves a receipt, signed by the station, that the owner can read and check. A request
-   declined or expired before a yes has no permission and so no receipt. Its row keeps only a content-free tombstone.
+   declined or expired before a yes has no permission and so no receipt. Its row holds no content, and the station
+   removes it 30 days later (D32).
 7. The owner can withdraw at any time. Withdrawal deletes the imprint at once and a receipt says so. End dates delete
    it too.
 8. Step 1 uses: admission (verify, survey, calibrate) and the trail evaluation (trail spec section 7), once
@@ -106,7 +118,7 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 - Serving `recall`, `read` or `inject_context` over an imprint to agents. That needs the permissions core and the
   lighthouse receiver (section 17).
 - Instincts, dream residue, task contexts and the knowledge graph. In the permissions spec they "are never objects;
-  they never leave" (its lines 233-235 and 885).
+  they never leave" (its 5.2, and section 14's non-goals).
 - Audiences other than the operator's home, requesters other than the station's imprint agent, and `group:`, `self`
   and `commons` audiences.
 - Cold storage, category stores, anchors, assessments, notes, the clipboard and the code index (section 6.3).
@@ -119,15 +131,21 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 
 - **Leakage.** Any byte of a left-out memory in the package: in a row, an FTS or vec0 shadow table, or a free page,
   including bytes a raw-byte scan cannot see.
-- **Early bytes.** Any byte of `imprint.db`, or any request field the confirm view doesn't show, reaches the station
-  before the owner's yes.
+- **Early bytes.** Any byte of `imprint.db`, or any request field other than `kind` and `version` that the confirm view
+  doesn't show, reaches the station before the owner's yes.
+- **Footpaths without `route`.** Without `route`, a log row or an episode's `session_id` leaves: anything from which
+  the trail spec could rebuild which session wrote or used what.
 - **Agent consent.** An agent can produce the owner's yes, or tick the owner's check about other people.
 - **Normal open.** An imprint is migrated, decayed, pruned, compressed, genome-synced or merged.
-- **False agreement.** An imprint, a fork, or any store whose lineage meets another's counts as independent of it.
+- **False agreement.** An imprint, a fork, a store older than store identity, or any store whose lineage meets
+  another's counts as independent of it.
 - **Sticky data.** Withdrawal waits for Andy, fails silently, or leaves imprint files on the station.
 - **Telling receipts.** A manifest or receipt carries memory content, query text, memory ids, or anything about what
   stayed home.
 - **Backed-up imprints.** Imprint bytes, or a request's contents from before the yes, in any station backup.
+- **Kept for good.** Any row or file about an imprint or a request that the station keeps with no end, or keeps longer
+  than the owner was told before sending.
+- **Late ends.** A use or an admission step that runs after the permission's effective end, or after a withdrawal.
 
 **The vision's constraints**
 
@@ -155,18 +173,18 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 | D3 | The package is built by inserting chosen rows into a fresh database, never by deleting rows from a copy. It is vacuumed and has no free pages. | Rio Grande's call |
 | D4 | Tables are deny by default. A source table no rule names is not copied, and the dry run names it. A table the package's own migrations create without a rule stops the build, because that is a bug in this code. | Rio Grande's call |
 | D5 | Semantics are closed downward over their recorded sources: a semantic leaves only if every recorded source episode is admissible. One with no recorded source leaves only with `--include-unsourced-semantics`. | Rio Grande's call |
-| D6 | Rows are kept whole or dropped whole, except a fixed list of scrubbed columns. | Rio Grande's call |
-| D7 | Log rows leave only from sessions closed at t₁, and only inside [t₀, t₁). A recall row loses its instinct results and leaves only if every other result leaves. Query text and outcome notes never leave. | Rio Grande's call |
-| D8 | Step 1 layers: episode and semantic. Instincts never leave. | Permissions spec 5.2 (lines 233-235) |
+| D6 | Rows are kept whole or dropped whole, except a fixed list of scrubbed columns. `episodes.session_id` is one of them: null unless D7 lets it leave. | Rio Grande's call |
+| D7 | Log rows (`memory_log`, `operation_log`) and episodes' `session_id` leave only when the owner chooses `route`. They are the owner's trails: the trail spec makes a session from any distinct `episodes.session_id` and a trail from its episodes alone (its section 4). Calibration reads no log row, and without session ids its paths analysis reports no session and says why (section 10). With `route`, an episode keeps its `session_id`, and log rows leave, only for sessions closed at t₁, and log rows only inside [t₀, t₁). A recall row loses its instinct results and leaves only if every other result leaves, with no mark of what was cut. Query text and outcome notes never leave. | Rio Grande's call (option (a) of the re-check's RMF1) |
+| D8 | Step 1 layers: episode and semantic. Instincts never leave. | Permissions spec 5.2 |
 | D9 | Step 1 audience: `place:home/<operator>`. The only requester is the station's agent `agent:station-imprints`, acting for the operator in the operator's home. | Rio Grande's call |
-| D10 | Actions are closed under the permissions spec's `need`: `recall`, `read` and `imprint` on the memories, and, when the owner chooses `route`, `route` on their roads and trails. Purposes are a set: `calibration` (required) and `trail-evaluation` (exactly when `route` is chosen). | Rio Grande's call, using permissions spec 6.4 |
+| D10 | Actions are closed under the permissions spec's `need`: `recall`, `read` and `imprint` on the memories, and, when the owner chooses `route`, `recall`, `read`, `imprint` and `route` on their roads and trails, since the session ids and log rows that make the trails are kept too (D7). Purposes are a set: `calibration` (required) and `trail-evaluation` (exactly when `route` is chosen). | Rio Grande's call, using permissions spec 6.4 |
 | D11 | An imprint gets a new random `instance_id`, origin `imprint`, `forked_from_instance_id` = the source, and an ancestry. Memory ids are kept. | Rio Grande's call |
 | D12 | Imprints live at `~/.engram/imprints/<imprint id>/`, read-only, with guards in `Storage`, `sharing`, genome sync, `fork` and `lighthouse_sheaf`. | Rio Grande's call |
-| D13 | A store's lineage is its id plus its stored ancestry. Two stores are independent only when their lineages don't meet and both ancestries are complete. Siblings are never independent. | Rio Grande's call |
+| D13 | A store's lineage is its id plus its stored ancestry. Two stores are independent only when their lineages don't meet and both ancestries are complete. Siblings are never independent. A store older than store identity (origin `retroactive`) is never complete, since nothing recorded the copies made of it then. | Rio Grande's call |
 | D14 | Transport is the station's HTTPS over the tailnet with the ship key, in 4 MiB parts hashed in the manifest. | Rio Grande's call |
 | D15 | Staged and admitted bytes, and a request's contents, live outside `peer.sqlite3`, so station backups never hold them. Tombstones survive a restore. | Rio Grande's call |
 | D16 | Admission is 17 checks plus calibration with a content-free report. Any failure deletes the package. | Rio Grande's call |
-| D17 | The owner or the owner's ship can withdraw at any time. Deletion is immediate, never waits for Andy, and wins over a running admission. The station may also delete. | Rio Grande's call |
+| D17 | The owner can withdraw at any time in the browser, which revokes the records. The owner's ship can ask the station to refuse at any time, which deletes the copy the same way and edits none of the owner's records, since an agent edits a person's layer only under a grant (permissions spec P10, 7.1). The ship's withdrawal and shortening are receipts, which the station's ceiling reads (D38). Deletion is immediate, never waits for Andy, and wins over a running admission. The station may also delete. | Rio Grande's call |
 | D18 | An end date is required, at most 365 days out. It can be shortened, never lengthened. | Rio Grande's call (the permissions spec's P13 allows 366) |
 | D19 | Receipts are hash-chained and hold no content. Station commands that hold no key write them unsigned, and the running lighthouse signs them within 60 seconds. | Rio Grande's call |
 | D20 | One live imprint per source store per station: one in any status before `deleted`, `declined` or `expired`. | Rio Grande's call |
@@ -175,16 +193,21 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 | D23 | Text that names a left-out row's key is shown to the owner, and the build refuses until they leave that memory out with `--exclude`. Step 1 has no flag that allows it. | Rio Grande's call |
 | D24 | The source machine deletes its package copy once the imprint is admitted, declined, denied, failed or deleted. | Rio Grande's call |
 | D25 | Odo's notice says only that an imprint waits for review. It names no owner and no details. | Rio Grande's call |
-| D26 | The request carries only what the confirm view shows. The manifest is sent after the yes. | Rio Grande's call |
+| D26 | The request carries only what the confirm view shows, plus its fixed labels `kind` and `version`. It names the source's ancestry, so the view can. The manifest is sent after the yes. | Rio Grande's call |
 | D27 | Before the yes, the owner confirms that nothing chosen is about another person who hasn't agreed, and that none of it is patient or participant data. A memory with a recorded co-subject never leaves. | Rio Grande's call |
-| D28 | The permission is an `imprint-permission` record holding two permissions-spec records. A use is allowed iff its `need` lies in ⟦p⟧ ∩ ⟦c⟧, the meet of the owner's permission and the station's ceiling. | Rio Grande's call, using permissions spec 5–6 |
+| D28 | The permission is an `imprint-permission` record holding two permissions-spec records. A use of imprint I is allowed iff its `need` lies in ⟦p_I⟧ ∩ ⟦c_I⟧, the meet of the owner's permission for I and the station's ceiling for I (D38). | Rio Grande's call, using permissions spec 5–6 |
 | D29 | Admission and uses run as detached user units. The station commands that start them return at once. | Rio Grande's call |
 | D30 | Each imprint has a writable state directory beside it for reports and uses. Withdrawal removes both. | Rio Grande's call |
 | D31 | Calibration skips any dense set over 7,500 episodes, from a measured peak of about 7.5 × n² × 8 bytes. | Rio Grande's call |
-| D32 | The station keeps a deleted imprint's permission and receipts for 400 days, then only a content-free row. | Rio Grande's call (the permissions spec keeps receipts 400 days, its 9.1) |
+| D32 | The station keeps a deleted imprint's row, permission, receipts and tombstone for 400 days after `deleted`, then removes them all. It removes a declined or expired request's row 30 days after it ends. Nothing about an imprint or a request is kept with no end. Backups age out by their own rule (section 9). The owner is told all of this before sending, in the confirm view, and in `imprint-status`. | Rio Grande's call (the permissions spec keeps receipts 400 days, its 9.1) |
 | D33 | Memories are inserted in `(created_at, id)` order. Source rowids are never copied. | Rio Grande's call |
 | D34 | Leak checks are logical: every value through SQL, FTS vocabularies against a rebuilt index, and vec0 slots. They run at the build, and the index checks run again on the Pi. A raw-byte scan is an extra check. | Rio Grande's call |
-| D35 | `route_shown` rows leave like recall rows, with their targets cut to what ships. | Rio Grande's call, from the trail spec's interface item I1 |
+| D35 | `route_shown` rows leave like recall rows, with their targets cut to what ships. A row cut to nothing is dropped, since it would say that a tool named only memories that stayed home (D21). | Rio Grande's call, from the trail spec's interface item I1 |
+| D36 | The memories record reaches its memories through one collection whose members are exactly the shipped refs, as the permissions spec requires of an allow that leaves a home (its P28). Its `layers` and `lanes` are `"*"`: the collection fixes what it reaches, so no lane is read at the station. An imprint holds at most 100,000 memories, that spec's collection bound. | Rio Grande's call, using permissions spec 5.4 |
+| D37 | When the source machine has a permissions ledger, the source store must be registered there with the requesting ship's owner as its owner. | Rio Grande's call, using permissions spec P12 and P32 |
+| D38 | The station's ceiling is one rule per copy, fixed in code over the station's own signed records and receipts. It allows only uses of that copy, on its own objects, within its own records' actions, purposes and dates, and none after a withdrawal or past a shortening. So no one edits a layer when the ship acts, and the station's check is the permissions spec's meet however many imprints an owner holds. Andy accepts it as his home's rule for imprints before the first one (section 18). | Rio Grande's call, from the re-check's RS2 and RN7 |
+| D39 | Admission is decided again at the start of every run, the first included, and checks the effective end and withdrawal before each of its writes. It never runs past the end. | Rio Grande's call, using permissions spec 10 ("Time needs no act") |
+| D40 | With a permissions ledger at home, a memory whose latest lane note is `pending`, or names another lane than its lane column, stays home. | Rio Grande's call, using permissions spec 5.3 |
 
 ## 5. On the source machine: choosing what leaves
 
@@ -202,7 +225,11 @@ The plan refuses:
 - an imprint (`meta.instance_id_origin = imprint`);
 - a store with unknown migrations, which is newer than this code (`store_reader.py:100`);
 - a store with no identity it can derive: `store_identity.effective_id` returns `None` (`store_identity.py:113-116`);
-- a selection with no memories.
+- when the machine has a permissions ledger (`ENGRAM_HOME/.engram/permissions.db`, read with `mode=ro`), a store with
+  no `stores` row there, or whose row's `owner` is not `person:<the requesting ship's owner>` (D37). A memory's default
+  subject is its store's owner, and a memory with no subject is refused (permissions spec P12, P32), so the yes must
+  come from the person the ledger names. With no ledger, the owner's word stands, as in the rest of step 1;
+- a selection with no memories, or with more than 100,000 (D36).
 
 ### 5.2 The selection, precisely
 
@@ -225,7 +252,7 @@ a second included.
 
 For a memory m, ℓ(m) is its `lane` column now. Define
 
-    base(m)  ⇔  ℓ(m) ∈ L  ∧  t₀ ≤ τ(m) < t₁  ∧  m ∉ X  ∧  (A = ⊥ ∨ shared(m, A))  ∧  cosubjects(m) = ∅
+    base(m)  ⇔  ℓ(m) ∈ L  ∧  t₀ ≤ τ(m) < t₁  ∧  m ∉ X  ∧  (A = ⊥ ∨ shared(m, A))  ∧  cosubjects(m) = ∅  ∧  ¬pending(m)
 
 **`shared(m, A)`** holds when the published house, opened read-only, holds a `shared_memories` row r with:
 
@@ -247,6 +274,12 @@ read-only from the source machine's permissions ledger (permissions spec 5.5, ta
 `removed_seq`). It is ∅ when that machine has no ledger. A memory with a co-subject needs that person's yes too (its
 7.4), and step 1 cannot collect it, so the memory stays home. The dry run counts these as "needs <name>'s yes".
 
+**`pending(m)`** (D40; the re-check's RN8). It holds when the source machine has a permissions ledger and the latest
+lane note of `mem:<source id>/<layer>/<m id>` (permissions spec 5.3 and 5.5, table `lane_notes`) is `pending`, or
+names a lane other than ℓ(m). That spec counts a memory with a pending move as in neither lane for an allow (its 5.3
+table), and a note that disagrees with the column means a re-lane has not settled. It is false with no ledger, and for
+a memory with no lane note. The dry run counts these as "lane change at home not settled".
+
 The admissible memories:
 
     Ê = { e ∈ episodes  : base(e) }
@@ -266,12 +299,32 @@ The shipped memories:
 Λ chooses what ships. It never widens what is admissible. A semantic can ship without its episodes, but only if they
 are admissible.
 
-**Log rows.** Recall and `route_shown` rows in `memory_log`, and `operation_log` rows, are rows about sessions. For a
-session id s, let rows_<t₁(s) be the source's episodes with `session_id` s, its `memory_log` rows whose
-`context.session_id` is s (any event type), and its `operation_log` rows with `session_id` s, each with τ < t₁. The
-session is **closed at t₁** when max τ over rows_<t₁(s) < t₁ − 3,600. This is the trail spec's closed session (its
-section 4) read at t₁, and it uses only rows before t₁, so rows written after the plan can't change it. A log row
-ships only if t₀ ≤ τ < t₁, it has a session id, that session is closed at t₁, and its table's rule in 6.2 keeps it.
+**Log rows and session ids.** Recall and `route_shown` rows in `memory_log`, `operation_log` rows, and each episode's
+`session_id` say which session did what: the order in which the owner's agents worked, from which the trail spec
+derives trails. Every episode records the session that wrote it: `remember` passes `session_id=_session_id`
+(`server.py:1869-1876`; the column is `migrations/001_initial.sql:48`), and so does the nudge hook
+(`hooks/nudge.py:531-535`). The trail spec makes a session from "any distinct non-null `episodes.session_id`", and its
+wrote touches are "every episode carrying that `session_id`" (its section 4, "Sessions" and "Wrote touches"). A trail
+needs two touches. So episodes alone give a trail to every session that wrote two of them. Session ids and log rows
+ship only when the terms include `route` (5.3; D7). Without `route`, the package sets every episode's `session_id` to
+null and holds no log row.
+
+Calibration reads no log row: its analyses (`calibrate.py:286-296`) read episodes, semantics, vectors, resonances and
+subdivision events, and sheaf's only `memory_log` read is the sleep pass's rate limit (`sheaf.py:285-300`, called only
+at `:323`), which calibration never runs. Its paths analysis does read `episodes.session_id`: `paths.report` counts
+the distinct non-null ids and turns each session into a path (`paths.py:338-354`, `:418-427`; run at
+`calibrate.py:295-296`). Without `route` it finds no session, and the admission report says why (section 10).
+
+For a session id s, let rows_<t₁(s) be the source's episodes with
+`session_id` s, its `memory_log` rows whose `context.session_id` is s (any event type), and its `operation_log` rows
+with `session_id` s, each with τ < t₁. The session is **closed at t₁** when max τ over rows_<t₁(s) < t₁ − 3,600. This
+is the trail spec's closed session (its section 4) read at t₁, made stricter: it counts every `memory_log` event type
+and `operation_log` rows too, so a session is closed here no sooner than there. It uses only rows before t₁, so rows
+written after the plan can't change it. A log row ships only if the terms include `route`, t₀ ≤ τ < t₁, it has a
+session id, that session is closed at t₁, and its table's rule in 6.2 keeps it. A shipped episode keeps its
+`session_id` only if the terms include `route` and that session is closed at t₁. Otherwise the package holds null
+there. So a session still open at t₁ leaves no mark at all: neither its writes' session id nor its log rows (Rio
+Grande's call; it only narrows, and spares the trail spec a part-trail whose recalls stayed home).
 
 A resonance ships only if t₀ ≤ τ(`created_at`) < t₁ and both its memories are in M. Recall forms resonances
 (`server.py:2490`), and a resonance that forms again only raises `co_occurrences` and `last_seen`
@@ -291,13 +344,16 @@ current session out, so this is rare. When it happens, the digest changes and th
 | `--purposes` | why (a set) | `calibration` (required), plus `trail-evaluation` exactly when `route` is chosen (D10) |
 | `--days` | days from the owner's yes to the end date | 1 to 365 (D18) |
 
-What the closure means, from the permissions spec's table (its 6.4, lines 405-411):
+What the closure means, from the permissions spec's table (its 6.4):
 
 - `imprint` "Keeps a copy as part of another store" and needs `recall`, `read` and `imprint` "on every object
-  included". So the memories' record lists all three.
-- `route` "Uses a road or trail as an edge" and needs "`route` on the road or trail, and `recall` on every memory it
-  names". So the roads-and-trails record lists `route`, and the memories' record must list `recall` for the same
-  purpose. It does, because its purposes include `trail-evaluation`.
+  included". So the memories' record lists all three. With `route`, the package also holds the session ids and log
+  rows that make the owner's trails (D7), so the roads-and-trails record lists all three as well.
+- `route` "Uses a road or trail as an edge" and needs "`route` on the road or trail; `recall` on every memory it
+  names; and `read` and `inject_context` on every memory whose content the answer shows". So the roads-and-trails
+  record lists `route`, and the memories' record must list `recall` for the same purpose. It does, because its
+  purposes include `trail-evaluation`. The trail evaluation's answer is a report of counts and rates (trail spec
+  section 7, step 7). It shows no memory's content to any agent, so it needs no `inject_context`.
 
 The plan prints the closed set in words. The permissions spec defines the general vocabulary. Step 1 accepts only
 these values because their meaning is fixed here (section 8).
@@ -329,7 +385,7 @@ It computes M, the rows of every table that would leave (section 6), the cross-r
 
 | Table | Row key |
 |---|---|
-| `episodes` | `[id, lane, created_at, sha256(content), sha256(context)]` |
+| `episodes` | `[id, lane, created_at, session_id as kept, sha256(content), sha256(context)]` |
 | `semantics` | `[id, lane, created_at, sha256(content)]` |
 | `episode_vectors`, `semantic_vectors` | `[id, sha256(embedding bytes)]` |
 | `semantic_sources` | `[semantic_id, episode_id]` |
@@ -339,7 +395,8 @@ It computes M, the rows of every table that would leave (section 6), the cross-r
 | `memory_log` | `[id, timestamp, event_type, layer, target_ids as a list, context as an object, outcome]`, all as kept |
 | `operation_log` | `[id, timestamp, operation, session_id, target_ids as a list, outcome]` |
 
-The keys bind every column the filter reads and every column the trails read, including the log rows' `target_ids`.
+The keys bind every column the filter reads and every column the trails read, including the log rows' `target_ids`
+and each episode's `session_id` as the package holds it (null without `route`).
 Counters that change on every recall (access counts, decay strength, confidence, `co_occurrences`, `last_seen`) are
 measured numbers, not keys. They are copied as of the build. X and the cross-references are not in the digest input.
 Only shipped rows are. Anyone holding the package can recompute the digest from these definitions (check 13).
@@ -353,22 +410,26 @@ What the owner sees (example numbers):
 Imprint plan 7c41 (nothing has left this machine)
 
 Store     /home/sam/superyak/engram/.engram/graph.db
-Store id  3f2a9c1e (stored; lineage complete)
+Store id  3f2a9c1e (stored, made after store identity; copied from no recorded store;
+          lineage complete)
 Station   https://smart.tail7db420.ts.net as ship voyager (owner sam)
 
 What would leave
   Episodes        1,204   work lane, 2026-01-01 to 2026-10-25 18:00 UTC
   Semantics          88   work lane; every recorded source is also leaving
   Vectors         1,292   copied as stored, never re-embedded
-  Recall log      1,940   rows from sessions closed by 17:00 UTC; instinct results, query text
-                          and notes removed
+  Session ids        57   sessions closed by 17:00 UTC: which of them wrote each episode,
+                          sent only because you chose route
+  Recall log      1,940   rows from those sessions, sent only because you chose route;
+                          instinct results, query text and notes removed
   Citing actions      0   a work-lane imprint has none
   Links             240   201 semantic sources, 31 resonances, 8 semantic peers
 
 What stays here
   4,676 episodes, 322 semantics, every instinct, dream residue, task contexts, anchors,
   assessments, notes, clipboard, code index, cold storage, category stores, knowledge graph,
-  session provenance.
+  the session registry (harness, model, working directory).
+  Without route, which session wrote each episode, and the recall log, would stay here too.
   14 semantics stay because a recorded source episode stays.
   3 semantics stay because no source is recorded (add --include-unsourced-semantics to send them).
   912 recall rows stay because a result stays.
@@ -382,7 +443,9 @@ of it is patient or participant data. If you can't confirm that, narrow the plan
 
 Permission you would give
   Audience  place:home/andy (the station's imprint agent, acting for andy)
-  Allows    recall, read and imprint on these memories; route on their roads and trails
+  Allows    recall, read and imprint on these memories; for the trail evaluation, keeping
+            which session wrote each memory and the recall log, which make your trails, and
+            route over their roads and trails
   Purposes  calibration, trail-evaluation
   Ends      90 days after you say yes
   Size      41.2 MiB in 11 parts
@@ -394,12 +457,15 @@ Send it:               make imprint-send PLAN=7c41
 
 - `make imprint-read PLAN=… [START=… LIMIT=…]` takes a new snapshot as `plan` does, refuses if the digest differs, and
   pages through every memory that would leave in `(created_at, id)` order. Episodes are read as `store_reader
-  read_episodes` reads them (`store_reader.py:188-210`). That reader reads only episodes, so `imprint.py` has its own
-  reader for semantics, in the same order.
+  read_episodes` reads them (`store_reader.py:188-210`), then shown as the package will hold them: its fields include
+  `session_id` (`store_reader.py:37-41`), which shows null where the package holds null. That reader reads only
+  episodes, so `imprint.py` has its own reader for semantics, in the same order.
 - `--list FILE` writes one JSON line `{table, key}` per row that would leave.
 - `--json` prints the whole dry run.
 - With a permissions ledger on the machine, the dry run also counts memories that stay because they need another
-  person's yes (5.2).
+  person's yes, and memories that stay because a lane change at home has not settled (5.2).
+- The "Store id" line names the stores this one was copied from (its ancestry, section 11), which the request carries
+  and the confirm view names too (7.1, 9).
 - A source table no rule names is listed under "What stays here" as not copied (D4).
 
 ## 6. Filtering at the source
@@ -446,7 +512,7 @@ hook-only table is absent.
 | Table | Rule | Why |
 |---|---|---|
 | **Memories** | | |
-| `episodes` | filtered: rows in E, every column except `rowid`, in `(created_at, id)` order | the memories chosen |
+| `episodes` | filtered: rows in E, every column except `rowid`, in `(created_at, id)` order; `session_id` scrubbed to null unless the terms include `route` and its session is closed at t₁ (5.2) | the memories chosen; a session id is the thread the owner's trails are made of (D7) |
 | `semantics` | filtered: rows in S, in `(created_at, id)` order; `contradicted_by` set to null when it names a semantic outside S | it would name a memory that stayed |
 | `instincts` | dropped | instincts never leave (permissions spec 5.2) |
 | **Vectors (vec0)** | | |
@@ -467,8 +533,8 @@ hook-only table is absent.
 | `subdivision_events` | filtered: `parent_id` and every id in `peer_ids` in S | read by calibration's conjunct audit (`persistence.py:222`) |
 | `entities`, `relationships`, `episode_entities` | dropped | the code index of the repository the server ran in (`indexer.py:324-364`); not memories, and the station has no code to index |
 | **Logs** | | |
-| `memory_log` | filtered and scrubbed; see below | the trails read these (trail spec section 4) |
-| `operation_log` | filtered and scrubbed: only `operation` in `CITING_OPERATIONS` (`hooks/sleep.py:44`), passing the log-row rule (5.2), with every target in M. `harness`, `model`, `repo` set to null and `details` to `{}` | the trail cited-touch rule reads them. `repo` is the session's working directory (`server.py:82-85`, `:1340`) |
+| `memory_log` | only when the terms include `route` (D7); filtered and scrubbed; see below | the trails read these (trail spec section 4); calibration doesn't (5.2) |
+| `operation_log` | only when the terms include `route` (D7); filtered and scrubbed: only `operation` in `CITING_OPERATIONS` (`hooks/sleep.py:44`), passing the log-row rule (5.2), with every target in M. `harness`, `model`, `repo` set to null and `details` to `{}` | the trail cited-touch rule reads them. `repo` is the session's working directory (`server.py:82-85`, `:1340`) |
 | `session_registry` | dropped | harness, model and repo provenance (`023_session_registry.sql:1-2`); no step 1 use |
 | `session_bindings` | dropped | runtime-only (`024_session_bindings.sql:1-2`) |
 | **Caches and session state** | | |
@@ -497,20 +563,24 @@ hook-only table is absent.
 - **Recall rows.** Remove from `target_ids` every id that is an instinct in the source. Instincts never ship, and a
   plain recall mixes layers and lanes: instincts are vector candidates whenever `layer` is not given
   (`server.py:1643-1645`), and lanes are filtered only when `lane` is given (`server.py:2332`). The row is kept only
-  if what remains is not empty and every remaining id is in M. `context` becomes `{recall_id, session_id}`, keeping
-  those present. `outcome` becomes `used: auto: cited` (`hooks/sleep.py:43`) when equal to it, else `used` or
+  if what remains is not empty and every remaining id is in M. A row with any other target outside M is dropped
+  whole: it never ships cut, and nothing marks that it was. The trail spec asked for cut rows with a `cut` flag (its
+  interface item I4). The interface pass declined that, since the flag says that something the recall matched stayed
+  home (D21). The trail spec records what this costs its evaluation (its section 7). `context` becomes
+  `{recall_id, session_id}`, keeping those present. `outcome` becomes `used: auto: cited` (`hooks/sleep.py:43`) when equal to it, else `used` or
   `not_used` by prefix, else null. `context.query` is the person's words (`server.py:2376`, `:2102`, `:2181`), and an
   outcome may carry a free-text note (`server.py:2629-2631`).
 - **`route_shown` rows** (trail spec section 6.6, its interface item I1). `target_ids` is cut to the ids in M, in
-  order, possibly to nothing. The row is kept only if `context.lane` ∈ L. `context` becomes
+  order. A row cut to nothing is dropped (D35): a tool answer names at least one memory (trail spec 6.6), so an empty
+  list would say that everything it named stayed home. The row is kept only if `context.lane` ∈ L. `context` becomes
   `{receipt_id, session_id, tool, lane}`, keeping those present, and `outcome` stays null. Without these rows, a
   session the tools steered looks unsteered on the imprint, and its suggested touches would count as support.
 - Every other event type is dropped.
 
-Every memory row is copied whole. The only scrubbed columns are the ones named in the table:
-`semantics.contradicted_by`; `memory_log.target_ids` (instinct ids removed from recall rows, ids outside M cut from
-`route_shown` rows), `memory_log.context` and `memory_log.outcome`; and `operation_log.harness`, `model`, `repo` and
-`details` (D6).
+Memory rows are copied whole but for two columns. The only scrubbed columns are the ones named in the table:
+`episodes.session_id` (null without `route`, and null for a session open at t₁); `semantics.contradicted_by`;
+`memory_log.target_ids` (instinct ids removed from recall rows, ids outside M cut from `route_shown` rows),
+`memory_log.context` and `memory_log.outcome`; and `operation_log.harness`, `model`, `repo` and `details` (D6).
 
 A kept recall row keeps every result that isn't an instinct, and the trail spec removes instinct targets before it
 counts a recall's targets (its section 4, "Cited touches"). So filtering never creates the trail spec's "exactly one
@@ -557,10 +627,13 @@ What P does not cover, stated plainly:
 
 1. **Free text inside a chosen memory.** It is the owner's content, so the owner decides. The build scans it for
    **cross-references**. The **left-out keys** X* are every value of a single-column TEXT primary key (or a vec0 `id`)
-   of a row of the source's `graph.db` or `cold.db` that does not ship, minus the session ids and recall ids that
-   shipped rows keep in their kept columns, compared ignoring case. So X* includes left-out memories and instincts, and
-   residue, task contexts, anchors, assessments, drift reports, log rows and every other table's keys. A UUID token
-   (L1) in the package that is in X* is a cross-reference. The build refuses until each cross-reference's memory is
+   of a row of the source's `graph.db` or `cold.db` that does not ship, minus the session ids that shipped rows keep in
+   their kept columns, compared ignoring case. So X* includes left-out memories and instincts, and residue, task
+   contexts, anchors, assessments, drift reports, log rows, every registered session (`session_registry`'s key) and
+   every other table's keys. Revision 2 also subtracted recall ids. A recall id is no table's key
+   (`server.py:2369-2384` keeps it inside `context`), so that subtracted nothing and is gone. Without `route`, no
+   session id ships, so nothing is subtracted, and text in a chosen memory that names a registered session's id is a
+   cross-reference too. A UUID token (L1) in the package that is in X* is a cross-reference. The build refuses until each cross-reference's memory is
    left out with `--exclude` (D23). Step 1 has no flag that keeps one: the browser yes never shows such a choice, and
    the agent running the commands could pass it.
 2. **Numbers measured over the whole store** and kept on chosen rows: decay strength, access counts, innovation,
@@ -578,7 +651,7 @@ What P does not cover, stated plainly:
    that is acceptable at all.
 6. **Later changes at home.** The imprint is a copy as of the build. A later re-lane, edit or exclusion at home does
    not reach it. The owner withdraws and sends again. This is the permissions spec's "content already delivered"
-   case (its section 10).
+   case (its section 10). r_M names no lane (D36), so no decision at the station reads one.
 
 **The leak checks** (D34). All of them read the finished, vacuumed `imprint.db`.
 
@@ -624,9 +697,13 @@ The Pi's structural checks (10, 11) instead require that every id-shaped key col
 
 ### 7.1 The request (before the yes)
 
-The request holds only what the confirm view shows (D26). `make imprint-send` prints it in words before it sends it:
-"This goes to the station now, before you say yes. It holds only what your browser will show. No memory leaves until
-you allow it."
+The request holds only what the confirm view shows, plus its fixed labels `kind` and `version` (D26). `make
+imprint-send` prints it in words before it sends it, and then says: "This goes to the station now, before you say
+yes. It holds only what your browser will show. No memory leaves until you allow it. If you decline, or don't answer
+within 10 minutes, the station deletes the request (at once when you decline, within an hour when it expires) and
+keeps a row with its ids, your ship and its times, and no scope or counts, for 30 days. Its nightly backups keep that
+row about 8 weeks more. If you allow, the station keeps the permission, its receipts and that row until 400 days after
+the copy is deleted (backups about 8 weeks more). Nothing is kept with no end." (D32.)
 
 ```json
 {
@@ -635,6 +712,7 @@ you allow it."
   "imprint_id": "c0a8f5e2-…",
   "plan_digest": "9d3e…",
   "source_instance_id": "3f2a9c1e-…",
+  "source_ancestry": [], "source_ancestry_complete": true,
   "scope": {"lanes": ["work"], "layers": ["episode", "semantic"],
             "since": "2026-01-01T00:00:00Z", "until": "2026-10-25T18:00:00Z",
             "shared_with": null, "unsourced_semantics": false},
@@ -646,7 +724,15 @@ you allow it."
 }
 ```
 
-- `contents` counts every non-empty table except shadow tables and `sqlite_sequence`.
+- `contents` has one key for each of the ten tables of 5.4 (`episodes`, `semantics`, `episode_vectors`,
+  `semantic_vectors`, `semantic_sources`, `resonances`, `semantic_peers`, `subdivision_events`, `memory_log`,
+  `operation_log`) that holds at least one row in the package, and no other key. Each value is that table's row count.
+  So `meta`, `schema_version`, the FTS tables, shadow tables and `sqlite_sequence` are never counted.
+- `source_ancestry` and `source_ancestry_complete` are the source's ancestry and its completeness (section 11): the
+  ids of the stores the source was copied from, nearest first. They are ids, not content, and the confirm view names
+  them.
+- The view shows every field but the two labels: `imprint_id` by its short id (`c0a8`), and `plan_digest` by its first
+  8 characters, with the words "the whole 64-character digest is sent".
 - `since` is null for t₀ = −∞.
 - `parts` = ⌈`bytes` / 4,194,304⌉. Here 43,188,224 bytes (41.2 MiB) give 11 parts.
 - `request_sha256` = SHA-256 of the request's canonical JSON. The permission binds it (section 8).
@@ -680,13 +766,15 @@ you allow it."
 
 - `source.instance_id` is `store_identity.effective_id` of the snapshot. `identity` is `present` when stored and
   `derived` when the store predates identity and this is the id its migration will derive
-  (`store_identity.py:84-116`). `ancestry` and `ancestry_complete` are the source's (section 11).
+  (`store_identity.py:84-116`). `ancestry` and `ancestry_complete` are the source's (section 11), and equal the
+  request's `source_ancestry` and `source_ancestry_complete`.
 - `schema.applied` is the package's `schema_version` set.
 - `embedding.model` is the constant `embeddings.py:70` names. `dimension` is read from the vec0 DDL.
 - `vec.create_version` is the package's vec0 `_info` `CREATE_VERSION`.
 - `engram_commit` is `git rev-parse HEAD` of the engram checkout, or null.
-- `scope`, `contents`, `imprint_id`, `plan_digest`, `package.bytes` and the number of `package.parts` equal the
-  request's, and `request_sha256` is the request's hash. The station refuses a manifest that differs.
+- `scope`, `contents`, `imprint_id`, `plan_digest`, `source.instance_id`, `source.ancestry`,
+  `source.ancestry_complete`, `package.bytes` and the number of `package.parts` equal the request's, and
+  `request_sha256` is the request's hash. The station refuses a manifest that differs.
 - Part n covers bytes [n·B, min((n+1)·B, size)) with B = `part_bytes`.
 - The filter name stays `imprint-filter-v1`: nothing is built, so no package of an older form exists.
 
@@ -727,8 +815,8 @@ Each entry of `records` has exactly the permissions spec's record fields (its 5.
 ```json
 {"id": "r-5b0d…", "layer": "place:home/sam", "effect": "allow",
  "selector": {"audience": ["place:home/andy"], "requesters": ["agent:station-imprints"],
-              "objects": {"kinds": ["memory"], "stores": ["3f2a9c1e-…"], "layers": ["episode", "semantic"],
-                          "lanes": ["work"], "collections": "*", "memories": "*"},
+              "objects": {"kinds": ["memory"], "stores": ["3f2a9c1e-…"], "layers": "*", "lanes": "*",
+                          "collections": ["collection:sam/imprint-c0a8f5e2-…"], "memories": "*"},
               "actions": ["imprint", "read", "recall"], "purposes": ["calibration", "trail-evaluation"]},
  "valid_from": 1792951950, "valid_until": 1800727950, "anchor": 1792951950, "backing": "person",
  "set_by": "person:sam", "channel": "browser", "under_grant": null, "proposal_id": null, "replaces": null,
@@ -737,8 +825,19 @@ Each entry of `records` has exactly the permissions spec's record fields (its 5.
 
 The roads-and-trails record, r_T, is present only when the owner chose `route`. It differs in `id` and in its selector:
 `objects` = `{"kinds": ["road", "trail"], "stores": ["3f2a9c1e-…"], "layers": "*", "lanes": "*", "collections": "*",
-"memories": "*"}`, `actions` = `["route"]` and `purposes` = `["trail-evaluation"]`. The permissions spec requires
-`"*"` in those four object dimensions for roads and trails (its 5.2).
+"memories": "*"}`, `actions` = `["imprint", "read", "recall", "route"]` and `purposes` = `["trail-evaluation"]`. The
+permissions spec requires `"*"` in those four object dimensions for roads and trails (its 5.2), and a finite `stores`
+list for one that leaves a home (its P28). `imprint`, `read` and `recall` are there because the package keeps the
+session ids and log rows that make the owner's trails (D7, D10).
+
+r_M's `layers` and `lanes` are `"*"` (D36; Rio Grande's call, from the re-check's RS1). Its one collection fixes which
+memories it reaches, and P28 lets layers and lanes only narrow it, so naming them would add nothing. With `"*"`, no
+decision under r_M depends on where a lane is read: at home from the source's lane notes, at the station from the
+imprint (permissions spec 5.3, "A copy held away from its source's ledger"), or in a step-2 ledger, which would hold
+no lane notes for `mem:S/…` refs, so that a list of lanes would match nothing there ("a memory with no lane note
+matches no allow whose `lanes` is a list", its 5.3). The scope's lanes and layers stay in the request, the manifest
+and check 12, so the owner still sees them and the Pi still checks them. The permissions spec's own example of an
+allow by collection names `"*"` there too (its 5.2).
 
 - Every list is sorted, as the permissions spec's selector requires (its 5.2). Ids are `r-` plus 32 random lowercase
   hex.
@@ -751,14 +850,27 @@ The roads-and-trails record, r_T, is present only when the owner chose `route`. 
 - `imprint-permission` and its keys are added to `identity.RECORD_KEYS` (`identity.py:76-83`), so `sign_record` signs
   it (`identity.py:147-151`) and it can't pass as another kind. `verify_station_record` (section 15) also checks that
   each `records` entry has exactly its keys.
-- The permissions spec plans station-signed `permission-record` and related kinds for its step 2 (its lines 866-871).
-  Rio Grande reconciles this kind with that list. The inner records are already in its form.
+- The permissions spec plans station-signed `permission-record` and related kinds for its step 2 (its section 14,
+  step 2). That list now names `imprint-permission` and `imprint-receipt` as the first station-signed kinds. Each
+  inner record is already in the form a `permission-record` signs, so step 2 adds no second form (Rio Grande's call,
+  from the interface pass).
 
-**Uses on the station.** A use is the permissions spec's u = (a, P, o, x, p, t) (its 6.1). In step 1 the station has
-exactly one requester: a = `agent:station-imprints`, the imprint runner, acting for the operator in P =
-`place:home/<operator>`. Andy's ships and Claude sessions are not requesters. Claude on the Pi running `make
+**Why a collection** (D36). An allow that leaves a person's home reaches memories only by listed ids or collections;
+stores, layers and lanes may only narrow it (permissions spec P28 and 5.4). So r_M names one collection,
+`collection:<owner handle>/imprint-<imprint_id>`, which fits that spec's grammar (its 4.1). Its members are exactly
+objects(I) (below): the shipped refs, which the plan digest binds and the owner's yes covers, so the memberships are
+person-backed. Nothing adds a member after the yes. The station holds no permissions ledger in step 1, so the
+collection lives in the signed permission as this definition, and the owner's machine keeps its member list in
+`objects.json` (section 12). A collection holds at most 100,000 members (its 5.4), so an imprint holds at most
+100,000 memories.
+
+**Uses on the station.** A use is the permissions spec's u = (a, P, o, h, x, p, t) (its 6.1, revision 3). In step 1
+the station has exactly one requester: a = `agent:station-imprints`, the imprint runner, acting for the operator in
+P = `place:home/<operator>`. Andy's ships and Claude sessions are not requesters. Claude on the Pi running `make
 station-imprint-use` when Andy asks is a caller of that agent. The record's `requesters` names only that agent, so
-nothing else in Andy's home is allowed by it. t is the station's clock.
+nothing else in Andy's home is allowed by it. h is the copy: every use of imprint I names h_I =
+`imprint:<station peer id>/<imprint_id>`, and its holding place H is the operator's home, as that spec's 6.1 fixes it
+for a station with no ledger. t is the station's clock.
 
 **The objects.** For an imprint I of a source store with instance id S, objects(I) is the set of refs
 `mem:S/<layer>/<id>` of its shipped memories (permissions spec 4.1). Memory ids are kept (D11), so these are the
@@ -768,55 +880,137 @@ owner's own refs. The trail evaluation derives roads and trails of S from I in m
 - **Subjects.** Every object in objects(I) keeps its source's subjects: the source store's owner (permissions spec
   P12). No memory with another subject ships (5.2). The station that holds the copy is never a subject of it. The
   permissions spec's own review asks for exactly this (its MF6), and naming objects by source refs gives it.
-- **A fixed set.** r_M names the store, layers and lanes, but its denotation (below) counts only o ∈ objects(I),
-  the set the plan digest binds. A memory written at home after the build is never covered. The permissions spec's
-  review warns that an allow by store and lane covers memories an agent writes later (its MF14). This one can't.
+- **A fixed set.** r_M reaches memories only through its collection, whose members are objects(I), the set the plan
+  digest binds. Its store only narrows, and it names no layer or lane. A memory written at home after the build is
+  never covered.
+  The permissions spec's review warns that an allow by store and lane covers memories an agent writes later (its
+  MF14). This one can't, by that spec's own rule (its P28).
 
 **The denotation.** For a record r of the permission p, match(r) ⊆ 𝒰 is the set of uses r matches by the permissions
 spec's 5.3, rules 1–3, read this way:
 
 - the audience `place:home/<operator>` matches a use whose place is that home (it is a root, so `dom` is itself);
-- a memory's layer and lane are read from the imprint, where they are fixed at the build;
-- a memory use matches only if its object is in objects(I) and its copy is this imprint,
-  `imprint:<station peer id>/<imprint_id>`;
-- r stops matching at withdrawal (rule 1, "not revoked"), and a shortening to e replaces `valid_until` by
-  min(`valid_until`, e). That is a replacement with `replaces` = r, which matches only what r matches (its rule 4).
+- r_M names `"*"` layers and lanes, and r_T must (its 5.2), so neither reads a memory's lane. Should a later record
+  over an imprint name lanes, that spec's 5.3 ("A copy held away from its source's ledger") reads them from the
+  imprint, where the build fixed them;
+- a memory is in the collection exactly when it is in objects(I), with a person-backed membership from the yes;
+- r stops matching when the owner withdraws (rule 1, "not revoked"), and the owner's shortening to e replaces
+  `valid_until` by min(`valid_until`, e). That is a replacement with `replaces` = r, which matches only what r
+  matches (its rule 4). The owner does both in the browser.
 
-Then ⟦p⟧ = match(r_M) ∪ match(r_T) (with match(r_T) = ∅ when r_T is absent).
+Then ⟦p_I⟧ = match(r_M) ∪ match(r_T) for I's own records (with match(r_T) = ∅ when r_T is absent).
 
-**The station's ceiling.** ⟦c⟧ is the set of uses with a = `agent:station-imprints` and (x, p) in
+**The station's ceiling** (D38; Rio Grande's call, from the re-check's RS2 and RN7). Let
 
     C = { (recall, calibration), (read, calibration), (imprint, calibration),
-          (recall, trail-evaluation), (read, trail-evaluation), (route, trail-evaluation) }
+          (recall, trail-evaluation), (read, trail-evaluation), (imprint, trail-evaluation),
+          (route, trail-evaluation) }
 
-It is the station's own consent layer in step 1, fixed in code. A place's later rules can only remove from it.
+For an imprint I, with records r_M and r_T, the ceiling ⟦c_I⟧ is the set of uses u = (a, P, o, h, x, p, t) with:
+
+1. a = `agent:station-imprints`, P = `place:home/<operator>`, and h = h_I;
+2. o ∈ objects(I) and (x, p) ∈ actions(r_M) × purposes(r_M), or o ∈ R(I), the roads and trails of S derived from I
+   (defined under "The decision" below), and (x, p) ∈ actions(r_T) × purposes(r_T);
+3. (x, p) ∈ C;
+4. `valid_from` ≤ t < the effective end of I: the earliest of its records' `valid_until` and every shortening of I,
+   by the owner or the ship (section 12);
+5. t is before every `withdrawn` receipt of I, by the owner or the ship.
+
+The station's layer is ⟦c⟧ = the union of ⟦c_I⟧ over its imprints. It is the station's own consent layer in step 1:
+one rule, fixed in code, over the station's own signed records and receipts. No one edits it when anyone acts. The
+ship's withdrawal or shortening writes a receipt, and items 4 and 5 read it. A place's later rules can only remove
+from it. Andy accepts it as his home's rule for imprints before the first one (section 18), since the operator's home
+is his (permissions spec section 2, "Home place").
+
+**Why the station's check is the permissions spec's meet.** In that spec's terms (its 6.1 and 6.3), a use of copy I
+has `Req` = {the owner's home layer, the operator's home layer}: the requester's place and the holding place are both
+`place:home/<operator>`, counted once. The agent's restriction layer is empty, and there are no legacy layers. At the
+station the owner's layer holds every allow the station holds for that owner: the records of every imprint J the
+owner sent here, so it is the union of the ⟦p_J⟧. Now take a use u of copy I.
+
+- u is in ⟦c⟧ only through ⟦c_I⟧, since item 1 names h_I.
+- Every u in ⟦c_I⟧ is in ⟦p_I⟧. Item 1 gives the audience and requester that r_M and r_T name. Item 2 gives the
+  action, the purpose and every object dimension: the store is S, the collection holds o, and the other dimensions
+  are `"*"`. Items 4 and 5 give that the record in force, after any replacement, is valid and unrevoked at t.
+
+So a use of copy I is in the meet over `Req` exactly when it is in ⟦c_I⟧, and ⟦c_I⟧ = ⟦p_I⟧ ∩ ⟦c_I⟧. That holds however
+many imprints the owner holds here, and however the others ended. The station decides with I's own records and
+receipts alone, and that is the meet.
+
+Revision 2's ceiling named only the copy and C. Then the station's per-imprint check was never wider than the meet,
+but the meet could be wider than it. A copy the ship withdrew keeps r_M and r_T unrevoked until their end (D17), and
+they match the same refs, and the same store's roads and trails, in a later copy of the same store, since no selector
+names a copy (permissions spec 6.1). So if copy 1 had `route` and copy 2, with no `route`, held only memories copy 1
+held, the meet would have allowed a trail evaluation on copy 2 through copy 1's r_M (the re-check's RS2). Items 2, 4
+and 5 close that.
+
+From step 2, a ledger may add the owner's denies at home to the owner's layer. The meet is then narrower than ⟦c_I⟧,
+never wider, and the station decides with the permissions spec's `decide` (section 17).
+
+**The ship's withdrawal and shortening** (D17). The requesting ship acts for the owner. But the permissions spec lets
+an agent edit a person's layer only under that person's grant (its P10 and 7.1), and step 1 makes no grants. So the
+ship never revokes or replaces r_M or r_T. Its withdrawal is the station refusing at the owner's agent's request: it
+writes a `withdrawn` receipt, and from that moment ⟦c_I⟧ holds no use of this copy (item 5), as a place may always
+refuse what a person allowed (its 7.5). Its shortening to e writes a `shortened` receipt, and ⟦c_I⟧ then holds no use
+at or after e (item 4). Both only narrow. Both act at once and never wait for Andy. Rio Grande's call.
 
 **The decision.** Each step-1 use kind k expands, at time t, into the finite set of uses it needs:
 
-    Need(admission, t)        = { (a, P, o, x, calibration, t) : o ∈ objects(I), x ∈ {recall, read, imprint} }
-    Need(trail-evaluation, t) = { (a, P, o, x, trail-evaluation, t) : o ∈ objects(I), x ∈ {recall, read} }
-                              ∪ { (a, P, o, route, trail-evaluation, t) : o a road or trail of S derived from I }
+    Need(admission, t)        = { (a, P, o, h_I, x, calibration, t) : o ∈ objects(I), x ∈ {recall, read, imprint} }
+                              ∪ { (a, P, o, h_I, x, trail-evaluation, t) : o ∈ R(I), x ∈ {recall, read, imprint} }
+                              ∪ { (a, P, o, h_I, recall, trail-evaluation, t) : o ∈ objects(I), named by some r ∈ R(I) }
+    Need(trail-evaluation, t) = { (a, P, o, h_I, x, trail-evaluation, t) : o ∈ objects(I), x ∈ {recall, read} }
+                              ∪ { (a, P, o, h_I, route, trail-evaluation, t) : o ∈ R(I) }
 
-The first is the permissions spec's `need` of an `imprint` use on each object. The second is `need` of a `route` use,
-plus `read`, because `trails.py` reads episode content to find cited touches (trail spec section 4). Then
+R(I) is the set of roads and trails of S that can be derived from I: from its episodes' session ids and its log rows
+(trail spec section 4). Every memory one of them names is in objects(I), since a wrote touch is a shipped episode and a
+cited touch a target of a kept row.
 
-    allowed(k, t)  ⇔  status(I) ∈ Status(k)  ∧  Need(k, t) ⊆ ⟦p⟧ ∩ ⟦c⟧
+The first is the permissions spec's `need` of an `imprint` use on each object kept, including, on a road or trail,
+`recall` on every memory it names (its 6.4). R(I) is empty unless the terms include `route`, since only then do session
+ids or log rows ship (D7). Revision 2 named only "a trail of S whose log rows I holds" here, and missed the trails
+that session ids alone make (the re-check's RMF1). The second is `need` of a `route` use, plus `read`,
+because `trails.py` reads memory content to find cited touches (trail spec section 4), and to embed measure W's texts
+and find their anchors (trail spec section 7, step 8). The text goes only to the embedder, in the run's process or the
+Pi's shared embedder service, which answers with vectors and keeps nothing (`embedder_service.py:105-122`; it logs
+only connection events, `:84`, `:134`, and its socket is the user's own, `:99`). Only counts and rates leave the run.
+Then
 
-with Status(admission) = {`approved`} and Status(trail-evaluation) = {`admitted`}.
+    allowed(k, t)  ⇔  status(I) ∈ Status(k)  ∧  Need(k, t) ⊆ ⟦p_I⟧ ∩ ⟦c_I⟧
 
-**A finite check.** Every o ∈ objects(I) matches r_M's object dimensions: its store is S (D11, bound by check 8), and
-its layer and lane are in r_M's (check 12). Every road or trail derived from I matches r_T's objects. So whether a use
-in Need(k, t) is in ⟦p⟧ ∩ ⟦c⟧ depends on o only through its kind. The check is at most six tests of an (action,
-purpose) pair against one record and C, whatever the imprint's size.
+with Status(admission) = {`approved`} and Status(trail-evaluation) = {`admitted`}. Admission is decided by this rule
+at approval and again at the start of every admission run, and checks its end and withdrawal before each write
+(section 10, D39).
+
+**Bulk uses** (the permissions spec's 6.4, P33; the re-check's RN6). Each use kind here shows nothing to any agent, and
+only counts, rates and digests leave the run. So each is decided as that spec's bulk uses. Need(admission) is named
+bulk `imprint` uses on the memories, in batches of at most 512 refs, and, with `route`, one counted bulk `imprint` use
+on R(I). Need(trail-evaluation) is named bulk `read` uses on the memories, in batches of 512, and one counted bulk
+`route` use on R(I). That spec's bound of 32 named memories applies to answer uses, not to bulk uses, so a trail of up
+to 512 touches (trail spec section 4) is no `BOUND` refusal here. Its other bounds still apply: at most 100,000 derived
+objects in one counted bulk use (a larger R(I) is split into several, each with its own receipt row), at most 8
+subjects per road or trail (here there is one, the owner, since no memory with a co-subject ships), and 43 layers per
+object. A use that showed an object to an agent would be an ordinary use, decided per object under the bound of 32.
+Step 1 has none.
+
+**A finite check.** Every o ∈ objects(I) matches r_M's object dimensions: its store is S (D11, bound by check 8), r_M
+names `"*"` layers and lanes, and o is in the collection by definition. Every road or trail in R(I) matches r_T's
+objects. So whether a use in Need(k, t) is in ⟦p_I⟧ ∩ ⟦c_I⟧ depends on o only through its kind. The check is at most
+nine tests of an (action, purpose) pair against one record, C and I's dates and receipts, whatever the imprint's size.
+This is the permissions spec's shortcut for bulk uses: objects that agree on every attribute the records read get the
+same decision (its 6.4, "How it is computed"). So a batch's decision is computed once, and the owner's use list gets
+one row per batch (section 12).
 
 A refusal names the first failing term, in this order: status, `valid_from`, the effective end, withdrawal, audience,
 requester, action, purpose, ceiling. For the owner's use list these map to the permissions spec's codes (its 6.5):
 `NOT_YET`, `EXPIRED`, and `NO_ALLOW` for the rest.
 
 **The order.** Permissions compare by what they allow, as in the permissions spec's 6.2: p′ ≤ p iff ⟦p′⟧ ⊆ ⟦p⟧.
-(𝒫(𝒰), ⊆) is a complete Boolean lattice, with meet = intersection. A decision uses ⟦p⟧ ∩ ⟦c⟧, the meet of the owner's
-layer and the station's. After the yes, step 1 allows only two changes. A shortening gives ⟦p′⟧ ⊆ ⟦p⟧, since every
-record's validity shrinks. A withdrawal gives ⟦p′⟧ = ∅. Neither can widen (the permissions spec's L3). Revision 1's
+(𝒫(𝒰), ⊆) is a complete Boolean lattice, with meet = intersection. A decision uses ⟦p_I⟧ ∩ ⟦c_I⟧, the meet of the
+owner's layer and the station's for copy I. After the yes, step 1 allows only narrowings. The owner's shortening gives
+⟦p′⟧ ⊆ ⟦p⟧, since every record's validity shrinks, and the owner's withdrawal gives ⟦p′⟧ = ∅. The ship's shortening and
+withdrawal shrink ⟦c_I⟧ the same way, since a receipt only ever removes uses from items 4 and 5. None can widen (the
+permissions spec's L1 and L3). Revision 1's
 order, with one purpose that had to be equal, is gone: two purposes had no meet there.
 
 ## 9. Transport over the tailnet
@@ -857,16 +1051,23 @@ restart.
 plus what the station knows itself:
 
 - the ship and machine (from the ship's docking);
-- the store id;
+- the imprint's short id (`c0a8`) and the request's short id (`4f1c`), which `make imprint-send` printed on the owner's
+  machine;
+- the store id, and the stores it was copied from by their short ids, with "lineage complete" or "lineage incomplete"
+  (`source_ancestry`; the re-check's RN4), or "copied from no recorded store";
 - the scope, the counts and the size;
 - the audience in words ("the station's imprint agent, acting for andy");
-- the closed actions ("recall, read and imprint on these memories; route on their roads and trails") and the purposes;
+- the closed actions ("recall, read and imprint on these memories; for the trail evaluation, keeping which session
+  wrote each memory and the recall log, which make your trails, and route over their roads and trails") and the
+  purposes. Without `route`: "which session wrote each memory, and the recall log, stay on your machine";
 - the end date if confirmed now;
-- the plan digest's first 8 characters;
+- the plan digest's first 8 characters, with "the whole 64-character digest is sent";
 - the owner's check about other people (section 8);
-- what the station keeps: "If you allow, the station keeps this permission and its receipts (the store id, the scope,
-  dates, sizes and events; no memory content) for 400 days after the copy is deleted. Its nightly backups keep copies
-  of them for about 8 weeks more, longer if the Pi was off, and also off the Pi if an off-Pi copy is set up.";
+- what the station keeps (D32): "If you allow, the station keeps this permission, its receipts and a row with the ids,
+  your ship and the times (no memory content) until 400 days after the copy is deleted, then removes them all. Its
+  nightly backups keep copies of them for about 8 weeks more, longer if the Pi was off, and also off the Pi if an
+  off-Pi copy is set up. If you decline, it keeps only that row, with no scope or counts, for 30 days. Nothing is kept
+  with no end.";
 - "This store is about you. Allow sends this copy to Deep Space 9. Andy then decides whether the station takes it.
   You can withdraw it at any time, and it is deleted on the end date."
 
@@ -880,20 +1081,27 @@ plus what the station knows itself:
 | `approved` | the imprint and state directories; admission running | `admitted`, `deleting` (failed, withdrawn) |
 | `admitted` | read-only imprint | `deleting` (withdrawn, ended, deleted by the station) |
 | `deleting` | being removed | `deleted`; the sweep retries a failed removal |
-| `deleted` | no files; the permission and receipts, for 400 days | terminal; the reason is in the last receipt |
-| `declined`, `expired` | no files; a content-free row | terminal; no permission, so no receipt (goal 6) |
+| `deleted` | no files but the tombstone; the row, the permission and the receipts, for 400 days, then nothing | terminal; the reason is in the last receipt |
+| `declined`, `expired` | no files; a content-free row, for 30 days, then nothing | terminal; no permission, so no receipt (goal 6) |
 
 **Where an imprint's data lives, and for how long** (D15, D32).
 
 | What | Where | In backups | Removed |
 |---|---|---|---|
-| The request (scope, counts, terms) | staging `request.json` | never | at decline; by the sweep within an hour of expiry; with the staging directory |
+| The request (scope, counts, terms, ancestry) | staging `request.json` | never | at decline; by the sweep within an hour of expiry; with the staging directory |
 | Manifest, parts, staged `imprint.db` | staging | never | at hand-off (moved), denial, withdrawal, or the window's end |
 | `imprint.db`, manifest, permission, registration | `~/.engram/imprints/<imprint id>/` | never | at withdrawal, the end date, a station delete, or a failed admission |
 | Calibration report, uses and their reports | `~/.engram/imprints/<imprint id>.state/` | never | with the imprint |
-| The request row: ids, ship, owner, status, times, `request_sha256` | `peer.sqlite3` | yes | never; it holds no scope and no counts |
+| The request row: ids, ship, owner, status, times, `request_sha256` | `peer.sqlite3` | yes | 30 days after a decline or an expiry; otherwise with the permission, 400 days after `deleted` (D32). It holds no scope and no counts |
 | The permission and its signature; the receipts | `peer.sqlite3` | yes | 400 days after `deleted` (D32) |
-| Tombstones | `~/.engram/imprints/tombstones/` | never | never; they hold only the `withdrawn` and `deleted` receipts |
+| Tombstones | `~/.engram/imprints/tombstones/` | never | 400 days after `deleted`, with the row (D32). They hold only the `withdrawn` and `deleted` receipts: ids, times, and each removed file's path, bytes and SHA-256 |
+
+Nothing about an imprint or a request has no end (D32; Rio Grande's call, from the re-check's RS5). Revision 2 kept the
+request row, a content-free row per deleted imprint, and the tombstones for good, and told the owner only of the 400
+days. A tombstone keeps a restore from bringing a withdrawn imprint back (section 12). A backup from 400 days ago stays
+in the rotation only if fewer than 8 of the ISO weeks since, or fewer than 14 of the days since, had a backup
+(`backups.py:30`, `:109-119`: "a Pi that was off never ages out its last copies"). A row restored from it whose files
+are gone becomes `deleted` or `expired` anyway, and one past its end is removed again (section 12, the sweep).
 
 Backups copy only `peer.sqlite3` (`backups.py:167-176`). They keep the newest copy of each of the 14 most recent days
 and the 8 most recent ISO weeks that have a copy (`backups.py:30`, `:109-119`). So a row erased today stays in the
@@ -924,29 +1132,61 @@ requests, read from its `request.json`:
 **Hand-off.** `station-approve` (peer, `Store(signing=False)`, `__main__.py:322-327`) for an imprint item:
 
 1. In one transaction: status `received` → `approved`, and the unsigned `approved` receipt (section 12).
-2. Create `~/.engram/imprints/<imprint id>/` and `<imprint id>.state/` (both 0700, exclusive create). It refuses if
-   either exists or a tombstone for that id exists. Makefile `IMPRINTS ?= $(HOME)/.engram/imprints` passes the path
-   to both sides.
+2. Create `<root>/<imprint id>/` and `<root>/<imprint id>.state/` (both 0700, exclusive create), where `<root>` is the
+   imprints root, `~/.engram/imprints` by default (below). It refuses if either exists or a tombstone for that id
+   exists. It records the absolute root in the request row.
 3. Move `imprint.db` and `manifest.json` from staging, and write `permission.json` (`{record, signature,
    station_key}`; the lighthouse signed it at the yes) and `approved.json`. Remove the staging directory.
 4. The Makefile then starts admission as a detached user unit and returns at once (D29):
 
-       systemd-run --user --unit=superyak-imprint-admit-<short id> --collect \
+       systemd-run --user --unit=superyak-imprint-admit-<imprint id> --collect \
            -p MemoryMax=4G -p MemorySwapMax=0 -p RuntimeMaxSec=1800 \
            make -C <repository> station-imprint-admit ID=<imprint id>
 
-   It prints "Approved 4f1c. Admitting in the background; see make station-imprints." Claude's Bash tool stops at 10
-   minutes, and calibration can take 30. `make station-imprint-admit` with no ID starts one unit for each approved
-   imprint without a result, after a crash. Approving a docking never touches the engram environment.
+   The unit is named by the full imprint id, so two imprints whose short ids match never share a unit (the re-check's
+   RN9). It prints "Approved 4f1c. Admitting in the background; see make station-imprints." Claude's Bash tool stops
+   at 10 minutes, and calibration can take 30. `make station-imprint-admit` with no ID starts one unit for each
+   approved imprint without a result, after a crash. Approving a docking never touches the engram environment.
 
-`station-imprint-admit ID=…` runs engram's `imprint.py admit --id …`, then the peer's `station-imprint-sync`, which
-records the result. Each step is idempotent.
+**The imprints root** (the re-check's RN10). It is one setting, the flag `--imprints-dir DIR`, with default
+`$HOME/.engram/imprints`. It is taken by `superyak-peer serve` (the lighthouse, which runs withdrawal), by every
+station command that touches imprints (`station-approve`, `station-deny`, `station-imprints`, `station-imprint-sync`,
+`-sweep`, `-delete`, `-use-begin`, `-admit-begin`), and by engram's `imprint.py admit`, `use` and `list`. The Makefile
+passes `IMPRINTS ?= $(HOME)/.engram/imprints` to the commands it runs. The sweep's unit passes `--imprints-dir
+%h/.engram/imprints`. The lighthouse's installed unit (`~/.config/systemd/user/superyak-lighthouse.service`) passes
+the same flag; today its `ExecStart` passes only `--data-dir`, `--host`, `--port`, `--proxy-headers`, `--origin` and
+`--share-link-file`. No environment variable sets the root, so every command line says where it is. Every later
+removal (withdrawal, the sweep, a station delete) removes the directories under the root recorded in the request row,
+whatever its own flag says, and a process whose flag differs logs the mismatch. A deploy gate checks that the
+lighthouse and the Makefile name one root (section 18).
 
-**Deletion wins** (D17). Withdrawal runs in the lighthouse, and admission runs in its own unit. So:
+`station-imprint-admit ID=…` runs the peer's `station-imprint-admit-begin --id …`, then engram's `imprint.py admit --id
+…`, then the peer's `station-imprint-sync`, which records the result whatever admission's exit status. Each step is
+idempotent.
+
+**Admission is decided again** (D39; Rio Grande's call, from the re-check's RS3). `station-approve` decides admission
+once, in the transaction that sets `approved`. A run may start much later: after a crash, `make station-imprint-admit`
+resumes, maybe days on. So every run, the first included, begins with `station-imprint-admit-begin`, which reruns
+section 8's whole check at its own time t: status `approved`, `valid_from`, the effective end with every shortening
+by the owner or the ship, withdrawal, audience, requester, action, purpose and ceiling. If it allows, it writes
+`<imprint id>.state/admission.json` (0400):
+
+    {"kind": "imprint-admission-allow", "instance_id": "c0a8f5e2-…", "decided_at": 1792956660,
+     "valid_until": 1800727950}
+
+with `valid_until` the effective end. A shortening replaces this file atomically, as it replaces a use's allow files
+(section 12). If refused, it writes a `failed` receipt naming the failing term and writes no file. The sync then
+deletes the imprint as a failed admission, with reason `ended` when the term is the end. So an end takes effect at the
+next decision at or after it, never at the next sweep: the permissions spec's "Time needs no act" (its section 10).
+
+**Deletion and the end win** (D17, D39). Withdrawal runs in the lighthouse, and admission runs in its own unit. So:
 
 - Admission never creates `<imprint id>/` or `<imprint id>.state/`. Before each write, and before calibration starts,
-  it checks that no tombstone exists and that `<imprint id>/approved.json` is present. If not, it stops without
-  writing ("withdrawn during admission").
+  it checks that no tombstone exists, that `<imprint id>/approved.json` is present, and that
+  `<imprint id>.state/admission.json` is present with `valid_until` later than now. If not, it stops without writing
+  ("withdrawn during admission", or "ended during admission"), and its exit status says which. The other terms of the
+  check are fixed by signed records and code, so these are the only ones that can change during a run. On "ended",
+  the sync writes the `failed` receipt (term: the effective end) and deletes the imprint with reason `ended`.
 - Calibration writes into `<imprint id>.state/calibration/`. `calibrate` gains `create_parents` (default true, today's
   behaviour at `calibrate.py:251`). Admission passes false, so a removed state directory is never recreated.
 - `station-imprint-sync` moves only `approved` rows. It never moves `deleting` or `deleted` to `admitted`.
@@ -976,11 +1216,14 @@ records the result. Each step is idempotent.
     links, peers, subdivision events, and log rows' `target_ids`. Every vector row's id is a row of its base table.
 11. Scrubs hold. Every `memory_log` row is a `recall` or `route_shown`. A recall has a non-empty target list with no id
     outside the package's memories, `context` keys within {`recall_id`, `session_id`}, and an outcome of null, `used`,
-    `not_used` or `used: auto: cited`. A `route_shown` row's targets are in the package, its `context` keys within
-    {`receipt_id`, `session_id`, `tool`, `lane`}, its lane in `covers`, and its outcome null. Every `operation_log` row
+    `not_used` or `used: auto: cited`. A `route_shown` row's targets are not empty and are in the package, its `context` keys within
+    {`receipt_id`, `session_id`, `tool`, `lane`}, its lane in `scope.lanes`, and its outcome null. Every `operation_log` row
     has its operation in `CITING_OPERATIONS`, null `harness`, `model` and `repo`, and `{}` details.
 12. Scope holds. Every memory's lane and `created_at`, and every log row's and resonance's time, are within the
-    scope. Tables of layers not chosen are empty, and the instinct tables are empty.
+    scope. Tables of layers not chosen are empty, and the instinct tables are empty. Without `route` in the terms,
+    `memory_log` and `operation_log` are empty, and every `episodes.session_id` is null (D7). With `route`, the Pi
+    can't check which sessions were closed at t₁, since it never sees the rows that stayed home. The plan digest binds
+    each episode's session id as kept (5.4), and check 13 recomputes it.
 13. Counts equal `manifest.contents`, and recomputing the plan digest from the package's rows (5.4) equals
     `manifest.plan_digest` (D22).
 14. `PRAGMA freelist_count` is 0.
@@ -1008,6 +1251,10 @@ Those rest on the source build, its L1 and L4, and its tests.
   is 7,914 at MemoryMax = 4 GiB. Step 1 uses 7,500. Revision 1's 12,000 would have peaked near 8.6 GB and been killed.
 - The report must show `source_unchanged` true and no side files created (`calibrate.py:302-305`). The snapshot
   uses `immutable` when there is no WAL (`calibrate.py:61`), so the read-only directory stays clean.
+- Without `route`, every `episodes.session_id` is null, so the paths analysis finds no session: `paths.report` counts
+  only non-null ids (`paths.py:423`), and `session_paths` selects only episodes that have one (`:349`). The admission
+  report then says "paths: no session ids, because route was not chosen" beside that section, so the empty result is
+  not read as a store with no sessions.
 - After calibration, `snapshot.db` and `working.db` are deleted. `report.json` and `report.md` stay.
 - One analysis that errors is reported, not fatal (`calibrate.py:236-241`). A calibration that fails as a whole
   (exception, memory limit, timeout, source changed) fails admission, because the trail spec needs this evidence.
@@ -1029,6 +1276,9 @@ What `make station-imprints` shows Andy after admission:
 c0a8  sam  admitted 2026-10-25 19:41 UTC   17 of 17 checks; calibrated (88 semantics measured, 31 session paths)
       read-only at ~/.engram/imprints/c0a8f5e2-…/   ends 2027-01-23   receipts signed
 ```
+
+The 31 session paths are there because this example chose `route`. Without it, the line says "no session paths
+(route not chosen)".
 
 ## 11. Identity, lineage, never merged
 
@@ -1052,8 +1302,17 @@ imprint replaces them with the rest.
   `meta.ancestry_complete` is `true` or `false`.
 - `stamp_fork` and `stamp_imprint` write the child's ancestry as `[parent id] + ancestry(parent)`, cut to 64 entries.
   The child is complete when the parent is complete, the parent's id is not null, and nothing was cut.
-- A store with neither key and no `forked_from_instance_id` is a root (origin `creation` or `retroactive`): ancestry
-  [], complete.
+- A store with neither key and no `forked_from_instance_id`, of origin `creation`, is a root: ancestry [], complete.
+  Store identity gave it a random id when this open created it (`storage.py:246-254`), so a copy made since is either
+  a fork, which records its parent, or a file copy, which keeps the same id.
+- A store with neither key and no `forked_from_instance_id`, of origin `retroactive` or with no stored identity yet,
+  is older than store identity (migration 028, 2026-09-29): ancestry [], **incomplete** (D13; Rio Grande's call, from
+  the re-check's RS4). Before identity, `cli.py fork` copied a store whole with SQLite's backup (`cli.py:15-49`, the
+  copy at `:42`) and recorded nothing in the copy. Such copies exist: `instances.json` records their `forked_from`
+  (`federation.py:127-142`). A retroactive id comes from the earliest episode (`store_identity.py:84-102`), and
+  pruning deletes episodes (`storage.py:734-747`, `:760`). So if the parent or its old copy pruned that episode before
+  migrating, the two got different ids, and nothing in either says that one is a copy of the other. Calling them
+  complete would make `independent` true for a store and its own copy.
 - A store with `forked_from_instance_id` and no `ancestry` was forked before this rule. Its ancestry is
   `[forked_from_instance_id]`, incomplete. Nothing recorded its grandparents.
 - A fork of a store with no identity (`forked_from_instance_id` null, which `stamp_fork` allows for an empty old
@@ -1077,7 +1336,9 @@ The review's cases, with G a genome, Y = fork(G), X = fork(Y), Z = fork(G) and I
 | Y and Z (siblings) | {Y, G}, {Z, G} | false |
 | I and G | {I, X, Y, G}, {G} | false |
 | an old fork W of F, made before this rule, and an unrelated G | {W, F}, {G} | unknown |
-| two unrelated roots | {A}, {B} | true |
+| a store R older than identity, and a copy R′ the old `fork` made of it, whose earliest episode was pruned before either migrated | {R}, {R′} (two derived ids) | unknown: both incomplete |
+| an imprint I of R | {I, R}, {R′} | unknown: I's ancestry inherits R's incompleteness |
+| two unrelated stores made after identity (origin `creation`) | {A}, {B} | true |
 
 - **Siblings forked from one genome are never independent.** That is conservative. `cli.py fork` forks from the
   genome by default (`cli.py:15`), so a person's instances are siblings. The rail spec should know this.
@@ -1087,7 +1348,14 @@ The review's cases, with G a genome, Y = fork(G), X = fork(Y), Z = fork(G) and I
 - **Row-level provenance.** Genome-synced episodes carry `origin_instance_id`, `origin_id` and `origin_created_at`
   (`federation.py:182-186`; `028_store_identity.sql:10-12`). Two stores whose lineages don't meet can still hold copies
   of one genome's episodes. The rail spec must also read `origin_instance_id`: an episode whose origin is in the other
-  store's lineage is a copy, not agreement. This spec only names it.
+  store's lineage is a copy, not agreement. The columns exist only since migration 028. A sync fills them in for an
+  older synced episode only when the genome still holds an episode with the same content hash
+  (`federation.py:187-193`). So an episode of type `genome_sync` with a null `origin_instance_id` is a copy of unknown
+  origin, and never agreement either. This spec only names it.
+- **Stores older than identity.** Every store of origin `retroactive`, or with no stored identity, is incomplete. So
+  `independent` is `unknown` for every pair that holds one, and the pair never counts. That is the strict default. A later spec may
+  give such a store a complete ancestry another way, for example its owner's signed word that it was never copied.
+  This spec does neither. The rail spec should know that today's older stores count for nothing until then.
 - The rail spec must count agreement only between stores whose `independent` is true. This stops accidental double
   counting. It cannot stop someone who rewrites identity by hand.
 
@@ -1113,11 +1381,13 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
 
 | Use | Needs (section 8) | Status | Started by | Output |
 |---|---|---|---|---|
-| admission: verify, survey, calibrate | `recall`, `read`, `imprint` on the memories, purpose `calibration` | `approved` | `station-approve`, in a detached unit | the content-free report in the state directory, shown to the owner |
-| `trail-evaluation` | `recall`, `read` on the memories and `route` on their roads and trails, purpose `trail-evaluation` | `admitted` | `make station-imprint-use ID=… USE=trail-evaluation`, in a detached unit | `trails.py … --evaluate` on `imprint.db`: counts and rates only (trail spec section 7.7) |
+| admission: verify, survey, calibrate | `recall`, `read`, `imprint` on the memories, purpose `calibration`; with `route`, also on their roads and trails, and `recall` on the memories they name, purpose `trail-evaluation` | `approved` | `station-approve`, in a detached unit; decided again at each run's start (D39) | the content-free report in the state directory, shown to the owner |
+| `trail-evaluation` | `recall`, `read` on the memories and `route` on their roads and trails, purpose `trail-evaluation` | `admitted` | `make station-imprint-use ID=… USE=trail-evaluation LANE=…`, in a detached unit | `trails.py <imprint dir>/imprint.db --evaluate --lane <LANE> --seed N --deadline 1740 --json --imprint-use <use id>`: counts and rates only (trail spec section 7, step 7). `LANE` is one lane of the scope, since a pass licenses one lane (trail spec section 7, step 9). It may be left out when the scope holds one lane |
 
 - Admission's decision is made by `station-approve`, in the transaction that sets `approved`, before the hand-off.
-  A refusal there is a denial, and its receipt names the failing term.
+  A refusal there is a denial, and its receipt names the failing term. It is made again by
+  `station-imprint-admit-begin` at the start of every admission run, and admission checks its end and withdrawal
+  before each write (section 10, D39). A refusal then is a `failed` receipt naming the term.
 - `station-imprint-use-begin` (peer) decides a use. If allowed, it writes the `use-started` receipt and the allow file
   `<imprint id>.state/uses/<use id>.allow.json` (0400):
 
@@ -1133,8 +1403,8 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
   directory is 0555 after admission. So `trails.py --imprint-use` must read it there, and must treat the tombstone
   `~/.engram/imprints/tombstones/<imprint id>.json` as withdrawal (revision 1's `withdrawn.json` was never written by
   anything). If refused, it writes a `refused` receipt and nothing else.
-- A shortening during a use replaces each live allow file of that imprint, atomically, with one holding the new
-  `valid_until`. A withdrawal removes the whole state directory.
+- A shortening replaces each live allow file of that imprint, `admission.json` included, atomically, with one holding
+  the new `valid_until`. A withdrawal removes the whole state directory.
 - Engram's `imprint.py use` refuses without the allow file, if a tombstone exists, or if `valid_until` has passed. It
   runs the use and writes its report in `<imprint id>.state/uses/<use id>/`. `station-imprint-sync` then writes
   `use-finished`, with the report's SHA-256 only when a report exists, and otherwise the run's end ("withdrawn" or
@@ -1186,21 +1456,26 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
 
 No receipt holds content, query text, ids of memories, or anything about what stayed home.
 
-**Withdrawal.** The owner (browser, CSRF) or the requesting ship (principle 1: agents may narrow) withdraws in any
-status before `deleted`. In one request:
+**Withdrawal.** The owner (browser, CSRF) withdraws by revoking the permission's records. The requesting ship
+(principle 1: agents may narrow) withdraws by asking the station to refuse, which edits none of the owner's records
+(section 8, D17). Either may do it in any status before `deleted`. In one request:
 
-1. Set status `deleting` and write `withdrawn`.
-2. Remove the staging directory, the imprint directory and its state directory, after restoring write permission.
-   Hash each file first. For `imprint.db` the hash is the manifest's, which admission verified.
-3. Write the tombstone `~/.engram/imprints/tombstones/<imprint id>.json` holding both receipts.
+1. Set status `deleting` and write `withdrawn`. From this receipt on, the ceiling ⟦c_I⟧ holds no use of the copy
+   (section 8, item 5), whoever withdrew.
+2. Remove the staging directory, the imprint directory and its state directory, under the root the request row
+   records (section 10), after restoring write permission. Hash each file first. For `imprint.db` the hash is the
+   manifest's, which admission verified.
+3. Write the tombstone `<root>/tombstones/<imprint id>.json` holding both receipts.
 4. Write `deleted` and set status `deleted`.
 
 It never waits for Andy, and it wins over a running admission (section 10). If a removal fails, the status stays
 `deleting`, a `delete-failed` receipt is written, the sweep retries, and the owner sees it. The station operator may
 also delete (`make station-imprint-delete ID=`; reason `station`), since places can refuse.
 
-**Shortening.** The owner or the ship can set a new end, later than now and earlier than the effective end. It is a
-narrowing (section 8). Lengthening is refused: it needs a new imprint and a new yes (D18).
+**Shortening.** The owner or the ship can set a new end, later than now and earlier than the effective end. The
+owner's replaces the records; the ship's is a `shortened` receipt, which the ceiling reads (section 8, item 4). Each
+is a narrowing (section 8).
+The effective end is the earliest of the records' `valid_until` and every shortening. Lengthening is refused: it needs a new imprint and a new yes (D18).
 
 **Expiry and the sweep.** `superyak-imprint-sweep.timer` runs hourly (beside the backup timer, Makefile
 `station-units`) and runs `superyak-peer station-imprint-sweep`. It:
@@ -1209,11 +1484,13 @@ narrowing (section 8). Lengthening is refused: it needs a new imprint and a new 
   upload or review window;
 - deletes the staging directory of every expired request, leaving its row content-free;
 - runs `station-imprint-sync`, then retries `deleting`;
-- reconciles after a restore: a row with a tombstone becomes `deleted`; an `admitted` row whose files are gone
-  becomes `deleted` (reason `missing`); a directory with no live row is removed, with a `deleted` receipt (reason
-  `restore`) when the station holds a permission for it;
-- replaces the permission and receipts of every imprint deleted more than 400 days ago with a content-free row: id,
-  ship, owner, final status and times (D32).
+- reconciles after a restore: a row with a tombstone becomes `deleted`; a row in any status before `deleting` whose
+  files are gone becomes `deleted` (reason `missing`) when it has a permission, and `expired` when it has none; a
+  directory with no live row is removed, with a `deleted` receipt (reason `restore`) when the station holds a
+  permission for it;
+- removes the row, the permission, the receipts and the tombstone of every imprint deleted more than 400 days ago,
+  and the row of every request declined or expired more than 30 days ago, so nothing is kept with no end (D32). A
+  restore that brings such a row back has it removed again at the next sweep.
 
 Imprint bytes and request contents are never in backups, because station backups copy only `peer.sqlite3`
 (`backups.py:167-176`) (D15). What `peer.sqlite3` holds, and for how long its backups keep it, is in section 9.
@@ -1232,8 +1509,9 @@ the second limit. Encrypted imprints (step 7) narrow the first.
 
 - `make imprint-status`: one line per imprint at the station, with short id, status, end date and last event.
 - `make imprint-status ID=…`: the permission with its signature, every receipt (signed, or "not yet signed"), the
-  content-free calibration report, any use reports, and what the station keeps and for how long (section 9). The agent
-  saves receipts in `~/.superyak/imprints/<imprint id>/receipts/` and checks the hash chain.
+  content-free calibration report, any use reports, and what the station keeps and for how long, in the confirm view's
+  words (section 9, D32), with the date each thing will be removed. The agent saves receipts in
+  `~/.superyak/imprints/<imprint id>/receipts/` and checks the hash chain.
 - `make imprint-verify ID=…` (peer environment):
   - checks that SHA-256 of `station_key` equals each record's `station` (`identity.py:94` makes the peer id that way);
   - verifies every signature;
@@ -1241,18 +1519,37 @@ the second limit. Encrypted imprints (step 7) narrow the first.
     imprint. A changed key is a loud warning, not a pass (`peer/API.md:304-309` explains when a station's key
     changes).
 - **In the owner's own use list.** The permissions spec has this spec build the owner's entry: "Until the deletion is
-  confirmed, the owner's use list shows 'copy held, deletion not confirmed'" (its lines 674-676). When the owner's
+  confirmed, the owner's use list shows 'copy held, deletion not confirmed'" (its section 10). The machine keeps the
+  shipped refs `mem:S/<layer>/<id>`, sorted, in `~/.superyak/imprints/<imprint id>/objects.json`. When the owner's
   machine has a permissions ledger, `make imprint-status` also imports each verified receipt of a use (`admitted`,
   or `failed` or `denied` with a failing term, for admission; `use-finished` or `refused` for a later use) into
-  `permission-uses.db` (permissions spec 9.1) as one `uses` row per action the use needed: `id` = `u-` + the first
-  32 hex of SHA-256(receipt id + action); `ledger_id` = the station's peer id (its 4.1 names that for step 2);
-  `ledger_seq` = the receipt's position in its chain; `agent`, `place` and `acting_for` from the use's terms;
-  `action` and `purpose`; `object` = null; `copy` = `imprint:<station peer id>/<imprint_id>`; `allowed`; `cited` = the record ids; `refusal`;
-  `until` = the effective end; `returned` = `{"imprint": …, "count": n}`. One `use_subjects` row names the owner and
-  the copy. The machine keeps the shipped refs `mem:S/<layer>/<id>` in `~/.superyak/imprints/<imprint id>/objects.json`,
-  so `engram-permissions uses --person sam --object mem:S/episode/<id>` finds every imprint use that covered that
-  memory. `uses --person` shows "copy held at Deep Space 9 (imprint c0a8), deletion not confirmed" for every imprint
-  whose last verified receipt is not `deleted`, and the deletion's date and receipt once it is.
+  `permission-uses.db` in the form that spec gives an imprint's receipts (its 9.1). For each action on memories the
+  use needed, it writes one `uses` row per batch of at most 512 refs from `objects.json`, in order:
+  - `id` = `u-` + the first 32 hex of SHA-256(receipt id + action + batch number);
+  - `ledger_id` = the station's peer id (its 4.1 names that for step 2), and `ledger_seq` = the receipt's position in
+    its chain;
+  - `agent`, `place` and `acting_for` from the use's terms; `action` and `purpose`; `object` = null;
+  - `copy` = `imprint:<station peer id>/<imprint_id>`; `allowed`; `cited` = the record ids; `refusal`; `until` = the
+    effective end;
+  - `returned` = the batch's count and the SHA-256 of its sorted refs;
+  - one `use_subjects` row (owner, ref) for each ref in the batch.
+
+  An action on roads and trails, which the Pi derives in memory and never names, gets one row with `returned` = their
+  count and one `use_subjects` row (owner, the copy's ref). So `engram-permissions uses --object mem:S/episode/<id>`
+  finds every imprint use that covered that memory, as it finds any other use. That spec's `uses` lists the ledger
+  owner's uses and takes no person argument (its 7.6, 9.3), so the owner runs it as themselves. It shows "copy held at
+  Deep Space 9 (imprint c0a8), deletion not confirmed" for every imprint whose last verified receipt is not `deleted`,
+  and the deletion's date and receipt once it is. The station's own receipts still name only `{imprint, count}`: they
+  outlive the copy by 400 days (D32), and memory ids kept there would outlive it too. Rio Grande's call, from the
+  interface pass.
+
+  **These rows depart from the permissions spec's local receipt form** (the re-check's RN5; Rio Grande's call, privacy
+  over a uniform form). They are its imported form, which its 9.1 names with four differences: one row per action the
+  use needed, where a local use writes one receipt whose `cited` covers all of `need`; memories by batches of at most
+  512 refs, where that spec writes one receipt per imprint batch; roads and trails as one counted row whose one
+  `use_subjects` row is (owner, h), a copy ref and not an object of any kind; and `cited` with record ids but no
+  versions. So `engram-permissions uses --action recall` counts an admission's recall rows, one per batch, apart from
+  its read and imprint rows, and its use list counts imported rows apart from local ones (its 9.3).
 - In the station web app, Accounts → Imprints shows the same, with Withdraw and Shorten buttons.
 - Once the imprint is `admitted`, `declined`, `denied`, `failed` or `deleted`, the agent deletes the source machine's
   `imprint.db` copy and keeps the manifest, plan, `objects.json` and receipts (D24).
@@ -1277,8 +1574,9 @@ Other plan flags: `--store PATH`, `--until`, `--shared-with`, `--exclude FILE`, 
 
 `make imprint-send` behaves like `make dock`:
 
-- It builds the package, prints the request in words (7.1), sends it, prints the short id, the code and the confirm
-  link, and waits up to 9 minutes per run.
+- It builds the package, prints the request in words with the ancestry and what the station keeps (7.1), sends it,
+  prints the imprint's short id (`c0a8`), the request's short id (`4f1c`, which Andy confirms at approval), the code
+  and the confirm link, and waits up to 9 minutes per run.
 - While it waits, it ends with `STATUS: waiting-for-you` and make reports `Error 3`. That is expected.
 - After the yes it sends the manifest and the parts with progress, and ends with `STATUS: received` (waiting for
   Andy).
@@ -1294,9 +1592,9 @@ make station-pending                        # IMPRINT items with their short ids
 make station-approve ID=4f1c                # approve; admission starts in the background
 make station-deny ID=4f1c
 make station-imprints                       # every imprint: owner, status, end date, checks, signing
-make station-imprint-use ID=c0a8 USE=trail-evaluation    # in the background, as agent:station-imprints for APPROVER
+make station-imprint-use ID=c0a8 USE=trail-evaluation LANE=work   # in the background, as agent:station-imprints for APPROVER
 make station-imprint-delete ID=c0a8         # the station declines to keep it
-make station-imprint-admit                  # resume an interrupted admission
+make station-imprint-admit                  # resume an interrupted admission; decided again first (D39)
 ```
 
 `APPROVER` (default `andy`) is the Pi operator's word about who is acting, not an authentication. Anyone with the
@@ -1322,20 +1620,26 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
 | Receipt signing | at start, every 60 seconds, and before an imprint read | D19 |
 | Closed session | newest row before t₁ older than t₁ − 3,600 s | the trail spec's closed session (its section 4) |
 | Ancestry | at most 64 ids | bounds `meta`; a longer chain is marked incomplete |
+| Memories per imprint | 100,000 | the permissions spec's collection bound (its 5.4), since r_M names them as one collection (D36) |
 | Calibration | MemoryMax=4G, MemorySwapMax=0, 30 minutes, at most 7,500 episodes in any dense set | measured 7.5 × n² × 8 B (section 10) |
-| Station-held permission and receipts | 400 days after `deleted` | the permissions spec's receipt retention (its 9.1) |
+| Station-held row, permission, receipts and tombstone | 400 days after `deleted`, then removed (D32) | the permissions spec's receipt retention (its 9.1) |
+| Row of a declined or expired request | 30 days after it ends, then removed (D32) | long enough for `make imprint-send` to report the outcome; the row holds no scope or counts |
 | Agent wait per run | 9 minutes | `make dock`'s |
 | Filter, request, manifest | `imprint-filter-v1`, version 1, version 1 | |
 
 `POST /api/imprints` refuses a request that breaks any of these:
 
-- it parses with `identity.parse` (`identity.py:27-48`) and has exactly the section 7.1 keys, at every level;
+- it parses with `identity.parse` (`identity.py:27-48`) and has exactly the section 7.1 keys, at every level, where
+  `contents` holds a subset of the ten table names 7.1 lists, each with a count of at least 1;
 - `imprint_id` is a lowercase UUID4 (`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`), and no
   request, imprint directory or tombstone on this station already has it. It becomes a path component on the Pi;
-- `source_instance_id` is a lowercase UUID;
+- `source_instance_id` is a lowercase UUID; `source_ancestry` is a list of at most 64 distinct lowercase UUIDs, none
+  equal to `source_instance_id`; `source_ancestry_complete` is a boolean;
 - `plan_digest` is 64 lowercase hex;
 - `since` and `until` are null or `YYYY-MM-DDTHH:MM:SSZ`, with `since` before `until`;
-- every count and `package.bytes` is an integer from 0 to 2⁵³, and `parts` equals ⌈bytes / part size⌉;
+- every count and `package.bytes` is an integer from 0 to 2⁵³, `parts` equals ⌈bytes / part size⌉, and `episodes` plus
+  `semantics` is at most 100,000 (D36);
+- `contents` holds `memory_log` or `operation_log` only when the terms include `route` (D7);
 - lanes, layers and every list are sorted, distinct and within 5.2's sets;
 - the terms obey 5.3: the audience is `place:home/<h>` with h the station's super admin (`users.is_super_admin`,
   `auth.py:23`), meant to be Andy on Deep Space 9 (a deploy gate checks it), and the requesting ship's owner has a
@@ -1343,24 +1647,26 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
 - disk, size, per-ship and per-source limits hold.
 
 `PUT /api/imprints/{id}/manifest` applies the same formats to the manifest's fields, with every `parts` entry and
-`sha256` 64 lowercase hex, `built_at` in the `Z` form, and `ancestry` a list of at most 64 lowercase UUIDs.
+`sha256` 64 lowercase hex, `built_at` in the `Z` form, and `ancestry` a list of at most 64 lowercase UUIDs equal to
+the request's `source_ancestry`.
 
 ## 15. Components
 
 | Component | Responsibility |
 |---|---|
-| `engram/imprint.py` | `plan`, `read`, `build` on the source; `admit`, `use`, `list` on the Pi; `import-receipts` on the owner's machine. The table rules of 6.2 as one ordered map, checked against the schema. The digest keys of 5.4. The leak checks L1–L4. The 17 checks. The semantics reader. |
-| `engram/store_identity.py` | `ORIGIN_IMPRINT`, `stamp_imprint`, ancestry in `stamp_fork`, `ancestry`, `lineage`, `independent` (returns true, false or unknown) |
+| `engram/imprint.py` | `plan`, `read`, `build` on the source; `admit`, `use`, `list` on the Pi, each with `--imprints-dir`; `import-receipts` on the owner's machine. The table rules of 6.2 as one ordered map, checked against the schema, with the `session_id` scrub. `pending(m)` from the ledger's lane notes. The digest keys of 5.4. The leak checks L1–L4. The 17 checks. The semantics reader. Admission's checks of `admission.json` before each write (D39). |
+| `engram/store_identity.py` | `ORIGIN_IMPRINT`, `stamp_imprint`, ancestry in `stamp_fork`, `ancestry`, `lineage`, `independent` (returns true, false or unknown); a `retroactive` store, or one with no stored identity, is incomplete (D13) |
 | `engram/storage.py` | refuse a normal open of an imprint, before any pragma or migration, unless `imprint_working_copy=True` |
 | `engram/store_reader.py` | `connect(…, vec=True)` loads sqlite-vec on a read-only connection |
 | `engram/calibrate.py` | `no_content`, `max_lane_episodes`, `create_parents`, and the working-copy flag |
 | `engram/persistence.py` | the bound applied to the core set and to each hub's sources |
 | `engram/sharing.py`, `federation.py`, `cli.py`, `lighthouse_sheaf.py` | the guards in section 11; `fork` passes ancestry |
 | `peer/superyak_peer/identity.py` | `RECORD_KEYS` for `imprint-permission` and `imprint-receipt`; `verify_station_record(public_key_b64, record, signature)`, True only when SHA-256 of the key equals `record.station`, the shape is right (including each inner record's keys) and the signature verifies; never raises |
-| `peer/superyak_peer/imprints.py` | requests, the confirm with password and the check, manifests, parts, joining, status, withdrawal, shortening, receipts and their chain, tombstones, the sweep, the hand-off, the use decision, the sync, retention |
+| `peer/superyak_peer/imprints.py` | requests, the confirm with password and the check, manifests, parts, joining, status, withdrawal, shortening, receipts and their chain, tombstones, the sweep, the hand-off, the use decision with the per-copy ceiling (D38), admission's decision at each run (D39), the sync, retention with its ends (D32) |
 | `peer/superyak_peer/app.py`, `peer_routes.py` | the routes in section 9 (ship routes through `ship_member`, `app.py:104-109`); the signing task in the lifespan, only where the store signs |
-| `peer/superyak_peer/ships.py`, `__main__.py` | `station_pending`, `station_decide`, `station_notices` and `describe_pending` learn `imprint`; new `station-imprints`, `station-imprint-sync`, `station-imprint-sweep`, `station-imprint-delete`, `station-imprint-use-begin`, `verify-imprint` |
-| peer database migration | tables for requests (ids, ship, owner, status, times, decisions, `request_sha256`, permission and signature) and receipts (seq, id, request, record, signature or null) |
+| `peer/superyak_peer/ships.py`, `__main__.py` | `station_pending`, `station_decide`, `station_notices` and `describe_pending` learn `imprint`; new `station-imprints`, `station-imprint-sync`, `station-imprint-sweep`, `station-imprint-delete`, `station-imprint-use-begin`, `station-imprint-admit-begin`, `verify-imprint`; `--imprints-dir` on `serve` and on every one of these (section 10) |
+| peer database migration | tables for requests (ids, ship, owner, status, times, decisions, `request_sha256`, the imprints root, permission and signature) and receipts (seq, id, request, record, signature or null) |
+| the lighthouse's installed user unit | `--imprints-dir %h/.engram/imprints` in its `ExecStart` (a deploy gate) |
 | peer web app | the confirm view and Accounts → Imprints |
 | `peer/systemd/` | `superyak-imprint-sweep.service` and `.timer`, added to `station-units` |
 | `agent/superyak_agent` | `imprint send`, `status`, `withdraw`, `shorten` over the ship key, standard library only |
@@ -1376,20 +1682,36 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
   build.
 - **Selection.** Lanes; layers; the half-open date range, including an unparseable `created_at` and one with no zone
   (read as UTC); `--shared-with` matched by instance name, layer, audience and digest; a source memory changed after it
-  was shared is not shared; `--exclude`; a memory with a co-subject in a fixture ledger stays home and is counted.
+  was shared is not shared; `--exclude`; a memory with a co-subject in a fixture ledger stays home and is counted. In a
+  fixture ledger, a memory whose latest lane note is `pending`, and one whose latest note names the other lane, stay
+  home and are counted; with no ledger, or no note, the lane column decides (D40).
 - **Down-closure.** A semantic with one out-of-scope source stays home. A semantic whose sources were all pruned stays
   home and is counted, and ships with `--include-unsourced-semantics`. A semantic with one source pruned is judged on
   the rest.
 - **Induced links.** For each link table, a row with one endpoint outside M is dropped. A resonance created after t₁
   is dropped.
 - **Log rows.** Rows at or after t₁ and rows of sessions not closed at t₁ are dropped. A recall and a `log_outcome`
-  after the plan don't change the digest. A late outcome on a kept row does, and the build refuses.
+  after the plan don't change the digest. A late outcome on a kept row does, and the build refuses. With no `route`
+  in the terms, no `memory_log` or `operation_log` row ships. Calibration's report on such a package equals, in every
+  section but `paths`, its report on a package of the same memories built with `route` (calibration reads no log
+  row), and its `paths` section says "no session ids, because route was not chosen".
+- **No footpath without `route`** (D7; the re-check's RMF1). The fixture is a store with one closed session that
+  wrote two work-lane episodes and made no recall. Built without `route`, the package's `episodes.session_id` is null
+  on every row, `memory_log` and `operation_log` are empty, check 12 passes, and a session reader written from the
+  trail spec's section 4 alone finds no session and no trail. Built with `route`, both episodes keep the session id,
+  and the reader finds one trail of two wrote touches. A second session still open at t₁ keeps no session id even with
+  `route`. Setting one session id by hand in a package built without `route` fails check 12 and the digest (check
+  13). Without `route`, an episode whose text names a registered session's id is a cross-reference, and the build
+  refuses until it is left out.
+- **Source owner (D37).** With a fixture ledger, a store with no `stores` row, or one whose owner is another person,
+  is refused. With no ledger, the plan proceeds.
 - **Recall rows.** Instinct ids are removed, and a row whose remaining targets are all in M is kept. A row with any
   other target outside M is dropped, as is one with no targets left. Kept rows have `context` = {recall_id,
   session_id}. Outcomes are normalized, including `used: auto: cited`. A trail derived from the package equals the
   trail derived from the source restricted to M.
-- **`route_shown` rows.** Targets are cut to M in order. A row of another lane is dropped. `context` is cut to its
-  four keys.
+- **`route_shown` rows.** Targets are cut to M in order. A row cut to nothing is dropped, and so is a row of another
+  lane. `context` is cut to its four keys. No kept recall or `route_shown` row carries a `cut` key or any other mark
+  of what was removed.
 - **Plan digest from the definitions.** A second implementation in the test, written from section 5.4 alone, computes
   the digest of a fixture package and gets the same value.
 - **Rowids.** Every memory table's rowids, and each FTS `_docsize`'s ids, run 1..n, whatever the source's rowids were.
@@ -1414,8 +1736,11 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
 - **Identity and ancestry.** A random imprint id, origin `imprint`, `forked_from` = the stored or derived source id,
   ancestry = [source] + the source's. An empty old store, the published house and an imprint are refused as sources.
 - **Vectors.** Copied bit for bit.
-- **Request.** The request has exactly the 7.1 keys, every one of which the confirm view shows. The terminal prints it
-  before it is sent.
+- **Request.** The request has exactly the 7.1 keys. `contents` names exactly the non-empty tables among 5.4's ten,
+  and never `meta`, `schema_version`, an FTS table or `sqlite_sequence`. Every field but `kind` and `version` is shown
+  in the confirm view: `imprint_id` by its short id, `plan_digest` by its first 8 characters with the words that the
+  whole digest is sent, and `source_ancestry` by its short ids. The terminal prints the request, the ancestry and
+  what the station keeps, and for how long, before it is sent.
 
 **Station (peer)**
 
@@ -1427,6 +1752,18 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
   required. A wrong password counts toward the login limits. The code is single-use and expires.
 - **Signing.** The permission is signed in the confirming transaction, has exactly its keys and each inner record
   exactly its keys, and verifies with `verify_station_record`. A record of another kind or another station fails.
+  r_M names exactly one collection, `collection:<owner>/imprint-<imprint_id>`, finite `stores`, and `"*"` for `layers`
+  and `lanes`; r_T names finite `stores` and `"*"` in its other four object dimensions. Both pass the permissions
+  spec's write rules for an outside-home allow (its 5.4), run as written from that spec.
+- **The ship narrows without editing the owner's records.** A withdrawal or shortening by the ship leaves r_M and r_T
+  unchanged, and every later use of the copy is refused at the station's ceiling, or past the new end.
+- **One ceiling per copy** (D38; the re-check's RS2). Two imprints of one store by one owner, made one after the
+  other: copy 1 with `route`, withdrawn by the ship, so its records stay unrevoked; copy 2 without `route`, holding
+  only memories copy 1 held. A trail evaluation on copy 2 is refused at the ceiling (item 2), though copy 1's r_M
+  would match it. A use of copy 2 is never
+  allowed through copy 1's records, nor after copy 2's own end, even while copy 1's records run longer. On a fixture of
+  both, the station's check gives the same answer as the permissions spec's meet over `Req`, computed with that spec's
+  `decide` over every record the station holds and ⟦c⟧ as a layer kept outside a ledger (its 6.1).
 - **Manifest before parts.** A manifest before `allowed`, a second manifest, and a manifest that differs from the
   request in any shared field are refused. Parts before the manifest are refused.
 - **Parts.** Refused before `allowed`. A wrong length or hash is refused. A repeated part changes nothing. Upload
@@ -1434,9 +1771,20 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
 - **Complete.** The whole-file hash is checked. The item appears in `station-pending` with its text flattened.
   Odo's notice appears, naming no owner and no details.
 - **Decline and expiry.** A declined request's staging directory is gone at once, and an expired one's after the
-  sweep. The row holds no scope, counts or terms in either case, and `peer.sqlite3` never did.
-- **Approval.** Approve and deny by short id. `station-approve` returns before admission ends and starts the unit. A
-  denial deletes everything and writes receipts.
+  sweep. The row holds no scope, counts or terms in either case, and `peer.sqlite3` never did. The row itself is gone
+  after the sweep 30 days later.
+- **Approval.** Approve and deny by short id. `station-approve` returns before admission ends and starts the unit,
+  named `superyak-imprint-admit-<full imprint id>`: two imprints whose ids share their first 4 hex get two units. The
+  request row records the imprints root. A denial deletes everything and writes receipts.
+- **Admission after the end** (D39; the re-check's RS3). Approve, stop the unit before it runs, move the clock past
+  the effective end, and resume with `make station-imprint-admit`: `station-imprint-admit-begin` refuses with a
+  `failed` receipt naming the end, no calibration runs, and the imprint is deleted with reason `ended`, before any
+  sweep. The same when the ship shortened the end to a time that has passed. A shortening that passes during
+  calibration stops admission before it writes its report, with the same receipts. `admission.json` is replaced
+  atomically on a shortening.
+- **The imprints root** (the re-check's RN10). With `--imprints-dir` set to a test root on `serve` and the commands,
+  withdrawal in the lighthouse removes the directories under the root the request row records, and nothing under
+  `~/.engram/imprints`. A lighthouse started with another root still removes the recorded one and logs the mismatch.
 - **Receipts.** A receipt written by a key-less command is stored unsigned and signed by the lighthouse within 60
   seconds, and at its next start if it was down. `imprint-status` shows "not yet signed" until then. Two processes
   appending at once produce one unbroken chain. A removed receipt is detected by `imprint-verify`.
@@ -1448,16 +1796,20 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
   `admitted`. A leftover is removed by the next sweep.
 - **Shortening.** It narrows only.
 - **Sweep.** End dates and windows delete. A failed removal is retried. Restore reconciliation uses tombstones, and
-  removing a directory with a permission writes `deleted` (reason `restore`). Permissions and receipts older than 400
-  days after `deleted` become content-free rows.
+  removing a directory with a permission writes `deleted` (reason `restore`). A restored row in `approved` or
+  `received` whose files are gone becomes `deleted` (reason `missing`); one in `requested` with no permission becomes
+  `expired`. 400 days after `deleted`, the row, the permission, the receipts and the tombstone are all gone; 30 days
+  after a decline or expiry, the row is gone. No table or file the station keeps about imprints holds a row or file
+  past those ends (D32).
 - **Backups.** A `station-backup` copy holds no imprint path and no request contents, and the restore test passes.
 
 **Admission (engram)**
 
 - **Each check fails.** One tampered package per check: a changed byte, a WAL header, a planted trigger, an extra
   table, another sqlite-vec `_info`, a changed `meta`, a dangling target, a non-empty dropped table, an unscrubbed
-  context, an instinct id in a recall, a lane or time outside `covers`, an unknown migration, a free page, a digest
-  mismatch, a rowid gap, an FTS orphan, a non-zero invalid vec0 slot.
+  context, an instinct id in a recall, a lane outside `scope.lanes` or a time outside the scope, a session id in a
+  package without `route`, an unknown migration, a free page, a digest mismatch, a rowid gap, an FTS orphan, a non-zero
+  invalid vec0 slot.
 - **vec0 reading.** The verifier opens the package immutable with sqlite-vec loaded, and creates no side file.
 - **Calibration.** No `content` key and no text value from the imprint in `report.json`. `source_unchanged`. No side
   files. Copies deleted. A lane, a core set and a hub over 7,500 each record a skip. A 7,500-episode lane on random
@@ -1467,20 +1819,37 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
   never returns one. `lighthouse_sheaf.py` refuses an imprint and flags a pair of sibling stores as not independent.
 - **Uses.** For each term of section 8's check, a use that fails only that term is refused with that term, in order.
   Each writes a receipt. A use after withdrawal or the end is refused. An allowed use writes the allow file with the
-  fields the trail spec checks.
+  fields the trail spec checks. A trail evaluation over a trail of 40 touches is not refused with `BOUND`, since it is
+  a bulk use (section 8; the re-check's RN6).
 - **Lineage.** An imprint and its source, two imprints of one source, an imprint and a fork of its source, and a file
   copy are not independent. Three generations: a fork of a fork is not independent of the genome. Cousins and siblings
   are not independent. An imprint of a fork of a fork is not independent of the genome. A fork made before the rule
-  gives unknown. A chain longer than 64 is incomplete. Two unrelated roots are independent.
-- **Owner's use list.** With a fixture ledger, `import-receipts` writes the `uses` rows of section 12, `uses --person`
-  shows "copy held, deletion not confirmed" until a verified `deleted` receipt arrives, and `--object` finds an
-  imprint use by a shipped memory's ref.
+  gives unknown. A chain longer than 64 is incomplete. A store older than identity, and its copy made by the old
+  `fork` after one side pruned its earliest episode, get different retroactive ids and `independent` = unknown, not
+  true; an imprint of either is incomplete too (the re-check's RS4). A store with no stored identity, read read-only,
+  counts as retroactive. Two unrelated stores made after identity are independent.
+- **Owner's use list.** With a fixture ledger, `import-receipts` writes the `uses` rows of section 12: one per action
+  per batch of at most 512 refs, with one `use_subjects` row per ref, so an imprint of 1,300 memories gives 3 rows
+  per memory action. `uses` shows "copy held, deletion not confirmed" until a verified `deleted` receipt arrives, and
+  `--object` finds an imprint use by a shipped memory's ref. No station receipt names a memory id.
 
 ## 17. Later steps (separate specs)
 
 1. **Serving an imprint** to agents through the lighthouse receiver, with `recall`, `read` and `inject_context` as
    separate actions with receipts (local-city spec), under the permissions core: more audiences and requesters, and
-   the meet of person, agent, place and county.
+   the meet of person, agent, place and county. The station's ledger then registers each imprint store with
+   `imprint_of` = its source's id (permissions spec 4.4 and 7.4). Its collection and records move into that ledger,
+   and nothing moves in wider than it stands (Rio Grande's call, from the re-check's RS2):
+   - the owner's `shortened` receipts become that spec's replacements (`replaces` = the record, the new
+     `valid_until`), and the owner's `withdrawn` receipts become its revocations, both by the owner in the browser;
+   - a record whose copy the ship withdrew, or that ended, or whose copy was deleted, moves in revoked, with its
+     receipt as the reason, or does not move in. It never moves in in force. Which of the two that spec's step 2
+     allows is its to say, since the station is no steward of the owner's home (its 7.1);
+   - the ceiling stays a layer kept outside the ledger, defined here, as that spec's 6.1 lets a layer be. It keeps
+     reading the station's receipts, so a ship's shortening still ends its copy at its time;
+   - every use names its copy h (its 6.1), and the decision is that spec's `decide`. It equals section 8's check, or
+     is narrower once the owner's home adds denies (section 8, "Why the station's check is the permissions spec's
+     meet").
 2. **Owner-held keys** (a passkey or hardware key), so a permission verifies without trusting the station. Needed
    before a county station takes imprints.
 3. **Station to station** over federation's signed envelopes (`identity.py:153-159`).
@@ -1488,7 +1857,9 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
 5. **More of the store.** Cold storage and category stores, each with its own closure rule. Trail roads rebuilt on
    the Pi from the imprint.
 6. **Rail.** The rail spec counts agreement only between stores whose `independent` is true, and reads row-level
-   provenance (section 11).
+   provenance (section 11). A store older than store identity is never complete, so it counts for nothing until a
+   spec gives it a complete ancestry another way. A synced episode with no recorded origin is a copy of unknown origin
+   (section 11).
 7. **Encrypted imprints.** Each imprint encrypted at rest with its own key, so deletion destroys the key and reaches
    every copy of the bytes.
 8. **Other people's yes.** Co-subjects found by a detector (permissions spec step 4) and asked through their own
@@ -1509,7 +1880,17 @@ Before the first live imprint:
 - A `station-backup` holds no imprint path and no request contents.
 - The lighthouse signs a receipt that a key-less command wrote, within 60 seconds.
 - The station's super admin is `andy`, since the audience check (section 14) names the super admin's home.
+- Andy accepts the ceiling as his home's rule for imprints: the set C and the five items of section 8 (D38; the
+  re-check's RN7). The operator's home is his, so this layer is his consent, and the ship's acts only ever remove
+  uses from it through receipts. Until he accepts it, no imprint is approved.
+- The lighthouse's installed unit passes `--imprints-dir`, and it names the same root as the Makefile's `IMPRINTS`
+  and the sweep's unit (section 10; the re-check's RN10).
 - The CLAUDE.md rule about `~/.engram/imprints/` is in the approving section.
+
+Before the first `trail-evaluation` use: the store's embedding model is on the Pi, through the shared embedder service
+or in the admission environment, loaded inside the use's 4 GB cap. Without it, measure W is "not evaluable: no
+embedder" and only the route gate is decided (trail spec section 7, step 8.2, its interface item I3). The run never
+downloads a model.
 
 ## 19. Left to the builder
 
@@ -1528,4 +1909,5 @@ None of these block building. They block the first live imprint.
   choice is that the owner must also hold a key of their own (later step 2) before any imprint leaves a machine.
 - **Memories that mention other people.** Step 1 can't ask the people a store mentions. It leaves out memories with a
   recorded co-subject and relies on the owner's check for the rest (D27). May step 1 imprint memories that mention
-  other people at all? And must the first store be work lane only?
+  other people at all? And must the first store be work lane only? Until Andy answers, that default stands. The
+  permissions spec and the trail spec list the same question (their sections 19 and 14).
