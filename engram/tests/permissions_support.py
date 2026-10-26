@@ -1237,3 +1237,196 @@ def cap_world(n: int):
 def cap_breaking_joint():
     """More than 4,096 boxes in one layer: (state, joint)."""
     return cap_world(4097)
+
+
+# ---------------------------------------------------------------- Task 9: write rules, authority and words
+
+PH = "place:la-county/public-health"
+PR = "place:la-county/parks-and-rec"
+
+
+def draft(**kw) -> Record:
+    """A Record that is not yet in the ledger (R25 form: kinds default to memory). Defaults: an allow in Andy's
+    home for `self`, every other dimension "*", from 2026-11-01, no end."""
+    fields = dict(layer=HOME, effect="allow", valid_from=T("2026-11-01"), valid_until=None, backing="person",
+                  set_by="person:andy", channel="terminal", under_grant=None, proposal_id=None, replaces=None,
+                  reason="test", id="r-" + "0" * 32, revoked=None, revoked_by=None, revoke_reason=None,
+                  revoked_seq=None, created_seq=0)
+    for k in list(fields):
+        if k in kw:
+            fields[k] = kw.pop(k)
+    sel = {"audience": kw.pop("audience", ["self"]), "requesters": kw.pop("requesters", "*"),
+           "objects": {k: kw.pop(k, "*") for k in _OBJ},
+           "actions": kw.pop("actions", "*"), "purposes": kw.pop("purposes", "*")}
+    if sel["objects"]["kinds"] == "*":
+        sel["objects"]["kinds"] = ["memory"]
+    assert not kw, kw
+    fields["anchor"] = fields["valid_from"]
+    fields["created"] = fields["valid_from"]
+    return _row("records", dict(fields, selector=parse_selector(sel)))
+
+
+def allow(audience, layer=HOME) -> Record:
+    return draft(layer=layer, audience=audience)
+
+
+def layer_with_256_records():
+    """(state, a 257th record) for Andy's home layer."""
+    w = county_world()
+    for i in range(256):
+        w.allow(HOME, audience=["self"], actions=["recall"], memories=[f"mem:S/episode/c{i}"])
+    return w.state(), draft(audience=["self"], actions=["recall"])
+
+
+def object_with_8_subjects():
+    """(state, ref): Andy (the store's owner) and seven co-subjects."""
+    w = county_world()
+    w.store("S", owner="person:andy", place=HOME)
+    for i in range(1, 8):
+        w.subject(M1, f"person:p{i}")
+    return w.state(), M1
+
+
+def collection_with_100000_members():
+    w = county_world()
+    w.collect("collection:andy/big", [f"mem:S/episode/b{i}" for i in range(100_000)])
+    return w.state(), "collection:andy/big"
+
+
+def mapping_world() -> State:
+    w = county_world()
+    for g in ("g1", "g2"):
+        w.group(g, "person:andy", ["agent:rio-grande"])
+    return w.state()
+
+
+def e1_state_with_r1() -> State:
+    return e1_world(1)[0].state()
+
+
+R1 = e1_world(1)[1].R1
+
+
+def parks_proposal_body(reason="because") -> dict:
+    """The body of an agent's proposal to share the medical history with Parks and Recreation."""
+    sel = dataclasses.replace(R1_ENVELOPE, audience=(PR,))
+    return {"layer": HOME, "selector": selector_json(sel), "valid_from": T("2026-11-01"),
+            "valid_until": T("2027-01-31"), "reason": reason}
+
+
+U4_ACTORS = ("andy", "steward", "valid", "expired", "revoked", "too-deep", "none", "jenn")
+_U4_WHO = {"andy": "person:andy", "steward": "person:ph-steward", "jenn": "person:jenn"}
+U4_NEW_END = T("2026-12-15")
+
+
+def channel_of(actor: str) -> str:
+    return "terminal" if actor.startswith("person:") else "tool"
+
+
+class _Ids(NamedTuple):
+    grant: str
+    r1: str
+    own: str
+    rph: str
+    deny: str
+    deny_ph: str
+
+
+def u4_world(variant: str):
+    """Andy's home with R1, an allow rio-grande wrote under a grant, a deny, and a PH layer with an allow and a
+    deny. `variant` says what rio-grande holds: a valid grant (depth 1), an expired one, a revoked one, the
+    fourth link of a chain, or none. Returns (state, ids)."""
+    w = andy_world()
+    w.agent("rio-2", HOME, at=HOME)
+    w.agent("rio-3", HOME, at=HOME)
+    w.agent("rio-4", HOME, at=HOME)
+    w.group("group:g1", "person:andy", ["agent:rio-grande"])
+    env = selector_json(R1_ENVELOPE)
+    ops = list(GRANT_OPS)
+    expires = T("2026-11-03") if variant == "expired" else None
+    if variant in ("valid", "expired", "revoked"):
+        gid = w.grant("person:andy", RIO, HOME, ops=ops, envelope=env, max_days=120, depth=1, expires=expires)
+    elif variant == "too-deep":
+        g1 = w.grant("person:andy", "agent:rio-2", HOME, ops=ops, envelope=env, max_days=120, depth=2)
+        g2 = w.grant("agent:rio-2", "agent:rio-3", HOME, ops=ops, envelope=env, max_days=120, depth=1,
+                     parent_id=g1)
+        g3 = w.grant("agent:rio-3", "agent:rio-4", HOME, ops=ops, envelope=env, max_days=120, depth=0,
+                     parent_id=g2)
+        gid = w.grant("agent:rio-4", RIO, HOME, ops=ops, envelope=env, max_days=120, depth=0, parent_id=g3)
+    else:
+        gid = "g-" + "f" * 32           # none held; the allow rio-grande once wrote names a grant that is gone
+    r1 = _r1(w)
+    own = _r1(w, backing=f"grant:{gid}", set_by=RIO, under_grant=gid)
+    ph_rule = dict(audience=[PH], kinds=list(KINDS_ALL), actions=R1_ACTIONS, purposes=["care-coordination"])
+    rph = w.allow(PH, **ph_rule, set_by="person:ph-steward")
+    deny = w.deny(HOME, audience=[PH], memories=[M2], actions=["recall", "read"])
+    deny_ph = w.deny(PH, audience=[PH], memories=[M2], actions=["recall", "read"], set_by="person:ph-steward")
+    if variant == "revoked":
+        w.revoke_grant(gid)
+    return w.state(), _Ids(gid, r1, own, rph, deny, deny_ph)
+
+
+KINDS_ALL = ("memory", "road", "trail")
+
+
+def u4_case(column: str, row: str):
+    """(state, actor id, Act) for one cell of P 7.1. The steward acts in the Public Health layer; the others
+    in Andy's home."""
+    from permissions import Act
+    s, ids = u4_world(column if column in ("valid", "expired", "revoked", "too-deep") else "none")
+    actor = _U4_WHO.get(column, RIO)
+    steward = column == "steward"
+    layer = PH if steward else HOME
+    rec = ids.rph if steward else ids.r1
+    deny = ids.deny_ph if steward else ids.deny
+    narrower = dataclasses.replace(s.records[rec].selector, actions=("recall",))
+    deny_narrower = dataclasses.replace(s.records[deny].selector, actions=("recall",))
+    args = {
+        "allow": dict(layer=layer, selector=R1_ENVELOPE, valid_from=T("2026-11-01"), valid_until=T("2026-12-01")),
+        "deny": dict(layer=layer, selector=R1_ENVELOPE, valid_from=T("2026-11-01"), valid_until=None),
+        "withdraw": dict(record=rec),
+        "withdraw-own": dict(record=rph_or(ids, steward)),
+        "shorten": dict(record=rec, valid_until=U4_NEW_END),
+        "narrow": dict(record=rec, selector=narrower),
+        "revoke-deny": dict(record=deny),
+        "shorten-deny": dict(record=deny, valid_until=U4_NEW_END),
+        "narrow-deny": dict(record=deny, selector=deny_narrower),
+        "collect": dict(collection=MEDICAL, objects=[M4]),
+        "uncollect": dict(collection=MEDICAL, objects=[M1]),
+        "add-subject": dict(object=M2, subject="person:amy"),
+        "group": dict(group="group:g1", owner="person:andy"),
+        "grant-root": dict(layer=layer, grantee="agent:rio-2", envelope=R1_ENVELOPE),
+        "grant-child": dict(layer=HOME, grantee="agent:rio-2", parent=ids.grant),
+        "give-up": dict(grant=ids.grant),
+    }[row]
+    kind = {"withdraw-own": "withdraw", "grant-root": "grant", "grant-child": "grant",
+            "give-up": "give-up-grant"}.get(row, row)
+    return s, actor, Act(kind, args)
+
+
+def rph_or(ids, steward):
+    return ids.rph if steward else ids.own
+
+
+# expected, by column: andy, steward, valid, expired, revoked, too-deep, none, jenn (P 7.1, written by hand)
+_D, _P, _R = "do", "proposal", "refused"
+U4_EXPECTED = {
+    "allow":        (_D, _D, _D, _P, _P, _P, _P, _R),
+    "deny":         (_D, _D, _D, _R, _R, _R, _R, _R),
+    "withdraw":     (_D, _D, _D, _R, _R, _R, _R, _R),
+    "withdraw-own": (_D, _D, _D, _D, _D, _D, _D, _R),
+    "shorten":      (_D, _D, _D, _P, _P, _P, _P, _R),
+    "narrow":       (_D, _D, _D, _P, _P, _P, _P, _R),
+    "revoke-deny":  (_D, _D, _P, _P, _P, _P, _P, _R),
+    "shorten-deny": (_D, _D, _P, _P, _P, _P, _P, _R),
+    "narrow-deny":  (_D, _D, _P, _P, _P, _P, _P, _R),
+    "collect":      (_D, _R, _D, _P, _P, _P, _P, _R),
+    "uncollect":    (_D, _R, _D, _P, _P, _P, _P, _R),
+    "add-subject":  (_D, _R, _D, _D, _D, _D, _D, _R),
+    "group":        (_D, _R, _P, _P, _P, _P, _P, _R),
+    "grant-root":   (_D, _D, _P, _P, _P, _P, _P, _R),
+    "grant-child":  (_R, _R, _D, _R, _R, _R, _R, _R),
+    "give-up":      (_R, _R, _D, _D, _D, _D, _R, _R),
+}
+U4_TABLE = [(column, row, expected) for row, cells in U4_EXPECTED.items()
+            for column, expected in zip(U4_ACTORS, cells)]

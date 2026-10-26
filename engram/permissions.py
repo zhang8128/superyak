@@ -8,6 +8,7 @@ import json
 import re
 from collections import namedtuple
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Callable, Iterable, Mapping, NamedTuple, Sequence
 
 from lighthouse_protocol import canonical_json
@@ -1076,23 +1077,28 @@ def needs(use: Use) -> tuple[Need, ...]:
     return tuple(out)
 
 
+def _own_subjects(state: State, ref: str, at: int | None = None) -> set[str]:
+    """The ref's store's owner and its co-subjects: those in force at `at`, or every one not removed when `at` is
+    None. A ref that names no registered store has none of its own."""
+    out: set[str] = set()
+    try:
+        parsed = parse_object_ref(ref)
+    except RuleError:
+        return out
+    store = state.stores.get(parsed.instance_id)
+    if store is not None and store.imprint_of is None:     # an imprint's owner is never a default subject
+        out.add(store.owner)
+    for row in state.subjects.get(ref, ()):
+        if (row.removed_seq is None if at is None else _in_force(state, row.added_seq, row.removed_seq, at)):
+            out.add(row.subject)
+    return out
+
+
 def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = ()) -> tuple[str, ...]:
     """P 6.3 item 1 and 7.4: the object's store's owner and its co-subjects in force at `at`, those of each
     source up the `copies` chain (at most MAX_COPY_CHAIN links), and for a road or trail those of the memories
     it names. Sorted. An object whose ref names no registered store has none of its own."""
     out: set[str] = set()
-
-    def own(ref: str) -> None:
-        try:
-            parsed = parse_object_ref(ref)
-        except RuleError:
-            return
-        store = state.stores.get(parsed.instance_id)
-        if store is not None and store.imprint_of is None:     # an imprint's owner is never a default subject
-            out.add(store.owner)
-        for row in state.subjects.get(ref, ()):
-            if _in_force(state, row.added_seq, row.removed_seq, at):
-                out.add(row.subject)
 
     def with_sources(ref: str) -> None:
         seen, cur = set(), ref
@@ -1100,7 +1106,7 @@ def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = ()) -> t
             if cur is None or cur in seen:
                 return
             seen.add(cur)
-            own(cur)
+            out.update(_own_subjects(state, cur, at))
             cur = state.copies.get(cur)
 
     with_sources(obj)
@@ -2246,3 +2252,690 @@ def disagreement_words(state: State, report: GluingReport) -> str:
                    f"{_purposes(report.ineffective)} that the places above it do not allow, so that part has "
                    f"no effect.")
     return " ".join(out)
+
+
+# ---------------------------------------------------------------- write rules (P 5.4)
+
+def _acts_for_person(state: State, agent: str, person: str) -> bool:
+    row = state.agents.get(agent)
+    return row is not None and row.acts_for == home_of(person)
+
+
+def is_inside_home(state: State, layer: str, selector: Selector) -> bool:
+    """P 5.4: every audience entry is `self`, a group of the person's own agents, or a place the home dominates.
+    Only a home layer has an inside."""
+    person = person_of_home(layer)
+    if person is None:
+        return False
+    for v in selector.audience:
+        if v == "self":
+            continue
+        if v.startswith("group:"):
+            group = state.groups.get(v)
+            if group is None or group.owner != person:
+                return False
+            if any(not _acts_for_person(state, m.agent, person)
+                   for m in state.group_members.get(v, ()) if m.removed_seq is None):
+                return False
+        elif not (v.startswith("place:") and v in state.places and layer in dominators(state, v)):
+            return False
+    return True
+
+
+def _effective_count(state: State, layer: str, at: int, skip: set) -> int:
+    return sum(1 for r in state.records.values()
+               if r.layer == layer and r.id not in skip and r.revoked_seq is None
+               and (r.valid_until is None or r.valid_until > at))
+
+
+def check_record(state: State, record: Record) -> None:
+    """P 5.4 for a record about to be written: the interval, the bound of 256 effective records in its layer, and
+    for an outside-home allow in a home layer the purposes, the 366 days and the two shapes of P28. A deny may
+    have a null end anywhere; a place's layer has no lifetime rule."""
+    rule = "5.4 validity rules"
+    sel = record.selector
+    if record.effect not in ("allow", "deny"):
+        raise RuleError(rule, f"a record is an allow or a deny, not {record.effect!r}")
+    if record.layer.startswith("agent:"):
+        if record.layer not in state.agents:
+            raise RuleError(rule, f"{record.layer} is not a registered agent")
+    elif record.layer not in state.places:
+        raise RuleError(rule, f"{record.layer} is not a registered place")
+    if record.valid_until is not None and record.valid_until <= record.valid_from:
+        raise RuleError(rule, "valid_until must be after valid_from")
+    skip = {record.id} | ({record.replaces} if record.replaces else set())
+    if _effective_count(state, record.layer, record.created, skip) >= MAX_RECORDS_PER_LAYER:
+        raise RuleError(rule, f"a layer holds at most {MAX_RECORDS_PER_LAYER} effective records")
+    if record.effect != "allow" or person_of_home(record.layer) is None:
+        return
+    if is_inside_home(state, record.layer, sel):
+        return
+    if sel.purposes == STAR:
+        raise RuleError(rule, "an outside-home allow needs a finite purposes list (P13)")
+    if record.valid_until is None or record.valid_until - record.valid_from > OUTSIDE_HOME_DAYS * 86400:
+        raise RuleError(rule, f"an outside-home allow ends at most {OUTSIDE_HOME_DAYS} days after it starts (P13)")
+    memory_shape = sel.kinds != STAR and set(sel.kinds) == {"memory"} and (
+        sel.memories != STAR or sel.collections != STAR)
+    road_shape = sel.kinds != STAR and set(sel.kinds) <= {"road", "trail"} and sel.stores != STAR
+    if not (memory_shape or road_shape):
+        raise RuleError(rule, "P28: an outside-home allow names memories by a finite memories or collections "
+                              "list, or roads and trails by a finite stores list")
+
+
+def check_new_subject(state: State, obj: str, subject: str) -> None:
+    """P 5.4 and 7.4: at most 8 of the object's own subjects. Its copies never refuse it."""
+    own = _own_subjects(state, obj)
+    if subject not in own and len(own) + 1 > MAX_SUBJECTS:
+        raise RuleError("5.4 validity rules", f"an object has at most {MAX_SUBJECTS} subjects")
+
+
+def check_new_members(state: State, collection: str, count: int) -> None:
+    """P 5.4: at most 100,000 members per collection."""
+    held = {r.object for r in state.collection_members.get(collection, ()) if r.removed_seq is None}
+    if len(held) + count > MAX_COLLECTION:
+        raise RuleError("5.4 validity rules", f"a collection holds at most {MAX_COLLECTION:,} members")
+
+
+def _record_region(state: State, rec: Record) -> list[Box]:
+    return _only(_selector_boxes(state, rec.selector, rec.layer, rec.anchor, rec.effect == "deny", frozenset(),
+                                 None), time=_interval(rec))
+
+
+def check_narrower(state: State, new: Record, old: Record) -> None:
+    """P 7.1: a replacement lies inside the record it replaces, in selector and in interval (box subset)."""
+    rule = "7.1 narrowing"
+    if new.layer != old.layer or new.effect != old.effect:
+        raise RuleError(rule, "a replacement keeps its layer and its effect")
+    try:
+        outside = _list_minus(_record_region(state, new), _record_region(state, old))
+    except TooComplex:
+        raise RuleError(rule, "too complex to compare a replacement with its record") from None
+    if outside:
+        raise RuleError(rule, "a replacement lies within the record it replaces, in selector and interval")
+
+
+def within_envelopes(state: State, selector: Selector, valid_from: int, valid_until: int | None,
+                     grant_id: str) -> bool:
+    """P 7.2: the selector lies in the envelope of the grant and of every grant above it, and a finite lifetime
+    is at most each link's `max_days`. A null end is judged by the caller (a deny may have one)."""
+    try:
+        chain = grant_chain(state, grant_id)
+    except RuleError:
+        return False
+    for g in chain:
+        if not selector_within(state, selector, g.envelope):
+            return False
+        if valid_until is not None and valid_until - valid_from > g.max_days * 86400:
+            return False
+    return True
+
+
+def placement_audience(state: State, record: Record | None, legacy_audience: str | None = None) -> str:
+    """P 12.1's mapping to a `shared_memories.audience` the legacy checks accept."""
+    if record is None:
+        if legacy_audience is None:
+            raise RuleError("12.1 placement audience", "a placement with no record needs its legacy audience")
+        return legacy_audience
+    aud = record.selector.audience
+    if len(aud) == 1 and aud[0].startswith("group:"):
+        return aud[0]
+    home = record.layer
+    if person_of_home(home) is not None and all(
+            v == "self" or (v.startswith("place:") and v in state.places and home in dominators(state, v))
+            for v in aud):
+        return "commons"
+    return RESERVED_GROUP
+
+
+# ---------------------------------------------------------------- who may set what (P 4.4, 7.1, 7.2, 7.6)
+
+CHANNELS = ("terminal", "tool", "migration")
+_RULE = "7.1 who may set what"
+# P 7.6's table: the acts that can widen. Done person-backed, each needs the person's yes.
+WIDENING_ACTS = frozenset({
+    "allow", "revoke-deny", "shorten-deny", "narrow-deny", "grant", "collect", "group", "register-agent",
+    "put-agent", "add-steward", "register-place", "add-parent", "register-store", "remove-subject", "gate"})
+
+
+@dataclass(frozen=True)
+class Act:
+    """One change a caller asks for. `kind` is a row of P 7.1 or 4.4 and `args` its arguments."""
+    kind: str
+    args: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class Authority:
+    """outcome `do` or `proposal`; backing `person` or `grant:<id>`; under_grant the grant that was used."""
+    outcome: str
+    backing: str
+    under_grant: str | None = None
+
+
+_DO = Authority("do", "person", None)
+_PROPOSAL = Authority("proposal", "person", None)
+_OWN = Authority("do", "person", None)      # an agent's act in its own restriction layer: it only narrows (P 7.1)
+
+
+def _refuse(why: str) -> RuleError:
+    return RuleError(_RULE, why)
+
+
+def _arg(args: Mapping, key: str):
+    if key not in args:
+        raise _refuse(f"the act needs {key}")
+    return args[key]
+
+
+def _as_selector(v) -> Selector:
+    return v if isinstance(v, Selector) else parse_selector(v)
+
+
+def _record_arg(state: State, args: Mapping, effect: str) -> Record:
+    rec = state.records.get(_arg(args, "record"))
+    if rec is None:
+        raise _refuse(f"{args['record']} is not a record")
+    if rec.revoked_seq is not None:
+        raise _refuse(f"{rec.id} is already revoked")
+    if rec.effect != effect:
+        raise _refuse(f"{rec.id} is not an {effect}" if effect == "allow" else f"{rec.id} is not a deny")
+    return rec
+
+
+def _principals(state: State, agent: str) -> frozenset[str]:
+    """The persons an agent acts for: the person whose home it acts for, or the stewards of the place."""
+    row = state.agents.get(agent)
+    if row is None:
+        return frozenset()
+    owner = person_of_home(row.acts_for)
+    return frozenset({owner}) if owner else stewards(state, row.acts_for)
+
+
+def _layer_steward(state: State, person: str, layer: str) -> bool:
+    if layer.startswith("agent:"):
+        return person in _principals(state, layer)
+    return layer in state.places and _is_steward(state, layer, person)
+
+
+def _store_owner(state: State, ref: str) -> str | None:
+    try:
+        store = state.stores.get(parse_object_ref(ref).instance_id)
+    except RuleError:
+        return None
+    return None if store is None else store.owner
+
+
+def _collection_layer(state: State, cid: str) -> str:
+    row = state.collections.get(cid)
+    owner = row.owner if row is not None else "person:" + cid.split(":", 1)[1].split("/")[0]
+    return home_of(owner)
+
+
+def _object_meets(state: State, ref: str, sel: Selector) -> bool:
+    """Does the memory lie in the selector's object dimensions?"""
+    try:
+        parsed = parse_object_ref(ref)
+    except RuleError:
+        return False
+    if not (_star_or_in(sel.kinds, parsed.kind) and _star_or_in(sel.stores, parsed.instance_id)):
+        return False
+    if sel.layers != STAR and parsed.layer not in sel.layers:
+        return False
+    if sel.memories != STAR and ref not in sel.memories:
+        return False
+    return sel.collections == STAR or any(
+        r.collection in sel.collections and r.removed_seq is None for r in state.member_of.get(ref, ()))
+
+
+def _meets_envelope(state: State, rec: Record, env: Selector) -> bool:
+    """P 7.2: the record's selector and the envelope intersect."""
+    try:
+        return bool(_list_and(_record_region(state, rec._replace(valid_until=None, valid_from=0)),
+                              _only(_selector_boxes(state, env, rec.layer, rec.anchor, False, frozenset(), None))))
+    except TooComplex:
+        return False
+
+
+def _covering(state: State, actor: str, op: str, layer: str, at: int, args: Mapping, check) -> str | None:
+    """A valid grant of the actor in `layer` with `op` whose chain satisfies check(grant_id, chain)."""
+    given = args.get("grant")
+    for gid in sorted(state.grants):
+        row = state.grants[gid]
+        if row.grantee != actor or row.layer != layer or (given is not None and gid != given):
+            continue
+        if op not in _grant_of(row).ops or not grant_validity(state, gid, at)[0]:
+            continue
+        if check(gid, grant_chain(state, gid)):
+            return gid
+    return None
+
+
+def _a_allow(state, actor, agent, args, at):
+    layer, sel = _arg(args, "layer"), _as_selector(_arg(args, "selector"))
+    vf, vu = _arg(args, "valid_from"), args.get("valid_until")
+    if not agent and _layer_steward(state, actor, layer):
+        return _DO
+    if not agent:
+        raise _refuse(f"{actor} is not a steward of {layer}")
+    gid = _covering(state, actor, "share", layer, at, args,
+                    lambda g, _c: vu is not None and within_envelopes(state, sel, vf, vu, g))
+    return Authority("do", f"grant:{gid}", gid) if gid else _PROPOSAL
+
+
+def _a_deny(state, actor, agent, args, at):
+    layer, sel = _arg(args, "layer"), _as_selector(_arg(args, "selector"))
+    if not agent:
+        if _layer_steward(state, actor, layer):
+            return _DO
+        raise _refuse(f"{actor} is not a steward of {layer}")
+    if layer == actor:                       # its own restriction layer
+        return _OWN
+    gid = _covering(state, actor, "deny", layer, at, args,
+                    lambda g, _c: within_envelopes(state, sel, _arg(args, "valid_from"), None, g))
+    if gid:
+        return Authority("do", "person", gid)    # a deny an agent writes under a grant is person-backed (P 7.3)
+    raise _refuse(f"{actor} may add a deny only in its own restriction layer, or under a grant")
+
+
+def _replacement(state: State, rec: Record, args: Mapping, kind: str) -> Record:
+    new = rec
+    if kind in ("shorten", "shorten-deny"):
+        new = new._replace(valid_until=_arg(args, "valid_until"))
+    else:
+        new = new._replace(selector=_as_selector(_arg(args, "selector")))
+        if "valid_until" in args:
+            new = new._replace(valid_until=args["valid_until"])
+    check_narrower(state, new, rec)
+    return new
+
+
+def _a_edit_allow(kind):
+    op = kind
+
+    def handler(state, actor, agent, args, at):
+        rec = _record_arg(state, args, "allow")
+        if kind != "withdraw":
+            _replacement(state, rec, args, kind)
+        keeps = "person" if kind == "withdraw" else rec.backing
+        if not agent:
+            if _layer_steward(state, actor, rec.layer):
+                return Authority("do", keeps, None)
+            raise _refuse(f"{actor} is not a steward of {rec.layer}")
+        gid = _covering(state, actor, op, rec.layer, at, args,
+                        lambda g, chain: all(_meets_envelope(state, rec, c.envelope) for c in chain))
+        if gid:
+            return Authority("do", keeps, gid)
+        if kind == "withdraw":
+            if rec.set_by == actor and rec.backing.startswith("grant:"):
+                return _DO
+            raise _refuse(f"{actor} may withdraw only grant-backed allows it wrote, or under a grant")
+        return _PROPOSAL
+    return handler
+
+
+def _a_edit_deny(kind):
+    def handler(state, actor, agent, args, at):
+        rec = _record_arg(state, args, "deny")
+        if kind != "revoke-deny":
+            _replacement(state, rec, args, kind)
+        if not agent:
+            if _layer_steward(state, actor, rec.layer):
+                return _DO
+            raise _refuse(f"{actor} is not a steward of {rec.layer}")
+        return _OWN if rec.layer == actor else _PROPOSAL     # P27: a deny in a consent layer is a steward's act
+    return handler
+
+
+def _a_collect(state, actor, agent, args, at):
+    cid = _arg(args, "collection")
+    layer = _collection_layer(state, cid)
+    if not agent:
+        if _layer_steward(state, actor, layer):
+            return _DO
+        raise _refuse(f"{actor} is not a steward of {layer}")
+
+    def inside(_g, chain):
+        return all(selector_within(state, r.selector, c.envelope)
+                   for r in state.records.values() if r.effect == "allow" and r.revoked_seq is None
+                   and r.selector.collections != STAR and cid in r.selector.collections for c in chain)
+    gid = _covering(state, actor, "collect", layer, at, args, inside)
+    return Authority("do", f"grant:{gid}", gid) if gid else _PROPOSAL
+
+
+def _a_uncollect(state, actor, agent, args, at):
+    cid, objects = _arg(args, "collection"), list(_arg(args, "objects"))
+    layer = _collection_layer(state, cid)
+    if not agent:
+        if _layer_steward(state, actor, layer):
+            return _DO
+        raise _refuse(f"{actor} is not a steward of {layer}")
+    gid = _covering(state, actor, "uncollect", layer, at, args,
+                    lambda g, chain: all(_object_meets(state, o, c.envelope) for o in objects for c in chain))
+    return Authority("do", "person", gid) if gid else _PROPOSAL
+
+
+def _a_add_subject(state, actor, agent, args, at):
+    owner = _store_owner(state, _arg(args, "object"))
+    if owner is None:
+        raise _refuse(f"{args['object']} names no registered store")
+    if agent:
+        if _acts_for_person(state, actor, owner):
+            return _DO
+        raise _refuse(f"{actor} does not act for {owner}")
+    if actor == owner or actor == _arg(args, "subject"):         # the owner, or a self-claim (P 7.4)
+        return _DO
+    raise _refuse(f"{actor} is not {owner}, and is not the subject")
+
+
+def _a_remove_subject(state, actor, agent, args, at):
+    obj, subject = _arg(args, "object"), _arg(args, "subject")
+    row = next((r for r in state.subjects.get(obj, ()) if r.subject == subject and r.removed_seq is None), None)
+    if row is None:
+        raise _refuse(f"{subject} is not a co-subject of {obj}")
+    if agent:
+        return _PROPOSAL
+    if actor == subject:
+        return _DO
+    owner = _store_owner(state, obj)
+    theirs = row.added_by == owner or (row.added_by.startswith("agent:") and owner is not None
+                                       and _acts_for_person(state, row.added_by, owner))
+    if actor == owner and theirs and not row.self_claimed:
+        return _DO
+    raise _refuse("only the owner may remove a co-subject the owner or their agents added; "
+                  "a self-claimed one or one a copy carries can be removed only by the subject (7.4)")
+
+
+def _a_group(state, actor, agent, args, at):
+    gid = _arg(args, "group")
+    row = state.groups.get(gid)
+    owner = row.owner if row is not None else _arg(args, "owner")
+    if agent:
+        return _PROPOSAL
+    if actor == owner:
+        return _DO
+    raise _refuse(f"only {owner} changes {gid}")
+
+
+def _a_grant(state, actor, agent, args, at):
+    parent = args.get("parent")
+    layer = _arg(args, "layer")
+    if parent is None:                       # a root: a steward issues it; an agent can only ask
+        if agent:
+            return _PROPOSAL
+        if _layer_steward(state, actor, layer):
+            return _DO
+        raise _refuse(f"{actor} is not a steward of {layer}")
+    row = state.grants.get(parent)
+    if row is None or not agent or row.grantee != actor:
+        raise _refuse("a child grant is issued by the holder of its parent grant")
+    ok, why = grant_validity(state, parent, at)
+    if not ok:
+        raise _refuse(f"the parent grant is not valid ({why})")
+    if row.depth < 1:
+        raise _refuse("the parent grant has no depth left")
+    return Authority("do", f"grant:{parent}", parent)
+
+
+def _a_give_up(state, actor, agent, args, at):
+    row = state.grants.get(_arg(args, "grant"))
+    if row is None:
+        raise _refuse(f"{args['grant']} is not a grant")
+    if row.grantee != actor:
+        raise _refuse("only the grantee gives up its own grant")
+    return _DO
+
+
+def _a_revoke_grant(state, actor, agent, args, at):
+    chain = grant_chain(state, _arg(args, "grant")) if _arg(args, "grant") in state.grants else None
+    if chain is None:
+        raise _refuse(f"{args['grant']} is not a grant")
+    if actor in {g.issuer for g in chain} or (not agent and _layer_steward(state, actor, chain[0].layer)):
+        return _DO
+    raise _refuse("a grant is revoked by an issuer in its chain or by the layer's stewards")
+
+
+def _persons_only(fn):
+    def handler(state, actor, agent, args, at):
+        if agent:
+            raise _refuse("an agent cannot do this")
+        return fn(state, actor, args)
+    return handler
+
+
+def _a_register_person(state, actor, args):
+    if state.persons[actor].is_admin:
+        return _DO
+    raise _refuse(f"{actor} is not a ledger admin")
+
+
+def _both_or_one(held: int, needed: int) -> Authority:
+    if held == needed:
+        return _DO
+    if held:
+        return _PROPOSAL                     # it waits for the other stewards' signatures
+    raise _refuse("the caller is not a steward where one is needed")
+
+
+def _a_register_place(state, actor, agent, args, at):
+    parents = list(args.get("parents", ()))
+    if agent:
+        return _PROPOSAL
+    if not parents:
+        if state.persons[actor].is_admin:
+            return _DO
+        raise _refuse(f"{actor} is not a ledger admin")
+    return _both_or_one(sum(_layer_steward(state, actor, p) for p in parents), len(parents))
+
+
+def _a_add_parent(state, actor, agent, args, at):
+    if agent:
+        return _PROPOSAL
+    return _both_or_one(_layer_steward(state, actor, _arg(args, "place"))
+                        + _layer_steward(state, actor, _arg(args, "parent")), 2)
+
+
+def _a_add_steward(state, actor, agent, args, at):
+    place = _arg(args, "place")
+    if person_of_home(place) is not None:
+        raise _refuse("a home's only steward is its person, never changed")
+    if agent:
+        return _PROPOSAL
+    if place in state.places and any(_is_steward(state, d, actor) for d in dominators(state, place)):
+        return _DO
+    raise _refuse(f"{actor} is not a steward of {place} or of a place that dominates it")
+
+
+def _a_remove_steward(state, actor, agent, args, at):
+    place, person = _arg(args, "place"), _arg(args, "person")
+    if person_of_home(place) is not None:
+        raise _refuse("a home's only steward is its person, never changed")
+    if agent:
+        raise _refuse("an agent cannot remove a steward")
+    if len(stewards(state, place) - {person}) < 1:
+        raise _refuse("a place keeps at least one steward")
+    if place in state.places and any(_is_steward(state, d, actor) for d in dominators(state, place)):
+        return _DO
+    raise _refuse(f"{actor} is not a steward of {place} or of a place that dominates it")
+
+
+def _a_register_agent(state, actor, agent, args, at):
+    place = _arg(args, "acts_for")
+    if agent:
+        return _PROPOSAL
+    if home_of(actor) == place or _layer_steward(state, actor, place):
+        return _DO
+    raise _refuse(f"{actor} is not the person, or a steward of the place, the agent acts for")
+
+
+def _a_put_agent(state, actor, agent, args, at):
+    if agent:
+        return _PROPOSAL
+    place, who = _arg(args, "place"), _arg(args, "agent")
+    return _both_or_one(_layer_steward(state, actor, place) + (actor in _principals(state, who)), 2)
+
+
+def _a_remove_agent(state, actor, agent, args, at):
+    if agent:
+        raise _refuse("an agent cannot do this")
+    if _layer_steward(state, actor, _arg(args, "place")) or actor in _principals(state, _arg(args, "agent")):
+        return _DO
+    raise _refuse(f"{actor} is neither a steward of the place nor the agent's principal")
+
+
+def _a_register_store(state, actor, agent, args, at):
+    if agent:
+        return _PROPOSAL
+    place = args.get("place")
+    if actor == _arg(args, "owner") or (place in state.places and person_of_home(place) is None
+                                        and _is_steward(state, place, actor)):
+        return _DO
+    raise _refuse(f"{actor} is neither the store's owner nor a steward of its place")
+
+
+def _a_gate(state, actor, agent, args, at):
+    if agent:
+        return _PROPOSAL
+    if actor == state.meta.get("owner"):
+        return _DO
+    raise _refuse("the gate is the ledger owner's")
+
+
+_HANDLERS = {
+    "allow": _a_allow, "deny": _a_deny,
+    "withdraw": _a_edit_allow("withdraw"), "shorten": _a_edit_allow("shorten"), "narrow": _a_edit_allow("narrow"),
+    "revoke-deny": _a_edit_deny("revoke-deny"), "shorten-deny": _a_edit_deny("shorten-deny"),
+    "narrow-deny": _a_edit_deny("narrow-deny"),
+    "collect": _a_collect, "uncollect": _a_uncollect, "add-subject": _a_add_subject,
+    "remove-subject": _a_remove_subject, "group": _a_group, "grant": _a_grant, "give-up-grant": _a_give_up,
+    "revoke-grant": _a_revoke_grant, "register-person": _persons_only(_a_register_person),
+    "register-place": _a_register_place, "add-parent": _a_add_parent, "add-steward": _a_add_steward,
+    "remove-steward": _a_remove_steward, "register-agent": _a_register_agent, "put-agent": _a_put_agent,
+    "remove-agent": _a_remove_agent, "register-store": _a_register_store, "gate": _a_gate}
+
+
+def authorize(state: State, actor: str, act: Act, *, channel: str, at: int) -> Authority:
+    """P 4.4, 7.1, 7.2 (P27) and 7.6: what the actor may do. A widening act on the `tool` channel, or by an agent
+    with no grant that covers it, files a proposal; on `terminal` or `migration` the role rules apply to the
+    actor the caller names. Raises RuleError when refused."""
+    if channel not in CHANNELS:
+        raise _refuse(f"channel must be one of {', '.join(CHANNELS)}")
+    handler = _HANDLERS.get(act.kind)
+    if handler is None:
+        raise _refuse(f"unknown act {act.kind!r}")
+    agent = actor.startswith("agent:")
+    row = (state.agents if agent else state.persons).get(actor)
+    if row is None or row.retired_seq is not None:
+        raise _refuse(f"{actor} is not a registered, unretired {'agent' if agent else 'person'}")
+    got = handler(state, actor, agent, act.args, at)
+    if got.outcome == "do" and got is not _OWN and got.under_grant is None and act.kind in WIDENING_ACTS and (
+            channel == "tool" or agent):
+        return _PROPOSAL          # the tools can give no yes (P 7.6)
+    return got
+
+
+# ---------------------------------------------------------------- words (P 7.6, 7.7)
+
+def _date(t: int) -> str:
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
+
+
+def _above(state: State, place: str) -> list[str]:
+    """dom(Z) minus Z, nearest first."""
+    dist, level, frontier = {place: 0}, 0, [place]
+    while frontier:
+        level += 1
+        nxt = []
+        for p in frontier:
+            for q in _parents(state, p):
+                if q not in dist:
+                    dist[q] = level
+                    nxt.append(q)
+        frontier = nxt
+    return sorted(dominators(state, place) - {place}, key=lambda q: (dist.get(q, level), _units(q)))
+
+
+def _stewards_words(state: State, z: str) -> str:
+    here = _name(state, z)
+    above = _above(state, z)
+    if not above:
+        return f"{here}'s stewards decide which agents those are."
+    return (f"{here}'s stewards, and {_and_list([_name(state, a) + chr(39) + 's' for a in above])} above it, "
+            f"decide which agents those are.")
+
+
+def _what(sel: Selector) -> str:
+    parts = []
+    if sel.collections != STAR:
+        names = [c.split(":", 1)[1] for c in sel.collections]
+        parts.append(("collection " if len(names) == 1 else "collections ") + _and_list(names))
+    if sel.memories != STAR:
+        parts.append((f"memory {sel.memories[0]}" if len(sel.memories) == 1 else
+                      f"memories {_and_list(sel.memories)}" if len(sel.memories) <= 3 else
+                      f"{len(sel.memories)} memories"))
+    if not parts and sel.kinds != STAR and set(sel.kinds) <= {"road", "trail"}:
+        kinds = _and_list([k + "s" for k in sel.kinds])
+        parts.append(f"{kinds} of store {_and_list(sel.stores)}" if sel.stores != STAR else kinds)
+    return _and_list(parts) if parts else "everything it covers"
+
+
+def allow_words(state: State, record: Record) -> str:
+    """P 7.6: the sentence the person confirms, with display names (R4). The agent's reason is never in it."""
+    sel = record.selector
+    purposes = "any purpose" if sel.purposes == STAR else _and_list(sel.purposes)
+    reading = {"recall", "read", "inject_context"}
+    actions = ""
+    if sel.actions == STAR:
+        actions = ", allowing every action"
+    elif set(sel.actions) != reading:
+        actions = f", allowing {_and_list(sorted(sel.actions, key=ACTIONS.index))}"
+    until = "with no end" if record.valid_until is None else f"until {_date(record.valid_until)}"
+    verb, prep = ("Share", "with") if record.effect == "allow" else ("Refuse", "to")
+    head = f"{verb} {_what(sel)} {prep} {_and_list(sel.audience)}, for {purposes}{actions}, {until}."
+    if record.effect != "allow":
+        return head
+    out = [head]
+    for z in sel.audience:
+        if z.startswith("place:"):
+            out.append(f"Agents that act for a place {_name(state, z)} dominates, working there, may use it.")
+            out.append(_stewards_words(state, z))
+    return " ".join(out)
+
+
+def _place_name(state: State, place: str) -> str:
+    return _name(state, place)
+
+
+def proposal_words(state: State, kind: str, body: Mapping) -> str:
+    """P 7.7: the sentence for a proposal, by one fixed template per kind, from the body only. The agent's
+    reason, kept in the body, is never read."""
+    g = body.get
+    if kind in ("allow", "deny"):
+        rec = _row("records", dict(
+            id="r-" + "0" * 32, layer=body["layer"], effect=kind, selector=_as_selector(body["selector"]),
+            valid_from=body["valid_from"], valid_until=body.get("valid_until"), anchor=body["valid_from"],
+            backing="person", set_by="", channel="tool", reason="", created=body["valid_from"], created_seq=0))
+        return allow_words(state, rec)
+    templates = {
+        "collect": lambda: f"Add {len(g('objects', ()))} memories to collection {str(g('collection')).split(':', 1)[-1]}.",
+        "uncollect": lambda: f"Remove {len(g('objects', ()))} memories from collection "
+                             f"{str(g('collection')).split(':', 1)[-1]}.",
+        "revoke-deny": lambda: f"Remove the deny {g('record')}.",
+        "shorten-deny": lambda: f"Shorten the deny {g('record')} to end on {_date(g('valid_until'))}.",
+        "narrow-deny": lambda: f"Narrow the deny {g('record')}.",
+        "grant": lambda: f"Give {g('grantee')} a grant in {_place_name(state, g('layer', ''))}.",
+        "group": lambda: f"Change group {g('group')}.",
+        "register-agent": lambda: f"Register {g('agent')} as acting for {_place_name(state, g('acts_for', ''))}.",
+        "put-agent": lambda: f"Put {g('agent')} to work in {_place_name(state, g('place', ''))}.",
+        "add-steward": lambda: f"Make {g('person')} a steward of {_place_name(state, g('place', ''))}.",
+        "register-place": lambda: f"Register {g('place')}"
+                                  + (f" under {_and_list([_place_name(state, p) for p in g('parents')])}"
+                                     if g("parents") else " as a root place") + ".",
+        "add-parent": lambda: f"Make {_place_name(state, g('parent', ''))} a parent of "
+                              f"{_place_name(state, g('place', ''))}.",
+        "register-store": lambda: f"Register store {g('instance_id', '')} owned by {g('owner')}.",
+        "remove-subject": lambda: f"Remove {g('subject')} as a subject of {g('object')}.",
+        "gate": lambda: f"Move the gate to {g('mode')}.",
+    }
+    if kind not in templates:
+        raise RuleError("7.7 proposal words", f"no template for a proposal of kind {kind!r}")
+    return templates[kind]()
