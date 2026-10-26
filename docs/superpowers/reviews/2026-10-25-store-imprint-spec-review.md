@@ -1112,3 +1112,318 @@ P's `need(imprint)` on R(I) is met, apart from FS1's purpose. Rows 14, 27 and 28
   I decide nothing here. RMF1's fix only narrows what leaves.
 - Which store to imprint first, and its owner's yes. Whether the station-signed browser yes is enough for step 1. The
   license. One permission an agent may set on its own. What the county sets.
+
+## Response to the final check (revision 4), 2026-10-25
+
+Reviser: a fresh agent on the Pi, working for Rio Grande. I took no part in writing revisions 1 to 3, any review, the
+earlier responses or the interface pass. I read the vision, the final check above, the spec, the interface table, and
+T (revision 6): its status line, section 4, section 7 ("The imprint check", "What an imprint changes", "The cost,
+chosen for privacy", step 8.2 and step 10), section 11 and the section 12 tests that I2, I3 and I6 name. I checked
+every new claim about code by reading the code; the citations are listed at the end. Section numbers are revision
+4's. I edited only the spec, this file and the interface table. I did not edit T or P, since P is being repaired by
+someone else. Nothing here is committed, pushed or posted.
+
+I applied FS1, FS2 and FS3. I declined nothing: no item lets more leave a machine or weakens a permission. FS1 takes
+option (a). FS3 adds two end values T's list doesn't name; I say why below. I didn't take the nits FN1 and FN2. FN3's
+first half, row 13's note, is covered by the row 13 note this pass adds. Every decision below is Rio Grande's call
+unless it quotes Andy, station law or P.
+
+### FS1. Applied, option (a)
+
+The premise holds in code. Calibration runs `paths.report` (`engram/calibrate.py:295-296`), which turns each session
+into a path (`engram/paths.py:338-354`) and names each session with its shape (`"session": p.key`, `:446-449`) and
+pairs of sessions that took different routes (`"a"`, `"b"`, `:328-330`). report.md prints those pairs too
+(`engram/calibrate.py:386-392`). That is a `read` on R(I) for `calibration`, and r_T allows the trails only for
+`trail-evaluation`.
+
+- **10, "No paths at admission".** `calibrate` gains `no_paths` (default false, today's behaviour). Admission always
+  passes it, with or without `route`. The report's `paths` section says only "not measured at admission; trails are
+  used only by the trail evaluation". T reads nothing from that section, so it loses nothing. The dry run's and confirm
+  view's words stay exact.
+- **8.** r_T's paragraph says that its one purpose is `trail-evaluation`, and that admission's calibration reads no
+  trail. After `Need(admission)`, a paragraph lists what admission does: verification reads the session ids and log
+  rows only to check what is kept, as part of the `imprint` use; calibration reads the memories for `calibration` and
+  derives no road or trail.
+- **The survey.** One more thing reads `episodes.session_id` at admission: the survey's `COUNT(DISTINCT session_id)`
+  (`engram/store_reader.py:126-131`). I kept it, as FS2's fix assumes. It is a count over a column of the memories,
+  read for `calibration` under r_M. It groups no episodes by session and orders none, so it derives no road or trail.
+  Section 10 says so.
+- **D7, D16, 5.2, 12's table, the `station-imprints` example and 15** say the same. The example now reads "88
+  semantics measured; 57 sessions counted; paths not measured at admission".
+- **The test FS1 asked for** is in 16, "Admission stays inside its `Need`": with `route`, every use admission performs
+  is in `Need(admission)`, and P's `decide` agrees with the station's check on each.
+
+### FS2. Applied
+
+- **16, "Log rows".** The test now compares `first_open`, `persistence_scores`, `cohesion` and `persistence`, and the
+  survey apart from `episodes.sessions` and the log tables' row counts. It says why `source` and `identity` differ.
+  Both reports' `paths` sections say "not measured at admission", and neither report names a session id.
+- **10, "The survey's counts".** `calibrate` gains `notes`, fixed sentences written beside named sections before the
+  report is hashed. Without `route`, admission notes "0 sessions and 0 log rows, because route was not chosen" beside
+  the survey's session count and the log tables' row counts. I put the note beside the log counts too, since those
+  zeros are just as easy to misread.
+- **5.2.** Calibration reads no log row's content, but its survey counts every table's rows
+  (`engram/store_reader.py:111-121`) and the distinct session ids (`:126-131`).
+- This makes I agree with T 7, which says the survey "counts no sessions either" without `route`.
+
+### FS3. Applied: T's I2, I3 and I6, as T states them
+
+I checked each ask against the rule I was given: decline it if it would let more leave a machine or weaken a
+permission. None does. I2 retires allow files and refuses reruns, which only narrows. I3 passes the socket of an
+embedder already on the Pi, which section 8 already names as where the text goes. I6 changes a test.
+
+- **I2** (new D41; 12, 13, 14, 15, 16; rows 24 and 27).
+  - A use id is a new lowercase uuid4 that `station-imprint-use-begin` makes. `imprint.py use` refuses any other form,
+    and a use directory that already exists. It never creates the directory's parents.
+  - `imprint.py use` writes `uses/<use id>/report.json`, only when `trails.py` exits 0, and `uses/<use id>/result.json`
+    with the exit status and the time the run ended.
+  - Finishing a use retires its allow file: `station-imprint-sync` deletes it, then writes `use-finished`, once.
+  - `use-finished` records the end: `report` with its SHA-256; `withdrawn` only when the tombstone exists and the
+    withdrawal came by the run's end; `ended`; `allow changed` otherwise; `not evaluable: limit` for a run a cap killed.
+  - The use always passes `--lane`. With `LANE` left out it fills in the scope's one lane, and it refuses when the
+    scope holds two.
+  - **Two additions, both needed so no run is recorded as something it wasn't.** A station deletion during a run
+    (`make station-imprint-delete`) writes a tombstone but is not a withdrawal, so it is recorded as `deleted`, with
+    its reason. Any other run with no report, such as a crash, is `failed`, with its exit status. Without these, the
+    first would read as a withdrawal, or both would read as a limit.
+  - **How the sync knows a run is over.** To record a run a cap killed, the sync must know the unit has stopped. So
+    the use's unit runs all three steps, begin, use and sync, as admission's does, and is named by the full imprint id.
+    `use-started` is then written inside the unit, and its `RuntimeMaxSec=1800` has stopped it 1,800 s later. The sync
+    finishes a use when `result.json` exists, when the imprint is `deleted`, or 1,800 s after `use-started`. It
+    finishes none while the imprint is `deleting`, since a withdrawal is still removing files. One imprint runs one use
+    at a time, which only narrows.
+  - `use-started` and `use-finished` now name the use id, so the sync can find the use's directory. It is a random
+    uuid4 the station made, and says nothing about the store.
+- **I3** (D29; 12, 15, 16, 18; row 28). The unit gets `--setenv=ENGRAM_EMBEDDER_SOCKET=<path>` exactly when the
+  station's `~/.config/superyak/runtime.json` names an `embedder_socket`, and nothing otherwise. A `systemd-run`
+  unit starts "in a clean and detached execution environment" (systemd-run(1), systemd 252 on the Pi, read today).
+  The Makefile reads only that key, by `superyak-runtime`'s rule (`scripts/runtime.py:84-89`): no file or no key
+  passes nothing, and a value that isn't an absolute path stops the use before the unit starts. I read only that key
+  because `superyak-runtime`'s whole reader (`scripts/runtime.py:56-89`) also requires `memory_home` and
+  `default_instance`, which the Pi may not set. Section 18's "The run never downloads a model" now rests on T's
+  `local_files_only=True`. It names the station user's `~/.kairos/models/fastembed` (`engram/embeddings.py:12`) for
+  the model files without the service, and says a service that doesn't answer raises rather than loading a local copy
+  (`engram/embeddings.py:191-194`).
+- **I6** (16, "Recall rows"; row 14). The test no longer asserts that the package's trails equal the source's
+  restricted to M. It asserts T's two statements: every touch derived from the package is a touch derived from the
+  source, of the same memory, kind and time, in the same order within its recall, and suggested only if the source's
+  is; and on every kept recall row, the "exactly one target" rule gives the source's answer. It points to T 12's
+  synthetic-imprint test for what is lost. I added one condition: derive both files' touches with one `as_of`. The
+  CLI's default `as_of` is each file's newest timestamp (T 4), so the two defaults differ, and T 7 names that as a
+  cause of difference. With one `as_of`, the package's rows are a subset of the source's, filtered the same way, so
+  both statements hold as T derives touches in its section 4.
+
+### The interface table
+
+I updated rows 13, 14, 24, 27 and 28, each with a note under "Imprint final-check pass", plus the I line in the header
+and a bullet in "What changed, by spec". Rows 14, 24, 27 and 28 are marked agreed. Row 13 gets a note for FS1 and FS2,
+and its "Agreed rule" cell now says that admission runs calibration without its paths analysis. Two points for T's
+next pass:
+
+- T's status line and section 11 still call I2's and I3's new parts and I6 pending in I. They are applied.
+- T 7's "Calibration reads exactly that" holds for calibration on a plain copy, not at admission on an imprint. No
+  rule of T's changes, since T reads nothing from calibration's `paths` section.
+
+### Not taken in this pass
+
+- FN1 (the dry run could say that resonances and `last_accessed` still leave without `route`) and FN2 (when the owner
+  is the operator, say that the ceiling stays its own layer in `Req`). Both are optional and change no decision.
+  FN2 matters if the first imprint is Andy's own store.
+- FN3's second half is P's text (P 6.4's last paragraph), and P is being repaired by someone else.
+
+### Still open with Andy (unchanged)
+
+- **Memories that mention other people.** The default is unchanged and stays the strictest of the three specs: no
+  memory with a recorded co-subject leaves, and the owner ticks the check for the rest (D27; 6.4, item 5; section 20).
+  This pass decides nothing about it. FS1 only narrows what is read at the station.
+- Which store to imprint first, and its owner's yes. Whether the station-signed browser yes is enough for step 1. The
+  license. One permission an agent may set on its own. What the county sets.
+
+### New code citations in revision 4, each read for this pass
+
+`engram/calibrate.py:258`, `:295-296`, `:328-331`, `:386-392`; `engram/store_reader.py:111-121`, `:126-131`;
+`engram/paths.py:328-330`, `:418-452`, `:446-449`; `scripts/runtime.py:56-89`, `:84-89`, `:597`, `:653-655`;
+`engram/embeddings.py:12`, `:191-194`; systemd-run(1) on the Pi (systemd 252).
+
+## Check of revision 4, 2026-10-25
+
+Reviewer: a fresh agent on the Pi, checking revision 4 in Andy's place under station law section 3. I took no part in
+writing any revision of the spec, any review, any response, or the interface pass. I read the vision's principles and
+its imprint section, the final check and the response to it above, `git diff HEAD` of the spec, the spec's sections 4,
+5.2, 6.2, 8, 10, 12, 13, 14, 15 and 16 as they stand, the interface table, and T (revision 6): section 4, section 7
+("The imprint check", "What an imprint changes", "The cost, chosen for privacy", steps 8.2 and 10), section 11 and
+section 12's imprint tests. I checked every new code claim by reading the code today, and the systemd claims on the Pi.
+File:line references are relative to `/home/andy/superyak/.worktrees/trail-arrows/`. "Spec line" means a line of
+`engram/docs/superpowers/specs/2026-10-25-store-imprint-design.md` as it stands today. I edited no spec. I appended
+only this section. I committed, pushed and posted nothing.
+
+VERDICT: APPROVE
+
+FS1, FS2 and FS3 are resolved, apart from one more gap in FS2's test (CS1). I2, I3 and I6 are provided as T states
+them. The file is whole. Revision 4 lets nothing more leave a machine and widens no permission. I found no wrong claim
+about code and no broken interface. Two should-fix items (CS1, CS2) and eight nits remain. Every fix named below is Rio
+Grande's call.
+
+### 1. FS1 to FS3
+
+**FS1: resolved, option (a).**
+
+- `calibrate` gains `no_paths`, and admission always passes it (spec lines 1260-1261, 1275-1283). The premise holds.
+  Calibration runs `paths.report` (`engram/calibrate.py:295-296`). Its report names each session
+  (`"session": p.key`, `engram/paths.py:447`) and pairs of sessions (`"a"`, `"b"`, `:329`), and report.md prints the
+  pairs (`engram/calibrate.py:386-392`).
+- No other analysis reads session ids or log rows. A grep for `session_id`, `memory_log` and `operation_log` in
+  `engram/calibrate.py`, `persistence.py`, `sheaf.py` and `store_identity.py` finds only sheaf's sleep-pass rate limit
+  (`engram/sheaf.py:287-291`) and sheaf's own writes (`:368`, `:387`). Calibration runs neither.
+- r_T now says its one purpose is `trail-evaluation` (spec lines 845-846). `Need(admission)` says what admission does
+  (spec lines 987-993). D7, D16, 5.2, section 12's table and the `station-imprints` example agree (spec lines 186, 195,
+  322-330, 1419, 1309-1316).
+- The test FS1 asked for is there (spec lines 1925-1927).
+- The survey still counts distinct session ids (`engram/store_reader.py:128-130`). That is no use on a trail. In P,
+  `recall` returns ids and digests, and `read` returns content (P lines 556-557). A count returns neither. report.md
+  already printed it in revision 3 (`engram/calibrate.py:329-331`), so the station sees nothing new. See CN3 for the
+  wording.
+
+**FS2: resolved in 5.2 and section 10. The test still has a gap (CS1).**
+
+- 5.2 now says calibration reads no log row's content, but counts the log tables' rows (spec lines 322-326;
+  `engram/store_reader.py:111-121`).
+- `calibrate` gains `notes`. Without `route`, the note sits beside the session count and the log row counts (spec lines
+  1288-1291).
+- The test (spec lines 1780-1789) now leaves out `paths`, the session count, the log row counts, `source` and
+  `identity`. That is the fix FS2 named. But the survey holds two more keys that differ, and one analysis reads the
+  clock. See CS1.
+
+**FS3: resolved. I2, I3 and I6, as T states them (T lines 1382-1446).**
+
+- **I2** (D41, spec line 220; spec lines 1436-1478, 1532, 1540-1541, 1713-1714, 1928-1937). Each part T asks is there:
+  - `withdrawn` only with the tombstone, `ended`, `allow changed` and `not evaluable: limit` are rules 2, 3, 5 and 6;
+  - the sync deletes the allow file, then writes `use-finished` once;
+  - `report.json` and `result.json` are the names T's check 5 reads (T lines 899-902);
+  - a lowercase uuid4 fits T's check 2 (T line 888);
+  - the use always passes `--lane`.
+
+  The two additions, `deleted` and `failed`, only name cases T's list leaves out. A station deletion writes a
+  tombstone but no `withdrawn` receipt (spec lines 1543-1557), so rule 4 keeps it from reading as a withdrawal. T's own
+  I2 test (T lines 1625-1628) passes on these rules. Moving `station-imprint-use-begin` inside the unit is sound: each
+  start is decided again and leaves its own `use-started`, the use id never reaches the caller's shell history, and one
+  unit per imprint only narrows. See CS2 for one gap in `failed`.
+- **I3** (D29, spec line 208; spec lines 1479-1495, 1938-1940, 2007-2015).
+  - systemd-run(1) on the Pi (systemd 252.39) says the unit runs "in a clean and detached execution environment".
+  - `scripts/runtime.py:84-89` is the `embedder_socket` rule, `:597` the default path, and `:653-655` sets the
+    variable. `:56-89` also requires `memory_home` and `default_instance`, as the response says.
+  - `engram/embeddings.py:12` is `~/.kairos/models/fastembed`. `:191-194` raises `EmbedderUnavailableError` when the
+    socket doesn't answer, and `create_embedding_provider` has no fallback (`:200-207`).
+  - The Pi has no `~/.config/superyak/runtime.json` today, so the use would pass nothing and take the in-process path.
+    The model is in the station user's cache (`~/.kairos/models/fastembed/models--nomic-ai--nomic-embed-text-v1.5`).
+  - The text still goes only to an embedder on the Pi, which section 8 already names (spec lines 994-997).
+- **I6** (spec lines 1800-1812). The two assertions are T's (T lines 1442-1444), and so is the pointer to T 12's
+  synthetic-imprint test (T line 1594). The added "one `as_of`" is right: T's CLI defaults `as_of` to each file's
+  newest timestamp (T line 199). With one `as_of`, both assertions hold as T derives touches:
+  - episodes ship whole apart from `session_id` (spec lines 594-597);
+  - a kept recall row loses only instinct ids (spec lines 577-581);
+  - outcome normalization keeps "starts with `used`" (spec lines 584-585; T line 215);
+  - a `route_shown` row is a cut of its source row (spec lines 587-589).
+
+### 2. Privacy and permissions
+
+Nothing more leaves a machine.
+
+- FS1 narrows what is read at the station. FS2 adds fixed sentences and changes a test. I6 changes a test.
+- I2 adds a random use id, an end code, a deletion reason and an exit status to receipts. None names anything in the
+  store, and receipts already go to the owner.
+- I3 passes a local socket path to a unit on the same Pi.
+
+No permission widens. Retiring the allow file, refusing a used use directory, one use per imprint, and refusing a
+two-lane scope without `LANE` only narrow. The decision rule (spec lines 972-1004) and C are unchanged.
+
+### 3. Must-fix
+
+None.
+
+### 4. Should-fix
+
+**CS1. The calibration test in "Log rows" still fails as written** (spec lines 1780-1789; the class of FS2).
+
+- The survey section is `report["snapshot"] = store_reader.survey(snap)` (`engram/calibrate.py:258`). `survey` returns
+  `{"file": facts, **body}` (`engram/store_reader.py:156-174`). `file` is the snapshot's path, bytes and SHA-256
+  (`:66-73`), and the body holds `identity`, from `store_identity.describe(conn)` (`:124`). Both differ between two
+  packages whose bytes and imprint ids differ. The path also sits under each imprint's own state directory.
+- `first_open` reads the wall clock unless `now` is passed (`engram/calibrate.py:89`, `:245`, `:286`). Admission
+  passes none (spec lines 1260-1261), so two runs at different times give different decay strengths.
+
+*Fix:* also leave out the survey's `file` and `identity`, and run both calibrations with one fixed `now`, as I6 uses
+one `as_of`.
+
+**CS2. A run with no `result.json` is always `not evaluable: limit`, so `failed` never names a crash of
+`imprint.py use` itself** (spec lines 220, 1472-1474).
+
+- D41 says `failed` is "for any other run with no report", and the response above says a crash is `failed`. But rule
+  6 comes first and takes every run with no `result.json`. So `imprint.py use` raising before it writes `result.json`,
+  or a manual `systemctl --user stop`, is recorded as a limit. Only a `trails.py` exit other than 0 and 3 reaches rule
+  7.
+- Nothing leaves, and no permission changes. But the receipt says the Pi ran out of room when it may be a bug. That is
+  the kind of mis-record D41 was added to prevent.
+
+*Fix, one of:* `imprint.py use` writes `result.json` for its own errors too (`exit` null, plus an error class), in a
+`finally`, so a missing file means only that the unit was stopped. Or D41 says that `not evaluable: limit` also covers
+a run stopped from outside, or one whose runner crashed.
+
+### 5. Nits
+
+- **CN1. "At the latest" and "by then the run is over."** The constants row (spec line 1714) says a use is finished
+  1,800 s after `use-started` "at the latest". But only the unit's own sync and the hourly sweep run the sync (spec
+  lines 1480, 1564-1570). A use whose unit was stopped is finished at the first sweep after 1,800 s, up to an hour
+  later. Also, at `RuntimeMaxSec` systemd sends SIGTERM and waits `TimeoutStopSec` before SIGKILL (systemd.service(5)
+  on the Pi). This user manager's default is 90 s (`systemctl --user show -p DefaultTimeoutStopUSec`). Say "at the
+  first sync after 1,800 s", and pass `-p TimeoutStopSec=` or wait 1,800 s plus it (spec lines 1454-1458). The window
+  is still narrower than revision 3's, which never retired an allow file.
+- **CN2. The socket rule's edges** (spec lines 208, 1490-1494, 1938-1940). runtime.py treats `"embedder_socket": null`
+  as absent (`scripts/runtime.py:85-86`), but the test says a non-string stops the use. "By the same rule", null
+  passes nothing. `superyak-runtime` also lets `SUPERYAK_RUNTIME_CONFIG` replace the default path (`:595-597`). Say
+  that the Makefile reads only the default. D29's "only through `--setenv`" is a little strong: a user unit also
+  inherits the user manager's environment. Today that holds no `ENGRAM_` variable (`systemctl --user
+  show-environment`, checked). A deploy gate could check it.
+- **CN3. "Counts over columns of the memories"** (spec line 1286; row 13's note). That fits the session count, not
+  the log tables' row counts, which count R(I)'s rows. A reason that fits both: the log row counts are already in the
+  request's `contents` (spec lines 733-743), and a count returns no id, digest or content, so under P 6.4 it is no use.
+- **CN4. Who fills in `LANE`.** The unit's command line carries `LANE=<lane>` (spec line 1486), so the Makefile fills
+  it in before the unit starts, and the test names `make station-imprint-use` (spec lines 1935-1937). Row 27's note
+  says `imprint.py use` does it. Name one.
+- **CN5. What the caller sees.** The use is now decided inside the unit, so `make station-imprint-use` can't show a
+  refusal. Print "Started; see make station-imprints", as admission does (spec line 1168). Say what a second start
+  prints while one runs, since systemd-run refuses a unit name that is already loaded.
+- **CN6. Write order.** `imprint.py use` should write `report.json`, atomically, before `result.json`. The sync starts
+  on `result.json` (spec line 1455), and the sweep's sync can run beside the unit. In the other order, a sync between
+  the two writes records an exit of 0 as `failed`.
+- **CN7. Tests.** "Use ends" (spec lines 1928-1937) tests every end but `failed`. Nothing tests that no use is
+  finished while the imprint is `deleting` (spec lines 1457-1458).
+- **CN8. Not new, now cheap.** Withdrawal and a station delete don't stop a running use's unit (spec lines
+  1547-1557). `trails.py` keeps working on the unlinked file until its deadline, then discards its report (T lines
+  905-911). The unit is now named by the full imprint id, so a withdrawal could stop `superyak-imprint-use-<imprint
+  id>`, and admission's unit too. That only narrows.
+
+### 6. The interface table
+
+Rows 13, 14, 24, 27 and 28 match the spec. Rows 14, 24, 27 and 28 are rightly marked agreed. The header line and
+"What changed, by spec" are right. Row 13's "Agreed rule" still opens "Calibration reads no log row", where the spec
+now says "no log row's content" (see CN3). Two points for T's next pass, which are not defects in I:
+
+- T's section 11 still calls I2's and I3's new parts, and I6, pending in I (T lines 1388-1389, 1407-1408, 1446).
+- T 7 (T lines 932-933) and T 11's I5 (T lines 1434-1435) still describe calibration's paths at admission:
+  "`paths.report` finds no session", the "31 session paths" example, and "differs only in `paths`". T reads nothing
+  from that section, so no rule of T's changes.
+
+### 7. The file is complete
+
+All 32 headings of the committed revision 3 are present, in order (a `diff` of `grep '^#'` against `git show HEAD:`).
+The diff adds 169 lines and removes 47, and every hunk is an edit the response names. The file ends with a newline, and
+section 20 ends where it did.
+
+### 8. Still open with Andy (this check changes none of them)
+
+- **Memories that mention other people.** The default is unchanged and stays the strictest of the three specs: no
+  memory with a recorded co-subject leaves, and the owner ticks the check for the rest (D27; 6.4, item 5; section 20).
+  I decide nothing here.
+- Which store to imprint first, and its owner's yes. Whether the station-signed browser yes is enough for step 1. The
+  license. One permission an agent may set on its own. What the county sets.
