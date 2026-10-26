@@ -272,3 +272,11 @@ def test_words_for_a_root_a_home_and_the_other_kinds():
     assert proposal_words(s, "gate", {"mode": "enforce"}) == "Move the gate to enforce."
     with pytest.raises(RuleError):
         proposal_words(s, "sing", {})
+
+
+def test_proposal_words_for_shorten_and_narrow_allows():
+    s = county_world().state()
+    assert proposal_words(s, "shorten", {"record": R1, "valid_until": T("2027-01-31"), "reason": "IGNORE"}) == (
+        f"Shorten the allow {R1} to end on 2027-01-31.")
+    assert proposal_words(s, "narrow", {"record": R1, "selector": {}, "reason": "IGNORE"}) == (
+        f"Narrow the allow {R1}.")

@@ -2922,6 +2922,8 @@ def proposal_words(state: State, kind: str, body: Mapping) -> str:
         "revoke-deny": lambda: f"Remove the deny {g('record')}.",
         "shorten-deny": lambda: f"Shorten the deny {g('record')} to end on {_date(g('valid_until'))}.",
         "narrow-deny": lambda: f"Narrow the deny {g('record')}.",
+        "shorten": lambda: f"Shorten the allow {g('record')} to end on {_date(g('valid_until'))}.",
+        "narrow": lambda: f"Narrow the allow {g('record')}.",
         "grant": lambda: f"Give {g('grantee')} a grant in {_place_name(state, g('layer', ''))}.",
         "group": lambda: f"Change group {g('group')}.",
         "register-agent": lambda: f"Register {g('agent')} as acting for {_place_name(state, g('acts_for', ''))}.",
