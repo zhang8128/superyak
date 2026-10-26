@@ -500,3 +500,281 @@ I's CN7 second half and CN8. T's final check FS1 and FN1 to FN3. These are as th
   steps.
 
 Not checked: I ran no engram or peer tests, since nothing here changes code.
+
+## Cross-check fixes, 2026-10-25
+
+Author: a fresh agent on the Pi, applying the cross-check above as its sections describe. I edited the three specs
+and the interface table with targeted edits only, and appended only this section here. I let nothing more leave a
+machine and widened no permission. I decided nothing about whether memories that mention other people may move at
+all. I committed nothing, pushed nothing, merged nothing, deployed nothing and posted nothing.
+
+The specs after these fixes: P revision 6, I revision 6, T revision 8.
+
+### Must-fix
+
+- **XM1. Applied** (I 8, "When the owner is the operator"; row 6).
+  - The ceiling is never one more allow. At the station the one home layer is the ceiling itself, ⟦c⟧, for every
+    copy, whoever owns it.
+  - The operator's own records add nothing there. Each ⟦c_J⟧ ⊆ ⟦p_J⟧ (I 8), and every other copy's ceiling lies in
+    𝒰_other, so ⟦c⟧ ∩ (∪_J ⟦p_J⟧ ∪ 𝒰_other) = ⟦c⟧.
+  - So the cross-check's case holds again. A use of sam's `c0a8` meets sam's layer and ⟦c⟧, which holds it, and P's
+    meet equals I's per-copy check on a fixture with two owners, one of them the operator.
+  - I 8 says what revision 5 defined and why it failed closed. The station's code and every verdict are unchanged.
+  - Row 6's consolidation note is corrected in place and marked so.
+
+### Should-fix
+
+- **XS1. Applied** (I 16, "Recall rows"; T 11's I6; row 14).
+  - The fixture's source holds no row at or after t₁, and `as_of` is at or after t₁. Or the test takes `as_of` = t₁,
+    and the source holds no row at exactly t₁. Either way every package session is closed in the source too.
+  - Why. I 5.2 decides "closed at t₁" from rows before t₁ only. Engram's session id is `CLAUDE_CODE_SESSION_ID`
+    (`engram/server.py:1319-1332`), so a shipped session can write again later under that id. T 4 ignores rows newer
+    than `as_of`, and counts a session open while its newest row is within an hour of `as_of`. So an `as_of` at such a
+    later row, or less than an hour after it, finds the session open in the source.
+  - T 11's I6 says so, and row 14's consolidation note is corrected in place. It changes a test, not a rule.
+- **XS2. Applied as the item states it, with one step it needed** (Rio Grande's call; I D16, 8, 10, 12 and 16; P 6.4
+  and 9.1 item 3; rows 8 and 21).
+  - With `route`, once the checks pass, `imprint.py admit` derives R(I) in memory with the trail spec's functions, at
+    `as_of` = t₁, the scope's `until`. It keeps only N, the number of roads and trails. Without `route`, N is 0.
+  - At t₁ every session the package holds is closed (I 5.2), and no kept row is ignored, so a later `as_of` gives the
+    same N.
+  - `result.json` and the `admitted` receipt carry N as `roads_and_trails`. `use-started` and `use-finished` copy it
+    from `admitted`, and so does `refused` once there is an `admitted` receipt.
+  - The import reads N from the receipt and writes ⌈N / 100,000⌉ rows per action on roads and trails. An R(I) of
+    150,000 gives `returned` 100,000 and 50,000.
+  - **The step it needed.** Deriving R(I) reads memory text: T 4 makes a cited touch when a later same-session
+    episode's `content` or `context` contains the target's id. Need(admission) had only `recall` on the memories for
+    `trail-evaluation`. Its third set is now `recall` and `read` on the memories for `trail-evaluation`, as in
+    Need(trail-evaluation). r_M lists `read` with purpose `trail-evaluation`, and C holds (read, trail-evaluation), so
+    no permission widens, and only N leaves the run. I 8's bulk uses, I 12's uses table and P 6.4's last paragraph say
+    so.
+  - **An edge the item didn't name.** A use refused with `route` before admission counted R(I) read no road or trail,
+    and its receipt has no N: a `denied` at approval, a `failed` naming a term at a run's start, or a `refused` before
+    `admitted`. Its import writes one row per action on roads and trails, with `returned` null, and P 9.1 item 3 now
+    allows that. This is the cross-check's second option, used only where no count exists.
+  - A count names no id, digest or content. The station keeps it in its receipts until 400 days after deletion, as
+    it keeps their `count` of memories, and it counts only roads and trails the owner's yes covers.
+  - I 16 tests the count, the split and the null row.
+- **XS3. Applied** (I 5.4 and 9; T 7).
+  - The dry run's "What would leave" gains, in plain words: "With them, route or not: when each memory was written;
+    how often and when last each episode was recalled; and the resonances, pairs of memories one recall returned
+    together, with when. These show when memories were recalled together." Its "Without route" line gains "The times
+    above would still leave."
+  - The confirm view says the same, as a fixed line beside the closed actions.
+  - The code, read today: each recall adds one to `accessed_count` and sets `last_accessed` on every episode it
+    returns (`engram/server.py:2388-2391`; `engram/storage.py:627-638`), with a microsecond timestamp
+    (`engram/storage.py:55-56`). It forms a resonance between results it returned together, keeping `created_at`,
+    `last_seen` and `co_occurrences` (`engram/server.py:2488-2491`; `engram/storage.py:2001-2012`).
+  - T 7's known limit names these beside write times, and says the imprint spec now tells the owner.
+  - Telling lets nothing more leave. Nothing in what ships changes.
+
+### Nits
+
+- **XN1. Applied** (I D41 and 12, rule 6; row 24). An error in `imprint.py use` before it makes the use directory,
+  such as an import error at start-up or an allow file it can't read, writes no `result.json`. Rule 6 reads it as a
+  limit, and both places say so.
+- **XN2. Not applied, carried.** Passing `-p UnsetEnvironment=ENGRAM_EMBEDDER_SOCKET` when there is no `--setenv` is
+  right: systemd.exec(5) on the Pi (systemd 252) says it is applied as the final step, so it must never go with
+  `--setenv`. But it isn't quick. It changes the unit's command and its rule in I D29, 12, 16 and 18, in T 7 step 8.2
+  and 11's I3, and in row 28, which all say "nothing otherwise". It also covers one variable, while I 18's gate checks
+  every `ENGRAM_` one. The plan can take it.
+- **XN3. Applied** (P U24; row 29). U24's fixture has trails of 512 touches each, the trail spec's cap, so the 40 s is
+  measured where a decision reads 51.2 million touches.
+- **XN4. Applied** (P 9.1 item 3): "one row for all of them in that bulk use".
+- **XN5. Applied** (row 8's agreed rule): "one receipt, which names its batch of objects or holds their count".
+- **XN6. Applied with XM1** (I 8; row 6). In a step-2 ledger the ceiling stays a term of the meet of its own, so a use
+  of copy I is allowed only within ⟦c_I⟧ less the home's denies. Which item of P's `Req` holds it there is left to
+  P 14 step 2.
+
+### Revision tags
+
+- P: the status line says revision 6 and lists these. The header names I revision 6 and T revision 8, and gains a
+  revision 6 item in "Depended on by". 6.4 and 11 say trail spec revision 8.
+- I: the status line says revision 6. The revision history gains row 6, and row 5 now names `ade420c`. The header
+  cites P revision 6 and T revision 8.
+- T: the status line says revision 8. The revision history gains row 8, and row 7 now names `ade420c`. The header
+  cites P revision 6 and I revision 6.
+
+### The interface table
+
+- The header names each spec's new revision and the rows it updated, and a paragraph names these fixes.
+- Row 6: the consolidation note corrected (XM1), and XN6.
+- Row 8: XS2's count and Need(admission)'s `read`; XN5 in the agreed rule.
+- Row 14: the consolidation note corrected (XS1), and the fix.
+- Row 21: the agreed rule names `{imprint, count, roads_and_trails}` and where `returned` comes from; XS2 and XN4.
+- Row 24: XN1. Row 29: XN3.
+- "What changed, by spec" gains a "Cross-check fixes" entry. XS3 changes no row.
+
+### Code and system claims checked today
+
+- `engram/server.py:1319-1332`: the session id is `CLAUDE_CODE_SESSION_ID` under Claude Code, else a bound or random
+  id.
+- `engram/server.py:2388-2391` (access counts on episode results), `:2488-2491` (`_form_resonances`).
+- `engram/storage.py:55-56` (`_now_iso`, microseconds), `:627-638` (`increment_episode_access`), `:2001-2012` (the
+  resonance upsert).
+- `engram/migrations/002_v3_layers.sql:5-6`: `accessed_count` and `last_accessed` are episode columns only.
+- systemd.exec(5) on the Pi, systemd 252 (252.39-1~deb12u2): `UnsetEnvironment=` is applied last.
+- Spec claims: T 2 (a road is a step with support ≥ 2, its section 5), T 4 ("As-of time", "Sessions", "Cited
+  touches"), I 5.2 (closed at t₁), I 6.4 item 2, I 7.1 and 7.2 (`scope.until`), P 6.1 and 6.3.
+
+### Checked after editing
+
+- Every `## ` heading, and every `#` heading, in P, I, T and the table matches `git show HEAD:<file>` (a `diff` of
+  `grep`, no difference). This file gains only this section.
+- Each file ends with a newline. Lines now: P 2,013, I 2,190, T 1,733, the table 130.
+- Every added line outside a table is at most 120 characters. Every table row keeps its column count.
+
+Not checked: I ran no engram or peer tests, since nothing here changes code.
+
+### Still open with Andy (unchanged)
+
+- **Memories that mention other people.** Whether they may move at all is Andy's. Each spec keeps its default: P 7.4
+  and 19; I D27 and 20, the strictest; T 14. These fixes decide nothing about it.
+- Also: the license; which store to imprint first, and its owner's yes; whether the station-signed browser yes is
+  enough for step 1, and the terminal yes at home; one permission an agent may set on its own; what the county sets;
+  pseudonyms; agent shares at home under `enforce`; the two departures from principle 5; who decides in the county
+  steps.
+
+## Check of the cross-check fixes, 2026-10-25
+
+Reviewer: a fresh agent on the Pi (`smart`), in Andy's place (station law section 3). I took no part in writing,
+reviewing, fixing, consolidating or cross-checking these specs. I read the "Cross-check" and "Cross-check fixes"
+sections above, `git diff HEAD` of P, I, T and the table, and the parts of each spec those touch. I checked code
+claims by reading the code today. I edited no spec and not the table. I appended only this section. I committed,
+pushed, merged, deployed and posted nothing.
+
+VERDICT: APPROVE
+
+XM1 and XS1 to XS3 are resolved. No must-fix is left, and the fixes add none. One should-fix is new (YS1): the XS3
+lines say wrongly how recall forms resonances, so the owner's words say a little less than what leaves. It lets
+nothing more leave. Fix it before the first live imprint, the gate XS3 already had. The rest are nits. Nothing here
+decides whether memories that mention other people may move at all.
+
+### The files are complete
+
+- Every `## ` heading, and every `#` heading, of P, I, T and the table matches `git show HEAD:<file>` (a `diff` of
+  `grep`, no difference). This file differs from HEAD only by the "Cross-check fixes" section and this one.
+- Each file ends with a newline, and each one's last five lines match HEAD's. Lines: P 2,013, I 2,190, T 1,733, the
+  table 130, as the fixes say.
+- Every added line outside a table is at most 120 characters. Every edited table keeps its column count: the
+  table's 32 rows, I's decisions, revision history, uses and receipts tables, and T's revision history.
+
+### The four items
+
+- **XM1. Resolved** (I lines 1001-1024; row 6). The one home layer is ⟦c⟧ for every copy. The identity
+  ⟦c⟧ ∩ (∪_J ⟦p_J⟧ ∪ 𝒰_other) = ⟦c⟧ holds. ⟦c⟧ is the union of the ⟦c_K⟧. Each of the operator's own lies in its
+  ⟦p_K⟧ (I 8, "Every u in ⟦c_I⟧ is in ⟦p_I⟧"). Each other one lies in 𝒰_other, since item 1 names its h.
+  - The cross-check's case now works. A use of sam's `c0a8` has `Req` = {sam's layer, ⟦c⟧}. It is in ⟦c⟧ only
+    through ⟦c_c0a8⟧, which lies in sam's ⟦p⟧. So the meet on that copy is ⟦c_c0a8⟧, I's per-copy check.
+  - For Andy's own copy I, `Req` is ⟦c⟧ alone, and the meet on that copy is again ⟦c_I⟧. The ceiling still narrows
+    after a ship's withdrawal, since the owner's records are no allow of their own there.
+  - No text in the four files still gives revision 5's definition as current (`grep`). XN6's step-2 paragraph
+    defers to P 14 step 2 and claims nothing P lacks.
+- **XS1. Resolved** (I 16, lines 1931-1945; T 11's I6, lines 1502-1510; row 14). Both fixtures work.
+  - I 5.2 calls a session closed at t₁ when its newest row before t₁ is older than t₁ − 3,600, over every log kind
+    (I lines 356-360). T 4 calls it closed when its newest row up to `as_of` is older than `as_of` − 3,600, over
+    fewer kinds (T lines 212-225). So I's closed at t₁ gives T's closed at `as_of` = t₁.
+  - With no source row at or after t₁, a shipped session's newest source row is the same at any `as_of` ≥ t₁, so it
+    stays closed. With `as_of` = t₁, T ignores rows after t₁, and no row sits at exactly t₁, so it is closed too.
+  - The package's rows are then a subset of the source's, filtered the same way, and both assertions hold. The code
+    claim is true (`engram/server.py:1319-1332`). A session idle for over an hour that writes again after t₁ is
+    enough, with or without a resume.
+- **XS2. Resolved** (I D16, 8, 10, 12 and 16; P 6.4 and 9.1 item 3; rows 8 and 21). N now has a source.
+  - Admission derives R(I) at `as_of` = t₁ and keeps only the count, and the receipts carry it. At t₁ every package
+    session is closed (as under XS1), and no package row is newer than t₁. So a later `as_of` gives the same N.
+  - The split is right: ⌈150,000 / 100,000⌉ = 2 rows, `returned` 100,000 and 50,000.
+  - The added `read` on the memories for `trail-evaluation` is needed: T 4's cited touches read an episode's
+    `content` and `context` (T line 234). It widens nothing. r_M's actions and purposes give (read, trail-evaluation)
+    (I line 870), and so does C (I lines 956-958). P 6.4's last paragraph and I 12's uses table say the same.
+  - Only a count leaves. It names no id, and the station keeps it as it already keeps the memories' `count`.
+- **XS3. Resolved in substance, with YS1** (I 5.4, lines 466-468, 475 and 513-519; I 9, lines 1154-1156; T 7, lines
+  969-976). The dry run and the confirm view now tell the owner that write times, access counts, last-access times
+  and resonances leave, with or without `route`. Telling lets nothing more leave. The access-count claim is true.
+  The resonance claim is not (YS1).
+
+The nits the fixes applied (XN1, XN3 to XN6) are where the log says. 51.2 million = 100,000 × 512, and 400,000 =
+3 × 100,000 + 100,000. XN2 is carried, with a reason that holds.
+
+### Code and system claims checked today
+
+- True: `engram/server.py:1319-1332` (the session id is `CLAUDE_CODE_SESSION_ID` under Claude Code, else a bound or
+  random id); `:2388-2391` (each episode result's access count; `:2466` does the same for uninvited episodes);
+  `:2488-2491` (the call to `_form_resonances`, imported from `resonance.py` at `:24-26`).
+- True: `engram/storage.py:55-56` (`_now_iso`, with microseconds), `:627-638` (`increment_episode_access`),
+  `:2001-2012` (the upsert raises `co_occurrences` and sets `last_seen`).
+- True: `engram/migrations/002_v3_layers.sql:5-6` (`accessed_count` and `last_accessed` are episode columns), and
+  `012_resonances.sql` gives resonances no session column, so T 7's "no record names a session" holds.
+- True: the Pi runs systemd 252 (252.39-1~deb12u2), and its systemd.exec(5) says `UnsetEnvironment=` "is applied as
+  final step".
+- Not as written: "forms a resonance between results it returned together" (YS1).
+
+### Privacy and permissions
+
+Nothing more leaves a machine, and no permission widens. N is a content-free count of what the owner's yes covers.
+Admission's new `read` is inside r_M and C. XM1's fix changes a definition and no verdict. XS3 tells the owner more.
+I found nothing about a person that moves without their yes.
+
+### Must-fix
+
+None.
+
+### Should-fix
+
+**YS1. The XS3 lines misstate how recall forms resonances** (I lines 467-468, 516-517 and 1155-1156; T lines
+971-973; this log's XS3 fix).
+
+- **Why.** `_form_resonances` is `resonance.form_resonances` (`engram/resonance.py:42-85`). It computes PMI over
+  every recall row in `memory_log` (`:52-58`; `engram/storage.py:2206-2229`). Then it upserts every pair with
+  PMI > 0 that has at least one member in this recall's results (`:68`, `:74`, `:81-82`). So each pair was returned
+  together by some recall. But `last_seen` is the latest recall that returned either one, and `co_occurrences`
+  counts those recalls, not joint returns.
+- **Failure.** Semantic s and episode e form a resonance. Later a recall returns s alone. The pair's `last_seen`
+  moves to that time, so the copy shows when s was last recalled. The owner was told that only episodes keep a last
+  recall time, and that resonances keep when a pair was recalled together.
+- **Fix.** Say that each recall updates every resonance with one of its results in it, once the pair has been
+  returned together. In the owner's words, for example: "Resonances, pairs of memories recalls returned together,
+  keep when they formed and when either was last recalled." While there: `last_accessed` also moves when an episode
+  leaves core (`engram/storage.py:987-1012`, from the `unmark_core` tools, `engram/server.py:3098`, `:3112`), so
+  "when last it was recalled" is nearly, not exactly, true. A builder's note covers it.
+
+### Nits
+
+- **YN1. N can exceed what an evaluation derives.** The use runs `trails.py` with no `--as-of` (I line 1506), so its
+  `as_of` is the copy's newest row (T line 1017), before t₁. Sessions in that last hour are open then and get no
+  trail, and the run covers one lane. Its receipts still carry N. That matches `Need(trail-evaluation)`, which names
+  all of R(I), and it only over-reports. Say N is R(I) as `Need` names it, or pass `--as-of` = t₁ to the use, which
+  would also end T 7's "which of the newest sessions count as closed can differ".
+- **YN2. One imported receipt is in neither list.** "Ended during admission" writes a `failed` receipt naming the
+  effective end (I 10, "Deletion and the end win"). It is imported (I line 1729). It is not "at a run's start", so
+  I 12's null list (I lines 1745-1748) misses it, and it may come after the count. Say "every imported receipt with
+  no N". I 16's use-list test should say a `denied` receipt "naming a failing term", since only those are imported.
+- **YN3. `until` may be null in the request** (I line 1854), but the count reads `as_of` = the scope's `until`. 5.2
+  always gives t₁ a value. Require `until`, or say what admission does without it.
+- **YN4. The count has no failure path of its own.** "Any failure writes `result.json` with `failed`, the check's
+  number" (I line 1389), but the count is no numbered check, and it shares the admission unit's 1,800 s with
+  calibration. Name its result. Calibration has the same gap today.
+- **YN5. T doesn't say that admission now derives trails.** T 7's "At admission, calibration reads no session path"
+  is still true. But I 10 now calls T's pure functions on an imprint, outside the CLI's imprint check (T 11's
+  `trails.py` row). One sentence in T 7 would keep a builder from putting that check into the shared functions.
+- **YN6. P 9.1 item 1 says "three for an admission"** (P line 1143). `uses.purpose` is NOT NULL (P line 1109), so a
+  row is per action and purpose. With `route`, an admission has `recall` and `read` for two purposes, and three
+  actions on roads and trails. I 16's "3 rows per memory action" (I line 2099) reads the same way. Say "per action
+  and purpose".
+- **YN7. One boundary.** T 11's I6 (T line 1507) and this log's XS1 fix say "less than an hour after it". T 4 keeps
+  a session open while its newest row is not older than `as_of` − 3,600, so "at most an hour" is exact. Row 14's
+  "within an hour" is right.
+
+### Carried, not changed
+
+XN2, as the fixes say. The cross-check's own "Carried, not changed" items.
+
+### Still open with Andy (unchanged)
+
+- **Memories that mention other people.** Whether they may move at all is Andy's. Each spec keeps its default: P 7.4
+  and 19; I D27 and 20, the strictest; T 14. No added line in this pass mentions it (`grep`). I decide nothing here.
+- Also: the license; which store to imprint first, and its owner's yes; whether the station-signed browser yes is
+  enough for step 1, and the terminal yes at home; one permission an agent may set on its own; what the county sets;
+  pseudonyms; agent shares at home under `enforce`; the two departures from principle 5; who decides in the county
+  steps.
+
+Not checked: I ran no engram or peer tests, since nothing here changes code.

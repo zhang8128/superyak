@@ -1,8 +1,15 @@
 # Trails: Footpaths, Roads and Detours in the Category Graph
 
 **Date:** 2026-10-25
-**Status:** Revision 7, the consolidation pass across the three city-rail specs
-(`docs/superpowers/reviews/2026-10-25-city-rail-consolidation.md`, which logs each change). Revision 6 was approved on
+**Status:** Revision 8, the fixes after the cross-check of the consolidation pass
+(`docs/superpowers/reviews/2026-10-25-city-rail-consolidation.md`, "Cross-check" and "Cross-check fixes"). I6's test
+needs one more condition: the fixture's source holds no row at or after t₁, or the test takes `as_of` = t₁ with no
+row at exactly t₁, since a shipped session can write again after t₁ (section 11; XS1). Section 7's known limit now
+names recall times too: access counts, last-access times and resonances leave with the memories and show when
+memories were recalled together, and the imprint spec's dry run and confirm view say so (XS3). No rule of this spec
+changes, and nothing more leaves a machine.
+Revision 7 was the consolidation pass across the three city-rail specs (the same file, which logs each change).
+Revision 6 was approved on
 its final check (`docs/superpowers/reviews/2026-10-25-trail-arrows-rev4-spec-review.md`, "Final check of
 2026-10-25"). The imprint spec's revision 4 provides I2, I3 and I6, and revision 7 marks them provided in section
 11, after checking each against what that spec provides. The check found one gap, in I6's test: its one `as_of` must
@@ -27,8 +34,8 @@ the contract, and this spec says so.
 **Builds on:** `2026-08-07-evolving-category-memory-design.md` (v2 store, rewrites, epochs),
 `2026-09-29-path-signatures-design.md` (`paths.py`), `2026-09-29-lighthouse-sheaf-design.md`,
 `2026-09-01-lighthouse-local-city-design.md` (sharing, permissions, receipts),
-[permissions by place](../../../../docs/superpowers/specs/2026-10-25-permissions-by-place-design.md) (revision 5;
-its sections 4.1, 5.2, 6.3–6.5, 7.6, 9.1, 11 and 14) and [imprints](2026-10-25-store-imprint-design.md) (revision 5;
+[permissions by place](../../../../docs/superpowers/specs/2026-10-25-permissions-by-place-design.md) (revision 6;
+its sections 4.1, 5.2, 6.3–6.5, 7.6, 9.1, 11 and 14) and [imprints](2026-10-25-store-imprint-design.md) (revision 6;
 its sections 5.3, 6.2, 10, 11 and 12). The last two were written in parallel. This spec cites them by path and
 section, and section 11 lists what it needs from each.
 
@@ -43,7 +50,8 @@ section, and section 11 lists what it needs from each.
 | 5 | uncommitted draft | Applied that verdict. Measure W embeds text the way the tools do (MF1). Imprinted recall rows keep their shipped targets (I4, MF2; declined in the interface pass, below). `at_goal` means A* popped an entry (MF3; corrected in revision 6). Every route node is rechecked, and a route has at most 64 stops (S1). A gate pass licenses one lane (S2). The answer bound is 6,000 bytes (S5). The allow-file check, the Pi budget, the evaluation's limits and the anchor patterns are tightened (S4, S9–S11). |
 | 5, interface pass | uncommitted draft | I4 declined for privacy, and its cost recorded (R17, section 7). The imprint check reads the imprint spec's state directory, tombstone and `valid_until` (I2). One `route` use per road (section 8). Lineage reads `independent` (section 8). The evaluation unit and `--lane` follow the imprint spec. `laid_by` on an imprint names the source's owner (6.5). |
 | 6 | `53c132a` | Applied the re-check. `at_goal` means the popped goal has no predecessor (RMF1). Without `route`, an imprint ships no session ids, so it holds no trail of any kind (R18, I5; RMF2). The evaluation stays offline, and its unit gets the shared embedder's socket from the station's `runtime.json` (R19, I3; RS2). One use id gives one run, and a finished use retires its allow file (R13, I2; RS3). A changed allow file ends the run as `allow changed`, and only a tombstone is recorded as a withdrawal (I2; RS4). The imprint spec's recall-row test is asked to change (I6; RS1). Nits RN1–RN11. Approved on its final check. |
-| 7 | this file | The consolidation pass. I2, I3 and I6 are provided by the imprint spec's revision 4, each checked against it (section 11); I6's one `as_of` must be at or after t₁, now in the imprint spec's revision 5. Admission's calibration on an imprint reads no session path, so section 7's "Calibration reads exactly that" now says it of a plain copy only (the imprint spec's `no_paths`). The known limit cites the permissions spec's 7.6. Step 10 names the use's `TimeoutStopSec=60`. No rule changes. |
+| 7 | `ade420c` | The consolidation pass. I2, I3 and I6 are provided by the imprint spec's revision 4, each checked against it (section 11); I6's one `as_of` must be at or after t₁, now in the imprint spec's revision 5. Admission's calibration on an imprint reads no session path, so section 7's "Calibration reads exactly that" now says it of a plain copy only (the imprint spec's `no_paths`). The known limit cites the permissions spec's 7.6. Step 10 names the use's `TimeoutStopSec=60`. No rule changes. |
+| 8 | this file | The cross-check's fixes. I6's test also needs a source with no row at or after t₁, or `as_of` = t₁ with no row at exactly t₁, since a shipped session can write again after t₁ (section 11; XS1). Section 7's known limit names access counts, last-access times and resonances beside write times, and the imprint spec now tells the owner (XS3). No rule changes. |
 
 ## Decisions in revisions 4 and 5
 
@@ -958,6 +966,15 @@ Episode write times stay in every imprint: the imprint spec's time window and pl
 and 5.4). Someone could guess sessions from the gaps between write times. No record says which episodes one session
 wrote, and nothing in step 1 guesses. That is a known limit. Rio Grande's call.
 
+Recall times stay in every imprint too, with or without `route` (the cross-check's XS3; this spec's final check FS2).
+Each episode ships its `accessed_count` and `last_accessed`, which every recall that returns it updates
+(`engram/server.py:2388-2391`; `engram/storage.py:627-638`). Resonances ship, and recall forms one between results it
+returned together, keeping `created_at`, `last_seen` and `co_occurrences` (`engram/server.py:2488-2491`;
+`engram/storage.py:2001-2012`). So these show when memories were recalled together: episodes whose last-access times
+lie a moment apart were very likely returned by one recall. None of it is a trail here, since a returned memory is
+not a used one (section 4), and no record names a session. This spec reads none of it. The imprint spec's dry run and
+confirm view tell the owner so in plain words (its revision 6, sections 5.4 and 9). Telling lets nothing more leave.
+
 With `route`, the imprint keeps log rows only from sessions closed at the plan's end t₁ and inside the plan's dates
 (imprint spec D7 and 5.2). Of those rows it keeps:
 
@@ -1484,9 +1501,14 @@ revision 5), and marks them provided below. All six are settled: five provided a
     since the CLI's default `as_of` is each file's newest timestamp (section 4) and differs between them (section 7).
     Revision 7's check found that `as_of` must also be at or after the plan's end t₁. An earlier one could count a
     session closed in the package, whose later rows stayed home, and open in the source (section 4, "Sessions"), and
-    then the package would have touches the source lacks. The imprint spec's revision 5 says so. With such an
-    `as_of`, every session of the package is closed in the source too, and the package's rows are a subset of the
-    source's, filtered the same way, so both assertions hold as section 4 derives touches.
+    then the package would have touches the source lacks. The imprint spec's revision 5 says so. The cross-check
+    found that a later `as_of` needs one more condition (XS1). The imprint spec decides "closed at t₁" from rows before
+    t₁ only (its 5.2), and a shipped session can write again after t₁ under the same id, since engram takes it from
+    `CLAUDE_CODE_SESSION_ID` (`engram/server.py:1319-1332`). With `as_of` at such a row or less than an hour after
+    it, the session is open in the source and closed in the package. So the imprint spec's revision 6 has the
+    fixture's source hold no row at or after t₁, or takes `as_of` = t₁ with no row at exactly t₁. With either, every
+    session of the package is closed in the source too, and the package's rows are a subset of the source's, filtered
+    the same way, so both assertions hold as section 4 derives touches.
 
 ## 12. Tests the builder must include
 

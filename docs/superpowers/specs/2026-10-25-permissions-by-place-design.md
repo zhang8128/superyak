@@ -1,8 +1,9 @@
 # Permissions by Place
 
 **Date:** 2026-10-25
-**Status:** Revision 5, the consolidation pass across the three city-rail specs
-([consolidation](../reviews/2026-10-25-city-rail-consolidation.md), which logs each change). It answers the check of
+**Status:** Revision 6, the fixes after the cross-check of the consolidation pass
+([consolidation](../reviews/2026-10-25-city-rail-consolidation.md), "Cross-check" and "Cross-check fixes"). Revision 5
+was the consolidation pass itself (the same file, which logs each change). It answers the check of
 revision 4 ([review](../reviews/2026-10-25-permissions-by-place-spec-review.md), "Check of the follow-up revision":
 approve, with BS1 to BS3 and BN1 to BN4). Revision 4 answered the final check after repair (the same file, verdict
 approve; its "Response to the final check after repair" says what changed). Revision 2 answered the first fresh
@@ -30,6 +31,14 @@ Revision 5 applies BS1 to BS3 and BN1 to BN4:
   9.2 gains the owner's row and says what a bulk refusal shows an agent (BN3, BN4);
 - the imprints spec is revision 5 and the trail spec revision 7 (header, 6.4, 11).
 
+Revision 6 applies the cross-check's items for this spec:
+- 9.1 item 3: the count of an imprint's roads and trails is the one the station's receipts carry, which that spec's
+  admission makes, and a use the station refused before counting them holds null (XS2); "in that bulk use" (XN4);
+- 6.4: that spec's `Need(admission)`, with `route`, also reads the memories for `trail-evaluation`, to count them
+  (XS2);
+- U24's fixture's trails have 512 touches each (XN3);
+- the imprints spec is revision 6 and the trail spec revision 8 (header, 6.4, 11).
+
 Every revision keeps every section number. No change in any pass widens a permission. Nothing here is built.
 **Contract:** [the city rail vision](../../city-rail-vision.md). Its principles and its "Permissions by place"
 section bind this spec. Rio Grande wrote them from Andy's words. Where they go past a quote, they are Rio Grande's
@@ -42,8 +51,8 @@ warning, 12.3), and migration `029`.
 [layered lighthouse](../../../engram/docs/superpowers/specs/2026-09-02-layered-lighthouse-design.md),
 [memory lanes](../../../engram/docs/superpowers/specs/2026-06-12-memory-lanes-design.md),
 [spec A](2026-10-08-instruction-layers-and-grants-design.md), [grants step 3](2026-10-15-grants-step3-design.md).
-**Depended on by:** the imprints spec revision 5 and the trail spec revision 7. Both cite sections 5, 6 and 11.
-Revisions 2 to 5 keep every section number, but line numbers moved. These changes reach them:
+**Depended on by:** the imprints spec revision 6 and the trail spec revision 8. Both cite sections 5, 6 and 11.
+Revisions 2 to 6 keep every section number, but line numbers moved. These changes reach them:
 
 - `route` also needs `read` and `inject_context` on every memory whose content a route answer shows (6.4). From
   revision 3, every action on a road or trail needs `recall` on each memory it names (6.4).
@@ -59,6 +68,8 @@ Revisions 2 to 5 keep every section number, but line numbers moved. These change
 - Revision 5: the roads and trails of one bulk use name at most 100,000 memories in all, and a larger set is several
   bulk uses (6.4). The imprints spec's uses always fit: every memory a road or trail of its R(I) names is a memory
   the imprint holds, and it holds at most 100,000 (its section 8 and D36).
+- Revision 6: an imported counted row for an imprint's roads and trails holds the count the station's receipts carry,
+  or null for a use refused before the station counted them (9.1, item 3). No rule either spec relies on changes.
 
 ## 1. Why
 
@@ -599,7 +610,7 @@ audience may not recall, which P23 forbids. The imprints spec already meets the 
 every target of the row ships (its section 6.2).
 
 This matches today's receiver: `recall` before asking, and all three before reading and delivering
-(`engram/neighbors.py:82`, `:120`, `:138`). The trail spec (revision 7) uses `route` in place of its work-lane rule,
+(`engram/neighbors.py:82`, `:120`, `:138`). The trail spec (revision 8) uses `route` in place of its work-lane rule,
 and its section 8 already shows a stop's summary only when `inject_context` is allowed on that memory, naming the id
 alone otherwise. Its "separate owner opt-in to route publication" is a `route` record. Its minimum published support
 of 3 stays in the trail spec. The imprints spec uses `imprint` on the memories it keeps, and on the roads and trails
@@ -676,8 +687,9 @@ So the imprints spec's `Need(trail-evaluation)` is bulk uses with h = `imprint:<
 `read` on the shipped memories, in batches of 512 (its `need` adds `recall`), and one `route` on all the roads and
 trails derived from them (its `need` adds `recall` on every memory they name). Its `Need(admission)` is imprint
 batches on the memories and, with `route`, one counted bulk `imprint` on the roads and trails derivable from the
-package's session ids and log rows (that spec's R(I)). This spec's `decide` and `explain` then agree with the
-station's check, and F1 holds for both.
+package's session ids and log rows (that spec's R(I)), and `read` batches on the memories for `trail-evaluation`,
+since admission counts R(I) and deriving it reads memory text (that spec's sections 8 and 10; the cross-check's
+XS2). This spec's `decide` and `explain` then agree with the station's check, and F1 holds for both.
 
 ### 6.5 The decision
 
@@ -1135,9 +1147,11 @@ CREATE TABLE uses_monthly(month TEXT NOT NULL, subject TEXT NOT NULL, place TEXT
      owner's list. `returned` holds the batch's count and the SHA-256 of its sorted refs, and there is one
      `use_subjects` row per (owner, ref). Each row is a named bulk use.
   3. **Roads and trails as one counted row per bulk use.** For each action on roads and trails, one row for all of
-     them, with `returned` = their count and one `use_subjects` row of (owner, h). It is a counted bulk use over roads
-     and trails together, within 6.4's bounds of 100,000 objects and 100,000 named memories. A use over more would be
-     several rows, one per bulk use.
+     them in that bulk use, with `returned` = their count and one `use_subjects` row of (owner, h). The count is the
+     one the station's receipts carry, which that spec's admission makes (its sections 10 and 12). A use the station
+     refused before it counted them read none, and its one row holds null in `returned` (the cross-check's XS2). It is
+     a counted bulk use over roads and trails together, within 6.4's bounds of 100,000 objects and 100,000 named
+     memories. A use over more would be several rows, one per bulk use.
   4. **Cited without versions.** `cited` holds the record ids alone. `ledger_id` is the station's peer id (4.1), and
      `ledger_seq` is the receipt's position in its chain. A station without a ledger has no layer versions, and
      `horizon` is null.
@@ -1276,7 +1290,7 @@ The agent sees one line. `neighbors.py` prints nothing; it returns JSON, which t
 `laid by andy (engram) · allowed by home/andy #7f3a, la-county #0b9e · until 2027-01-31 · receipt #5e21a9c0`
 
 - `laid_by`: who made it. For a memory, its store's owner and instance name. For a road or trail, the trail spec
-  (revision 7) fills it in the same field.
+  (revision 8) fills it in the same field.
 - `allowed_by`: each consent layer's cited records, in the order of 6.5, step 2. Each layer shows its place's short
   name and the short ids of its distinct cited records, joined by `+`.
 - `until`: the decision's `until`, as a date. It covers ledger layers only (6.5, step 6): a legacy policy rule may
@@ -1931,7 +1945,9 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
 - **U24** The Pi budget: on a generated fixture of 20,000 placements and 43 layers of 256 records, one eligible-set
   rebuild takes at most 2 s on the station's Raspberry Pi 5. On a fixture of 100,000 derived roads and trails that
   name 100,000 memories, the largest bulk use 6.4 allows, against the same layers, `explain` on one bulk `imprint`
-  takes at most 40 s there, with objects that don't group (the final check's FN3). Marked slow, and run on the Pi.
+  takes at most 40 s there, with objects that don't group (the final check's FN3). Its trails have 512 touches each,
+  the trail spec's cap, so the decision reads 51.2 million touches though it makes at most 400,000 decisions (the
+  cross-check's XN3). Marked slow, and run on the Pi.
 - **U25** Lane notes: a failed `UPDATE` settles to the old lane; a crash between the two calls leaves a pending note
   that allows read as neither lane and denies as both; a memory with no note matches no lane-limited allow.
 - **U26** Ids: the CLI takes full ids and unique prefixes, and refuses an ambiguous prefix with its matches.
