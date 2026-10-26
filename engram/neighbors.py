@@ -8,6 +8,7 @@ import time
 from lighthouse_client import LighthouseClient, NeighborUnavailable, fuse_traces, validate_read, validate_trace
 from lighthouse_policy import PolicyRequest
 from lighthouse_protocol import artifact_digest, canonical_json, content_digest, recall_frame, read_frame
+from permissions import annotation_line
 from lighthouse_receipts import build_receipt, write_receipt
 from lighthouse_receiver_config import NAME, context_ref, load_receiver_policy, load_settings, valid_publishers
 
@@ -152,6 +153,9 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
             content_bytes += size
             bounded.append(item)
         delivered = bounded
+        permitted = [i["permission"] for i in delivered if isinstance(i.get("permission"), dict)]
+        delivered = [{**i, "permission": annotation_line(i["permission"])} if isinstance(i.get("permission"), dict) else i
+                     for i in delivered]
         recall_rules = {source["policyDecision"]["ruleId"] for source in sources}
         receipt = build_receipt(receiver=receiver, turn_id=recall_id, context=context, purpose=purpose,
                                 sources=sources, selected=selected,
@@ -164,6 +168,10 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                                  "engram:receiverDecisions": decisions,
                                  "engram:diagnostics": diagnostics,
                                  "engram:sourceDigestBasis": "canonical-received-trace-v1"}
+        if permitted:
+            receipt["extensions"]["engram:permissions"] = {
+                "receipts": sorted({p["receipt"] for p in permitted}),
+                "records": sorted({r for p in permitted for e in p["allowed_by"] for r in e["records"]})}
         receipt["digest"] = artifact_digest(receipt)
         receipt_id = write_receipt(storage, receipt, session_id=session_id, recall_id=recall_id)
     except Exception:
