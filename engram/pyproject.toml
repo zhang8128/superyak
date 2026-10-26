@@ -99,6 +99,7 @@ py-modules = [
     "operation_audit",
     "paths",
     "permission_ledger",
+    "permission_uses",
     "permissions",
     "persistence",
     "policy_gen",
