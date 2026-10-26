@@ -42,7 +42,7 @@ def cli_e1_world(tmp_path, monkeypatch, fake_tty):
 
 
 def add_receipt(home, *, place, obj=M1, at, allowed=True, agent="agent:ph-coordinator", action="read",
-                cited=(), refusal=None, shadow=0, subjects=(), copy=HOUSE_COPY):
+                cited=(), refusal=None, shadow=0, subjects=(), copy=HOUSE_COPY, content_digest=None):
     led = Ledger.open_read_only(home)
     ledger_id = led.meta()["ledger_id"]
     led.close()
@@ -51,7 +51,8 @@ def add_receipt(home, *, place, obj=M1, at, allowed=True, agent="agent:ph-coordi
         return uses.append(UseRow(
             at=T(at), ledger_id=ledger_id, ledger_seq=1, agent=agent, place=place, acting_for=HOME, action=action,
             purpose="care-coordination", allowed=int(allowed), cited=canonical_json(list(cited)), object=obj,
-            copy=copy, refusal=None if refusal is None else canonical_json(refusal), shadow=shadow), list(subjects))
+            copy=copy, refusal=None if refusal is None else canonical_json(refusal), shadow=shadow,
+            content_digest=content_digest), list(subjects))
     finally:
         uses.close()
 
@@ -269,6 +270,28 @@ def test_report_shadow_lists_the_disagreements_and_the_shares_that_would_need_a_
     out = json.loads(capsys.readouterr().out)
     assert [r["id"] for r in out["disagreements"]] == [cli_shadow_world.refused_receipt]
     assert [s["share_id"] for s in out["would_need_a_proposal"]] == [cli_shadow_world.uncovered_share]
+
+
+def _audience_receipt(home, at, *, allowed, refusal, digest):
+    return add_receipt(home, place=HOME, at=at, allowed=allowed, action="inject_context", shadow=1,
+                       cited=[deny_cited(HOME)] if not allowed else [], refusal=refusal, content_digest=digest)
+
+
+def test_report_shadow_counts_the_audience_refusal_as_legacy(cli_shadow_world, capsys):
+    home = cli_shadow_world.home
+    # both refuse: the ledger's refusal, and the publisher delivered nothing (no content digest)
+    _audience_receipt(home, "2026-11-06", allowed=False, digest=None,
+                      refusal={"code": "DENIED", "layer": HOME, "action": "inject_context"})
+    # the ledger alone refuses: the legacy path delivered (digest kept under shadow)
+    only_ledger = _audience_receipt(home, "2026-11-07", allowed=False, digest="d" * 64,
+                                    refusal={"code": "DENIED", "layer": HOME, "action": "inject_context"})
+    # the audience check alone refuses: the ledger allowed, the receipt notes LEGACY_DENY by the publisher
+    only_audience = _audience_receipt(home, "2026-11-08", allowed=True, digest=None,
+                                      refusal={"code": "LEGACY_DENY", "layer": "publisher",
+                                               "action": "inject_context"})
+    assert main(["report", "shadow", "--json"]) == 0
+    got = [r["id"] for r in json.loads(capsys.readouterr().out)["disagreements"]]
+    assert got == [cli_shadow_world.refused_receipt, only_ledger, only_audience]
 
 
 def test_report_shadow_in_words(cli_shadow_world, capsys):

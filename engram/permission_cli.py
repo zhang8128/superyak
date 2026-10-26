@@ -20,6 +20,7 @@ import json
 import os
 import re
 import select
+import shlex
 import sqlite3
 import sys
 import time
@@ -1003,8 +1004,10 @@ def _migrate(args) -> int:
             iid = _house_id(p)
             if iid:
                 ids.setdefault(iid, "default" if p.parent.name == ".engram" else p.parent.name)
-        led = Ledger.create(root, login, now=at, channel="migration")
+        led = None
         try:
+            led = Ledger.create(root, login, now=at, channel="migration")
+
             def do(kind, **a):
                 out = led.perform(Act(kind, a), actor=owner, channel="migration", now=at)
                 if out.status != "done":
@@ -1031,7 +1034,8 @@ def _migrate(args) -> int:
                 record_of[collection] = do("allow", layer=home, selector=_legacy_selector(login, audience, collection),
                                            valid_from=at, valid_until=None, reason="legacy share").ref
         except BaseException:
-            led.close()
+            if led is not None:
+                led.close()
             _forget_ledger(path)
             raise
         led.close()
@@ -1042,8 +1046,12 @@ def _migrate(args) -> int:
                         "UPDATE shared_memories SET source_instance_id = ?, record_id = ? WHERE share_id = ?",
                         (m["source_instance_id"], record_of[m["collection"]], m["share_id"]))
         except sqlite3.Error as e:
+            remove = "rm -f " + " ".join(shlex.quote(str(path.with_name(path.name + x)))
+                                         for x in ("", "-journal", "-wal", "-shm"))
             raise RuleError("12.3 migrate", f"the ledger was made, but the published house could not be filled "
-                            f"({e}); share each row again with `share`") from e
+                            f"({e}). The gate is off and nothing is widened. To run migrate again, remove the "
+                            f"ledger, fix the cause, and rerun `engram-permissions migrate`; to keep the ledger "
+                            f"instead, share each row again with `share`.\n{remove}") from e
     finally:
         published.close()
     print(f"Migrated {len(migrated)} shares into {len(record_of)} collections, each with one allow. The ledger is "
@@ -1055,15 +1063,21 @@ def _migrate(args) -> int:
 # ---------------------------------------------------------------- report shadow (P 12.3, 12.1)
 
 def _legacy_agreed(row) -> bool:
-    """A refused shadow receipt the legacy path did not refuse: no cited legacy layer denies it, and the refusal is
-    not the legacy path's own."""
+    """A shadow receipt on which the two paths differ. A ledger refusal the legacy path did not make: no cited legacy
+    layer denies it, the refusal is not the legacy path's own, and for a delivery the publisher did deliver (under
+    shadow the digest is kept only then). Or the converse, a delivery the ledger allowed that the publisher's audience
+    check refused (recorded as LEGACY_DENY by the publisher)."""
     try:
         cited = json.loads(row["cited"])
         refusal = json.loads(row["refusal"]) if row["refusal"] else None
     except (TypeError, ValueError):
         return False
+    if row["allowed"]:
+        return bool(refusal) and refusal.get("code") == "LEGACY_DENY" and refusal.get("layer") == "publisher"
     if refusal and refusal.get("code") == "LEGACY_DENY":
         return False
+    if row["action"] == "inject_context" and row["content_digest"] is None:
+        return False                    # the publisher's audience check delivered nothing: both paths refused
     return not any(isinstance(c, dict) and c.get("kind") == "legacy" and c.get("verdict") != "allow" for c in cited)
 
 
@@ -1074,7 +1088,7 @@ def _shadow_disagreements() -> tuple[int, list[dict]]:
     uses = Uses.open_read_only(_home())
     count, rows = 0, []
     try:
-        for r in uses.conn.execute("SELECT * FROM uses WHERE shadow = 1 AND allowed = 0 ORDER BY seq"):
+        for r in uses.conn.execute("SELECT * FROM uses WHERE shadow = 1 ORDER BY seq"):
             if _legacy_agreed(r):
                 count += 1
                 if len(rows) < REPORT_ROWS:

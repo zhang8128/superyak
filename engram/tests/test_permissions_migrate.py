@@ -378,3 +378,40 @@ def test_migrate_refuses_without_a_published_house(tmp_path, monkeypatch, fake_t
     _as_andy(tmp_path, monkeypatch)
     assert main(["migrate"]) == 1 and "published house" in capsys.readouterr().err
     assert not (tmp_path / ".engram" / "permissions.db").exists()
+
+
+# ---------------------------------------------------------------- Task 30B: migrate never strands the owner
+
+def test_migrate_whose_ledger_create_fails_part_way_leaves_no_ledger_so_migrate_runs_again(
+        legacy_home, fake_tty, monkeypatch):
+    real = Ledger.create
+
+    def made_then_failed(*a, **k):
+        real(*a, **k).close()                       # the file exists on disk, then the call raises
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(permission_cli.Ledger, "create", staticmethod(made_then_failed))
+    fake_tty.answer_the_printed_code()
+    assert main(["migrate"]) == 1
+    assert not (legacy_home / ".engram" / "permissions.db").exists()
+    monkeypatch.setattr(permission_cli.Ledger, "create", staticmethod(real))
+    fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
+
+
+def test_migrate_whose_house_update_fails_prints_the_rerun_steps_and_the_removal_lets_it_run_again(
+        legacy_home, fake_tty, capsys):
+    import subprocess
+    house = legacy_home / PUBLISHED_HOUSE
+    con = sqlite3.connect(house)
+    con.execute("CREATE TRIGGER no_fill BEFORE UPDATE ON shared_memories BEGIN SELECT RAISE(ABORT, 'locked'); END")
+    con.commit(); con.close()
+    fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 1
+    err = capsys.readouterr().err
+    path = legacy_home / ".engram" / "permissions.db"
+    assert path.exists() and "locked" in err and "rm -f" in err and str(path) in err
+    command = next(line.strip() for line in err.splitlines() if line.strip().startswith("rm -f"))
+    con = sqlite3.connect(house)
+    con.execute("DROP TRIGGER no_fill"); con.commit(); con.close()
+    subprocess.run(command, shell=True, check=True)
+    assert not path.exists()
+    fake_tty.answer_the_printed_code(); assert main(["migrate"]) == 0
