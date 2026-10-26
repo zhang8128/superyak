@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import heapq
 import json
@@ -43,6 +44,7 @@ from lighthouse_protocol import (
     recall_result_frame,
     validate_frame,
 )
+from permissions import CACHE_ENTRIES
 from sharing import validate_audience
 from storage import Storage, vec0_distance_to_similarity
 
@@ -340,6 +342,21 @@ def _object_of(layer: str, source_instance_id, source_id) -> str | None:
     return f"mem:{source_instance_id}/{layer}/{source_id}"
 
 
+@dataclass(frozen=True)
+class _CacheEntry:
+    """An eligible set (P 12.2) and what it was built from. It serves a frame while the ledger is the same one at
+    the same ``seq``, the house's placements have the same change count and copy, and ``at <= t < horizon``."""
+    seq: int
+    ledger_id: str
+    changes: int
+    copy: str
+    eligible: object        # permissions.EligibleSet
+
+    def serves(self, seq: int, ledger_id: str, changes: int, copy: str, t: int) -> bool:
+        return ((self.seq, self.ledger_id, self.changes, self.copy) == (seq, ledger_id, changes, copy)
+                and self.eligible.at <= t and (self.eligible.horizon is None or t < self.eligible.horizon))
+
+
 @dataclass
 class _Placed:
     """What the permission decisions say of every placed copy of a house, for one recall."""
@@ -350,8 +367,9 @@ class _Placed:
 
 
 class _LedgerSide:
-    """One frame's permission decisions and receipts (P 12.2). Built per frame from the ledger read-only; nothing
-    is kept between frames (the eligible-set cache is Task 21's)."""
+    """One frame's permission decisions and receipts (P 12.2). Built per frame from the ledger read-only. The
+    ledger decisions of a house's placements are the daemon's cached eligible set; the legacy layers are met with
+    them afresh at every frame and never cached (P 6.3 item 4)."""
 
     def __init__(self, daemon: "PublisherDaemon", publisher: "PublisherStore", frame: dict, mode: str,
                  frame_decision, state, ledger_id: str, now: datetime):
@@ -416,11 +434,14 @@ class _LedgerSide:
             return None
 
     def recall_set(self) -> _Placed:
-        """Decide ``recall`` for each placed copy that has a copy to rank, before ranking (P 12.2)."""
+        """Decide ``recall`` for each placed copy that has a copy to rank, before ranking (P 12.2): the cached
+        ledger decision of its object, met with this frame's legacy verdicts."""
+        from permissions import meet_legacy
         objects: dict[str, set] = {}
         for row in self.publisher.storage.conn.execute(_COPY_EXISTS):
             objects.setdefault(row["memory_id"], set()).add(
                 _object_of(row["layer"], row["source_instance_id"], row["source_id"]))
+        ledger = self.daemon._eligible(self).decisions
         decisions: dict = {}
         eligible = set()
         for memory_id, objs in objects.items():
@@ -430,7 +451,8 @@ class _LedgerSide:
                     allowed = False
                     continue
                 if obj not in decisions:
-                    decisions[obj] = self.decide(obj, "recall")
+                    base = ledger.get(obj)
+                    decisions[obj] = None if base is None else meet_legacy(base, self._use(obj, "recall"), self.legacy)
                 if decisions[obj] is None or not decisions[obj].allowed:
                     allowed = False
             if allowed:
@@ -530,6 +552,41 @@ class PublisherDaemon:
         self.engram_home = Path(engram_home) if engram_home is not None else None
         self._server: socketserver.ThreadingUnixStreamServer | None = None
         self._ready = threading.Event()
+        # The eligible-set cache (P 12.2, R31): (house, agent, place, purpose, action) -> _CacheEntry, least
+        # recently served first, at most CACHE_ENTRIES over all houses. ``rebuilds`` counts the sets built.
+        self._cache: collections.OrderedDict = collections.OrderedDict()
+        self._cache_lock = threading.Lock()
+        self.rebuilds = 0
+
+    def _eligible(self, side: "_LedgerSide"):
+        """This frame's eligible set of ``recall`` decisions for the house, from the cache while it is valid,
+        otherwise built from every placement the house holds and kept. The house is its ``db_path``: an entry is
+        read against that house's own change count and no other's."""
+        from permissions import Placement, eligible_set
+        publisher, action = side.publisher, "recall"
+        key = (publisher.db_path, side.agent, side.place, side.frame["purpose"], action)
+        changes = publisher.storage.placement_changes()      # read before the rows: a later change only shows stale
+        with self._cache_lock:
+            entry = self._cache.get(key)
+            if entry is not None and entry.serves(side.state.seq, side.ledger_id, changes, side.copy, side.t):
+                self._cache.move_to_end(key)
+                return entry.eligible
+        placements = [
+            Placement(row["memory_id"], _object_of(row["layer"], row["source_instance_id"], row["source_id"]),
+                      side.copy)
+            for row in publisher.storage.conn.execute(
+                "SELECT memory_id, layer, source_instance_id, source_id FROM shared_memories")]
+        got = eligible_set(side.state, placements, requester=side.agent, place=side.place,
+                           purpose=side.frame["purpose"], action=action, at=side.t)
+        for obj in sorted({p.obj for p in placements if p.obj and p.obj not in got.decisions}):
+            logger.warning("permission: %s is not a decidable object in %s", obj, publisher.name)
+        with self._cache_lock:
+            self.rebuilds += 1
+            self._cache[key] = _CacheEntry(side.state.seq, side.ledger_id, changes, side.copy, got)
+            self._cache.move_to_end(key)
+            while len(self._cache) > CACHE_ENTRIES:
+                self._cache.popitem(last=False)
+        return got
 
     def _request(self, frame: dict, action: str) -> PolicyRequest:
         # A receiver's recorded request time cannot extend a publisher grant.

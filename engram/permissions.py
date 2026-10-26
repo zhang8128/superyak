@@ -1220,6 +1220,10 @@ class Decision:
     horizon: int | None
     versions: Mapping[str, int]
     multi: bool = False         # a road or trail: `cited` holds `records` (R8)
+    # How far `decide` got, so `meet_legacy` can place a legacy verdict where `decide(legacy=...)` would: the
+    # number of needs it decided, and the need the first refusal came from. Not part of the decision's JSON.
+    processed: int | None = field(default=None, compare=False)
+    failed_need: int | None = field(default=None, compare=False)
 
     def to_json(self) -> dict:
         return {"allowed": self.allowed, "at": self.at, "ledger_seq": self.ledger_seq, "action": self.action,
@@ -1243,17 +1247,20 @@ def _layer_index(state: State):
 
 def _prefilter(state: State, layer_id: str, use: Use, action: str) -> list:
     """P 6.5, "How it is computed": the layer's records whose requesters, actions, purposes and audience can
-    match this requester, place, action and purpose, before any object test."""
-    out = []
-    for r in _layer_index(state)[0].get(layer_id, ()):
-        sel = r.selector
-        if not (_star_or_in(sel.requesters, use.requester) and _star_or_in(sel.actions, action)
-                and _star_or_in(sel.purposes, use.purpose)):
-            continue
-        deny = r.effect == "deny"
-        if any(_audience_entry(state, v, r.layer, use, r.anchor, deny) for v in sel.audience):
-            out.append(r)
-    return out
+    match this requester, place, action and purpose, before any object test. It reads nothing of the object, so
+    it is made once per (layer, requester, place, purpose, time, action) for a State, however many objects ask."""
+    def compute():
+        out = []
+        for r in _layer_index(state)[0].get(layer_id, ()):
+            sel = r.selector
+            if not (_star_or_in(sel.requesters, use.requester) and _star_or_in(sel.actions, action)
+                    and _star_or_in(sel.purposes, use.purpose)):
+                continue
+            deny = r.effect == "deny"
+            if any(_audience_entry(state, v, r.layer, use, r.anchor, deny) for v in sel.audience):
+                out.append(r)
+        return out
+    return state._memo(("prefilter", layer_id, use.requester, use.place, use.purpose, use.at, action), compute)
 
 
 def layer_version(state: State, layer_id: str) -> int:
@@ -1523,6 +1530,8 @@ class _Run:
         self.versions: dict[str, int] = {}
         self.layer_pos: dict[str, int] = {}     # layers in required_layers order, the first object's first
         self.failure: tuple | None = None
+        self.cur = 0                             # the index in need(u) being decided (decide only)
+        self.failed_need: int | None = None
         self.ends: list[int] = []                # effective ends of the cited records (step 5)
         self.ledger_layers: list[str] = []       # the required consent and restriction layers, first seen order
         self._ledger_seen: set = set()
@@ -1600,7 +1609,7 @@ class _Run:
             code = ("NO_LAYER" if verdict == "missing" else
                     "LEGACY_DENY" if layer.kind == "legacy" else "DENIED" if verdict == "deny" else
                     "NO_ALLOW" if layer.kind == "outside" else _silent_code(self.state, layer, sub, action))
-            self.failure = (code, layer.id, action)
+            self.failure, self.failed_need = (code, layer.id, action), self.cur
 
     def _register(self, layers: Sequence[Layer]) -> None:
         for layer in layers:
@@ -1620,7 +1629,8 @@ class _Run:
         code = ("RETIRED" if self._any_retired(subjects) else "NO_LAYER" if not subjects else
                 "BOUND" if len(subjects) > MAX_SUBJECTS or bound else None)
         if code is not None:
-            self.failure = self.failure or (code, None, None)
+            if self.failure is None:
+                self.failure, self.failed_need = (code, None, None), self.cur
             return False
         self.done.update((sub.obj, x) for x in todo)
         shared = self._shared.get(gkey) if gkey is not None else None
@@ -1679,13 +1689,15 @@ def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
     multi = _kind_of(use.obj) in ("road", "trail")
     run = _Run(state, use, legacy, outside, multi=multi)
     if not run.before_any_object():
-        return run.result()
+        return replace(run.result(), processed=0)
     over = multi and len(set(use.names) | set(use.shows)) > MAX_ANSWER_NAMES
-    for need in needs(use):
+    processed = 0
+    for run.cur, need in enumerate(needs(use)):
         sub = use if need.obj == use.obj else replace(use, obj=need.obj, names=(), shows=frozenset())
         if not run.process(sub, need.actions, run.subjects(sub.obj, sub.names), bound=over and sub is use):
             break
-    return run.result()
+        processed += 1
+    return replace(run.result(), processed=processed, failed_need=run.failed_need)
 
 
 def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = (),
@@ -1736,6 +1748,108 @@ def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = 
         if not ok:
             break
     return run.result()
+
+
+# ---------------------------------------------------------------- the eligible set and the legacy meet (P 12.2, L8)
+
+@dataclass(frozen=True)
+class Placement:
+    """One placed copy of a house: the memory it holds, its source object (None for a row with no source) and the
+    copy that serves it."""
+    memory_id: str
+    obj: str | None
+    copy: str
+
+
+@dataclass(frozen=True)
+class EligibleSet:
+    """What the ledger alone allows a requester to `action`, for the placements of one house. `decisions` is the
+    ledger decision of each decidable object (the first refused one, if its copies differ); `horizon` is the
+    earliest horizon among every decision made, or None. It holds from `at` until `horizon` (L8)."""
+    memory_ids: frozenset
+    decisions: Mapping[str, Decision]
+    at: int
+    horizon: int | None
+
+
+def eligible_set(state: State, placements: Sequence[Placement], *, requester: str, place: str, purpose: str,
+                 action: str, at: int) -> EligibleSet:
+    """Decide `action` for each placement, with no legacy layer: the subjects', places', holding place's and
+    restriction layers only. A memory is eligible when each of its placements has an object that can be decided
+    and the decision allows it. The pre-filter of P 6.5 is made once per (layer, action) for the requester,
+    place, purpose and time (`_prefilter` keeps it on the State), and each object is matched against those
+    records alone."""
+    decisions: dict[str, Decision] = {}
+    made: dict[tuple, Decision | None] = {}
+    horizons: list[int] = []
+    for p in placements:
+        if p.obj is None or (p.obj, p.copy) in made:
+            continue
+        u = Use(requester=requester, place=place, obj=p.obj, copy=p.copy, action=action, purpose=purpose, at=at)
+        try:
+            d = decide(state, u)
+        except RuleError:
+            made[(p.obj, p.copy)] = None
+            continue
+        made[(p.obj, p.copy)] = d
+        prior = decisions.get(p.obj)
+        if prior is None or (prior.allowed and not d.allowed):
+            decisions[p.obj] = d
+        if d.horizon is not None:
+            horizons.append(d.horizon)
+    ok: dict[str, bool] = {}
+    for p in placements:
+        d = None if p.obj is None else made[(p.obj, p.copy)]
+        ok[p.memory_id] = ok.get(p.memory_id, True) and d is not None and d.allowed
+    return EligibleSet(frozenset(m for m, good in ok.items() if good), decisions, at,
+                       min(horizons) if horizons else None)
+
+
+def meet_legacy(decision: Decision, use: Use, legacy: Sequence[LegacyLayer]) -> Decision:
+    """A ledger decision made with no legacy layer, met with this request's legacy verdicts, each in its place
+    in P 6.5 step 2's order (after the places' layers, before the agent's restriction layer, once for each need
+    and action `decide` made): `allowed`, `refusal` and `cited` are what `decide(state, use, legacy=legacy)`
+    gives, with the first refusal in that order. `until` and `horizon` are the ledger's and are unchanged (R7).
+    `at` is the use's. Only a decision `decide` made carries what this needs."""
+    if decision.processed is None:
+        raise RuleError("6.5 legacy", "the decision was not made by decide, so it cannot be met with legacy layers")
+    by_name: dict = {}
+    for layer in legacy:
+        by_name.setdefault(layer.name, layer)         # a layer is required once, by its name
+    layers = list(by_name.values())
+    if not layers or decision.processed == 0:
+        return replace(decision, at=use.at)
+    done: set = set()
+    verdicts: dict = {}                       # (layer index, action) -> every call allowed
+    first_fail = None                         # (position, layer, action) of the first legacy refusal
+    for i, need in enumerate(needs(use)[:decision.processed]):
+        sub = use if need.obj == use.obj else replace(use, obj=need.obj, names=(), shows=frozenset())
+        todo = [x for x in need.actions if (sub.obj, x) not in done]
+        done.update((sub.obj, x) for x in todo)
+        for li, layer in enumerate(layers):
+            for x in todo:
+                allowed = bool(layer.allows(sub, x))
+                verdicts[(li, x)] = verdicts.get((li, x), True) and allowed
+                if not allowed and first_fail is None:
+                    first_fail = ((i, 1 + li, ACTIONS.index(x)), layer.name, x)
+    legacy_cited = tuple(Cited(layers[li].name, "legacy", x, "allow" if good else "deny", ())
+                         for (li, x), good in sorted(verdicts.items(), key=lambda kv: (kv[0][0], ACTIONS.index(kv[0][1]))))
+    cut = next((n for n, c in enumerate(decision.cited) if c.kind == "restriction"), len(decision.cited))
+    cited = decision.cited[:cut] + legacy_cited + decision.cited[cut:]
+    refusal, failed_need = decision.refusal, decision.failed_need
+    if first_fail is not None:
+        if refusal is None:
+            ledger_pos = None
+        elif refusal.layer is None:
+            ledger_pos = (decision.failed_need, -1, 0)
+        else:
+            kind = next((c.kind for c in decision.cited if c.layer == refusal.layer and c.action == refusal.action),
+                        "consent")
+            ledger_pos = (decision.failed_need, 10 ** 6 if kind == "restriction" else 0, ACTIONS.index(refusal.action))
+        if ledger_pos is None or first_fail[0] < ledger_pos:
+            refusal, failed_need = Refusal("LEGACY_DENY", first_fail[1], first_fail[2]), first_fail[0][0]
+    return replace(decision, at=use.at, allowed=refusal is None, cited=cited, refusal=refusal,
+                   failed_need=failed_need)
 
 
 # ---------------------------------------------------------------- overlaps between places: the gluing check (P 8)

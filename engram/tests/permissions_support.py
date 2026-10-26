@@ -1913,14 +1913,17 @@ def write_receiver_settings(root, receiver, publishers=(HOUSE_NAME,)):
 
 def write_receiver_policy(root, receiver, *, actions=("recall", "read", "inject_context"), publisher=HOUSE_NAME,
                           purposes=PURPOSES):
+    """`publisher` is one house name or several."""
     import json
     inst = house_dir(root, receiver)
+    publishers = [publisher] if isinstance(publisher, str) else list(publisher)
     (inst / "lighthouse-receiver-policy.json").write_text(json.dumps(
-        connection_policy(receiver, [f"urn:engram:{publisher}"], actions=actions, purposes=purposes)))
+        connection_policy(receiver, [f"urn:engram:{p}" for p in publishers], actions=actions, purposes=purposes)))
 
 
 def write_receiver_files(root, receiver, **policy):
-    write_receiver_settings(root, receiver)
+    publishers = policy.get("publisher", HOUSE_NAME)
+    write_receiver_settings(root, receiver, (publishers,) if isinstance(publishers, str) else tuple(publishers))
     write_receiver_policy(root, receiver, **policy)
 
 
@@ -1928,8 +1931,14 @@ def remove_receiver_settings(root, receiver):
     (house_dir(root, receiver) / "lighthouse-receiver.toml").unlink()
 
 
+def _memory_n(n):
+    """(memory id, text) of the n-th test memory, whose source is `mem:S/episode/m<n>`."""
+    texts = {1: M1_TEXT, 2: M2_TEXT, 3: M3_TEXT}
+    return str(__import__("uuid").UUID(int=n)), texts.get(n, f"m{n}: shared: a note")
+
+
 def make_placed_house(root, name=HOUSE_NAME, *, receiver=DAEMON_RECEIVER, legacy_allows=True, orphans=0,
-                      audience="commons", purposes=PURPOSES, house_id=HOUSE_ID):
+                      audience="commons", purposes=PURPOSES, house_id=HOUSE_ID, ns=(1, 2, 3)):
     """A real house (migration 029) whose instance id is `house_id`, holding episodes m1 to m3 placed to `audience`,
     each linked to its source `mem:S/episode/mN`, and `orphans` more `shared_memories` rows naming no copy (older
     code could leave them), written in one transaction. The publisher's policy lets `receiver` recall and read, or
@@ -1946,7 +1955,8 @@ def make_placed_house(root, name=HOUSE_NAME, *, receiver=DAEMON_RECEIVER, legacy
     columns = ("share_id, memory_id, source_instance, source_id, layer, audience, reason, content_digest, shared_at, "
                "source_instance_id, record_id")
     rows = []
-    for n, (memory_id, text) in enumerate(((M1_ID, M1_TEXT), (M2_ID, M2_TEXT), (M3_ID, M3_TEXT)), start=1):
+    for n in ns:
+        memory_id, text = _memory_n(n)
         store.add_episode(memory_id, "s", text, embedding=unit(text))
         rows.append((f"share-{n}", memory_id, "engram", f"m{n}", "episode", audience, "test",
                      hashlib.sha256(text.encode()).hexdigest(), "2026-11-01", SOURCE_ID, None))
@@ -1963,7 +1973,8 @@ def make_placed_house(root, name=HOUSE_NAME, *, receiver=DAEMON_RECEIVER, legacy
                           disclosures_path=inst / "lighthouse-disclosures.db")
 
 
-def daemon_ledger(root, mode="enforce", *, receiver=DAEMON_RECEIVER, allow=True, only=None):
+def daemon_ledger(root, mode="enforce", *, receiver=DAEMON_RECEIVER, allow=True, only=None, houses=(HOUSE_ID,),
+                  valid_from=T("2026-11-01"), valid_until=None):
     """A ledger at `root` with Andy's source store S, the house, `agent:<receiver>` at his home and, when `allow`,
     one inside-home allow covering every memory of S (or just `only`, a set of refs); the gate raised to `mode`
     unless that is `off`. The houses must exist first."""
@@ -1971,15 +1982,16 @@ def daemon_ledger(root, mode="enforce", *, receiver=DAEMON_RECEIVER, allow=True,
     make_house(root, "lighthouse")
     led = Ledger.create(root, "andy", now=T("2026-11-01"))
     do(led, ANDY, "register-store", instance_id=SOURCE_ID, name="engram", owner=ANDY, place=HOME, imprint_of=None)
-    do(led, ANDY, "register-store", instance_id=HOUSE_ID, name="published house", owner=ANDY, place=HOME,
-       imprint_of=None)
+    for house_id in houses:
+        do(led, ANDY, "register-store", instance_id=house_id, name="published house", owner=ANDY, place=HOME,
+           imprint_of=None)
     do(led, ANDY, "register-agent", agent=f"agent:{receiver}", acts_for=HOME)
     do(led, ANDY, "put-agent", agent=f"agent:{receiver}", place=HOME)
     if allow:
         memories = sorted(only) if only is not None else "*"
         sel = parse_selector(_doc_of(["self"], kinds=["memory"], stores=[SOURCE_ID], memories=memories,
                                      actions=R1_ACTIONS))
-        do(led, ANDY, "allow", layer=HOME, selector=sel, valid_from=T("2026-11-01"), valid_until=None,
+        do(led, ANDY, "allow", layer=HOME, selector=sel, valid_from=valid_from, valid_until=valid_until,
            reason="test")
     if mode != "off":
         raise_gate(led, mode)
@@ -2215,3 +2227,134 @@ def hold_ledger_lock(root, kind):
     finally:
         con.execute("ROLLBACK")
         con.close()
+
+
+# ---------------------------------------------------------------- the eligible-set cache (Task 21)
+
+class Clock:
+    """A settable clock the daemon reads."""
+
+    def __init__(self, t):
+        self.t = t
+
+    def __call__(self):
+        return datetime.fromtimestamp(self.t, tz=timezone.utc)
+
+
+class CachedRig(Rig):
+    """A Rig over a daemon whose clock moves and whose cache the tests look into."""
+
+    def __init__(self, daemon, root, clock, houses, **kw):
+        super().__init__(daemon, root, **kw)
+        self.clock, self.houses = clock, houses
+
+    @property
+    def rebuilds(self):
+        return self.daemon.rebuilds
+
+    def clock_to(self, t):
+        self.clock.t = t
+
+    def cache_horizon(self, pub=None):
+        """The horizon of the entry built for house `pub` (the rig's own by default)."""
+        [horizon] = [e.eligible.horizon for key, e in self.daemon._cache.items()
+                     if key[0] == self.houses[pub or self.pub].db_path]
+        return horizon
+
+    def recall_ids(self, pub=None):
+        saved, self.pub = self.pub, pub or self.pub
+        try:
+            return {c["memoryId"] for c in self.recall()["candidates"]}
+        finally:
+            self.pub = saved
+
+
+def _cached_rig(root, publishers, houses, clock, **ledger):
+    daemon_ledger(root, "enforce", houses=houses, **ledger)
+    write_receiver_files(root, DAEMON_RECEIVER, publisher=[p.name for p in publishers])
+    daemon = _daemon_over(root, publishers, clock=clock)
+    return CachedRig(daemon, root, clock, {p.name: p for p in publishers})
+
+
+def cached_daemon(root, *, valid_from=T("2026-11-01"), valid_until=T("2026-12-01")):
+    """Enforce over house `why` (m1 to m3) under one allow, valid `valid_from` to `valid_until`, the clock at
+    2026-11-02. Returns (rig, the ledger's home, the house)."""
+    pub = make_placed_house(root)
+    rig = _cached_rig(root, [pub], (HOUSE_ID,), Clock(DAEMON_CLOCK), valid_from=valid_from, valid_until=valid_until)
+    return rig, root, pub
+
+
+def cached_daemon_with_allow_starting(root, start):
+    return cached_daemon(root, valid_from=start, valid_until=None)[0]
+
+
+def cached_daemon_two_publishers(root):
+    """`cached_daemon` and a second house B at the same place: A places m1, B places m5, one allow covers both.
+    Returns (rig, (A's name, A's house), (B's name, B's house))."""
+    a = make_placed_house(root, ns=(1,))
+    b = make_placed_house(root, name="why-b", house_id="HOUSE-B", ns=(5,))
+    rig = _cached_rig(root, [a, b], (HOUSE_ID, "HOUSE-B"), Clock(DAEMON_CLOCK), valid_until=T("2026-12-01"))
+    return rig, (a.name, a), (b.name, b)
+
+
+def write_any_ledger_row(root):
+    """One act that decides nothing about m1 to m3: Andy registers a person."""
+    from permission_ledger import Ledger
+    led = Ledger.open(root)
+    try:
+        do(led, ANDY, "register-person", now="2026-11-03", person="person:visitor")
+    finally:
+        led.close()
+
+
+def insert_then_delete_a_placement(house):
+    """A placement row added and removed again: the house's rows are as before, its change count is not."""
+    import sqlite3
+    con = sqlite3.connect(house.db_path)
+    try:
+        con.execute("INSERT INTO shared_memories (share_id, memory_id, source_instance, source_id, layer, audience, "
+                    "reason, content_digest, shared_at, source_instance_id) VALUES ('tmp', 'tmp', 'engram', 'tmp', "
+                    "'episode', 'commons', 'test', ?, '2026-11-01', ?)", ("0" * 64, SOURCE_ID))
+        con.execute("DELETE FROM shared_memories WHERE share_id = 'tmp'")
+        con.commit()
+    finally:
+        con.close()
+
+
+def write_publisher_policy(root, *, allows_recall=True, receiver_audiences=None, name=HOUSE_NAME):
+    """The publisher's hand-written policy file, again: whether it lets the receiver recall, and the audiences it
+    lists for the receiver."""
+    import json
+    path = house_dir(root, name) / "lighthouse-policy.json"
+    path.write_text(json.dumps(connection_policy(
+        name, [f"urn:engram:{DAEMON_RECEIVER}"], actions=("recall", "read") if allows_recall else ("read",),
+        audience_map={f"urn:engram:{DAEMON_RECEIVER}": receiver_audiences or ["commons"]})))
+
+
+def e1_daemon_after_use_10(root):
+    """P 13 through use 10 in the ledger (the last write is 2026-11-20), `agent:ph-coordinator` asking house `why`
+    for care-coordination, the clock at 2026-11-21."""
+    receiver = "ph-coordinator"
+    pub = make_placed_house(root, receiver=receiver)
+    make_house(root, "lighthouse")
+    led, ids = e1_through_use_9(root)
+    do(led, ANDY, "revoke-grant", now="2026-11-20", grant=ids.G1)
+    raise_gate(led, "enforce", now="2026-11-21")
+    led.close()
+    write_receiver_files(root, receiver)
+    clock = Clock(T("2026-11-21"))
+    return CachedRig(_daemon_over(root, [pub], clock=clock), root, clock, {pub.name: pub}, receiver=receiver,
+                     purpose="care-coordination"), ids
+
+
+def random_legacy_layers(rng):
+    """0 to 3 legacy layers in a random order, each answering by a hash of (its name, the object, the action), so
+    asking again gives the same verdict."""
+    import zlib
+    from permissions import LegacyLayer
+    names = rng.sample(["publisher", "receiver", "extra"], rng.randint(0, 3))
+    bias = rng.choice([2, 4, 8])
+
+    def layer(name):
+        return LegacyLayer(name, lambda u, x: zlib.crc32(f"{SEED}/{name}/{u.obj}/{x}".encode()) % bias != 0)
+    return [layer(n) for n in names]
