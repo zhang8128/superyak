@@ -195,7 +195,10 @@ def _time_text(value) -> str:
     if value is None:
         return "none (no end)"
     if isinstance(value, int) and not isinstance(value, bool):
-        return f"{value} ({datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})"
+        try:
+            return f"{value} ({datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})"
+        except (OverflowError, OSError, ValueError):        # an agent-filed time out of the calendar: show the raw int
+            return str(value)
     return str(value)
 
 

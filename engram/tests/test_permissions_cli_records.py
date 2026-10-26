@@ -252,7 +252,7 @@ def test_grant_and_revoke_grant(cli_home, fake_tty, capsys):
     assert next(iter(grants(cli_home).values())).revoked_seq is not None
 
 
-def test_a_child_grant_names_its_parent(cli_home, fake_tty):
+def test_a_child_grant_names_its_parent(cli_home, fake_tty, capsys):
     with_agent(cli_home)
     led = led_of(cli_home)
     try:
@@ -265,8 +265,13 @@ def test_a_child_grant_names_its_parent(cli_home, fake_tty):
                 "--depth", "1", "--hours", "24"], fake_tty) == 0
     [g] = grants(cli_home).values()
     # a child is issued by the holder of the parent, never by the owner here: the rule refuses it, exit 1
+    capsys.readouterr()
     assert run(["grant", "--to", "agent:two", "--ops", "share", "--envelope", json.dumps(sel()), "--max-days", "30",
-                "--depth", "0", "--hours", "24", "--parent", g.id[:8]], fake_tty) in (0, 1)
+                "--depth", "0", "--hours", "24", "--parent", g.id[:8]], fake_tty) == 1
+    cap = capsys.readouterr()
+    assert f"parent: {g.id}" in cap.out                      # the short prefix resolved to the full parent id
+    assert "a child is issued by its parent's grantee" in cap.err
+    assert list(grants(cli_home)) == [g.id]                 # nothing was written
 
 
 def file_parks_proposal(home):
@@ -424,3 +429,19 @@ def test_every_new_command_with_no_terminal_writes_nothing(cli_home, monkeypatch
     monkeypatch.setattr(permission_cli, "TTY", str(cli_home / "no-such-tty"))
     before = ledger_bytes(cli_home)
     assert main(allow_argv()) == 3 and ledger_bytes(cli_home) == before
+
+
+def test_a_huge_proposal_time_does_not_crash_sign_decline_or_proposals(cli_home, fake_tty, capsys):
+    with_agent(cli_home)
+    huge = 10 ** 15
+    pid = agent_files(cli_home, "allow", {"layer": HOME, "selector": canon(sel(audience=(HOME,))),
+                                          "valid_from": T(FROM), "valid_until": huge, "reason": "r"})
+    capsys.readouterr()
+    assert main(["proposals"]) == 0
+    assert pid in capsys.readouterr().out
+    assert run(["sign", pid[:8]], fake_tty) in (0, 1, 3)    # reviewed, never a traceback
+    out = capsys.readouterr().out
+    assert str(huge) in out
+    if pid in {p["id"] for p in open_proposals(cli_home)}:
+        assert run(["decline", pid[:8]], fake_tty) == 0
+    assert open_proposals(cli_home) == []
