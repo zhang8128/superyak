@@ -5,10 +5,13 @@ from datetime import datetime, timezone
 
 import dataclasses
 
-from permissions import Grant, Record, State, _row, _units, home_of, parse_selector, selector_json
+from permissions import Grant, Record, State, Use, _row, _units, home_of, parse_selector, selector_json
 
 SEED = 20261025
 _OBJ = ("kinds", "stores", "layers", "lanes", "collections", "memories")
+
+
+M1 = "mem:S/episode/m1"
 
 
 def T(text: str) -> int:
@@ -148,6 +151,10 @@ class World:
 
     def copy(self, copy_ref, source_ref):
         self._add("copies", object=copy_ref, source=source_ref, added_seq=self._bump())
+
+    def leave(self, agent):
+        """The agent leaves the place it is in."""
+        self._find("agent_places", agent=agent, removed_seq=None)["removed_seq"] = self._bump()
 
     def lane(self, ref, lane, at):
         self._add("lane_notes", object=ref, lane=lane, at=at, seq=self._bump())
@@ -296,3 +303,118 @@ def three_link_chain():
     grandchild = w.put_grant(dataclasses.replace(
         child_draft(child), ops=frozenset({"share"}), max_days=30, expires=child.expires - 86400))
     return w, root, child, grandchild
+
+
+def use(agent, place, obj, *, copy="store:house", action="recall", purpose="care-coordination", at=None,
+        names=(), shows=()) -> Use:
+    """A Use; `at` defaults to 2026-11-02."""
+    return Use(requester=agent, place=place, obj=obj, copy=copy, action=action, purpose=purpose,
+               at=T("2026-11-02") if at is None else at, names=tuple(names), shows=frozenset(shows))
+
+
+def home_use(obj, at, **kw) -> Use:
+    """Rio Grande, at Andy's home, on obj."""
+    return use("agent:rio-grande", "place:home/andy", obj, at=at, **kw)
+
+
+_PLACES = ["place:la-county", "place:la-county/public-health", "place:la-county/parks-and-rec",
+           "place:la-county/public-health/clinic-3", "place:la-county/summer-wellness", "place:home/andy"]
+_AGENTS = {"agent:rio-grande": "place:home/andy", "agent:ph-coordinator": "place:la-county/public-health/clinic-3",
+           "agent:parks-planner": "place:la-county/parks-and-rec",
+           "agent:sw-helper": "place:la-county/summer-wellness"}
+_OBJS = ["mem:S/episode/m1", "mem:S/episode/m2", "mem:S/episode/m3", "mem:S/semantic/m4", "mem:Z/episode/m5",
+         "road:S/r1"]
+_PURPOSES = ["care-coordination", "research", "billing"]
+_DAY = 86400
+
+
+def _pick(rng, pool, star=0.4, kmax=3):
+    if rng.random() < star:
+        return "*"
+    return rng.sample(pool, rng.randint(1, min(kmax, len(pool))))
+
+
+def random_selector(rng) -> dict:
+    """A selector document parse_selector accepts (R25 form: only a memory-only kinds list has object limits)."""
+    aud = rng.sample(_PLACES + ["self", "commons", "group:andys"], rng.randint(1, 3))
+    memory_only = rng.random() < 0.7
+    objects = {"kinds": ["memory"] if memory_only else rng.choice([["memory", "road"], "*", ["road"]]),
+               "stores": _pick(rng, ["S", "Z"], 0.6), "layers": "*", "lanes": "*", "collections": "*",
+               "memories": "*"}
+    if memory_only:
+        objects["layers"] = _pick(rng, ["episode", "semantic"], 0.7, 2)
+        objects["lanes"] = _pick(rng, ["personal", "work"], 0.6, 2)
+        objects["collections"] = _pick(rng, ["collection:andy/medical-history", "collection:andy/other"], 0.6)
+        objects["memories"] = _pick(rng, _OBJS[:5], 0.8)
+    return {"audience": aud, "requesters": _pick(rng, list(_AGENTS), 0.6),
+            "objects": objects, "actions": _pick(rng, ["recall", "read", "inject_context", "route", "imprint"],
+                                                 0.3, 4),
+            "purposes": _pick(rng, _PURPOSES, 0.5, 2)}
+
+
+def random_replacement_chain(rng):
+    """(world, [record ids]): an original allow and 1 to 3 replacements, each revoking the one before. The
+    replacements' selectors and intervals are random, some outside the original's."""
+    w = county_world()
+    w.group("group:andys", "person:andy", ["agent:rio-grande"])
+    w.collect("collection:andy/other", ["mem:S/episode/m1", "mem:S/semantic/m4"])
+    chain, anchor = [], None
+    for i in range(rng.randint(2, 4)):
+        start = T("2026-11-01") + rng.randint(0, 30) * _DAY
+        end = None if rng.random() < 0.3 else start + rng.randint(1, 60) * _DAY
+        kw = {"valid_from": start, "valid_until": end}
+        if chain:
+            kw.update(replaces=chain[-1], anchor=anchor)
+        doc = random_selector(rng)
+        obj = doc.pop("objects")
+        rid = w.allow("place:home/andy", audience=doc["audience"], requesters=doc["requesters"],
+                      actions=doc["actions"], purposes=doc["purposes"], **obj, **kw)
+        if not chain:
+            anchor = w.now
+        else:
+            w.revoke(chain[-1])
+        chain.append(rid)
+        w.tick(rng.randint(0, 3) * _DAY)
+    return w, chain
+
+
+def apply_random_registry_changes(rng, w) -> None:
+    """Random moves of memberships, lanes and placements, after the records are written."""
+    base = T("2026-10-01")
+    for ref in _OBJS[:5]:
+        if rng.random() < 0.8:
+            w.lane(ref, rng.choice(["personal", "work"]), base + rng.randint(0, 20) * _DAY)
+        for _ in range(rng.randint(0, 3)):
+            w.tick(rng.randint(0, 5) * _DAY)
+            w.lane(ref, rng.choice(["pending", "personal", "work"]), w.now)
+    for _ in range(rng.randint(0, 3)):
+        w.tick(rng.randint(0, 5) * _DAY)
+        coll = rng.choice(["collection:andy/medical-history", "collection:andy/other"])
+        ref = rng.choice(_OBJS[:5])
+        live = [r for r in w.rows.get("collection_members", []) if r["collection"] == coll
+                and r["object"] == ref and r.get("removed_seq") is None]
+        if live:
+            w.uncollect(coll, ref)
+        else:
+            w.collect(coll, [ref])
+    for agent in rng.sample(list(_AGENTS), rng.randint(0, 2)):
+        w.tick(rng.randint(0, 5) * _DAY)
+        w.leave(agent)
+        if rng.random() < 0.5:
+            w.tick(_DAY)
+            w._add("agent_places", agent=agent, place=rng.choice(_PLACES), added_seq=w._bump())
+    if rng.random() < 0.5:
+        w.tick(_DAY)
+        w._find("group_members", group_id="group:andys", agent="agent:rio-grande", removed_seq=None)[
+            "removed_seq"] = w._bump()
+
+
+def sample_uses(rng, w, n):
+    """n random uses over the chain world's agents, places, objects and times."""
+    out = []
+    for _ in range(n):
+        agent = rng.choice(list(_AGENTS))
+        place = _AGENTS[agent] if rng.random() < 0.6 else rng.choice(_PLACES)
+        out.append(use(agent, place, rng.choice(_OBJS), purpose=rng.choice(_PURPOSES), copy="store:S",
+                       at=T("2026-10-20") + rng.randint(0, 100) * _DAY))
+    return out

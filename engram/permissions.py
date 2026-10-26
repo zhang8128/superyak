@@ -785,3 +785,255 @@ def check_child_grant(state: State, parent: Grant, child: Grant) -> None:
         raise RuleError(rule, "a child's depth is below its parent's")
     if child.expires > parent.expires:
         raise RuleError(rule, "a child expires no later than its parent")
+
+
+# ---------------------------------------------------------------- matching with history (P 5.2, 5.3, 6.5)
+
+@dataclass(frozen=True)
+class Use:
+    """One act on one object (P 6.1). names are the memories a road or trail names, in order; shows those
+    whose content the answer shows."""
+    requester: str
+    place: str
+    obj: str
+    copy: str
+    action: str
+    purpose: str
+    at: int
+    names: tuple = ()
+    shows: frozenset = frozenset()
+
+
+def acts_for_place(state: State, agent: str) -> str | None:
+    """act(a): the place the agent acts for, or None for an unregistered agent."""
+    row = state.agents.get(agent)
+    return None if row is None else row.acts_for
+
+
+def _span(state: State, added: int, removed: int | None) -> tuple[int, int | None]:
+    """The time interval [lo, hi) a membership row is in force; hi None is open (PF22)."""
+    lo = state.seq_at[added]
+    if removed is None or removed > state.seq:
+        return lo, None
+    return lo, state.seq_at[removed]
+
+
+def _in_force(state: State, added: int, removed: int | None, t: int) -> bool:
+    lo, hi = _span(state, added, removed)
+    return lo <= t and (hi is None or t < hi)
+
+
+def _meets(state: State, added: int, removed: int | None, anchor: int, t: int) -> bool:
+    lo, hi = _span(state, added, removed)
+    return lo <= t and (hi is None or hi > anchor)
+
+
+def agent_place_at(state: State, agent: str, at: int) -> str | None:
+    for r in state.agent_places.get(agent, ()):
+        if _in_force(state, r.added_seq, r.removed_seq, at):
+            return r.place
+    return None
+
+
+def _lane_at(notes: Sequence, tau: int) -> str | None:
+    """The lane of the last note with at <= tau (notes are ordered by (at, seq))."""
+    lane = None
+    for n in notes:
+        if n.at > tau:
+            break
+        lane = n.lane
+    return lane
+
+
+def lane_held(state: State, ref: str, lane: str, since: int, at: int) -> bool:
+    """The allow reading: the memory has a note, and `lane` was its lane at every instant of
+    [max(since, first note's at), at], with no pending note in that interval."""
+    notes = state.lane_notes.get(ref, ())
+    if not notes:
+        return False
+    start = max(since, notes[0].at)
+    if start > at:
+        return False
+    if _lane_at(notes, start) != lane:
+        return False
+    return all(n.lane == lane for n in notes if start < n.at <= at)
+
+
+def lane_touched(state: State, ref: str, lane: str, anchor: int, at: int) -> bool:
+    """The deny reading: no note, or `lane` or a pending move was in force at some instant of [anchor, at]."""
+    notes = state.lane_notes.get(ref, ())
+    if not notes:
+        return True
+    if anchor > at:
+        return False
+    first = _lane_at(notes, anchor)
+    if first is None:
+        first = notes[0].lane            # a first note assumes the lane held since creation
+    if first in (lane, "pending"):
+        return True
+    return any(n.lane in (lane, "pending") for n in notes if anchor <= n.at <= at)
+
+
+def _star_or_in(dim, value) -> bool:
+    return dim == STAR or value in dim
+
+
+def _audience_entry(state: State, v: str, layer: str, use: Use, anchor: int, deny: bool) -> bool:
+    a, t = use.requester, use.at
+    if v == "commons":
+        return True
+    act = acts_for_place(state, a)
+    if act is None:
+        return False
+    if layer.startswith("place:"):
+        layer_place = layer
+    else:
+        layer_place = acts_for_place(state, layer)
+    if v == "self":
+        if act != layer_place:
+            return False
+        return deny or layer_place in dominators(state, use.place)
+    if v.startswith("group:"):
+        members = [r for r in state.group_members.get(v, ()) if r.agent == a]
+        if deny:
+            if not any(_meets(state, r.added_seq, r.removed_seq, anchor, t) for r in members):
+                return False
+            return True
+        if not any(_in_force(state, r.added_seq, r.removed_seq, t) for r in members):
+            return False
+        group = state.groups.get(v)
+        return group is not None and home_of(group.owner) in dominators(state, use.place)
+    if v.startswith("place:"):
+        if deny:
+            if v in ancestors(state, use.place) or v in ancestors(state, act):
+                return True
+            return any(v in ancestors(state, r.place) for r in state.agent_places.get(a, ())
+                       if _meets(state, r.added_seq, r.removed_seq, anchor, t))
+        return v in dominators(state, use.place) and v in dominators(state, act)
+    return False
+
+
+def _object_dims(state: State, sel: Selector, layer: str, anchor: int, use: Use, action: str, deny: bool,
+                 assume: frozenset, check_validity: bool) -> bool:
+    ref = parse_object_ref(use.obj)
+    if not _star_or_in(sel.kinds, ref.kind):
+        return False
+    if not _star_or_in(sel.stores, ref.instance_id):
+        return False
+    if sel.layers != STAR and ref.layer not in sel.layers:
+        return False
+    if sel.memories != STAR and use.obj not in sel.memories:
+        return False
+    t = use.at
+    if sel.lanes != STAR:
+        if deny:
+            if not any(lane_touched(state, use.obj, lane, anchor, t) for lane in sel.lanes):
+                return False
+        elif not any(lane_held(state, use.obj, lane, anchor, t) for lane in sel.lanes):
+            return False
+    if sel.collections != STAR:
+        rows = [r for r in state.member_of.get(use.obj, ()) if r.collection in sel.collections]
+        if not any(_membership_counts(state, r, layer, anchor, use, action, deny, assume, check_validity)
+                   for r in rows):
+            return False
+    return True
+
+
+def _membership_counts(state: State, row, layer: str, anchor: int, use: Use, action: str, deny: bool,
+                       assume: frozenset, check_validity: bool) -> bool:
+    t = use.at
+    if deny:
+        return _meets(state, row.added_seq, row.removed_seq, anchor, t)
+    if not _in_force(state, row.added_seq, row.removed_seq, t):
+        return False
+    if not row.backing.startswith("grant:"):
+        return True
+    if row in assume:       # the envelope that bounds this very membership may rely on it
+        return True
+    gid = row.backing[len("grant:"):]
+    if check_validity and not grant_validity(state, gid, t)[0]:
+        return False
+    try:
+        chain = grant_chain(state, gid)
+    except RuleError:
+        return False
+    return all(_selector_match(state, g.envelope, g.layer, anchor, use, action, False, assume | {row},
+                               check_validity) for g in chain)
+
+
+def _selector_match(state: State, sel: Selector, layer: str, anchor: int, use: Use, action: str, deny: bool,
+                    assume: frozenset = frozenset(), check_validity: bool = True) -> bool:
+    """P 5.3 rules 2 and 3."""
+    if not _star_or_in(sel.requesters, use.requester):
+        return False
+    if not _star_or_in(sel.actions, action):
+        return False
+    if not _star_or_in(sel.purposes, use.purpose):
+        return False
+    if not any(_audience_entry(state, v, layer, use, anchor, deny) for v in sel.audience):
+        return False
+    return _object_dims(state, sel, layer, anchor, use, action, deny, assume, check_validity)
+
+
+def _revoked(state: State, record) -> bool:
+    return record.revoked_seq is not None and record.revoked_seq <= state.seq
+
+
+def _in_interval(record, t: int) -> bool:
+    return record.valid_from <= t and (record.valid_until is None or t < record.valid_until)
+
+
+def _chain_ok(state: State, record, use: Use, action: str, deny: bool, check_validity: bool) -> bool:
+    """P 5.3 rule 4: the replaces chain, each link's revocation ignored."""
+    cur, n = record.replaces, 0
+    while cur is not None:
+        n += 1
+        r = state.records.get(cur)
+        if r is None or n > MAX_REPLACES:
+            return False
+        if check_validity and not _in_interval(r, use.at):
+            return False
+        if not _selector_match(state, r.selector, r.layer, record.anchor, use, action, deny,
+                               check_validity=check_validity):
+            return False
+        cur = r.replaces
+    return True
+
+
+def _grant_ok(state: State, record, use: Use, action: str, deny: bool, check_validity: bool) -> bool:
+    """P 5.3 rule 5."""
+    if not record.backing.startswith("grant:"):
+        return True
+    gid = record.backing[len("grant:"):]
+    if check_validity and not grant_validity(state, gid, use.at)[0]:
+        return False
+    try:
+        chain = grant_chain(state, gid)
+    except RuleError:
+        return False
+    return all(_selector_match(state, g.envelope, record.layer, record.anchor, use, action, deny,
+                               check_validity=check_validity) for g in chain)
+
+
+def record_matches(state: State, record: Record, use: Use, action: str) -> bool:
+    """P 5.3 rules 1 to 5. Memberships read narrowly for an allow and widely for a deny (P7). Whether the
+    requester is in the use's place is decide's step 1, not this (PF21)."""
+    deny = record.effect == "deny"
+    if _revoked(state, record) or not _in_interval(record, use.at):
+        return False
+    if not _selector_match(state, record.selector, record.layer, record.anchor, use, action, deny):
+        return False
+    return (_chain_ok(state, record, use, action, deny, True)
+            and _grant_ok(state, record, use, action, deny, True))
+
+
+def record_candidate(state: State, record: Record, use: Use, action: str) -> bool:
+    """P 6.5: an unrevoked allow matching by rules 2 and 3 and the selector parts of 4 and 5; every validity
+    interval and every grant's validity is ignored (PF23)."""
+    if record.effect != "allow" or _revoked(state, record):
+        return False
+    if not _selector_match(state, record.selector, record.layer, record.anchor, use, action, False,
+                           check_validity=False):
+        return False
+    return (_chain_ok(state, record, use, action, False, False)
+            and _grant_ok(state, record, use, action, False, False))
