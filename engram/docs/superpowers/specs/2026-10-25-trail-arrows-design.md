@@ -1,17 +1,24 @@
 # Trails: Footpaths, Roads and Detours in the Category Graph
 
 **Date:** 2026-10-25
-**Status:** Revision 6. Revision 3 was approved: the
-first verdict (MF1–MF8, S1–S8, N1–N9) and the re-check (RMF1–RMF3, S-a–S-d, N-a–N-d) are both applied. Revision 4
-kept every approved decision except the ones it lists under "Changes to approved decisions". Its fresh review
-(`docs/superpowers/reviews/2026-10-25-trail-arrows-rev4-spec-review.md`) approved it with changes. Revision 5
-applies MF1–MF3, S1–S11 and N1–N16; that file's "Response" section lists each. An interface pass across the three
-city-rail specs then changed R13, R17, sections 4, 6.5, 7, 8, 9, 10, 11, 12 and 14
+**Status:** Revision 7, the consolidation pass across the three city-rail specs
+(`docs/superpowers/reviews/2026-10-25-city-rail-consolidation.md`, which logs each change). Revision 6 was approved on
+its final check (`docs/superpowers/reviews/2026-10-25-trail-arrows-rev4-spec-review.md`, "Final check of
+2026-10-25"). The imprint spec's revision 4 provides I2, I3 and I6, and revision 7 marks them provided in section
+11, after checking each against what that spec provides. The check found one gap, in I6's test: its one `as_of` must
+be at or after the plan's end t₁, which the imprint spec's revision 5 now says. Section 7 now says that admission's
+calibration on an imprint reads no session path (the imprint spec's `no_paths`), and cites the permissions spec's 7.6
+for "this narrows mistakes, not malice". No rule of this spec changes, and nothing more leaves a machine.
+Revision 3 was approved: the first verdict (MF1–MF8, S1–S8, N1–N9) and the re-check (RMF1–RMF3, S-a–S-d, N-a–N-d)
+are both applied. Revision 4 kept every approved decision except the ones it lists under "Changes to approved
+decisions". Its fresh review (`docs/superpowers/reviews/2026-10-25-trail-arrows-rev4-spec-review.md`) approved it
+with changes. Revision 5 applies MF1–MF3, S1–S11 and N1–N16; that file's "Response" section lists each. An
+interface pass across the three city-rail specs then changed R13, R17, sections 4, 6.5, 7, 8, 9, 10, 11, 12 and 14
 (`docs/superpowers/reviews/2026-10-25-city-rail-interfaces.md`). Above all it declines I4, the cut flag, for privacy,
 and records the cost in section 7. A second fresh reviewer re-checked revision 5 in the same review file and approved
 it with changes (RMF1–RMF2, RS1–RS4, RN1–RN11). Revision 6 applies them; that file's "Re-check response" lists each.
-Some of them need the imprint spec to change too (section 11). I5 is already in that spec's revision 3, written in
-parallel. I2's and I3's new parts and I6 are pending there, since this pass doesn't edit that spec.
+Some of them needed the imprint spec to change too (section 11). I5 is in that spec's revision 3, written in
+parallel, and I2's and I3's new parts and I6 are in its revision 4.
 Observational; every part is off by default.
 **Contract:** [the city rail vision](../../../../docs/city-rail-vision.md), "The traveler's view" and "Permissions by
 place". Rio Grande wrote the vision from Andy's words. Where it goes past a quote, it is Rio Grande's call carried by
@@ -20,10 +27,10 @@ the contract, and this spec says so.
 **Builds on:** `2026-08-07-evolving-category-memory-design.md` (v2 store, rewrites, epochs),
 `2026-09-29-path-signatures-design.md` (`paths.py`), `2026-09-29-lighthouse-sheaf-design.md`,
 `2026-09-01-lighthouse-local-city-design.md` (sharing, permissions, receipts),
-[permissions by place](../../../../docs/superpowers/specs/2026-10-25-permissions-by-place-design.md) (its sections
-4.1, 5.2, 6.3–6.5, 9.1, 11 and 14) and [imprints](2026-10-25-store-imprint-design.md) (its sections 5.3, 6.2, 10, 11
-and 12). The last two are being written in parallel. This spec cites them by path and section, and section 11 lists
-what it needs from each.
+[permissions by place](../../../../docs/superpowers/specs/2026-10-25-permissions-by-place-design.md) (revision 5;
+its sections 4.1, 5.2, 6.3–6.5, 7.6, 9.1, 11 and 14) and [imprints](2026-10-25-store-imprint-design.md) (revision 5;
+its sections 5.3, 6.2, 10, 11 and 12). The last two were written in parallel. This spec cites them by path and
+section, and section 11 lists what it needs from each.
 
 ## Revision history
 
@@ -35,7 +42,8 @@ what it needs from each.
 | 4 | uncommitted draft | The vision's traveler's view: locate from context (6.2), route to a goal in words (6.3), forward lookup (6.4), short answers (6.5), three read-only tools (6.6), suggested touches (4), a goal-in-words measure (7, steps 8 and 9), the evaluation on an imprint (7), per-audience permissions in place of the work-lane rule (8), and a Raspberry Pi budget for every pass (10). Verdict: approve with changes (MF1–MF3, S1–S11, N1–N16). |
 | 5 | uncommitted draft | Applied that verdict. Measure W embeds text the way the tools do (MF1). Imprinted recall rows keep their shipped targets (I4, MF2; declined in the interface pass, below). `at_goal` means A* popped an entry (MF3; corrected in revision 6). Every route node is rechecked, and a route has at most 64 stops (S1). A gate pass licenses one lane (S2). The answer bound is 6,000 bytes (S5). The allow-file check, the Pi budget, the evaluation's limits and the anchor patterns are tightened (S4, S9–S11). |
 | 5, interface pass | uncommitted draft | I4 declined for privacy, and its cost recorded (R17, section 7). The imprint check reads the imprint spec's state directory, tombstone and `valid_until` (I2). One `route` use per road (section 8). Lineage reads `independent` (section 8). The evaluation unit and `--lane` follow the imprint spec. `laid_by` on an imprint names the source's owner (6.5). |
-| 6 | this file | Applied the re-check. `at_goal` means the popped goal has no predecessor (RMF1). Without `route`, an imprint ships no session ids, so it holds no trail of any kind (R18, I5; RMF2). The evaluation stays offline, and its unit gets the shared embedder's socket from the station's `runtime.json` (R19, I3; RS2). One use id gives one run, and a finished use retires its allow file (R13, I2; RS3). A changed allow file ends the run as `allow changed`, and only a tombstone is recorded as a withdrawal (I2; RS4). The imprint spec's recall-row test is asked to change (I6; RS1). Nits RN1–RN11. |
+| 6 | `53c132a` | Applied the re-check. `at_goal` means the popped goal has no predecessor (RMF1). Without `route`, an imprint ships no session ids, so it holds no trail of any kind (R18, I5; RMF2). The evaluation stays offline, and its unit gets the shared embedder's socket from the station's `runtime.json` (R19, I3; RS2). One use id gives one run, and a finished use retires its allow file (R13, I2; RS3). A changed allow file ends the run as `allow changed`, and only a tombstone is recorded as a withdrawal (I2; RS4). The imprint spec's recall-row test is asked to change (I6; RS1). Nits RN1–RN11. Approved on its final check. |
+| 7 | this file | The consolidation pass. I2, I3 and I6 are provided by the imprint spec's revision 4, each checked against it (section 11); I6's one `as_of` must be at or after t₁, now in the imprint spec's revision 5. Admission's calibration on an imprint reads no session path, so section 7's "Calibration reads exactly that" now says it of a plain copy only (the imprint spec's `no_paths`). The known limit cites the permissions spec's 7.6. Step 10 names the use's `TimeoutStopSec=60`. No rule changes. |
 
 ## Decisions in revisions 4 and 5
 
@@ -888,8 +896,8 @@ and tombstones in `tombstones/` (its sections 10 and 12). `trails.py`:
 2. takes `--imprint-use <use id>`, a use id of at most 64 characters from `[A-Za-z0-9-]`, never a path, and reads
    the allow file only at `<root>/<id>.state/uses/<use id>.allow.json`, where the imprint spec's use step writes it
    (its section 12; the imprint directory itself is 0555 after admission). A symlink at any part of that path is
-   refused. The imprint spec is asked to name the form of a use id, a lowercase uuid4 of 36 characters, which fits
-   (I2);
+   refused. The imprint spec names the form of a use id, a lowercase uuid4 of 36 characters, which fits (its D41;
+   I2);
 3. refuses when the tombstone `<root>/tombstones/<id>.json` exists, which is how that spec marks a withdrawal or a
    deletion (its section 12), or when the state directory is gone, since a withdrawal removes it;
 4. refuses unless the allow file names this file's `meta.instance_id`, the action `route`, the purpose
@@ -897,9 +905,10 @@ and tombstones in `tombstones/` (its sections 10 and 12). `trails.py`:
    earliest of the records' `valid_until` and every shortening, and rewrites the file atomically when the end is
    shortened (its section 12; I2);
 5. refuses when the use's directory `<root>/<id>.state/uses/<use id>/` already holds a `report.json` or a
-   `result.json` (I2 asks the imprint spec to name them). One use id gives one run. A use that has finished also has
-   no allow file any more, because finishing retires it (I2), so check 2 refuses it too. So rerunning an old command
-   from shell history can't make a use without a receipt (vision principle 5). Rio Grande's call;
+   `result.json` (the names the imprint spec's use step writes, its section 12 and D41; I2). One use id gives one
+   run. A use that has finished also has no allow file any more, because finishing retires it (I2), so check 2
+   refuses it too. So rerunning an old command from shell history can't make a use without a receipt (vision
+   principle 5). Rio Grande's call;
 6. opens the file `mode=ro&immutable=1`, as `store_reader.connect(path, immutable=True)` does
    (`store_reader.py:43-54`), and keeps the allow file's SHA-256;
 7. checks again when the run ends: the allow file is still there with the same SHA-256, no tombstone exists,
@@ -908,10 +917,12 @@ and tombstones in `tombstones/` (its sections 10 and 12). `trails.py`:
    withdrawal, a shortening and an end reached all change what it checks. The use then writes no `use-finished`
    receipt with a report. It records the run's end from the station's side: `withdrawn` only when the tombstone
    exists, `ended` when the effective end has passed, and `allow changed` otherwise, for example after a shortening
-   whose new end is still ahead (I2). Discarding the run only narrows. Rio Grande's call.
+   whose new end is still ahead (I2). The imprint spec adds two ends this list doesn't name: `deleted` for a station
+   deletion during the run, which writes a tombstone but is no withdrawal, and `failed` for a run that ended with no
+   report for another reason (its section 12 and D41). Discarding the run only narrows. Rio Grande's call.
 
 **Known limit.** The allow file is unsigned. Any process running as the station's Unix user can write one. Like the
-permissions spec's terminal yes ("this narrows mistakes, not malice", its section 14), this check narrows mistakes,
+permissions spec's terminal yes ("this narrows mistakes, not malice", its section 7.6), this check narrows mistakes,
 not malice: it keeps an evaluation from running on an imprint by accident, against the wrong imprint, after a
 withdrawal, or a second time under one use id. Rio Grande's call.
 
@@ -920,8 +931,8 @@ withdrawal, or a second time under one use id. Rio Grande's call.
 
 A trail is one session's touches in one lane, in order (section 2), and a wrote touch is every episode carrying that
 session's id (section 4). So episodes with their session ids already hold the order in which each session wrote: a
-trail with no log row at all. Calibration reads exactly that. `paths.report` (`paths.py:418-426`) calls
-`session_paths`, which groups episodes by `session_id` in `(created_at, id)` order (`paths.py:348-354`), and
+trail with no log row at all. Calibration on a plain copy reads exactly that. `paths.report` (`paths.py:418-426`)
+calls `session_paths`, which groups episodes by `session_id` in `(created_at, id)` order (`paths.py:348-354`), and
 calibration calls it (`calibrate.py:295-296`). Revision 5 missed this. An imprint without `route` would have kept the
 owner's wrote-touch trails with no record covering them and nothing in the dry run saying so, against section 8's
 "sharing a memory is still not consent to sharing routes" and the vision's "Count its own trails as the person's".
@@ -929,13 +940,19 @@ So, Rio Grande's call (I5, option (a) of the re-check):
 
 - **Without `route`,** every episode ships with `session_id` null, and no log row ships. No trail of any kind is on
   the imprint. `trails.py` refuses it anyway, since no allow file can name `route` (checks 2 and 4). The cost falls
-  on calibration: `paths.report` finds no session on such an imprint (`paths.py:349`, `:423`), and the imprint
-  spec's admission report says why (its 5.2 and 10). `store_reader`'s survey of such a file counts no sessions either
-  (`store_reader.py:126-131`). Privacy wins, by the interface pass's rule.
+  on calibration: on such a file `paths.report` would find no session (`paths.py:349`, `:423`), and `store_reader`'s
+  survey counts no sessions and no log rows (`store_reader.py:111-121`, `:126-131`). The imprint spec's admission
+  report notes why, "because route was not chosen" (its 5.2 and 10). Privacy wins, by the interface pass's rule.
 - **With `route`,** episodes of sessions closed at t₁ keep `session_id`, so their wrote-touch trails are on the
   imprint. A session still open at t₁ keeps neither its session ids nor its log rows (imprint spec 5.2). Cited touches
   come from the log rows; only they depend on log rows. The owner's yes to `route` covers both, and the dry run and
   confirm view say both leave (I5).
+
+**At admission, calibration reads no session path, with or without `route`** (the imprint spec's revision 4, its
+sections 8 and 10). With `route`, the shipped session ids are trail material, and the owner's record for roads and
+trails names only the purpose `trail-evaluation`. So admission runs calibration with `no_paths`, and the report's
+`paths` section says only "not measured at admission". Without `route` there would be no session to measure. This
+spec reads nothing from calibration's `paths` section, so no rule here changes.
 
 Episode write times stay in every imprint: the imprint spec's time window and plan digest read `created_at` (its 5.2
 and 5.4). Someone could guess sessions from the gaps between write times. No record says which episodes one session
@@ -988,10 +1005,10 @@ logs only that lane's memories: the lane filter runs before truncation and reads
 included, as personal (`server.py:2332-2333`). So a work-lane imprint keeps far more of an owner's lane-filtered
 recalls than of their default ones. The synthetic-imprint test (section 12) measures the loss.
 
-The imprint spec's test "A trail derived from the package equals the trail derived from the source restricted to M"
-(its section 16, "Recall rows") asserts more than holds: on a fixture with one mixed-lane recall it fails, for the
-reasons above. I6 asks the imprint spec to assert what does hold, and to point to this spec's synthetic-imprint test
-for what is lost.
+The imprint spec's revision 3 had a test "A trail derived from the package equals the trail derived from the source
+restricted to M" (its section 16, "Recall rows"). It asserted more than holds: on a fixture with one mixed-lane recall
+it fails, for the reasons above. I6 asked that spec to assert what does hold, and to point to this spec's
+synthetic-imprint test for what is lost. Its revision 4 does (section 11, I6).
 
 The imprint carries no query text, so measure W can't replay what the agent typed. It embeds the stored text of
 memories instead (step 8).
@@ -1166,7 +1183,8 @@ work, so W's goal reach and F1 are likely higher than the tools will see in use.
 
 **10. At the limits.** The run on an imprint is bounded by the imprint's calibration limits: a detached user unit
 with `-p MemoryMax=4G -p MemorySwapMax=0 -p RuntimeMaxSec=1800`, so 4 GB and 30 minutes (imprint spec sections 10 and
-12, its D29). The worst case, per qualifying session, is:
+12, its D29). The use's unit also passes `-p TimeoutStopSec=60`, so it is killed within 60 s of that limit (imprint
+spec section 12, from its revision 5). The worst case, per qualifying session, is:
 
 - 12 A* searches for the route gate: T, B, and the 10 shuffles of S;
 - 2 for W (T and B) and 2 for its stored-vector diagnostic (step 8.9);
@@ -1359,8 +1377,9 @@ The builder measures all of them on the Pi (section 12).
 
 **Interfaces with the parallel specs.** These are for Rio Grande to reconcile, not for Andy. The interface pass
 (`docs/superpowers/reviews/2026-10-25-city-rail-interfaces.md`) settled I1–I4, as the items below say. The re-check
-of revision 5 added I5 and I6 and extended I2 and I3. I5 is already applied in the imprint spec. The other new parts
-are marked "pending in the imprint spec": this pass edits only this spec, the review and the interface table.
+of revision 5 added I5 and I6 and extended I2 and I3. I5 is applied in the imprint spec's revision 3, and I2's and
+I3's new parts and I6 in its revision 4. Revision 7 checked each against what that spec provides (as of its
+revision 5), and marks them provided below. All six are settled: five provided and I4 declined.
 
 - **Permissions spec.** This spec uses its object kinds `road` and `trail` and their names (its sections 4.1 and
   5.2), the `route`, `inject_context` and `imprint` actions and their `need` (6.4), L4, P24, its annotation's
@@ -1386,18 +1405,25 @@ are marked "pending in the imprint spec": this pass edits only this spec, the re
     `tombstones/<imprint id>.json` (section 7, "The imprint check"). A shortening during a use rewrites the allow
     file atomically, since `trails.py` can't read receipts. When `trails.py` exits with status 3, `allow changed`, or
     writes no report, the use writes no `use-finished` receipt with a report's SHA-256. *Asked in revision 6,
-    pending in the imprint spec* (the re-check's RS3, RS4, RN8 and RN10; Rio Grande's call):
+    provided in the imprint spec's revision 4* (the re-check's RS3, RS4, RN8 and RN10; Rio Grande's call; its D41
+    and section 12). Revision 7 checked each ask against that spec:
     - `use-finished` records the run's end as `withdrawn` only when the tombstone exists, `ended` when the effective
-      end has passed, `allow changed` otherwise, and "not evaluable: limit" for a run a cap killed. Its section 12
-      now says only "withdrawn" or "not evaluable", so a shortening during a run would be recorded as a withdrawal;
-    - finishing a use retires its allow file: `station-imprint-sync` deletes `<id>.state/uses/<use id>.allow.json`
-      when it writes `use-finished`. Today nothing does, so an old use id passes every check until the end date and
-      leaves no `use-started` receipt;
-    - `imprint.py use` writes the report as `uses/<use id>/report.json` and the run's end as
-      `uses/<use id>/result.json`, the names section 7's check 5 reads;
-    - a use id is a lowercase uuid4, which fits `[A-Za-z0-9-]{1,64}` (section 7, check 2);
+      end has passed, `allow changed` otherwise, and "not evaluable: limit" for a run a cap killed. *Provided*, as
+      rules 2, 3, 5 and 6 of its "Finishing a use". Its rule 2 is narrower: `withdrawn` also needs a `withdrawn`
+      receipt by the run's end. It adds `deleted`, for a station deletion, which writes a tombstone but is no
+      withdrawal, and `failed`, for any other run with no report, so no run is recorded as a withdrawal or a limit
+      it wasn't (section 7, check 7). Its revision 5 makes `failed` reachable for an error in `imprint.py use` too;
+    - finishing a use retires its allow file. *Provided*: `station-imprint-sync` deletes
+      `<id>.state/uses/<use id>.allow.json`, then writes `use-finished`, once. The use's unit runs the begin, the use
+      and the sync, so every run has its `use-started` receipt, and one imprint runs one use at a time;
+    - `imprint.py use` writes the report as `uses/<use id>/report.json`, only when `trails.py` exits 0, and the run's
+      end as `uses/<use id>/result.json`. *Provided*, with the names section 7's check 5 reads. Its revision 5 writes
+      `report.json` first;
+    - a use id is a lowercase uuid4. *Provided*: `station-imprint-use-begin` makes one of 36 characters, which fits
+      `[A-Za-z0-9-]{1,64}` (section 7, check 2), and `imprint.py use` refuses any other form;
     - the use always passes `--lane`, filling in the scope's one lane when `LANE` is left out (interface row 27).
-      `trails.py` refuses an imprint without it.
+      *Provided*: `imprint.py use` fills it in, and refuses a scope of two lanes without `LANE`. `trails.py` refuses
+      an imprint without it.
   - **I3.** `trails.py` reads vectors through sqlite-vec, so the Pi's admission environment (its section 18) must
     include sqlite-vec, as its calibration already does. Measure W also needs the store's embedding model on the Pi
     (section 7, step 8.2): either the shared embedder service, reachable from the run, or `fastembed` and the model
@@ -1405,11 +1431,17 @@ are marked "pending in the imprint spec": this pass edits only this spec, the re
     `trail-evaluation` use must cover reading memory text inside the run to embed it and find its anchors, with
     nothing but counts and rates leaving the run. *Applied:* the imprint spec's `Need(trail-evaluation)` names that
     `read` (its section 8), and its section 18 makes the embedder a gate before the first use. *Asked in revision 6,
-    pending in the imprint spec* (the re-check's RS2; Rio Grande's call): the use's detached unit gets
-    `--setenv=ENGRAM_EMBEDDER_SOCKET=<path>` when the station's `~/.config/superyak/runtime.json` names an
-    `embedder_socket`, and nothing otherwise (section 7, step 8.2). Its section 18's "The run never downloads a model"
-    then rests on step 8.2's `local_files_only=True`. Without the service, the model files must be in the station
-    user's `~/.kairos/models/fastembed` before the first use.
+    provided in the imprint spec's revision 4* (the re-check's RS2; Rio Grande's call; its D29 and sections 12, 16
+    and 18): the use's detached unit gets `--setenv=ENGRAM_EMBEDDER_SOCKET=<path>` when the station's
+    `~/.config/superyak/runtime.json` names an `embedder_socket`, and nothing otherwise (section 7, step 8.2). Its
+    section 18's "The run never downloads a model" then rests on step 8.2's `local_files_only=True`. Without the
+    service, the model files must be in the station user's `~/.kairos/models/fastembed` before the first use.
+    Revision 7 checked each part. The unit's command carries the `--setenv` exactly then, read by
+    `superyak-runtime`'s rule (`scripts/runtime.py:84-88`): no file, no key or `null` passes nothing, and a value that
+    isn't an absolute path stops the use. Its revision 5 reads only the default path and adds a deploy gate that the
+    user manager's environment, which the unit inherits, holds no `ENGRAM_` variable. Its section 18 rests "never
+    downloads" on `local_files_only=True` and names the cache. It also keeps sqlite-vec in the admission environment
+    (its section 18).
   - **I4. Declined by the interface pass, for privacy** (R17). The imprint spec keeps its whole-row rule, and section
     7, "The cost, chosen for privacy", records what that costs. The request, kept for the record: its whole-row rule
     for recall rows (6.2, D6, D7) removes far more than the memories left at home
@@ -1431,10 +1463,13 @@ are marked "pending in the imprint spec": this pass edits only this spec, the re
     revision 3*, written in parallel and read at the end of this pass: its D6, D7 and D10, 5.2 ("Log rows and session
     ids"), the 5.4 dry run and row key (`session_id as kept`), the 6.2 `episodes` row, section 8's R(I), "from its
     episodes' session ids and its log rows", check 12 (every `episodes.session_id` null without `route`), section
-    10's example (its "31 session paths" are there because it chose `route`), and its log-rows test (calibration's
-    report differs only in `paths`, which finds no session without `route`: `paths.py:349`, `:423`). It goes one step
-    narrower: with `route`, a session still open at t₁ keeps no session id either. Option (b), keeping session ids
-    under a record of their own, was not taken: by the interface pass's rule, privacy wins, and (a) lets less leave.
+    10's example, and its log-rows test. It goes one step narrower: with `route`, a session still open at t₁ keeps
+    no session id either. Its revision 4 goes one more: admission's calibration never measures session paths, with
+    or without `route` (`no_paths`). So section 10's example counts "57 sessions" in the survey, there because it
+    chose `route`, with "paths not measured at admission". Its log-rows test compares calibration's reports with and
+    without `route` in the sections that must agree, and both `paths` sections say only "not measured at admission"
+    (section 7, "At admission"). Option (b), keeping session ids under a record of their own, was not taken: by the
+    interface pass's rule, privacy wins, and (a) lets less leave.
   - **I6. The imprint spec's recall-row test** (the re-check's RS1; for Rio Grande). Its section 16, "Recall rows",
     asserts "A trail derived from the package equals the trail derived from the source restricted to M". Section 7
     here says why that fails on any fixture with a mixed-lane recall. This spec is the source of truth for trails, so
@@ -1443,7 +1478,15 @@ are marked "pending in the imprint spec": this pass edits only this spec, the re
       in the same order within its recall, and suggested only if the source's is (section 4);
     - on every recall row the package keeps, section 4's "exactly one target" rule gives the source's answer;
     - and for what an imprint loses, a pointer to this spec's synthetic-imprint test (section 12).
-    *Pending in the imprint spec.*
+    *Provided in the imprint spec's revision 4* (its section 16, "Recall rows"). Revision 7 checked it. Both
+    assertions are there, on a fixture with `route` and a mixed-lane recall, and so is the pointer. That spec no
+    longer asserts that the trails are equal. It adds one condition: derive both files' touches with one `as_of`,
+    since the CLI's default `as_of` is each file's newest timestamp (section 4) and differs between them (section 7).
+    Revision 7's check found that `as_of` must also be at or after the plan's end t₁. An earlier one could count a
+    session closed in the package, whose later rows stayed home, and open in the source (section 4, "Sessions"), and
+    then the package would have touches the source lacks. The imprint spec's revision 5 says so. With such an
+    `as_of`, every session of the package is closed in the source too, and the package's rows are a subset of the
+    source's, filtered the same way, so both assertions hold as section 4 derives touches.
 
 ## 12. Tests the builder must include
 
@@ -1625,7 +1668,8 @@ are marked "pending in the imprint spec": this pass edits only this spec, the re
 - **Use ends (I2).** On the imprint spec's fixture of a use: a finished use's allow file is gone, and rerunning
   `trails.py --imprint-use <that id>` is refused with no report; a shortening during a run is recorded as
   `allow changed`, not `withdrawn`; a withdrawal during a run is recorded as `withdrawn`. These run when the imprint
-  spec's use step exists, since that spec owns the receipts.
+  spec's use step exists, since that spec owns the receipts. Its section 16, "Use ends", tests the same, and its
+  `deleted` and `failed` ends.
 - **Read-only CLI.** Every database's SHA-256 is unchanged, and `total_changes` is 0.
 - **Gate off.** First open the store once with the same flags (so first-open vector provisioning
   doesn't count). After startup, `categories_v2.db` must be byte-identical in each of these cases:

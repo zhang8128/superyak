@@ -1,7 +1,19 @@
 # Imprints: Porting an Engram Store Here with Its Owner's Permission
 
 **Date:** 2026-10-25
-**Status:** Revision 4. Revision 3 was approved on its final check
+**Status:** Revision 5, the consolidation pass across the three city-rail specs
+(`docs/superpowers/reviews/2026-10-25-city-rail-consolidation.md`, which logs each change). Revision 4 was approved on
+its check (`docs/superpowers/reviews/2026-10-25-store-imprint-spec-review.md`, "Check of revision 4": approve, with
+CS1, CS2 and CN1–CN8). Revision 5 applies CS1, CS2 and CN1–CN6. CS1: the calibration test also leaves out the
+survey's file and identity facts, and both runs share one `now`. CS2: `imprint.py use` writes `result.json` for its
+own errors too, so `failed` is reachable, and a missing `result.json` means that the unit was stopped, or that a
+withdrawal, a deletion or the end came before the run began. It also takes two items the permissions spec's reviser
+carried: section 8 defines the home layer at the station when the owner is the operator, and section 12's rows for
+roads and trails are one per bulk use of at most 100,000, as the permissions spec's 9.1 has them. The recall-row
+test's one `as_of` is at or after the plan's end t₁, found while checking I6. Revision 5 changes D29 and D41, the
+header and sections 8, 10, 12, 13, 14, 15, 16 and 18. It lets nothing more leave a machine, and it widens no
+permission.
+Revision 3 was approved on its final check
 (`docs/superpowers/reviews/2026-10-25-store-imprint-spec-review.md`, "Final check": approve, with three should-fix
 items, FS1–FS3). Revision 4 applies all three; that file's "Response to the final check" lists each. FS1: admission
 runs calibration without its paths analysis, so it reads no road or trail, which no record allows for `calibration`.
@@ -22,14 +34,15 @@ less leave: without `route`, no episode's session id leaves either. Nothing here
 `lighthouse_sheaf.py`, the peer's `identity.py`, `ships.py`, `app.py`, `peer_routes.py`, `__main__.py`, the agent, the
 Makefile and the CLAUDE.md files (section 15).
 **Contract:** `docs/city-rail-vision.md`, "Imprints: porting a store here" and "Permissions by place".
-**Source of truth for permissions:** `docs/superpowers/specs/2026-10-25-permissions-by-place-design.md` (revision 3,
-whose uses name their copy h and whose bulk uses this spec's checks are; its 6.1 and 6.4).
+**Source of truth for permissions:** `docs/superpowers/specs/2026-10-25-permissions-by-place-design.md` (revision 5,
+whose uses name their copy h and whose bulk uses this spec's checks are, each naming at most 100,000 memories; its
+6.1 and 6.4).
 That spec says the imprints spec cites its sections 5, 6 and 11 (its header, "Depended on by"). This spec does: the record and its selector (its 5.1–5.2), matching (5.3), uses and denotations (6.1), the order
 and the lattice (6.2), and `need` (6.4). Section 8 says how an imprint permission is made of those records, and names
 the few imprint-only fields beside them. Where the two specs differ, the permissions spec wins and this one is revised.
 **Builds on:** `2026-10-03-ds9-station-design.md` (ships, docking, approval), `2026-10-15-grants-step3-design.md`
 (signed records), `2026-09-29-inheritance-reading-design.md` (store identity), the trail spec
-`2026-10-25-trail-arrows-design.md` (revision 6; it uses this spec's sections 5.3, 6.2,
+`2026-10-25-trail-arrows-design.md` (revision 7; it uses this spec's sections 5.3, 6.2,
 10, 11 and 12 and D10, and lists what it needs from this spec as its interface items I1–I6, in its section 11).
 
 Every decision here that does not quote Andy, station law or the permissions spec is **Rio Grande's call**. Section 4
@@ -43,7 +56,8 @@ lists them all.
 | 2 | `3c022bf` | Adopts the permissions spec's records, uses, lattice and `need`; drops instincts; the audience is the operator's home. Lineage is a closure over a stored ancestry. Leak checks read values, FTS vocabularies and vec0 slots. Receipts from station commands are signed by the lighthouse. The request carries only what the confirm view shows. Other people in a store get a stated limit and an owner's check. Calibration's bound comes from a measurement. Plus the should-fix items and nits. |
 | 2, interface pass | uncommitted | Log rows ship only with `route`, and r_T then lists `imprint`, `read` and `recall` too (D7, D10). r_M reaches memories through one collection, as P28 requires (D36). A `route_shown` row cut to nothing is dropped (D35); I4's cut flag is declined. The ship's withdrawal and shortening narrow the station's ceiling, never the owner's records (D17). The source store's ledger owner must be the ship's owner (D37). The owner's use list gets the permissions spec's receipt form, in batches of 512. `--lane` for the trail evaluation, and an embedder gate. |
 | 3 | `21fe509` | Answers the re-check. Without `route`, every shipped episode's `session_id` is null, so no footpath leaves; with it, only sessions closed at t₁ keep theirs (RMF1, option (a)). r_M names `"*"` lanes and layers (RS1). Uses name their copy, and the ceiling is per copy: a fixed rule over the station's own records and receipts, so the station's check is the permissions spec's meet however many imprints an owner holds (RS2, RN7). Admission is decided again at every start and checks its end before each write (RS3). Stores older than store identity have incomplete ancestry (RS4). Every row and file about an imprint or a request has an end, and the owner is told before sending (RS5). The nits: `scope.lanes`, the ten `contents` keys, the request's labels, ancestry in the request, the named departures from the permissions spec's receipts, bulk uses, the ceiling as Andy's rule, pending lane notes, full-id unit names, and the `--imprints-dir` flag. |
-| 4 | this file | Answers the final check (FS1–FS3). Admission runs calibration without its paths analysis, so it reads no road or trail (FS1, option (a)). The calibration test compares the sections that are the same, and the survey's zero session count says why (FS2). The trail spec's I2: a use id is a lowercase uuid4, `imprint.py use` writes `report.json` and `result.json`, finishing a use retires its allow file, `use-finished` records how the run ended, and the use always passes `--lane` (D41). I3: the use's unit gets the shared embedder's socket from the station's `runtime.json` (D29). I6: the recall-row test asserts what the trail spec says holds (FS3). |
+| 4 | `05f4538` | Answers the final check (FS1–FS3). Admission runs calibration without its paths analysis, so it reads no road or trail (FS1, option (a)). The calibration test compares the sections that are the same, and the survey's zero session count says why (FS2). The trail spec's I2: a use id is a lowercase uuid4, `imprint.py use` writes `report.json` and `result.json`, finishing a use retires its allow file, `use-finished` records how the run ended, and the use always passes `--lane` (D41). I3: the use's unit gets the shared embedder's socket from the station's `runtime.json` (D29). I6: the recall-row test asserts what the trail spec says holds (FS3). Approved on its check. |
+| 5 | this file | The consolidation pass. The calibration test leaves out the survey's file and identity facts and fixes one `now` (CS1). `imprint.py use` writes `result.json` for its own errors, so a crash is `failed` and a missing file means the unit was stopped (CS2, D41). The use's unit stops within 60 s of its limit, and the sync finishes it at the first sync after (CN1). The socket rule's edges, and a deploy gate on the user manager's environment (CN2, D29). The survey's counts get a reason that fits both (CN3). `imprint.py use` fills in `LANE` (CN4). What `make station-imprint-use` prints (CN5). `report.json` before `result.json` (CN6). The home layer when the owner is the operator (section 8). Roads-and-trails rows per bulk use (section 12). The recall-row test's `as_of` is at or after t₁ (section 16). |
 
 ## 1. Why
 
@@ -205,7 +219,7 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 | D26 | The request carries only what the confirm view shows, plus its fixed labels `kind` and `version`. It names the source's ancestry, so the view can. The manifest is sent after the yes. | Rio Grande's call |
 | D27 | Before the yes, the owner confirms that nothing chosen is about another person who hasn't agreed, and that none of it is patient or participant data. A memory with a recorded co-subject never leaves. | Rio Grande's call |
 | D28 | The permission is an `imprint-permission` record holding two permissions-spec records. A use of imprint I is allowed iff its `need` lies in ⟦p_I⟧ ∩ ⟦c_I⟧, the meet of the owner's permission for I and the station's ceiling for I (D38). | Rio Grande's call, using permissions spec 5–6 |
-| D29 | Admission and uses run as detached user units. The station commands that start them return at once. A unit starts in a clean environment, so a use's unit gets `ENGRAM_EMBEDDER_SOCKET` only through `--setenv`, and only when the station's `~/.config/superyak/runtime.json` names an `embedder_socket` (section 12). | Rio Grande's call (the socket: the trail spec's I3) |
+| D29 | Admission and uses run as detached user units. The station commands that start them return at once. A unit starts in a clean environment: not the caller's shell, only the user manager's own environment, which a deploy gate checks holds no `ENGRAM_` variable (section 18). So a use's unit gets `ENGRAM_EMBEDDER_SOCKET` through `--setenv`, and only when the station's `~/.config/superyak/runtime.json` names an `embedder_socket` (section 12). | Rio Grande's call (the socket: the trail spec's I3) |
 | D30 | Each imprint has a writable state directory beside it for reports and uses. Withdrawal removes both. | Rio Grande's call |
 | D31 | Calibration skips any dense set over 7,500 episodes, from a measured peak of about 7.5 × n² × 8 bytes. | Rio Grande's call |
 | D32 | The station keeps a deleted imprint's row, permission, receipts and tombstone for 400 days after `deleted`, then removes them all. It removes a declined or expired request's row 30 days after it ends. Nothing about an imprint or a request is kept with no end. Backups age out by their own rule (section 9). The owner is told all of this before sending, in the confirm view, and in `imprint-status`. | Rio Grande's call (the permissions spec keeps receipts 400 days, its 9.1) |
@@ -217,7 +231,7 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 | D38 | The station's ceiling is one rule per copy, fixed in code over the station's own signed records and receipts. It allows only uses of that copy, on its own objects, within its own records' actions, purposes and dates, and none after a withdrawal or past a shortening. So no one edits a layer when the ship acts, and the station's check is the permissions spec's meet however many imprints an owner holds. Andy accepts it as his home's rule for imprints before the first one (section 18). | Rio Grande's call, from the re-check's RS2 and RN7 |
 | D39 | Admission is decided again at the start of every run, the first included, and checks the effective end and withdrawal before each of its writes. It never runs past the end. | Rio Grande's call, using permissions spec 10 ("Time needs no act") |
 | D40 | With a permissions ledger at home, a memory whose latest lane note is `pending`, or names another lane than its lane column, stays home. | Rio Grande's call, using permissions spec 5.3 |
-| D41 | One use id gives one run. A use id is a new lowercase uuid4. `imprint.py use` writes the report as `uses/<use id>/report.json` and how the run ended as `uses/<use id>/result.json`. Finishing a use retires its allow file. `use-finished` records the run's end: the report's SHA-256, or `withdrawn` (only when the tombstone exists), `ended`, `deleted` (a station deletion), `allow changed`, `not evaluable: limit`, or `failed` for any other run with no report (section 12). The use always passes `--lane`. | Rio Grande's call, from the trail spec's I2 |
+| D41 | One use id gives one run. A use id is a new lowercase uuid4. `imprint.py use` writes the report as `uses/<use id>/report.json` and how the run ended as `uses/<use id>/result.json`. Finishing a use retires its allow file. `use-finished` records the run's end: the report's SHA-256, or `withdrawn` (only when the tombstone exists), `ended`, `deleted` (a station deletion), `allow changed`, `not evaluable: limit` for a run a signal killed or a unit stopped before `imprint.py use` ended, or `failed` for any other run with no report, an error in `imprint.py use` itself included (section 12). `imprint.py use` writes `result.json` for its own errors too, so a missing `result.json` means that the unit was stopped, or that a withdrawal, a deletion or the end came before the run began, which rules 2 to 4 of section 12 record (the check of revision 4, CS2). The use always passes `--lane`. | Rio Grande's call, from the trail spec's I2 |
 
 ## 5. On the source machine: choosing what leaves
 
@@ -861,7 +875,7 @@ allow by collection names `"*"` there too (its 5.2).
   differs between languages (`peer/API.md:270-274`).
 - `channel` is `browser`, the channel the permissions spec's step 2 adds (its 5.1 and 14). Imprints are its first user.
 - An outside-home allow needs named purposes and an end at most 366 days out (its P13). These do: the audience is not
-  the owner's home unless the owner is the operator.
+  the owner's home unless the owner is the operator ("When the owner is the operator", below).
 - `imprint-permission` and its keys are added to `identity.RECORD_KEYS` (`identity.py:76-83`), so `sign_record` signs
   it (`identity.py:147-151`) and it can't pass as another kind. `verify_station_record` (section 15) also checks that
   each `records` entry has exactly its keys.
@@ -962,6 +976,22 @@ and 5 close that.
 From step 2, a ledger may add the owner's denies at home to the owner's layer. The meet is then narrower than ⟦c_I⟧,
 never wider, and the station decides with the permissions spec's `decide` (section 17).
 
+**When the owner is the operator** (carried by the permissions spec's reviser; Rio Grande's call). Andy may imprint
+his own store here, and then the owner's home and the operator's home are one place. The permissions spec counts a
+layer that appears twice once (its 6.3), so `Req` holds one home layer, not two. A consent layer there is the union of
+its allows less its denies (its 6.1). If the ceiling were read as one more allow in that layer, it would stop
+narrowing: after the ship withdrew a copy, the owner's unrevoked r_M would still match that copy's uses, since no
+selector names h. So at the station, when the owner is the operator, the home layer `place:home/<operator>` is
+defined as the owner's records met with the ceiling,
+
+    ⟦L⟧ = (∪_J ⟦p_J⟧) ∩ ⟦c⟧,
+
+as that spec's 6.1 lets a layer kept outside a ledger be. The ceiling stays its own term inside it, never one more
+allow. Then the argument above holds word for word: a use of copy I is in ⟦L⟧ exactly when it is in ⟦c_I⟧, and
+⟦c_I⟧ = ⟦p_I⟧ ∩ ⟦c_I⟧. The station's code doesn't change, since it computes that intersection already ("The
+decision", below). In a step-2 ledger the ceiling stays a layer kept outside the ledger (section 17, step 1), so the
+same holds there.
+
 **The ship's withdrawal and shortening** (D17). The requesting ship acts for the owner. But the permissions spec lets
 an agent edit a person's layer only under that person's grant (its P10 and 7.1), and step 1 makes no grants. So the
 ship never revokes or replaces r_M or r_T. Its withdrawal is the station refusing at the owner's agent's request: it
@@ -1009,7 +1039,9 @@ bulk `imprint` uses on the memories, in batches of at most 512 refs, and, with `
 on R(I). Need(trail-evaluation) is named bulk `read` uses on the memories, in batches of 512, and one counted bulk
 `route` use on R(I). That spec's bound of 32 named memories applies to answer uses, not to bulk uses, so a trail of up
 to 512 touches (trail spec section 4) is no `BOUND` refusal here. Its other bounds still apply: at most 100,000 derived
-objects in one counted bulk use (a larger R(I) is split into several, each with its own receipt row), at most 8
+objects in one counted bulk use (a larger R(I) is split into several, each with its own receipt row), at most 100,000
+memories named by one bulk use's roads and trails (its revision 5; every memory a road or trail of R(I) names is in
+objects(I), which holds at most 100,000, D36, so this bound never splits a use here), at most 8
 subjects per road or trail (here there is one, the owner, since no memory with a co-subject ships), and 43 layers per
 object. A use that showed an object to an agent would be an ordinary use, decided per object under the bound of 32.
 Step 1 has none.
@@ -1283,9 +1315,12 @@ Those rest on the source build, its L1 and L4, and its tests.
   evaluation, keeping which session wrote each memory", stay exact.
 - **The survey's counts.** The survey (`calibrate.py:258`) counts every table's rows (`store_reader.py:111-121`) and
   the episodes' distinct session ids (`:126-131`), and report.md prints the second as "… N sessions"
-  (`calibrate.py:328-331`). These are counts over columns of the memories, read for `calibration` under r_M. They
-  derive no road or trail. Without `route`, every `episodes.session_id` is null and the log tables are empty, so the
-  survey counts 0 sessions and 0 log rows. `calibrate` gains `notes`: fixed sentences that it writes beside named
+  (`calibrate.py:328-331`). A count returns no id, digest or content, so it is no `recall` or `read` of a road or
+  trail in the permissions spec's terms (its 6.4). It groups no episodes by session and orders none, so it derives no
+  road or trail. The log tables' row counts are also already in the request's `contents`, which the owner saw before
+  the yes (7.1). So these counts are read for `calibration` under r_M (the check of revision 4, CN3). Without
+  `route`, every `episodes.session_id` is null and the log tables are empty, so the survey counts 0 sessions and 0
+  log rows. `calibrate` gains `notes`: fixed sentences that it writes beside named
   sections of report.json and report.md, before either is hashed. Without `route`, admission passes "0 sessions and
   0 log rows, because route was not chosen" for the survey's session count and the log tables' row counts, so the
   zeros are not read as a store with no sessions (the final check's FS2).
@@ -1417,7 +1452,7 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
 | Use | Needs (section 8) | Status | Started by | Output |
 |---|---|---|---|---|
 | admission: verify, survey, calibrate | `recall`, `read`, `imprint` on the memories, purpose `calibration`; with `route`, also on their roads and trails, and `recall` on the memories they name, purpose `trail-evaluation`. Calibration runs without its paths analysis, so it reads no road or trail (section 10) | `approved` | `station-approve`, in a detached unit; decided again at each run's start (D39) | the content-free report in the state directory, shown to the owner |
-| `trail-evaluation` | `recall`, `read` on the memories and `route` on their roads and trails, purpose `trail-evaluation` | `admitted` | `make station-imprint-use ID=… USE=trail-evaluation LANE=…`, in a detached unit | `trails.py <imprint dir>/imprint.db --evaluate --lane <LANE> --seed N --deadline 1740 --json --imprint-use <use id>`: counts and rates only (trail spec section 7, step 7). `LANE` is one lane of the scope, since a pass licenses one lane (trail spec section 7, step 9). The use always passes `--lane`: when `LANE` is left out and the scope holds one lane, it fills in that lane; when the scope holds two, it refuses (D41) |
+| `trail-evaluation` | `recall`, `read` on the memories and `route` on their roads and trails, purpose `trail-evaluation` | `admitted` | `make station-imprint-use ID=… USE=trail-evaluation LANE=…`, in a detached unit | `trails.py <imprint dir>/imprint.db --evaluate --lane <LANE> --seed N --deadline 1740 --json --imprint-use <use id>`: counts and rates only (trail spec section 7, step 7). `LANE` is one lane of the scope, since a pass licenses one lane (trail spec section 7, step 9). The use always passes `--lane`: when `LANE` is left out and the scope holds one lane, `imprint.py use` fills in that lane; when the scope holds two, it refuses (D41) |
 
 - Admission's decision is made by `station-approve`, in the transaction that sets `approved`, before the hand-off.
   A refusal there is a denial, and its receipt names the failing term. It is made again by
@@ -1445,22 +1480,39 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
 - Engram's `imprint.py use` refuses without the allow file, if a tombstone exists, or if `valid_until` has passed. It
   also refuses a use id that is not a lowercase uuid4, and a use whose directory `<imprint id>.state/uses/<use id>/`
   already exists. It creates that directory (0700) and never creates its parents, so a removed state directory is
-  never recreated. It runs `trails.py`, always with `--lane` (D41). It writes two files there, the names the trail
-  spec's check 5 reads (D41; the trail spec's I2):
+  never recreated. It runs `trails.py`, always with `--lane` (D41). When the caller left `LANE` out, `imprint.py use`
+  fills it in from the imprint's `manifest.json` (`scope.lanes`) when the scope holds one lane, and refuses when it
+  holds two; the Makefile passes `LANE` through only when the caller gave it (the check of revision 4, CN4). It writes
+  two files there, the names the trail spec's check 5 reads (D41; the trail spec's I2):
   - `report.json`: what `trails.py` printed, only when it exited with status 0;
-  - `result.json`: `{"kind": "imprint-use-result", "use_id": "…", "exit": n, "report": true or false,
+  - `result.json`: `{"kind": "imprint-use-result", "use_id": "…", "exit": n, "error": null, "report": true or false,
     "ended_at": <integer UTC seconds>}`, where `exit` is the exit status of `trails.py`, or minus the signal that
     killed it.
+
+  Once it has created the use directory, `imprint.py use` writes `result.json` in a `finally`, so its own errors
+  write it too. An exception before or after `trails.py` runs, the two-lane refusal above included, gives
+  `"exit": null` and `"error"` = the exception's class name, never its message, which could quote a path or text. A
+  refusal before the directory exists writes nothing, and never into another use's directory. In the unit, the begin
+  step has just made the use id and the allow file, so only a withdrawal, a deletion or an end reached in between
+  leads there, and rules 2 to 4 below name those. A signal that stops `imprint.py use` itself writes nothing either.
+  So a missing `result.json` means only that the unit was stopped, or one of those three (the check of revision 4,
+  CS2). It writes `report.json` first, atomically (a temporary file in the same directory, then a rename), and
+  `result.json` after, the same way. The sync starts on `result.json`, and the sweep's sync can run beside the unit,
+  so in the other order a sync between the two writes would record an exit of 0 as `failed` (CN6).
 - **Finishing a use** (D41; the trail spec's I2; Rio Grande's call). `station-imprint-sync` finishes every use that has
   a `use-started` receipt and no `use-finished`, once one of these holds: `result.json` exists; the imprint is
-  `deleted`; or 1,800 s have passed since `use-started`. The use's unit writes `use-started` itself, and its
-  `RuntimeMaxSec` stops it within 1,800 s, so by then the run is over. The sync finishes no use of an imprint in
-  `deleting`: the withdrawal is still removing files, and the next sync finishes it. To finish a use, the sync first
+  `deleted`; or 1,860 s have passed since `use-started`. The use's unit writes `use-started` itself. Its
+  `RuntimeMaxSec=1800` counts from the unit's start, which comes before `use-started`. At that limit systemd sends
+  SIGTERM, and SIGKILL after the unit's `TimeoutStopSec=60` (systemd.service(5); the user manager's default is 90 s).
+  So 1,860 s after `use-started` the run is over. A stopped unit runs no sync of its own, so its use is finished by
+  the first sync after that, which the hourly sweep runs, up to an hour later (the check of revision 4, CN1). The
+  sync finishes no use of an imprint in `deleting`: the withdrawal is still removing files, and the next sync
+  finishes it. To finish a use, the sync first
   deletes its allow file `<imprint id>.state/uses/<use id>.allow.json` (a missing file is no error), and then appends
   `use-finished`, checking inside the receipt's transaction that none exists yet, so two syncs write it once. So a
   finished use has no allow file, and rerunning its command from shell history is refused by the trail spec's checks 2
   and 5. `use-finished` records the run's end as the first of these that holds, at t_end, the time in `result.json`'s
-  `ended_at`, or else the earlier of now and 1,800 s after `use-started`:
+  `ended_at`, or else the earlier of now and 1,860 s after `use-started`:
   1. `report.json` exists: the end is `report`, with its SHA-256;
   2. the tombstone `<root>/tombstones/<imprint id>.json` exists and a `withdrawn` receipt of the imprint is at or
      before t_end: `withdrawn`. So `withdrawn` is recorded only when the tombstone exists;
@@ -1469,9 +1521,12 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
      the copy (reason `station`): `deleted`, with that receipt's reason. A deletion is not a withdrawal, and the trail
      spec's list doesn't name this case;
   5. `trails.py` exited with status 3: `allow changed`, for example after a shortening whose new end is still ahead;
-  6. `trails.py` was killed by a signal, or no `result.json` was written: `not evaluable: limit`, since a run the
-     memory cap or the 30-minute limit killed writes no report (trail spec section 7, step 10);
-  7. otherwise: `failed`, with the exit status.
+  6. `trails.py` was killed by a signal, or no `result.json` was written, so the unit was stopped: `not evaluable:
+     limit`, since a run the memory cap or the 30-minute limit killed writes no report (trail spec section 7, step
+     10). A stop from outside the run, such as `systemctl --user stop`, reads the same, since the station can't tell
+     it from a cap;
+  7. otherwise: `failed`, with the exit status, or with the error class when `exit` is null. That covers a
+     `trails.py` exit other than 0 and 3, and an error in `imprint.py use` itself (D41; CS2).
 
   A shortening during a run is therefore recorded as `allow changed` or `ended`, never as a withdrawal. Revision 3
   recorded only "withdrawn" or "not evaluable", and nothing retired an allow file, so an old use id passed every check
@@ -1481,18 +1536,27 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
   does (section 10), with calibration's limits:
 
       systemd-run --user --unit=superyak-imprint-use-<imprint id> --collect \
-          -p MemoryMax=4G -p MemorySwapMax=0 -p RuntimeMaxSec=1800 \
+          -p MemoryMax=4G -p MemorySwapMax=0 -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 \
           [--setenv=ENGRAM_EMBEDDER_SOCKET=<path>] \
-          make -C <repository> station-imprint-use-run ID=<imprint id> USE=trail-evaluation LANE=<lane>
+          make -C <repository> station-imprint-use-run ID=<imprint id> USE=trail-evaluation [LANE=<lane>]
 
-  The unit is named by the full imprint id, so one imprint runs one use at a time. Such a unit starts in a clean
-  environment, not the caller's shell (systemd-run(1), systemd 252 on the Pi; trail spec section 7, step 8.2). So the
-  Makefile passes `--setenv=ENGRAM_EMBEDDER_SOCKET=<path>` when the station's `~/.config/superyak/runtime.json` names
-  an `embedder_socket`, and nothing otherwise. That is the file and key `superyak-runtime` reads to set the same
-  variable for every engram process (`scripts/runtime.py:84-89`, `:597`, `:653-655`). The Makefile reads only that
-  key, by the same rule: absent, or no file, passes nothing; an absolute path is passed; anything else stops the use
-  before the unit starts. Without the variable, `trails.py` loads the model in process from the local cache only (trail spec
-  section 7, step 8.2, `local_files_only=True`), so the run never downloads a model (section 18).
+  `LANE=<lane>` is there only when the caller gave it; otherwise `imprint.py use` fills it in (above; CN4). The unit
+  is named by the full imprint id, so one imprint runs one use at a time. The use is decided inside the unit, so
+  `make station-imprint-use` can't show a refusal. It prints "Started a use of c0a8 in the background; see make
+  station-imprints.", as admission does (section 10). While a use of that imprint runs, systemd-run refuses the unit
+  name, since it is already loaded; the Makefile then prints "A use of c0a8 is already running; see make
+  station-imprints.", starts nothing and exits non-zero (the check of revision 4, CN5). Such a unit starts in a clean
+  environment, not the caller's shell (systemd-run(1), systemd 252 on the Pi; trail spec section 7, step 8.2). It
+  inherits only the user manager's own environment, which on the Pi holds no `ENGRAM_` variable today (`systemctl
+  --user show-environment`, checked 2026-10-25), and a deploy gate checks that (section 18; CN2). So the Makefile
+  passes `--setenv=ENGRAM_EMBEDDER_SOCKET=<path>` when the station's `~/.config/superyak/runtime.json` names an
+  `embedder_socket`, and nothing otherwise. That is the file and key `superyak-runtime` reads to set the same variable
+  for every engram process (`scripts/runtime.py:84-89`, `:597`, `:653-655`). The Makefile reads only that key, by the
+  same rule (`:84-88`): no file, no key, or `null` passes nothing; an absolute path is passed; anything else stops the
+  use before the unit starts. It reads only that default path. `superyak-runtime` also takes another path from
+  `SUPERYAK_RUNTIME_CONFIG` (`:595-597`), and the Makefile ignores it, so the unit's socket never depends on the
+  caller's shell (CN2). Without the variable, `trails.py` loads the model in process from the local cache only
+  (trail spec section 7, step 8.2, `local_files_only=True`), so the run never downloads a model (section 18).
 - A use's report is never posted to a room unless the owner allows it. Step 1 has no command that posts it.
 - Allowed and refused uses both leave receipts. Nothing else reads an imprint in step 1. That is a rule, not an
   enforcement: see the known limits below.
@@ -1529,7 +1593,7 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
 | `approved`, `denied` | none; `actor_id` is the operator |
 | `admitted` | checks passed (17), the report's SHA-256, skipped analyses |
 | `failed` | check number and fixed message |
-| `use-started`, `use-finished` | use, its `use_id`, actions, purpose, objects as `{"imprint": <imprint id>, "count": n}`; when finished, the run's `end` (`report`, `withdrawn`, `ended`, `deleted`, `allow changed`, `not evaluable: limit` or `failed`), with the report's SHA-256 for `report`, the reason for `deleted` and the exit status for `failed` (D41) |
+| `use-started`, `use-finished` | use, its `use_id`, actions, purpose, objects as `{"imprint": <imprint id>, "count": n}`; when finished, the run's `end` (`report`, `withdrawn`, `ended`, `deleted`, `allow changed`, `not evaluable: limit` or `failed`), with the report's SHA-256 for `report`, the reason for `deleted` and the exit status, or the error class, for `failed` (D41) |
 | `refused` | use, actions, purpose, the failing term |
 | `shortened` | the new `valid_until` |
 | `withdrawn` | none; `actor_id` is the owner or the ship |
@@ -1538,7 +1602,8 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
 | `delete-failed` | path and error class |
 
 No receipt holds content, query text, ids of memories, or anything about what stayed home. A use id is a random
-uuid4 the station made, so naming it in a receipt tells nothing about the store.
+uuid4 the station made, so naming it in a receipt tells nothing about the store. An error class is a name from the
+code, such as `OperationalError`, never the error's message.
 
 **Withdrawal.** The owner (browser, CSRF) withdraws by revoking the permission's records. The requesting ship
 (principle 1: agents may narrow) withdraws by asking the station to refuse, which edits none of the owner's records
@@ -1582,7 +1647,7 @@ Imprint bytes and request contents are never in backups, because station backups
 **Known limits, stated in every `deleted` receipt:** "Files removed. The station does not overwrite disk blocks, and
 cannot reach copies anyone made by hand."
 
-**Known limits on the station** (as the permissions spec states its own for the terminal yes, its 14). Anyone with
+**Known limits on the station** (as the permissions spec states its own for the terminal yes, its 7.6). Anyone with
 Andy's shell on the Pi can read `imprint.db` (0444). That includes Claude sessions on the Pi. They can also read the
 station's `identity.json`, so they could sign a permission no owner gave. "Nothing else reads an imprint" is a rule,
 not enforcement. The CLAUDE.md approving section gains the rule that agents never read `~/.engram/imprints/` except
@@ -1618,8 +1683,10 @@ the second limit. Encrypted imprints (step 7) narrow the first.
   - `returned` = the batch's count and the SHA-256 of its sorted refs;
   - one `use_subjects` row (owner, ref) for each ref in the batch.
 
-  An action on roads and trails, which the Pi derives in memory and never names, gets one row with `returned` = their
-  count and one `use_subjects` row (owner, the copy's ref). So `engram-permissions uses --object mem:S/episode/<id>`
+  An action on roads and trails, which the Pi derives in memory and never names, gets one row per bulk use, since
+  section 8 splits an R(I) of more than 100,000 into several (the permissions spec's 9.1, item 3). With N of them,
+  that is ⌈N / 100,000⌉ rows, each with `returned` = its bulk use's count (100,000, and the rest in the last) and one
+  `use_subjects` row (owner, the copy's ref). So `engram-permissions uses --object mem:S/episode/<id>`
   finds every imprint use that covered that memory, as it finds any other use. That spec's `uses` lists the ledger
   owner's uses and takes no person argument (its 7.6, 9.3), so the owner runs it as themselves. It shows "copy held at
   Deep Space 9 (imprint c0a8), deletion not confirmed" for every imprint whose last verified receipt is not `deleted`,
@@ -1630,10 +1697,10 @@ the second limit. Encrypted imprints (step 7) narrow the first.
   **These rows depart from the permissions spec's local receipt form** (the re-check's RN5; Rio Grande's call, privacy
   over a uniform form). They are its imported form, which its 9.1 names with four differences: one row per action the
   use needed, where a local use writes one receipt whose `cited` covers all of `need`; memories by batches of at most
-  512 refs, where that spec writes one receipt per imprint batch; roads and trails as one counted row whose one
-  `use_subjects` row is (owner, h), a copy ref and not an object of any kind; and `cited` with record ids but no
-  versions. So `engram-permissions uses --action recall` counts an admission's recall rows, one per batch, apart from
-  its read and imprint rows, and its use list counts imported rows apart from local ones (its 9.3).
+  512 refs, where that spec writes one receipt per imprint batch; roads and trails as one counted row per bulk use,
+  whose one `use_subjects` row is (owner, h), a copy ref and not an object of any kind; and `cited` with record ids
+  but no versions. So `engram-permissions uses --action recall` counts an admission's recall rows, one per batch,
+  apart from its read and imprint rows, and its use list counts imported rows apart from local ones (its 9.3).
 - In the station web app, Accounts → Imprints shows the same, with Withdraw and Shorten buttons.
 - Once the imprint is `admitted`, `declined`, `denied`, `failed` or `deleted`, the agent deletes the source machine's
   `imprint.db` copy and keeps the manifest, plan, `objects.json` and receipts (D24).
@@ -1677,7 +1744,8 @@ make station-approve ID=4f1c                # approve; admission starts in the b
 make station-deny ID=4f1c
 make station-imprints                       # every imprint: owner, status, end date, checks, signing
 make station-imprint-use ID=c0a8 USE=trail-evaluation LANE=work   # in the background, as agent:station-imprints for APPROVER;
-                                            # LANE may be left out when the scope holds one lane
+                                            # LANE may be left out when the scope holds one lane;
+                                            # prints "Started", or that a use is already running
 make station-imprint-delete ID=c0a8         # the station declines to keep it
 make station-imprint-admit                  # resume an interrupted admission; decided again first (D39)
 ```
@@ -1711,7 +1779,7 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
 | Row of a declined or expired request | 30 days after it ends, then removed (D32) | long enough for `make imprint-send` to report the outcome; the row holds no scope or counts |
 | Agent wait per run | 9 minutes | `make dock`'s |
 | Use id | a lowercase uuid4, 36 characters (D41) | fits the trail spec's `[A-Za-z0-9-]{1,64}` (its section 7, check 2) |
-| Unfinished use | finished by the sync 1,800 s after `use-started` at the latest (D41) | the use's unit's `RuntimeMaxSec` |
+| Unfinished use | finished by the first sync at least 1,860 s after `use-started`, which the hourly sweep runs when the unit was stopped (D41) | the use's unit's `RuntimeMaxSec=1800` and `TimeoutStopSec=60` (section 12) |
 | Filter, request, manifest | `imprint-filter-v1`, version 1, version 1 | |
 
 `POST /api/imprints` refuses a request that breaks any of these:
@@ -1741,7 +1809,7 @@ the request's `source_ancestry`.
 
 | Component | Responsibility |
 |---|---|
-| `engram/imprint.py` | `plan`, `read`, `build` on the source; `admit`, `use`, `list` on the Pi, each with `--imprints-dir`; `import-receipts` on the owner's machine. The table rules of 6.2 as one ordered map, checked against the schema, with the `session_id` scrub. `pending(m)` from the ledger's lane notes. The digest keys of 5.4. The leak checks L1–L4. The 17 checks. The semantics reader. Admission's checks of `admission.json` before each write (D39). `use` with its use-id check, `--lane` always, and `report.json` and `result.json` (D41). |
+| `engram/imprint.py` | `plan`, `read`, `build` on the source; `admit`, `use`, `list` on the Pi, each with `--imprints-dir`; `import-receipts` on the owner's machine. The table rules of 6.2 as one ordered map, checked against the schema, with the `session_id` scrub. `pending(m)` from the ledger's lane notes. The digest keys of 5.4. The leak checks L1–L4. The 17 checks. The semantics reader. Admission's checks of `admission.json` before each write (D39). `use` with its use-id check, `--lane` always (filling in the scope's one lane), and `report.json` then `result.json`, each written atomically, with `result.json` also for its own errors (D41). |
 | `engram/store_identity.py` | `ORIGIN_IMPRINT`, `stamp_imprint`, ancestry in `stamp_fork`, `ancestry`, `lineage`, `independent` (returns true, false or unknown); a `retroactive` store, or one with no stored identity, is incomplete (D13) |
 | `engram/storage.py` | refuse a normal open of an imprint, before any pragma or migration, unless `imprint_working_copy=True` |
 | `engram/store_reader.py` | `connect(…, vec=True)` loads sqlite-vec on a read-only connection |
@@ -1757,7 +1825,7 @@ the request's `source_ancestry`.
 | peer web app | the confirm view and Accounts → Imprints |
 | `peer/systemd/` | `superyak-imprint-sweep.service` and `.timer`, added to `station-units` |
 | `agent/superyak_agent` | `imprint send`, `status`, `withdraw`, `shorten` over the ship key, standard library only |
-| `Makefile` | the targets in section 13, and the detached units for admission and uses; `station-imprint-use-run`, which the use's unit runs; the use's `--setenv=ENGRAM_EMBEDDER_SOCKET` from `runtime.json` (D29) |
+| `Makefile` | the targets in section 13, and the detached units for admission and uses; `station-imprint-use-run`, which the use's unit runs; the use's `--setenv=ENGRAM_EMBEDDER_SOCKET` from the default `runtime.json` only (D29); `TimeoutStopSec=60` on the use's unit; "Started", or that a use is already running (section 12) |
 | `peer/API.md`, `engram/CLAUDE.md`, `CLAUDE.md` | routes and records, and that receipts from key-less commands are signed by the lighthouse; an "Imprints" paragraph and Key Files row; in CLAUDE.md's approving section, that an `IMPRINT` item is a person's memories, that Andy confirms its short id against the owner's machine, that `station-approve` returns while admission runs, and that agents never read `~/.engram/imprints/` except through `imprint.py use` |
 
 ## 16. Tests the builder must include
@@ -1780,13 +1848,16 @@ the request's `source_ancestry`.
 - **Log rows.** Rows at or after t₁ and rows of sessions not closed at t₁ are dropped. A recall and a `log_outcome`
   after the plan don't change the digest. A late outcome on a kept row does, and the build refuses. With no `route`
   in the terms, no `memory_log` or `operation_log` row ships. Calibration's report on such a package, run as admission
-  runs it, equals its report on a package of the same memories built with `route` in the analyses `first_open`,
-  `persistence_scores`, `cohesion` and `persistence`, and in the survey apart from `episodes.sessions` and the log
-  tables' row counts (calibration reads no log row's content). The `source` and `identity` sections differ, since the
-  two packages' bytes and imprint ids differ. Without `route`, the survey counts 0 sessions and 0 log rows, with the
-  note "because route was not chosen" beside them. In both reports the `paths` section says only "not measured at
-  admission; trails are used only by the trail evaluation", and neither report names a session id (the final check's
-  FS1 and FS2).
+  runs it but with one fixed `now` passed to both runs, equals its report on a package of the same memories built
+  with `route` in the analyses `first_open`, `persistence_scores`, `cohesion` and `persistence`, and in the survey
+  apart from `episodes.sessions`, the log tables' row counts, and the survey's `file` and `identity` (calibration
+  reads no log row's content). The `source` and `identity` sections, and the survey's `file` and `identity`, differ,
+  since the two packages' paths, bytes and imprint ids differ (`engram/store_reader.py:66-73`, `:124`, `:174`).
+  `first_open` reads the wall clock unless `now` is passed (`engram/calibrate.py:89`, `:286`), so the test fixes it,
+  as the recall-row test below fixes one `as_of` (the check of revision 4, CS1). Without `route`, the survey counts
+  0 sessions and 0 log rows, with the note "because route was not chosen" beside them. In both reports the `paths`
+  section says only "not measured at admission; trails are used only by the trail evaluation", and neither report
+  names a session id (the final check's FS1 and FS2).
 - **No footpath without `route`** (D7; the re-check's RMF1). The fixture is a store with one closed session that
   wrote two work-lane episodes and made no recall. Built without `route`, the package's `episodes.session_id` is null
   on every row, `memory_log` and `operation_log` are empty, check 12 passes, and a session reader written from the
@@ -1801,7 +1872,9 @@ the request's `source_ancestry`.
   other target outside M is dropped, as is one with no targets left. Kept rows have `context` = {recall_id,
   session_id}. Outcomes are normalized, including `used: auto: cited`. On a fixture with `route` and a mixed-lane
   recall, derive touches from the package and from the source as the trail spec's section 4 does, with one `as_of`
-  for both (the CLI's default `as_of` differs between the two files, its section 7). Then (the trail spec's I6):
+  for both (the CLI's default `as_of` differs between the two files, its section 7), at or after the plan's end t₁.
+  An earlier `as_of` could count a session closed in the package, whose later rows stayed home, and open in the
+  source (its section 4, "Sessions"; found while checking I6 in the consolidation pass). Then (the trail spec's I6):
   - every touch derived from the package is a touch derived from the source, of the same memory, kind and time, in the
     same order within its recall, and suggested only if the source's is;
   - on every recall row the package keeps, the trail spec's "exactly one target" rule (its section 4) gives the
@@ -1932,12 +2005,19 @@ the request's `source_ancestry`.
   and only once the tombstone exists; `ended` for an end reached during the run; `deleted` with reason `station` for a
   station deletion during the run, never `withdrawn`; `allow changed` for a shortening whose
   new end is still ahead, never `withdrawn`; `not evaluable: limit` for a run killed by a signal, and for a unit
-  stopped with no `result.json`, finished by the sweep's sync 1,800 s after `use-started` and not before. Two syncs at
-  once write one `use-finished`. `make station-imprint-use` with no `LANE` passes the scope's one lane to `--lane`,
-  and refuses when the scope holds two.
+  stopped with no `result.json`, finished by the sweep's first sync at least 1,860 s after `use-started` and not
+  before; `failed` with the exit status for a `trails.py` exit other than 0 and 3, and `failed` with the error class,
+  never its message, when `imprint.py use` raises after creating the use directory (the check of revision 4, CS2).
+  Two syncs at once write one `use-finished`. A sync run between `imprint.py use`'s two writes finds no `result.json`
+  and finishes nothing, so an exit of 0 is recorded as `report` (CN6). With no `LANE`, `imprint.py use` passes the
+  scope's one lane to `--lane`, and with a two-lane scope it refuses before `trails.py` runs, recorded as `failed`
+  (CN4). A second `make station-imprint-use` of the same imprint while one runs starts nothing, prints that a use is
+  already running, and exits non-zero (CN5).
 - **The use's unit** (D29; the trail spec's I3). Its command carries `--setenv=ENGRAM_EMBEDDER_SOCKET=<path>` exactly
-  when the fixture's `runtime.json` names an absolute `embedder_socket`. With no file or no key it carries none, and
-  with a relative path or a non-string the use stops before the unit starts.
+  when the fixture's `runtime.json` names an absolute `embedder_socket`. With no file, no key, or `null`, it carries
+  none, and with a relative path or another non-string the use stops before the unit starts. A
+  `SUPERYAK_RUNTIME_CONFIG` naming another file changes nothing. The command carries `-p TimeoutStopSec=60` (CN1,
+  CN2).
 - **Lineage.** An imprint and its source, two imprints of one source, an imprint and a fork of its source, and a file
   copy are not independent. Three generations: a fork of a fork is not independent of the genome. Cousins and siblings
   are not independent. An imprint of a fork of a fork is not independent of the genome. A fork made before the rule
@@ -2003,6 +2083,9 @@ Before the first live imprint:
 - The lighthouse's installed unit passes `--imprints-dir`, and it names the same root as the Makefile's `IMPRINTS`
   and the sweep's unit (section 10; the re-check's RN10).
 - The CLAUDE.md rule about `~/.engram/imprints/` is in the approving section.
+- The station user's systemd user manager holds no `ENGRAM_` variable in its environment (`systemctl --user
+  show-environment`), since a use's unit inherits it (section 12, D29; the check of revision 4, CN2). It held none on
+  2026-10-25.
 
 Before the first `trail-evaluation` use: the store's embedding model is on the Pi, through the shared embedder service
 or in the admission environment, loaded inside the use's 4 GB cap. Without it, measure W is "not evaluable: no

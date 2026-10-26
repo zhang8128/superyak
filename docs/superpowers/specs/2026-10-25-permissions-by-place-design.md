@@ -1,10 +1,12 @@
 # Permissions by Place
 
 **Date:** 2026-10-25
-**Status:** Revision 4, answering the final check after repair
-([review](../reviews/2026-10-25-permissions-by-place-spec-review.md), verdict approve; its "Response to the final
-check after repair" says what changed). Revision 2 answered the first fresh review. An interface pass across the
-three city-rail specs then changed 4.1, 6.4, 9.1, 11, 14, 15, 17 and 19
+**Status:** Revision 5, the consolidation pass across the three city-rail specs
+([consolidation](../reviews/2026-10-25-city-rail-consolidation.md), which logs each change). It answers the check of
+revision 4 ([review](../reviews/2026-10-25-permissions-by-place-spec-review.md), "Check of the follow-up revision":
+approve, with BS1 to BS3 and BN1 to BN4). Revision 4 answered the final check after repair (the same file, verdict
+approve; its "Response to the final check after repair" says what changed). Revision 2 answered the first fresh
+review. An interface pass across the three city-rail specs then changed 4.1, 6.4, 9.1, 11, 14, 15, 17 and 19
 ([interfaces](../reviews/2026-10-25-city-rail-interfaces.md)). Revision 3 answered the second fresh reviewer's
 re-check. It changed 3, 4.1, 5.1, 5.3, 5.4, 6.1, 6.3, 6.4, 6.5, 6.6, 7.4, 8, 9.1, 9.3, 10, 11, 12.1, 12.2, 12.3, 13,
 14, 15, 16, 17 and 19. Its final check found the file cut off after section 14's first later step. The repair after
@@ -19,6 +21,15 @@ it. Revision 4 applies that check's AS1 to AS3 and AN1 to AN5, and the items the
 - "such as an imprint batch" (6.4, 9.1); a bulk use's step-1 order (6.5, U22); a Pi budget for a bulk decision (6.4,
   15, U24); and `config.py` warns about `[permissions]` (header, 12.3, 16, U16) (AN5).
 
+Revision 5 applies BS1 to BS3 and BN1 to BN4:
+- a refused `remember` tells an agent that doesn't act for the owner only "not allowed" (10, 18, U17; BS1);
+- a bulk use's roads and trails name at most 100,000 memories, and a larger set is split (6.4, 6.5, 9.1, 15, U22,
+  U24; BS2);
+- step 2 decides what a subject sees of another subject's home in receipts (14), and section 19 gains a fact (BS3);
+- section 15 says "such as" (BN1); an oversized bulk use is refused once its requester and places pass (6.4; BN2);
+  9.2 gains the owner's row and says what a bulk refusal shows an agent (BN3, BN4);
+- the imprints spec is revision 5 and the trail spec revision 7 (header, 6.4, 11).
+
 Every revision keeps every section number. No change in any pass widens a permission. Nothing here is built.
 **Contract:** [the city rail vision](../../city-rail-vision.md). Its principles and its "Permissions by place"
 section bind this spec. Rio Grande wrote them from Andy's words. Where they go past a quote, they are Rio Grande's
@@ -31,8 +42,8 @@ warning, 12.3), and migration `029`.
 [layered lighthouse](../../../engram/docs/superpowers/specs/2026-09-02-layered-lighthouse-design.md),
 [memory lanes](../../../engram/docs/superpowers/specs/2026-06-12-memory-lanes-design.md),
 [spec A](2026-10-08-instruction-layers-and-grants-design.md), [grants step 3](2026-10-15-grants-step3-design.md).
-**Depended on by:** the imprints spec and trail spec revision 6. Both cite sections 5, 6 and 11. Revisions 2 to 4
-keep every section number, but line numbers moved. These changes reach them:
+**Depended on by:** the imprints spec revision 5 and the trail spec revision 7. Both cite sections 5, 6 and 11.
+Revisions 2 to 5 keep every section number, but line numbers moved. These changes reach them:
 
 - `route` also needs `read` and `inject_context` on every memory whose content a route answer shows (6.4). From
   revision 3, every action on a road or trail needs `recall` on each memory it names (6.4).
@@ -45,6 +56,9 @@ keep every section number, but line numbers moved. These changes reach them:
 - Revision 4: the agent that asked sees a refused read only as "not allowed", and a place's stewards see a home in
   a refusal only as its person's pseudonym (9.2). A bulk use tests its requester, places and size before any object
   (6.5, step 1), and a bulk decision has a Pi budget (15, U24). No rule either spec relies on changes.
+- Revision 5: the roads and trails of one bulk use name at most 100,000 memories in all, and a larger set is several
+  bulk uses (6.4). The imprints spec's uses always fit: every memory a road or trail of its R(I) names is a memory
+  the imprint holds, and it holds at most 100,000 (its section 8 and D36).
 
 ## 1. Why
 
@@ -585,7 +599,7 @@ audience may not recall, which P23 forbids. The imprints spec already meets the 
 every target of the row ships (its section 6.2).
 
 This matches today's receiver: `recall` before asking, and all three before reading and delivering
-(`engram/neighbors.py:82`, `:120`, `:138`). The trail spec (revision 6) uses `route` in place of its work-lane rule,
+(`engram/neighbors.py:82`, `:120`, `:138`). The trail spec (revision 7) uses `route` in place of its work-lane rule,
 and its section 8 already shows a stop's summary only when `inject_context` is allowed on that memory, naming the id
 alone otherwise. Its "separate owner opt-in to route publication" is a `route` record. Its minimum published support
 of 3 stays in the trail spec. The imprints spec uses `imprint` on the memories it keeps, and on the roads and trails
@@ -629,7 +643,8 @@ and this spec's `explain` would refuse what the imprints spec's check allows. So
   waived: 43 layers per object, 8 subjects per road or trail.
 - **Refused** when any per-object decision is. The refusal is the first failing per-object decision, objects in ref
   order. It holds the code, layer and action only, never the object (P23). What each reader sees of it is 9.2. A U
-  over more objects than **Size** below allows is refused with `BOUND` before any object is decided (6.5, step 1).
+  larger than **Size** below allows, in objects or in the memories its roads and trails name, is refused with `BOUND`
+  once its requester and places pass, before any object is decided (6.5, step 1).
 - **The decision.** `cited` holds, for each (layer, action), every distinct record cited for it across O, sorted by
   id. `until` and `horizon` are the earliest across O, and null when every one is null. `decide` gives one result for
   U, and F1 fixes it.
@@ -642,13 +657,20 @@ and this spec's `explain` would refuse what the imprints spec's check allows. So
   deciding party derives the objects and never names them, such as the roads and trails derived from an imprint.
   100,000 is the most memories one collection holds (5.4), and so the most an imprint holds (imprints spec D36). A
   larger set is several bulk uses, each with its own receipt.
+  - **Named memories.** The roads and trails of one bulk use, named or counted, name at most 100,000 distinct
+    memories in all, by the same bound (Rio Grande's call, from the check of revision 4, BS2). A set that names more
+    is split into several bulk uses in the same way. Without this bound, 100,000 derived trails of up to 512 touches
+    (the trail spec's section 4) could name 51.2 million memories, far past the Pi budget below. The imprints spec's
+    uses always fit: every memory a road or trail of its R(I) names is a memory the imprint holds (its section 8).
 - **One receipt** per bulk use (9.1).
 - **How it is computed.** Objects that agree on every attribute the pre-filtered records read (6.5) get the same
   decision: kind, store, layer, lane history, collection memberships, whether a record lists them in `memories`, and
   subjects. So the evaluator may decide each such group once. The imprints spec's finite check is this shortcut:
   every object of one kind in an imprint matches the same records (its section 8, "A finite check").
 - **Its Pi budget.** With or without grouping, one bulk decision at the largest size must fit the budget in section
-  15, which U24 measures. `explain` on a bulk use runs the same decision.
+  15, which U24 measures. `explain` on a bulk use runs the same decision. **Size** fixes the largest: at most 100,000
+  objects, each needing at most three actions (`imprint`'s `recall`, `read` and `imprint`), and at most 100,000 named
+  memories, each needing `recall`. That is at most 400,000 (object, action) pairs.
 
 So the imprints spec's `Need(trail-evaluation)` is bulk uses with h = `imprint:<station peer id>/<imprint id>`:
 `read` on the shipped memories, in batches of 512 (its `need` adds `recall`), and one `route` on all the roads and
@@ -668,9 +690,10 @@ decide(u, σ) → {allowed, at, ledger_seq, action, cited: [{layer, kind, action
    with `RETIRED` if P, a place in `anc(P)` or `anc(H)`, or the home of a subject is retired. Then with `NO_LAYER` if
    o has no subject. Then with `BOUND` if a bound of 6.4 would be passed, or if o would have more than 8 subjects,
    which a kept copy can reach through its source (7.4).
-   **For a bulk use U** (6.4), the tests on a, P, `anc(P)` and `anc(H)` run once, and then U's size bound, before any
-   object. Then each o ∈ O is decided in ref order, and its own tests here (a retired subject's home, no subject, more
-   than 8 subjects) come first in its decision. So any o ∈ O with no subject refuses U with `NO_LAYER`, and any o ∈ O
+   **For a bulk use U** (6.4), the tests on a, P, `anc(P)` and `anc(H)` run once, and then U's size bounds (its
+   objects, and the memories its roads and trails name), before any object. Then each o ∈ O is decided in ref
+   order, and its own tests here (a retired subject's home, no subject, more than 8 subjects) come first in its
+   decision. So any o ∈ O with no subject refuses U with `NO_LAYER`, and any o ∈ O
    with more than 8 subjects with `BOUND`, unless an earlier object failed first.
 2. **The order.** Compute `Req(u)` and sort it: subjects by id, then the requester's places by id, then the holding
    places by id, then legacy layers, then the restriction layer. Actions take `need`'s order: `recall`, `read`,
@@ -1111,9 +1134,10 @@ CREATE TABLE uses_monthly(month TEXT NOT NULL, subject TEXT NOT NULL, place TEXT
   2. **Memories by batch.** For each action on memories, one row per batch of at most 512 refs, in the order of the
      owner's list. `returned` holds the batch's count and the SHA-256 of its sorted refs, and there is one
      `use_subjects` row per (owner, ref). Each row is a named bulk use.
-  3. **Roads and trails as one counted row.** For each action on roads and trails, one row for all of them, with
-     `returned` = their count and one `use_subjects` row of (owner, h). It is a counted bulk use over roads and
-     trails together, within 6.4's bound of 100,000 objects. A use over more derived objects would be several rows.
+  3. **Roads and trails as one counted row per bulk use.** For each action on roads and trails, one row for all of
+     them, with `returned` = their count and one `use_subjects` row of (owner, h). It is a counted bulk use over roads
+     and trails together, within 6.4's bounds of 100,000 objects and 100,000 named memories. A use over more would be
+     several rows, one per bulk use.
   4. **Cited without versions.** `cited` holds the record ids alone. `ledger_id` is the station's peer id (4.1), and
      `ledger_seq` is the receipt's position in its chain. A station without a ledger has no layer versions, and
      `horizon` is null.
@@ -1141,8 +1165,9 @@ CREATE TABLE uses_monthly(month TEXT NOT NULL, subject TEXT NOT NULL, place TEXT
 | Reader | Sees |
 |---|---|
 | A subject (and agents acting for them) | Every receipt whose `use_subjects` names them, as written at the time of the use: requester, place, action, purpose, records, time, outcome. A later claim to be a subject gives no access to earlier uses. |
+| The ledger owner, and agents acting for the owner | The owner's list (9.3), with each refusal's code, layer and action. An agent acting for the owner that was refused sees its own receipts as the agents row below says, and the layer only in this list (the check of revision 4, BN3). |
 | A place's stewards, and the stewards of every place that dominates it | Receipts for uses at the place, or of copies it holds: requester, action, purpose, outcome, time, and the records cited in the layers of places that are not homes. Each subject appears as a pseudonym, and so does every home: a home's layer, cited or refusing, shows as the pseudonym this view gives the home's person, with no record ids. A refusal shows its code and action, and its layer as the place's id when that place is not a home, or as `legacy` or `restriction`. Filtered counts. |
-| The agents in a place | Their own receipts: allowed items, with the annotation of section 11, and refusals of ids they named. A refusal shows only the id, the time and "not allowed": no code, layer, action or cited record. No filtered counts, which would tell them refused memories exist (P23). |
+| The agents in a place | Their own receipts: allowed items, with the annotation of section 11, and refusals of ids they named. A refusal shows only the id, the time and "not allowed": no code, layer, action or cited record. A bulk refusal, which names no id (9.1), shows its count in place of the id, and for a named bulk use also the SHA-256 of its sorted objects (the check of revision 4, BN4). No filtered counts, which would tell them refused memories exist (P23). |
 | The requester | Its own allowed items, with the annotation of section 11. A refused item carries no reason (12.2). |
 | Anyone else | Nothing. |
 
@@ -1212,6 +1237,12 @@ to Andy.
   24 hours, at most 200. The daemon writes those receipts whichever reader asked, so deliveries through the context
   runtime are caught as well as those through `neighbors.py` (12.1). This catches copies, not paraphrases. When
   `imprint` is allowed, the kept memory carries its source's subjects (P25).
+  - **What the agent is told** (the check of revision 4, BS1). To an agent that doesn't act for the ledger owner, a
+    refused `remember` says only that keeping this content is not allowed: no code, layer or action, as 9.2 says of
+    a refused read. Its receipt shows as 9.2's agents row. A layer can name a person. If Andy records `person:amy` as
+    a co-subject of m1 after use 1 delivered it (7.4), the guard's first failing layer is `place:home/amy`, since
+    subjects come first, by id (6.5, step 2). Naming it would tell `ph-coordinator` that m1 is about Amy, who never
+    said yes. No rule changes.
   - **Known limit: time** (the re-check's RS8). The guard reads only the last 24 hours, at most 200 receipts
     (section 15). A verbatim `remember` after that passes, and the kept memory carries no source subjects. That is
     the failure P25 exists to stop (the first review's MF6), reached by waiting. The window bounds the guard's cost
@@ -1245,7 +1276,7 @@ The agent sees one line. `neighbors.py` prints nothing; it returns JSON, which t
 `laid by andy (engram) · allowed by home/andy #7f3a, la-county #0b9e · until 2027-01-31 · receipt #5e21a9c0`
 
 - `laid_by`: who made it. For a memory, its store's owner and instance name. For a road or trail, the trail spec
-  (revision 6) fills it in the same field.
+  (revision 7) fills it in the same field.
 - `allowed_by`: each consent layer's cited records, in the order of 6.5, step 2. Each layer shows its place's short
   name and the short ids of its distinct cited records, joined by `+`.
 - `until`: the decision's `until`, as a date. It covers ledger layers only (6.5, step 6): a legacy policy rule may
@@ -1627,7 +1658,10 @@ limits.
    self-claims become real (7.4). Receipts about a person go to their home ledger. Withdrawal notices go to every holder
    with a receipt, and so do subjects and lane-limited denies recorded later on a source that a holder keeps a copy of
    (5.3, 7.4). The `remember` guard learns of deliveries decided elsewhere (section 10). The imprints spec's transport
-   lands here.
+   lands here. Step 2 also decides what a subject sees of another subject's home in receipts (9.2). As written, a
+   subject sees the records and outcome of every receipt that names them, so a co-subject such as Jenn would see
+   Andy's home's layer and record ids, while 9.4 keeps home rules readable only by their person (the check of
+   revision 4, BS3).
 2. **County stations (step 3).** The county's root place and stewards, its ceiling, joint places, public
    `PlaceRules` pages, the place view of receipts. A decider keeps copies of the `PlaceRules` of every place in the
    chains it decides for, and refuses when a copy is older than a bound the county sets. **A question step 3 must
@@ -1686,7 +1720,8 @@ limits.
 | Places per ledger / parents per place / name depth | 1,024 / 4 / 8 segments | bounds dominance |
 | Ancestors per place | 16, itself included | bounds `Req`: 8 subjects + 16 + 16 + 2 legacy + 1 restriction ≤ 43 layers (fixed to match 6.4) |
 | Memories named per answer use on a road or trail | 32 | bounds what one answer names to an agent, and what one decision costs (6.4); bulk uses waive it |
-| Objects per bulk use | 512 when its receipt names them (an imprint batch); 100,000 when they are derived and never named | bounds a bulk decision and its receipt (6.4, 9.1); a larger set is several bulk uses. 512 is the `memories` list bound and 100,000 the collection size (fixed to match) |
+| Objects per bulk use | 512 when its receipt names them (such as an imprint batch, or one of the evaluation's `read` batches); 100,000 when they are derived and never named | bounds a bulk decision and its receipt (6.4, 9.1); a larger set is several bulk uses. 512 is the `memories` list bound and 100,000 the collection size (fixed to match) |
+| Memories named per bulk use | 100,000, by all its roads and trails together | with the row above, bounds a bulk decision to 400,000 (object, action) pairs (6.4); a larger set is several bulk uses. The collection size (fixed to match) |
 | `copies` chain read at a decision | 4 links | bounds a copy's subjects (7.4); a longer chain is refused when the copy is made |
 | Outside-home allow lifetime | 366 days | renewal by the person |
 | Grant chain / lifetime | 3 links (a root's depth at most 2) / 720 hours | spec A's defaults (fixed to match) |
@@ -1699,7 +1734,7 @@ limits.
 | Eligible-set cache | 64 entries | bounds daemon memory |
 | Placements per published house | 20,000 | bounds a cache rebuild on a Pi |
 | Eligible-set rebuild | 2 s on the station's Raspberry Pi 5 | the Pi budget (12.2) |
-| Bulk decision | 40 s on the station's Raspberry Pi 5, for a bulk `imprint` of 100,000 derived objects whose `need` names 100,000 memories | the Pi budget for one bulk use at its largest (6.4), and so for `explain` on one (U24). It is the rebuild's rate: the rebuild makes 20,000 (object, action) decisions in 2 s, and this use at most 400,000 (three actions on each derived object, and `recall` on each memory) |
+| Bulk decision | 40 s on the station's Raspberry Pi 5, for a bulk `imprint` of 100,000 derived objects whose `need` names 100,000 memories, the largest that "Objects per bulk use" and "Memories named per bulk use" allow | the Pi budget for one bulk use at its largest (6.4), and so for `explain` on one (U24). It is the rebuild's rate: the rebuild makes 20,000 (object, action) decisions in 2 s, and this use at most 400,000 (three actions on each derived object, and `recall` on each memory) |
 | `remember` guard | 200 receipts, 24 hours | bounds the check on each `remember`; its known limits are in section 10 |
 | Houses read for the `off` rule | 64 | bounds the effective gate (12.3); with more houses, a reader reads closed |
 | Receipt retention | 400 days, then monthly counts | Open for Andy for the county |
@@ -1851,7 +1886,10 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   - with no ledger and more than 64 houses, a reader reads closed (the re-check's RS6, for every house case above).
 - **U17** `remember`: verbatim delivered content is refused unless `imprint` is allowed, whether it came through
   `neighbors.py` or the context runtime; when allowed, the kept memory carries its source's subjects; a co-subject
-  added to the source afterwards refuses the kept copy's next use.
+  added to the source afterwards refuses the kept copy's next use; with a co-subject (`person:amy`) recorded on m1
+  after its delivery, so that `place:home/amy` is the first failing layer, the guard's reply to an agent that doesn't
+  act for the owner, and that agent's view of the receipt, name no code, layer or action (section 10; the check of
+  revision 4, BS1).
 - **U18** The terminal yes: refused without a terminal; a wrong code writes nothing; no command acts as anyone but
   the ledger owner; each act in the table of 7.6 is refused through the MCP tools (filed as a proposal) and works
   only with the yes.
@@ -1879,6 +1917,9 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
     no object; its `cited`, `until` and `horizon` follow 6.4;
   - a bulk use of 100,001 derived objects, or a named one of 513, is refused with `BOUND` before any object is
     decided, and with `UNKNOWN_REQUESTER` when its requester is also unregistered;
+  - a counted bulk use over derived trails whose touches name 100,001 distinct memories is refused with `BOUND`
+    before any object is decided; the same trails split into two bulk uses, each naming at most 100,000, are each
+    decided object by object (6.4, "Named memories"; the check of revision 4, BS2);
   - a bulk use with an object that has no subject is refused with `NO_LAYER`, and one with an object of 9 subjects
     with `BOUND`, unless an earlier object in ref order fails first (6.5, step 1);
   - the imprints spec's `Need(trail-evaluation)` and `Need(admission)` on a fixture imprint, decided by this spec's
@@ -1889,8 +1930,8 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   name as an argument; `policy_gen.py` refuses a group named `outside-home`.
 - **U24** The Pi budget: on a generated fixture of 20,000 placements and 43 layers of 256 records, one eligible-set
   rebuild takes at most 2 s on the station's Raspberry Pi 5. On a fixture of 100,000 derived roads and trails that
-  name 100,000 memories, against the same layers, `explain` on one bulk `imprint` takes at most 40 s there, with
-  objects that don't group (the final check's FN3). Marked slow, and run on the Pi.
+  name 100,000 memories, the largest bulk use 6.4 allows, against the same layers, `explain` on one bulk `imprint`
+  takes at most 40 s there, with objects that don't group (the final check's FN3). Marked slow, and run on the Pi.
 - **U25** Lane notes: a failed `UPDATE` settles to the old lane; a crash between the two calls leaves a pending note
   that allows read as neither lane and denies as both; a memory with no note matches no lane-limited allow.
 - **U26** Ids: the CLI takes full ids and unique prefixes, and refuses an ambiguous prefix with its matches.
@@ -1913,7 +1954,8 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
 ## 18. Left to the builder
 
 - Indexes, and the cache's data structure, within the bounds in section 15.
-- CLI output formatting and the exact wording of errors, as long as each refusal names its rule.
+- CLI output formatting and the exact wording of errors, as long as each refusal names its rule. That is for the
+  owner's CLI. What an agent that doesn't act for the owner is told of a refusal is fixed by 9.2 and section 10.
 - The random generators for the property tests, as long as they reach every op, every membership kind, joint places,
   roots, pending notes, kept copies with chains of up to 4 links, and bulk uses.
 
@@ -1950,3 +1992,6 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
     owner's yes alone. The imprints spec also makes the owner tick a box first: "Nothing I am sending is about
     another person who hasn't agreed to share it, and none of it is patient or participant data" (its D27 and
     section 8). This spec has no such confirmation for an outside-home allow. The question stays open.
+  - **A second fact, not a decision** (the check of revision 4, BS3). Once co-subjects can say yes (step 2), an
+    allowed item's annotation names each allowing home (section 11). So an agent shown a memory about Andy and Jenn
+    learns both homes from the line. Each said yes to the use, not necessarily to being named.
