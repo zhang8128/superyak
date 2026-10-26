@@ -2,6 +2,7 @@
 (P 17: PT1, PT3, PT4, PT5, PT7, PT8; L1 to L8 of P 6.6). Every property test loops 500 cases of `random_world`
 and also asserts that `decide` and the oracle agree on each sampled use."""
 import random
+from dataclasses import replace
 from collections import Counter
 
 from permissions import (ACTIONS, LegacyLayer, State, ancestors, decide, dominators, subjects_of)
@@ -468,3 +469,55 @@ def test_pt3_delegation():
             for u in uses:
                 j.both(u, f"{case}")
     assert chains > 400 and backed > 50 and checked > 500, (chains, backed, checked, member_backed)
+
+
+# ---------------------------------------------------------------- PT12 and PT10 (Task 6)
+
+def _shape(d):
+    """What a decision says, apart from the time it was asked at and the bounds it reports."""
+    return (d.allowed, d.refusal, d.cited)
+
+
+def test_pt12_horizon():
+    """L8: with σ fixed, decide is the same at every t' in [t, horizon); and horizon <= until."""
+    bounded = unbounded = both = sampled = 0
+    for case in range(N):
+        rng = _rng("pt12", case)
+        w = random_world(rng)
+        s = w.state()
+        now = s.seq_at[s.seq]       # L8 holds for a use asked after the ledger's last write
+        for x in (y for u in sample_uses(rng, w, 8) for y in _flat(u)):
+            x = replace(x, at=max(x.at, now))
+            d = decide(s, x)
+            assert d.horizon is None or d.horizon > x.at, (case, x, d.horizon)
+            if d.horizon is not None and d.until is not None:
+                both += 1
+                assert d.horizon <= d.until, (case, x, d.horizon, d.until)
+            if d.horizon is None:
+                unbounded += 1
+                span = [x.at, x.at + rng.randint(1, 400) * DAY]
+            else:
+                bounded += 1
+                span = [x.at, d.horizon - 1]
+            times = {span[0], span[1]} | {rng.randint(span[0], span[1]) for _ in range(8)}
+            for t2 in sorted(times):
+                sampled += 1
+                assert _shape(decide(s, replace(x, at=t2))) == _shape(d), (case, x, t2, d.horizon)
+    assert bounded > 500 and unbounded > 100 and both > 100 and sampled > 5000, (bounded, unbounded, both, sampled)
+
+
+def test_pt10_determinism_by_insertion_order():
+    """The same decision, cited records, until and horizon whatever order the rows were inserted in."""
+    checked = 0
+    for case in range(N // 5):
+        rng = _rng("pt10", case)
+        w = random_world(rng)
+        s = w.state()
+        shuffled = {t: [dict(r) for r in rs] for t, rs in w.rows.items()}
+        for rows in shuffled.values():
+            rng.shuffle(rows)
+        s2 = State.from_tables(shuffled, seq=w.seq, seq_at=w.seq_at, meta=w.meta, names=w.names)
+        for x in (y for u in sample_uses(rng, w, 8) for y in _flat(u)):
+            assert decide(s, x) == decide(s2, x), (case, x)
+            checked += 1
+    assert checked > 300

@@ -670,6 +670,18 @@ def e1_use_1():
     return w.state(), _ph_use(M1, T("2026-11-02"), "inject_context")
 
 
+E1_USE_1_LAYERS = ["place:home/andy", "place:la-county", "place:la-county/public-health", CLINIC_3]
+
+
+def e1_use_1_with_publisher_rule_until(end: str):
+    """E1's use 1 beside a legacy `publisher` rule that stops allowing at `end`: (state, u(at), legacy)."""
+    from permissions import LegacyLayer
+    w, _ = e1_world(1)
+    stop = T(end)
+    legacy = [LegacyLayer("publisher", lambda u, x: u.at < stop)]
+    return w.state(), (lambda at: _ph_use(M1, at, "inject_context")), legacy
+
+
 def e1_after_use_7():
     return e1_world(7)[0].state(), _ph_use
 

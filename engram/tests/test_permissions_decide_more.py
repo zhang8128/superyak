@@ -106,7 +106,7 @@ def test_a_holding_place_with_no_row_is_a_layer_that_does_not_exist():
 
 def test_e1_use_1_is_allowed_and_cites_each_layer_and_action():
     d = decide(*e1_use_1())
-    assert d.allowed and d.refusal is None and d.until is None and d.horizon is None
+    assert d.allowed and d.refusal is None and d.until == d.horizon == T("2027-01-31")
     consent = [c for c in d.cited if c.kind == "consent"]
     layers = ["place:home/andy", "place:la-county", "place:la-county/public-health", CLINIC_3]
     assert [(c.layer, c.action) for c in consent] == [(l, a) for l in layers for a in ACTIONS[:3]]
