@@ -4,9 +4,12 @@ import hashlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import copy as _copy
 import dataclasses
+from typing import NamedTuple
 
-from permissions import Grant, Record, State, Use, _row, _units, home_of, parse_selector, selector_json
+from permissions import (ACTIONS, GRANT_OPS, Grant, Record, State, Use, _row, _units, home_of, parse_selector,
+                         selector_json)
 
 SEED = 20261025
 _OBJ = ("kinds", "stores", "layers", "lanes", "collections", "memories")
@@ -46,6 +49,8 @@ class World:
         self.rows = {}
         self.names = {}
         self._n = 0
+        self.bulk_sets = []         # sets of objects a bulk use may name (P 6.4); random_world fills them
+        self.cfg = None             # what random_world's samplers draw from
         self.meta = {"ledger_id": "ledger-test", "schema_version": "1", "owner": self.owner,
                      "admins": self.owner}
         self.person(self.owner, admin=True)
@@ -227,8 +232,16 @@ class World:
         return self.now
 
     def state(self) -> State:
+        return self.state_at(self.seq)
+
+    def state_at(self, seq) -> State:
+        """The State as of log sequence number `seq` (rows added later are dropped, later removals undone)."""
         tables = {t: [dict(r) for r in rs] for t, rs in self.rows.items()}
-        return State.from_tables(tables, seq=self.seq, seq_at=self.seq_at, meta=self.meta, names=self.names)
+        return State.from_tables(tables, seq=seq, seq_at=self.seq_at, meta=self.meta, names=self.names)
+
+    def fork(self) -> "World":
+        """An independent copy, to which a test adds a layer, a subject or a change."""
+        return _copy.deepcopy(self)
 
 
 def random_dag_and_new_edge(rng):
@@ -414,7 +427,7 @@ def apply_random_registry_changes(rng, w) -> None:
             "removed_seq"] = w._bump()
 
 
-def sample_uses(rng, w, n):
+def _sample_chain_uses(rng, w, n):
     """n random uses over the chain world's agents, places, objects and times."""
     out = []
     for _ in range(n):
@@ -657,3 +670,450 @@ def e1_after_use_9():
 
 def e1_after_use_10():
     return e1_world(10)[0].state(), lambda at: _ph_use(M4, at, "read")
+
+
+# ---------------------------------------------------------------- Task 5A: random_world and its samplers
+
+class Bulk(NamedTuple):
+    """A bulk use (P 6.4): one per-object use for each object of O, the same a, P, h, x, p and t. Until the
+    evaluator decides one directly, it is allowed when every per-object use is."""
+    uses: tuple
+
+
+def use_json(u: Use) -> dict:
+    """A Use as the plain dict the oracle reads."""
+    return {"requester": u.requester, "place": u.place, "obj": u.obj, "copy": u.copy, "action": u.action,
+            "purpose": u.purpose, "at": u.at, "names": list(u.names), "shows": sorted(u.shows)}
+
+
+def legacy_json(legacy, u: Use) -> list:
+    """PF29: [(name, the actions the layer's callable allows for u)]; a callable can't be serialised without u."""
+    return [(layer.name, frozenset(a for a in ACTIONS if layer.allows(u, a))) for layer in legacy]
+
+
+REQUIRED_FEATURES = frozenset({
+    "op:share", "op:deny", "op:withdraw", "op:shorten", "op:narrow", "op:collect", "op:uncollect",
+    "member:lane", "member:collection", "member:group", "member:agent_place", "member:place_parent",
+    "joint", "root", "pending", "copy-chain-4", "bulk"})
+
+
+def features(w: World) -> set:
+    """Which of REQUIRED_FEATURES a world shows, read from its rows."""
+    out, rows = set(), w.rows
+    recs = rows.get("records", [])
+    by_id = {r["id"]: r for r in recs}
+    for r in recs:
+        grant_backed = str(r["backing"]).startswith("grant:")
+        if r["effect"] == "allow" and grant_backed and r.get("replaces") is None:
+            out.add("op:share")
+        if r["effect"] == "deny" and r.get("under_grant"):
+            out.add("op:deny")
+        if str(r.get("revoked_by") or "").startswith("agent:"):
+            out.add("op:withdraw")
+        old = by_id.get(r.get("replaces"))
+        if old is not None and r.get("under_grant"):
+            if r["selector"] != old["selector"]:
+                out.add("op:narrow")
+            elif r["valid_until"] is not None and (old["valid_until"] is None
+                                                   or r["valid_until"] < old["valid_until"]):
+                out.add("op:shorten")
+    for m in rows.get("collection_members", []):
+        out.add("member:collection")
+        if str(m["backing"]).startswith("grant:"):
+            out.add("op:collect")
+        if m.get("removed_seq") is not None and str(m.get("removed_by") or "").startswith("agent:"):
+            out.add("op:uncollect")
+    notes = rows.get("lane_notes", [])
+    if notes:
+        out.add("member:lane")
+    last = {}
+    for n in sorted(notes, key=lambda n: (n["at"], n["seq"])):
+        last[n["object"]] = n["lane"]
+    if "pending" in last.values():
+        out.add("pending")
+    if rows.get("group_members"):
+        out.add("member:group")
+    if rows.get("agent_places"):
+        out.add("member:agent_place")
+    if rows.get("place_parents"):
+        out.add("member:place_parent")
+    count = {}
+    for r in rows.get("place_parents", []):
+        count[r["place"]] = count.get(r["place"], 0) + 1
+    if any(k >= 2 for k in count.values()):
+        out.add("joint")
+    if any(p["is_root"] and not p["id"].startswith("place:home/") for p in rows.get("places", [])):
+        out.add("root")
+    links = {r["object"]: r["source"] for r in rows.get("copies", [])}
+    for start in links:
+        cur, hops = start, 0
+        while cur in links and hops < 5:
+            cur, hops = links[cur], hops + 1
+        if hops >= 4:
+            out.add("copy-chain-4")
+    if w.bulk_sets:
+        out.add("bulk")
+    return out
+
+
+DAY = _DAY
+_KINDS_ALL = ["memory", "road", "trail"]
+_RW_PURPOSES = ["care-coordination", "research", "billing"]
+_COLLECTIONS = ["collection:andy/medical-history", "collection:andy/other", "collection:jenn/shared"]
+
+
+def _doc_of(audience, *, requesters="*", actions="*", purposes="*", kinds=None, **dims) -> dict:
+    objects = {"kinds": kinds or _KINDS_ALL, "stores": "*", "layers": "*", "lanes": "*", "collections": "*",
+               "memories": "*"}
+    objects.update(dims)
+    return {"audience": list(audience), "requesters": requesters, "objects": objects, "actions": actions,
+            "purposes": purposes}
+
+
+def _kw_of(doc) -> dict:
+    """A selector document as the keyword arguments of World.allow and World.deny."""
+    out = {k: v for k, v in doc.items() if k != "objects"}
+    out.update(doc["objects"])
+    return out
+
+
+def _rw_doc(rng, c, *, deny=False) -> dict:
+    """A random selector document in R25 form (only a memory-only kinds list has object limits)."""
+    entries, weights = ["commons", "self", "group:g1", "group:g2"] + c.places, None
+    k = rng.randint(1, 3)
+    aud = []
+    for _ in range(k):
+        r = rng.random()
+        aud.append("commons" if r < 0.2 else "self" if r < 0.35 else rng.choice(["group:g1", "group:g2"])
+                   if r < 0.45 else rng.choice(c.places))
+    aud = sorted(set(aud))
+    doc = _doc_of(aud, requesters=_pick(rng, c.agents, 0.6, 3), actions=_pick(rng, list(ACTIONS), 0.35, 4),
+                  purposes=_pick(rng, _RW_PURPOSES, 0.5, 2))
+    if rng.random() < 0.75:
+        o = doc["objects"]
+        o["kinds"] = ["memory"]
+        o["stores"] = _pick(rng, c.store_ids, 0.6, 2)
+        o["layers"] = _pick(rng, ["episode", "semantic"], 0.7, 1)
+        o["lanes"] = _pick(rng, ["personal", "work"], 0.55, 1)
+        o["collections"] = _pick(rng, _COLLECTIONS, 0.6, 2)
+        o["memories"] = _pick(rng, c.objects, 0.75, 4)
+    else:
+        doc["objects"]["kinds"] = rng.choice([["road"], ["trail"], ["memory", "road"], _KINDS_ALL])
+        doc["objects"]["stores"] = _pick(rng, c.store_ids, 0.5, 2)
+    return doc
+
+
+def _narrow(rng, doc, c) -> dict:
+    """A document within `doc`: every list a sublist, a "*" a sublist of its pool."""
+    d = _copy.deepcopy(doc)
+    sub = lambda v: rng.sample(v, rng.randint(1, len(v)))
+    d["audience"] = sub(d["audience"])
+    pools = {"requesters": c.agents, "actions": list(ACTIONS), "purposes": _RW_PURPOSES}
+    for k, pool in pools.items():
+        d[k] = sub(d[k]) if d[k] != "*" else (sub(pool) if rng.random() < 0.4 else "*")
+    o = d["objects"]
+    if o["kinds"] == ["memory"]:
+        opools = {"stores": c.store_ids, "layers": ["episode", "semantic"], "lanes": ["personal", "work"],
+                  "collections": _COLLECTIONS, "memories": c.objects}
+        for k, pool in opools.items():
+            o[k] = sub(o[k]) if o[k] != "*" else (sub(pool) if rng.random() < 0.3 else "*")
+    elif o["stores"] != "*":
+        o["stores"] = sub(o["stores"])
+    return d
+
+
+def _grant_chain(w, rng, c, issuer, layer, holders):
+    """A root grant to holders[0] and up to two children down the holders, each a subset of its parent."""
+    n = rng.randint(1, len(holders))
+    depth0 = rng.randint(n - 1, 2)
+    hours = rng.randint(24, 720)
+    ops = rng.sample(GRANT_OPS, rng.randint(3, len(GRANT_OPS)))
+    doc = _narrow(rng, _rw_doc(rng, c), c) if rng.random() < 0.5 else _doc_of(["commons"])
+    max_days = rng.randint(10, 120)
+    expires = w.now + hours * 3600
+    ids, docs, opss = [], [], []
+    parent, issuer_of = None, issuer
+    for i in range(n):
+        gid = w.grant(issuer_of, holders[i], layer, ops=ops, envelope=selector_json(parse_selector(doc)),
+                      parent_id=parent, max_days=max_days, depth=depth0 - i, expires=expires)
+        ids.append(gid), docs.append(doc), opss.append(list(ops))
+        parent, issuer_of = gid, holders[i]
+        ops = rng.sample(ops, rng.randint(1, len(ops)))
+        doc = _narrow(rng, doc, c)
+        max_days = rng.randint(1, max_days)
+        expires = w.now + rng.randint(12, max(12, (expires - w.now) // 3600)) * 3600
+        w.tick(rng.randint(1, 600))
+    return ids, docs, opss
+
+
+def random_world(rng, *, places=12) -> World:
+    """A World at a random point of its life. It reaches every grant op, every membership kind, joint places and
+    roots, pending lane notes, kept copies with chains of 4 links, and bulk sets (P 18); its records are written
+    without checks, as World writes everything. The shape of the draws is in `w.cfg`."""
+    w = World()
+    c = SimpleNamespace()
+    w.cfg = c
+    w.now = T("2026-10-01")
+    homes = {h: f"place:home/{h}" for h in ("andy", "jenn", "sam", "st1", "st2", "late")}
+    for h in list(homes)[1:]:
+        w.person(h)
+    # places: two roots and a DAG under them, with joint places
+    ids = ["place:county", "place:elsewhere"] + [f"place:county/p{i:02d}" for i in range(2, places)]
+    w.place(ids[0], stewards=["st1"])
+    w.place(ids[1], stewards=["st2"])
+    parents = {}
+    for i in range(2, places):
+        kmax = min(3, i - 1)
+        k = min(kmax, 2 if i == 3 else rng.choice([1, 1, 2, 3]))
+        parents[ids[i]] = rng.sample(ids[:i], k)
+        w.place(ids[i], parents=parents[ids[i]], stewards=[rng.choice(["st1", "st2"])])
+    c.places = ids
+    c.parented = list(parents)
+    c.earlier = {x: [q for q in ids[:ids.index(x)] if q not in parents[x]] for x in parents}
+    # agents and groups
+    c.agents, c.agent_history = [], {}
+
+    def agent(name, acts_for, at):
+        w.agent(name, acts_for, at=at)
+        c.agents.append("agent:" + name)
+        c.agent_history["agent:" + name] = [at]
+    andy, jenn = homes["andy"], homes["jenn"]
+    agent("a0", andy, andy)
+    agent("a1", andy, rng.choice(ids))
+    agent("a6", andy, andy)
+    agent("a2", jenn, jenn)
+    agent("a7", jenn, jenn)
+    for k in (3, 4, 5):
+        acts = rng.choice(ids)
+        agent(f"a{k}", acts, acts if rng.random() < 0.7 else rng.choice(ids))
+    w.group("group:g1", "person:andy", ["agent:a0", "agent:a1"])
+    w.group("group:g2", "person:jenn", ["agent:a2"])
+    # stores, houses, objects, roads and a chain of four kept copies
+    w.store("S", owner="person:andy", place=andy)
+    w.store("Z", owner="person:jenn", place=jenn)
+    w.store("house", owner="person:andy", place=andy)
+    w.store("H2", owner="person:st1", place=ids[2])
+    w.store("I1", owner="person:sam", place=ids[3], imprint_of="S")
+    c.store_ids = ["S", "Z", "house", "H2"]
+    c.copies = ["store:S", "store:house", "store:H2", "imprint:peer-1/I1", "store:S", "store:house", "store:ghost"]
+    mems = ["mem:S/episode/m1", "mem:S/episode/m2", "mem:S/episode/m3", "mem:S/semantic/m4",
+            "mem:S/semantic/m5", "mem:Z/episode/m6", "mem:house/episode/m7", "mem:Q/episode/m8"]
+    chain = [f"mem:H2/episode/c{i}" for i in range(1, 5)]
+    for i, ref in enumerate(chain):
+        w.copy(ref, mems[0] if i == 0 else chain[i - 1])
+        w.subject(ref, "person:andy")                   # carried when the copy was made (P25)
+    c.objects = mems + chain
+    c.subjectable = [m for m in c.objects if not m.startswith("mem:Q/")]   # an object with no subject has ⊥
+    c.copy_chain = chain[::-1] + [mems[0]]
+    c.roads = {"road:S/r1": (mems[0], mems[1]), "road:S/r2": (mems[2], mems[3], mems[4]),
+               "road:Z/r3": (mems[5], mems[0])}
+    w.bulk_sets = [rng.sample(mems, rng.randint(2, 5)), list(c.roads) + rng.sample(mems, 2), list(chain)]
+    c.subject_pool = ["person:jenn", "person:sam", "person:andy", "person:late", "person:ghost", "place:county",
+                      rng.choice(ids)]
+    # October: collections, co-subjects and the first lane notes
+    for cid in _COLLECTIONS:
+        w.collect(cid, [m for m in mems if rng.random() < 0.5])
+    for ref in mems:
+        if rng.random() < 0.25:
+            w.subject(ref, rng.choice(c.subject_pool[:5] if rng.random() < 0.9 else c.subject_pool))
+    last_note = {}
+    for ref in c.objects:
+        if rng.random() < 0.12:
+            continue
+        at = T("2026-10-02") + rng.randint(0, 6) * DAY + rng.randint(0, 3600)
+        w.lane(ref, rng.choice(["personal", "work"]), at)
+        for _ in range(rng.randint(0, 2)):
+            at += rng.randint(1, 5) * DAY + rng.randint(1, 3600)
+            if rng.random() < 0.2:
+                w.lane(ref, "pending", at)
+                at += 2 * DAY + rng.randint(1, 3600)
+            w.lane(ref, rng.choice(["personal", "work"]), at)
+        last_note[ref] = at
+    # November: grants, records and what agents did under them
+    w.now = T("2026-10-13")
+    docs, edges = {}, set()
+    owner_of = {place: "person:" + h for h, place in homes.items()}
+
+    def put(layer, doc, effect="allow", **kw):
+        w.tick(rng.randint(1, 600))
+        kw.setdefault("valid_from", T("2026-10-01") - rng.randint(0, 5) * DAY if rng.random() < 0.7
+                      else w.now + rng.randint(0, 30) * DAY)
+        if "valid_until" not in kw:
+            kw["valid_until"] = None if rng.random() < 0.55 else kw["valid_from"] + rng.randint(5, 90) * DAY
+        if layer in owner_of:
+            kw.setdefault("set_by", owner_of[layer])
+        rid = (w.allow if effect == "allow" else w.deny)(layer, **_kw_of(doc), **kw)
+        docs[rid] = doc
+        return rid
+
+    chains = [(_grant_chain(w, rng, c, "person:andy", andy, ["agent:a0", "agent:a1", "agent:a6"]),
+               ["agent:a0", "agent:a1", "agent:a6"], andy, "person:andy"),
+              (_grant_chain(w, rng, c, "person:jenn", jenn, ["agent:a2", "agent:a7"]),
+               ["agent:a2", "agent:a7"], jenn, "person:jenn")]
+    c.grant_chains = [g[0][0] for g in chains]
+    for pid in ids:
+        if rng.random() < 0.85:
+            put(pid, _doc_of(["commons"]), valid_from=T("2026-10-01"),
+                valid_until=None if rng.random() < 0.8 else T("2026-12-01") + rng.randint(0, 30) * DAY)
+        for _ in range(rng.choice([0, 0, 1])):
+            put(pid, _rw_doc(rng, c), "deny")
+    for h, place in homes.items():
+        if rng.random() < 0.92:
+            aud = ["commons"] if rng.random() < 0.6 else sorted({"self", rng.choice(ids), "group:g1"})
+            put(place, _doc_of(aud), valid_from=T("2026-10-01"),
+                valid_until=None if rng.random() < 0.85 else T("2026-12-01") + rng.randint(0, 30) * DAY)
+        for _ in range(rng.randint(2, 5) if h in ("andy", "jenn") else rng.randint(0, 2)):
+            put(place, _rw_doc(rng, c))
+        for _ in range(rng.choice([0, 0, 1, 2])):
+            put(place, _rw_doc(rng, c), "deny")
+    for agent_id in c.agents:
+        if rng.random() < 0.25:
+            doc = _doc_of(["commons"], actions=_pick(rng, list(ACTIONS), 0.2, 3))
+            put(agent_id, doc, "deny", valid_from=T("2026-10-01"))
+    base = [rid for rid in docs if w.record(rid).layer in (andy, jenn) and w.record(rid).effect == "allow"]
+    for (ids_, gdocs, opss), holders, layer, person in chains:
+        for gid, gdoc, ops, holder in zip(ids_, gdocs, opss, holders):
+            if "share" in ops:
+                for _ in range(rng.randint(1, 2)):
+                    rid = put(layer, _narrow(rng, gdoc, c), backing=f"grant:{gid}", set_by=holder,
+                              under_grant=gid, valid_from=T("2026-10-10"))
+                    base.append(rid)
+            if "deny" in ops and rng.random() < 0.6:
+                put(layer, _narrow(rng, gdoc, c), "deny", set_by=holder, under_grant=gid)
+            if "collect" in ops and layer == andy:
+                for ref in rng.sample(mems[:5], rng.randint(0, 2)):
+                    w.tick(rng.randint(1, 3600))
+                    w.collect(_COLLECTIONS[0], [ref], backing=f"grant:{gid}")
+                    w._find("collection_members", collection=_COLLECTIONS[0], object=ref,
+                            removed_seq=None)["added_by"] = holder
+            if "uncollect" in ops and rng.random() < 0.5:
+                live = [m for m in w.rows["collection_members"]
+                        if m["collection"].startswith("collection:" + person[len("person:"):] + "/")
+                        and m.get("removed_seq") is None]
+                if live:
+                    w.tick(rng.randint(1, 3600))
+                    w.uncollect(live[0]["collection"], live[0]["object"])
+                    live[0]["removed_by"] = holder
+            for op in ("shorten", "narrow"):
+                mine = [b for b in base if w.record(b).layer == layer]
+                if op in ops and mine and rng.random() < 0.7:
+                    old = rng.choice(mine)
+                    rec = w.record(old)
+                    if rec.revoked_seq is not None:
+                        continue
+                    new_doc = docs[old] if op == "shorten" else _narrow(rng, docs[old], c)
+                    until = (rec.valid_until or T("2026-12-31")) - rng.randint(1, 20) * DAY
+                    rid = put(layer, new_doc, replaces=old, anchor=rec.anchor, backing=rec.backing,
+                              set_by=holder, under_grant=gid, valid_from=rec.valid_from,
+                              valid_until=until if op == "shorten" or rng.random() < 0.5 else rec.valid_until)
+                    w.tick(1)
+                    w.revoke(old)
+                    w._find("records", id=old)["revoked_by"] = holder
+                    base.append(rid)
+            mine = [b for b in base if w.record(b).layer == layer]
+            if "withdraw" in ops and mine and rng.random() < 0.4:
+                victim = rng.choice(mine)
+                if w.record(victim).revoked_seq is None:
+                    w.tick(rng.randint(1, 3600))
+                    w.revoke(victim)
+                    w._find("records", id=victim)["revoked_by"] = holder
+    # November and later: the changes nobody checked
+    w.now = max(w.now, T("2026-10-24"))
+    c.t0 = max(r["anchor"] for r in w.rows["records"])      # no use is drawn before every record exists
+    for _ in range(rng.randint(2, 6)):
+        w.tick(rng.randint(1, 3) * DAY + rng.randint(1, 3600))
+        kind = rng.choice(["lane", "lane", "group", "agent", "uncollect", "subject", "edge", "grant", "revoke"])
+        if kind == "lane":     # the ledger writes a first note before a move (P 5.3): only a laned memory moves
+            w.lane(rng.choice(sorted(last_note)), rng.choice(["personal", "work"]), w.now)
+        elif kind == "group":
+            live = [r for r in w.rows["group_members"] if r.get("removed_seq") is None]
+            if live:
+                rng.choice(live)["removed_seq"] = w._bump()
+        elif kind == "agent":
+            who = rng.choice(c.agents)
+            if not any(r["agent"] == who and r.get("removed_seq") is None for r in w.rows["agent_places"]):
+                continue
+            w.leave(who)
+            if rng.random() < 0.6:
+                w.tick(DAY)
+                where = rng.choice(ids)
+                w._add("agent_places", agent=who, place=where, added_seq=w._bump())
+                c.agent_history[who].append(where)
+        elif kind == "uncollect":
+            live = [r for r in w.rows["collection_members"] if r.get("removed_seq") is None]
+            if live:
+                w.uncollect(live[0]["collection"], live[0]["object"])
+        elif kind == "subject":
+            w.subject(rng.choice(c.objects), rng.choice(c.subject_pool[:5]))
+        elif kind == "edge":
+            x = rng.choice(c.parented)
+            w.add_parent(x, rng.choice(c.earlier[x]))
+            parents[x].append(w.rows["place_parents"][-1]["parent"])
+            c.earlier[x] = [q for q in c.earlier[x] if q not in parents[x]]
+            if not c.earlier[x]:
+                c.parented.remove(x)
+        elif kind == "grant" and chains:
+            ids_ = chains[rng.randrange(len(chains))][0][0]
+            w.revoke_grant(rng.choice(ids_))
+        elif kind == "revoke":
+            live = [r for r in w.rows["records"] if r.get("revoked_seq") is None]
+            if live:
+                w.revoke(rng.choice(live)["id"])
+    if rng.random() < 0.25:
+        w.tick(DAY)
+        w.lane(rng.choice(sorted(last_note)), "pending", w.now)
+    if rng.random() < 0.12:
+        w.retire_place(ids[rng.randrange(6, len(ids))])
+    if rng.random() < 0.08:
+        w.retire_person("late")
+    if not c.parented:
+        c.parented = ["place:county/p02"]
+        c.earlier["place:county/p02"] = []
+    for r in w.rows["records"]:
+        edges.update(v for v in (r["valid_from"], r["valid_until"]) if v is not None)
+    for g in w.rows["permission_grants"]:
+        edges.add(g["expires"])
+    c.edges = sorted(e for e in edges if c.t0 <= e <= c.t0 + 80 * DAY) or [c.t0 + 20 * DAY]
+    return w
+
+
+def _place_at(w, agent, t):
+    """Where the agent was at time t, read from the rows (None if nowhere)."""
+    for r in w.rows.get("agent_places", []):
+        if r["agent"] == agent and w.seq_at[r["added_seq"]] <= t and (
+                r.get("removed_seq") is None or t < w.seq_at[r["removed_seq"]]):
+            return r["place"]
+    return None
+
+
+def sample_uses(rng, w, n):
+    """n random uses over the world's agents, places, objects and times. A random_world's include roads
+    that name memories and bulk uses (Bulk)."""
+    c = w.cfg
+    if c is None:
+        return _sample_chain_uses(rng, w, n)
+    out = []
+
+    def when():
+        if rng.random() < 0.3:
+            return max(c.t0, rng.choice(c.edges) + rng.choice([-1, 0, 0, 1]))
+        return c.t0 + rng.randint(0, 75) * DAY + rng.randint(0, DAY - 1)
+
+    def one(agent, place, obj, copy, action, purpose, at):
+        names = c.roads.get(obj, ())
+        shows = frozenset(m for m in names if rng.random() < 0.4)
+        return Use(requester=agent, place=place, obj=obj, copy=copy, action=action, purpose=purpose, at=at,
+                   names=tuple(names), shows=shows)
+
+    for _ in range(n):
+        agent = rng.choice(c.agents)
+        copy, action, purpose, at = rng.choice(c.copies), rng.choice(ACTIONS), rng.choice(_RW_PURPOSES), when()
+        place = _place_at(w, agent, at) if rng.random() < 0.85 else None
+        place = place or rng.choice(c.places)
+        if w.bulk_sets and rng.random() < 0.15:
+            objs = sorted(rng.choice(w.bulk_sets))
+            out.append(Bulk(tuple(one(agent, place, o, copy, action, purpose, at) for o in objs)))
+        else:
+            obj = rng.choice(c.objects + list(c.roads))
+            out.append(one(agent, place, obj, copy, action, purpose, at))
+    return out
