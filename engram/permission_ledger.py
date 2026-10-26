@@ -517,6 +517,40 @@ class Ledger:
                                                  "added_by": by, "self_claimed": 0}} for s in carried]
         self._append("record-copy", copy_ref, by, "tool", {"insert": insert}, at=now)
 
+    def note_lanes(self, phase: str, rows: Sequence[Mapping], target: str, *, store_id: str, now: int) -> None:
+        """The lane notes around a re-lane (P 5.3). `rows` are the memories' `{id, lane, created_at}` read just
+        before the UPDATE. `before`: a first note at each memory's `created_at` (its current lane) for a ref with
+        none, then `pending` at now. `after`: the target lane. `failed`: each row's old lane. One log row."""
+        if self.read_only:
+            raise _bad("this ledger is open read-only")
+        if phase not in ("before", "after", "failed"):
+            raise _bad(f"unknown lane note phase {phase!r}")
+        if target not in LANES:
+            raise _bad(f"unknown lane {target!r}")
+        state = self.state() if phase == "before" else None
+        insert, refs = [], []
+        for row in rows:
+            o = f"mem:{store_id}/episode/{row['id']}"
+            parse_object_ref(o)
+            refs.append(o)
+            if phase == "before":
+                if not state.lane_notes.get(o):
+                    insert.append(_ins("lane_notes", object=o, lane=row["lane"] or "personal",
+                                       at=_seconds(row["created_at"]), seq="@seq"))
+                insert.append(_ins("lane_notes", object=o, lane="pending", at=now, seq="@seq"))
+            elif phase == "after":
+                insert.append(_ins("lane_notes", object=o, lane=target, at=now, seq="@seq"))
+            else:
+                insert.append(_ins("lane_notes", object=o, lane=row["lane"] or "personal", at=now, seq="@seq"))
+        if insert:
+            self._append("lane-note-" + phase, refs[0], "store:" + store_id, "tool", {"insert": insert}, at=now)
+
+    def latest_lane_note(self, ref: str) -> str | None:
+        """The lane of the newest note on ref (by `at`, then seq), or None when it has none."""
+        r = self.conn.execute("SELECT lane FROM lane_notes WHERE object=? ORDER BY at DESC, seq DESC, rowid DESC LIMIT 1",
+                              (ref,)).fetchone()
+        return None if r is None else r["lane"]
+
     def store_row(self, instance_id: str) -> dict | None:
         r = self.conn.execute("SELECT instance_id, name, owner, place, imprint_of, created_seq FROM stores "
                               "WHERE instance_id=?", (instance_id,)).fetchone()
@@ -625,6 +659,16 @@ class _Act:
     authority: Callable = None   # (state, actor, act, channel, now) -> Authority; default: the pure model's
     check: Callable = None       # (state, actor, args, now) -> None: the write-time rules (P 5.4, 7.1, 7.2); raises
     rooted: bool = False         # make also takes root=<engram home>: the act reads or writes files on disk
+
+
+def _seconds(created_at) -> int:
+    """An episode's `created_at` (ISO text, naive meaning UTC, or already seconds) as UTC seconds."""
+    if isinstance(created_at, int) and not isinstance(created_at, bool):
+        return created_at
+    when = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return int(when.timestamp())
 
 
 def _text(args: Mapping, key: str) -> str:

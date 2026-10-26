@@ -7,6 +7,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import asdict
 import uuid
@@ -1290,6 +1291,25 @@ def _run_sleep_maintenance(guarded: bool = False) -> None:
         _maint.save(_storage.conn)
 
 
+def _lane_notes(phase: str, rows: list[dict], target: str) -> None:
+    """The storage's lane listener (P 5.3). The gate is read on every call: `off` returns at once, `shadow` and
+    `enforce` write the lane notes, `closed` raises so that storage refuses the re-lane."""
+    from permission_ledger import Ledger, effective_gate
+    from storage import LaneNoteError
+
+    gate = effective_gate(ENGRAM_HOME, [Path(_storage.db_path)])
+    if gate.mode == "off":
+        return
+    if gate.mode == "closed":
+        raise LaneNoteError(f"the permissions gate is closed: {gate.cause}")
+    led = Ledger.open(ENGRAM_HOME)
+    try:
+        led.note_lanes(phase, rows, target, store_id=_storage.instance_identity()["instance_id"],
+                       now=int(time.time()))
+    finally:
+        led.close()
+
+
 def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_maintenance: bool = False):
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_status, _category_atexit_callback
     global _framing_cfg, _sleep_maintenance_deferred
@@ -1314,6 +1334,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
     # Every server and watcher access is serialized by the lifecycle barrier.
     _storage = Storage(str(db_path), check_same_thread=False)
     _register_server_cleanup(_storage, _storage.close, "storage")
+    _storage.lane_listener = _lane_notes
     _embeddings = create_embedding_provider()
 
     harness = os.environ.get("ENGRAM_HARNESS", "claude-code")

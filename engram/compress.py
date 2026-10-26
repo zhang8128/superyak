@@ -13,7 +13,7 @@ import numpy as np
 from scipy.cluster.hierarchy import fclusterdata
 
 from clusters import ClusterEngine
-from storage import vec0_distance_to_similarity
+from storage import LaneNoteError, vec0_distance_to_similarity
 
 if TYPE_CHECKING:
     from config import CompressionConfig
@@ -507,7 +507,13 @@ class Compressor:
             )
             if summary.get("lane") and summary["lane"] != (cluster.get("lane") or "personal"):
                 # Compression review corrected the lane — re-lane the evidence too
-                self._storage.set_episode_lanes(all_episode_ids, summary["lane"])
+                try:
+                    self._storage.set_episode_lanes(all_episode_ids, summary["lane"])
+                except LaneNoteError as e:
+                    # R20: no note could be written, so the lane stays; the summary keeps its evidence's lane
+                    logger.warning("Compression review's lane change to %r refused, the lane stays %r: %s",
+                                   summary["lane"], cluster.get("lane") or "personal", e)
+                    lane = cluster.get("lane") or "personal"
 
             if action == "discard":
                 # Junk cluster — no knowledge to extract. Mark compressed so

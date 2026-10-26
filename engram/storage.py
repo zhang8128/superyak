@@ -13,7 +13,7 @@ from session_bindings import valid_codex_run_key
 import store_identity
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from resources import resource_path
 
@@ -74,11 +74,18 @@ def _sanitize_fts_query(query: str) -> str:
     return " ".join(f'"{t.replace(chr(34), chr(34)+chr(34))}"' for t in tokens)
 
 
+class LaneNoteError(RuntimeError):
+    """The lane listener could not write the note that must precede a re-lane; nothing was updated."""
+
+
 class ReadOnlyStorageError(RuntimeError):
     """Raised when a mutation is attempted on a read-only Storage."""
 
 
 class Storage:
+    # Called with (phase, rows, target lane) around every re-lane; see set_episode_lanes (P 5.3).
+    lane_listener: Callable[[str, list[dict], str], None] | None = None
+
     """SQLite-backed storage for entities, relationships, episodes, and vectors."""
 
     def __init__(
@@ -96,6 +103,7 @@ class Storage:
         self._conn_closed = False
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
+        self._outcome_queue = []
         self.read_only = False
 
         # Load sqlite-vec extension
@@ -148,6 +156,7 @@ class Storage:
         self._conn_closed = False
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
+        self._outcome_queue = []
         self._migrations_dir = None
         self.read_only = True
         self.conn.enable_load_extension(True)
@@ -168,16 +177,45 @@ class Storage:
         if outermost:
             self.conn.execute("BEGIN IMMEDIATE")
         self._transaction_depth += 1
+        outcome = "rollback"
         try:
             yield
             if outermost:
                 self.conn.commit()
+            outcome = "commit"
         except BaseException:
             if outermost and self.conn.in_transaction:
                 self.conn.rollback()
             raise
         finally:
             self._transaction_depth -= 1
+            if outermost:
+                self._settle_outcomes(outcome)
+
+    def after_outcome(self, on_commit: Callable[[], None], on_rollback: Callable[[], None]) -> None:
+        """Run `on_commit` once the write just made is committed, or `on_rollback` if it is not.
+
+        Outside any transaction, `_commit` has just committed, so `on_commit` runs at once. Inside `transaction()`
+        both calls queue on the outermost block, which runs one of them after its commit or on any exceptional exit,
+        and then clears the queue. An `Exception` from a call is logged, since the store's outcome is already final;
+        a `BaseException` such as SystemExit propagates."""
+        if self._transaction_depth == 0:
+            self._run_outcome(on_commit)
+        else:
+            self._outcome_queue.append((on_commit, on_rollback))
+
+    def _settle_outcomes(self, outcome: str) -> None:
+        queue, self._outcome_queue = self._outcome_queue, []
+        for on_commit, on_rollback in queue:
+            self._run_outcome(on_commit if outcome == "commit" else on_rollback)
+
+    @staticmethod
+    def _run_outcome(call: Callable[[], None]) -> None:
+        try:
+            call()
+        except Exception:
+            logger.warning("a call after the store's outcome failed; the lane note it carried stays pending",
+                           exc_info=True)
 
     def _commit(self) -> None:
         """Commit immediately unless an outer storage transaction owns it."""
@@ -615,17 +653,44 @@ class Storage:
         self._commit()
 
     def set_episode_lanes(self, ids: list[str], lane: str) -> int:
-        """Re-lane episodes (e.g. when compression review reveals work content)."""
+        """Re-lane episodes (e.g. when compression review reveals work content).
+
+        With a `lane_listener`, it is told "before" (a failure refuses the re-lane with LaneNoteError and nothing
+        is updated), then "after" once the change is committed, or "failed" when it is not (P 5.3)."""
         if lane not in ("personal", "work"):
             raise ValueError(f"Invalid lane: {lane!r}. Must be 'personal' or 'work'.")
         if not ids:
             return 0
         placeholders = ", ".join("?" * len(ids))
-        cur = self.conn.execute(
-            f"UPDATE episodes SET lane = ? WHERE id IN ({placeholders})",
-            [lane, *ids],
-        )
-        self._commit()
+        listener = self.lane_listener
+        rows: list[dict] = []
+        if listener is not None:
+            rows = [dict(r) for r in self.conn.execute(
+                f"SELECT id, lane, created_at FROM episodes WHERE id IN ({placeholders})", ids)]
+            try:
+                listener("before", rows, lane)
+            except Exception as e:
+                raise LaneNoteError(f"the lane note could not be written: {e}") from e
+        try:
+            cur = self.conn.execute(
+                f"UPDATE episodes SET lane = ? WHERE id IN ({placeholders})",
+                [lane, *ids],
+            )
+            if self._transaction_depth == 0:
+                try:
+                    self._commit()
+                except BaseException:
+                    if self.conn.in_transaction:     # a COMMIT refused with SQLITE_BUSY leaves it open
+                        self.conn.rollback()
+                    raise
+            else:
+                self._commit()
+        except Exception:
+            if listener is not None:
+                self._run_outcome(lambda: listener("failed", rows, lane))
+            raise
+        if listener is not None:
+            self.after_outcome(lambda: listener("after", rows, lane), lambda: listener("failed", rows, lane))
         return cur.rowcount
 
     def get_uncompressed_episodes(self) -> list[dict]:
