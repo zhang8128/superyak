@@ -244,3 +244,78 @@ def test_rf5_two_writers_keep_one_chain(tmp_path):
     assert seqs == list(range(1, len(seqs) + 1)) and len(seqs) == 111 and led.verify() is None
     assert len(led.state().agents) == 110
     assert Ledger.open(led.rebuild(tmp_path / "copy.db")).tables() == led.tables()
+
+
+# ---------------------------------------------------------------- Task 13B: hardening (P 5.5, 5.6)
+
+def test_rebuild_refuses_an_edited_log_and_writes_nothing(tmp_path):
+    led = small_ledger(tmp_path)
+    led.close()
+    flip_one_byte_in_log_body(ledger_path(tmp_path), seq=4)
+    led = Ledger.open(tmp_path)
+    dest = tmp_path / "copy"
+    with pytest.raises(RuleError, match="seq 4"):
+        led.rebuild(dest)
+    assert not ledger_path(dest).exists() and not dest.exists()
+
+
+def test_rebuild_refuses_a_replay_whose_digest_differs(tmp_path, monkeypatch):
+    led = small_ledger(tmp_path)
+    led.close()
+    con = sqlite3.connect(ledger_path(tmp_path))
+    con.execute("UPDATE ledger_log SET digest = ? WHERE seq = 4", ("f" * 64,))
+    con.commit()
+    con.close()
+    led = Ledger.open(tmp_path)
+    monkeypatch.setattr(Ledger, "verify", lambda self: None)     # the chain check is bypassed; the replay must catch it
+    dest = tmp_path / "copy"
+    with pytest.raises(RuleError, match="seq 4"):
+        led.rebuild(dest)
+    assert not ledger_path(dest).exists()
+
+
+def test_a_rebuild_that_raises_leaves_no_file_and_a_retry_works(tmp_path, monkeypatch):
+    led = small_ledger(tmp_path)
+    dest = tmp_path / "copy"
+    real = Ledger._project
+
+    def boom(self, body, seq, at):
+        if seq == 5:
+            raise RuntimeError("disk gone")
+        return real(self, body, seq, at)
+
+    monkeypatch.setattr(Ledger, "_project", boom)
+    with pytest.raises(RuntimeError):
+        led.rebuild(dest)
+    assert not ledger_path(dest).exists()
+    assert list(ledger_path(dest).parent.glob("*")) == []
+    monkeypatch.setattr(Ledger, "_project", real)
+    assert Ledger.open(led.rebuild(dest)).tables() == led.tables()
+
+
+def test_state_reads_log_tables_and_meta_in_one_transaction(tmp_path):
+    led = small_ledger(tmp_path)
+    other = Ledger._open(tmp_path, False, 50)
+    wrote = []
+
+    class Proxy:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+
+        def execute(self, sql, *a):
+            if "FROM agents" in sql and not wrote:
+                wrote.append(1)
+                try:
+                    other._append("register-agent", "agent:late", "person:andy", "terminal",
+                                  {**agent_row("late"), "meta": {"admins": "person:late"}}, at=T("2026-11-02"))
+                except sqlite3.OperationalError:
+                    pass          # blocked by the open read transaction, which is the point
+            return self.conn.execute(sql, *a)
+
+    led.conn = Proxy(led.conn)
+    st = led.state()
+    assert st.seq == max(st.seq_at) == 11
+    assert st.meta["admins"] == "person:andy"          # the meta of seq 11, whether or not the late write got in

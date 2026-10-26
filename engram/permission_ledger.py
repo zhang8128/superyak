@@ -181,8 +181,8 @@ class Ledger:
         return cls._open(engram_home, True, busy_ms)
 
     @classmethod
-    def _blank(cls, engram_home: Path, ledger_id: str) -> "Ledger":
-        path = ledger_path(engram_home)
+    def _blank(cls, engram_home: Path, ledger_id: str, path: Path | None = None) -> "Ledger":
+        path = ledger_path(engram_home) if path is None else path
         if path.exists():
             raise FileExistsError(str(path))
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -227,20 +227,26 @@ class Ledger:
         return out
 
     def state(self, seq: int | None = None) -> State:
-        top = self.seq()
-        seq = top if seq is None else seq
-        if not 0 <= seq <= top:
-            raise ValueError(f"seq {seq} is outside the log (0 to {top})")
-        log = [dict(r) for r in self.conn.execute("SELECT seq, at, kind, ref, body FROM ledger_log ORDER BY seq")]
-        tables = {t: [dict(r) for r in self.conn.execute(
-            f"SELECT {', '.join(_COLUMNS[t])} FROM {t} ORDER BY rowid")] for t in _TABLES}
+        # One read transaction: the log, the tables and meta all come from the same committed seq (P 5.6).
+        self.conn.execute("BEGIN")
+        try:
+            top = self.seq()
+            seq = top if seq is None else seq
+            if not 0 <= seq <= top:
+                raise ValueError(f"seq {seq} is outside the log (0 to {top})")
+            log = [dict(r) for r in self.conn.execute("SELECT seq, at, kind, ref, body FROM ledger_log ORDER BY seq")]
+            tables = {t: [dict(r) for r in self.conn.execute(
+                f"SELECT {', '.join(_COLUMNS[t])} FROM {t} ORDER BY rowid")] for t in _TABLES}
+            meta = self.meta()
+        finally:
+            self.conn.execute("COMMIT")
         names = {}
         for r in log:
             if r["seq"] <= seq and r["kind"] == "register-place":
                 name = json.loads(r["body"]).get("name")
                 if name:
                     names[r["ref"]] = name
-        return State.from_tables(tables, seq=seq, seq_at={r["seq"]: r["at"] for r in log}, meta=self.meta(),
+        return State.from_tables(tables, seq=seq, seq_at={r["seq"]: r["at"] for r in log}, meta=meta,
                                  names=names)
 
     def verify(self) -> int | None:
@@ -565,17 +571,44 @@ class Ledger:
 
     # ---------------------------------------------------------------- rebuild
     def rebuild(self, dest: Path) -> Path:
-        """Replay the log into a fresh ledger whose engram home is `dest`; the same tables. Returns `dest`."""
-        meta = self.meta()
-        new = Ledger._blank(dest, meta["ledger_id"])
+        """Replay the log into a fresh ledger whose engram home is `dest`; the same tables. Returns `dest`.
+
+        The old chain must verify first, each replayed digest must equal the stored one, and the new file is built
+        beside its final name and renamed into place only when the whole replay succeeded (P 5.6)."""
+        final = ledger_path(dest)
+        if final.exists():
+            raise FileExistsError(str(final))
+        broken = self.verify()
+        if broken is not None:
+            raise _bad(f"the log does not verify from seq {broken}; it cannot be rebuilt")
+        made_dir = not final.parent.exists()
+        tmp = final.with_name(final.name + ".rebuilding")
+        for stale in (tmp, tmp.with_name(tmp.name + "-journal")):
+            stale.unlink(missing_ok=True)
+        new = None
         try:
+            new = Ledger._blank(dest, self.meta()["ledger_id"], path=tmp)
             for r in self.conn.execute("SELECT * FROM ledger_log ORDER BY seq").fetchall():
                 got = new._append(r["kind"], r["ref"], r["actor"], r["channel"], json.loads(r["body"]),
                                   under_grant=r["under_grant"], proposal_id=r["proposal_id"], at=r["at"])
-                if got != r["seq"]:
-                    raise _bad(f"the log has a gap before seq {r['seq']}")
-        finally:
+                again = new.conn.execute("SELECT digest FROM ledger_log WHERE seq=?", (got,)).fetchone()[0]
+                if got != r["seq"] or again != r["digest"]:
+                    raise _bad(f"the replay does not match the log at seq {r['seq']}; it cannot be rebuilt")
             new.close()
+            new = None
+            os.replace(tmp, final)
+        except BaseException:
+            if new is not None:
+                new.close()
+            for stale in (tmp, tmp.with_name(tmp.name + "-journal")):
+                stale.unlink(missing_ok=True)
+            if made_dir:
+                for d in (final.parent, Path(dest)):
+                    try:
+                        d.rmdir()
+                    except OSError:
+                        pass
+            raise
         return Path(dest)
 
 
