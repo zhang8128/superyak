@@ -13,19 +13,26 @@ angles, the A* of 6.1 and 6.3, locate, forward lookup, the short-answer builder,
 imprint check and a read-only CLI. It reads a `sqlite3` connection it is given and writes nothing. The v2 observer
 (`category_evolution.py`) gains a gated pass that writes trail events and pending road and detour rewrites. The
 server (`server.py`) runs that pass before `prune`, builds the tool graph as the last maintenance step, and registers
-the three tools only when `[trails] tools` is exactly `true`. Small hooks go into `storage.py`, `config.py`,
-`embeddings.py` and `reflection.py`.
+the three tools only when `[trails] tools` is exactly `true`. Small hooks go into `storage.py`, `config.py` and
+`reflection.py`. Every reader of a store derives one session at a time, with a scratch SQLite file on disk for what
+grows with the store, and every graph is numpy arrays, so each process stays inside T 10.1's memory budget for a
+2 GB Pi.
 
 **Tech Stack:** Python (the interpreter `uv run --locked` picks from engram's `uv.lock`), standard library, numpy
-2.4.3, `sqlite3` with sqlite-vec 0.1.7 for vectors, fastembed 0.7.4 for the in-process model, pytest, uv. Built and
-tested on the station's Raspberry Pi 5 (`smart`).
+2.4.3, `sqlite3` with sqlite-vec 0.1.7 for vectors, pytest, uv. No model library: the evaluation reaches the shared
+embedder over its socket (T R19). Built and tested on the station's Raspberry Pi 5 (`smart`).
 
-**Spec:** `engram/docs/superpowers/specs/2026-10-25-trail-arrows-design.md`, revision 8, at `e737e02`, cited below as
-"T" with its section numbers. Also read: the contract `docs/city-rail-vision.md`; the interface table
+**Spec:** `engram/docs/superpowers/specs/2026-10-25-trail-arrows-design.md`, revision 9 (uncommitted on branch
+`trail-arrows-spec`, 2026-10-26; revision 8 was `e737e02`), cited below as "T" with its section numbers. Revision 9
+carries Andy's two decisions of 2026-10-26: the full store (T A8, R24, section 14) and small hardware (T A7, R19–R23,
+section 10.1), with the fixes from its fresh check (`docs/superpowers/reviews/2026-10-25-small-hardware-trails-review.md`,
+"Response"): the session's id bound and one value (T 4, R25), the evaluation's touch bound and its rule for sessions
+over the bound (T 7, R26), and detours one at a time (T 5). Also read: the contract `docs/city-rail-vision.md`; the interface table
 `docs/superpowers/reviews/2026-10-25-city-rail-interfaces.md` ("row N"); the consolidation log
 `docs/superpowers/reviews/2026-10-25-city-rail-consolidation.md`; the permissions plan
 `docs/superpowers/plans/2026-10-25-permissions-by-place.md` ("P plan", its tasks by number); the imprints spec
-`engram/docs/superpowers/specs/2026-10-25-store-imprint-design.md`, revision 6 ("I").
+`engram/docs/superpowers/specs/2026-10-25-store-imprint-design.md`, revision 6 ("I"), and its revision 7, written in
+parallel for the same two decisions.
 
 **Scope.** T's step 1 only: sections 4 to 7, with 10 to 12. Sections 8 and 9 are later specs; nothing here crosses a
 store boundary. Every gate stays off. Nothing touches the station: no deploy, no service restart, no post.
@@ -69,7 +76,7 @@ earlier, so that such imprints can be admitted sooner, is Rio Grande's option (G
   imprints and permissions code is integer UTC seconds, as those plans hold them (TR22).
 - **Names, verbatim from T.** Module `engram/trails.py`; method `CategoryObserver.observe_trails(graph_conn, as_of)`;
   tools `trail_locate`, `trail_route`, `trail_next`; `Storage.search_fts_ids(table, phrase, limit)`;
-  `NomicEmbedProvider(local_files_only=...)` and `create_embedding_provider(local_files_only=...)`; the `Reflector`
+  `trails.Reader`, `trails.Scratch`, `trails.iter_trails` and `trails.open_embedder` (T 4, R19, R21); the `Reflector`
   keyword `trails_reporter`; config `[category_evolution] trails`, `[trails] tools`, `[trails] lanes`; event kind
   `trail_observed`; `rule_version` `"trail-v1"`; payload keys `session_id`, `lane`, `context_id`, `truncated`,
   `ambiguous_used_recalls`, `rule_version`, `touches`, and per touch `memory_id`, `layer`, `kind` (`wrote` |
@@ -81,7 +88,8 @@ earlier, so that such imprints can be admitted sooner, is Rio Grande's option (G
   answers `{"error": "lane not enabled"}`, `{"error": "lane not enabled: <lane>"}`,
   `{"error": "embedder unavailable"}`, `{"note": "trail graph not ready"}`, `{"end": "stale"}`,
   `degraded: ["embedding"]`, `{"skipped": k}`; counts `ambiguous_used_recalls`, `steps_supported_not_eligible`,
-  `pairs_not_scanned`, `lanes_invalid`, `ignored`, `ended_here`, `ends_unknown`, `steered`, `empty_text`,
+  `pairs_not_scanned`, `sessions_too_large`, `rows_unparsed`, `lanes_invalid`, `ignored`, `ended_here`,
+  `ends_unknown`, `steered`, `empty_text`, `check_skipped_long`,
   `truth_inside_entries`, `no_stored_vector`; verdicts `"not evaluable"`, `"not evaluable: no embedder"`,
   `"not evaluable: embedder mismatch"`, `"not evaluable: limit"`, `"not evaluable: too large"`; exit status 3,
   `allow changed`; the CLI flags of T 11 exactly.
@@ -96,14 +104,32 @@ earlier, so that such imprints can be admitted sooner, is Rio Grande's option (G
   `MAX_TEXT = 4_000`; `GOAL_DELTA = 0.10`; `R_MAX = math.acos(0.60)`; `FORWARD_STATIONS = 3`; `FORWARD_KEEP = 2`;
   `FORWARD_SESSIONS = 256`; `MAX_STOPS = 64`; `SHOWN_EACH_END = 6`; `SUMMARY_BYTES = 160`; `ANSWER_BYTES = 6_000`;
   `MAX_IDS = 6`; `RECHECK_ROWS = 70`; `RECEIPT_HEX = 8`; `TOOL_SESSIONS = 4_096`; `TOOL_NODES = 20_000`;
-  `TOOL_STEPS = 262_144`; `TOOL_MEMORY_TARGET_MB = 256`; `BUILD_BATCH = 64`; `VECTOR_BLOCK = 4_096`;
-  `B_BLOCK = 1_024`; `N_EMPTY_SIZE = 4`; `EMBED_CHECK_N = 32`; `EMBED_CHECK_MIN = 0.99`; `DEADLINE_S = 1_740`;
-  `EVAL_MAX_NODES = 20_000`; `EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"`.
+  `TOOL_STEPS = 262_144`; `TOOL_TOUCHES = 262_144`; `SERVER_ADDED_MIB = 128`; `BUILD_BATCH = 64`;
+  `VECTOR_BLOCK = 1_024`; `VECTOR_CHUNK = 1_024`; `B_BLOCK = 256`; `B_COLUMNS = 1_024`; `B_CANDIDATES = 16`;
+  `N_EMPTY_SIZE = 4`; `EMBED_CHECK_N = 32`; `EMBED_CHECK_MIN = 0.99`; `DEADLINE_S = 1_740`; `EVAL_MAX_NODES = 20_000`;
+  `EVAL_MAX_STEPS = 262_144`; `EVAL_MAX_HELD_OUT = 40_000`; `BOOTSTRAP_CHUNK = 64`; `READ_BATCH_ROWS = 1_000`;
+  `READ_BATCH_BYTES = 8 * 2**20`; `SESSION_ROWS_MAX = 16_384`; `SESSION_IDS_MAX = 327_680`; `LOOKUP_CACHE = 16_384`;
+  `TEXT_PIECE_BYTES = 2**20`; `ID_OVERLAP_BYTES = 63`; `W_TEXT_BYTES = 16_000`; `CHECK_TEXT_BYTES = 65_536`;
+  `EVAL_MAX_TOUCHES = 262_144`; `PEAK_PROCESS_MIB = 384`;
+  `PEAK_EVAL_MIB = 320`; `EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"`. Revision 9 of T removed
+  `TOOL_MEMORY_TARGET_MB = 256` and changed `VECTOR_BLOCK` from 4,096 and `B_BLOCK` from 1,024. Its fresh check added
+  `SESSION_IDS_MAX`, `TEXT_PIECE_BYTES`, `ID_OVERLAP_BYTES`, `W_TEXT_BYTES`, `CHECK_TEXT_BYTES` and `EVAL_MAX_TOUCHES`
+  (T 4, 7, R25, R26).
+- **Small hardware** (T A7, R20–R23, 10.1). The target is a 2 GB Pi. Every process this plan adds peaks under 512 MiB
+  resident on the Pi. Design peaks: `PEAK_PROCESS_MIB` for a process, `PEAK_EVAL_MIB` for the evaluation in the use's
+  unit, and `SERVER_ADDED_MIB` for what the pass, or the tool graph with one call, adds to an engram server. No code
+  calls `fetchall` on a table that grows with the store: cursors are read in batches of `READ_BATCH_ROWS` rows or
+  `READ_BATCH_BYTES`, or one row when that row alone is larger. No text value over `TEXT_PIECE_BYTES` is read whole,
+  by Python or by SQLite: lengths and long text come through the blob reader (TR30). A store is derived one session at
+  a time through `Reader` (Task 1). Whatever grows with the
+  store goes in a `trails.Scratch` file on disk (TR24, TR28). Graphs are numpy arrays (TR25). No model is made in
+  process (Task 20). This Pi has 16 GB, so Task 28's 512 MiB scopes, not the machine, play the 2 GB Pi.
 - **No test loads the real model or reaches the network.** This Pi holds the model in `~/.kairos/models/fastembed`.
   Every test module that runs `--evaluate` or `open_embedder` uses the fixture `trails_support.no_real_model`
   (`pytestmark = pytest.mark.usefixtures("no_real_model")`), which points `embeddings._CACHE_DIR` at an empty
   `tmp_path` directory and unsets `ENGRAM_EMBEDDER_SOCKET`. Server tests use a fake provider, as
-  `tests/test_category_server.py:240` does. Only Task 28's Pi measurements load the model, on purpose.
+  `tests/test_category_server.py:240` does. `trails.py` never imports fastembed (Task 20). Only Task 28's embedding
+  time reaches the model, through the shared service, and only when `ENGRAM_EMBEDDER_SOCKET` is set.
 - **Test command on this Pi** (`smart`, Raspberry Pi 5, 16 GB, 4 cores; `/tmp` and `/var/tmp` are on disk, checked
   2026-10-25), from the task's worktree's `engram/` directory, written out in full in every task:
   `PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider <tests>`.
@@ -136,9 +162,9 @@ Choices T leaves to the builder (its section 13) or does not fix. A reviewer che
 | TR8 | A pair whose old event exists but whose trail has gone (fewer than two touches now) gets a new event with `touches: []`, so recounting sees it gone. | T 5 recounts support from current events. |
 | TR9 | `observe_trails(graph_conn, as_of, *, batch_scope=contextlib.nullcontext, own_session_id=None)`. The server passes `batch_scope=lambda: _maintenance_step_scope(guarded)`. The keyword-only arguments keep T's two positional ones. Lock order: each batch enters `batch_scope()` first and the observer's `self._lock` inside it, the order every tool call takes them. Neither is held across a batch boundary, and `graph.db` is read outside both. | T 5: the barrier is taken "only per batch, as a yield point"; T 4 excludes the running server's own session. A tool call holds the lifecycle barrier for the whole call (`engram/server.py:653-683`), then `recall`, `log_outcome` and `reflect` take `self._lock` (`engram/category_evolution.py:1052-1053`). The reverse order in the pass would deadlock a recall that arrives between batches (the plan review's MF1). |
 | TR10 | The pass's counts live in the observer's memory for its last pass and appear in `report()["trails"]`, with `trail_events` (the stored total) so the 10,000-event index rule is visible. | T 5 "Diagnostics": counts only. |
-| TR11 | Detour search enumerates candidate routes from travelled runs only: every contiguous run of 1 to 8 road steps, none co-cited or suggested, with no repeated memory, in each current full or revisit trail, keyed by its endpoints. Pairs under one key are tried in order of `(lane, X, Y, R1 ids, R2 ids)`. The algorithm is in Task 8. | T 5 asks that both routes were travelled; enumerating from trails bounds the search by what sessions did. |
+| TR11 | Detour search enumerates candidate routes from travelled runs only: every contiguous run of 1 to 8 road steps, none co-cited or suggested, with no repeated memory, in each current full or revisit trail, keyed by its endpoints. Pairs under one key are tried in order of `(lane, X, Y, R1 ids, R2 ids)`. The algorithm is in Task 8. The runs live in the scratch file, and SQL there aggregates each route's sessions (count, earliest and latest first touch, evidence) and pairs one key's routes, so `find_detours` yields one `Detour` at a time in this order and holds no list (T 5). | T 5 asks that both routes were travelled; enumerating from trails bounds the search by what sessions did. The fresh check's M2: a list of detours, each with all its sessions, grows with the store. |
 | TR12 | The pass and the build rank sessions by newest row, then session id; pairs inherit their session's rank. | T 4 and 5 rank "by newest row" and need a total order for determinism. |
-| TR13 | The bounded-count tests (16,384 pairs; 4,096 sessions, 20,000 nodes, 262,144 steps) assert each constant's value, then run with the module constant patched small. Task 28 exercises the real bounds on the Pi. | A 16,385-pair store per test run would take minutes on the Pi, and T 12's Pi measurement already builds one at the bounds. |
+| TR13 | The bounded-count tests (16,384 pairs; 4,096 sessions, 20,000 nodes, 262,144 steps, 262,144 touches; 16,384 rows and 327,680 ids per session; 1 MiB a value; 16,384 cached ids; 262,144 evaluation steps and touches; 40,000 held-out sessions; 64 KiB for the embedder check) assert each constant's value, then run with the module constant patched small. Task 28 exercises the real bounds on the Pi. | A 16,385-pair store per test run would take minutes on the Pi, and T 12's Pi measurement already builds one at the bounds. |
 | TR14 | Tool registration is `_register_trail_tools()` in `_initialize_pre_serving`, after `_init` and before `_start_deferred_sleep_maintenance()`, through `_server_tool(name=…, description=…)`. | T 6.6: after config loads and before `mcp.run()`; the build step must see the registration. |
 | TR15 | Argument errors read `{"error": "at most 6 memory ids"}`, `{"error": "give context or memory ids"}`, `{"error": "give a goal"}`, and for a bad lane `{"error": "Invalid lane: '<lane>'"}`, as recall words it (`engram/server.py:2089-2090`). A `memory_ids` item that is not a non-empty string of at most 64 characters is ignored and counted in `ignored`. So is a repeat of an earlier item, and then an id that is no node of the lane's graph. | T 6.6 says "an error" and "ignored" without fixing words. |
 | TR16 | An answer that names nothing carries no `sources` and writes no receipt. `truncated` and `stale` name nothing. `no_goal` names only `nearest` and `no_route` only `nearest_goal`, when there is one. With no entry station, every tool answers `{"tool", "lane", "as_of", "stations": [], "note": "nothing on the trails is near this context"}` (6.2). | T 6.6: "An answer naming nothing writes none." |
@@ -147,8 +173,16 @@ Choices T leaves to the builder (its section 13) or does not fix. A reviewer che
 | TR19 | The held-out share is the last `ceil(0.20 · n)` closed sessions by first touch in the lane, ties by session id. A session's own hops from `s` to `g` is the index of its last `g` minus the index of its first `s` in its lane trail. The bootstrap interval is `numpy.quantile(means, [0.025, 0.975])`, default method. | T 7 steps 1, 5 and 6 leave these open. |
 | TR20 | `roads_and_trails(conn, *, lane, as_of)` is, for one lane, the number of current full trails, one per session with at least two touches in that lane, plus the number of distinct steps of that lane that are roads under T 5's eligibility in `graph.db` mode. `count_roads_and_trails(conn, as_of, *, lanes=LANES)` sums it over `lanes`. Detours are not counted, since the permissions spec's kinds are memory, road and trail. | XS2 needs one number N for the imprints plan (I 10), whose seam sums `derive(conn, lane=lane, as_of=as_of)` over the scope's lanes (its R10). T is the source of truth for trails. |
 | TR21 | The token ratio of T 6.5 is measured with `anthropic.Anthropic().messages.count_tokens(model="claude-opus-5-5", messages=[{"role": "user", "content": answer}]).input_tokens`, minus the same call's count for a one-character message. It runs only where a credential exists (`ant auth status`). | T 6.5 and 12 ask for "the tokenizer of the model the agents use". This session's agents run Claude Opus 5.5. |
-| TR22 | Units. Every reader of a store takes `as_of` as an integer in microseconds: `read_sessions`, and through it `derive_trails`, `roads_and_trails`, `count_roads_and_trails`, `build_tool_graph` and `evaluate`. `check_as_of(as_of)` raises `ValueError("as_of must be integer microseconds since the epoch, UTC")` for a `bool`, a non-`int`, or a value below `MIN_AS_OF_US = 10**14` (1973-03-03). A seconds value (about 1.8·10⁹ today) fails. `TrailGraph.build` takes `as_of` as a label and checks nothing. Every time handed to or from the imprints and permissions code is integer UTC seconds: the imprints plan's `_trail_derive` passes `as_of * 10**6`; Task 16's ledger `now`, Task 22's `now` and `valid_until`, Task 26's `until`, and Task 27's `now` and shortened `valid_until` are seconds. | The plan review's MF4. Bound directly, a seconds `as_of` reads as 1970. Every row is then newer than it, N is 0 for every imprint, and the imprints plan's cross-plan test passes as 0 = 0 = 0. |
+| TR22 | Units. Every reader of a store takes `as_of` as an integer in microseconds: `Reader`, and through it `iter_trails`, `derive_trails`, `roads_and_trails`, `count_roads_and_trails`, `build_tool_graph` and `evaluate`. `check_as_of(as_of)` raises `ValueError("as_of must be integer microseconds since the epoch, UTC")` for a `bool`, a non-`int`, or a value below `MIN_AS_OF_US = 10**14` (1973-03-03). A seconds value (about 1.8·10⁹ today) fails. `TrailGraph.build` takes `as_of` as a label and checks nothing. Every time handed to or from the imprints and permissions code is integer UTC seconds: the imprints plan's `_trail_derive` passes `as_of * 10**6`; Task 16's ledger `now`, Task 22's `now` and `valid_until`, Task 26's `until`, and Task 27's `now` and shortened `valid_until` are seconds. | The plan review's MF4. Bound directly, a seconds `as_of` reads as 1970. Every row is then newer than it, N is 0 for every imprint, and the imprints plan's cross-plan test passes as 0 = 0 = 0. |
 | TR23 | `lane_filtered` counts, for each lane's trail, the touches removed from inside it: a touch of another lane, or of a memory with no current lane, that has touches of this lane both before and after it in the session. Removing it joins its neighbours into one step. A touch outside every kept run is not counted, so deriving both lanes doesn't count every touch once per other lane. | T 5's "lane filtering" names a count without a rule. This one counts what the filter changed. Per (touch, lane), MF8's test would read 3, which says nothing. |
+| TR24 | **Reader and Scratch** (T 4, R21). `Scratch(directory=None)` is a SQLite file in a new 0700 directory under `directory`, or under `tempfile.gettempdir()` (so `TMPDIR`), with `temp_store = FILE` and `journal_mode = OFF` set on its own connection and the default page cache. A context manager; the directory is removed on exit. It holds ids, times and counts, never memory text. `Reader(conn, as_of, ...)` streams `(session, t, table, row id, rowid, makes_session, ids)` for every episode with a session id and every `recall` and `route_shown` row up to `as_of` into a scratch table, in batches of `READ_BATCH_ROWS` rows or `READ_BATCH_BYTES`, `ids` being a log row's `json_array_length(target_ids)`, read only after TR30's length check; one SQL query then gives each session's newest row, row count and id count, ordered as TR12 orders them. `rows(info)` first counts the session's `operation_log` rows and their ids through `idx_operation_log_session`, and returns `None`, counting `sessions_too_large`, when the rows pass `SESSION_ROWS_MAX` or the ids `SESSION_IDS_MAX`. Otherwise it reads one session's rows by primary key, 500 ids a query and at most `READ_BATCH_BYTES` of known lengths a query, and its `operation_log` rows by `session_id`; it reads the recall rows first, then streams the episodes through the blob reader (TR30) and keeps, per episode, only the session's recalled ids its content or context contains (`EpisodeRow.mentions`, a sorted tuple of the recall rows' own id strings). The mentions count toward `SESSION_IDS_MAX` as they are found; a session that passes it there is dropped and counted the same way. It uses only `conn.execute`, cursor iteration, `fetchmany` and `conn.blobopen(..., readonly=True)`, sets no pragma on `conn`, changes no row factory and needs no sqlite-vec. | T 4 "Reading in bounded memory" and "The session bound"; the fresh check's M1: rows alone don't bound a session, since `recall` logs `max_results` ids, the caller's (`engram/server.py:2068`, `:2367`, `:2384`), and `operation_log.target_ids` is unbounded (`engram/migrations/025_operation_log.sql:9`). Rows are read by primary key, and the blob reader takes the rowid the index keeps: `episodes.id` and `memory_log.id` are primary keys (`engram/migrations/001_initial.sql:46-52`, `engram/migrations/002_v3_layers.sql:51-59`), `episodes.session_id` has no index, and `operation_log` has `idx_operation_log_session` (`engram/migrations/025_operation_log.sql:13`). |
+| TR25 | **Graphs as arrays** (T R22, R23). `TrailGraph` keeps `nodes` sorted by id, so a node's index orders as its id and the open list's `(f, h, memory id)` can compare indices. Edges are compressed rows: `offsets` int32, `dst` int32, `cost` float64, `support` int32, `latest` int64 (−1 for none), `flags` uint8 (road 1, co-cited 2, suggested 4). Touches likewise: `node` int32, `t` int64, `bits` uint8 (wrote 1, co-cited 2, suggested 4), with per-session `start` int32, `newest` int64 and `truncated` bool; postings `through` as compressed rows of int32 session indices. `out[u]` is a read-only view that builds `Edge` tuples on access, so existing callers and tests read edges as before; nothing stores an `Edge`. `remove(ids)` clears an `alive` bool per node, and every reader skips dead nodes and their edges. In the evaluation's T and S, a session is its index in the scratch file, with no id string, and the full trails hold at most `EVAL_MAX_TOUCHES` touches, 5.95 MiB a graph (T 10.1). | T 6.6 "Held as arrays" and 10.1's arithmetic (73.2 MiB at the bounds). The evaluation's part: the fresh check's M2, since the next hit reads T's and each S's trails and postings (Task 14). |
+| TR26 | **B's tiles** (T 7 step 3, R23). For each block of `B_BLOCK` rows of T's nodes with vectors, in node order, and each chunk of `B_COLUMNS` columns, compute dot products in float64. Keep for each row the `B_CANDIDATES` other nodes with the largest dot product, ties by id. Then compute the Kahan angle to each and keep the 8 smallest, ties by id. B is the undirected union, edge cost the angle. | T 7 step 3 defines B by this procedure. |
+| TR27 | **Bootstrap chunks** (T 7 "Seeds", R23). `paired_bootstrap` draws `rng.integers(0, n, size=(BOOTSTRAP_CHUNK, n))` 156 times and `size=(16, n)` once, keeps each row's mean of `diffs[idx]`, and takes `numpy.quantile` of the 10,000 means as TR19 says. | T fixes the chunking because another chunking can draw another stream. |
+| TR28 | **Where scratch files live** (T 10.1). The server's pass and build use `Path(DB_PATH).parent / "trails-scratch"`, made 0700 and emptied at each start and end. `trails.py` uses `tempfile.gettempdir()`, which the imprints plan's use sets to `<imprint id>.state/scratch/` through `TMPDIR` (I 12, revision 7); an owner's own run on a machine whose `/tmp` is tmpfs sets `TMPDIR` to a disk directory. On Linux `Scratch` reads its directory's filesystem type from `/proc/self/mountinfo` (the longest mount point that holds the resolved path) and refuses `tmpfs` and `ramfs` with `ScratchOnRam`, whose message names `TMPDIR`; where that file doesn't exist, as on macOS, it checks nothing. | A scratch file on tmpfs would take RAM. The fresh check's S12: nothing checked it, and `engram/CLAUDE.md:302` says `/tmp` is tmpfs on a machine engram runs on. |
+| TR29 | **Peak-memory tests** (T 12, R20). Task 28 runs each pass in a fresh child process under `systemd-run --user --scope --quiet -p MemoryMax=512M -p MemorySwapMax=0`. After the child's imports and setup it reads `VmHWM` and `VmRSS` from `/proc/self/status`, then writes `5` to `/proc/self/clear_refs`, which resets `VmHWM` to the current resident size, and reads `VmHWM` again at its end. For the pass, the build and a call, the test checks the end `VmHWM` less the setup `VmRSS` against `SERVER_ADDED_MIB`; for any other process, the larger `VmHWM` against its design peak. Fixtures are built once per session under `/var/tmp/trails-pi`. | As the imprints plan's R27 does for its processes. The fresh check's S3: a difference of `ru_maxrss` misses memory that setup used and freed. Checked on this Pi (kernel 6.12): a 200 MiB block freed before the reset left `VmHWM` at 208 MiB, the reset brought it to 9 MiB, and a 50 MiB block after it read 59 MiB. |
+| TR30 | **One value** (T 4 "One value", R25). `text_length(conn, table, column, rowid)`, an `int` or `None`, opens `conn.blobopen(table, column, rowid, readonly=True)` and returns its length, reading nothing; it is `None` for a NULL or a number, which `blobopen` refuses with `sqlite3.OperationalError` ("cannot open value of type null"). No SQL names these columns, not even `typeof`, since an authorizer sees that as a read; `blobopen` passes no authorizer (both checked on this Pi with Python 3.11.2). `text_pieces(conn, table, column, rowid)` yields `TEXT_PIECE_BYTES` at a time, each piece starting `ID_OVERLAP_BYTES` before the last ended. `text_head(conn, table, column, rowid, limit) -> str` reads at most `limit` bytes and decodes them, dropping a character cut at the end. Every reader uses these for `episodes.content` and `episodes.context`, and for `semantics.content` in a summary; no statement this plan runs names those columns. A log row's `target_ids` and `context` are read in SQL only after `text_length` finds each at most `TEXT_PIECE_BYTES`: past it, `target_ids` makes the session too large, and `context` makes the row `rows_unparsed`. A summary reads `text_head(..., TEXT_PIECE_BYTES)`, W `text_head(..., W_TEXT_BYTES)`, and the embedder check takes only episodes whose `text_length` is at most `CHECK_TEXT_BYTES`, counting the rest as `check_skipped_long`. | The fresh check's M1 and S9: engram caps no text (`engram/server.py:1851` checks only a minimum), and SQLite reads a value whole for any function on it. On this Pi, `length()` and `substr()` on a 200,000,011-byte episode each peaked at 202.8 MiB, and `blobopen` in 1 MiB pieces at 15.4 MiB. Two lengths a row cost 1.34 s over 200,000 rows. Every table read this way is a rowid table (no `WITHOUT ROWID` in `engram/migrations/`). |
+| TR31 | **The evaluation and the session bound** (T 7 step 3, R26). `evaluate` counts closed sessions over `SESSION_ROWS_MAX` or `SESSION_IDS_MAX` from the `Reader`'s index, in every lane, and when there is one it answers "not evaluable: too large" for both gates, with `sessions_too_large` and `rows_unparsed` in `counts` as in every report. `Split` holds the cutoff and two counts; which sessions are held out is a mark in `ScratchTrails`, never a list. | The fresh check's M3: dropping such sessions from T, S and the held-out set is a sample, which T 7 step 3 forbids. A session's lane can't be known without reading it. `Split`'s two lists could reach 200,000 ids, 17.7 MiB (T 10.1). |
 
 ## Carried items
 
@@ -164,7 +198,8 @@ Items from the consolidation log, and the reviews it answers, that belong to thi
 | XS3 | Recall times leave with the memories; T reads none of them. | Applied in the specs. Task 26's test above. |
 | XS1 and I6 | The recall-row comparison's `as_of` and source rows. | Task 26's fixture: its source holds no row at or after t₁, and both files are derived at one `as_of` ≥ t₁. |
 | XN2 | `-p UnsetEnvironment=ENGRAM_EMBEDDER_SOCKET` without `--setenv`, never with it. | Taken by the imprints plan (its R15, Task 40). Task 27 asserts it from this side. |
-| FS1 | The offline test can't assert "nothing written to the cache directory": fastembed 0.7.4 makes `tmp/` there. | Task 24: no file is created under the cache and no model is fetched; empty directories are allowed. |
+| FS1 | The offline test can't assert "nothing written to the cache directory": fastembed 0.7.4 makes `tmp/` there. | Moot since T's revision 9: the evaluation never makes a model in process (R19), so nothing reaches the cache. Task 24's test refuses any import of fastembed. |
+| I 17's asks of T, (a) to (d) (I revision 7) | The evaluation under 320 MiB in the use's 512 MiB unit; no model in process; pure functions that give one session's trails and steps; every process under 512 MiB and every unit at `MemoryMax=512M`. | T 10.1 and I7. Task 1 (`Reader`, one session at a time), Task 4 (`roads_and_trails` on disk), Task 20 (`open_embedder`), Task 23 (the evaluation's bounds), Task 28 (peak-memory tests). This plan adds no unit. |
 | FN1 to FN3 | Wording, citations, wrap width in T. | Gate G9. FN2's call path is in Task 20's note. |
 | Not this spec's | YN2, YN3, YN4, YN6, XM1, XN1, XN3 to XN6, I's CN7 (second half) and CN8. | The imprints and permissions plans. Listed so a reviewer can see none was dropped here. |
 
@@ -191,12 +226,12 @@ task named.
 
 | File | Responsibility | Tasks |
 |---|---|---|
-| `engram/trails.py` (new) | The pure parts, the tool graph, both gates, the imprint check, the read-only CLI (T 11 row 1). | 1–4, 8, 10–16, 21–25 |
+| `engram/trails.py` (new) | The pure parts, `Reader` and `Scratch`, the tool graph, both gates, `open_embedder`, the imprint check, the read-only CLI (T 11 row 1). | 1–4, 8, 10–16, 20–25 |
 | `engram/category_evolution.py` | `CategoryObserver.observe_trails`: events, proxies, road and detour proposals, the `trails` report block. | 6–8 |
 | `engram/server.py` | The pass before `prune`; the tool graph as the last maintenance step; the three tools; receipts; counters; `trails_reporter`. | 9, 17–19 |
 | `engram/storage.py` | `search_fts_ids(table, phrase, limit)`. | 13 |
 | `engram/config.py` | `CategoryEvolutionConfig.trails`; `TrailsConfig` with `tools` and `lanes`. | 5 |
-| `engram/embeddings.py` | `local_files_only` on `NomicEmbedProvider` and `create_embedding_provider`. | 20 |
+| `engram/embeddings.py` | Unchanged since T's revision 9: no model in process, so no `local_files_only` (R19). | none |
 | `engram/reflection.py` | `trails_reporter`; `reflect(focus="trails")`. | 19 |
 | `engram/pyproject.toml` | `"trails"` in `py-modules`. | 1 |
 | `engram/CLAUDE.md` | A "Trails" paragraph, a Key Files row, three MCP Tools rows marked off by default. | 29 |
@@ -204,11 +239,11 @@ task named.
 | `engram/tests/test_trails.py` (new) | Derivation, routing, locate, forward lookup, answers. | 1–4, 10–15 |
 | `engram/tests/test_trail_observer.py` (new) | The observer pass, gate off, barrier. | 6–9 |
 | `engram/tests/test_trail_tools.py` (new) | Config, tool graph, registration, the tools, receipts, reflection. | 5, 16–19 |
-| `engram/tests/test_trails_embeddings.py` (new) | `local_files_only`. | 20 |
+| `engram/tests/test_trails_embeddings.py` (new) | `open_embedder`: the shared service only. | 20 |
 | `engram/tests/test_trails_cli.py` (new) | The CLI and the imprint check. | 21, 22 |
 | `engram/tests/test_trails_eval.py` (new) | Both gates, the report, limits, offline. | 23–25 |
 | `engram/tests/test_trails_imprint.py` (new) | The synthetic imprint and the use's ends, with the imprints plan's code. | 26, 27 |
-| `engram/tests/test_trails_pi.py` (new) | Pi measurements, run only with `ENGRAM_TRAILS_PI=1`. | 28 |
+| `engram/tests/test_trails_pi.py` (new) | Peak memory per pass and times on the Pi, run only with `ENGRAM_TRAILS_PI=1` (TR29). | 28 |
 | `engram/scripts/trails_token_ratio.py` (new) | Counts real tokens of the largest answers (TR21). | 28 |
 
 ## What this plan uses from the other plans
@@ -242,6 +277,10 @@ task named.
     (its R15, R20), for Task 27.
   - D-I5: whether `imprint.py use` passes `--as-of` = t₁ (YN1). That plan keeps I 12's command, without it (its YN1
     row), so N may exceed one evaluation's count, as its docstring says.
+  - D-I7 (I revision 7, sections 12 and 14.1): the use's unit carries `MemoryMax=512M` and `MemorySwapMax=0`,
+    `imprint.py use` takes at most 64 MiB of it, and it gives `trails.py` `TMPDIR` and `SQLITE_TMPDIR` set to
+    `<imprint id>.state/scratch/`, where `--evaluate` puts its scratch file (TR28). `imprint.py` points `TMPDIR` at its
+    scratch directory before it calls `roads_and_trails` too (its R26).
   - The other direction: that plan's `imprint.count_roads_and_trails(conn, *, lanes, as_of, derive=None)` sums
     `derive(conn, lane=lane, as_of=as_of)` over the scope's lanes (its R10, Task 35), with `as_of` in UTC seconds.
     Its `derive=None` should reach this plan's `trails.roads_and_trails` (Task 4) through its `_trail_derive`,
@@ -269,14 +308,24 @@ Worktree `/home/andy/superyak/.worktrees/trail-derivation`, branch `trail-deriva
   - `CITING_OPERATIONS: tuple[str, ...]` (TR2);
   - `parse_time(text: str) -> int` (microseconds UTC; raises `ValueError`); `iso_z(us: int) -> str`;
     `canonical(value) -> str` (TR6);
-  - frozen dataclasses `EpisodeRow(id, created_at: str, t: int, content: str, context: str)`,
+  - frozen dataclasses `EpisodeRow(id, created_at: str, t: int, mentions: tuple[str, ...])` (the session's recalled
+    ids that the episode's content or context contains, sorted, sharing the recall rows' id strings; the text itself
+    is never kept, T 4),
     `RecallRow(id, timestamp: str, t: int, target_ids: tuple[str, ...], outcome: str | None, recall_id: str | None)`,
     `ShownRow(timestamp: str, t: int, target_ids: tuple[str, ...])`, `OpRow(t: int, operation: str,
-    target_ids: tuple[str, ...])`, and `SessionRows(session_id: str, episodes, recalls, shown, operations,
-    newest: int, closed: bool)`;
-  - `read_sessions(conn, as_of: int, *, own_session_id: str | None = None, counts: collections.Counter | None = None)
-    -> dict[str, SessionRows]`. It reads rows by index, sets no pragma, changes no row factory and needs no
-    sqlite-vec, so the imprints plan can pass any read-only connection.
+    target_ids: tuple[str, ...])`, `SessionRows(session_id: str, episodes, recalls, shown, operations,
+    newest: int, closed: bool)` and `SessionInfo(session_id: str, newest: int, closed: bool, rows: int, ids: int)`;
+  - `Scratch(directory: Path | None = None)` (TR24, TR28), a context manager with `.conn` and `.path`, raising
+    `ScratchOnRam` for a directory on `tmpfs` or `ramfs`;
+  - `text_length`, `text_pieces` and `text_head` (TR30), the blob reader's three uses;
+  - `Reader(conn, as_of: int, *, own_session_id: str | None = None, counts: collections.Counter | None = None,
+    scratch: Scratch | None = None)`, a context manager (TR24) with `sessions() -> Iterator[SessionInfo]` (every
+    session, closed or not, newest first, TR12), `rows(info) -> SessionRows | None` (one session's rows; `None`, and
+    `sessions_too_large` counted, past `SESSION_ROWS_MAX` rows or `SESSION_IDS_MAX` ids, T 4 "The session bound") and
+    `scratch_path`. With no `scratch` it makes a private
+    one and removes it on exit. It reads rows by index through `conn.execute`, cursor iteration and `fetchmany` only,
+    sets no pragma, changes no row factory and needs no sqlite-vec, so the imprints plan can pass any read-only
+    connection. Revision 8's `read_sessions`, which returned every session's rows at once, is gone (T R21).
   - `tests/trails_support.py`: `T(text) -> int`; `at(day: int, hh: int, mm: int = 0, ss: float = 0) -> str`
     (`2026-10-<day>` UTC ISO); `minute(i: int) -> str` (2026-10-01T00:00 UTC plus i minutes); `class Store` over
     `Storage(path, migrations_dir=MIGRATIONS_DIR)` with `ids(names) -> list[str]` (uuid5 per name),
@@ -286,16 +335,21 @@ Worktree `/home/andy/superyak/.worktrees/trail-derivation`, branch `trail-deriva
     `route_shown(session, at, targets) -> str`, `operation(session, at, op, targets)`, `relane(id, lane)`,
     `prune(id)` (`Storage.prune_episode_ids`), `revive(id)` (`Storage.revive_episode`), `walk(session, names, start,
     *, minutes=5, lane="work") -> list[str]` (one used single-target recall per memory, in order), `ro() ->
-    sqlite3.Connection` (`paths.connect_ro`), `path`; `load_hook(name)` (importlib from `engram/hooks/<name>.py`).
+    sqlite3.Connection` (`paths.connect_ro`), `path`; `load_hook(name)` (importlib from `engram/hooks/<name>.py`);
+    `index(store, as_of, **kw) -> dict[str, SessionInfo]` and `session_rows(store, session, as_of, **kw) ->
+    SessionRows | None`, test helpers over a `Reader` for small stores; `batch_only(conn, max_rows) -> object`, a
+    proxy whose cursors refuse `fetchall` and any `fetchmany` of more than `max_rows`, and which passes `blobopen`,
+    `set_authorizer` and `set_trace_callback` through.
     Rows are written through `Storage` and then their time set with one `UPDATE`, or inserted directly with the given
     timestamp.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-import subprocess, sys
+import collections, itertools, json, sqlite3, subprocess, sys, tempfile
+import pytest
 import trails
-from tests.trails_support import Store, T, at, load_hook
+from tests.trails_support import Store, T, at, batch_only, index, load_hook, minute, session_rows
 
 def test_sessions_come_from_episodes_and_recall_rows_only(tmp_path):
     s = Store(tmp_path); (a,) = s.ids("a")
@@ -303,25 +357,91 @@ def test_sessions_come_from_episodes_and_recall_rows_only(tmp_path):
     s.recall("S2", at(1, 10, 5), [a])
     s.route_shown("S3", at(1, 10, 6), [a])            # a route_shown row alone makes no session (C4)
     s.route_shown("S1", at(1, 13), [a])               # but it moves S1's newest row
-    got = trails.read_sessions(s.ro(), T(at(1, 13, 30)))
+    got = index(s, T(at(1, 13, 30)))
     assert sorted(got) == ["S1", "S2"]
     assert got["S1"].newest == T(at(1, 13)) and got["S1"].closed is False
     assert got["S2"].closed is True
 
 def test_yn7_closed_means_older_than_as_of_minus_one_hour(tmp_path):
     s = Store(tmp_path); s.episode("a", "S1", at(1, 10))
-    assert trails.read_sessions(s.ro(), T(at(1, 11)))["S1"].closed is False          # exactly an hour: open
-    assert trails.read_sessions(s.ro(), T(at(1, 11)) + 1)["S1"].closed is True       # 1 µs more: closed
+    assert index(s, T(at(1, 11)))["S1"].closed is False          # exactly an hour: open
+    assert index(s, T(at(1, 11)) + 1)["S1"].closed is True       # 1 µs more: closed
 
 def test_rows_newer_than_as_of_are_ignored(tmp_path):
     s = Store(tmp_path); s.episode("a", "S1", at(1, 10)); s.episode("b", "S1", at(1, 12))
-    got = trails.read_sessions(s.ro(), T(at(1, 12)) - 1)["S1"]
+    got = session_rows(s, "S1", T(at(1, 12)) - 1)
     assert [e.id for e in got.episodes] == s.ids("a") and got.newest == T(at(1, 10))
-    assert len(trails.read_sessions(s.ro(), T(at(1, 12)))["S1"].episodes) == 2      # a row at as_of counts
+    assert len(session_rows(s, "S1", T(at(1, 12))).episodes) == 2      # a row at as_of counts
 
 def test_rf3_own_session_is_never_closed(tmp_path):
     s = Store(tmp_path); s.episode("a", "S1", at(1, 10))
-    assert trails.read_sessions(s.ro(), T(at(1, 12)), own_session_id="S1")["S1"].closed is False
+    assert index(s, T(at(1, 12)), own_session_id="S1")["S1"].closed is False
+
+def test_sessions_come_newest_first_and_rows_hold_no_text(tmp_path):        # T 4, R21
+    s = Store(tmp_path)
+    for i, h in enumerate((10, 12, 11)): s.episode(f"e{i}", f"S{i}", at(1, h), content=f"secret text {i}")
+    with trails.Reader(s.ro(), T(at(2, 0))) as r:
+        infos = list(r.sessions()); rows = r.rows(infos[0]); scratch = r.scratch_path
+        assert scratch.exists() and b"secret" not in scratch.read_bytes()
+    assert [i.session_id for i in infos] == ["S1", "S2", "S0"]
+    assert "secret" not in repr(rows) and not scratch.exists()
+
+def test_no_whole_table_is_fetched(tmp_path):                               # R21: cursors in batches only
+    s = Store(tmp_path)
+    for i in range(30): s.walk(f"S{i:02d}", ["a", "b"], minute(i), create=(i == 0))
+    with trails.Reader(batch_only(s.ro(), max_rows=trails.READ_BATCH_ROWS), T(at(3, 0))) as r:
+        assert sum(1 for i in r.sessions() if r.rows(i) is not None) == 30
+
+def test_a_session_over_the_row_bound_gets_no_rows_and_is_counted(tmp_path, monkeypatch):
+    assert trails.SESSION_ROWS_MAX == 16_384
+    monkeypatch.setattr(trails, "SESSION_ROWS_MAX", 5)                       # TR13
+    s = Store(tmp_path); s.walk("BIG", [f"m{i}" for i in range(6)], at(1, 10), create=True)
+    s.walk("OK", ["m0", "m1"], at(1, 11))
+    counts = collections.Counter()
+    with trails.Reader(s.ro(), T(at(2, 0)), counts=counts) as r:
+        got = {i.session_id: r.rows(i) for i in r.sessions()}
+    assert got["BIG"] is None and got["OK"] is not None and counts["sessions_too_large"] == 1
+
+def test_a_session_over_the_id_bound_gets_no_rows_and_is_counted(tmp_path, monkeypatch):    # T 4; the check's M1
+    assert trails.SESSION_IDS_MAX == 327_680 == 16_384 * 20
+    monkeypatch.setattr(trails, "SESSION_IDS_MAX", 30)                       # TR13
+    s = Store(tmp_path); many = s.ids(" ".join(f"m{i}" for i in range(40)))
+    for i in range(40): s.episode(f"m{i}", None, at(1, 9))
+    s.recall("WIDE", at(1, 10), many)                     # one row, 40 ids: few rows, too many ids
+    s.recall("OK", at(1, 10), many[:20])
+    s.recall("MENTIONS", at(1, 10), many[:10])            # 10 ids in its row ...
+    for i in range(4): s.episode(None, "MENTIONS", at(1, 11, i), content=" ".join(many[:10]))   # ... and 40 mentions
+    counts = collections.Counter()
+    with trails.Reader(s.ro(), T(at(2, 0)), counts=counts) as r:
+        got = {i.session_id: r.rows(i) for i in r.sessions()}
+    assert got["WIDE"] is None and got["MENTIONS"] is None and got["OK"] is not None
+    assert counts["sessions_too_large"] == 2
+
+def test_one_value_is_never_read_whole(tmp_path, monkeypatch):               # T 4 "One value"; TR30
+    assert (trails.TEXT_PIECE_BYTES, trails.ID_OVERLAP_BYTES) == (2**20, 63)
+    monkeypatch.setattr(trails, "TEXT_PIECE_BYTES", 256)                     # TR13
+    s = Store(tmp_path); (a,) = s.ids("a"); s.episode("a", None, at(1, 9))
+    s.recall("S1", at(1, 10), [a])
+    s.episode(None, "S1", at(1, 10, 1), content="x" * 230 + a + "y" * 500)    # a straddles the first two pieces
+    s.raw_log("recall", at(1, 10, 2), json.dumps([a] * 30), '{"session_id": "BIG"}', "used")      # 1,200 bytes
+    s.raw_log("recall", at(1, 10, 3), '["x"]', json.dumps({"session_id": "S2", "q": "z" * 300}), "used")
+    conn = s.ro()
+    conn.set_authorizer(lambda action, table, column, *_: sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_READ
+                        and table == "episodes" and column in ("content", "context") else sqlite3.SQLITE_OK)
+    counts = collections.Counter()
+    with trails.Reader(conn, T(at(2, 0)), counts=counts) as r:                # SQL never reads episode text
+        got = {i.session_id: r.rows(i) for i in r.sessions()}
+    assert a in got["S1"].episodes[-1].mentions                               # found across the piece boundary
+    assert got["BIG"] is None and counts["sessions_too_large"] == 1           # its target_ids was never read
+    assert "S2" not in got and counts["rows_unparsed"] == 1                   # nor its context
+    rowid = conn.execute("SELECT rowid FROM episodes WHERE session_id = 'S1'").fetchone()[0]
+    assert trails.text_head(conn, "episodes", "content", rowid, 40) == "x" * 40   # a summary's or W's read
+
+def test_scratch_refuses_a_directory_in_ram(tmp_path, monkeypatch):           # TR28; the check's S12
+    monkeypatch.setattr(trails, "_filesystem_type", lambda path: "tmpfs")
+    with pytest.raises(trails.ScratchOnRam, match="TMPDIR"):
+        with trails.Scratch(tmp_path): pass
+    assert list(tmp_path.iterdir()) == []
 
 def test_citing_operations_come_from_the_sleep_hook():
     assert trails.CITING_OPERATIONS == load_hook("sleep").CITING_OPERATIONS
@@ -337,21 +457,31 @@ def test_importing_trails_runs_no_hook_code():
 Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py`
 Expected: FAIL, `ModuleNotFoundError: No module named 'trails'`.
 
-- [ ] **Step 3: Implement the constants, times and `read_sessions` in `engram/trails.py`**
+- [ ] **Step 3: Implement the constants, times, `Scratch` and `Reader` in `engram/trails.py`**
 
-`read_sessions` reads non-null `episodes.session_id`, `memory_log` rows with `event_type IN ('recall',
-'route_shown')` and their session id, and `operation_log` rows by `session_id`, ignoring rows with `t > as_of`
-(TR1). It reads the session id as `CASE WHEN json_valid(context) THEN json_extract(context, '$.session_id') END`,
-with `json_valid(context)` beside it. A bare `json_extract` on text that isn't JSON raises "malformed JSON" and aborts
+On entry `Reader` streams into its scratch file (TR24): non-null `episodes.session_id` with `created_at`, `id` and
+`rowid`, and `memory_log` rows with `event_type IN ('recall', 'route_shown')` with their session id, `timestamp`, `id`,
+`rowid` and id count, ignoring rows with `t > as_of` (TR1), from cursors in batches of `READ_BATCH_ROWS` rows or
+`READ_BATCH_BYTES`. A log row's `context` and `target_ids` are read in SQL, by rowid a batch at a time, only after
+`text_length` finds each at most `TEXT_PIECE_BYTES` (TR30). A `context` over it is `rows_unparsed`; a `target_ids`
+over it marks its session too large, its id count recorded as `SESSION_IDS_MAX + 1`. It reads the session id as `CASE WHEN json_valid(context) THEN json_extract(context, '$.session_id') END`, with
+`json_valid(context)` beside it. A bare `json_extract` on text that isn't JSON raises "malformed JSON" and aborts
 the whole query (SQLite 3.40.1 on the Pi). A row whose `context` is not NULL and not valid JSON, whose time doesn't
 parse, or whose `target_ids` isn't a JSON list of strings is skipped and counted as `rows_unparsed` in `counts` when
 given (Task 2's `test_rf1_…` covers all three). A session exists only through an episode or a recall row. `closed`
-is `newest < as_of − CLOSED_IDLE_US` and `session_id != own_session_id`. Add `"trails"` to `py-modules`.
+is `newest < as_of − CLOSED_IDLE_US` and `session_id != own_session_id`. `sessions()` reads the ranked index from
+the scratch file through a cursor. `rows(info)` counts the session's `operation_log` rows and their ids by its index,
+after the same length check, returns `None` past `SESSION_ROWS_MAX` rows or `SESSION_IDS_MAX` ids, and otherwise
+reads the recall, `route_shown` and operation rows, then streams the episodes, searching each one's content and context
+piece by piece with `text_pieces` for the session's recalled ids, keeping its `mentions` and dropping its text. Each
+mention counts toward `SESSION_IDS_MAX`; past it, `rows` drops what it read and returns `None`, counted the same way.
+`Scratch` calls `_filesystem_type(path) -> str | None`, which reads `/proc/self/mountinfo` (TR28). `Store.raw_log`
+(below) joins `trails_support.py` here. Add `"trails"` to `py-modules`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py`
-Expected: PASS, 6 passed.
+Expected: PASS, 12 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -372,7 +502,8 @@ git -C /home/andy/superyak/.worktrees/trail-derivation commit --trailer "Co-Auth
   - `Touch`, a `NamedTuple` `(memory_id: str, layer: str, kind: str, at: str, recall_id: str | None, rank: int,
     suggested: bool)`, with `payload() -> dict` holding exactly those seven keys;
   - `class MemoryLookup(conn)` with `lane(id) -> str | None`, `layer(id) -> str | None`, `created_at(id) -> int |
-    None`, `exists(id) -> bool`, `is_instinct(id) -> bool`, batched 500 ids a query and cached;
+    None`, `exists(id) -> bool`, `is_instinct(id) -> bool`, batched 500 ids a query and cached for at most
+    `LOOKUP_CACHE` ids, least recently used dropped first (T R21);
   - `session_touches(rows: SessionRows, lookup: MemoryLookup, counts: collections.Counter) -> list[Touch]`, sorted by
     `(parse_time(at), rank, memory_id)`, before any lane filter. Counters: `ambiguous_used_recalls`,
     `skipped_targets`, `rows_unparsed`.
@@ -381,9 +512,18 @@ git -C /home/andy/superyak/.worktrees/trail-derivation commit --trailer "Co-Auth
 
 ```python
 def touches(s, session, as_of=None):
-    counts = collections.Counter()                     # one Counter: rows_unparsed is counted by read_sessions
-    rows = trails.read_sessions(s.ro(), as_of or T(at(9, 0)), counts=counts)[session]
+    counts = collections.Counter()                     # one Counter: rows_unparsed is counted by the Reader
+    rows = session_rows(s, session, as_of or T(at(9, 0)), counts=counts)
     return trails.session_touches(rows, trails.MemoryLookup(s.ro()), counts), counts
+
+def test_the_lookup_cache_holds_at_most_its_bound(tmp_path, monkeypatch):       # R21
+    assert trails.LOOKUP_CACHE == 16_384
+    monkeypatch.setattr(trails, "LOOKUP_CACHE", 3)                                # TR13
+    s = Store(tmp_path); ids = s.ids(" ".join(f"m{i}" for i in range(10)))
+    for i in range(10): s.episode(f"m{i}", None, at(1, 9), lane="work" if i % 2 else "personal")
+    look = trails.MemoryLookup(s.ro())
+    assert [look.lane(m) for m in ids] == ["work" if i % 2 else "personal" for i in range(10)]
+    assert look.cached() <= 3 and look.lane(ids[0]) == "personal"                 # evicted, read again
 
 def test_a_surfaced_result_is_not_a_touch(tmp_path):
     s = Store(tmp_path); a, b = s.ids("a b"); s.episode("a", None, at(1, 9)); s.episode("b", None, at(1, 9))
@@ -442,25 +582,26 @@ def test_rf1_malformed_rows_are_skipped_and_counted(tmp_path):
     assert [t.memory_id for t in got] == [a] and counts["rows_unparsed"] == 3
 ```
 
-`Store.raw_log(event_type, timestamp, target_ids, context, outcome)` inserts one `memory_log` row as given; add it to
-`trails_support.py`.
+`Store.raw_log(event_type, timestamp, target_ids, context, outcome)` inserts one `memory_log` row as given; Task 1
+added it to `trails_support.py`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "touch or citation or instinct or ambiguous or suggested or malformed"`
+Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "touch or citation or instinct or ambiguous or suggested or malformed or lookup"`
 Expected: FAIL, `AttributeError: module 'trails' has no attribute 'session_touches'`.
 
 - [ ] **Step 3: Implement `MemoryLookup` and `session_touches`**
 
-Wrote touches are the session's episodes. For each recall row with `outcome` starting with `used`: drop instinct
-targets (TR3); a target is cited when a later same-session episode's `content` or `context` contains it, or a later
-same-session `operation_log` row with an operation in `CITING_OPERATIONS` lists it, or the row has exactly one
-non-instinct target (missing ones counted). A cited touch is suggested when a `route_shown` row of the session with
+`MemoryLookup.cached() -> int` reports how many ids it holds. Wrote touches are the session's episodes. For each
+recall row with `outcome` starting with `used`: drop instinct targets (TR3); a target is cited when a later
+same-session episode's `mentions` holds it (found while the `Reader` streamed that episode's content and context),
+or a later same-session `operation_log` row with an operation in `CITING_OPERATIONS` lists it, or the row has exactly
+one non-instinct target (missing ones counted). A cited touch is suggested when a `route_shown` row of the session with
 `t <=` the recall's `t` lists it. A row that fails to parse is skipped (TR1).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 7 passed.
+Run: the command of step 2. Expected: PASS, 8 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -486,12 +627,21 @@ git -C /home/andy/superyak/.worktrees/trail-derivation commit --trailer "Co-Auth
     `lane_filtered` by TR23, and `truncations`);
   - `revisit_trail(trail: Trail, lookup) -> Trail | None` (memories created before the session's first touch);
   - `trail_steps(trail: Trail) -> list[Step]` (co-cited: both touches from one recall; suggested: either touch);
-  - `TrailSet`, a dataclass `(as_of: int, sessions: dict[str, SessionRows], full: dict[tuple[str, str], Trail],
-    revisit: dict[tuple[str, str], Trail], counts: Counter)`;
-  - `newest_first(sessions: Mapping[str, SessionRows]) -> list[SessionRows]` (closed only, TR12);
+  - `SessionTrails`, a `NamedTuple` `(info: SessionInfo, full: dict[str, Trail], revisit: dict[str, Trail])`;
+  - `iter_trails(conn, as_of: int, *, lanes: Sequence[str] = LANES, own_session_id: str | None = None,
+    max_pairs: int | None = None, counts: Counter | None = None, scratch: Scratch | None = None) ->
+    Iterator[SessionTrails]`: every closed session newest first (TR12), with empty dicts when it has no trail, one
+    at a time through a `Reader`, each session's rows dropped before the next (T 4, R21). With `max_pairs` it
+    yields sessions until that many pairs and derives the rest one at a time only to count them as
+    `pairs_not_scanned`. This is what every production reader uses: the count (Task 4), the pass (Tasks 6 to 8), the
+    build (Task 16) and the evaluation (Task 23);
+  - `TrailSet`, a dataclass `(as_of: int, sessions: dict[str, SessionInfo], full: dict[tuple[str, str], Trail],
+    revisit: dict[tuple[str, str], Trail], counts: Counter)` with `trails(lane: str | None = None) ->
+    Iterator[Trail]` (full, then revisit, in key order);
   - `derive_trails(conn, as_of: int, *, lanes: Sequence[str] = LANES, own_session_id: str | None = None,
-    max_pairs: int | None = None) -> TrailSet`. With `max_pairs` it derives sessions newest first until that many
-    pairs, and counts the rest as `pairs_not_scanned`. It opens no file and runs no imprint check (YN5).
+    max_pairs: int | None = None) -> TrailSet`: `iter_trails` collected into memory. It holds every trail it
+    returns, so only tests and small stores use it; no production path calls it. It opens no store file and runs no
+    imprint check (YN5); its scratch file is its own.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -539,24 +689,44 @@ def test_mf3_revisit_trails_skip_what_the_session_wrote(tmp_path):
     full = [{(x.src, x.dst) for x in trails.trail_steps(ts.full[(f"S{i}", "work")])} for i in (0, 1)]
     assert not (full[0] & full[1])
     assert all((a, b) in {(x.src, x.dst) for x in trails.trail_steps(ts.revisit[(f"S{i}", "work")])} for i in (0, 1))
+
+def test_iter_trails_reads_one_session_at_a_time_and_equals_an_independent_reference(tmp_path, monkeypatch):  # R21
+    s = varied(tmp_path); as_of = T(at(20, 0)); reads = []
+    real = trails.Reader.rows
+    monkeypatch.setattr(trails.Reader, "rows", lambda self, info: reads.append(info.session_id) or real(self, info))
+    it = trails.iter_trails(s.ro(), as_of)
+    first = next(it)
+    assert reads == [first.info.session_id]                       # lazy: no session read ahead
+    got = {"full": {}, "revisit": {}}
+    for x in itertools.chain([first], it):
+        for view in got: got[view] |= {(x.info.session_id, k): v.digest() for k, v in getattr(x, view).items()}
+    assert got == reference_trails(s.path, as_of)                 # the fresh check's S5: not iter_trails collected
 ```
 
 `planted(tmp_path, sessions)` and `Store.walk(..., create=True)` join `trails_support.py`. With `create=True`, a walk
 first creates each named memory that doesn't exist yet, with no session, one second before the walk starts, in the
 walk's lane; a memory that exists is reused.
 
+`varied(tmp_path)` is a small store with every case of T 4: wrote and cited touches, a co-cited recall, a suggested
+touch, a personal touch between work touches, an ambiguous used recall, a pruned target, an instinct target, a citing
+operation and a non-citing one, a repeat and a return, and a session still open. `reference_trails(path, as_of) ->
+{"full": {(session, (session, lane)): digest}, "revisit": {...}}` is written for the tests from T 4 alone, with plain
+`sqlite3` and whole-table reads (`fetchall`, every row in memory, every text searched whole), and imports nothing from
+`trails` but `canonical`. It is the independent reference that T 12 asks for; both join `trails_support.py`.
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "determinism or mf8 or repeats or mf2 or mf3"`
+Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "determinism or mf8 or repeats or mf2 or mf3 or iter_trails"`
 Expected: FAIL, `AttributeError: module 'trails' has no attribute 'derive_trails'`.
 
-- [ ] **Step 3: Implement `build_trail`, `revisit_trail`, `trail_steps`, `newest_first` and `derive_trails`**
+- [ ] **Step 3: Implement `build_trail`, `revisit_trail`, `trail_steps`, `iter_trails` and `derive_trails`**
 
 The revisit trail applies the same steps to the memories whose `created_at` is before the session's first touch.
+`iter_trails` asks the `Reader` for one session's rows only when the caller asks for that session's trails.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 5 passed.
+Run: the command of step 2. Expected: PASS, 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -580,10 +750,19 @@ git -C /home/andy/superyak/.worktrees/trail-derivation commit --trailer "Co-Auth
     trails; a step that is co-cited or suggested in a session adds no session but sets the flag;
   - `is_road(stats: StepStats) -> bool` (`support >= ROAD_SUPPORT and span_s >= PERSISTENCE_MIN_S`);
   - `road_summary(stats_by_step) -> dict` with `roads`, `steps_supported_not_eligible`, `steps_support_2`;
-  - `roads_and_trails(conn, *, lane: str, as_of: int) -> int` (TR20), the imprints plan's `derive` seam, and
-    `count_roads_and_trails(conn, as_of: int, *, lanes: Sequence[str] = LANES) -> int`, their sum. Both take `as_of`
-    in microseconds; the imprints plan's `_trail_derive` converts its seconds (TR22);
-  - `MIN_AS_OF_US = 10**14` and `check_as_of(as_of: object) -> int` (TR22), which `read_sessions` calls first, so
+  - `step_support` holds every step of the trails it is given, so it takes a bounded set (tests, Task 16's graph);
+  - `roads_and_trails(conn, *, lane: str, as_of: int, scratch: Scratch | None = None, counts: Counter | None =
+    None) -> int` (TR20), the imprints plan's `derive` seam, and `count_roads_and_trails(conn, as_of: int, *, lanes:
+    Sequence[str] = LANES, counts: Counter | None = None) -> int`, their sum. Both take `as_of` in microseconds; the
+    imprints plan's `_trail_derive` converts its seconds (TR22). Both count into `counts`, when given, the sessions
+    over T 4's bound as `sessions_too_large`: N leaves them out, and T I7 asks the imprints side to show that count
+    beside N (the fresh check's M3);
+    `roads_and_trails` holds one session at a time (I 17's ask (c); T I7): it reads `iter_trails`, counts each
+    session's full trail in the lane, and writes the session's steps that are neither co-cited nor suggested, as
+    `(src, dst, session, t)` rows, to its scratch file. One SQL query there then counts the roads: per
+    `(src, dst, session)` the earliest `t` (TR5), then per `(src, dst)` at least `ROAD_SUPPORT` sessions and
+    `max − min ≥ PERSISTENCE_MIN_S · 10⁶`. Its scratch file goes under `TMPDIR` (TR28);
+  - `MIN_AS_OF_US = 10**14` and `check_as_of(as_of: object) -> int` (TR22), which `Reader.__init__` calls first, so
     every reader of a store refuses a seconds value.
 
 - [ ] **Step 1: Write the failing tests**
@@ -632,25 +811,39 @@ def test_xs2_count_roads_and_trails_on_a_plain_or_imprint_copy(tmp_path):
 def test_an_as_of_in_seconds_fails_loudly(tmp_path):         # TR22: never a silent N = 0 at the imprints seam
     s = Store(tmp_path); two_walks(s, [(2, 10), (2, 11), (3, 11)])
     seconds = T(at(9, 0)) // 10**6
-    for call in (lambda v: trails.read_sessions(s.ro(), v), lambda v: trails.derive_trails(s.ro(), v),
+    for call in (lambda v: trails.Reader(s.ro(), v), lambda v: trails.derive_trails(s.ro(), v),
                  lambda v: trails.roads_and_trails(s.ro(), lane="work", as_of=v),
                  lambda v: trails.count_roads_and_trails(s.ro(), v)):
         for bad in (seconds, float(T(at(9, 0))), True):
             with pytest.raises(ValueError, match="microseconds"): call(bad)
     assert trails.roads_and_trails(s.ro(), lane="work", as_of=seconds * 10**6) == 4
+
+def test_roads_and_trails_streams_through_its_scratch_file(tmp_path, monkeypatch):      # R21; I 17 (c)
+    s = planted(tmp_path / "s", sessions=30); as_of = T(at(20, 0))
+    ts = trails.derive_trails(s.ro(), as_of)
+    want = (sum(1 for (_, lane) in ts.full if lane == "work")
+            + trails.road_summary(trails.step_support(ts, "work"))["roads"])
+    monkeypatch.setattr(trails, "derive_trails", raises(AssertionError("holds every trail")))
+    monkeypatch.setattr(trails, "step_support", raises(AssertionError("holds every step")))
+    (tmp_path / "tmp").mkdir(); monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))   # TMPDIR, cached
+    conn = batch_only(s.ro(), max_rows=trails.READ_BATCH_ROWS)
+    assert trails.roads_and_trails(conn, lane="work", as_of=as_of) == want
+    assert list((tmp_path / "tmp").iterdir()) == []                 # the scratch file is gone
 ```
+
+`raises(exc)` (a callable that raises `exc`) joins `trails_support.py` here, before Part B's tasks use it.
 
 `imprint_origin_copy(src, dest)` copies the store with the `sqlite3` backup API (a plain file copy would miss rows
 still in the WAL) and sets `meta.instance_id_origin` to `imprint`; add it to `trails_support.py`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "mf1 or mf3_the or co_cited_and or xs2 or in_seconds"`
+Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "mf1 or mf3_the or co_cited_and or xs2 or in_seconds or streams_through"`
 Expected: FAIL, `AttributeError: module 'trails' has no attribute 'step_support'`.
 
 - [ ] **Step 3: Implement `StepStats`, `step_support`, `is_road`, `road_summary`, `roads_and_trails`, `count_roads_and_trails` and `check_as_of`**
 
-`check_as_of` runs first in `read_sessions`, before any query, so no reader of a store can take seconds (TR22). The
+`check_as_of` runs first in `Reader.__init__`, before any query, so no reader of a store can take seconds (TR22). The
 docstring of `roads_and_trails` says `as_of` is integer microseconds, UTC, and that the imprints plan's
 `_trail_derive` multiplies its seconds by 10⁶.
 
@@ -735,19 +928,26 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 ### Task 6: The observer pass, trail events
 
 **Files:**
-- Modify: `engram/category_evolution.py` (`CategoryObserver`, `:870-1470`)
+- Modify: `engram/category_evolution.py` (`CategoryObserver`, `:870-1470`), `engram/trails.py`
+  (`open_categories_ro`)
 - Test: `engram/tests/test_trail_observer.py`
 
 **Interfaces:**
-- Consumes: `trails.derive_trails`, `trails.newest_first`, `Trail.digest`, `Trail.payload`; the store's
+- Consumes: `trails.iter_trails`, `trails.Scratch`, `Trail.digest`, `Trail.payload`; the store's
   `transaction(immediate=True)` and `append_event(kind, payload, *, event_id)` (`engram/categories.py:1432`, `:1522`).
 - Produces:
   - `CategoryObserver.observe_trails(graph_conn, as_of: int, *, batch_scope=contextlib.nullcontext,
-    own_session_id: str | None = None) -> dict` (TR9), returning the pass's counts;
+    own_session_id: str | None = None, scratch_dir: Path | None = None) -> dict` (TR9), returning the pass's counts;
+  - `CategoryObserver._stream_current_events(scratch) -> int`: reads `trail_observed` events through its own
+    read-only connection to the observer's database (`trails.open_categories_ro`, moved here from Task 12), one
+    event at a time in rowid order, and writes each `(session, lane, rowid, event id, digest)` to the scratch file,
+    where SQL gives each pair's current event (T 5, "In bounded memory");
   - `CategoryObserver._current_trail_events() -> dict[tuple[str, str], tuple[str, dict]]` (newest
-    `trail_observed` event by rowid per (session, lane));
+    `trail_observed` event by rowid per (session, lane)), an inspection helper for tests. It holds every current
+    event, so the pass never calls it;
   - counters `sessions_read`, `events_written`, `pairs_not_scanned`, `passes_skipped_lock`,
-    `passes_skipped_auto_commit`, `truncations`, `ambiguous_used_recalls`, `skipped_targets`, `lane_filtered`.
+    `passes_skipped_auto_commit`, `truncations`, `ambiguous_used_recalls`, `skipped_targets`, `lane_filtered`,
+    `sessions_too_large`.
   - `trails_support.observer(tmp_path, *, db=None, **flags) -> CategoryObserver` on `db` or
     `tmp_path / "categories_v2.db"`, with `shadow=True` and `auto_commit=False` unless `flags` say otherwise.
 
@@ -850,27 +1050,44 @@ self._lock:` and `self._ensure_process()`, as `observe_recall` does (`:1043-1065
 across a batch boundary, and it reads `graph.db` outside both.
 
 1. If `self.auto_commit` is true, count a skipped pass and return.
-2. Outside both locks, derive from `graph_conn` with `max_pairs=trails.MAX_PAIRS_SCANNED`.
-3. The first batch reads `_current_trail_events()`. It uses the observer's own connection, so it runs only inside a
-   batch. The batch picks the pairs whose current event is missing, differs, or whose trail has gone (TR8). It takes
-   at most `SESSIONS_PER_PASS` sessions, oldest first by newest row (TR12), and writes the first
-   `SESSIONS_PER_BATCH` of them. Each later batch writes the next `SESSIONS_PER_BATCH`. Every batch re-checks its
-   pairs' current events and appends inside one `transaction(immediate=True)`, with the stable id of TR7.
+2. Outside both locks, open one `trails.Scratch(scratch_dir)` for the whole pass and fill it with
+   `_stream_current_events` (T 5, "In bounded memory"). Then read `iter_trails(graph_conn, as_of,
+   max_pairs=trails.MAX_PAIRS_SCANNED, scratch=…)`. For each session, compare each pair's digest with its current
+   event in the scratch file. A pair is pending when its current event is missing, differs, or its trail has gone
+   (TR8); a current event whose session has no row now, so is absent from the `Reader`'s index in the same file, is
+   gone too. Keep only the scanned pairs' digests and a `collections.deque(maxlen=SESSIONS_PER_PASS)` of pending
+   sessions' full trails, `SessionTrails.full` only: an event holds the full trail, and Task 7's step 3 derives the
+   revisit view again from it, so keeping the revisit trails would add 22.7 MiB for nothing (T 10.1; the fresh
+   check's S6). Sessions come newest first, so the deque ends holding the oldest pending ones (TR12).
+3. Batches then write those sessions, oldest first, `SESSIONS_PER_BATCH` at a time. Every batch re-checks its
+   pairs' current events and appends inside one `transaction(immediate=True)`, with the stable id of TR7, as
+   before; reading the events outside the locks is safe because of that re-check.
 4. `sqlite3.OperationalError` on the lock (the connection's `timeout=0`) counts `passes_skipped_lock` and ends the
    pass. `CategoryQuotaExceeded` ends the pass through `_record_error`. An exception from `batch_scope()` itself (a
    coordinator that is shutting down) ends the pass and propagates.
 
 `category_evolution.py` does `import trails` and reads every constant as `trails.NAME` when it runs, never through
-`from trails import …`, so TR13's patches reach the pass.
+`from trails import …`, so TR13's patches reach the pass. Add to step 1's tests:
+
+```python
+def test_the_pass_holds_no_whole_store_and_leaves_no_scratch(tmp_path, monkeypatch):      # T 5, R21
+    s = Store(tmp_path)
+    for i in range(70): s.walk(f"S{i:02d}", ["a", "b"], minute(i), create=(i == 0))
+    obs = observer(tmp_path); scratch = tmp_path / "trails-scratch"; scratch.mkdir()
+    monkeypatch.setattr(type(obs), "_current_trail_events", raises(AssertionError("holds every event")))
+    monkeypatch.setattr(trails, "derive_trails", raises(AssertionError("holds every trail")))
+    got = obs.observe_trails(batch_only(s.ro(), max_rows=trails.READ_BATCH_ROWS), T(at(3, 0)), scratch_dir=scratch)
+    assert got["events_written"] == 64 and not any(scratch.iterdir())
+```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 8 passed.
+Run: the command of step 2. Expected: PASS, 9 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /home/andy/superyak/.worktrees/trail-step-1 add engram/category_evolution.py engram/tests/trails_support.py engram/tests/test_trail_observer.py
+git -C /home/andy/superyak/.worktrees/trail-step-1 add engram/category_evolution.py engram/trails.py engram/tests/trails_support.py engram/tests/test_trail_observer.py
 git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Category observer: gated trail events with bounded scan, batches and fail-closed locks (T 5)"
 ```
 
@@ -881,10 +1098,10 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 - Test: `engram/tests/test_trail_observer.py`
 
 **Interfaces:**
-- Consumes: Task 6; `trails.step_support`, `trails.is_road`; `EvolutionEngine.propose`, `latest_disposition`,
-  `lineage` (`engram/category_evolution.py:281`, `:408`, `:424`); `CellDraft`, `Boundary`
+- Consumes: Task 6; `trails.is_road` (and `trails.step_support` in tests only); `EvolutionEngine.propose`,
+  `latest_disposition`, `lineage` (`engram/category_evolution.py:281`, `:408`, `:424`); `CellDraft`, `Boundary`
   (`engram/categories.py:249-266`); `CategoryObserver.proxy_id`.
-- Produces: `CategoryObserver._propose_trail_roads(trail_set, events, batch_scope, counts) -> int`; the
+- Produces: `CategoryObserver._propose_trail_roads(scratch, graph_conn, batch_scope, counts) -> int`; the
   `report()["trails"]` block with exactly `sessions_read`, `events_written`, `trail_events`,
   `steps_support_2_full`, `steps_support_2_revisit`, `co_cited_steps`, `suggested_steps`,
   `steps_supported_not_eligible`, `roads_proposed`, `detours_proposed`, `any_committed`, `truncations`,
@@ -958,14 +1175,17 @@ Expected: FAIL, `TypeError: 'NoneType' object is not subscriptable` (no road cel
 
 - [ ] **Step 3: Implement road proposals and the report block**
 
-Every batch keeps Task 6's lock order. After the events, one batch reads the current events again and copies them
-out. Outside both locks, the pass recounts support from that copy (current lane filtered, revisit view from
-`MemoryLookup` over `graph_conn`). It then proposes at most `MAX_ROADS_PER_PASS` eligible roads not yet proposed,
-`PROPOSALS_PER_BATCH` per batch. Each batch re-checks `latest_disposition` of its rewrite ids inside its transaction.
-Create proxy 0-cells for both endpoints inside the same transaction when missing, as `_observe_recall` does
-(`engram/category_evolution.py:1145-1157`), with `context_id=None` and `created_event_id` the newest supporting
-event. Evidence: the earliest and latest supporting sessions' events, then the rest earliest first, at most
-`ROAD_EVIDENCE`. No weight observation is written.
+Every batch keeps Task 6's lock order. After the events, outside both locks, the pass streams the current events
+again through its read-only connection, one at a time (T 5, "In bounded memory"). For each it derives the full and
+revisit steps (current lane filtered, revisit view from `MemoryLookup` over `graph_conn`) and writes them as
+`(view, session, lane, src, dst, t, co_cited, suggested)` rows to the pass's scratch file. One SQL query there gives
+each step's support, span and latest time (TR5) and the counts of the report block; another gives the eligible steps
+with no `trail-road` rewrite yet, at most `MAX_ROADS_PER_PASS`. Nothing holds a step per row in memory. It then
+proposes those roads, `PROPOSALS_PER_BATCH` per batch. Each batch re-checks `latest_disposition` of its rewrite ids
+inside its transaction. Create proxy 0-cells for both endpoints inside the same transaction when missing, as
+`_observe_recall` does (`engram/category_evolution.py:1145-1157`), with `context_id=None` and `created_event_id` the
+newest supporting event. Evidence: the earliest and latest supporting sessions' events, then the rest earliest
+first, at most `ROAD_EVIDENCE`. No weight observation is written.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -989,9 +1209,17 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 - Consumes: Tasks 3, 4 and 7.
 - Produces:
   - `Detour`, a frozen dataclass `(lane: str, x: str, y: str, long: tuple[tuple[str, str], ...], short:
-    tuple[tuple[str, str], ...], sessions: tuple[str, ...], first_touch: tuple[int, ...])` with `saving -> float`
-    and `persistence -> float`;
-  - `trails.find_detours(trail_set: TrailSet, lane: str, roads: frozenset[tuple[str, str]]) -> list[Detour]`;
+    tuple[tuple[str, str], ...], evidence: tuple[str, ...], sessions: int, first: int, last: int)` with `saving ->
+    float` and `persistence -> float`. `evidence` holds at most `DETOUR_EVIDENCE` of the sessions that ran either
+    side, the earliest and the latest by first touch and then the earliest; `sessions` counts them all; `first` and
+    `last` are their earliest and latest first touch;
+  - `trails.find_detours(trails_: Iterable[Trail], lane: str, roads: Container[tuple[str, str]], *, scratch:
+    Scratch | None = None) -> Iterator[Detour]`: it writes each travelled run to the scratch file; SQL there
+    aggregates each route's sessions and pairs the routes of one `(x, y)` key; and it yields one detour at a time, in
+    TR11's order (T 5, R21; the fresh check's M2). It holds one trail, one pair of routes and one detour at once, never
+    a list of detours or a route's list of sessions. Tests pass `TrailSet.trails()` and a set; the pass passes its
+    stream of current events' trails and its scratch table of stored roads, and stops after `MAX_DETOURS_PER_PASS`
+    proposals;
   - `CategoryObserver._propose_trail_detours(detours, batch_scope, counts) -> int`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1007,7 +1235,7 @@ def detour_store(tmp_path, long_names, short_names, days=(2, 4, 6)):
 def test_mf4_overlapping_routes_give_only_the_vertex_disjoint_pair(tmp_path):
     s = detour_store(tmp_path, ["x", "a", "b", "y"], ["x", "a", "y"])
     obs = observer(tmp_path); obs.observe_trails(s.ro(), T(at(9, 0)))
-    (d,) = trails.find_detours(trails.derive_trails(s.ro(), T(at(9, 0))), "work", road_set(obs))
+    (d,) = trails.find_detours(trails.derive_trails(s.ro(), T(at(9, 0))).trails(), "work", road_set(obs))
     x, a, b, y = s.ids("x a b y")
     assert (d.x, d.y, d.long, d.short) == (a, y, ((a, b), (b, y)), ((a, y),))
     (rid,) = detour_rewrites(obs); members = obs.engine.lineage(rid)
@@ -1042,6 +1270,19 @@ def test_sf3_a_detour_waits_for_the_cells_of_its_roads(tmp_path, monkeypatch):
     assert detour_rewrites(obs) == [] and obs.report()["last_error"] is None
     for _ in range(3): obs.observe_trails(s.ro(), T(at(9, 0)))
     assert len(road_set(obs)) == 4 and len(detour_rewrites(obs)) == 1 and obs.report()["last_error"] is None
+
+def test_detours_come_one_at_a_time_and_the_pass_stops_at_its_cap(tmp_path, monkeypatch):    # T 5; the check's M2
+    s = detour_store(tmp_path, ["x", "a", "b", "y"], ["x", "a", "y"])
+    detour_store(tmp_path, ["p", "q", "r", "t"], ["p", "r", "t"], days=(3, 5, 7))       # a second detour, (p, r)
+    monkeypatch.setattr(trails, "MAX_DETOURS_PER_PASS", 1)                              # TR13
+    obs = observer(tmp_path)
+    assert obs.observe_trails(s.ro(), T(at(9, 0)))["detours_proposed"] == 1
+    assert obs.observe_trails(s.ro(), T(at(9, 0)))["detours_proposed"] == 1 and len(detour_rewrites(obs)) == 2
+    found = trails.find_detours(trails.derive_trails(s.ro(), T(at(9, 0))).trails(), "work", road_set(obs))
+    assert isinstance(found, collections.abc.Iterator)                                # a generator, not a list
+    ds = list(found)
+    assert [(d.x, d.y) for d in ds] == sorted((d.x, d.y) for d in ds)                   # TR11's order
+    assert all(d.sessions == 6 and len(d.evidence) == 6 and d.first < d.last for d in ds)   # 3 runs of each side
 ```
 
 `road_set(obs)` and `detour_rewrites(obs)` join `trails_support.py`.
@@ -1076,8 +1317,20 @@ for (x, y), routes in sorted(runs.items()):
         yield Detour(...)                    # kept when persistence >= 0.10
 ```
 
+This sketch holds `runs` in memory. The real search keeps the same order and results with `runs` in the scratch file
+(T 5, R21): each travelled run is a row `(x, y, route, session, first_touch)`, with the route as its road ids joined
+by a space, and a second table holds each route's inner memories. SQL gives the keys with at least two distinct
+routes, in `(x, y)` order. For one key, one query yields its eligible pairs, of different lengths, with no shared
+inner memory and a saving over `DETOUR_SAVING`, in TR11's order, one row at a time. For each pair a last query gives
+its evidence: the union of both sides' sessions ordered by `(first touch, session)`, the earliest
+`DETOUR_EVIDENCE − 1` and the latest, with the count and the earliest and latest first touch, from which persistence
+follows. So the search holds one trail, one pair and one detour at once (T 10.1: a detour at its largest, 5,351
+bytes as measured), never a key's list of routes or a route's list of sessions. The trails come one at a time from
+the caller's iterable.
+
 `roads` is the set of road steps of the lane whose `trail step` cell is stored in the v2 store, proposed this pass
-or earlier, read in one batch after the road proposals. It is not every road eligible in `graph.db` mode. With the
+or earlier. The pass reads it after the road proposals into a scratch table, a batch at a time, and looks steps up
+there; tests pass a set. It is not every road eligible in `graph.db` mode. With the
 cap of 64 roads a pass, an eligible road may have no cell yet, and a detour over it would fail `validate_path`
 (`engram/categories.py:1724-1745`) and `propose`'s witness check (`engram/category_evolution.py:369-371`). Such a
 detour waits for a later pass. The search itself runs outside both locks; proposals go `PROPOSALS_PER_BATCH` per
@@ -1087,12 +1340,13 @@ Before proposing, call `validate_path` on both sides and check their endpoints m
 `locus_id` proxy(X); witnesses the distinct roads of both sides, at most `DETOUR_WITNESSES`; evidence the earliest
 and latest, then earliest first, at most `DETOUR_EVIDENCE`; `cohesion_gain` the saving, `complexity_cost` 0.25,
 `persistence_score = min(1, (latest − earliest) // 10**6 / PERSISTENCE_UNIT_S)` over first-touch times. At most
-`MAX_DETOURS_PER_PASS`, after the roads.
+`MAX_DETOURS_PER_PASS`, after the roads: the pass takes detours from the generator until it has proposed that many,
+skipping any whose rewrite id already exists, and drops the generator.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trail_observer.py`
-Expected: PASS, 18 passed.
+Expected: PASS, 19 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1114,7 +1368,8 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 - Produces: `server._run_trail_observer(maint, guarded: bool) -> None`. It runs when `category_evolution.enabled is
   True` and `trails is True` and an observer exists; when `auto_commit is not False` it writes nothing and notes
   `maint.note("trail-observe", skipped="auto_commit")`. It opens `Storage.open_read_only(DB_PATH)`, closes it in a
-  `finally`, and passes `batch_scope=lambda: _maintenance_step_scope(guarded)` and `own_session_id=_session_id`.
+  `finally`, and passes `batch_scope=lambda: _maintenance_step_scope(guarded)`, `own_session_id=_session_id` and
+  `scratch_dir=_trail_scratch_dir()` (TR28: `trails-scratch/` beside `DB_PATH`, made 0700, emptied before and after).
   `trails_support.trail_init_env(tmp_path, monkeypatch, toml)` drives the real initializer, as
   `tests/test_category_server.py:222-260` does, with graph and watcher off and a fake embedder. It exposes
   `server`, `store`, `v2_path`, `start()` (initialize and run maintenance inline), `stop()` (run the generation's
@@ -1161,7 +1416,9 @@ def test_a_failing_pass_is_recorded_and_never_blocks_startup_or_recall(tmp_path,
 ```
 
 `GATE_ON`, `seed_road_sessions`, `legacy_replay` (through `category_evolution.import_legacy_category`,
-`engram/category_evolution.py:2276`), `spy`, `recording`, `raises` and `step` join `trails_support.py`. `GATE_ON`
+`engram/category_evolution.py:2276`), `spy`, `recording` and `step` join `trails_support.py` (`raises` is Task 4's).
+The pass's scratch directory is `Path(DB_PATH).parent / "trails-scratch"` (TR28), and `test_the_pass_runs_before_…`
+also asserts that it holds no file once `start()` returns. `GATE_ON`
 leaves `[persistence]` off, so the prune step calls `Storage.prune_decayed`. `env.store` seeds the store before
 `_init` runs, so it is the helper's own `Storage`, not `server._storage`; the order test patches the class.
 `spy(monkeypatch, "mod.Class.attr")` reads the attribute with `inspect.getattr_static` and wraps a classmethod's
@@ -1206,22 +1463,31 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 - Produces:
   - `angle(a: np.ndarray, b: np.ndarray) -> float`, `2·atan2(‖â − b̂‖, ‖â + b̂‖)` in float64;
   - `Edge`, a `NamedTuple` `(dst: int, cost: float, support: int, road: bool, latest: int | None, co_cited: bool,
-    suggested: bool)`;
-  - `TrailGraph`, a dataclass `(lane, as_of, nodes: tuple[str, ...], index: dict[str, int], vectors: np.ndarray
-    (float32, n × d), has_vec: np.ndarray (bool), out: list[list[Edge]], layers: tuple[str, ...], trails:
-    dict[str, TrailRef], through: list[tuple[str, ...]], digest: str)` with `remove(ids: Iterable[str]) -> None`;
-    `TrailRef` is `(nodes: tuple[int, ...], kinds: tuple[str, ...], times: tuple[int, ...], truncated: bool,
-    newest: int, flags: tuple[tuple[bool, bool], ...])`;
-  - `TrailGraph.build(lane, as_of, nodes, vectors: Mapping[str, np.ndarray | None], steps: Iterable[tuple[str, str,
-    int, bool, int | None, bool, bool]], *, layers=None, trails=None) -> TrailGraph`, costing each edge
-    `θ(u, v)·(1 + 1/max(1, support))`, or `π·(1 + 1/max(1, support))` when a vector is missing;
-  - `TrailGraph.from_trails(trail_set, lane, vectors) -> TrailGraph` (`graph.db` mode, road = `is_road`);
-  - `vectors_for(conn, ids) -> dict[str, np.ndarray]` from `episode_vectors` and `semantic_vectors`, float32;
+    suggested: bool)`, the form in which callers read an edge; no graph stores one (TR25);
+  - `TrailGraph`, a dataclass of arrays (TR25; T R22): `lane`, `as_of`, `nodes: tuple[str, ...]` sorted by id,
+    `index: dict[str, int]`, `vectors: np.ndarray` (float32, n × d), `has_vec`, `alive` (bool), `layers` (uint8),
+    the edge arrays `offsets`, `dst`, `cost`, `support`, `latest`, `flags`, `trails: TrailArrays`, `digest: str`;
+    `out` a read-only view with `out[u] -> list[Edge]` built on access and `len(out) == n`; `remove(ids:
+    Iterable[str]) -> None` clears `alive`; `nbytes() -> int`, the arrays' bytes plus the ids';
+  - `TrailArrays` (TR25): per session `session_ids`, `start`, `newest`, `truncated`; per touch `node`, `t`, `bits`;
+    postings `through_offsets`, `through`; `trail(i) -> TrailRef` built on access, `TrailRef` being `(nodes:
+    tuple[int, ...], kinds: tuple[str, ...], times: tuple[int, ...], truncated: bool, newest: int, flags:
+    tuple[tuple[bool, bool], ...])`, and `sessions_through(node) -> np.ndarray`;
+  - `TrailGraph.build(lane, as_of, nodes, vectors, steps: Iterable[tuple[str, str, int, bool, int | None, bool,
+    bool]], *, layers=None, trails=None) -> TrailGraph`, costing each edge `θ(u, v)·(1 + 1/max(1, support))`, or
+    `π·(1 + 1/max(1, support))` when a vector is missing. `vectors` is a mapping (tests) or the pair `read_vectors`
+    returns, which it takes without a copy;
+  - `TrailGraph.from_trails(trail_set, lane, vectors) -> TrailGraph` (`graph.db` mode, road = `is_road`), for tests
+    and small sets;
+  - `vectors_for(conn, ids) -> dict[str, np.ndarray]` from `episode_vectors` and `semantic_vectors`, float32, for
+    tests and a few ids; `read_vectors(conn, nodes) -> tuple[np.ndarray, np.ndarray]`, which fills one float32
+    n × 768 array and its `has_vec` mask, `VECTOR_CHUNK` ids per query, so no second copy is ever held (T 6.6);
   - `Search`, a `NamedTuple` `(end: str, path: tuple[int, ...], cost: float | None, expansions: int, pred: int |
     None)`, `end` one of `goal`, `no_route`, `truncated`;
   - `astar(graph, starts: Mapping[int, float], goals: frozenset[int], h: Callable[[int], float], *,
     max_expansions: int = MAX_EXPANSIONS, wall_s: float | None = None, clock=time.monotonic, trace: list | None =
-    None) -> Search`, open list keyed `(f, h, memory id)`, a relaxation only when strictly lower;
+    None) -> Search`, open list keyed `(f, h, node index)`, which orders as `(f, h, memory id)` since the nodes are
+    sorted by id (TR25), a relaxation only when strictly lower, skipping dead nodes;
   - `route(graph, start_id, goal_id, *, wall_s=None, clock=time.monotonic) -> dict`: `{"route": [ids],
     "steps": [{"support", "road"}], "end", "detours_avoided": []}`, ids only.
 
@@ -1265,23 +1531,34 @@ def test_route_names_ids_with_each_steps_support_and_road_status():
     out = trails.route(hand_graph(), "s", "t")
     assert out["route"] == ["s", "m2", "m3", "t"] and [x["road"] for x in out["steps"]] == [True, False, True]
     assert all(isinstance(x["support"], int) for x in out["steps"])
+
+def test_the_graph_is_arrays_sorted_by_id(tmp_path):                       # TR25; T R22
+    g = hand_graph()
+    assert g.nodes == tuple(sorted(g.nodes))
+    assert (g.dst.dtype, g.cost.dtype, g.support.dtype, g.latest.dtype, g.flags.dtype) == \
+           (np.int32, np.float64, np.int32, np.int64, np.uint8)
+    assert all(isinstance(e, trails.Edge) for es in g.out for e in es)        # built on access
+    assert g.nbytes() == sum(a.nbytes for a in arrays_of(g)) + ids_bytes(g)
+    g.remove(["m2"])
+    assert trails.route(g, "s", "t")["route"] != ["s", "m2", "m3", "t"]
 ```
 
-`u(x)` (unit vector), `hand_graph()`, `HAND_COST` and `chain_graph(n)` join `trails_support.py`.
+`u(x)` (unit vector), `hand_graph()`, `HAND_COST`, `chain_graph(n)`, `arrays_of(graph)` and `ids_bytes(graph)` join
+`trails_support.py`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "r4 or astar or missing_vectors or bound or route_names"`
+Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "r4 or astar or missing_vectors or bound or route_names or arrays_sorted"`
 Expected: FAIL, `AttributeError: module 'trails' has no attribute 'angle'`.
 
-- [ ] **Step 3: Implement `angle`, `TrailGraph`, `vectors_for`, `astar` and `route`**
+- [ ] **Step 3: Implement `angle`, `TrailGraph`, `TrailArrays`, `vectors_for`, `read_vectors`, `astar` and `route`**
 
-`route` uses `h(n) = θ(n, goal)`, or 0 when either vector is missing (T 6.1), `heapq` with the `(f, h, id)` key, and
-`MAX_EXPANSIONS`.
+`route` uses `h(n) = θ(n, goal)`, or 0 when either vector is missing (T 6.1), `heapq` with the `(f, h, node index)`
+key, and `MAX_EXPANSIONS`. A* reads the edge arrays directly, never through `out`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 5 passed.
+Run: the command of step 2. Expected: PASS, 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1394,11 +1671,17 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 **Interfaces:**
 - Consumes: Tasks 7, 8, 10.
 - Produces:
-  - `open_categories_ro(path) -> sqlite3.Connection` (`file:…?mode=ro`, `query_only`);
-  - `TrailGraph.from_categories(trail_set, lane, vectors, categories_conn, lookup) -> TrailGraph`: footpaths from
-    `graph.db`, road status from stored road cells and detours from level-2 cells, read through `cat_boundaries`
-    and the store's `validate_path`, keeping a cell unless its rewrite's latest disposition is `rejected` and
-    dropping a cell whose endpoint's current lane differs from its payload's lane;
+  - `open_categories_ro(path) -> sqlite3.Connection` (`file:…?mode=ro`, `query_only`), written in Task 6, which the
+    pass needs first;
+  - `apply_categories(graph, categories_conn, lookup) -> TrailGraph`: the same graph with road status from stored
+    road cells and detours from level-2 cells, read through `cat_boundaries` and the store's `validate_path`,
+    keeping a cell unless its rewrite's latest disposition is `rejected` and dropping a cell whose endpoint's
+    current lane differs from its payload's lane. It reads only the cells whose endpoints' proxies are the graph's
+    nodes, 500 proxies a query, so it holds no more than the graph does (T R21). The CLI applies it to the bounded
+    graph of Task 21;
+  - `TrailGraph.from_categories(trail_set, lane, vectors, categories_conn, lookup) -> TrailGraph`:
+    `apply_categories(TrailGraph.from_trails(trail_set, lane, vectors), categories_conn, lookup)`, with footpaths from
+    `graph.db`;
   - `TrailGraph.detours`: `list[Detour | StoredDetour]`; `route()` now fills `detours_avoided` with
     `{"x", "y", "detour", "sessions"}` for each detour whose X and Y the route visits, X first, by its short side.
 
@@ -1451,13 +1734,13 @@ def test_c3_a_re_laned_memory_in_an_unscanned_old_trail_never_reaches_a_work_rou
 Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "mf6 or mf8_re or c3_a"`
 Expected: FAIL, `AttributeError: type object 'TrailGraph' has no attribute 'from_categories'`.
 
-- [ ] **Step 3: Implement `open_categories_ro`, `from_categories` and `detours_avoided`**
+- [ ] **Step 3: Implement `apply_categories`, `from_categories` and `detours_avoided`**
 
 `from_categories` wraps the read-only connection in an `EvolvingCategoryStore` only if that opens it without
 writing; otherwise it reads `cat_cells`, `cat_boundaries` and the disposition events with the same queries
 `validate_path` and `latest_disposition` use (`engram/categories.py:1674-1745`;
 `engram/category_evolution.py:408-421`). A sessions count N for a stored detour comes from the travelled runs of
-`find_detours` on the same trail set.
+`find_detours` over the graph's own trails.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1651,7 +1934,9 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
     `answer_locate(graph, located, *, summary_of, sources, cut=(), degraded=())`,
     `answer_route(graph, result: RouteToGoal, stations, *, q, summary_of, sources, cut=(), degraded=())`,
     `answer_next(graph, stations, forwards, *, summary_of, sources, cut=(), degraded=())`;
-    `summary_of: Callable[[str], str | None]` returns a memory's content, read when the answer is built;
+    `summary_of: Callable[[str], str | None]` returns at most the first `TEXT_PIECE_BYTES` of a memory's content,
+    read with Task 1's `text_head` when the answer is built, so a long content is never read whole (T 6.5, R25;
+    TR30). Task 18's server passes one that does so; Task 1's test covers `text_head`;
   - `fit(answer: dict) -> tuple[dict, bool]`: at most `ANSWER_BYTES` of UTF-8 compact JSON, dropping in T 6.5's
     order, `True` when it shrank;
   - `named_ids(answer: dict) -> list[str]`, every id the answer names, in order;
@@ -1742,11 +2027,16 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
   - `ToolGraph`, a dataclass `(as_of: int, lanes: dict[str, TrailGraph], digest: str, truncated: dict[str, bool],
     lanes_invalid: bool, sessions: dict[str, int], build_seconds: float, nbytes: int, laid_by: str)`;
   - `build_tool_graph(conn, as_of: int, lanes: tuple[str, ...] | None, *, own_session_id: str | None, laid_by:
-    str, between_batches: Callable[[], None] = lambda: None, clock=time.monotonic) -> ToolGraph | None`. `None`
-    lanes (invalid) builds nothing and sets `lanes_invalid`. Each lane gets `TOOL_SESSIONS` sessions and an equal
-    share of `TOOL_NODES` and `TOOL_STEPS`, stopping a lane at the first session that would pass its share and
-    marking it `truncated`. It calls `between_batches()` every `BUILD_BATCH` sessions; an exception from it
-    propagates and the partial graph is dropped. Vectors are float32; each step's angle is computed once.
+    str, between_batches: Callable[[], None] = lambda: None, clock=time.monotonic, scratch: Scratch | None = None)
+    -> ToolGraph | None`. `None` lanes (invalid) builds nothing and sets `lanes_invalid`. It reads `iter_trails`
+    newest first, one session at a time (T 6.6, R21). Each lane gets `TOOL_SESSIONS` sessions and an equal share of
+    `TOOL_NODES`, `TOOL_STEPS` and `TOOL_TOUCHES`, stopping a lane at the first session that would pass its share and
+    marking it `truncated`. It keeps each session's full trail as `TrailArrays` rows and its full and revisit steps
+    as numpy step records `(u, v, session, t, flags)`, at most 2 × `TOOL_TOUCHES`, aggregated by one sort at the end;
+    no dict per step, and no revisit trail is kept. It reads vectors with `read_vectors`, `VECTOR_CHUNK` ids a
+    query, into one float32 array. It calls `between_batches()` every `BUILD_BATCH` sessions; an exception from it
+    propagates and the partial graph is dropped. Each step's angle is computed once. `nbytes` is the sum of the
+    graphs' `nbytes()`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1766,7 +2056,8 @@ def test_laid_by_names_the_ledger_owner_or_this_store(tmp_path):
     assert trails.laid_by(home, iid, "default") == "this store (default)"           # unreadable
 
 def test_bounds_keep_the_newest_and_split_between_lanes(tmp_path, monkeypatch):
-    assert (trails.TOOL_SESSIONS, trails.TOOL_NODES, trails.TOOL_STEPS) == (4096, 20_000, 262_144)
+    assert (trails.TOOL_SESSIONS, trails.TOOL_NODES, trails.TOOL_STEPS, trails.TOOL_TOUCHES) == \
+           (4096, 20_000, 262_144, 262_144)
     monkeypatch.setattr(trails, "TOOL_SESSIONS", 10); monkeypatch.setattr(trails, "TOOL_NODES", 40)
     s = Store(tmp_path)
     for i in range(30): s.walk(f"W{i:02d}", [f"w{i}a", f"w{i}b"], minute(i), create=True)
@@ -1778,6 +2069,19 @@ def test_bounds_keep_the_newest_and_split_between_lanes(tmp_path, monkeypatch):
     monkeypatch.setattr(trails, "TOOL_STEPS", 6)                          # one distinct step per session
     three = trails.build_tool_graph(s.ro(), T(at(3, 0)), ("work",), own_session_id=None, laid_by="x")
     assert three.sessions["work"] == 6 and three.truncated["work"]
+    monkeypatch.setattr(trails, "TOOL_STEPS", 262_144); monkeypatch.setattr(trails, "TOOL_TOUCHES", 8)
+    four = trails.build_tool_graph(s.ro(), T(at(3, 0)), ("work",), own_session_id=None, laid_by="x")
+    assert four.sessions["work"] == 4 and four.truncated["work"]            # two touches per session
+
+def test_the_build_streams_and_holds_arrays(tmp_path, monkeypatch):            # T 6.6, R21, R22
+    s = vector_store(tmp_path)
+    monkeypatch.setattr(trails, "derive_trails", raises(AssertionError("holds every trail")))
+    monkeypatch.setattr(trails, "step_support", raises(AssertionError("holds every step")))
+    tg = trails.build_tool_graph(batch_only(s.ro(), max_rows=trails.READ_BATCH_ROWS), T(at(3, 0)), ("work",),
+                                 own_session_id=None, laid_by="x")
+    g = tg.lanes["work"]
+    assert tg.nbytes == g.nbytes() and g.nodes == tuple(sorted(g.nodes))
+    assert not hasattr(g.trails, "revisit")                                    # revisit trails are not kept
 
 def test_vectors_are_float32_and_angles_match_float64(tmp_path):
     s = vector_store(tmp_path)                                    # walks over memories with random vectors
@@ -1808,17 +2112,18 @@ def test_a_refused_checkpoint_stops_the_build(tmp_path):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trail_tools.py -k "laid_by or bounds or float32 or invalid_lanes or checkpoint"`
+Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trail_tools.py -k "laid_by or bounds or float32 or invalid_lanes or checkpoint or streams_and"`
 Expected: FAIL, `AttributeError: module 'trails' has no attribute 'laid_by'`.
 
 - [ ] **Step 3: Implement `laid_by`, `ToolGraph` and `build_tool_graph`**
 
 `laid_by` imports `permission_ledger` inside the function, catches `FileNotFoundError`, `LedgerUnreadable` and
-`sqlite3.Error`, and closes the ledger in a `finally`. The digest is TR6's `graph_digest`.
+`sqlite3.Error`, and closes the ledger in a `finally`. The digest is TR6's `graph_digest`. The arrays follow TR25,
+and T 10.1 gives what they come to at the bounds: 73.2 MiB held, 83.1 MiB at most while building.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 5 passed.
+Run: the command of step 2. Expected: PASS, 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1903,7 +2208,8 @@ Expected: FAIL, `AttributeError: module 'server' has no attribute '_register_tra
 - [ ] **Step 3: Implement registration, the build step and the checkpoint**
 
 The build opens `Storage.open_read_only(DB_PATH)`, registers it with `_register_server_cleanup(conn, conn.close,
-"trail graph build")`, reads `laid_by` once (`trails.laid_by(ENGRAM_HOME, store_identity.effective_id(conn.conn),
+"trail graph build")`, opens its `trails.Scratch(_trail_scratch_dir())` (TR28) and removes it in the same `finally`
+that closes the connection, reads `laid_by` once (`trails.laid_by(ENGRAM_HOME, store_identity.effective_id(conn.conn),
 _instance_name or "default")`), builds with `between_batches=_trail_checkpoint` and the lanes of
 `trails.enabled_lanes(_config.trails.lanes)`, closes the connection in a `finally`, and swaps the graph in under
 `_maintenance_step_scope(guarded)`. A failure is logged by type, recorded in the step, and leaves the tools answering
@@ -2053,7 +2359,8 @@ ids (TR15), the inputs. Embed `[x, y]` (or `[y]`, or `[x]`) once with `trails.em
 `fts_hits` over `_storage.search_fts_ids`. Locate, then route or forward lookup; `wall_s=ROUTE_WALL_S` for the
 route. Recheck every node of the computed route, every station and every other named memory, hidden stops included;
 on a failure remove those memories from the cached graph and compute once more, and on a second failure answer
-`{"end": "stale"}`. Summaries are read from `_storage` when the answer is built. `fit` the answer, then write one
+`{"end": "stale"}`. Summaries are read from `_storage` when the answer is built, one memory at a time, each content
+dropped once its summary is cut (T 10.1). `fit` the answer, then write one
 receipt when it names a memory, with `receipt_id = str(uuid.uuid4())` passed as `add_log_entry`'s `id`, so the row's
 id is the receipt id (T 6.6). `trail_next` runs the forward lookup from the first `FORWARD_STATIONS` stations only
 (T 6.4). When the context or goal was longer than `MAX_TEXT` characters, the answer carries `cut` (TR17), unless it
@@ -2085,8 +2392,8 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
   dict` (`{"available": False}` without a reporter); `reflect(focus="trails")`; `server._trail_tools_report() ->
   dict`, `{"available": False}` when the tools aren't registered, else the graph's `as_of`, `sessions`, `nodes`,
   `steps`, `roads`, `truncated`, `lanes_invalid`, `build_seconds`, `bytes`, `calls`, `ends`, `shrunk`,
-  `receipts_written`. `analyze_trails` adds, through its own storage, `route_shown_rows` and `suggested_touches`
-  (suggested touches in closed sessions at the graph's `as_of`).
+  `receipts_written`, and `suggested_touches`, counted from the graph's touch bits (T 6.6, R21: `reflect` derives no
+  session). `analyze_trails` adds `route_shown_rows`, counted with one SQL `COUNT(*)` through its own storage.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2126,47 +2433,50 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 add engram/reflection.py engr
 git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Reflection: reflect(focus='trails') through a trails_reporter (T 6.6)"
 ```
 
-### Task 20: The in-process model loads from the local cache only when asked
+### Task 20: The evaluation's embedder is the shared service only
+
+T's revision 9 withdrew this task's earlier form, a `local_files_only` keyword on the in-process model (T R19): a model
+in process needs about 1.5 GB more than a process without one, past the use's 512 MiB unit (T 10.1). `embeddings.py`
+is unchanged.
 
 **Files:**
-- Modify: `engram/embeddings.py` (`NomicEmbedProvider.__init__`, `:73-84`; `create_embedding_provider`,
-  `:200-207`)
+- Modify: `engram/trails.py`
 - Test: `engram/tests/test_trails_embeddings.py`
 
 **Interfaces:**
-- Produces: `NomicEmbedProvider(local_files_only: bool = False)`, passing the keyword to fastembed's `TextEmbedding`;
-  `create_embedding_provider(local_files_only: bool = False)`, passing it only to the in-process provider. Servers
-  and `embedder_service.py` keep calling without it. fastembed pops the keyword in
-  `text/text_embedding_base.py:19`; it reaches the loader through `**kwargs` at `text/text_embedding.py:114-123` and
-  is used at `text/onnx_embedding.py:254` (the final check's FN2).
+- Consumes: `embeddings.RemoteEmbedProvider(socket_path)` (`engram/embeddings.py:137-153`) and
+  `EmbedderUnavailableError` (`:133-134`).
+- Produces: `open_embedder() -> tuple[object | None, dict | None]`. With `ENGRAM_EMBEDDER_SOCKET` set and not empty,
+  `(embeddings.RemoteEmbedProvider(path), {"provider": "shared", "model": EMBED_MODEL})`; otherwise `(None, None)`.
+  It never calls `create_embedding_provider()`, which makes the in-process model when the variable is unset
+  (`engram/embeddings.py:200-207`), and never imports fastembed, which only `NomicEmbedProvider.__init__` imports
+  (`:73-74`). `RemoteEmbedProvider.__init__` only stores the path and first connects on `embed` (`:151-153`,
+  `:158-163`), so a socket nobody serves passes `open_embedder`; Task 24 makes W "not evaluable: no embedder" then.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_the_keyword_reaches_text_embedding(monkeypatch):
-    seen = []
-    monkeypatch.setattr("fastembed.TextEmbedding", recorder(seen))
-    embeddings.NomicEmbedProvider(local_files_only=True); embeddings.NomicEmbedProvider()
-    assert [kw["local_files_only"] for kw in seen] == [True, False]
-
-def test_create_passes_it_only_to_the_in_process_provider(monkeypatch):
-    seen = []; monkeypatch.setattr("fastembed.TextEmbedding", recorder(seen))
-    monkeypatch.delenv("ENGRAM_EMBEDDER_SOCKET", raising=False)
-    assert isinstance(embeddings.create_embedding_provider(local_files_only=True), embeddings.NomicEmbedProvider)
-    assert seen[-1]["local_files_only"] is True
+def test_with_the_socket_it_is_the_shared_client(monkeypatch):
     monkeypatch.setenv("ENGRAM_EMBEDDER_SOCKET", "/nonexistent.sock")
-    assert isinstance(embeddings.create_embedding_provider(local_files_only=True), embeddings.RemoteEmbedProvider)
-```
+    provider, info = trails.open_embedder()
+    assert isinstance(provider, embeddings.RemoteEmbedProvider)
+    assert info == {"provider": "shared", "model": trails.EMBED_MODEL}
 
-`recorder(seen)` returns a stand-in class whose `__init__` records its keywords and whose `model.tokenizer` accepts
-`enable_truncation`; it joins `trails_support.py`.
+def test_without_the_socket_there_is_no_provider_and_no_model(monkeypatch):
+    monkeypatch.setattr("embeddings.NomicEmbedProvider.__init__", raises(AssertionError("loaded a local model")))
+    monkeypatch.setitem(sys.modules, "fastembed", None)                     # any import of it would fail
+    for value in (None, ""):
+        if value is None: monkeypatch.delenv("ENGRAM_EMBEDDER_SOCKET", raising=False)
+        else: monkeypatch.setenv("ENGRAM_EMBEDDER_SOCKET", value)
+        assert trails.open_embedder() == (None, None)
+```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails_embeddings.py`
-Expected: FAIL, `TypeError: NomicEmbedProvider.__init__() got an unexpected keyword argument 'local_files_only'`.
+Expected: FAIL, `AttributeError: module 'trails' has no attribute 'open_embedder'`.
 
-- [ ] **Step 3: Add the keyword to both**
+- [ ] **Step 3: Implement `open_embedder`**
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -2175,8 +2485,8 @@ Run: the command of step 2, adding `tests/test_embeddings.py tests/test_embedder
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /home/andy/superyak/.worktrees/trail-step-1 add engram/embeddings.py engram/tests/trails_support.py engram/tests/test_trails_embeddings.py
-git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Embeddings: local_files_only for the in-process model, default unchanged (T 7 step 8.2, R19)"
+git -C /home/andy/superyak/.worktrees/trail-step-1 add engram/trails.py engram/tests/test_trails_embeddings.py
+git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Trails: the evaluation's embedder is the shared service only, never a model in process (T 7 step 8.2, R19)"
 ```
 
 ### Task 21: The read-only CLI
@@ -2186,8 +2496,10 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 - Test: `engram/tests/test_trails_cli.py`
 
 **Interfaces:**
-- Consumes: Tasks 10 to 14; `paths.connect_ro` (`engram/paths.py:397-409`).
-- Produces: `main(argv: list[str] | None = None) -> int` with T 11's flags exactly: a positional path,
+- Consumes: Tasks 10 to 14 and 16; `paths.connect_ro` (`engram/paths.py:397-409`).
+- Produces: `main(argv: list[str] | None = None) -> int` with T 11's flags exactly. The route modes build the tool
+  graph's bounded graph with `build_tool_graph` on the copy (T 6.6, 11), and `--categories` applies
+  `apply_categories` to it; none of them derives a graph of every session (T 10.1). Its flags: a positional path,
   `--categories PATH`, `--lane LANE` (default `work` on a plain copy), `--as-of T` (ISO, default the newest
   timestamp in the store), `--route A B`, `--route-goal A G`, `--next A`, `--evaluate`, `--seed N`,
   `--imprint-use USE_ID`, `--deadline SECONDS`, `--json`; `newest_timestamp(conn) -> int`. Output holds ids,
@@ -2211,6 +2523,11 @@ def test_the_cli_changes_no_byte_and_prints_ids_and_counts_only(tmp_path, capsys
 def test_as_of_defaults_to_the_newest_timestamp(tmp_path):
     s, _, _ = cli_store(tmp_path)
     assert trails.newest_timestamp(s.ro()) == max(T(r) for r in s.all_timestamps())
+
+def test_route_modes_build_the_bounded_graph(tmp_path, capsys, monkeypatch):     # T 10.1, R22
+    s, _, names = cli_store(tmp_path); built = spy(monkeypatch, "trails.build_tool_graph")
+    monkeypatch.setattr(trails, "derive_trails", raises(AssertionError("a graph of every session")))
+    assert trails.main([str(s.path), "--json", "--route", names["A"], names["B"]]) == 0 and built
 ```
 
 `cli_store(tmp_path)` builds a road store, runs the observer pass into a `categories_v2.db`, closes both writers so
@@ -2231,7 +2548,7 @@ Each database opens `mode=ro` with `query_only`; sqlite-vec loads as `paths.conn
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 5 passed.
+Run: the command of step 2. Expected: PASS, 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2339,18 +2656,36 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
   - `stream_seed(seed: int, purpose: str) -> int` (`int.from_bytes(sha256(f"{seed}:{purpose}".encode()).digest()[:8],
     "big")`), purposes `shuffle:0` to `shuffle:9`, `bootstrap:route:T-B`, `bootstrap:route:T-S`,
     `bootstrap:goal:T-N`, `bootstrap:goal:T-B`;
-  - `Split`, a dataclass `(cutoff: int, training: list[str], held_out: list[str])`; `split_sessions(trail_set, lane)
-    -> Split` (TR19);
+  - a trail source, either a `TrailSet` (tests) or `ScratchTrails` (`evaluate`): `ScratchTrails.load(conn, as_of, *,
+    lane, scratch, counts) -> ScratchTrails` reads `iter_trails` into the scratch file, one row per touch
+    `(session, view, position, memory id, kind, t, recall id, rank, bits)`, with each session's first touch and
+    newest row, and gives `sessions(lane)` in order and `trail(session, view)` one at a time (T 7, R23);
+  - `Split`, a dataclass `(cutoff: int, n_training: int, n_held_out: int)`; `split_sessions(source, lane) -> Split`
+    (TR19, TR31) marks each session training or held out in the source (a column in `ScratchTrails`, a dict on a
+    `TrailSet`) and keeps no list of sessions; `source.held_out(lane)` and `source.training(lane)` read them back
+    one at a time. More than `EVAL_MAX_HELD_OUT` held-out sessions raises `TooLarge`;
   - `Qualified`, a dataclass `(session: str, s: str, g: str, interior: frozenset[str], touches: tuple[str, ...])`;
-    `qualify(trail_set, split, lane, lookup, counts) -> list[Qualified]` (`steered` counted);
-  - `graph_T(trail_set, split, lane, lookup, vectors) -> TrailGraph`, `graph_S(trail_set, split, lane, lookup,
-    vectors, rng) -> TrailGraph`, `graph_B(T: TrailGraph) -> TrailGraph` (8 nearest by angle, undirected, cost the
-    angle, rows in blocks of `B_BLOCK`);
+    `qualify(source, split, lane, lookup, counts) -> Iterator[Qualified]` (`steered` counted), one at a time;
+  - `graph_T(source, split, lane, lookup, vectors) -> TrailGraph`, `graph_S(source, split, lane, lookup, vectors,
+    rng) -> TrailGraph`, `graph_B(T: TrailGraph) -> TrailGraph` (TR26: tiles of `B_BLOCK` × `B_COLUMNS`,
+    `B_CANDIDATES` by dot product, then 8 by angle and id, undirected, cost the angle). T and S aggregate their steps
+    with SQL in the scratch file when the source is `ScratchTrails`; past `EVAL_MAX_NODES` nodes, `EVAL_MAX_STEPS`
+    steps or `EVAL_MAX_TOUCHES` touches of full trails they raise `TooLarge`. T and S keep their full trails as
+    `TrailArrays` for the next hit's `forward` (Task 14), with sessions as scratch-file indices (TR25). All three are
+    arrays;
+  - `training_detours(source, split, lane, scratch) -> int` writes `find_detours` over the training trails into the
+    scratch file one at a time (Task 8) and returns how many; the detour hit rate reads, for each held-out session,
+    the detours whose X it visits through a cursor (T 7 step 5, R23);
   - `scores(route_interior: Sequence[str], truth: frozenset[str]) -> tuple[float, float, float]`;
-  - `paired_bootstrap(diffs: np.ndarray, rng) -> tuple[float, float]` (mean, lower bound);
-  - `route_gate(qualified, T, S_list, B, seed) -> dict`;
+  - `paired_bootstrap(diffs: np.ndarray, rng) -> tuple[float, float]` (mean, lower bound), drawing in chunks of
+    `BOOTSTRAP_CHUNK` (TR27);
+  - `route_gate(qualified, T, S_list, B, seed) -> dict`, where `S_list` is a callable that builds S for shuffle k, so
+    one S is alive at a time;
   - `evaluate(conn, *, lane: str, seed: int, as_of: int, embedder=None, deadline_s: float | None = None,
-    clock=time.monotonic) -> dict`, the report's body. A route of more than 64 stops counts as no route.
+    clock=time.monotonic, scratch: Scratch | None = None) -> dict`, the report's body. A route of more than 64 stops
+    counts as no route. `TooLarge` makes both gates "not evaluable: too large", and so does any closed session over
+    T 4's bound, in any lane (TR31; Task 25 tests it). `counts` holds `sessions_too_large` and `rows_unparsed` in
+    every report.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2394,7 +2729,37 @@ def test_rf5_empty_store_is_not_evaluable(tmp_path):
 
 def test_seeds_derive_one_stream_per_purpose():
     assert trails.stream_seed(7, "shuffle:0") == int.from_bytes(hashlib.sha256(b"7:shuffle:0").digest()[:8], "big")
+
+def test_b_from_tiles_equals_brute_force_by_angle_then_id():                  # TR26; T 7 step 3
+    assert (trails.B_BLOCK, trails.B_COLUMNS, trails.B_CANDIDATES) == (256, 1_024, 16)
+    for case in range(5):
+        rng = np.random.default_rng(20261025 + case)
+        T_ = random_vector_graph(rng, nodes=300, dim=768, duplicates=10)      # exact duplicates, so ties by id
+        assert edges(trails.graph_B(T_)) == edges(brute_B(T_)), case
+
+def test_the_bootstrap_draws_in_chunks_of_64_and_repeats():                     # TR27
+    diffs = np.random.default_rng(1).normal(0.1, 1.0, 500); purpose = "bootstrap:route:T-B"
+    one, two = (trails.paired_bootstrap(diffs, np.random.default_rng(trails.stream_seed(7, purpose))) for _ in "ab")
+    assert one == two == reference_bootstrap(diffs, trails.stream_seed(7, purpose), chunk=64)
+
+def test_at_most_one_s_is_alive_at_a_time(tmp_path, monkeypatch):                # R23
+    alive, peak, real = [0], [0], trails.graph_S
+    def counted(*a, **k):
+        g = real(*a, **k); alive[0] += 1; peak[0] = max(peak[0], alive[0])
+        weakref.finalize(g, lambda: alive.__setitem__(0, alive[0] - 1)); return g
+    monkeypatch.setattr(trails, "graph_S", counted)
+    trails.evaluate(planted_routes_store(tmp_path, sessions=200).ro(), lane="work", seed=7, as_of=END)
+    assert peak[0] == 1
+
+def test_the_evaluation_reads_through_bounded_cursors(tmp_path):              # T 12 "Bounded reading"; the check's S4
+    s = planted_routes_store(tmp_path, sessions=200)
+    plain = trails.evaluate(s.ro(), lane="work", seed=7, as_of=END)
+    bounded = trails.evaluate(batch_only(s.ro(), max_rows=trails.READ_BATCH_ROWS), lane="work", seed=7, as_of=END)
+    assert trails.canonical(bounded) == trails.canonical(plain) and plain["route_gate"]["verdict"] == "pass"
 ```
+
+`random_vector_graph`, `brute_B` (8 nearest by Kahan angle, then id, over every pair, written from T 7 step 3 alone)
+and `reference_bootstrap` (a plain loop of 64-resample draws, the last of 16) join `trails_support.py`.
 
 `planted_routes_store` (several fixed routes of six memories with random vectors, each session walking one route in
 order, days apart), `popularity_store` (the same popular memories touched in random order), `co_retrieval_store`
@@ -2416,15 +2781,20 @@ Expected: FAIL, `KeyError: 'route_gate'`.
 
 - [ ] **Step 3: Implement the split, qualification, the three graphs, scores, the bootstrap and the route gate**
 
+In bounded memory (T 7 step 3, R23, 10.1): `evaluate` loads its trails into a `ScratchTrails` (under `TMPDIR`,
+TR28), builds T and then B, and then, for each shuffle k in turn, builds S_k, routes every qualifying session in it,
+and drops it before S_{k+1}. Qualifying sessions are read from the scratch file one at a time; per held-out session
+it keeps only its scores, as arrays. Before it loads anything it reads the `Reader`'s index for closed sessions over
+T 4's bound (TR31). T 10.1 gives the arithmetic: 296.9 MiB at the bounds, under `PEAK_EVAL_MIB`.
 Routing uses A* with the expansion bound only: every search passes `wall_s=None`, so no route is cut by wall time and
 the hashed report holds no count that depends on the machine (T 7 steps 4 and 7). The deadline of step 10 is the
 evaluation's only wall clock, and a run that hits it reports `limit`. The report also gives reach, hop ratio, the
-detour hit rate over training detours (`find_detours` on training trails) and the next hit (Task 24 supplies the
-entries). Counts and rates only, never content or ids.
+detour hit rate over training detours (`training_detours`, one at a time through the scratch file) and the next hit
+(Task 24 supplies the entries). Counts and rates only, never content or ids.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 8 passed.
+Run: the command of step 2. Expected: PASS, 12 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2440,17 +2810,18 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 - Test: `engram/tests/test_trails_eval.py`
 
 **Interfaces:**
-- Consumes: Tasks 13, 20, 23; `embeddings.create_embedding_provider(local_files_only=True)`,
-  `EmbedderUnavailableError`.
-- Produces: `open_embedder() -> tuple[object | None, dict | None]` (the provider and `{"provider": "shared" |
-  "in-process", "model": EMBED_MODEL}`, or `(None, None)` on `ImportError`, `ValueError` or
-  `EmbedderUnavailableError`). `RemoteEmbedProvider.__init__` only stores the socket path and first connects on
-  `embed` (`engram/embeddings.py:151-153`), so a socket nobody serves passes `open_embedder`. W therefore treats
-  `EmbedderUnavailableError` from any embed, the embedder check's first one included, as "not evaluable: no
-  embedder", and the report's `embedder` is then null (T 7 step 7: "null when W had none"). W's verdict is decided
-  in T 7 step 8's order: no embedder, then embedder mismatch, then fewer than 30.
-  `embedder_check(conn, lane, provider) -> float | None` (median cosine over the
-  `EMBED_CHECK_N` earliest episodes with vectors, by `(created_at, id)`, embedded with `search_document`);
+- Consumes: Tasks 13, 20 (`open_embedder`), 23; `EmbedderUnavailableError`.
+- Produces: W, on Task 20's `open_embedder`. A socket nobody serves passes `open_embedder`, since
+  `RemoteEmbedProvider.__init__` only stores the path and first connects on `embed`
+  (`engram/embeddings.py:151-153`). W therefore treats `EmbedderUnavailableError` from any embed, the embedder
+  check's first one included, as "not evaluable: no embedder", and the report's `embedder` is then null (T 7 step 7:
+  "null when W had none"). W's verdict is decided in T 7 step 8's order: no embedder, then embedder mismatch, then
+  fewer than 30.
+  `embedder_check(conn, lane, provider, counts) -> float | None` (median cosine over the
+  `EMBED_CHECK_N` earliest episodes with vectors and a `text_length` of at most `CHECK_TEXT_BYTES`, by
+  `(created_at, id)`, embedded with `search_document` one at a time, so it holds one text of at most 64 KiB at once;
+  longer ones passed over are counted as `check_skipped_long`; T 7 step 8.2, R25, TR30). W reads `x` and `y` with
+  `text_head(..., W_TEXT_BYTES)` and cuts each to `MAX_TEXT` characters;
   `goal_gate(conn, qualified, T, B, provider, seed, lookup, counts) -> dict`; the stored-vector diagnostic,
   labelled `document-to-document`, which reads its vectors through `_diagnostic_vectors(conn, qualified) ->
   dict[str, tuple[np.ndarray, np.ndarray]]` (`v(s)` and `v(w)` per session) and feeds nothing into W's verdict.
@@ -2500,16 +2871,16 @@ def test_w_without_an_embedder_or_with_a_mismatched_one(tmp_path):
     off = trails.evaluate(s.ro(), lane="work", seed=7, as_of=END, embedder=RandomProvider())
     assert off["goal_gate"]["verdict"] == "not evaluable: embedder mismatch"
 
-def test_r19_offline_with_an_empty_cache_and_no_socket(tmp_path, monkeypatch, capsys):
+def test_r19_without_the_socket_no_model_is_made_or_imported(tmp_path, monkeypatch, capsys):
     s = planted_routes_store(tmp_path / "s", sessions=40, end_with_summary=True)
-    cache = tmp_path / "cache"; cache.mkdir(); monkeypatch.setattr("embeddings._CACHE_DIR", str(cache))
     monkeypatch.delenv("ENGRAM_EMBEDDER_SOCKET", raising=False)
-    kw = spy(monkeypatch, "embeddings.create_embedding_provider"); forbid_non_unix_connect(monkeypatch)
+    monkeypatch.setattr("embeddings.NomicEmbedProvider.__init__", raises(AssertionError("loaded a local model")))
+    monkeypatch.setitem(sys.modules, "fastembed", None)                      # any import of it would fail the run
+    made = spy(monkeypatch, "embeddings.create_embedding_provider"); forbid_non_unix_connect(monkeypatch)
     assert trails.main([str(s.path), "--evaluate", "--seed", "7", "--json"]) == 0
     rep = json.loads(capsys.readouterr().out)
-    assert kw[0].kwargs == {"local_files_only": True}
-    assert rep["goal_gate"]["verdict"] == "not evaluable: no embedder" and rep["embedder"] is None
-    assert [p for p in cache.rglob("*") if p.is_file()] == []          # FS1: empty directories are allowed
+    assert made == [] and rep["embedder"] is None
+    assert rep["goal_gate"]["verdict"] == "not evaluable: no embedder"     # FS1 is moot: nothing reaches a cache
 
 def test_r19_a_socket_nobody_serves_loads_no_local_model(tmp_path, monkeypatch, capsys):
     s = planted_routes_store(tmp_path / "s", sessions=40, end_with_summary=True)
@@ -2526,6 +2897,16 @@ def test_the_stored_vector_diagnostic_never_changes_ws_verdict(tmp_path, monkeyp
     monkeypatch.setattr(trails, "_diagnostic_vectors", lambda *a, **k: scrambled())
     two = trails.evaluate(s.ro(), lane="work", seed=7, as_of=END, embedder=DocumentEchoProvider(s))
     assert two["goal_gate"]["verdict"] == one["goal_gate"]["verdict"] == "pass"
+
+def test_the_check_passes_over_long_episodes_and_counts_them(tmp_path, monkeypatch):    # T 7 step 8.2, R25
+    assert trails.CHECK_TEXT_BYTES == 65_536
+    s = planted_routes_store(tmp_path, sessions=200, end_with_summary=True, long_contents=True)
+    monkeypatch.setattr(trails, "CHECK_TEXT_BYTES", 4_000)                     # TR13: the long contents pass over it
+    p = DocumentEchoProvider(s)
+    rep = trails.evaluate(s.ro(), lane="work", seed=7, as_of=END, embedder=p)
+    checked = [texts for texts, prefix in p.calls if prefix == "search_document"]
+    assert checked and all(len(t.encode()) <= 4_000 for (t,) in checked)     # one text a call, none over the bound
+    assert rep["counts"]["check_skipped_long"] > 0
 ```
 
 The two r19 tests keep 40 sessions: "no embedder" is decided before the count, so their verdict doesn't depend on
@@ -2545,12 +2926,13 @@ Expected: FAIL, `KeyError: 'goal_gate'`.
 - [ ] **Step 3: Implement measure W**
 
 Steps 8.1 to 8.9 of T 7: qualification (not steered; an episode in the lane at or after the touch of `g`; `w` the
-last by `(created_at, id)`); `x = content(s)`, `y = content(w)` through `embed_queries` in one batch; `empty_text`;
-the embedder check before scoring (`≥ EMBED_CHECK_MIN`; an `EmbedderUnavailableError` from it or any later W embed
-makes W "not evaluable: no embedder" with `embedder` null); entries by `locate` over T with words from the imprint's
-own `episode_fts` and `semantic_fts` kept only when nodes of T; `Γ` over T; methods T, B and N (N's size from T,
-`N_EMPTY_SIZE` when T names nothing outside the entries); scores; the gate; the also-reported values; the
-diagnostic for sessions with both stored vectors, `no_stored_vector` for the rest. The next hit (step 5) uses these
+last by `(created_at, id)`); `x = content(s)`, `y = content(w)`, each from `text_head(..., W_TEXT_BYTES)` cut to
+`MAX_TEXT` characters, through `embed_queries` in one batch; `empty_text`;
+the embedder check before scoring, one text of at most `CHECK_TEXT_BYTES` at a time (`≥ EMBED_CHECK_MIN`; an `EmbedderUnavailableError` from it
+or any later W embed makes W "not evaluable: no embedder" with `embedder` null); entries by `locate` over T with
+words from the imprint's own `episode_fts` and `semantic_fts` kept only when nodes of T; `Γ` over T; methods T, B
+and N (N's size from T, `N_EMPTY_SIZE` when T names nothing outside the entries); scores; the gate; the
+also-reported values; the diagnostic for sessions with both stored vectors, `no_stored_vector` for the rest. The next hit (step 5) uses these
 entries, or the near stations of `v(s)` when the check fails, and the report names its regime.
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -2575,8 +2957,11 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 - Consumes: Tasks 21 to 24.
 - Produces: `report_bytes(report: dict) -> bytes` (canonical JSON, sorted keys, no spaces, every float rounded to 4
   places, NaN as null); the report names `lane` and `embedder`; `--deadline` checked between sessions, past which
-  both gates read `"not evaluable: limit"`; T over `EVAL_MAX_NODES` nodes gives `"not evaluable: too large"` for
-  both.
+  both gates read `"not evaluable: limit"`; T over `EVAL_MAX_NODES` nodes, T or an S over `EVAL_MAX_STEPS` steps, T
+  over `EVAL_MAX_TOUCHES` touches, more than `EVAL_MAX_HELD_OUT` held-out sessions, or any closed session over
+  `SESSION_ROWS_MAX` rows or `SESSION_IDS_MAX` ids gives `"not evaluable: too large"` for both, and the report's
+  `counts` carry `sessions_too_large` and `rows_unparsed` in every run (T 7 steps 3 and 7, R23, R26; TR31). On an
+  imprint holding `imprint_subjects`, the run reads no row of it and the report holds counts and rates only (T R24).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2584,7 +2969,7 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 def test_the_report_is_byte_identical_for_the_same_store_seed_lane_and_provider(tmp_path, capsys, monkeypatch):
     s = planted_routes_store(tmp_path, sessions=200, both_lanes=True)         # 200 in each lane: the gates run
     monkeypatch.setattr(trails, "open_embedder",
-                        lambda: (DocumentEchoProvider(s), {"provider": "in-process", "model": trails.EMBED_MODEL}))
+                        lambda: (DocumentEchoProvider(s), {"provider": "shared", "model": trails.EMBED_MODEL}))
     searches = spy(monkeypatch, "trails.astar")
     runs = []
     for lane in ("work", "work", "personal"):
@@ -2607,16 +2992,48 @@ def test_a_run_killed_by_the_memory_cap_writes_no_report(tmp_path, capsys, monke
     with pytest.raises(MemoryError): trails.main([str(s.path), "--evaluate", "--seed", "7", "--json"])
     assert capsys.readouterr().out == ""
 
-def test_a_graph_over_20000_nodes_is_too_large(tmp_path, monkeypatch):
-    assert trails.EVAL_MAX_NODES == 20_000
-    monkeypatch.setattr(trails, "EVAL_MAX_NODES", 10)                         # TR13
+@pytest.mark.parametrize("name, small", [("EVAL_MAX_NODES", 10), ("EVAL_MAX_STEPS", 10),
+                                         ("EVAL_MAX_TOUCHES", 10), ("EVAL_MAX_HELD_OUT", 5)])
+def test_a_graph_or_a_held_out_set_over_its_bound_is_too_large(tmp_path, monkeypatch, name, small):
+    assert (trails.EVAL_MAX_NODES, trails.EVAL_MAX_STEPS, trails.EVAL_MAX_TOUCHES, trails.EVAL_MAX_HELD_OUT) == \
+           (20_000, 262_144, 262_144, 40_000)
+    monkeypatch.setattr(trails, name, small)                                   # TR13
     rep = trails.evaluate(planted_routes_store(tmp_path, sessions=200).ro(), lane="work", seed=7, as_of=END)
     assert rep["route_gate"]["verdict"] == rep["goal_gate"]["verdict"] == "not evaluable: too large"
+
+@pytest.mark.parametrize("name, small", [("SESSION_ROWS_MAX", 10), ("SESSION_IDS_MAX", 30)])
+def test_a_closed_session_over_the_session_bound_makes_both_gates_too_large(tmp_path, monkeypatch, name, small):
+    s = planted_routes_store(tmp_path, sessions=200, end_with_summary=True)    # every session: < 10 rows, < 30 ids
+    rep = trails.evaluate(s.ro(), lane="work", seed=7, as_of=END, embedder=DocumentEchoProvider(s))
+    assert rep["counts"]["sessions_too_large"] == 0 and rep["route_gate"]["verdict"] == "pass"    # R26; M3
+    wide = s.walk("WIDE", [f"p{i}" for i in range(12)], on_day(3, 12), lane="personal", create=True)  # another lane
+    s.recall("WIDE", on_day(3, 13), wide * 3)                                  # WIDE: 13 rows, 48 ids
+    monkeypatch.setattr(trails, name, small)                                   # TR13
+    rep = trails.evaluate(s.ro(), lane="work", seed=7, as_of=END, embedder=DocumentEchoProvider(s))
+    assert rep["route_gate"]["verdict"] == rep["goal_gate"]["verdict"] == "not evaluable: too large"
+    assert rep["counts"]["sessions_too_large"] == 1                            # never a quiet sample
+
+def test_r24_a_run_on_a_full_store_imprint_reads_no_co_subject_row(tmp_path):     # T R24; the check's S2
+    s = planted_routes_store(tmp_path / "src", sessions=200, end_with_summary=True)
+    copy = imprint_origin_copy(s.path, tmp_path / "imp" / "imprint.db")
+    with_co_subjects(copy, s.memory_ids()[:50])                 # an `imprint_subjects` table with rows
+    conn = store_reader.connect(copy, immutable=True, vec=True)
+    conn.set_authorizer(lambda action, table, *_: sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_READ
+                        and table == "imprint_subjects" else sqlite3.SQLITE_OK)
+    rep = trails.evaluate(conn, lane="work", seed=7, as_of=END, embedder=DocumentEchoProvider(s))
+    assert rep["route_gate"]["verdict"] == "pass"               # the run went through, and never read that table
+    assert_counts_and_rates_only(trails.report_bytes(rep), s, copy)
 ```
+
+`with_co_subjects(path, memory_ids)` writes an `imprint_subjects` table in the imprint spec's form (its D43) with
+one row per memory and a made-up person. `assert_counts_and_rates_only(report, store, path)` fails when the report's
+bytes hold any memory id, session id or `imprint_subjects` value, or any 12 characters in a row of any memory's
+content, or a string value other than a verdict, the lane, a regime or the embedder's fields. Both join
+`trails_support.py`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails_eval.py -k "byte_identical or deadline or memory_cap or too_large"`
+Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails_eval.py -k "byte_identical or deadline or memory_cap or too_large or r24"`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement `report_bytes`, the deadline and the size limit**
@@ -2837,9 +3254,14 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 - Modify: this plan's "Results" section (the numbers only)
 
 **Interfaces:**
-- Consumes: Tasks 15, 16, 18, 23 to 25.
+- Consumes: Tasks 4, 6 to 9, 15 to 18, 21, 23 to 25.
 - Produces: `test_trails_pi.py`, skipped unless `ENGRAM_TRAILS_PI=1`, writing `results.json` into
-  `ENGRAM_TRAILS_PI_OUT` (default `/var/tmp/trails-pi`); `scripts/trails_token_ratio.py ANSWERS.json` printing,
+  `ENGRAM_TRAILS_PI_OUT` (default `/var/tmp/trails-pi`); the fixtures `stores["bounds"]`,
+  `stores["hundred_thousand"]` and `stores["long_value"]` (T 12), built once under `/var/tmp/trails-pi`;
+  `peak_in_child(cap, process, store) -> Peak`, which runs one pass in a fresh child under `cap` and returns, in MiB,
+  `setup_hwm` and `setup_rss` (`VmHWM` and `VmRSS` after setup), `end_hwm` (`VmHWM` at the end, after the child wrote
+  `5` to `/proc/self/clear_refs` once setup was done), with `added = end_hwm − setup_rss` and `whole =
+  max(setup_hwm, end_hwm)`, and its exit status (TR29; the fresh check's S3); `scripts/trails_token_ratio.py ANSWERS.json` printing,
   per answer, its bytes, `estimate_tokens` (`category_compile.estimate_tokens`, `engram/category_compile.py:195-197`)
   and real tokens (TR21).
 
@@ -2847,35 +3269,64 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 
 ```python
 pytestmark = pytest.mark.skipif(os.environ.get("ENGRAM_TRAILS_PI") != "1", reason="Pi measurement (T 12)")
+CAP = ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0"]   # TR29
+BUDGETS = {                       # T 10.1: "added" is the rise over the setup's resident size; "whole" the process's
+    "observer_pass": ("added", trails.SERVER_ADDED_MIB), "tool_graph_build": ("added", trails.SERVER_ADDED_MIB),
+    "tool_call": ("added", trails.SERVER_ADDED_MIB), "cli_route": ("whole", trails.PEAK_PROCESS_MIB),
+    "roads_and_trails": ("whole", trails.PEAK_PROCESS_MIB), "evaluate": ("whole", trails.PEAK_EVAL_MIB)}
 
-def test_pi_build_at_the_bounds(bounds_store, results):     # 4,096 sessions, 20,000 nodes, 262,144 steps, one lane
-    peak, seconds, ranking = measure_build_in_subprocess(bounds_store)   # ru_maxrss of a fresh process
-    results.update(build_seconds=seconds, build_peak_mb=peak, ranking_seconds=ranking,
-                   build_over_target=peak > 256)
-    assert graph_counts(bounds_store) == (4096, 20_000, 262_144)
+@pytest.mark.parametrize("store", ["bounds", "hundred_thousand"])
+@pytest.mark.parametrize("process", sorted(BUDGETS))
+def test_pi_peak_memory(stores, results, process, store):                     # one test per pass and store
+    got = peak_in_child(CAP, process, stores[store])
+    kind, budget = BUDGETS[process]
+    peak = got.added if kind == "added" else got.whole
+    results.record(process, store, setup_rss_mib=got.setup_rss, setup_hwm_mib=got.setup_hwm, end_hwm_mib=got.end_hwm,
+                   peak_mib=peak, budget_mib=budget)        # a server pass's setup_rss is the server's own (T 10.1)
+    assert got.status == 0, (process, store, "killed or failed under MemoryMax=512M")
+    assert peak < budget, (process, store, peak, budget)
 
-def test_pi_tool_call_without_embedding_and_astar_rate(bounds_store, results):
-    results.update(call_seconds=time_calls(bounds_store, n=50), expansions_per_second=astar_rate(bounds_store))
+@pytest.mark.parametrize("process", ["roads_and_trails", "evaluate"])
+def test_pi_a_long_value_is_read_in_pieces(stores, results, process):         # T 12 "One long value"; R25
+    got = peak_in_child(CAP, process, stores["long_value"])                     # one episode of 128 MiB of content
+    results.record(process, "long_value", added_mib=got.added)
+    assert got.status == 0 and got.added < 64, (process, got.added)            # a whole read would add 128 or more
 
-def test_pi_embedding_two_texts_of_4000_characters(results):
-    results.update(embed_in_process_s=time_embed(local=True),
-                   embed_shared_s=time_embed(local=False) if os.environ.get("ENGRAM_EMBEDDER_SOCKET") else None)
+def test_pi_times(stores, results):
+    for name in ("bounds", "hundred_thousand"):
+        store = stores[name]
+        results.record_times(name, build_s=time_build(store), ranking_s=time_ranking(store),
+                             call_s=time_calls(store, n=50), expansions_per_second=astar_rate(store),
+                             evaluate_s=time_evaluate(store))
 
-def test_pi_evaluation_at_20000_nodes_under_4g(bounds_store, results):
-    results.update(evaluation=run_evaluation_capped(bounds_store, memory="4G"))   # systemd-run --user --scope
+def test_pi_embedding_two_texts_through_the_shared_service(results):
+    if not os.environ.get("ENGRAM_EMBEDDER_SOCKET"):
+        pytest.skip("no shared embedder on this station; the evaluation never loads one in process (T R19)")
+    results.update(embed_shared_s=time_embed_shared())
 
-def test_pi_largest_answers_for_the_token_ratio(bounds_store, results):
-    write_largest_answers(bounds_store, results.out / "answers.json")            # the 3 largest of each tool
+def test_pi_largest_answers_for_the_token_ratio(stores, results):
+    write_largest_answers(stores["bounds"], results.out / "answers.json")      # the 3 largest of each tool
 ```
 
-`bounds_store` (a synthetic store at the tool graph's bounds with a `memory_log` of 200,000 recall rows) and the
-measuring helpers go in the same file.
+The stores (T 12, "Peak memory on the Pi, per pass"): `bounds` holds 16,384 closed sessions, the newest 4,096
+holding 262,144 touches over 20,000 memories and 262,144 distinct steps; one session at both session bounds, 16,384
+recall rows of 20 ids (327,680 ids); one at the id bound with few rows, 1,638 recall rows of 200 ids (327,600 ids,
+the fresh check's M1 case); a `memory_log` of 200,000 recall rows; and T as near 20,000 nodes, 262,144 steps and
+262,144 touches as the store allows. `hundred_thousand` is T 10.1's shape, 100,000 memories with random 768-dimension
+vectors. `long_value` is a small store of planted sessions in which one closed session wrote an episode of 128 MiB
+of content, made inside SQLite in one statement (for example `hex(zeroblob(67108864))`, 134,217,728 characters) so the
+parent never holds it as a Python string. The fixtures write in batches through `Storage`.
+In each child, the server's passes (`observer_pass`, `tool_graph_build`, `tool_call`) first run `server._init()` on
+the store with a fake embedder, as Task 9's `trail_init_env` does, and take their setup figure there; `tool_call`
+then builds the graph and answers 50 calls, so its rise is the held graph with a call. The other passes take their
+setup figure after their imports. The measuring helpers go in the same file.
 
 - [ ] **Step 2: Run them on this Pi**
 
-Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && ENGRAM_TRAILS_PI=1 PYTHONDONTWRITEBYTECODE=1 systemd-run --user --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider -s tests/test_trails_pi.py`
-Expected: 5 passed; `/var/tmp/trails-pi/results.json` and `answers.json` written. The evaluation's own run is
-capped at 4 GB inside; the outer 6 GB cap leaves room for the build's subprocess beside it.
+Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && ENGRAM_TRAILS_PI=1 PYTHONDONTWRITEBYTECODE=1 systemd-run --user --scope --quiet -p MemoryMax=512M -p MemorySwapMax=0 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider -s tests/test_trails_pi.py`
+Expected: 17 passed (12 peaks, 2 long-value peaks, times, embedding, answers), or 16 and the embedding test skipped
+when the station runs no shared embedder; `/var/tmp/trails-pi/results.json` and `answers.json` written. The parent only builds fixtures and starts children,
+and runs under the same 512 MiB cap; each child gets its own (TR29).
 
 - [ ] **Step 3: Count real tokens, only where a credential exists**
 
@@ -2886,17 +3337,20 @@ answers only, never a real store's text.
 
 - [ ] **Step 4: Record the results**
 
-Write the numbers into "Results" below, each beside its T 10 hypothesis: build time against 20 s, peak against
-256 MB, tool call against 1 s, the newest-rows ranking's time, both embedding times, expansions per second, the
-evaluation's time and peak against 1,740 s and 4 GB, the largest answer's real tokens against 2,000, and
-`cited_touches_lost` from Task 26. Overruns change nothing here: they go to T's next revision (Gate G11).
+Write the numbers into "Results" below, each beside its T 10 or 10.1 figure: each pass's peak on each store against
+its design peak and its arithmetic, build time against 20 s, tool call against 1 s, the newest-rows ranking's time,
+the shared embedding time, expansions per second, the evaluation's time against 1,740 s, the largest answer's real
+tokens against 2,000, and `cited_touches_lost` from Task 26. Also the engram server's own resident size at setup,
+from the server passes' `setup_rss`, against T 10.1's 305.2 MiB, since "433.2 MiB, inside 512" rests on that figure,
+measured on 2026-10-02 and not on the Pi (the fresh check's S11); and the long value's two rises against 64 MiB.
+Overruns change nothing here: they go to T's next revision (Gate G11).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git -C /home/andy/superyak/.worktrees/trail-step-1 add engram/tests/test_trails_pi.py engram/scripts/trails_token_ratio.py \
         engram/docs/superpowers/plans/2026-10-25-trail-arrows.md
-git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Trails: Pi measurements at the bounds and the real-token ratio, recorded (T 10, 12)"
+git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Trails: peak memory per pass and times on the Pi, and the real-token ratio, recorded (T 10, 10.1, 12)"
 ```
 
 ### Task 29: `engram/CLAUDE.md` and the whole suite
@@ -2910,7 +3364,9 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
 In plain words: what a trail, a road and a detour are; that the observer pass and the tools are off by default and
 gated separately (`[category_evolution] trails`, `[trails] tools` and `lanes`); that roads and detours stay pending
 and never change recall; that the tools write one `route_shown` receipt and nothing else; that a pass licenses one
-lane and turning the tools on is the store owner's act after both gates pass; the read-only CLI line `python
+lane and turning the tools on is the store owner's act after both gates pass; that every pass fits a 2 GB Pi (each
+process under 512 MiB, at most 128 MiB added to a server, one session read at a time, a scratch file in
+`trails-scratch/` beside `graph.db`, and no model in process for the evaluation); the read-only CLI line `python
 trails.py /path/to/copy-of-graph.db [--json]`; and the spec's path. The MCP Tools rows read "(off by default)".
 
 - [ ] **Step 2: Check the rows are there**
@@ -2921,7 +3377,7 @@ Expected: at least 3.
 - [ ] **Step 3: Run every new test file and the suites they touch**
 
 Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py tests/test_trail_observer.py tests/test_trail_tools.py tests/test_trails_embeddings.py tests/test_trails_cli.py tests/test_trails_eval.py tests/test_trails_imprint.py tests/test_trails_pi.py tests/test_packaging.py tests/test_category_server.py tests/test_category_evolution.py`
-Expected: PASS, with `test_trails_pi.py`'s five tests skipped. Report the counts.
+Expected: PASS, with `test_trails_pi.py`'s seventeen tests skipped. Report the counts.
 
 - [ ] **Step 4: Commit**
 
@@ -2943,27 +3399,36 @@ None of these is run by this plan. Each waits for the person named.
 | G3 | Engram servers in running sessions load the new code only at their next start. Nothing restarts them. | Nothing live here, and with every gate off they behave as today. |
 | G4 | `[category_evolution] trails = true` on a store, with `enabled = true` and `auto_commit = false`. | T 7 step 9: a route-gate pass on that store, then its owner's decision. For Andy's stores, Andy. |
 | G5 | `[trails] tools = true` with a lane in `[trails] lanes`. | T 7 step 9 and 14: both gates pass on that store, or an imprint of it, for that lane; then the owner's act. |
-| G6 | The first evaluation on an imprint: which store, its owner's yes, T 14's open question on memories that mention other people (until Andy answers, the imprint spec's default holds: no memory with a recorded co-subject ships, and the owner confirms the rest), and I 18's deploy gates (sqlite-vec and the embedder in the admission environment, the user manager's environment holding no `ENGRAM_` variable). | T 14 and I 18, 20: Andy's, and the owner's. |
+| G6 | The first evaluation on an imprint. Which store and its owner's yes were answered on 2026-10-26: Andy's full store, his yes ("yes you can copy the full store"; T 14, A8), and he still says yes in the browser for that imprint (I D1). Memories that mention other people may be copied, keeping their co-subjects (T R24). Both other specs now follow the permissions spec's P36 (its 6.3, which names this run's `read` batches and counted bulk `route`): inside the owner's home a co-subject's silence passes and their no holds, as Rio Grande ruled on that spec's check (M3), and the imprint spec keeps at home a memory whose co-subject said no (its D27). Still waiting: their side-by-side re-check, with the bound of 8 subjects per road or trail (until then I 8 and I 18 approve no imprint whose `others.memories` is above 0), and I 18's deploy gates (sqlite-vec in the admission environment, the shared embedder reachable from the use's unit, the user manager's environment holding no `ENGRAM_` variable, and room on a 2 GB Pi). | T 7 and 14, I 18 and 20: Rio Grande's to reconcile, Andy's if he wants to choose, and the owner's. |
 | G7 | Compiled roads, publication, rail, rail routing, translations, governance, tools over an imprint. | T 9: each a later spec. |
 | G8 | YS1's wording in T 7 and I 5.4 and 9, and the builder's note that `last_accessed` also moves when an episode leaves core. | Before the first live imprint. Specs, not code; this plan edits no spec. |
 | G9 | T's next revision: YN5's sentence in T 7, YN7's "at most an hour" in T 11's I6, FN1 to FN3. | This plan edits no spec. No rule changes. |
 | G10 | The real-token ratio, if no credential exists on the Pi, measured where one does. If the largest answer exceeds 2,000 real tokens, the next revision lowers the byte bound. | T 6.5 and 12; Task 28 step 3. |
-| G11 | Pi measurements over a T 10 hypothesis (20 s build, 256 MB, 1 s call, the evaluation's 1,740 s). | T 6.6 and 10: the next revision lowers the counts or the builder compacts structures within them, in a branch of its own. |
+| G11 | Pi measurements over a T 10 hypothesis (20 s build, 1 s call, the evaluation's 1,740 s) or over a T 10.1 design peak (128 MiB added to a server, 320 MiB for the evaluation, 384 MiB for any other process). | T 6.6, 10 and 10.1: the next revision lowers the counts or the builder compacts structures within them, in a branch of its own. |
 | G12 | The imprints plan's gate G13: imprints with `route` are refused until `trails` imports on the Pi; then its `test_count_matches_the_trail_functions` must pass against Part A's `roads_and_trails`, through a `_trail_derive` that passes `as_of * 10**6` (TR22), with N above 0 on its trail-rich store. | Cross-plan: Part A merged and deployed with engram on the Pi, which is a deploy act for later. |
 | G13 | The road index, once any store holds 10,000 `trail_observed` events (`report()["trails"]["trail_events"]`), and a per-session newest row there if Task 28 finds the ranking too slow. | T 5 and 10: required then, with a schema version bump. |
 | G14 | The license. | T 14: Andy's. Engram has none yet. |
+| G15 | The whole 2 GB Pi. One imprint job takes at most 512 MiB beside the shared embedder, which rests near 1.1 GB (1,049 MiB; `scripts/superyak-embedder.service:13`), leaving 2,048 − 1,049 − 512 = 487 MiB for the system and the lighthouse (T 10.1). Where the embedder doesn't fit, it doesn't run, and W is "not evaluable: no embedder". | I 18's deploy gate measures it on the station; a deploy act for later. |
 
 ## Results (filled by the builder in Task 28)
 
 | Measurement | T 10 hypothesis | Measured on the Pi |
 |---|---|---|
 | Tool graph build at the bounds | 20 s | |
-| Build peak memory | 256 MB per process | |
+| Peak, observer pass, added to the server: bounds / 100,000 memories | under 128 MiB; 80.5 MiB by arithmetic (T 10.1) | |
+| Peak, tool graph build, added to the server: bounds / 100,000 memories | under 128 MiB; 83.1 MiB | |
+| Peak, held graph and 50 calls, added to the server: bounds / 100,000 memories | under 128 MiB; 125.5 MiB | |
+| Peak, CLI route modes: bounds / 100,000 memories | under 384 MiB; 253.5 MiB | |
+| Peak, `roads_and_trails`: bounds / 100,000 memories | under 384 MiB; its own base + 47.0 MiB | |
+| Peak, evaluation: bounds / 100,000 memories | under 320 MiB; 296.9 MiB | |
+| Long value (128 MiB episode), added by `roads_and_trails` / the evaluation | under 64 MiB each (T 12, R25) | |
+| Base of each process, imports only | 128 MiB allowed for `trails.py` (T 10.1) | |
+| Engram server's own resident size at setup: bounds / 100,000 memories | 305.2 MiB (320 MB, `engram/CLAUDE.md:44-45`, measured 2026-10-02, not on the Pi) | |
 | Newest-rows ranking, 200,000 log rows | none; measure | |
 | Tool call, without embedding | 1 s | |
-| Embedding 2 × 4,000 characters, in process / shared | none; measure | |
+| Embedding 2 × 4,000 characters, through the shared service | none; measure | |
 | A* expansions per second | none; measure | |
-| Evaluation at 20,000 nodes, time and peak | 1,740 s, 4 GB | |
+| Evaluation at 20,000 nodes, time | 1,740 s | |
 | Largest answer, bytes / `estimate_tokens` / real tokens | 6,000 / 1,500 / at most 2,000 | |
 | `cited_touches_lost` (Task 26) | none; record | |
 
@@ -2972,7 +3437,7 @@ None of these is run by this plan. Each waits for the person named.
 | T item | Task |
 |---|---|
 | Component `trails.py` (pure functions, CLI, imprint check, `--evaluate`) | 1–4, 8, 10–16, 21–25 |
-| Component `embeddings.py` | 20 |
+| Component `embeddings.py` (unchanged since T's revision 9) | none; Task 20 builds `open_embedder` in `trails.py` |
 | Component `category_evolution.py` | 6–8 |
 | Component `server.py` | 9, 17–19 |
 | Component `storage.py` | 13 |
@@ -2990,7 +3455,7 @@ None of these is run by this plan. Each waits for the person named.
 | Event ids (RMF1) | 6 |
 | Session picking (S-a) | 6 |
 | Bounded scan (C3) | 6 (counts), 12 (unscanned re-lane) |
-| Detours (MF4) | 8 |
+| Detours (MF4) | 8 (and one at a time, the pass's cap: the fresh check's M2) |
 | Parity (MF6) | 12 |
 | A* | 10 |
 | Angles (R4) | 10 |
@@ -3004,6 +3469,7 @@ None of these is run by this plan. Each waits for the person named.
 | Goal gate (W) | 24 (the unit's socket: 27) |
 | Synthetic imprint | 26 |
 | Report | 25 |
+| On a full-store imprint (R24) | 25 (`test_r24_…`: an authorizer denies `imprint_subjects`; counts and rates only) |
 | Limits | 25 |
 | Imprints (R13) | 22 |
 | Use ends (I2) | 27 |
@@ -3011,9 +3477,17 @@ None of these is run by this plan. Each waits for the person named.
 | Gate off | 9 |
 | Barrier | 6 (per batch, and the lock order against a recall between batches) |
 | Units at the seams (the plan review's MF4) | 4 (seconds refused), 22 (`now` in seconds), 26 (the admission count at t₁) |
-| Pi measurements | 28 |
+| Bounded reading (R21) | 1 (no whole table, rows hold no text, the row bound, the id bound, a scratch directory on tmpfs refused), 2 (the lookup cache), 3 (one session at a time, against an independent whole-table reference), 4 (`roads_and_trails` on disk), 6 (the pass), 16 (the build), 21 (the CLI), 23 (the evaluation on bounded cursors) |
+| One value (R25, TR30) | 1 (no SQL reads episode text, an id across two pieces, a long `target_ids` or `context`, `text_head`), 24 (the embedder check passes over long episodes), 28 (a 128 MiB episode on the Pi) |
+| Graphs as arrays (R22, TR25) | 10, 16 |
+| The evaluation in bounded memory (R23) | 23 (B's tiles, the bootstrap's chunks, one S at a time, training detours one at a time), 25 (too large, the touch bound) |
+| No silent sample (R26, TR31) | 25 (a closed session over the bound, by rows or by ids, in another lane) |
+| No model in process (R19) | 20, 24 |
+| Peak memory on the Pi, per pass (T 12, TR29) | 28 |
+| Pi measurements, times | 28 |
 | Review Focus 1 to 5 | 2, 13, 1, 18, 18 and 23 |
-| Carried XS2, YN5, YN1, YN7, YS1, XS3, XS1/I6, XN2, FS1, FN1–FN3 | 4, 4/22/26, 22, 1, G8/26, 26, 26, 27, 24, G9 |
+| Carried XS2, YN5, YN1, YN7, YS1, XS3, XS1/I6, XN2, FS1, FN1–FN3 | 4, 4/22/26, 22, 1, G8/26, 26, 26, 27, 24 (moot), G9 |
+| Carried I 17's asks (a) to (d) (T I7) | 23 and 28 (a), 20 and 24 (b), 1, 3 and 4 (c), 28 and none added (d) |
 
 ## Notes for the other plans
 
@@ -3026,6 +3500,18 @@ None of these is run by this plan. Each waits for the person named.
   sets no pragma and changes no row factory, so it takes `store_reader.connect(path, immutable=True)` as it is. It
   checks no allow file: admission decides that use itself (YN5). For Task 27 this plan also asks for D-I6, a peer
   test builder that admits an imprint engram built.
+- **Imprints plan, for Andy's decisions of 2026-10-26** (T I7). `roads_and_trails` now reads one session at a time
+  and counts roads in a scratch file under `TMPDIR`, which `imprint.py` points at its scratch directory (its R26), so
+  it answers that plan's gate G19 on the count. Deriving one session can hold that session's rows, up to 32.8 MiB at
+  16,384 rows and 327,680 ids, so counting adds T 10.1's 47.0 MiB (one session 32.8 + lookups 4.2 + a batch 8 + the
+  scratch connection 2.0); the imprint spec's 14.1, as revised, now has admission at 146.8 + 47.0 = 193.8 MiB, under
+  its 384 (T I7, replacing the earlier 185.0). The evaluation's design peak is 320 MiB, 296.9 by T 10.1's arithmetic,
+  answering G19's second part. R(I) is counted under T 4's session bound, so N leaves out a session over it though
+  its rows ship; `roads_and_trails(..., counts=)` gives that number as `sessions_too_large`, and T I7 asks that
+  admission show it beside N. `local_files_only` is withdrawn (T R19; Task 20): that plan's "From
+  the trails plan" line naming `embeddings.create_embedding_provider(local_files_only=True)` no longer applies, and
+  its gate G11, as revised, already asks for the shared service only. `trails.py` never makes a model in process
+  and, without `ENGRAM_EMBEDDER_SOCKET`, reports W "not evaluable: no embedder", answering G19's third part.
 - **Permissions plan.** `tests/test_packaging.py:225` asserts 43 MCP tools after `server._init()`. This plan adds
   none there. The permissions plan's `permit` and `permissions` tools (its Task 23), if registered at import, would
   make that 45, against its rule that no existing test changes; that plan should check it.
@@ -3049,9 +3535,14 @@ ship.
    `cd engram && LIGHTHOUSE_REPO="$(cd .. && pwd)/lighthouse" PYTHONDONTWRITEBYTECODE=1 systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 uv run --locked --extra dev python -m pytest -q -ra --tb=short -p no:cacheprovider`
    Expected: every test passes except any that also fail on `main` at the merge base. Run the same command on a
    checkout of the merge base first, and report both counts and the names of any failures. The trail tests are in
-   it; `test_trails_pi.py` skips without `ENGRAM_TRAILS_PI=1`.
-4. **Part B only: the Pi measurements.** Task 28, step 2's command. Expected: 5 passed. The reviewer compares the
-   new `results.json` with the plan's "Results" and reports any number more than 20% worse.
+   it; `test_trails_pi.py` skips without `ENGRAM_TRAILS_PI=1`. The 4G cap is the whole existing suite's (its runner
+   peaks near 1.6 GB, engram's CLAUDE.md); it is no unit this work adds, and item 4 holds this work's processes to
+   512 MiB each.
+4. **Part B only: the Pi measurements.** Task 28, step 2's command. Expected: 17 passed, or 16 and the embedding
+   test skipped. Every pass's peak is under its T 10.1 design peak on both stores, and the long value adds under
+   64 MiB. The reviewer compares the new
+   `results.json` with the plan's "Results" and reports any number more than 20% worse. Part A's `roads_and_trails`
+   peak is measured here too, once Part B's test file exists.
 5. **The peer suite** (unchanged by this branch; section 2 names the suites):
    `cd peer && PYTHONDONTWRITEBYTECODE=1 systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 uv run --locked python -m pytest -q -p no:cacheprovider`
    Expected: as on `main`.
@@ -3059,13 +3550,19 @@ ship.
    directory with the knowledge graph and the watcher off, as `tests/test_packaging.py:206-214` sets them:
    `cd engram && D=$(mktemp -d /var/tmp/trails-off.XXXX) && mkdir -p "$D/.engram" && printf '[watcher]\nenabled = false\n\n[graph]\nenabled = false\n' > "$D/.engram/config.toml" && ENGRAM_HOME="$D" ENGRAM_PROJECT_ROOT="$D" ENGRAM_HARNESS=codex uv run --locked --extra dev python -c "import server; server._initialize_pre_serving(); t = server._sleep_maintenance_thread; t and t.join(300); names = {x.name for x in server.mcp._tool_manager.list_tools()}; print(sorted(names & {'trail_locate', 'trail_route', 'trail_next'}), server._config.category_evolution.trails, server._config.trails.tools)"`
    Expected: `[] False False`, and `ls "$D/.engram"` shows no `categories_v2.db`. Then `rm -r "$D"`. This loads the
-   in-process model once (about 1.8 GB, `engram/CLAUDE.md`), as the packaging test's start does.
+   in-process model once (about 1.8 GB, `engram/CLAUDE.md`), as the packaging test's start does. If the station runs
+   the shared embedder, set `ENGRAM_EMBEDDER_SOCKET` from `runtime.json` for this command, so the model isn't loaded
+   twice (T A7).
 7. **Read the safety-critical code against the spec**, at least: the closed-session rule and `as_of` (T 4), the
    cited-touch rules and suggested touches (T 4), the current-lane filter in every reader (T 4, 6.6), the pass's
    `auto_commit` refusal and its one-transaction check (T 5), that nothing commits a trail rewrite (T 5,
    Activation), the output-time check and its hidden stops (T 6.6), the receipt's fields and the absence of text
-   (T 6.6), the imprint check's seven steps and exit 3 (T 7), `local_files_only` on every evaluation path (T 7 step
-   8.2), and that `count_roads_and_trails` and `derive_trails` open no file.
+   (T 6.6), the imprint check's seven steps and exit 3 (T 7), that no evaluation path makes a model in process or
+   imports fastembed (T 7 step 8.2, R19), that no reader calls `fetchall` on a store table, derives more than one
+   session at a time, or writes memory text to a scratch file (T 4, R21), that no SQL statement reads episode text
+   and no text value over `TEXT_PIECE_BYTES` is read whole (T 4 "One value", R25, TR30), that a closed session over
+   the session bound makes both gates "not evaluable: too large" (T 7 step 3, R26), and that `count_roads_and_trails`
+   and `derive_trails` open no store file.
 8. **Not a Pi suite.** `make check-integration` needs Node.js 24 and pnpm 11.20.0; the Pi has Node 18.20.4 and no pnpm
    (checked 2026-10-25). It must pass in CI or on the Mac before the merge, and its result is posted with the verdict.
 

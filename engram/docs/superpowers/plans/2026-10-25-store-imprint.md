@@ -20,8 +20,13 @@ agent code uses nothing newer than 3.11. Engram: its `uv.lock` (numpy, scipy, sq
 library, FastAPI and `cryptography` as today. Agent: standard library only. uv. Run on the station's Raspberry Pi 5
 (`smart`).
 
-**Spec:** `engram/docs/superpowers/specs/2026-10-25-store-imprint-design.md`, revision 6, at `e737e02`, cited below as
-"I" with its section numbers and decisions (D1–D41). Also read: the contract `docs/city-rail-vision.md` ("Imprints:
+**Spec:** `engram/docs/superpowers/specs/2026-10-25-store-imprint-design.md`, revision 7 (Andy's two decisions of
+2026-10-26 on top of revision 6 at `e737e02`), cited below as "I" with its section numbers and decisions (A1–A4,
+D1–D43). Revision 7 changed this plan where its rulings A3, A4 and R26 to R30 say, and in Tasks 5 to 19, 23 to 27,
+32 to 35, 38, 40, 42a, 42b, 43a, 45, 47, 48 and the new 50, the Review Focus, the verification, the gates and the
+self-review. The fixes after revision 7's check (`docs/superpowers/reviews/2026-10-25-small-hardware-imprints-review.md`,
+"Response") changed A3, R10, R24, R26, R28 and R29, the constants, the carried items, Tasks 8, 12, 15, 25, 34 to
+36, 40, 46 and 50, the verification, gates G15 and G18 to G20, and the self-review. Also read: the contract `docs/city-rail-vision.md` ("Imprints:
 porting a store here"); the interface table `docs/superpowers/reviews/2026-10-25-city-rail-interfaces.md` (rows cited
 as "row N"); the consolidation log `docs/superpowers/reviews/2026-10-25-city-rail-consolidation.md`; the permissions
 spec `docs/superpowers/specs/2026-10-25-permissions-by-place-design.md` ("P"), the source of truth for what a
@@ -51,7 +56,9 @@ worktree. Each task's commands start from the worktree root.
 - **Names, verbatim from the spec.** New modules `engram/imprint.py` and `peer/superyak_peer/imprints.py`, plus the
   builder's split of I 19 (ruling R1). Record kinds `imprint-permission` and `imprint-receipt`; file kinds
   `engram-imprint-request` and `engram-imprint-manifest` (version 1), `imprint-admission-allow`, `imprint-use-allow`,
-  `imprint-use-result`; filter `imprint-filter-v1`; attestation `no-unconsented-others-v1`; requester
+  `imprint-use-result`; filter `imprint-filter-v1`; attestations `no-unconsented-others-v1` and
+  `others-copied-at-home-v1`; the package-only table `imprint_subjects`; the request and manifest key `others`
+  (`memories`, `people`); the owner's file `subjects.json`; the job lock `<root>/.jobs.lock`; requester
   `agent:station-imprints`; audience `place:home/<operator>`; copy `imprint:<station peer id>/<imprint id>`;
   collection `collection:<owner handle>/imprint-<imprint_id>`; origin `imprint` (`ORIGIN_IMPRINT`); meta keys
   `ancestry` and `ancestry_complete`; purposes `calibration` and `trail-evaluation`; statuses `requested`, `allowed`,
@@ -67,11 +74,16 @@ worktree. Each task's commands start from the worktree root.
   4 GiB after reserving 3 × package bytes; 4 open requests per ship; 1 live imprint per source store per station;
   confirm code life 10 minutes; upload and review windows 7 days each; longest permission 365 days; 120 part uploads
   per ship per minute; sweep hourly; receipt signing at start, every 60 s and before an imprint read; closed session
-  `CLOSED_SECONDS = 3600`; `MAX_ANCESTRY = 64`; `MAX_MEMORIES = 100_000`; calibration `MemoryMax=4G`,
-  `MemorySwapMax=0`, `RuntimeMaxSec=1800`, `MAX_LANE_EPISODES = 7500`; 400 days after `deleted`; 30 days after a
+  `CLOSED_SECONDS = 3600`; `MAX_ANCESTRY = 64`; `MAX_MEMORIES = 100_000`; calibration `MemoryMax=512M`,
+  `MemorySwapMax=0`, admission's `RuntimeMaxSec=3600` (I 10, "Time": each blocked set at most 600 s, a whole
+  admission at its bounds at most 3,300 s), `MAX_LANE_EPISODES = 16_000` (lane and core sets, in blocks of
+  `BLOCK_ROWS = 256`), `MAX_SEMANTIC_EPISODES = 1_024` (per-semantic dense sets); memory (D42, I 14.1):
+  `UNIT_MEMORY_MAX = "512M"` with `MemorySwapMax=0` on every unit this plan adds, `PEAK_BUDGET = 384 * 2**20` bytes
+  per process at the bounds, `BATCH_ROWS = 1000` and `BATCH_BYTES = 8 * 2**20` per read or insert batch, one imprint
+  job at a time under `flock -n <root>/.jobs.lock`; 400 days after `deleted`; 30 days after a
   decline or an expiry; agent wait 9 minutes per run; use id a lowercase uuid4 of 36 characters; unfinished use at
-  1,860 s; the use's unit `TimeoutStopSec=60`; a begun admission with no result fails 1,860 s after its `decided_at`
-  (`ADMISSION_BOUND`, R24), and the admission's unit also gets `TimeoutStopSec=60`.
+  1,860 s; the use's unit `RuntimeMaxSec=1800` and `TimeoutStopSec=60`; a begun admission with no result fails
+  3,660 s after its `decided_at` (`ADMISSION_BOUND`, R24), and the admission's unit also gets `TimeoutStopSec=60`.
 - **Times.** Requests, manifests, records, receipts and allow files hold integer UTC seconds. Stored engram times are
   read with ISO-8601 rules; a time with no zone is UTC (I 5.2).
 - **Canonical JSON** is the peer's (`peer/superyak_peer/identity.py:20-23`): keys sorted, `,` and `:` with no spaces,
@@ -79,6 +91,11 @@ worktree. Each task's commands start from the worktree root.
   with `lighthouse_protocol.canonical_json`, which orders keys by UTF-16 units (`engram/lighthouse_protocol.py:113-120`).
 - **What receipts and manifests hold.** No memory content, query text, memory ids, paths of left-out rows, or anything
   about what stayed home (I 3, D21). An error is named by its class, never its message.
+- **Small hardware** (A4, D42, I 14.1). The target is a 2 GB Pi. Every process this plan adds peaks under 512 MiB
+  resident on the Pi, with a design peak of 384 MiB at the bounds that Task 50 asserts; every unit it adds carries
+  `MemoryMax=512M` and `MemorySwapMax=0`. No code reads a table that grows with the store with `fetchall`, holds a
+  whole table, an n × n matrix or a whole graph that grows with the store, or loads the embedder. Id sets that grow
+  with the store live in the scratch file of R26. This Pi has 16 GB, so the caps, not the machine, play the 2 GB Pi.
 - **Test commands on this Pi** (`smart`, Raspberry Pi 5, 16 GB, `/tmp` on disk; checked 2026-10-25):
   - engram: `cd engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider <tests>`
   - peer: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider <tests>`
@@ -101,10 +118,13 @@ worktree. Each task's commands start from the worktree root.
 
 ## Rulings
 
-Choices the spec leaves to the builder (I 19) or does not fix. A reviewer checks each; Andy can veto any.
+Choices the spec leaves to the builder (I 19) or does not fix. A reviewer checks each; Andy can veto any. A3 and A4
+are not rulings: they are Andy's decisions of 2026-10-26, listed first so every task that follows them can cite them.
 
 | # | Ruling | Why |
 |---|---|---|
+| A3 | Andy: "yes you can copy the full store." In a copy kept in the owner's home (audience `place:home/<owner>`, the owner being the operator), memories with recorded co-subjects ship and carry them in `imprint_subjects`, except one whose co-subject's layer on the source ledger refuses a use the imprint needs, which stays home as "<name> said no" (`denied`, I 5.2); their uses stay inside that home and show nothing to any agent; the dry run and the confirm view say so with counts, and the owner acknowledges it (`others-copied-at-home-v1`), in words that at n = 0 promise no co-subject (I 8). Another owner's copy keeps revision 6's filter and confirmation (`no-unconsented-others-v1`). Tasks 8, 12, 13, 15, 18, 24, 25, 33, 45, 47. | Andy's decision, as I 4 (A3, D27, D43) applies it. The line between inside and outside the home is Rio Grande's call (I D27). The permissions spec's revision 7 applies A3 as its P36: inside the owner's home, his `imprint` and every bulk use that shows nothing to an agent read a co-subject's layer as a restriction layer, so silence passes and a deny refuses. I follows P36 (I 8, "Carried co-subjects in the meet"). Gate G18 still holds every imprint with a carried co-subject until both specs are re-checked side by side. |
+| A4 | Andy: "remember the ram limitations of this machine, build this so that it can run easily with small amounts of hardware." Rio Grande's call on what that means is I D42 and 14.1, applied by R26 to R30 and Task 50. | Andy's decision. |
 | R1 | `imprint.py` is split by responsibility: `engram/imprint_filter.py` (5.2, 5.4, 6.2: selection, rows, digest), `engram/imprint_checks.py` (6.4's L1–L4 and section 10's 17 checks), `engram/imprint.py` (the command and its steps), and `engram/imprint_copies.py` (`copies_held`, standard library only, so the owner's `uses` command loads no numpy; Task 45). The peer side stays one module, `imprints.py`, as I 15 names it. The agent's is `agent/superyak_agent/imprint.py`. | I 19: "how `imprint.py` is split into modules" is the builder's. Each file then has one job. |
 | R2 | Two peer tables, `imprint_requests` and `imprint_receipts`, DDL in Task 23. Every time column is integer UTC seconds. | I 19 leaves the DDL; I 15 lists the fields. |
 | R3 | `store_identity.independent` returns `True`, `False` or `None`, and `None` is printed `unknown`. Callers test `is True`. | A string `"unknown"` is truthy, so `if independent(...)` would count it. Only `true` counts (I 11). |
@@ -114,7 +134,7 @@ Choices the spec leaves to the builder (I 19) or does not fix. A reviewer checks
 | R7 | With a ship key, `GET /api/imprints` also returns `{"ship", "owner", "operator", "station"}`: `operator` is the super admin's username, which `check_request` reads for the audience (Task 24), and `station` is the station's peer id. `agent imprint context` writes it to `~/.superyak/imprints/context.json` (0600), and `imprint.py plan` reads it for D37, the dry run's "Station" line, the plan's owner, and `parse_terms`' `operator`, so a plan naming another home is refused on the owner's machine. | The plan must know the requesting ship's owner (D37) and the operator whose home the audience names (I 5.3) before anything is sent. This sends only the ship key. |
 | R8 | `superyak-peer serve` registers the imprint routes only when `--imprints-dir` is given; without it they answer 404, as on the door. Station commands keep the default `$HOME/.engram/imprints` (I 10). | Off by default. The deploy gate that adds the flag to the lighthouse's unit is the switch. |
 | R9 | Check 3's signature part runs the peer's `verify-imprint --permission FILE` in the peer environment. `imprint.py admit` takes that command as `verify_cmd`; the Makefile passes it. | `verify_station_record` lives in the peer (I 15). Engram gains no dependency. |
-| R10 | Two seams to the trails plan. `imprint.count_roads_and_trails(conn, *, lanes, as_of, derive=None)` calls T's pure functions through `derive`; when `trails` can't be imported, admission with `route` fails with check `count` and the message "roads and trails can't be counted: trails.py is not installed". `imprint.use(..., trails_cmd=None)` runs `[sys.executable, <engram>/trails.py, ...]` by default. Tests pass stubs. | Build order puts trails after imprints. Failing closed narrows; no imprint with `route` is admitted until trails step 1 is on the Pi (gate G13). |
+| R10 | Two seams to the trails plan. `imprint.count_roads_and_trails(conn, *, lanes, as_of, derive=None)` sums `derive(conn, lane=lane, as_of=as_of)` over the scope's lanes, where `derive` reaches T's `roads_and_trails` (the trails plan's TR20 and Task 4). T derives one session at a time and counts roads with SQL in a scratch file under `TMPDIR` (T R21, T 11's I7 (c); the trails plan's TR28), which R26's re-exec points at `<id>.state/scratch/`. This plan keeps only the sum (I 10). T owns the aggregation and the support rule, so each has one implementation (the check's S8, settled toward the trail spec; it also drops the `scratch` parameter Task 35 had, which R10 lacked). When `trails` can't be imported, admission with `route` fails with check `count` and the message "roads and trails can't be counted: trails.py is not installed". `imprint.use(..., trails_cmd=None)` runs `[sys.executable, <engram>/trails.py, ...]` by default. Tests pass stubs. | Build order puts trails after imprints. Failing closed narrows; no imprint with `route` is admitted until trails step 1 is on the Pi (gate G13). |
 | R11 | An admission failure names its step: a check number 1–17, `calibration` or `count`. `imprint.py admit` exits 0 admitted, 1 failed (with `result.json`), 4 withdrawn during admission, 5 ended during admission. | YN4: the count and calibration had no name. Exit codes let the sync and the unit tell the cases apart. |
 | R12 | The evaluation's `--seed` is `int(use_id[:8], 16)`. | I 12 says `--seed N` without fixing N; this makes a run repeatable from its receipt. |
 | R13 | An imported row's id is `u-` + the first 32 hex of SHA-256 of `receipt id + action + purpose + batch number` (batch from 0). | YN6 makes rows per action **and** purpose; I 12's formula without the purpose would give two rows one id. |
@@ -128,8 +148,13 @@ Choices the spec leaves to the builder (I 19) or does not fix. A reviewer checks
 | R21 | `verify-imprint --dir DIR` writes `DIR/verified.json` (the station key and the ids of receipts whose chain and signature verify, in chain order). `import-receipts` imports only those. | I 12 imports "each verified receipt"; engram can't verify Ed25519 itself (R9). |
 | R22 | Withdrawing a `requested` item (no yes yet) is a decline: the staging directory goes, the row turns `declined` and stays content-free, and no receipt is written. | Goal 6: no permission, no receipt. |
 | R23 | A use's unit runs `station-imprint-use-begin`, which prints the use id on its only stdout line; the Makefile passes it to `imprint.py use`. | I 12: the begin step makes the use id. |
-| R24 | A begun admission runs once. `station-imprint-admit-begin` writes `admission.json` only when none exists, and refuses a row that has one, writing nothing. `make station-imprint-admit` with no ID resumes only `approved` rows with no `admission.json` (decided again first, D39, maybe days on). The sync fails an `approved` row that has `admission.json`, no `result.json`, and a `decided_at` more than `ADMISSION_BOUND = 1860` s ago (the unit's `RuntimeMaxSec=1800` plus its `TimeoutStopSec=60`, so the unit is gone): `failed` with step `calibration` and the fixed message `ADMISSION_STOPPED`, then the deletion, reason `failed`. A shortening's rewrite of `admission.json` keeps `decided_at`. | I 10: a memory limit or a timeout fails admission, and D16: any failure deletes the package. A unit killed at its cap writes no `result.json`, so without a bound the row would stay `approved`, with its bytes on the Pi, until its end, and every resume would calibrate it again. The files can't tell a cap from a crash, so both fail closed and the owner sends again. The spec's resume (D39) keeps its case: an admission that never began. I 10 counts a memory limit and a timeout as calibration's failures, hence the step name. |
+| R24 | A begun admission runs once. `station-imprint-admit-begin` writes `admission.json` only when none exists, and refuses a row that has one, writing nothing. `make station-imprint-admit` with no ID resumes only `approved` rows with no `admission.json` (decided again first, D39, maybe days on). The sync fails an `approved` row that has `admission.json`, no `result.json`, and a `decided_at` more than `ADMISSION_BOUND = 3660` s ago (the unit's `RuntimeMaxSec=3600` plus its `TimeoutStopSec=60`, so the unit is gone; 1,860 before the check's S3 doubled the unit's time): `failed` with step `calibration` and the fixed message `ADMISSION_STOPPED`, then the deletion, reason `failed`. A shortening's rewrite of `admission.json` keeps `decided_at`. | I 10: a memory limit or a timeout fails admission, and D16: any failure deletes the package. A unit killed at its cap writes no `result.json`, so without a bound the row would stay `approved`, with its bytes on the Pi, until its end, and every resume would calibrate it again. The files can't tell a cap from a crash, so both fail closed and the owner sends again. The spec's resume (D39) keeps its case: an admission that never began. I 10 counts a memory limit and a timeout as calibration's failures, hence the step name. |
 | R25 | Receipt `detail` keys are listed once, in Task 23's `DETAIL_KEYS`, and every task writes and reads those names. A failure names its step under `step` (R11), never `check`. `denied` may carry `term` (the decision refused at approval). `failed` carries `{step, message}` when admission ran and failed, or `{term}` alone when the decision refused at a run's start or the run ended during admission. | I 12's table gives `denied` no detail and `failed` a check number and a message, but I 10 and Task 29 record the term the decision refused on, and YN2's import reads it. One name everywhere. Gate G15. |
+| R26 | **Streaming and the scratch file** (D42). `imprint_filter.Scratch(path)` is a SQLite file on disk (`temp_store = FILE`, `journal_mode = OFF`, the default page cache) in the plan's 0700 directory, or in `<imprint id>.state/scratch/` on the Pi. `IdSet` is one of its tables, with `__contains__`, `__len__` and `__iter__` in insertion order; `ScratchMap` is a keyed table with the `Mapping` protocol. Every function that returns a table's rows returns an iterator over a cursor, read in batches of `BATCH_ROWS` or `BATCH_BYTES`; every id collection that grows with the store (Ê and Ŝ, closed sessions, instinct ids, X*, the vector keys, the digest's keys) is an `IdSet` or a `ScratchMap`. `Shipped` keeps its two tuples, since M is capped at `MAX_MEMORIES`: measured on the Pi, 100,000 ids take 8.9 MiB and the `members()` set of (layer, id) pairs 9.3 MiB more, 18.2 MiB in all. `SourceContext` gains `scratch`; a function without a context takes `scratch=None`, which makes a private one. **The scratch directory reaches SQLite only through the environment at start** (I 6.1, step 7; the check's S1: SQLite reads `SQLITE_TMPDIR` and `TMPDIR` once, when Python's `sqlite3` import initializes it, and `tempfile` caches `TMPDIR`; set later, `VACUUM`'s temporary file went to `/var/tmp`, measured with `strace` on the Pi). So `imprint.main` makes the run's scratch directory first (`plan`, `read`, `build`: a new 0700 directory under `home/imprints/plans/`; `admit`: `<id>.state/scratch/` without parents) and calls `ensure_scratch_env(scratch, environ=os.environ, execve=os.execve)`: unless `SQLITE_TMPDIR`, `TMPDIR` and `IMPRINT_SCRATCH` all name it, it re-executes `[sys.executable, *sys.orig_argv[1:]]` once with the three set. The re-executed process finds `IMPRINT_SCRATCH`, uses that directory and removes it when it ends. `make_plan`, `build` and `admit` take the directory as an argument and set no variable. Tests compare iterators through `list(...)` or `set(...)`. | I 5.4, 6.1, 6.4, 10 and D42 say what must stream; this names the one mechanism every task uses. A re-exec works the same from `make`, a unit or a shell, so no Makefile recipe has to make the directory. |
+| R27 | **Peak-memory tests on the Pi** (D42). Task 50's tests and Task 5's calibration measurements are R16's Pi measurements: they run only with `ENGRAM_PI_BUDGET=1` (the peer's and agent's too), in a child process under `systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0`, and assert `ru_maxrss` of that child under `PEAK_BUDGET`. The fixtures are built once per session under `/var/tmp`. | R16's rule, extended to every process this plan adds, beside the measurements R16 already covered. |
+| R28 | **The blocked filtration** (D31). `persistence.build_filtration_blocked(X, block_rows=BLOCK_ROWS) -> Filtration`: float64 L2-normalized rows in one n × 768 array, allocated once (`np.empty`), filled batch by batch and normalized in place, never `np.stack`ed (`persistence.py:137`) or divided into a new array (`:35`), since each copy at n = 16,000 is 6,144 × 16,000 = 98,304,000 bytes, 93.75 MiB, and one would take admission's lane row from 333.5 to 427.2 MiB (I 14.1); nearest neighbours from one reused `block_rows` × n buffer (`np.matmul(X[b], X.T, out=buf)`, then `1 − buf` in place, clipped at 0 as `distance_matrix` clips at `persistence.py:38`) with the diagonal masked; the tree by dense Prim's, one row of n distances per added point, floored at `_MST_FLOOR`; each tree edge written **(h, min(u, v), max(u, v))** by `_prim_edges(X)`, the edges sorted by that triple and fed to today's union-find (`persistence.py:67-86`). The order of u and v decides the deaths: the union-find lets j's lineage die when two components have the same size (`persistence.py:82-84`), and scipy gives `_mst_edges` every edge with i < j (`:41-46`; the check's S2). With no exact duplicates the outputs then equal `build_filtration`'s. `calibrate.persistence_scores` and `flag_redundant_cores` call it when `max_lane_episodes` is given; `None` keeps today's `build_filtration`. | I 10 fixes the outputs and the memory; Prim's is the simplest exact tree with no n × n matrix. |
+| R29 | **One imprint job at a time** (D42). The Makefile runs each unit's command as `flock -n $(IMPRINTS)/.jobs.lock make …`, and tries `flock -n $(IMPRINTS)/.jobs.lock true` before `systemd-run`; when that fails it prints I 10's sentence and starts nothing (exit 3 for a use, exit 1 for an approval's admission). Only `flock`'s exit status 1 means the lock is held (util-linux 2.38.1 on the Pi); any other, such as 66 when the lock file can't be opened because the imprints root is missing, prints "the imprint job lock can't be taken: <status>" and also starts nothing (the check's nit 2). A unit that loses the race after the Makefile's check passed runs nothing; `station-imprints` then shows "waiting: not begun; run make station-imprint-admit" for an approved admission with no `admission.json`, and no use running (I 10; nit 3). `station-imprint-admit` with no ID starts only the first awaiting id and prints how many more wait. | I 10, "One imprint job at a time". |
+| R30 | **The owner's two lists** (D43, D42). `objects.json` and `subjects.json` are JSON arrays written one element per line, `[` and `]` on lines of their own and `,` after every element but the last, so `json.load` reads them and `import-receipts` reads them line by line. | I 12; a file anyone can parse, which never needs reading whole. |
 
 ## Carried items
 
@@ -151,18 +176,20 @@ Items from the consolidation log, and the checks it records, that belong to this
 | XS1, XS2, XM1, XN1, XS3, CS1, CS2, CN1–CN6 | Applied in the spec. | Tasks 21 (XS1), 34 and 35 (XS2, CS1), 27 and 28 (XM1's two owners), 38 and 39 (XN1, CS2, CN1, CN4, CN6), 40 (CN1, CN2, CN5), 15 and 25 (XS3). |
 | XN6 | Which item of P's `Req` holds the ceiling in a step-2 ledger. | Gate G17: P 14 step 2's to say. Not built. |
 | Not this spec's | XN3, XN4, XN5, BS1–BS3, BN1–BN4, T's FS1 and FN1–FN3. | The permissions and trails plans. Listed so none is dropped. |
+| I 17's asks of revision 7 | The permissions spec and I agree on carried co-subjects inside the owner's home (ask (a)); the trail spec fits the use's 512 MiB unit, loads no model there, and gives one session at a time (asks (a) to (d)). | Ask (a) of the permissions spec is answered by its P36, which I now follows (Task 8's `denied`); what is left, the two texts side by side, the bound of 8 subjects per road or trail and the roads-and-trails rows' subjects (the check's S4), is gate G18's. The trail spec's revision 9 answers (a) to (d) on paper (its I7); its build is gate G19's. Task 35 calls its `roads_and_trails`. |
+| Revision 7's check (`docs/superpowers/reviews/2026-10-25-small-hardware-imprints-review.md`) | M1, M2, S1–S8, nits 1–6. | M1: A3, Task 8, G18. M2: Tasks 15 and 25. S1: R26, Tasks 15, 34, 50. S2: R28, Task 5. S3: the constants, R24, Tasks 36, 40, 50, G15. S4: G18 (not built; I 12 says why). S5: R28 and I 14.1. S6: G20. S7: Tasks 46 and 50. S8: R10, "What this plan uses", Task 35, G19. Nits: I 10 (1, 3, 4), R29 (2, 3), Task 8 (5), Task 12 (6). |
 
 ## Review Focus
 
 Inputs and failures the spec implies that no test in I 16 exercises, most likely first. Each has a test in the task
 named.
 
-1. **An admission that died before it wrote a result.** A run killed at `MemoryMax=4G`, at `RuntimeMaxSec=1800` or
+1. **An admission that died before it wrote a result.** A run killed at `MemoryMax=512M`, at `RuntimeMaxSec=3600` or
    by a crash writes no `result.json`. A begun admission runs once (R24): `station-imprint-admit-begin` refuses a row
    whose `admission.json` exists, and `make station-imprint-admit` with no ID resumes only rows with none. So no run
    ever finds a dead run's `<id>.state/calibration/`. If one does (only `imprint.py admit` run twice by hand could),
    it fails with step `calibration` before calibrating, rather than clearing it (`calibrate` creates its directory
-   with `exist_ok=False`, `engram/calibrate.py:251`). The sync fails the row once `decided_at` + 1,860 s has passed:
+   with `exist_ok=False`, `engram/calibrate.py:251`). The sync fails the row once `decided_at` + 3,660 s has passed:
    `failed` (step `calibration`, `ADMISSION_STOPPED`), then the deletion, reason `failed`. A run that died after
    writing `imprint.json` ends the same way, so a half-registered imprint is never admitted. Failing closed narrows;
    the owner sends again. Tasks 34 (`test_rf1_a_dead_runs_calibration_fails_the_rerun`) and 36
@@ -178,6 +205,13 @@ named.
    so one plan makes one package and one imprint id; the agent's `send` holds a lock on the imprint, so parts are never
    sent twice under two requests and `send.json` is never torn. The second run refuses (exit 4). Tasks 19
    (`test_rf5_a_second_build_of_one_plan_refuses`) and 43a (`test_rf5_two_sends_of_one_plan_never_interleave`).
+6. **A full store on a small Pi** (A3, A4). Andy's full store, near the 100,000-memory cap, with lanes over 16,000
+   episodes and a hub over 1,024 sources: every process stays under its budget, calibration records the skipped sets
+   instead of failing, and admission still finishes. Task 50 (`test_pi_every_process_at_the_cap`) and Task 5
+   (`test_lane_and_hub_over_their_bounds_are_skipped_and_named`).
+7. **A carried co-subject with a removed row.** A ledger where Jenn was added to m3 and later removed by her own act:
+   only effective rows ship, so the package carries nothing for her, and the digest changes if the removal lands
+   between plan and build. Task 8 (`test_only_effective_co_subjects_are_carried`).
 
 ## File Structure
 
@@ -185,9 +219,10 @@ named.
 |---|---|
 | `engram/store_identity.py` | `ORIGIN_IMPRINT`, `ImprintRefused`, `is_imprint`, ancestry, lineage, `independent`, `stamp_imprint`, ancestry in `stamp_fork`. Task 1. |
 | `engram/storage.py`, `sharing.py`, `federation.py`, `cli.py`, `lighthouse_sheaf.py` | The guards of I 11; `fork` passes ancestry. Tasks 1 to 3. |
-| `engram/calibrate.py`, `engram/persistence.py`, `engram/sheaf.py` | `no_content`, `no_paths`, `notes`, `create_parents`, the working-copy flag, the dense-set bound (`sheaf.measure_all` and `persistence.audit_unchecked_events` included). Tasks 2, 4, 5. |
+| `engram/calibrate.py`, `engram/persistence.py`, `engram/sheaf.py` | `no_content`, `no_paths`, `notes`, `create_parents`, the working-copy flag; the blocked filtration for lane and core sets and the per-semantic bound (`sheaf.measure_all` and `persistence.audit_unchecked_events` included); the streaming reads of I 10 (R28). Tasks 2, 4, 5. |
 | `engram/store_reader.py` | `connect(..., vec=True)`. Task 32. |
-| `engram/imprint_filter.py` (new) | Table rules, selection, terms, rows that leave, sessions, log rows, digest, the owner's words, cross-references. Tasks 6 to 12, 15, 17. |
+| `engram/imprint_filter.py` (new) | Table rules, selection, terms, co-subject rows, rows that leave, sessions, log rows, digest, the owner's words, cross-references; `Scratch`, `IdSet`, `ScratchMap` (R26). Tasks 6 to 12, 15, 17. |
+| `engram/tests/test_imprint_memory.py` (new) | The Pi's peak-memory tests and the memory rules every suite runs. Task 50. |
 | `engram/imprint_checks.py` (new) | L1–L4 and the 17 checks. Tasks 14, 32, 33. |
 | `engram/imprint.py` (new) | The command: `plan`, `read`, `build`, `admit`, `use`, `list`, `import-receipts`; the package writer; the count. Tasks 13, 15 to 19, 34, 35, 38, 45. |
 | `engram/imprint_copies.py` (new) | `copies_held`, standard library only, for the owner's use list. Task 45. |
@@ -210,6 +245,7 @@ named.
 | `peer/tests/test_station_units.py` | The sweep's two units in its expected lists (the one existing test changed). Task 42b. |
 | `agent/superyak_agent/imprint.py` (new), `__main__.py`, `station.py`, `agent/pyproject.toml` | `imprint context`, `send`, `status`, `withdraw`, `shorten`; a raw `PUT` body. Tasks 43a, 43b. |
 | `agent/tests/test_imprint_agent.py` (new) | The agent's tests. Tasks 43a, 43b. |
+| `agent/tests/test_imprint_memory.py` (new) | The agent's Pi measurement. Task 50. |
 | `Makefile` | The targets of I 13, the units and `station-units`. Tasks 40, 42b, 46. |
 
 ## What this plan uses from the other plans
@@ -218,7 +254,9 @@ named.
 
 - `permission_ledger.Ledger.open_read_only(engram_home)`, raising `FileNotFoundError` or `LedgerUnreadable` (its
   Task 10); `Ledger.store_row(instance_id) -> dict | None` and `Ledger.cosubjects(ref) -> frozenset[str]` (its Task
-  11); `Ledger.latest_lane_note(ref) -> str | None` (its Task 17). Task 8 here.
+  11); `Ledger.latest_lane_note(ref) -> str | None` (its Task 17); for `denied` (I 5.2), the ledger's `records`
+  table (`permission_ledger.py:68-72` on `permissions-core`), `Ledger.state()` (`:229`), `permissions.Use`
+  (`permissions.py:797-808`) and `permissions.record_matches(state, record, use, action)` (`:1026-1036`). Task 8 here.
 - `permission_uses.Uses.open(engram_home)`, `UseRow`, `Uses.append_imported(row, subjects)` (its Task 14) and
   `Uses.owner_list(state, ...)` (its Task 15), which Task 45 here extends with a `copies` keyword; the `uses` command
   of `permission_cli.py` (its Task 27). Task 45 here.
@@ -229,13 +267,19 @@ named.
 
 **From the trails plan** (built after this one; its names are T's until that plan fixes them):
 
-- T 11's pure functions for touches, trails and support (T 4 and 5), called by `count_roads_and_trails` through the
-  `derive` seam (R10). They take a connection and `as_of`, read no clock, and do not run the imprint check (YN5): the
+- T's `roads_and_trails` (T 4 and 5; T R21 and its I7 (c), revision 9), called by `count_roads_and_trails` through
+  the `derive` seam (R10): it takes a connection, a lane and `as_of`, derives one session at a time, counts roads
+  with SQL in a scratch file under `TMPDIR` (the trails plan's TR20 and TR28), reads no clock, and does not run the
+  imprint check (YN5): the
   check stays in the `trails.py` CLI (gate G12). Task 35's real-function test, `test_count_matches_the_trail_functions`,
-  runs once they exist (gate G13).
+  runs once it exists (gate G13).
 - `trails.py`'s CLI with `--evaluate --lane --seed --deadline --json --imprint-use` and exit status 3 for
   `allow changed` (T 7, 11), run by `imprint.py use` through the `trails_cmd` seam. Task 38.
-- `embeddings.create_embedding_provider(local_files_only=True)` (T 11). Gate G11.
+- No model in process: T's revision 9 withdrew `create_embedding_provider(local_files_only=True)` and reaches the
+  store's model only through the shared embedder at `ENGRAM_EMBEDDER_SOCKET` (T R19; the check's S8). Gate G11.
+- From I 17's asks of revision 7, which T's revision 9 answers on paper (its I7; gate G19): T's `roads_and_trails`
+  holds one session at a time; its evaluation has a 320 MiB design peak in the use's 512 MiB unit (T R20); and with no
+  socket it loads no model in process and reports W "not evaluable: no embedder" (T R19).
 - Nothing in the trails plan may change this plan's file layout, allow file or `result.json` names; T 7 and 11 read
   them as I 12 writes them (interface row 27).
 
@@ -538,29 +582,38 @@ git add engram/calibrate.py engram/tests/imprint_support.py engram/tests/test_im
 git commit -m "Calibrate: no_content, no_paths, notes and create_parents for admission (I 10)"
 ```
 
-### Task 5: Every dense set bounded at 7,500
+### Task 5: Every dense set bounded, lane and core sets in blocks (revision 7: was "bounded at 7,500")
 
 **Files:**
-- Modify: `engram/calibrate.py:146-162` (`persistence_scores`), `:165-180` (`cohesion_report`), `:183-212` (`persistence_preview`), `calibrate`
-- Modify: `engram/persistence.py:215-253` (`audit_unchecked_events`), `:342-417` (`classify_hubs`, `flag_redundant_cores`)
-- Modify: `engram/sheaf.py:266-282` (`measure_all`)
+- Modify: `engram/calibrate.py:82-122` (`first_open_preview` streams), `:146-162` (`persistence_scores`), `:165-180` (`cohesion_report`, one semantic at a time), `:183-212` (`persistence_preview`), `calibrate`
+- Modify: `engram/persistence.py:57-88` (`build_filtration_blocked` beside `build_filtration`, R28), `:163-188` (`generativity_scores` iterates), `:215-253` (`audit_unchecked_events`), `:269-304` (`evaluate_prune` iterates; `counts_only`), `:342-417` (`classify_hubs`, `flag_redundant_cores`)
+- Modify: `engram/sheaf.py:266-282` (`measure_all`; `measure_each`, a generator over semantics)
 - Test: `engram/tests/test_imprint_calibrate.py`
 
 **Interfaces:**
 - Consumes: Task 4.
-- Produces: `persistence.classify_hubs(storage, cfg, min_episodes=10, *, max_episodes: int | None = None, skips: list | None = None)`;
+- Produces: `persistence.build_filtration_blocked(X, *, block_rows: int = 256) -> Filtration` (R28);
+  `persistence.evaluate_prune(storage, cfg, threshold=0.05, *, counts_only: bool = False)` (with `counts_only`,
+  `{"evict": n, "protected": n, "candidates": n}` as integers, and `persistence_preview` reads them as counts);
+  `sheaf.measure_each(storage, cfg, *, max_episodes=None, skips=None)`, yielding one semantic's measure at a time,
+  which `measure_all` sorts as today and `cohesion_report` folds into the histogram, the 15 hottest and the 5 coolest
+  with two bounded heaps;
+  `persistence.classify_hubs(storage, cfg, min_episodes=10, *, max_episodes: int | None = None, skips: list | None = None)`;
   `persistence.flag_redundant_cores(storage, cfg, *, max_episodes=None, skips=None)`;
   `persistence.audit_unchecked_events(storage, cfg, *, max_episodes=None, skips=None)` (per event, the two peers'
   vectored sources that `split_band`'s `distance_matrix` and MSTs span, `persistence.py:110-125`);
   `sheaf.measure_all(storage, cfg, *, max_episodes=None, skips=None)` (per semantic, the sources whose n × n `W`, `L`,
   eigenvectors and residuals `cohesion_energy` builds, `sheaf.py:61-87`);
-  `calibrate.persistence_scores(conn, *, max_episodes=None, skips=None)`, `calibrate.cohesion_report(store, *,
-  max_episodes=None, skips=None)` and `calibrate.persistence_preview(store, *, max_episodes=None, skips=None)`, which
-  pass the bound on. A set is counted with `COUNT(*)` before any vector is read; over the bound it is skipped, never
-  sampled, and `{"set": "lane:<lane>" | "core" | "hub:<semantic id>" | "cohesion:<semantic id>" | "event:<subdivision
-  event id>", "n": n, "bound": b}` is appended. `calibrate` writes the list as
-  `report["analyses"]["skipped_dense_sets"]`. `MAX_LANE_EPISODES = 7500` in `calibrate.py`. I 10 lists three dense
-  sets; `measure_all` and `audit_unchecked_events` are two more that calibration reaches (gate G15).
+  `calibrate.persistence_scores(conn, *, max_episodes=None, skips=None)` (blocked, R28),
+  `calibrate.cohesion_report(store, *, max_episodes=None, skips=None)` and `calibrate.persistence_preview(store, *,
+  max_episodes=None, max_semantic_episodes=None, skips=None)`, which pass the bounds on; `calibrate(...,
+  max_lane_episodes=None, max_semantic_episodes=None)`. A set is counted with `COUNT(*)` before any vector is read;
+  over its bound it is skipped, never sampled, and `{"set": "lane:<lane>" | "core" | "hub:<semantic id>" |
+  "cohesion:<semantic id>" | "event:<subdivision event id>", "n": n, "bound": b}` is appended. Lane and core sets use
+  `max_lane_episodes` and the blocked filtration; hubs, cohesion sets and events use `max_semantic_episodes` and
+  today's dense code. `calibrate` writes the list as `report["analyses"]["skipped_dense_sets"]`. `MAX_LANE_EPISODES =
+  16_000` and `MAX_SEMANTIC_EPISODES = 1_024` in `calibrate.py` (I 10, D31). With both bounds given, no calibration
+  read calls `fetchall` on a table that grows with the store (I 10, "The rest of calibration streams").
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -570,51 +623,95 @@ def test_every_dense_set_over_the_bound_records_a_skip(tmp_path, monkeypatch):
     built = []                                       # whose two peers hold 13 vectored sources together
     monkeypatch.setattr(persistence, "distance_matrix", spy(persistence.distance_matrix, built, size=len))
     monkeypatch.setattr(sheaf, "build_local_sheaf", spy(sheaf.build_local_sheaf, built, size=lambda sid, ids, *a: len(ids)))
-    report = calibrate(src, tmp_path / "out", max_lane_episodes=12, now=NOW)
+    report = calibrate(src, tmp_path / "out", max_lane_episodes=12, max_semantic_episodes=12, now=NOW)
     sets = {s["set"].split(":")[0] for s in report["analyses"]["skipped_dense_sets"]}
     assert sets == {"lane", "core", "hub", "cohesion", "event"} and max(built, default=0) <= 12
 
-def test_the_real_bound_is_7500(tmp_path, monkeypatch):
-    src = dense_source(tmp_path, lane_n=7501, cores=0, hub_sources=0)
-    monkeypatch.setattr(persistence, "build_filtration", refuse_over(7500))
-    report = calibrate(src, tmp_path / "out", max_lane_episodes=MAX_LANE_EPISODES, now=NOW)
-    assert {"set": "lane:work", "n": 7501, "bound": 7500} in report["analyses"]["skipped_dense_sets"]
+def test_lane_and_hub_over_their_bounds_are_skipped_and_named(tmp_path, monkeypatch):
+    src = dense_source(tmp_path, lane_n=16_001, cores=0, hub_sources=1_025)
+    monkeypatch.setattr(persistence, "build_filtration_blocked", refuse_over(16_000))
+    monkeypatch.setattr(persistence, "distance_matrix", refuse_over(1_024, size=len))
+    report = calibrate(src, tmp_path / "out", max_lane_episodes=MAX_LANE_EPISODES,
+                       max_semantic_episodes=MAX_SEMANTIC_EPISODES, now=NOW)
+    skipped = report["analyses"]["skipped_dense_sets"]
+    assert {"set": "lane:work", "n": 16_001, "bound": 16_000} in skipped
+    assert any(s["set"].startswith("hub:") and s["n"] == 1_025 and s["bound"] == 1_024 for s in skipped)
 
-@pytest.mark.skipif(os.environ.get("ENGRAM_PI_BUDGET") != "1", reason="Pi measurement (R16)")
-def test_pi_budget_a_7500_episode_lane_fits_in_4g(tmp_path):
-    src = dense_source(tmp_path, lane_n=7500, cores=0, hub_sources=0, dim=768)   # random unit vectors
-    peak = child_peak_rss("calibrate.persistence_scores(Storage.open_read_only(SRC).conn)", src=src)
-    assert peak < 4 * 1024**3 - 512 * 1024**2
+@pytest.mark.parametrize("n,dupes", [(40, 0), (300, 0), (300, 12)])
+def test_the_blocked_filtration_equals_the_dense_one(n, dupes):
+    X = random_unit_vectors(n, 768, seed=n, duplicate_rows=dupes)
+    a, b = persistence.build_filtration(X), persistence.build_filtration_blocked(X, block_rows=7)
+    assert np.allclose(a.nn_dist, b.nn_dist, atol=1e-9) and math.isclose(a.max_height, b.max_height, abs_tol=1e-9)
+    assert sorted(np.round(heights(a), 9)) == sorted(np.round(heights(b), 9))     # the tree's heights, as a multiset
+    assert all(i < j for _, i, j in persistence._prim_edges(unit_rows(X)))        # (h, min, max), R28; the check's S2
+    if dupes == 0:
+        assert np.allclose(a.death, b.death, atol=1e-9)        # (parent, child) or (max, min) edges fail here
+
+def test_calibration_reads_no_whole_table(tmp_path, monkeypatch):
+    src = calibration_source(tmp_path, resonances=50, decayed=20)
+    monkeypatch.setattr(calibrate, "_connect_read_only", refusing_fetchall(GROWING_TABLES))   # a proxy connection
+    report = calibrate(src, tmp_path / "out", max_lane_episodes=MAX_LANE_EPISODES,
+                       max_semantic_episodes=MAX_SEMANTIC_EPISODES, now=NOW)
+    assert not [a for a in report["analyses"].values() if isinstance(a, dict) and "error" in a]
+
+def test_cohesion_keeps_only_its_summary(tmp_path):
+    src = dense_source(tmp_path, lane_n=60, semantics=40, sources_each=3)
+    report = calibrate(src, tmp_path / "out", max_semantic_episodes=MAX_SEMANTIC_EPISODES, now=NOW)
+    c = report["analyses"]["cohesion"]
+    assert c["measured"] == 40 and len(c["hottest"]) == 15 and len(c["coolest"]) == 5 and sum(c["energy_histogram"]) == 40
+
+@pytest.mark.skipif(os.environ.get("ENGRAM_PI_BUDGET") != "1", reason="Pi measurement (R16, R27)")
+def test_pi_budget_a_16000_episode_lane_in_blocks(tmp_path):
+    src = dense_source(tmp_path, lane_n=16_000, cores=0, hub_sources=0, dim=768)   # random unit vectors
+    peak, seconds = child_peak_rss("calibrate.persistence_scores(Storage.open_read_only(SRC).conn, "
+                                   "max_episodes=16_000)", src=src, timed=True)
+    assert peak < PEAK_BUDGET and seconds < 600
+
+@pytest.mark.skipif(os.environ.get("ENGRAM_PI_BUDGET") != "1", reason="Pi measurement (R16, R27)")
+@pytest.mark.parametrize("analysis", ["cohesion_energy", "classify_hubs", "split_band"])
+def test_pi_budget_a_1024_source_semantic(tmp_path, analysis):
+    src = dense_source(tmp_path, lane_n=1_024, cores=0, hub_sources=1_024, dim=768)
+    peak = child_peak_rss(f"run_one({analysis!r}, SRC)", src=src)
+    assert peak < PEAK_BUDGET
+    print(f"{analysis}: ratio {(peak - base_peak()) / (1_024**2 * 8):.2f} (I 10 assumes at most 16)")
 ```
 
-The child's peak resident size comes from `resource.getrusage(RUSAGE_CHILDREN).ru_maxrss` after it exits. The
-reviewer also runs this test under `systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0` (see
-"Verification before merge").
+The child's peak resident size comes from `resource.getrusage(RUSAGE_CHILDREN).ru_maxrss` after it exits; `timed`
+also returns its wall time. The reviewer also runs these under `systemd-run --user --scope -p MemoryMax=512M -p
+MemorySwapMax=0` (see "Verification before merge", and R27). `heights(f)` is the sorted list of the tree's edge
+heights, which both functions expose as `Filtration.heights` (an added field, n − 1 floats).
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_imprint_calibrate.py`
-Expected: FAIL, `KeyError: 'skipped_dense_sets'`.
+Expected: FAIL, `TypeError: calibrate() got an unexpected keyword argument 'max_semantic_episodes'`.
 
-- [ ] **Step 3: Implement the bound**
+- [ ] **Step 3: Implement the bounds, the blocked filtration and the streaming reads**
 
-`calibrate(max_lane_episodes=…)` passes the bound to `persistence_scores` (each lane, `calibrate.py:146-162`'s set);
-through `persistence_preview` to `flag_redundant_cores` (the core set, which has no lane bound today),
-`classify_hubs` (each semantic's sources) and `audit_unchecked_events` (each event's two peers); and through
-`cohesion_report` to `sheaf.measure_all` (each semantic's sources, whose count its `GROUP BY` already reads). The spies
-on `distance_matrix` (which `build_filtration`, `split_band` and `classify_hubs` call) and `build_local_sheaf` (which
-precedes every `cohesion_energy`) see every dense matrix calibration builds. `None` keeps today's behaviour. I 10's
-"Why 7,500": n_max = ⌊√((4 GiB − 512 MiB) / (7.5 × 8 B))⌋ = 7,914; step 1 uses 7,500.
+`calibrate(max_lane_episodes=…, max_semantic_episodes=…)` passes the lane bound to `persistence_scores` (each lane,
+`calibrate.py:146-162`'s set) and through `persistence_preview` to `flag_redundant_cores` (the core set, which has no
+lane bound today); both use `build_filtration_blocked` (R28) when the bound is given. It passes the semantic bound to
+`classify_hubs` (each semantic's sources), `audit_unchecked_events` (each event's two peers) and, through
+`cohesion_report`, to `sheaf.measure_each` (each semantic's sources, whose count its `GROUP BY` already reads). The
+spies on `distance_matrix` (which `build_filtration`, `split_band` and `classify_hubs` call) and `build_local_sheaf`
+(which precedes every `cohesion_energy`) see every dense matrix calibration builds. `first_open_preview`,
+`generativity_scores`, `evaluate_prune` (with `counts_only=True` from calibration), `classify_hubs`,
+`audit_unchecked_events` and `measure_each` iterate their cursors. `calibrate` opens its read-only connections
+through one helper, `_connect_read_only`, so the test can wrap it. `None` for both bounds keeps today's behaviour. I
+10's arithmetic: 8,704 bytes per episode in blocks, 139,264,000 bytes (132.8 MiB) at 16,000; 16 × n² × 8 bytes for
+a dense set, 134,217,728 bytes (128 MiB) at 1,024.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 7 passed, 1 skipped (the Pi measurement, without `ENGRAM_PI_BUDGET=1`).
+Run: the command of step 2. Expected: PASS, 12 passed, 4 skipped (Task 4's 5; here the skip test, the bounds test,
+three blocked-equals-dense cases, no whole table and the cohesion summary, 7; the four Pi measurements are skipped
+without `ENGRAM_PI_BUDGET=1`).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add engram/calibrate.py engram/persistence.py engram/sheaf.py engram/tests/imprint_support.py engram/tests/test_imprint_calibrate.py
-git commit -m "Calibrate: every dense set bounded at 7,500 episodes, skipped never sampled (I 10, D31)"
+git commit -m "Calibrate: lane and core sets in blocks, per-semantic sets bounded, reads streamed (I 10, D31, D42)"
 ```
 
 ### Task 6: Every table has a rule
@@ -627,11 +724,11 @@ git commit -m "Calibrate: every dense set bounded at 7,500 episodes, skipped nev
 
 **Interfaces:**
 - Produces:
-  - `TABLE_RULES: dict[str, str]`, every table of I 6.2 in its order, valued `filtered`, `dropped`, `rebuilt` or
-    `never` (`sqlite_stat1`–`4`);
+  - `TABLE_RULES: dict[str, str]`, every table of I 6.2 in its order, valued `filtered`, `dropped`, `rebuilt`,
+    `built` (`imprint_subjects`, the one table only the build creates, I 6.2, D43) or `never` (`sqlite_stat1`–`4`);
   - `HOOK_TABLES = ("context_threads", "context_prev_embedding", "nudge_co_fire_window", "nudge_surfaced")` (absent
     from a package); `session_bias` is a migration table (`011_session_bias.sql`) and `dropped`;
-  - `DIGEST_TABLES`, the ten tables of I 5.4 in its order; `CITING_OPERATIONS = ("mark_core", "instinct_feedback", "dream_react")`;
+  - `DIGEST_TABLES`, the eleven tables of I 5.4 in its order, `imprint_subjects` last; `CITING_OPERATIONS = ("mark_core", "instinct_feedback", "dream_react")`;
   - `is_shadow(name: str, virtual: Iterable[str]) -> bool` (a virtual table's name plus `_`);
   - `SourceTables(copied: tuple[str, ...], dropped: tuple[str, ...], unnamed: tuple[str, ...])`;
     `classify_source(conn) -> SourceTables`;
@@ -708,9 +805,11 @@ git commit -m "Imprints: every table classified, deny by default (I 6.2, D4)"
     `route`; purposes `calibration`, plus `trail-evaluation` exactly with `route`; days 1 to 365);
   - `parse_instant(text: str | None) -> datetime | None` (aware UTC; `None` when it does not parse);
   - `SourceContext` (frozen): `source_path: Path`, `source_id: str`, `instance_name: str`, `owner: str`,
-    `published: Path | None`, `ledger: object | None`;
-  - `base(conn, layer: str, sel: Selection, ctx: SourceContext, counts: Counter) -> list[str]`, ids in
-    `(created_at, id)` order; Task 8 adds `cosubjects` and `pending` to it;
+    `published: Path | None`, `ledger: object | None`, `home: bool` (the audience is `place:home/<owner>`, I 5.2;
+    Task 8 reads it), `scratch: Scratch` (R26; the test helper `ctx` makes one under `tmp_path`);
+  - `Scratch`, `IdSet`, `ScratchMap` (R26);
+  - `base(conn, layer: str, sel: Selection, ctx: SourceContext, counts: Counter) -> Iterator[str]`, ids in
+    `(created_at, id)` order, read in batches (R26); Task 8 adds `cosubjects` and `pending` to it;
   - `shared(published_conn, row: dict, layer: str, ctx: SourceContext, audience: str) -> bool`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -724,12 +823,12 @@ def test_lanes_and_the_half_open_window(tmp_path):
         ep(s, i, at=at)
     ep(s, "personal", lane="personal", at="2026-02-01T00:00:00+00:00")
     counts = Counter()
-    got = base(s.conn, "episode", selection(since=T("2026-01-01"), until=T("2026-10-25T18:00:00Z")), ctx(s), counts)
+    got = list(base(s.conn, "episode", selection(since=T("2026-01-01"), until=T("2026-10-25T18:00:00Z")), ctx(s), counts))
     assert got == ["in", "no-zone", "just-before"] and counts["unparseable_time"] == 1
 
 def test_exclude_and_layers(tmp_path):
     s = new_store(tmp_path, "s"); ep(s, "a"); ep(s, "b")
-    assert base(s.conn, "episode", selection(exclude={"b"}), ctx(s), Counter()) == ["a"]
+    assert list(base(s.conn, "episode", selection(exclude={"b"}), ctx(s), Counter())) == ["a"]
     with pytest.raises(PlanRefused):
         parse_selection(lanes="", layers="episode", since=None, until=None, shared_with=None,
                         exclude_file=None, unsourced=False, now=T("2026-10-25"))
@@ -741,7 +840,7 @@ def test_shared_with_matches_instance_layer_audience_and_digest(tmp_path):
     share_as(s, pub, "changed", "group:ph"); s.conn.execute("UPDATE episodes SET content='edited' WHERE id='changed'")
     share_as(s, pub, "other-instance", "group:ph", source_instance_id=str(uuid.uuid4()))  # another store's share of that id
     share_as(s, pub, "other-layer", "group:ph", layer="semantic")         # the id shared as a semantic, not this episode
-    got = base(s.conn, "episode", selection(shared_with="group:ph"), ctx(s, published=pub), Counter())
+    got = list(base(s.conn, "episode", selection(shared_with="group:ph"), ctx(s, published=pub), Counter()))
     assert got == ["shared"]
 
 def test_terms_accept_only_step_one_values():
@@ -780,16 +879,31 @@ git commit -m "Imprints: the selection, its half-open window, shared-with and th
 
 **Files:**
 - Modify: `engram/imprint_filter.py`
-- Modify: `engram/tests/imprint_support.py` (`ledger`)
+- Modify: `engram/tests/imprint_support.py` (`ledger`, which takes one person or a list per memory, and `denies`, a deny record per person written straight into the fixture's `records` table, since no step-1 command writes another person's layer (P 7.6); `remove_cosubject`; `ctx`'s `owner`, `home`, `terms` and `now`)
 - Test: `engram/tests/test_imprint_selection.py`
 
 **Interfaces:**
-- Consumes: the permissions plan's `Ledger.open_read_only`, `store_row`, `cosubjects`, `latest_lane_note`.
+- Consumes: the permissions plan's `Ledger.open_read_only`, `store_row`, `cosubjects`, `latest_lane_note`, `state`,
+  and `permissions.Use` and `record_matches` (see "What this plan uses").
 - Produces:
   - `open_ledger(engram_home: Path) -> Ledger | None` (no file: `None`; unreadable: `PlanRefused("The permissions ledger can't be read; nothing was planned.")`);
   - `check_owner(ledger, source_id: str, owner: str) -> None` (D37);
-  - `base` now also drops `cosubjects(m) ≠ ∅` (counted under `needs_yes`, keyed by person) and `pending(m)` (counted
-    under `lane_unsettled`);
+  - `base` now also drops `pending(m)` (counted under `lane_unsettled`), and, when `ctx.home` is false, drops
+    `cosubjects(m) ≠ ∅` (counted under `needs_yes:<person>`). When `ctx.home` is true it keeps them (A3, I 5.2) and
+    counts them under `others_memories`, with each person once under `others_people:<person>`, except that it drops
+    `denied(m)` (I 5.2; the check's M1), counted under `said_no:<person>`;
+  - `Refusals(ledger, ctx)`: built once per plan; `.any` is false when one query on the ledger's `records` finds no
+    deny with `revoked` null and `valid_until` null or after `ctx.now` in the layer of any effective co-subject of a
+    memory of the source (`place:home/<p>` for `person:<p>`, the place itself for a `place:` subject, P 6.3 item 1),
+    and then it builds no State; else it holds `ledger.state()` and those denies; `.refuses(ref, subject) -> bool` is
+    true when one of that subject's denies `record_matches` a
+    `Use(requester="agent:station-imprints", place=f"place:home/{owner}", obj=ref, copy=…, action=x,
+    purpose=p, at=max(ctx.now, deny.valid_from))` for x in {`recall`, `read`, `imprint`} and p in the terms'
+    purposes, or, with `route`, the same on a road ref `road:<source id>/…` of the store with `route` added to x;
+  - `cosubject_rows(sh: Shipped, ctx) -> Iterator[tuple[str, str, str]]`: `(memory_id, layer, subject)` for each
+    shipped memory and each effective co-subject in the ledger other than the owner, sorted by those three, read
+    one batch of refs at a time; empty when `ctx.home` is false or there is no ledger (I 6.2's `imprint_subjects`,
+    D43);
   - `published_house(engram_home: Path) -> Path` (`.engram/instances/lighthouse/graph.db`);
   - `check_source(path: Path, conn, *, engram_home: Path, imprint_roots: Sequence[Path] = ()) -> None`: refuses the
     published house and anything under an imprints root by resolved path, an imprint by origin, unknown migrations
@@ -804,11 +918,52 @@ def test_co_subjects_and_unsettled_lanes_stay_home_and_are_counted(tmp_path):
     led = ledger(home, owner="sam", store=s, cosubjects={"about-jenn": "person:jenn"},
                  lane_notes={"pending": "pending", "other-lane": "personal", "plain": "work"})
     counts = Counter()
-    got = base(s.conn, "episode", selection(), ctx(s, ledger=led), counts)
+    got = list(base(s.conn, "episode", selection(), ctx(s, ledger=led, home=False), counts))
     assert got == ["no-note", "plain"]                   # one created_at, so id order
     assert counts["needs_yes:person:jenn"] == 1 and counts["lane_unsettled"] == 2
     assert sorted(base(s.conn, "episode", selection(), ctx(s, ledger=None), Counter())) == sorted(
         ["plain", "about-jenn", "pending", "other-lane", "no-note"])
+
+def test_in_the_owners_home_co_subjects_ship_and_are_carried(tmp_path):
+    s = new_store(tmp_path, "s"); home = tmp_path / "home"
+    for i in ("plain", "about-jenn", "about-two"): ep(s, i)
+    led = ledger(home, owner="andy", store=s, cosubjects={"about-jenn": "person:jenn",
+                                                          "about-two": ["person:jenn", "person:lee"]})
+    c, counts = ctx(s, ledger=led, owner="andy", home=True), Counter()
+    assert sorted(base(s.conn, "episode", selection(), c, counts)) == ["about-jenn", "about-two", "plain"]
+    assert counts["others_memories"] == 2 and {k for k in counts if k.startswith("others_people:")} == {
+        "others_people:person:jenn", "others_people:person:lee"}
+    rows = list(cosubject_rows(Shipped(("about-jenn", "about-two", "plain"), ()), c))
+    assert rows == [("about-jenn", "episode", "person:jenn"), ("about-two", "episode", "person:jenn"),
+                    ("about-two", "episode", "person:lee")]
+    assert list(cosubject_rows(Shipped(("plain",), ()), ctx(s, ledger=None, owner="andy", home=True))) == []
+
+def test_only_effective_co_subjects_are_carried(tmp_path):
+    s = new_store(tmp_path, "s"); ep(s, "m3"); ep(s, "m4")
+    led = ledger(tmp_path / "home", owner="andy", store=s,
+                 cosubjects={"m3": "person:jenn", "m4": ["person:andy", "person:lee"]})   # m4 also names the owner
+    remove_cosubject(led, "m3", "person:jenn", by="person:jenn")        # her own act (P 7.4)
+    c = ctx(s, ledger=led, owner="andy", home=True)
+    assert list(cosubject_rows(Shipped(("m3", "m4"), ()), c)) == [("m4", "episode", "person:lee")]   # never the owner (nit 5)
+
+def test_a_co_subjects_no_keeps_the_memory_home(tmp_path):                 # I 5.2 denied(m); the check's M1
+    s = new_store(tmp_path, "s")
+    for i in ("about-jenn", "about-lee", "plain"): ep(s, i)
+    read_cal = dict(actions=["read"], purposes=["calibration"])
+    led = ledger(tmp_path / "home", owner="andy", store=s,
+                 cosubjects={"about-lee": "person:lee", "about-jenn": "person:jenn"},
+                 denies={"person:lee": [deny(**read_cal)],                                     # lee said no
+                         "person:jenn": [deny(**read_cal, revoked=True), deny(**read_cal, valid_until=NOW - 1),
+                                         deny(**read_cal, audience=["place:la-county/parks"])]})   # none refuses
+    c, counts = ctx(s, ledger=led, owner="andy", home=True, now=NOW), Counter()
+    assert sorted(base(s.conn, "episode", selection(), c, counts)) == ["about-jenn", "plain"]
+    assert counts["said_no:person:lee"] == 1 and counts["others_memories"] == 1
+    assert list(cosubject_rows(Shipped(("about-jenn", "plain"), ()), c)) == [("about-jenn", "episode", "person:jenn")]
+    roads = ledger(tmp_path / "h2", owner="andy", store=s, cosubjects={"about-lee": "person:lee"},
+                   denies={"person:lee": [deny(kinds=["road", "trail"], actions=["route"], purposes=["trail-evaluation"])]})
+    assert "about-lee" in base_ids(s, roads, route=False) and "about-lee" not in base_ids(s, roads, route=True)
+    calm = ledger(tmp_path / "h3", owner="andy", store=s, cosubjects={"about-lee": "person:lee"})
+    assert not Refusals(calm, ctx(s, ledger=calm, owner="andy", home=True, now=NOW)).any         # no State is built
 
 def test_source_owner_d37(tmp_path):
     s = new_store(tmp_path, "s"); home = tmp_path / "home"
@@ -843,20 +998,27 @@ Expected: FAIL, `ImportError: cannot import name 'check_owner' from 'imprint_fil
 
 - [ ] **Step 3: Implement the reads and refusals**
 
-Refs are `mem:<source id>/<layer>/<id>`. `cosubjects(m)` is `ledger.cosubjects(ref) - {f"person:{owner}"}`.
+Refs are `mem:<source id>/<layer>/<id>`. `cosubjects(m)` is `ledger.cosubjects(ref) - {f"person:{owner}"}`, the
+effective rows only (P 7.4's removals applied). `ctx.home` is `terms.audience == f"place:home/{owner}"`, set once by
+the plan from the station's context (R7), never from a flag.
 `pending(m)` is true when `ledger.latest_lane_note(ref)` is `pending` or names a lane other than the row's `lane`; no
-ledger or no note gives false (D40). `check_source` compares `Path.resolve()` of the given path with the published
-house and each root. Messages are fixed sentences that name the reason, never a memory.
+ledger or no note gives false (D40). `denied(m)` is `any(refusals.refuses(ref, s) for s in cosubjects(m))`, asked
+only when `ctx.home` is true and `refusals.any`; with no ledger it is false. The State is built at most once per plan,
+and only when a deny exists, which in step 1 only a place co-subject the owner stewards can hold (P 7.6); its memory
+is I 14.1's. `record_matches` reads the
+deny as P 5.3 reads a deny, so a deny naming another place, or revoked, or ended, refuses nothing. `check_source`
+compares `Path.resolve()` of the given path with the published house and each root. Messages are fixed sentences that
+name the reason, never a memory.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 8 passed.
+Run: the command of step 2. Expected: PASS, 11 passed (Task 7's 4 and these 7).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add engram/imprint_filter.py engram/tests/imprint_support.py engram/tests/test_imprint_selection.py
-git commit -m "Imprints: co-subjects, unsettled lanes, the source owner and refused sources (I 5.1, 5.2, D37, D40)"
+git commit -m "Imprints: co-subjects carried at home or kept home, a co-subject's no kept, unsettled lanes, the source owner, refused sources (I 5.1, 5.2, D27, D37, D40, D43)"
 ```
 
 ### Task 9: Down-closure, the shipped memories and induced links
@@ -870,15 +1032,18 @@ git commit -m "Imprints: co-subjects, unsettled lanes, the source owner and refu
 - Consumes: Tasks 7, 8.
 - Produces:
   - `MAX_MEMORIES = 100_000`;
-  - `Admissible(episodes: tuple[str, ...], semantics: tuple[str, ...], counts: Counter)`;
+  - `Admissible(episodes: IdSet, semantics: IdSet, counts: Counter)` (R26: Ê need not ship, so it isn't capped);
     `admissible(conn, sel, ctx) -> Admissible`: Ê, then Ŝ = base semantics whose recorded sources all lie in Ê and
-    that have one (or `sel.unsourced`); counts `semantic_source_stays` and `semantic_unsourced`;
+    that have one (or `sel.unsourced`), the down-closure decided by SQL against Ê's scratch table; counts
+    `semantic_source_stays` and `semantic_unsourced`;
   - `Shipped(episodes: tuple[str, ...], semantics: tuple[str, ...])` with `members() -> frozenset[tuple[str, str]]`
-    of (layer, id) and `refs(source_id: str) -> list[str]` (sorted `mem:` refs); `shipped(adm, sel) -> Shipped`
-    (Λ chooses; refuses none or more than `MAX_MEMORIES`);
-  - `semantic_rows(conn, sh) -> list[dict]` (`contradicted_by` null when it names a semantic outside S);
-    `vector_rows(conn, layer: str, ids: Sequence[str]) -> list[dict]` (`{"id", "embedding"}` in memory order);
-  - `link_rows(conn, sel, sh) -> dict[str, list[dict]]` for `semantic_sources`, `resonances`, `semantic_peers`,
+    of (layer, id) and `refs(source_id: str) -> Iterator[str]` (sorted `mem:` refs); `shipped(adm, sel) -> Shipped`
+    (Λ chooses; counts first and refuses none or more than `MAX_MEMORIES` before it builds the tuples, which R26
+    measures at 18.2 MiB at the cap);
+  - `semantic_rows(conn, sh) -> Iterator[dict]` (`contradicted_by` null when it names a semantic outside S);
+    `vector_rows(conn, layer: str, ids: Sequence[str]) -> Iterator[dict]` (`{"id", "embedding"}` in memory order, one
+    batch of ids per query);
+  - `link_rows(conn, sel, sh) -> dict[str, Iterator[dict]]` for `semantic_sources`, `resonances`, `semantic_peers`,
     `subdivision_events`, by I 6.2.
 
 - [ ] **Step 1: Write the failing tests**
@@ -911,7 +1076,7 @@ def test_each_link_row_with_an_endpoint_outside_m_is_dropped(tmp_path):
 def test_contradicted_by_is_cleared_when_it_names_a_semantic_that_stays(tmp_path):
     s = new_store(tmp_path, "s"); ep(s, "e1"); sem(s, "kept", sources=["e1"], contradicted_by="home-only")
     sem(s, "home-only", sources=["e1"], lane="personal")
-    assert semantic_rows(s.conn, Shipped(("e1",), ("kept",)))[0]["contradicted_by"] is None
+    assert next(semantic_rows(s.conn, Shipped(("e1",), ("kept",))))["contradicted_by"] is None
 
 def test_no_memories_or_too_many_is_refused(tmp_path, monkeypatch):
     s = new_store(tmp_path, "s")
@@ -957,12 +1122,12 @@ git commit -m "Imprints: down-closure, the shipped memories and links induced on
 - Consumes: Tasks 7, 9.
 - Produces:
   - `CLOSED_SECONDS = 3600`;
-  - `closed_sessions(conn, t1: int) -> frozenset[str]`: sessions whose newest row before t₁ (episodes by
-    `session_id`, `memory_log` by `context.session_id` of any event type, `operation_log` by `session_id`) is older
-    than t₁ − 3,600 s;
-  - `episode_rows(conn, sh, terms, closed) -> list[dict]`: every column but `rowid`, in `(created_at, id)` order;
+  - `closed_sessions(conn, t1: int, *, scratch: Scratch | None = None) -> IdSet`: sessions whose newest row before t₁
+    (episodes by `session_id`, `memory_log` by `context.session_id` of any event type, `operation_log` by
+    `session_id`) is older than t₁ − 3,600 s, found by SQL `GROUP BY` into the scratch file (R26);
+  - `episode_rows(conn, sh, terms, closed) -> Iterator[dict]`: every column but `rowid`, in `(created_at, id)` order;
     `session_id` kept only when `terms.route` and the session is in `closed`, else null (D6, D7);
-  - `operation_rows(conn, sel, terms, closed, sh) -> list[dict]`: empty without `route`; else rows with `operation`
+  - `operation_rows(conn, sel, terms, closed, sh) -> Iterator[dict]`: empty without `route`; else rows with `operation`
     in `CITING_OPERATIONS`, `t₀ ≤ τ < t₁`, a closed session, every target in M; `harness`, `model`, `repo` null and
     `details` `{}`.
 
@@ -979,7 +1144,7 @@ def test_closed_at_t1_reads_every_row_kind_before_t1_only(tmp_path):
     ep(s, "c", session="late-op", at="2026-10-25T16:00:00+00:00")
     op(s, "o1", session="late-op", at="2026-10-25T17:10:00+00:00", operation="share", targets=["c"])
     ep(s, "d", session="after", at="2026-10-25T16:00:00+00:00"); ep(s, "e", session="after", at="2026-10-25T19:00:00+00:00")
-    assert closed_sessions(s.conn, T1) == {"old", "after"}
+    assert set(closed_sessions(s.conn, T1)) == {"old", "after"}
 
 def test_session_ids_ship_only_with_route_and_only_for_closed_sessions(tmp_path):
     s = new_store(tmp_path, "s")
@@ -987,18 +1152,18 @@ def test_session_ids_ship_only_with_route_and_only_for_closed_sessions(tmp_path)
     sh, closed = Shipped(("w1", "w2"), ()), closed_sessions(s.conn, T1)
     assert [r["session_id"] for r in episode_rows(s.conn, sh, terms(route=False), closed)] == [None, None]
     assert [r["session_id"] for r in episode_rows(s.conn, sh, terms(route=True), closed)] == ["closed", None]
-    assert "rowid" not in episode_rows(s.conn, sh, terms(route=True), closed)[0]
+    assert "rowid" not in next(episode_rows(s.conn, sh, terms(route=True), closed))
 
 def test_operation_rows_are_citing_closed_inside_m_and_scrubbed(tmp_path):
     s = ops_store(tmp_path)        # mark_core on a kept episode; share; a target outside M; a row after t1; an open session
-    rows = operation_rows(s.conn, selection(until=T1), terms(route=True), closed_sessions(s.conn, T1), shipped_all(s))
+    rows = list(operation_rows(s.conn, selection(until=T1), terms(route=True), closed_sessions(s.conn, T1), shipped_all(s)))
     assert [r["id"] for r in rows] == ["o-kept"]
     assert (rows[0]["harness"], rows[0]["model"], rows[0]["repo"], rows[0]["details"]) == (None, None, None, "{}")
-    assert operation_rows(s.conn, selection(until=T1), terms(route=False), closed_sessions(s.conn, T1), shipped_all(s)) == []
+    assert list(operation_rows(s.conn, selection(until=T1), terms(route=False), closed_sessions(s.conn, T1), shipped_all(s))) == []
 
 def test_no_footpath_rows_without_route(tmp_path):
     s = footpath_store(tmp_path)  # one closed session wrote two work-lane episodes and made no recall
-    rows = episode_rows(s.conn, shipped_all(s), terms(route=False), closed_sessions(s.conn, T1))
+    rows = list(episode_rows(s.conn, shipped_all(s), terms(route=False), closed_sessions(s.conn, T1)))
     assert len(rows) == 2 and all(r["session_id"] is None for r in rows)
 ```
 
@@ -1036,7 +1201,7 @@ git commit -m "Imprints: sessions closed at t1; session ids and citing operation
 - Produces:
   - `normalize_outcome(text: str | None) -> str | None`: `used: auto: cited` when equal to it, else `used` or
     `not_used` by prefix, else null;
-  - `memory_log_rows(conn, sel, terms, closed, sh, instinct_ids: frozenset[str]) -> list[dict]`: empty without
+  - `memory_log_rows(conn, sel, terms, closed, sh, instinct_ids: IdSet) -> Iterator[dict]` (R26): empty without
     `route`. Recall rows lose instinct ids, and ship whole only when the rest is non-empty and inside M, with `context`
     `{recall_id, session_id}` (those present). `route_shown` rows ship with targets cut to M in order, dropped when cut
     to nothing or when `context.lane ∉ L`, with `context` `{receipt_id, session_id, tool, lane}` and `outcome` null.
@@ -1073,8 +1238,8 @@ def test_log_rows_need_route_a_closed_session_and_the_window(tmp_path):
     s = recall_store(tmp_path, extra=[("after-t1", "2026-10-25T18:00:00+00:00"), ("open", "2026-10-25T17:45:00+00:00")])
     ids = [r["id"] for r in rows_of(s)]
     assert "after-t1" not in ids and "open" not in ids
-    assert memory_log_rows(s.conn, selection(until=T1), terms(route=False), closed_sessions(s.conn, T1),
-                           shipped_all(s), instinct_ids(s)) == []
+    assert list(memory_log_rows(s.conn, selection(until=T1), terms(route=False), closed_sessions(s.conn, T1),
+                                shipped_all(s), instinct_ids(s))) == []
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1084,8 +1249,9 @@ Expected: FAIL, `ImportError: cannot import name 'memory_log_rows' from 'imprint
 
 - [ ] **Step 3: Implement the two kept event types**
 
-`instinct_ids` is every id in the source's `instincts` table. The session of a row is `context.session_id`; a row
-without one is dropped. The row keeps its `id`, `timestamp`, `event_type` and `layer` as stored.
+`instinct_ids` is every id in the source's `instincts` table, as an `IdSet` in the scratch file (R26). The session of
+a row is `context.session_id`; a row without one is dropped. Rows are read from one cursor in batches; `rows_of` and
+`recall_rows_of` in the tests return lists. The row keeps its `id`, `timestamp`, `event_type` and `layer` as stored.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1109,14 +1275,20 @@ git commit -m "Imprints: recall and route_shown rows, whole or cut to what ships
 - Produces:
   - `FILTER = "imprint-filter-v1"`; `canonical(value) -> bytes` (R5; raises `ValueError` on a float, NaN or a
     non-JSON value); `sha256_value(v: str | bytes | None) -> str` (a null hashes as `""`);
-  - `row_key(table: str, row: dict) -> list` for the ten tables of I 5.4's table;
+  - `row_key(table: str, row: dict) -> list` for the eleven tables of I 5.4's table, `imprint_subjects` included;
   - `scope_of(sel: Selection) -> dict`: `{"lanes", "layers", "since", "until", "shared_with", "unsourced_semantics"}`,
     lists sorted, times as `YYYY-MM-DDTHH:MM:SSZ`, `since` null for −∞;
-  - `PackageRows(rows: dict[str, list[dict]], counts: Counter, shipped: Shipped)`, `rows` keyed by `DIGEST_TABLES`;
+  - `PackageRows(rows: RowSource, counts: Counter, shipped: Shipped, others: dict)`, where `RowSource` is a
+    `Mapping[str, Iterable[dict]]` keyed by `DIGEST_TABLES` whose every lookup starts a new cursor over the working
+    copy, so nothing holds a table (R26); `others` is `{"memories": n, "people": p}` (I 7.1);
     `package_rows(conn, sel, terms, ctx) -> PackageRows`;
-  - `plan_digest(scope: dict, rows: Mapping[str, list[dict]]) -> str`: SHA-256 of
-    `canonical({"filter": FILTER, "scope": scope, "rows": {t: sorted(row keys, key=canonical)}})`;
-  - `contents_of(rows) -> dict[str, int]`: the tables with at least one row, and their counts.
+  - `plan_digest(scope: dict, rows: Mapping[str, Iterable[dict]], *, scratch: Scratch | None = None) -> str`: SHA-256
+    of `canonical({"filter": FILTER, "scope": scope, "rows": {t: sorted(row keys, key=canonical)}})`, computed as I
+    5.4's "Computing it in bounded memory" says: each key's canonical bytes into a scratch table, `ORDER BY` the
+    bytes, and the pieces fed to `hashlib.sha256` in order. The scratch table has no `PRIMARY KEY` or `UNIQUE`
+    constraint, so a repeated key stays repeated, as the definition's sorted list keeps it (the check's nit 6; each
+    key holds its row's primary key, so none repeats today, and the digest must not depend on that);
+  - `contents_of(rows) -> dict[str, int]`: the tables with at least one row, and their counts, counted by SQL.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1127,7 +1299,7 @@ def test_canonical_is_the_peers_form_and_refuses_floats():
         with pytest.raises(ValueError):
             canonical(bad)
 
-def test_the_digest_input_has_exactly_the_ten_tables_sorted_by_canonical_bytes():
+def test_the_digest_input_has_exactly_the_eleven_tables_sorted_by_canonical_bytes():
     rows = {t: [] for t in DIGEST_TABLES} | {"semantic_sources": [{"semantic_id": "s2", "episode_id": "e1"},
                                                                  {"semantic_id": "s1", "episode_id": "e9"}]}
     expected = hashlib.sha256(canonical({"filter": "imprint-filter-v1", "scope": SCOPE, "rows": {
@@ -1146,6 +1318,13 @@ def test_measured_numbers_are_not_keys_but_content_is(tmp_path):
 def test_contents_names_only_non_empty_tables(tmp_path):
     rows = package_rows(digest_store(tmp_path).conn, selection(), terms(route=False), ctx_of(tmp_path)).rows
     assert set(contents_of(rows)) <= set(DIGEST_TABLES) and "memory_log" not in contents_of(rows)
+
+def test_the_streamed_digest_equals_the_whole_object(tmp_path):
+    s = digest_store(tmp_path, every_table=True, cosubjects=True)      # at home, with imprint_subjects rows
+    rows = package_rows(s.conn, selection(), terms(route=True), ctx(s, home=True)).rows
+    whole = {t: sorted((row_key(t, r) for r in rows[t]), key=canonical) for t in DIGEST_TABLES}
+    expected = hashlib.sha256(canonical({"filter": FILTER, "scope": SCOPE, "rows": whole})).hexdigest()
+    assert plan_digest(SCOPE, rows) == expected and len(DIGEST_TABLES) == 11 and "imprint_subjects" in DIGEST_TABLES
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1158,11 +1337,12 @@ Expected: FAIL, `ImportError: cannot import name 'canonical' from 'imprint_filte
 `canonical` is `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 .encode()` after a walk that refuses `float`. Row keys follow I 5.4's table: `sha256_value` of TEXT as UTF-8 bytes
 and of BLOB as bytes, `created_at` as stored, `target_ids` as a list, `context` as an object, `peer_ids` as a sorted
-list. `package_rows` assembles Tasks 9 to 11 in one pass over one connection.
+list. `package_rows` assembles Tasks 9 to 11, and Task 8's `cosubject_rows` as `imprint_subjects`, over one
+connection; each table's rows are a fresh cursor when asked (R26).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 4 passed.
+Run: the command of step 2. Expected: PASS, 5 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1182,10 +1362,13 @@ git commit -m "Imprints: the package's rows and the plan digest over canonical r
 - Consumes: Task 1's `stamp_imprint`; Task 6's `check_package_tables`; Task 12's `PackageRows`.
 - Produces: `write_package(rows: PackageRows, dest: Path, *, source_id: str, source_ancestry: list[str],
   source_complete: bool, imprint_id: str) -> None`, I 6.1 steps 4 to 7: `Storage(dest)` (every migration), then
-  `stamp_imprint` on its connection; with foreign keys off, inserts table by table with explicit column lists that
-  never name `rowid`, memories in `(created_at, id)` order and vectors in their memories' order, vectors as the
-  source's raw `embedding` bytes; then `foreign_key_check` empty, `integrity_check` `ok`, `journal_mode=DELETE`,
-  `VACUUM`, `freelist_count` 0; then `check_package_tables`. It refuses to write over an existing file.
+  `stamp_imprint` on its connection and `IMPRINT_SUBJECTS_DDL` (I 6.2's fixed DDL); with foreign keys off, inserts
+  table by table with explicit column lists that never name `rowid`, memories in `(created_at, id)` order and vectors
+  in their memories' order, vectors as the source's raw `embedding` bytes, `imprint_subjects` in `(memory_id, layer,
+  subject)` order; each table through `executemany` in batches of `BATCH_ROWS` or `BATCH_BYTES`, committing after
+  each batch (R26, I 6.1 step 5); then `foreign_key_check` empty, `integrity_check` `ok`, `journal_mode=DELETE`,
+  `temp_store = FILE`, `VACUUM`, `freelist_count` 0; then `check_package_tables`. It refuses to write over an
+  existing file.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1220,6 +1403,13 @@ def test_a_source_older_than_identity_names_its_derived_id(tmp_path):
     meta = dict(sqlite3.connect(path).execute("SELECT key, value FROM meta"))
     assert meta["forked_from_instance_id"] == derived and stored_instance_id(src) is None
     assert (json.loads(meta["ancestry"]), meta["ancestry_complete"]) == ([derived], "false")
+
+def test_co_subject_rows_are_written_only_at_home(tmp_path):
+    src, path = written_with_source(tmp_path, cosubjects={"e1": "person:jenn"}, home=True)
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT memory_id, layer, subject FROM imprint_subjects").fetchall() == [("e1", "episode", "person:jenn")]
+    _, away = written_with_source(tmp_path / "away", cosubjects={"e1": "person:jenn"}, home=False)
+    assert sqlite3.connect(away).execute("SELECT count(*) FROM imprint_subjects").fetchone()[0] == 0
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1230,11 +1420,12 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'imprint'`.
 - [ ] **Step 3: Implement `write_package` in `engram/imprint.py`**
 
 The FTS triggers fill `episode_fts` and `semantic_fts`; vec0 fills its own shadow tables. `meta` holds only the
-identity keys `stamp_imprint` writes. Add `"imprint"` to `py-modules`.
+identity keys `stamp_imprint` writes. Add `"imprint"` to `py-modules`. `IMPRINT_SUBJECTS_DDL` lives in
+`imprint_filter.py`, so Task 32's reference file uses the same string.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 5 passed.
+Run: the command of step 2. Expected: PASS, 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1255,8 +1446,9 @@ git commit -m "Imprints: write a package by insertion into a fresh, vacuumed fil
 - Produces (each returns a list of failure lines; empty is a pass; none names a value, only the table, the column or
   the slot):
   - `UUID_TOKEN` (I 6.4's pattern, case ignored);
-  - `l1_values(conn, x_star: frozenset[str]) -> list[str]`: every value of every ordinary table, TEXT and BLOB (as
-    Latin-1), scanned for UUID tokens in `x_star`;
+  - `l1_values(conn, x_star: Container[str]) -> list[str]`: every value of every ordinary table, TEXT and BLOB (as
+    Latin-1), read one row at a time, scanned for UUID tokens in `x_star` (the build passes Task 17's `IdSet`, so X*
+    is looked up on disk, R26; tests may pass a `frozenset`);
   - `l2_fts(conn, scratch: Path) -> list[str]`: per FTS5 table, a scratch FTS5 table with the same columns and
     options but no `content=`, filled in rowid order from the base table; `fts5vocab` `instance` rows of both,
     streamed and compared; `_docsize` ids equal the base's rowids;
@@ -1264,7 +1456,8 @@ git commit -m "Imprints: write a package by insertion into a fresh, vacuumed fil
     sqlite-vec 0.1.7 (`_rowids`, `_chunks` validity bits and rowids, `_vector_chunks00`); `expected` maps each vec0
     table to `{id: SHA-256 hex of the embedding bytes}`, one form on both machines (at the build, hashed from the
     source's bytes; on the Pi, the plan digest's vector keys, which are those hashes, I 5.4), and L3 compares
-    `sha256(slot bytes)` with it;
+    `sha256(slot bytes)` with it, one chunk at a time; the build and the Pi pass `ScratchMap`s (R26), tests may pass
+    dicts;
   - `l4_raw(path: Path, x_star) -> list[str]`: 1 MiB chunks overlapping by 35 bytes.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1308,7 +1501,9 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'imprint_checks'`.
 - [ ] **Step 3: Implement L1 to L4 in `engram/imprint_checks.py`**
 
 L2 reads each FTS table's DDL from `sqlite_master`, drops only its `content=` and `content_rowid=` options, and keeps
-the tokenizer options, so honest Unicode text indexes the same way on both sides (RF3). L3's `V_info` comparison is
+the tokenizer options, so honest Unicode text indexes the same way on both sides (RF3). L2 fills its scratch table in
+batches with a commit after each, and compares the two `fts5vocab` cursors in lockstep; L4 reads 1 MiB at a time
+(I 6.4, D42). L3's `V_info` comparison is
 check 7's job; here it reads the layout only. Add `"imprint_checks"` to `py-modules`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -1342,12 +1537,24 @@ git commit -m "Imprints: leak checks L1 to L4 on values, FTS vocabularies, vec0 
     `--project-root`, else `$ENGRAM_PROJECT_ROOT` (as `server.py:163` reads it), else the current directory;
   - `Plan` (frozen): `id`, `created`, `store`, `source_id`, `source_identity` (`present` or `derived`), `ancestry`,
     `ancestry_complete`, `selection`, `terms`, `digest`, `counts`, `contents`, `package_bytes`, `parts`;
-  - `make_plan(store: Path, sel, terms, ctx, context: Context, *, home: Path, now: int) -> Plan`: a snapshot and a
-    working copy in a 0700 directory under `home/imprints/plans/` (removed when it ends); `package_rows` on the
-    working copy; the size from a scratch `write_package`; the plan written to `home/imprints/plans/<plan id>.json`
-    (0600: selection, X, terms, digest);
+  - `make_plan(store: Path, sel, terms, ctx, context: Context, *, home: Path, now: int, scratch_dir: Path | None =
+    None) -> Plan`: a snapshot, a
+    working copy and the scratch file (R26) in a 0700 directory under `home/imprints/plans/` (removed when it ends):
+    `scratch_dir=None` makes one, and the command passes the one `imprint.main` made and named in `SQLITE_TMPDIR` and
+    `TMPDIR` before its re-exec (R26; `make_plan` sets no variable, the check's S1); `package_rows` on the working copy; the size from a scratch
+    `write_package`; the plan written to `home/imprints/plans/<plan id>.json` (0600: selection, X, terms, digest);
+    `Plan` gains `others` and `home`;
   - `render_dry_run(plan, context) -> str`: I 5.4's text, with YS1's words (`TIMES_WORDS`), the ancestry line, the
-    "Other people" paragraph and the permission in words;
+    "Other people" line under "What would leave" and the paragraph in the words I 5.4 gives for `home` (with the
+    counts and the names) or for a copy that leaves the owner's home (the count by person under "What stays here",
+    and the confirmation), or, at n = 0, with no ledger or a ledger that records no co-subject on what leaves, the
+    "can't count them, and no one but you is recorded on them" words with no "Other people" line and no "0
+    memories" (`OTHERS_HOME_WORDS`, `OTHERS_AWAY_WORDS`, `OTHERS_NO_LEDGER_WORDS` in `imprint_filter.py`; I 5.4, the
+    check's M2); each `said_no:<person>` count as "N memories stay because <name> said no" under "What stays here";
+    and the permission in words;
+  - `ensure_scratch_env(scratch: Path, *, environ, execve) -> None` (R26): returns when `SQLITE_TMPDIR`, `TMPDIR` and
+    `IMPRINT_SCRATCH` all name `scratch`; else calls `execve(sys.executable, [sys.executable, *sys.orig_argv[1:]],
+    env)` with the three set, once. Every subcommand of `main` that opens SQLite calls it first (Tasks 15, 16, 19, 34);
   - `main(argv) -> int` with `plan` and its flags: `--store`, `--project-root`, `--lanes`, `--layers`, `--since`, `--until`,
     `--shared-with`, `--exclude FILE`, `--include-unsourced-semantics`, `--audience`, `--actions`, `--purposes`,
     `--days`, `--show-cross-references` (Task 17), `--list FILE`, `--json`, `--superyak-home`, `--engram-home`.
@@ -1381,6 +1588,29 @@ def test_the_dry_run_says_what_leaves_and_what_stays(tmp_path):
         assert line in text, line
     assert "Without route" in render_dry_run(make_plan(*plan_args(tmp_path / "b", route=False)), CONTEXT)
 
+def test_the_dry_run_says_plainly_how_many_memories_name_other_people(tmp_path):
+    cos = {"e1": "person:jenn", "e2": ["person:jenn", "person:lee"]}
+    at_home = render_dry_run(make_plan(*plan_args(tmp_path, owner="andy", cosubjects=cos)), ANDY_CONTEXT)
+    assert "2 memories have other people recorded on them (2 people: jenn, lee)" in at_home
+    assert "They will be copied" in at_home and "outside your" in at_home and "patients" in at_home
+    away = render_dry_run(make_plan(*plan_args(tmp_path / "away", owner="sam", cosubjects=cos)), CONTEXT)
+    assert "needs jenn's yes" in away and "stay here" in away and "patient or participant data" in away
+    none = render_dry_run(make_plan(*plan_args(tmp_path / "none", owner="andy", ledger=None)), ANDY_CONTEXT)
+    assert "can't count them" in none and "no one but you is recorded on them" in none and "on your yes alone" in none
+    zero = render_dry_run(make_plan(*plan_args(tmp_path / "zero", owner="andy", cosubjects={})), ANDY_CONTEXT)
+    assert OTHERS_NO_LEDGER_WORDS in zero and "0 memories" not in zero and "(0 people" not in zero   # M2
+    said_no = render_dry_run(make_plan(*plan_args(tmp_path / "no", owner="andy", cosubjects=cos,
+                                                  denies={"person:lee": [deny(actions=["read"], purposes=["calibration"])]})), ANDY_CONTEXT)
+    assert "1 memory stays because lee said no" in said_no
+
+def test_the_scratch_directory_is_set_before_python_starts(tmp_path):           # R26; the check's S1
+    calls, scratch = [], tmp_path / "s"; scratch.mkdir()
+    ensure_scratch_env(scratch, environ={"TMPDIR": "/tmp"}, execve=lambda *a: calls.append(a))
+    (_, argv, env), = calls
+    assert argv[0] == sys.executable and env["SQLITE_TMPDIR"] == env["TMPDIR"] == env["IMPRINT_SCRATCH"] == str(scratch)
+    ensure_scratch_env(scratch, environ=env, execve=lambda *a: calls.append(a))     # already set: no second exec
+    assert len(calls) == 1
+
 def test_list_writes_one_line_per_row_that_would_leave(tmp_path):
     rc = main(["plan", *PLAN_FLAGS, "--list", str(tmp_path / "rows.jsonl"), "--superyak-home", str(tmp_path / "h")])
     lines = [json.loads(l) for l in (tmp_path / "rows.jsonl").read_text().splitlines()]
@@ -1412,7 +1642,7 @@ resolved store path always (I 5.1).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 6 passed.
+Run: the command of step 2. Expected: PASS, 8 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1462,7 +1692,7 @@ It recomputes `package_rows` on a fresh snapshot and compares digests before sho
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 8 passed.
+Run: the command of step 2. Expected: PASS, 10 passed (Task 15's 8 and these 2).
 
 - [ ] **Step 5: Commit**
 
@@ -1480,9 +1710,10 @@ git commit -m "Imprints: imprint.py read pages through what would leave (I 5.4)"
 **Interfaces:**
 - Consumes: Tasks 12, 15.
 - Produces:
-  - `left_out_keys(source_conn, cold_conn: sqlite3.Connection | None, rows: PackageRows) -> frozenset[str]`: X*, every
+  - `left_out_keys(source_conn, cold_conn: sqlite3.Connection | None, rows: PackageRows) -> IdSet`: X*, every
     single-column TEXT primary key (and every vec0 `id`) of a row of `graph.db` or `cold.db` that does not ship, lower
-    case, minus the session ids that kept columns of shipped rows hold;
+    case, minus the session ids that kept columns of shipped rows hold, written to the scratch file in batches and
+    looked up there (R26, I 6.4);
   - `CrossRef(table: str, id: str, keys: int)`; `cross_references(rows: PackageRows, x_star) -> list[CrossRef]`: a
     shipped memory whose text holds a UUID token in X*;
   - the plan prints the count and, with `--show-cross-references`, each memory's id and the table of the key it names,
@@ -1548,14 +1779,17 @@ git commit -m "Imprints: cross-references to anything that stays home, ignoring 
 **Interfaces:**
 - Consumes: Tasks 12, 15.
 - Produces:
-  - `REQUEST_KEYS`, the exact key tree of I 7.1; `request_for(plan: Plan, imprint_id: str, package_bytes: int) -> dict`
-    (`parts` = ⌈bytes / `PART_BYTES`⌉);
+  - `REQUEST_KEYS`, the exact key tree of I 7.1, with `others` (`memories`, `people`); `request_for(plan: Plan,
+    imprint_id: str, package_bytes: int) -> dict` (`parts` = ⌈bytes / `PART_BYTES`⌉; `others` from the plan);
   - `manifest_for(request: dict, package: Path, *, built_at: int, engram_commit: str | None) -> dict` (I 7.2: canonical,
     no floats; `schema.applied` from the package; `embedding` from `embeddings.NomicEmbedProvider.MODEL_NAME` and the
     vec0 DDL's dimension; `vec.create_version` from `episode_vectors_info`; part hashes over 1 MiB reads);
   - `render_request(request: dict) -> str`: the request in words, the ancestry by short ids, and I 7.1's paragraph on
     what the station keeps and for how long, word for word;
-  - `objects_for(rows: PackageRows, source_id: str) -> list[str]`: the sorted `mem:` refs, written as `objects.json`.
+  - `objects_for(rows: PackageRows, source_id: str) -> Iterator[str]`: the sorted `mem:` refs, written as
+    `objects.json`; `subjects_for(rows: PackageRows, source_id: str) -> Iterator[tuple[str, str]]`: the sorted
+    `[ref, subject]` pairs of `imprint_subjects`, written as `subjects.json`; both one element per line (R30), by
+    `write_owner_lists(dir: Path, rows: PackageRows, source_id: str) -> None`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1573,7 +1807,7 @@ def test_a_request_without_route_names_no_log_table(tmp_path):
 def test_the_manifest_agrees_with_the_request(tmp_path):
     req, pkg = request_and_package(tmp_path)
     man = manifest_for(req, pkg, built_at=NOW, engram_commit=None)
-    for k in ("imprint_id", "plan_digest", "scope", "contents"):
+    for k in ("imprint_id", "plan_digest", "scope", "contents", "others"):
         assert man[k] == req[k]
     assert man["request_sha256"] == hashlib.sha256(canonical(req)).hexdigest()
     assert len(man["package"]["parts"]) == req["package"]["parts"] and man["vec"] == {"create_version": "v0.1.7"}
@@ -1583,6 +1817,21 @@ def test_the_terminal_prints_the_request_and_what_the_station_keeps(tmp_path):
     text = render_request(request_for(make_plan(*plan_args(tmp_path, ancestry=["3f2a9c1e-5b7d-4c2a-9e1f-0a6b8c4d2e10"])), IMPRINT_ID, 1))
     assert "This goes to the station now, before you say yes." in text and "Nothing is kept with no end." in text
     assert "30 days" in text and "400 days" in text and "3f2a" in text and IMPRINT_ID[:4] in text
+
+def test_others_carry_counts_and_no_name(tmp_path):
+    plan = make_plan(*plan_args(tmp_path, owner="andy", cosubjects={"e1": "person:jenn", "e2": ["person:jenn", "person:lee"]}))
+    req = request_for(plan, IMPRINT_ID, package_bytes=4_194_304)
+    assert req["others"] == {"memories": 2, "people": 2} and req["contents"]["imprint_subjects"] == 3
+    assert "jenn" not in json.dumps(req) and "lee" not in json.dumps(req)
+    away = request_for(make_plan(*plan_args(tmp_path / "away", owner="sam", cosubjects={"e1": "person:jenn"})), IMPRINT_ID, 1)
+    assert away["others"] == {"memories": 0, "people": 0} and "imprint_subjects" not in away["contents"]
+
+def test_the_owners_lists_are_json_one_element_per_line(tmp_path):
+    rows = plan_rows(tmp_path, owner="andy", cosubjects={"e1": "person:jenn"})           # Task 12's PackageRows
+    write_owner_lists(tmp_path / "out", rows, SOURCE_ID)
+    for name in ("objects.json", "subjects.json"):
+        lines = (tmp_path / "out" / name).read_text().splitlines()
+        assert lines[0] == "[" and lines[-1] == "]" and json.loads("\n".join(lines)) == [json.loads(l.rstrip(",")) for l in lines[1:-1]]
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1593,11 +1842,13 @@ Expected: FAIL, `ImportError: cannot import name 'request_for' from 'imprint'`.
 - [ ] **Step 3: Implement the three documents**
 
 `engram_commit` is `git rev-parse HEAD` in the engram checkout, or null when that fails. `source.identity` is
-`present` or `derived` from `store_identity.describe`. Every count and byte value is an int.
+`present` or `derived` from `store_identity.describe`. Every count and byte value is an int. `others` counts the
+memories with an `imprint_subjects` row and their distinct subjects by SQL over the package (or the plan's scratch
+file), never naming them (I 7.1). The part hashes read 1 MiB at a time.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 4 passed.
+Run: the command of step 2. Expected: PASS, 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1617,8 +1868,9 @@ git commit -m "Imprints: the request, the manifest and objects.json (I 7.1, 7.2,
 - Produces: `Built(imprint_id: str, dir: Path, request: dict, manifest: dict)`;
   `build(plan_id: str, *, home: Path, now: int, if_needed: bool = False) -> Built`: I 6.1 steps 1 to 10 (a new
   snapshot and working copy; digest compared; cross-references refused; `home/imprints/<imprint id>/` 0700 with a new
-  lowercase uuid4; `write_package`; L1 to L4, with X* and the SHA-256s of the source's vectors; `request.json`, `manifest.json` and
-  `objects.json`; `imprint.db` 0400; scratch removed; the plan file gains `imprint_id`). With `if_needed`, a plan
+  lowercase uuid4; `write_package`; L1 to L4, with X* and the SHA-256s of the source's vectors, both in the scratch
+  file (R26); `request.json`, `manifest.json`, `objects.json` and `subjects.json` (R30); `imprint.db` 0400; scratch
+  removed; the plan file gains `imprint_id`). With `if_needed`, a plan
   already built returns its `Built` and prints nothing. The `build` subcommand prints `render_request`.
   `build` holds an exclusive `fcntl.flock(LOCK_EX | LOCK_NB)` on `home/imprints/plans/<plan id>.lock` from before it
   reads the plan file until it has written `imprint_id` there, so two builds of one plan never make two imprint ids
@@ -1640,6 +1892,12 @@ def test_a_recall_and_a_log_outcome_after_the_plan_change_nothing_but_a_late_out
     plan2 = make_plan(*plan_args(tmp_path / "2", route=True)); log_outcome_now(tmp_path / "2", on="a-kept-row")
     with pytest.raises(PlanRefused):
         build(plan2.id, home=HOME(tmp_path / "2"), now=NOW)
+
+def test_a_co_subjects_no_between_plan_and_build_refuses_the_build(tmp_path):    # I 5.2 denied(m); the check's M1
+    plan = make_plan(*plan_args(tmp_path, owner="andy", cosubjects={"e1": "person:lee"}))
+    write_deny(ledger_of(tmp_path), "person:lee", actions=["read"], purposes=["calibration"])
+    with pytest.raises(PlanRefused, match="changed since the plan"):
+        build(plan.id, home=HOME(tmp_path), now=NOW)
 
 def test_plan_list_equals_the_package_rows(tmp_path):
     plan = make_plan(*plan_args(tmp_path, route=True)); built = build(plan.id, home=HOME(tmp_path), now=NOW)
@@ -1694,7 +1952,7 @@ with --exclude FILE and plan again."
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 13 passed (Task 13's 5 and these 8).
+Run: the command of step 2. Expected: PASS, 15 passed (Task 13's 6 and these 9).
 
 - [ ] **Step 5: Commit**
 
@@ -1917,7 +2175,9 @@ git commit -m "Peer: imprint-permission and imprint-receipt records, and verify_
     signature}` in chain order);
   - `peer/tests/imprint_support.py`: `station(tmp_path) -> Station` (Task 24 adds `imprints_dir`) with `app`, `store`, `clock` (a one-item list),
     `root` (a test imprints root), `andy` (the super admin's client), `sam` (a person's client), `voyager` (sam's
-    docked ship's client, through `test_presence.docked`), `jenn` and `other_ship`; `seed_imprint(st, *, status,
+    docked ship's client, through `test_presence.docked`), `serenity` (andy's own docked ship's client, for A3's copy
+    kept in the operator's home; `request_doc(owner_ship="serenity")` names its source), `jenn` and `other_ship`;
+    `seed_imprint(st, *, status,
     route=False, owner="sam", **over) -> str` (a row and a signed permission, for tests that skip the routes);
     `only_signed_imprint_record(st, signed: str)` (a station whose only signed record is one imprint permission, or
     one receipt with the permission's signature cleared).
@@ -1994,7 +2254,10 @@ git commit -m "Peer: imprint tables and hash-chained receipts written in one tra
 - Consumes: Task 23.
 - Produces:
   - `check_request(doc: dict, *, super_admin: str, owner_username: str) -> dict`: every rule of I 14 for `POST
-    /api/imprints`, with R14 (`until` required); refusals are `Problem(400, <fixed message naming the field>)`;
+    /api/imprints`, with R14 (`until` required), and I 14's `others` rule: integers, 0 exactly when `contents` has no
+    `imprint_subjects`, each at most `contents.imprint_subjects`, `memories` at most the shipped memories, and both 0
+    unless the audience is `place:home/<owner_username>` (A3, D27, D43); refusals are `Problem(400, <fixed message
+    naming the field>)`;
   - `Imprints.create_imprint_request(ship_id: str, raw: bytes, *, staging: Path) -> dict` →
     `{"id", "code", "expires", "imprint_short", "request_short"}`: parses with `identity.parse`, checks, applies the
     disk, size, per-ship (4 open) and per-source (D20) limits, writes `$(STATION_DATA)/imprints/<request id>/request.json`
@@ -2025,7 +2288,9 @@ def test_routes_are_off_without_imprints_dir(tmp_path):
     {"imprint_id": "../../etc"}, {"plan_digest": "9d3e"}, {"scope.until": "2026-10-25 18:00:00"},
     {"scope.until": None}, {"contents.episodes": 1.0}, {"contents.episodes": -1}, {"package.parts": 12},
     {"terms.audience": ["place:home/sam"]}, {"terms.days": 366}, {"contents.memory_log": 3, "terms.actions": ["imprint"]},
-    {"contents.episodes": 99_999, "contents.semantics": 2}, {"extra": 1}, {"scope.lanes": ["work", "personal"]}])
+    {"contents.episodes": 99_999, "contents.semantics": 2}, {"extra": 1}, {"scope.lanes": ["work", "personal"]},
+    {"others.memories": 1, "others.people": 1, "contents.imprint_subjects": 1},   # sam's copy to andy's home
+    {"others.memories": 1, "others.people": 0}, {"others.people": 1.0}])
 def test_each_format_refuses_a_bad_value(tmp_path, change):
     st = station(tmp_path)
     assert st.voyager.post("/api/imprints", content=canonical(request_doc(**change))).status_code == 400
@@ -2045,6 +2310,11 @@ def test_the_request_lives_in_staging_and_a_ship_sees_its_owner(tmp_path):
     assert stat.S_IMODE(staged.stat().st_mode) == 0o600 and b'"scope"' not in (tmp_path / "peer" / "peer.sqlite3").read_bytes()
     context = st.voyager.get("/api/imprints").json()
     assert (context["owner"], context["operator"]) == ("sam", "andy")
+
+def test_the_operators_own_copy_may_carry_others(tmp_path):
+    st = station(tmp_path)                                   # andy's own ship, serenity, sends to place:home/andy
+    doc = request_doc(owner_ship="serenity", **{"others.memories": 2, "others.people": 2, "contents.imprint_subjects": 3})
+    assert st.serenity.post("/api/imprints", content=canonical(doc)).status_code == 201
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2061,7 +2331,7 @@ handle must be the super admin's username (`users.is_super_admin`), and the ship
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 19 passed.
+Run: the command of step 2. Expected: PASS, 23 passed (18 bad values among them).
 
 - [ ] **Step 5: Commit**
 
@@ -2073,7 +2343,7 @@ git commit -m "Peer: imprint requests, every format and limit checked, kept in s
 ### Task 25: The confirm view, the confirm and the signed permission
 
 **Files:**
-- Modify: `peer/superyak_peer/imprints.py` (`imprint_preview`, `confirm_imprint`, `decline_imprint`, `permission_record`, `TIMES_WORDS`, `KEEPS_WORDS`, `CHECK_TEXT`, `STATION_NAME`)
+- Modify: `peer/superyak_peer/imprints.py` (`imprint_preview`, `confirm_imprint`, `decline_imprint`, `permission_record`, `TIMES_WORDS`, `KEEPS_WORDS`, `CHECK_TEXT`, `CHECK_TEXT_AT_HOME`, `CHECK_TEXT_AT_HOME_NONE`, `OTHERS_AT_HOME_WORDS`, `OTHERS_AT_HOME_NONE_WORDS`, `OTHERS_AWAY_WORDS`, `STATION_NAME`)
 - Modify: `peer/superyak_peer/auth.py:80-100` (`check_password_attempt`, R19; `login` calls it)
 - Modify: `peer/superyak_peer/app.py` (`GET /api/imprints/code/{code}`, `POST /api/imprints/{id}/confirm`, `POST /api/imprints/{id}/decline`)
 - Test: `peer/tests/test_imprint_confirm.py`
@@ -2086,14 +2356,26 @@ git commit -m "Peer: imprint requests, every format and limit checked, kept in s
     machine; `imprint_short`, `request_short`; the store id with its ancestry by short ids and "lineage complete",
     "lineage incomplete" or "copied from no recorded store"; scope, counts and size; the audience in words; the closed
     actions in words, or the without-route words; `TIMES_WORDS` (YS1); the end date if confirmed now; the digest's
-    first 8 characters and "the whole 64-character digest is sent"; `CHECK_TEXT`; `KEEPS_WORDS` (D32, I 9's
-    words); the closing paragraph;
+    first 8 characters and "the whole 64-character digest is sent"; other people, `OTHERS_AT_HOME_WORDS` with the two
+    `others` counts filled in when the audience is the owner's home and `others.memories` is above 0,
+    `OTHERS_AT_HOME_NONE_WORDS` when it is 0, else the fixed `OTHERS_AWAY_WORDS` (I 9); the check, `CHECK_TEXT_AT_HOME`
+    with the counts when the audience is the owner's home and n is above 0, `CHECK_TEXT_AT_HOME_NONE` when n = 0, else
+    revision 6's `CHECK_TEXT` (I 8, D27). The three home texts are I 8's and I 9's words exactly: at n above 0 the box
+    ends "Other memories may mention people Engram has no record of. They are copied on my yes alone, with no one else
+    recorded on them."; at n = 0 it reads "I know these memories may be about other people, such as family,
+    colleagues, patients or study participants. Engram has no record of the people they mention, so no one but me is
+    recorded on them. They are copied on my yes alone." (the check's M2: revision 7's first draft kept the n > 0
+    promise of co-subjects and their yes at n = 0, where nothing carries one). The station chooses by
+    `others.memories` alone, so no ledger and a ledger with no co-subject on what leaves get the same words;
+    `KEEPS_WORDS` (D32, I 9's words); the closing paragraph;
   - `confirm_imprint(actor: str, request_id: str, *, code: str, password: str, attest: bool, source: str) -> dict`:
     the owner, CSRF (through `current_user`), the password (`check_password_attempt`), the ticked check; in one
     transaction it builds `permission_record`, signs it, stores both and sets status `allowed`, `expires` = now + 7 days;
   - `decline_imprint(actor: str, request_id: str) -> dict`: removes the staging directory at once; status `declined`;
   - `permission_record(*, station: str, request_id: str, owner: str, owner_id: str, ship_id: str, request: dict,
-    request_sha256: str, now: int) -> dict`: I 8's record, with r_M and, with `route`, r_T; ids `r-` + 32 random hex;
+    request_sha256: str, now: int) -> dict`: I 8's record, with r_M and, with `route`, r_T; `attestation`
+    `"others-copied-at-home-v1"` when the audience is `place:home/<owner>`, else `"no-unconsented-others-v1"`, chosen
+    from the stored request's owner and audience, never from the browser (D27); ids `r-` + 32 random hex;
     `valid_until` = now + days × 86,400; every list sorted; `reason` = `f"imprint {imprint_id[:4]} at {STATION_NAME}"`;
   - `TIMES_WORDS = "Each memory keeps when it was written. Each episode keeps how often and when last it was recalled.
     Resonances, pairs of memories recalls returned together, keep when they formed and when either was last recalled.
@@ -2157,6 +2439,35 @@ def test_the_view_shows_every_field_but_kind_and_version(tmp_path):
         assert shown in view, shown
     assert doc["plan_digest"] not in view and "engram-imprint-request" not in view
 
+def test_the_check_and_attestation_follow_where_the_copy_lives(tmp_path):
+    st = station(tmp_path)
+    home = st.serenity.post("/api/imprints", content=canonical(request_doc(owner_ship="serenity",
+        **{"others.memories": 37, "others.people": 3, "contents.imprint_subjects": 40}))).json()
+    view = json.dumps(st.andy.get(f"/api/imprints/code/{home['code']}").json())
+    assert "37 of these memories have other people recorded on them (3 people)" in view and "patients" in view
+    assert CHECK_TEXT not in view and "outside my home" in view
+    confirm(st.andy, home)
+    assert json.loads(row(st, home["id"])["permission"])["attestation"] == "others-copied-at-home-v1"
+    away = post(st, request_doc()).json()                                  # sam's copy to andy's home
+    view = json.dumps(st.sam.get(f"/api/imprints/code/{away['code']}").json())
+    assert CHECK_TEXT in view and OTHERS_AWAY_WORDS in view and "recorded on them (" not in view
+    confirm(st.sam, away)
+    assert json.loads(row(st, away["id"])["permission"])["attestation"] == "no-unconsented-others-v1"
+
+def test_both_home_texts_say_only_what_is_true(tmp_path):                   # I 8, 9; the check's M2
+    st = station(tmp_path)
+    some = st.serenity.post("/api/imprints", content=canonical(request_doc(owner_ship="serenity",
+        **{"others.memories": 37, "others.people": 3, "contents.imprint_subjects": 40}))).json()
+    view = json.dumps(st.andy.get(f"/api/imprints/code/{some['code']}").json())
+    assert CHECK_TEXT_AT_HOME.format(n=37, p=3) in view and CHECK_TEXT_AT_HOME_NONE not in view
+    assert "They are copied on my yes alone, with no one else recorded on them." in view
+    none = st.serenity.post("/api/imprints", content=canonical(request_doc(owner_ship="serenity"))).json()  # n = 0
+    view = json.dumps(st.andy.get(f"/api/imprints/code/{none['code']}").json())
+    assert CHECK_TEXT_AT_HOME_NONE in view and OTHERS_AT_HOME_NONE_WORDS in view
+    assert "no one but me is recorded on them" in view and "co-subjects" not in view and "their yes" not in view
+    confirm(st.andy, none)
+    assert json.loads(row(st, none["id"])["permission"])["attestation"] == "others-copied-at-home-v1"
+
 def test_decline_removes_staging_at_once_and_keeps_a_content_free_row(tmp_path):
     st = station(tmp_path); made = post(st, request_doc()).json()
     assert st.sam.post(f"/api/imprints/{made['id']}/decline").status_code == 200
@@ -2179,7 +2490,7 @@ The confirm also stores the station's public key, base64, in the row's `station_
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 8 passed.
+Run: the command of step 2. Expected: PASS, 10 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2212,7 +2523,9 @@ git commit -m "Peer: the owner's browser yes, with password and check, signs the
     the station holds, so a send resumes after a restart); anyone else gets 404. Task 41 adds the rest of I 12's
     "What the owner sees afterwards" to this answer;
   - `station_pending()` gains `{"kind": "imprint", ...}` items read from `request.json`; `describe_pending` prints I
-    10's two lines through `safe_line`; `station_notices()` gains "An imprint is waiting for Andy's review. He decides
+    10's two lines through `safe_line`, and a third when `others.memories` is above 0: "<n> memories have other people
+    recorded on them (<p> people); copied in <owner>'s home as co-subjects" (I 10, gate G18); `station_notices()`
+    gains "An imprint is waiting for Andy's review. He decides
     with make station-pending on the Pi." per received item, naming no one.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2227,7 +2540,7 @@ def test_manifest_before_parts(tmp_path):
     assert put_manifest(st, made, manifest_for_doc(made, data)).status_code == 200
     assert put_manifest(st, made, manifest_for_doc(made, data)).status_code == 409          # a second one
 
-@pytest.mark.parametrize("field", ["scope", "contents", "imprint_id", "plan_digest", "request_sha256",
+@pytest.mark.parametrize("field", ["scope", "contents", "others", "imprint_id", "plan_digest", "request_sha256",
                                    "source.instance_id", "source.ancestry", "source.ancestry_complete",
                                    "package.bytes", "package.parts"])                    # I 7.2's shared fields
 def test_a_manifest_that_differs_from_the_request_in_any_shared_field_is_refused(tmp_path, field):
@@ -2264,6 +2577,10 @@ def test_complete(tmp_path):
     assert "IMPRINT  from sam (ship voyager, machine" in lines and "\n" not in safe_parts(lines)
     notice = [n for n in st.store.station_notices() if n["id"].startswith("imprint-")][0]
     assert notice["text"] == "An imprint is waiting for Andy's review. He decides with make station-pending on the Pi."
+    st2, made2, _ = allowed_with_all_parts(tmp_path / "home", ship="serenity", others={"memories": 37, "people": 3})
+    st2.serenity.post(f"/api/imprints/{made2['id']}/complete")
+    assert "37 memories have other people recorded on them (3 people)" in describe_pending(
+        st2.store.station_pending(), st2.clock[0], "andy")
 
 def test_rf2_failed_join_leaves_no_partial_file(tmp_path, monkeypatch):
     st, made, data = allowed_with_all_parts(tmp_path)
@@ -2290,7 +2607,8 @@ space; nothing was kept. Run make imprint-send again later.")`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 15 passed.
+Run: the command of step 2. Expected: PASS, 16 passed (the manifest's shared fields are 11 cases now, `others`
+added).
 
 - [ ] **Step 5: Commit**
 
@@ -2324,7 +2642,9 @@ git commit -m "Peer: the manifest, resumable 4 MiB parts, the join, and the IMPR
     t: int, operator: str, uses: Iterable[tuple[str, str, str]] | None = None) -> UseDecision`. Terms in I 8's order:
     status, `valid_from`, the effective end, withdrawal (any `withdrawn` receipt at or before t), then audience,
     requester, action and purpose (necessary conditions, read over `owner_records`), then the ceiling (items 1 to 5
-    over this copy's own records and receipts, and C). The verdict is the ceiling's, so a use of copy I is allowed
+    over this copy's own records and receipts, and C). Item 6 (a carried co-subject's memory is used only in the
+    owner's home, I 8) holds for every admitted imprint by Task 24's request rule and Task 33's check 12, and every
+    step-1 use is in the operator's home, so `decide_use` does not read it (I 8 says so). The verdict is the ceiling's, so a use of copy I is allowed
     exactly when `Need ⊆ ⟦c_I⟧` (I 8, "Why the station's check is the permissions spec's meet"). Codes: `NOT_YET` for
     `valid_from`, `EXPIRED` for the end, `NO_ALLOW` for the rest. `uses` replaces `need(...)` in tests only.
 
@@ -2697,13 +3017,16 @@ git commit -m "Peer: shortening by the owner or the ship, narrowing only, rewrit
 - Consumes: Task 19's packages; Task 14's L2 and L3.
 - Produces:
   - `store_reader.connect(..., vec=True)` loads `sqlite_vec` as `Storage.open_read_only` does (`storage.py:153-156`);
+    the open path is `store_reader.py:44-55`;
   - `CheckFailure(step: int | str, message: str)` (R11); `CHECK_MESSAGES: dict[int, str]` (fixed sentences);
   - `verify(imprint_dir: Path, *, verify_cmd: Sequence[str], migrations_dir: Path, scratch: Path) -> CheckFailure | None`:
     I 10's checks in order, stopping at the first failure; this task writes 1 to 9 (Task 33 adds 10 to 17). The file
     is opened `mode=ro&immutable=1` with sqlite-vec loaded. Check 3 runs `verify_cmd + ["--permission",
     str(imprint_dir / "permission.json")]` and needs exit 0 (R9), then compares `request_sha256`, `plan_digest`, the two
     `imprint_id`s and the source ids. Check 7 builds the reference with `Storage(ref, migrations_dir=<a scratch copy of
-    exactly manifest.schema.applied>)` and compares `sqlite_master` (type, name, tbl_name, sql) and every vec0 `_info`;
+    exactly manifest.schema.applied>)` plus `imprint_filter.IMPRINT_SUBJECTS_DDL` (I 10, check 7) and compares
+    `sqlite_master` (type, name, tbl_name, sql) and every vec0 `_info`. `scratch` is `<id>.state/scratch/` in
+    admission (R26), and every check reads rows from cursors;
   - `imprint_support.handed_off(tmp_path, built, *, route: bool, valid_until: int) -> tuple[Path, str]` lays out a
     root as the station's hand-off would (the four files, `<id>.state/` with `admission.json`); `tampered(tmp_path,
     change) -> Path` changes a copy, then fixes `manifest.package` so checks before the target pass.
@@ -2764,10 +3087,15 @@ git commit -m "Imprints: admission checks 1 to 9 on an immutable, vec-loaded ope
 - Consumes: Tasks 12, 14, 32.
 - Produces: checks 10 to 17 in `verify`, each also callable alone as `check_<n>(conn, manifest) -> str | None`: 10
   references resolve inside the package, the log rows' `target_ids` included, so an instinct id in a recall row
-  (the instincts table is empty, check 9) fails here, before check 11; 11 the scrubs (I 10's rules for `memory_log` and `operation_log`); 12 the
-  scope (with D7's rule without `route`); 13 counts equal `manifest.contents` and the recomputed plan digest equals
-  `manifest.plan_digest`; 14 `freelist_count` 0; 15 rowids 1..n in every memory table and FTS `_docsize`; 16 L2;
-  17 L3 against the plan digest's vector keys.
+  (the instincts table is empty, check 9) fails here, before check 11, and every `imprint_subjects` row names a
+  package memory in its layer and a `person:` or `place:` subject that is not the owner; 11 the scrubs (I 10's rules for `memory_log` and `operation_log`); 12 the
+  scope (with D7's rule without `route`, and no `imprint_subjects` row when the audience is not the owner's home);
+  13 counts equal `manifest.contents` and `manifest.others`, and the recomputed plan digest equals
+  `manifest.plan_digest`, computed in the scratch file as I 5.4 streams it (Task 12's `plan_digest` with a
+  `Scratch` in `<id>.state/scratch/`); 14 `freelist_count` 0; 15 rowids 1..n in every memory table and FTS
+  `_docsize`, by `count`, `min` and `max`; 16 L2; 17 L3 against the plan digest's vector keys, kept in a
+  `ScratchMap` while check 13 reads them. References in check 10 are SQL anti-joins, with `json_each` for
+  `target_ids` and `peer_ids`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2775,7 +3103,9 @@ git commit -m "Imprints: admission checks 1 to 9 on an immutable, vec-loaded ope
 @pytest.mark.parametrize("change,step", [
     ("dangling_target", 10), ("unscrubbed_context", 11), ("instinct_id_in_recall", 10), ("lane_outside_scope", 12),
     ("time_outside_scope", 12), ("session_id_without_route", 12), ("digest_mismatch", 13), ("free_page", 14),
-    ("rowid_gap", 15), ("fts_orphan", 16), ("non_zero_invalid_vec0_slot", 17)])
+    ("rowid_gap", 15), ("fts_orphan", 16), ("non_zero_invalid_vec0_slot", 17),
+    ("subject_row_for_a_missing_memory", 10), ("subject_row_naming_the_owner", 10),
+    ("subject_row_in_a_copy_leaving_home", 12), ("others_disagree_with_the_rows", 13)])
 def test_each_check_fails(tmp_path, change, step):
     root, imprint_id = tampered(tmp_path, change)
     failure = verify(root / imprint_id, verify_cmd=stub_verify(ok=True), migrations_dir=MIGRATIONS, scratch=tmp_path / "s")
@@ -2787,9 +3117,11 @@ def test_a_session_id_set_by_hand_also_fails_the_digest(tmp_path):
     assert check_12(conn, manifest) is not None and check_13(conn, manifest) is not None
 
 def test_a_clean_package_passes_all_17(tmp_path):
-    for route in (False, True):
-        root, imprint_id = handed_off(tmp_path / str(route), built_package(tmp_path / str(route), route=route), route=route, valid_until=FAR)
-        assert verify(root / imprint_id, verify_cmd=stub_verify(ok=True), migrations_dir=MIGRATIONS, scratch=tmp_path / "s") is None
+    for route, cos in ((False, None), (True, None), (True, {"e1": "person:jenn"})):     # the last: andy's copy at home
+        d = tmp_path / f"{route}-{bool(cos)}"
+        built = built_package(d, route=route, owner="andy" if cos else "sam", cosubjects=cos)
+        root, imprint_id = handed_off(d, built, route=route, valid_until=FAR)
+        assert verify(root / imprint_id, verify_cmd=stub_verify(ok=True), migrations_dir=MIGRATIONS, scratch=d / "s") is None
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2805,7 +3137,7 @@ form the build passes too (Task 14).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 28 passed.
+Run: the command of step 2. Expected: PASS, 32 passed (Task 32's 15; here 15 tampered cases and two more).
 
 - [ ] **Step 5: Commit**
 
@@ -2837,10 +3169,18 @@ git commit -m "Imprints: admission checks 10 to 17, the digest recomputed from t
     step `calibration` and `CALIBRATION_FAILED = "Calibration did not finish. Nothing was admitted."`, never the
     exception's text (YN4);
   - calibration: `calibrate_fn(<id>/imprint.db, <id>.state/calibration, migrate=True, no_content=True, no_paths=True,
-    notes=…, max_lane_episodes=7500, create_parents=False, now=calibration_now)`, with `notes = {"snapshot": "0
-    sessions and 0 log rows, because route was not chosen"}` without `route`; then `snapshot.db` and `working.db` go;
+    notes=…, max_lane_episodes=MAX_LANE_EPISODES, max_semantic_episodes=MAX_SEMANTIC_EPISODES, create_parents=False,
+    now=calibration_now)`, with `notes = {"snapshot": "0 sessions and 0 log rows, because route was not chosen"}`
+    without `route`; then `snapshot.db` and `working.db` go;
+  - the scratch directory: `imprint.main`'s `admit` makes `<id>.state/scratch/` without parents (through
+    `_write_state`'s check first) and calls `ensure_scratch_env` (Task 15, R26), so the re-executed process starts
+    with `SQLITE_TMPDIR` and `TMPDIR` naming it; `admit(..., scratch_dir=None)` makes it itself when called in
+    process, sets no variable, passes it to `verify`, and removes it in a `finally` (I 10, R26; the check's S1). The
+    count's scratch file goes under `TMPDIR` (R10). It imports numpy and scipy only when calibration starts, after
+    verification, so its child `verify-imprint` runs beside a smaller parent (I 14.1);
   - registration: `<id>/imprint.json` (status, manifest, permission, admission time, the report's SHA-256, the engram
-    commit); files 0444, the directory 0555; `<id>.state/result.json` `{"status": "admitted", "checks": 17,
+    commit, and `others` with the number of `imprint_subjects` rows, which registers the carried co-subjects, D43);
+    files 0444, the directory 0555; `<id>.state/result.json` `{"status": "admitted", "checks": 17,
     "report_sha256", "skipped", "roads_and_trails": N, "ended_at"}`. A failure writes `{"status": "failed", "step",
     "message", "ended_at"}` and exits 1;
   - `list_imprints(root: Path) -> list[dict]` and `imprint.py list --imprints-dir`.
@@ -2900,6 +3240,14 @@ def test_a_failed_check_writes_a_failed_result(tmp_path):
     root, iid_ = tampered(tmp_path, "changed_byte")
     assert admit(iid_, root=root, verify_cmd=OK) == 1
     assert json.loads((root / f"{iid_}.state" / "result.json").read_text())["step"] == 2
+
+def test_admission_registers_co_subjects_and_leaves_no_scratch(tmp_path):
+    built = built_package(tmp_path, owner="andy", cosubjects={"e1": "person:jenn", "e2": ["person:jenn", "person:lee"]})
+    root, iid_ = handed_off(tmp_path, built, route=False, valid_until=FAR)
+    assert admit(iid_, root=root, verify_cmd=OK, calibration_now=CAL_NOW) == 0
+    reg = json.loads((root / iid_ / "imprint.json").read_text())
+    assert reg["others"] == {"memories": 2, "people": 2} and reg["imprint_subjects"] == 3
+    assert not (root / f"{iid_}.state" / "scratch").exists()
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2916,7 +3264,7 @@ R24's bound passes (Task 36). The subcommand is `imprint.py admit --id ID --impr
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 8 passed.
+Run: the command of step 2. Expected: PASS, 9 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2932,12 +3280,17 @@ git commit -m "Imprints: imprint.py admit, decided again, checked before each wr
 - Test: `engram/tests/test_imprint_admit.py`
 
 **Interfaces:**
-- Consumes: Task 34; the trails plan's pure functions through `derive` (R10); Task 28's `ceiling_world`.
+- Consumes: Task 34; the trails plan's `roads_and_trails` through `derive` (R10); Task 28's `ceiling_world`.
 - Produces:
   - `class CountUnavailable(RuntimeError)`;
   - `count_roads_and_trails(conn, *, lanes: Sequence[str], as_of: int, derive: Callable | None = None) -> int`: N,
-    the sum over the scope's lanes of the roads and trails `derive(conn, lane=lane, as_of=as_of)` returns (T 4 and
-    5). `derive=None` imports `trails` and raises `CountUnavailable` when it can't. With `route`, `admit` calls it
+    the sum over the scope's lanes of `derive(conn, lane=lane, as_of=as_of)`, T's count of one lane's roads and
+    trails (I 10, D42). T's `roads_and_trails` derives one session at a time, writes each session's steps to a
+    scratch file under `TMPDIR` and counts the roads there by SQL with T 5's support rule (the trails plan's TR20,
+    TR28; T R21 and I7 (c)); this plan holds only the integers. Revision 7's first draft aggregated the steps here
+    with a per-session `derive` and a `scratch` parameter, which R10 lacked and the trail spec did itself; the check's
+    S8 settled it toward the trail spec, so the support rule has one implementation. `derive=None` imports `trails`
+    and raises `CountUnavailable` when it can't. With `route`, `admit` calls it
     after check 17 at `as_of` = the scope's `until`; without `route`, N = 0 and nothing is imported. A
     `CountUnavailable` fails admission with step `count` and R10's message (YN4);
   - `UseRecord(object_kind: str, action: str, purpose: str, batch: int, count: int)`; `admit` calls `record_use`
@@ -2965,9 +3318,15 @@ def test_admission_with_route_fails_closed_without_the_trail_functions(tmp_path,
 
 def test_counting_reads_the_package_at_t1(tmp_path):
     seen = []
-    root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, until=T1), route=True, valid_until=FAR)
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, until=T1, lanes=("personal", "work")), route=True, valid_until=FAR)
     admit(iid_, root=root, verify_cmd=OK, derive=recording_stub(seen))
-    assert {s["as_of"] for s in seen} == {T1} and {s["lane"] for s in seen} == {"work"}
+    assert sorted((s["lane"], s["as_of"]) for s in seen) == [("personal", T1), ("work", T1)]   # one call per lane
+
+def test_the_count_is_the_sum_of_the_trail_specs_lane_counts(tmp_path):     # R10; the check's S8
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, until=T1, lanes=("personal", "work")), route=True, valid_until=FAR)
+    assert admit(iid_, root=root, verify_cmd=OK, derive=per_lane_stub({"personal": 2, "work": 3})) == 0
+    assert json.loads((root / f"{iid_}.state" / "result.json").read_text())["roads_and_trails"] == 5
+    assert not (root / f"{iid_}.state" / "scratch").exists()
 
 def test_admission_stays_inside_its_need(tmp_path):
     recorded = []
@@ -2995,13 +3354,17 @@ Expected: FAIL, `TypeError: admit() got an unexpected keyword argument 'derive'`
 - [ ] **Step 3: Implement the count**
 
 The count opens the package with `store_reader.connect(..., immutable=True)`. It keeps only the number. The real
-`derive` is a thin adapter over the trails plan's pure functions, in one place (`_trail_derive`), so the trails plan
-changes one function when it fixes their names. Those functions take `as_of` in integer microseconds (the trails
-plan's TR22), so `_trail_derive` passes `as_of * 10**6`; every time this plan holds stays in seconds.
+`derive` is a thin adapter over the trails plan's `trails.roads_and_trails(conn, *, lane, as_of)` (its TR20 and Task
+4), in one place (`_trail_derive`), so the trails plan changes one function when it fixes its name. T holds one
+session at a time and puts its scratch file under `TMPDIR` (gate G19; T I7 (c)); until it exists, the stubs stand
+in, and `test_count_matches_the_trail_functions` stays skipped (G13). The test stubs `counting_stub(n)`,
+`per_lane_stub(counts)` and `recording_stub(seen)` take the `lane` and `as_of` keywords and return an integer. T's
+function takes `as_of` in integer microseconds (the trails plan's TR22), so `_trail_derive` passes `as_of * 10**6`;
+every time this plan holds stays in seconds.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 12 passed, 1 skipped (`test_count_matches_the_trail_functions`, until the
+Run: the command of step 2. Expected: PASS, 14 passed, 1 skipped (Task 34's 9 and 5 here; `test_count_matches_the_trail_functions`, until the
 trails plan's pure functions exist).
 
 - [ ] **Step 5: Commit**
@@ -3021,7 +3384,7 @@ git commit -m "Imprints: admission counts R(I) at t1 with route, inside its Need
 **Interfaces:**
 - Consumes: Tasks 27, 29, 30; engram's `result.json` (Task 34).
 - Produces:
-  - `ADMISSION_BOUND = 1860` (the unit's `RuntimeMaxSec=1800` plus `TimeoutStopSec=60`, R24) and
+  - `ADMISSION_BOUND = 3660` (the unit's `RuntimeMaxSec=3600` plus `TimeoutStopSec=60`, R24; I 10, "Time") and
     `ADMISSION_STOPPED = "Admission stopped before it wrote a result: it reached its memory or time limit, or the
     station stopped. Nothing was admitted; send it again."`;
   - `station_imprint_admit_begin(imprint_id: str, *, root: Path, operator: str) -> dict`: when `admission.json`
@@ -3213,7 +3576,9 @@ git commit -m "Peer: a use is decided, given a uuid4, a use-started receipt and 
   str(int(use_id[:8], 16)), "--deadline", "1740", "--json", "--imprint-use", use_id]`, writes `report.json` (stdout,
   only on exit 0) and then `result.json` (`{"kind": "imprint-use-result", "use_id", "exit", "error", "report",
   "ended_at"}`), each atomically. `exit` is the exit status, or minus the signal; an exception gives `exit` null and
-  `error` its class name.
+  `error` its class name. Revision 7 (I 12, "The use's memory"; D42): `use` imports no numpy, so it stays under
+  64 MiB while it waits; it makes `<id>.state/scratch/` without parents, runs the child with `SQLITE_TMPDIR` and
+  `TMPDIR` set to it, and removes it in the `finally`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3261,6 +3626,15 @@ def test_a_tombstone_or_a_passed_end_refuses_before_the_directory(tmp_path):
     for fault in ("tombstone", "ended", "no_allow_file"):
         root, iid_, use_id = with_allow(tmp_path / fault, fault=fault)
         assert use(iid_, use_id, root=root, trails_cmd=STUB_OK) == 2 and not uses_dir(root, iid_, use_id).exists()
+
+def test_the_child_gets_the_scratch_directory_and_the_parent_no_numpy(tmp_path):
+    root, iid_, use_id = with_allow(tmp_path)
+    assert use(iid_, use_id, root=root, trails_cmd=STUB_PRINTS_ENV) == 0
+    env = json.loads((uses_dir(root, iid_, use_id) / "report.json").read_text())
+    assert env["SQLITE_TMPDIR"] == env["TMPDIR"] == str(root / f"{iid_}.state" / "scratch")
+    assert not (root / f"{iid_}.state" / "scratch").exists()
+    assert "numpy" not in subprocess.run([sys.executable, "-c", "import imprint, sys; print(sorted(sys.modules))"],
+                                         capture_output=True, text=True, cwd=ENGRAM).stdout
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -3276,7 +3650,7 @@ does not run on SIGKILL.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 10 passed.
+Run: the command of step 2. Expected: PASS, 11 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3385,21 +3759,29 @@ git commit -m "Peer: the sync finishes each use once, retiring its allow file an
     `imprint.py admit --verify-cmd "uv run --locked --project <repo>/peer python -m superyak_peer verify-imprint"`,
     only when begin exited 0 (a refused or already-begun admission is never run, R24); and the peer's
     `station-imprint-sync`, whatever happened before;
-  - the admission unit is `systemd-run --user --unit=superyak-imprint-admit-<imprint id> --collect -p MemoryMax=4G
-    -p MemorySwapMax=0 -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 make -C <repository> station-imprint-admit
-    ID=<imprint id>`, written once in a Make `define` that both of the next two recipes call;
+  - the admission unit is `systemd-run --user --unit=superyak-imprint-admit-<imprint id> --collect -p MemoryMax=512M
+    -p MemorySwapMax=0 -p RuntimeMaxSec=3600 -p TimeoutStopSec=60 flock -n $(IMPRINTS)/.jobs.lock make -C
+    <repository> station-imprint-admit ID=<imprint id>`, written once in a Make `define` that both of the next two
+    recipes call (D42, R29);
+  - before any `systemd-run` of an imprint unit, the recipe runs `flock -n $(IMPRINTS)/.jobs.lock true`; when the
+    lock is held it starts nothing and prints I 10's sentence (R29);
   - `station-approve` runs the peer's approval, prints its output but the `ADMIT:` line, and starts the unit for the
     one id that line names (Task 29), and no other. A docking's approval prints no `ADMIT:` line, so it starts no unit
     and runs no engram command (I 10). When the start fails, it prints "Approved c0a8, but its admission did not
-    start. Run make station-imprint-admit." and exits 1; begin never ran, so that command resumes it;
-  - `station-imprint-admit` with no ID starts the unit for each id `station-imprints --awaiting-admission` prints
-    (never begun, R24), skipping an id whose unit `systemctl --user show -p LoadState --value` reports `loaded`;
+    start. Run make station-imprint-admit." and exits 1; when the job lock is held, "Approved c0a8, but another
+    imprint job is running, so its admission waits. Run make station-imprint-admit when that job ends." and exits 1;
+    begin never ran, so that command resumes it;
+  - `station-imprint-admit` with no ID starts the unit for the first id `station-imprints --awaiting-admission` prints
+    (never begun, R24) whose unit `systemctl --user show -p LoadState --value` doesn't report `loaded`, and prints how
+    many more wait (R29);
   - `station-imprint-use ID=… USE=trail-evaluation [LANE=…]` resolves the full id, `eval`s the output of
     `station-imprint-unit-env`, and starts `systemd-run --user --unit=superyak-imprint-use-<imprint id> --collect
-    -p MemoryMax=4G -p MemorySwapMax=0 -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 <env> make -C <repository>
-    station-imprint-use-run ID=<imprint id> USE=trail-evaluation [LANE=<lane>]`, printing "Started a use of c0a8 in
-    the background; see make station-imprints."; when the unit name is loaded it prints "A use of c0a8 is already
-    running; see make station-imprints.", starts nothing and exits 3;
+    -p MemoryMax=512M -p MemorySwapMax=0 -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 <env> flock -n
+    $(IMPRINTS)/.jobs.lock make -C <repository> station-imprint-use-run ID=<imprint id> USE=trail-evaluation
+    [LANE=<lane>]`, printing "Started a use of c0a8 in the background; see make station-imprints."; when the unit name
+    is loaded it prints "A use of c0a8 is already running; see make station-imprints.", starts nothing and exits 3;
+    when another job holds the lock it prints "Another imprint job is running on the station; try again when it
+    ends.", starts nothing and exits 3 (R29);
   - `station-imprint-use-run` runs the begin step (R23), `imprint.py use --id --use-id [--lane]`, and the sync;
   - `station-imprint-unit-env` prints `--setenv=ENGRAM_EMBEDDER_SOCKET=<path>` when `$HOME/.config/superyak/runtime.json`
     names an absolute `embedder_socket`, else `-p UnsetEnvironment=ENGRAM_EMBEDDER_SOCKET` (R15); a relative path or
@@ -3418,7 +3800,8 @@ def test_the_use_unit_gets_the_socket_exactly_when_runtime_json_names_one(tmp_pa
     unit = started_unit(tmp_path, home, env={"SUPERYAK_RUNTIME_CONFIG": str(other_runtime(tmp_path))}, make_vars={"RUNTIME_CONFIG": "/elsewhere"})
     assert unit.env_options == expected
     assert not ("--setenv=ENGRAM_EMBEDDER_SOCKET" in " ".join(unit.argv) and "UnsetEnvironment=ENGRAM_EMBEDDER_SOCKET" in unit.argv)
-    assert {"-p", "TimeoutStopSec=60", "MemoryMax=4G", "MemorySwapMax=0", "RuntimeMaxSec=1800"} <= set(unit.argv)
+    assert {"-p", "TimeoutStopSec=60", "MemoryMax=512M", "MemorySwapMax=0", "RuntimeMaxSec=1800"} <= set(unit.argv)
+    assert unit.argv[unit.argv.index("flock"):unit.argv.index("flock") + 3] == ["flock", "-n", f"{IMPRINTS_OF(tmp_path)}/.jobs.lock"]
     assert unit.name == f"superyak-imprint-use-{FULL_ID}" and not [a for a in unit.argv if a.startswith("LANE=")]
 
 @pytest.mark.parametrize("bad", [{"embedder_socket": "relative/sock"}, {"embedder_socket": 3}])
@@ -3437,13 +3820,26 @@ def test_approve_starts_only_the_approved_imprints_unit(tmp_path):
     calls = make_approve(tmp_path, admit_line=ID2, awaiting=[ID1, ID2], loaded=[f"superyak-imprint-admit-{ID1}"])
     units = [c for c in calls if c[0] == "systemd-run"]
     assert [u[u.index("--user") + 1] for u in units] == [f"--unit=superyak-imprint-admit-{ID2}"]
-    assert {"TimeoutStopSec=60", "MemoryMax=4G", "MemorySwapMax=0", "RuntimeMaxSec=1800"} <= set(units[0])
+    assert {"TimeoutStopSec=60", "MemoryMax=512M", "MemorySwapMax=0", "RuntimeMaxSec=3600"} <= set(units[0])   # I 10, "Time"
     dock = make_approve(tmp_path / "dock", admit_line=None, awaiting=[ID1])                   # a docking's approval
     assert not [c for c in dock if c[0] == "systemd-run" or "imprint.py" in " ".join(c) or "--awaiting-admission" in c]
 
 def test_the_no_id_resume_skips_a_loaded_unit(tmp_path):
     calls = make_admit_all(tmp_path, awaiting=[ID1, ID2], loaded=[f"superyak-imprint-admit-{ID1}"])
     assert [u[u.index("--user") + 1] for u in calls if u[0] == "systemd-run"] == [f"--unit=superyak-imprint-admit-{ID2}"]
+
+def test_one_imprint_job_at_a_time(tmp_path):
+    with held_lock(IMPRINTS_OF(tmp_path) / ".jobs.lock"):               # another job is running (R29)
+        done, calls = make_use(tmp_path, fake_home(tmp_path, {}))
+        assert done.returncode == 3 and "Another imprint job is running on the station" in done.stdout
+        assert not [c for c in calls if c[0] == "systemd-run"]
+        approve = make_approve(tmp_path / "a", admit_line=ID2, awaiting=[ID2], lock_held=True)
+        assert not [c for c in approve if c[0] == "systemd-run"] and "its admission waits" in approve.stdout
+    calls = make_admit_all(tmp_path / "b", awaiting=[ID1, ID2], loaded=[])
+    assert len([u for u in calls if u[0] == "systemd-run"]) == 1 and "1 more waits" in calls.stdout
+    missing, calls = make_use(tmp_path / "c", fake_home(tmp_path / "c", {}), imprints_root_missing=True)   # flock exits 66
+    assert missing.returncode != 0 and "can't be taken: 66" in missing.stdout and "Another imprint job" not in missing.stdout
+    assert not [c for c in calls if c[0] == "systemd-run"]                       # R29; the check's nit 2
 
 def test_admit_runs_only_when_begin_allows(tmp_path):
     calls = make_admit(tmp_path, FULL_ID, begin_exit=3)                     # refused, or begun already (R24)
@@ -3458,7 +3854,9 @@ def test_station_imprint_admit_runs_begin_admit_and_sync_in_order(tmp_path):
 `make_use`, `make_approve`, `make_admit_all`, `make_admit` and `started_unit` run `make` with `systemd-run`,
 `systemctl` and `uv` shimmed on `PATH`, recording their argv, with `HOME` in `tmp_path`, as
 `peer/tests/test_station_units.py:89-112` does. The `uv` shim answers `station-approve` with `admit_line`'s
-`ADMIT:` line, and `station-imprint-admit-begin` with `begin_exit`. The file starts with `pytestmark =
+`ADMIT:` line, and `station-imprint-admit-begin` with `begin_exit`. `flock` is the real util-linux one
+(`/usr/bin/flock`, 2.38.1 on the Pi, checked 2026-10-26); `held_lock` holds the lock file in the test process, and
+`lock_held=True` does the same for one call. The file starts with `pytestmark =
 pytest.mark.skipif(not (REPO / "Makefile").is_file() or not shutil.which("make"), reason="needs the parent repository
 Makefile")`, as `test_station_units.py:88` does, so the standalone bundle skips it. The admission command names
 `verify-imprint`, which Task 44 builds; these tests are dry runs and shims, so they pass before it exists.
@@ -3476,7 +3874,7 @@ space stays one argument. "Already running" is decided by `systemctl --user show
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 11 passed.
+Run: the command of step 2. Expected: PASS, 12 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3584,7 +3982,10 @@ number the other two plans cite.)
   reason `restore`, when the station holds a permission for it); removes every row, permission, receipt and tombstone
   400 days after `deleted`, and every declined or expired row 30 days after it ended. The first step skips `approved`
   rows: the sync it runs next ends them as I 10 says (`failed` `{"term": "end"}`, then reason `ended`; Task 36's rule
-  4), so an admission's end always leaves the same receipts.
+  4), so an admission's end always leaves the same receipts. Revision 7 (I 12, D42): it reads rows in batches of
+  100, hashes 1 MiB at a time, lists the root with `os.scandir` one entry at a time, skips `tombstones/` and
+  `.jobs.lock` (never a "directory with no live row"), and never takes the job lock. Its test
+  `test_the_lock_file_and_tombstones_are_never_swept` holds the lock while it runs and checks the file is still there.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3628,6 +4029,12 @@ def test_a_station_backup_holds_no_imprint_file_and_no_request_contents(tmp_path
     assert sorted(p.name for p in copy.parent.iterdir()) == [copy.name]          # only the database copy
     assert CANARY.encode() not in raw and b'"scope"' not in raw and b'"contents"' not in raw
     assert station_restore_test(st).returncode == 0
+
+def test_the_lock_file_and_tombstones_are_never_swept(tmp_path):
+    st = several(tmp_path, ["admitted-past-end"])
+    with held_lock(st.root / ".jobs.lock"):
+        st.store.station_imprint_sweep(root=st.root)                  # the sweep never waits for the lock
+    assert (st.root / ".jobs.lock").exists() and (st.root / "tombstones").is_dir()
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -3643,7 +4050,7 @@ sweep step runs in its own transaction and logs a failure without stopping the o
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 6 passed.
+Run: the command of step 2. Expected: PASS, 7 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3664,7 +4071,8 @@ git commit -m "Peer: the sweep: ends, windows, retries, restore reconciliation a
 - Consumes: Task 42a's `station-imprint-sweep`.
 - Produces: the service runs `%h/superyak/peer/.venv/bin/python -I -m superyak_peer station-imprint-sweep --data-dir
   %h/.local/share/superyak/lighthouse --imprints-dir %h/.engram/imprints`, `Type=oneshot`,
-  `OnFailure=superyak-alert@%n.service`, `MemoryMax=512M`; the timer `OnCalendar=hourly`, `Persistent=true`. Both
+  `OnFailure=superyak-alert@%n.service`, `MemoryMax=512M`, `MemorySwapMax=0` (D42, I 12); the timer
+  `OnCalendar=hourly`, `Persistent=true`. Both
   ship in the standalone bundle, whose `tests/test_station_units.py` lists them.
 
 - [ ] **Step 1: Change the existing test**
@@ -3713,10 +4121,12 @@ git commit -m "Peer: the hourly sweep's units, in station-units and the source b
     request's short ids, the code and the confirm link; saves `send.json`; waits up to 9 minutes, then returns
     `waiting-for-you`; after the yes, sends the manifest, then only the parts the station does not hold, with progress,
     then `complete`, and returns `received`; later runs return the status (`admitted`, `declined`, `denied`, `failed`
-    or `deleted` with the reason). Which parts the station holds comes from Task 26's `GET /api/imprints/{id}`;
+    or `deleted` with the reason). Which parts the station holds comes from Task 26's `GET /api/imprints/{id}`. Each
+    part is read from `imprint.db` with `seek` and one `read` of at most `PART_BYTES` just before it is sent, and
+    dropped before the next, so the agent holds one 4 MiB part at a time (I 9, D42; Task 50 measures it);
   - `_drop_local_copy(imprint_id)`: after any call that sees `admitted`, `declined`, `denied`, `failed` or
-    `deleted`, it deletes the local `imprint.db` and keeps `manifest.json`, the plan, `objects.json` and `receipts/`
-    (D24); Task 43b's calls use it too;
+    `deleted`, it deletes the local `imprint.db` and keeps `manifest.json`, the plan, `objects.json`, `subjects.json`
+    and `receipts/` (D24); Task 43b's calls use it too;
   - the command prints `STATUS: <value>` last and exits 3 for `waiting-for-you`, as `make dock` does.
 
 - [ ] **Step 1: Write the failing tests**
@@ -3893,8 +4303,10 @@ git commit -m "Peer: verify-imprint checks the key, every signature, the chain a
   - `import_receipts(imprint_id: str, *, home: Path, engram_home: Path) -> int`: with no ledger, does nothing. Else, for
     each verified, not yet imported receipt of a use (`admitted`, or `failed` or `denied` naming a term, for
     admission; `use-finished` or `refused` for a later use), one row per (action, purpose) the use needed (YN6) and
-    per batch of at most 512 refs of `objects.json`, in order, with R13's id, `returned` = `{"count", "sha256"}` and
-    one `use_subjects` row (owner, ref) per ref; for each action on roads and trails, ⌈N / 100,000⌉ counted rows with
+    per batch of at most 512 refs of `objects.json`, read line by line (R30), in order, with R13's id, `returned` =
+    `{"count", "sha256"}`, one `use_subjects` row (owner, ref) per ref and one (s, ref) for each co-subject s that
+    `subjects.json` carries for that ref (I 12, A3; `subjects.json` is read in step with the batch, since both files
+    are sorted by ref); for each action on roads and trails, ⌈N / 100,000⌉ counted rows with
     `returned` = `{"count"}` and one `use_subjects` row (owner, h), N from `roads_and_trails`; when the imprint has
     `route` and the receipt carries no `roads_and_trails`, one row per action on roads and trails with `returned`
     null (YN2). Every row: `ledger_id` = the station's peer id, `ledger_seq` = the receipt's place in its chain,
@@ -3915,6 +4327,13 @@ def test_memory_rows_are_per_action_purpose_and_batch(tmp_path):
     assert Counter((r["action"], r["purpose"]) for r in rows) == {(a, "calibration"): 3 for a in ("imprint", "read", "recall")}
     assert sum(json.loads(r["returned"])["count"] for r in rows if r["action"] == "read") == 1300
     assert subject_rows(led_home, action="read") == 1300
+
+def test_carried_co_subjects_get_their_own_use_subjects_rows(tmp_path):
+    led_home = ledger_home(tmp_path)
+    home = imported_home(tmp_path, memories=3, receipts=["admitted"], subjects={0: ["person:jenn", "person:lee"]})
+    import_receipts(IMPRINT_ID, home=home, engram_home=led_home)
+    assert subject_rows(led_home, action="read") == 5                      # 3 owners' rows, and jenn's and lee's
+    assert {s for s, ref in subject_pairs(led_home, action="read") if s != "person:sam"} == {"person:jenn", "person:lee"}
 
 def test_roads_and_trails_rows_split_at_100000_and_are_null_without_a_count(tmp_path):
     led_home, home = ledger_home(tmp_path), imported_home(tmp_path, route=True, receipts=[("admitted", 150_000)])
@@ -3958,7 +4377,7 @@ The receipt keys read are Task 23's `DETAIL_KEYS` names (`term` on `denied` and 
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 5 passed.
+Run: the command of step 2. Expected: PASS, 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4013,7 +4432,7 @@ python imprint.py`; the verifier as `uv run --locked --project peer python -m su
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 17 passed (Task 40's 11 and these 6).
+Run: the command of step 2. Expected: PASS, 18 passed (Task 40's 12 and these 6).
 
 - [ ] **Step 5: Commit**
 
@@ -4030,8 +4449,10 @@ git commit -m "Make: the owner's imprint targets, plan to verify (I 13)"
 
 **Interfaces:**
 - Consumes: Tasks 25, 30, 31.
-- Produces: the route `/#imprint?code=<code>` (as `/#dock?code=`) renders `imprint_preview`'s fields in words, a box
-  with `CHECK_TEXT` that must be ticked, a password field and "Allow" and "Decline" buttons; Accounts → Imprints lists
+- Produces: the route `/#imprint?code=<code>` (as `/#dock?code=`) renders `imprint_preview`'s fields in words, the
+  other-people words it carries, a box with the check text it carries (`CHECK_TEXT_AT_HOME` with its counts for a
+  copy in the owner's home, else `CHECK_TEXT`; I 8, D27) that must be ticked, a password field and "Allow" and
+  "Decline" buttons; Accounts → Imprints lists
   the person's imprints (short id, status, end date, last event) with Withdraw and Shorten. When `GET /api/imprints`
   answers 404 (R8), the Accounts section is not shown.
 
@@ -4046,6 +4467,15 @@ def test_the_confirm_view_needs_the_check_and_the_password(imprint_browser):
     page.get_by_label("Password").fill(SAM_PASSWORD); page.get_by_role("button", name="Allow").click()
     expect(page.get_by_text("Tick the box")).to_be_visible()
     page.get_by_label(CHECK_TEXT).check(); page.get_by_role("button", name="Allow").click()
+    expect(page.get_by_text("Allowed")).to_be_visible()
+
+def test_the_operators_own_copy_shows_the_counts_and_the_acknowledgment(imprint_browser):
+    page = signed_in(imprint_browser, "andy")
+    made = imprint_browser.request(ship="serenity", others={"memories": 37, "people": 3})
+    page.goto(f"{imprint_browser.url}/#imprint?code={made['code']}")
+    expect(page.get_by_text("37 of these memories have other people recorded on them (3 people)")).to_be_visible()
+    page.get_by_label(CHECK_TEXT_AT_HOME.format(n=37, p=3)).check()
+    page.get_by_label("Password").fill(ANDY_PASSWORD); page.get_by_role("button", name="Allow").click()
     expect(page.get_by_text("Allowed")).to_be_visible()
 
 def test_accounts_imprints_withdraw(imprint_browser):
@@ -4067,7 +4497,7 @@ Follow the docking view's code paths in `app.js`. Every requester-supplied strin
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 2 passed.
+Run: the command of step 2. Expected: PASS, 3 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4080,8 +4510,8 @@ git commit -m "Peer web: the imprint confirm view and Accounts, Imprints (I 9, 1
 
 **Files:**
 - Modify: `peer/API.md` (the routes of I 9; the two record kinds; that receipts from key-less commands are signed by the lighthouse, beside `:300-302`; `roads_and_trails` as R(I) at t₁ over the scope's lanes, YN1)
-- Modify: `engram/CLAUDE.md` (an "Imprints" paragraph under Architecture; Key Files rows for `imprint.py`, `imprint_filter.py`, `imprint_checks.py`)
-- Modify: `CLAUDE.md` (the approving section: an `IMPRINT` item is a person's memories; Andy confirms its short id against the owner's machine; `station-approve` returns while admission runs; agents never read `~/.engram/imprints/` except through `imprint.py use`, and never sign or write imprint records by hand)
+- Modify: `engram/CLAUDE.md` (an "Imprints" paragraph under Architecture, which says each imprint process stays under 512 MiB and each unit carries `MemoryMax=512M`, one job at a time; Key Files rows for `imprint.py`, `imprint_filter.py`, `imprint_checks.py`)
+- Modify: `CLAUDE.md` (the approving section: an `IMPRINT` item is a person's memories, and may hold memories about other people, whose count it shows; Andy approves no item with that count above 0 until gate G18 is passed; Andy confirms its short id against the owner's machine; `station-approve` returns while admission runs, or says the admission waits while another imprint job runs; agents never read `~/.engram/imprints/` except through `imprint.py use`, and never sign or write imprint records by hand)
 - Test: `peer/tests/test_imprint_docs.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -4095,6 +4525,7 @@ def test_the_docs_name_what_the_spec_requires():
     assert "**Imprints:**" in engram_md and "| `imprint.py` |" in engram_md
     approving = claude_md.split("# Approving on the station")[1]
     assert "IMPRINT" in approving and "~/.engram/imprints/" in approving and "imprint.py use" in approving
+    assert "other people" in approving and "MemoryMax=512M" in engram_md
 ```
 
 The file starts with `pytestmark = pytest.mark.skipif(not (REPO / "CLAUDE.md").is_file() or not (REPO / "engram" /
@@ -4168,6 +4599,121 @@ git add peer/pyproject.toml peer/tests/test_imprint_end_to_end.py
 git commit -m "Imprints: one imprint end to end, from the plan to the tombstone"
 ```
 
+### Task 50: Peak memory on the Pi, for every process (A4, D42)
+
+(New in revision 7. It sits beside the Pi measurements R16 already ran, in Task 5, and uses R27.)
+
+**Files:**
+- Create: `engram/tests/test_imprint_memory.py`, `peer/tests/test_imprint_memory.py`, `agent/tests/test_imprint_memory.py`
+- Modify: `engram/tests/imprint_support.py` (`cap_store`, `bounds_store`, `child_peak_rss(..., cmd=…)` for a whole command, `refusing_fetchall`, `GROWING_TABLES`, `strace_temp_files`, `admit_command`, `use_command`)
+- Modify: `peer/pyproject.toml` (the sdist list gains `tests/test_imprint_memory.py`)
+
+**Interfaces:**
+- Consumes: every earlier task.
+- Produces: tests only. `cap_store(tmp_path)` builds once per session, under `/var/tmp/imprint-cap-<uid>/`, the
+  fixture of I 16's "Every process at its bounds": 100,000 memories (90,000 episodes in two lanes of 45,000, so both
+  lanes are over 16,000 and are skipped; 10,000 semantics, one of them a hub of 1,025 sources), random 768-dimension
+  unit vectors, 1 KiB of text each, 200,000 `memory_log` rows over 2,000 closed sessions, a `cold.db` of 100,000 keys,
+  and a fixture ledger with co-subjects on 1,000 memories, 7 each at most; the owner is the operator, so they ship.
+  Its lanes are over 16,000, so every calibration set there is skipped (the check's S3). `bounds_store(tmp_path)`,
+  built the same way, keeps every set at its bound: two lanes and a core set of 16,000 episodes each, a semantic with
+  1,024 sources, and a resonance on every episode, with `route`. Each Pi test runs its command in a child under
+  `systemd-run --user --scope --quiet -p MemoryMax=512M -p MemorySwapMax=0` and asserts the child's peak under
+  `PEAK_BUDGET` (R27), and prints it with the base the child reaches after its imports alone, beside I 14.1's
+  allowance. `strace_temp_files(cmd, env) -> list[str]` runs a command as a child under `strace -f -e
+  trace=open,openat` and returns every SQLite temporary file (`etilqs_…`) it opened.
+
+- [ ] **Step 1: Write the tests**
+
+```python
+PI = pytest.mark.skipif(os.environ.get("ENGRAM_PI_BUDGET") != "1", reason="Pi measurement (R16, R27)")
+
+@PI
+@pytest.mark.parametrize("step", ["plan", "read", "build", "admit", "count", "import-receipts"])
+def test_pi_every_process_at_the_cap(cap_store, step):
+    peak = child_peak_rss(cmd=cap_command(cap_store, step))   # admit on a package without route; "count" runs
+    assert peak < PEAK_BUDGET, (step, peak)                     # count_roads_and_trails with T's roads_and_trails, or a stub until it exists
+    print(step, mib(peak), "base", mib(base_peak(step)))
+
+@PI
+def test_pi_one_admission_at_its_bounds_timed(bounds_store):                # I 10, "Time"; the check's S3
+    started = time.monotonic()
+    peak = child_peak_rss(cmd=admit_command(bounds_store, derive="stub"))
+    seconds = time.monotonic() - started
+    assert peak < PEAK_BUDGET and seconds < 3300, (mib(peak), seconds)
+    assert "skipped" not in admitted_report(bounds_store)                     # every set ran at its bound
+    print("admission at its bounds", mib(peak), "MiB", round(seconds), "s")
+
+@PI
+def test_pi_the_use_parent_with_a_sleeping_child(tmp_path):                  # I 16, "The use's parent"; the check's S7
+    peak = child_peak_rss(cmd=use_command(tmp_path, trails_cmd=[sys.executable, "-c", "import time; time.sleep(2)"]))
+    assert peak < 64 * 2**20, mib(peak)
+
+def test_plan_build_and_admission_read_no_whole_table(tmp_path, monkeypatch):
+    s = small_store(tmp_path, route=True, cosubjects={"e1": "person:jenn"}, owner="andy")
+    monkeypatch.setattr(imprint, "_connect", refusing_fetchall(GROWING_TABLES))
+    built = build(make_plan(*plan_args_for(s)).id, home=HOME(tmp_path), now=NOW)
+    root, iid_ = handed_off(tmp_path, built, route=True, valid_until=FAR)
+    assert admit(iid_, root=root, verify_cmd=OK, derive=counting_stub(1)) == 0
+
+@pytest.mark.skipif(shutil.which("strace") is None, reason="needs strace (the Pi has /usr/bin/strace)")
+def test_scratch_stays_on_disk_where_it_belongs(tmp_path):                  # I 16, "Scratch on disk"; the check's S1
+    watched = tmp_path / "watched"; watched.mkdir()
+    env = {**os.environ, "TMPDIR": str(watched), "SQLITE_TMPDIR": str(watched)}   # set before each child starts
+    plan_id = make_plan(*plan_args(tmp_path)).id
+    opened = strace_temp_files([sys.executable, IMPRINT_PY, "build", "--plan", plan_id, "--superyak-home", str(HOME(tmp_path))], env)
+    assert opened and all(Path(p).parent.parent == HOME(tmp_path) / "imprints" / "plans" for p in opened)
+    root, iid_ = handed_off(tmp_path, built_of(tmp_path, plan_id), route=False, valid_until=FAR)
+    opened = strace_temp_files([sys.executable, IMPRINT_PY, "admit", "--id", iid_, "--imprints-dir", str(root),
+                                "--verify-cmd", OK_CMD], env)
+    assert all(Path(p).parent == root / f"{iid_}.state" / "scratch" for p in opened)
+    assert not [p for p in opened if Path(p).is_relative_to(watched)] and not (root / f"{iid_}.state" / "scratch").exists()
+```
+
+```python
+# peer/tests/test_imprint_memory.py
+def test_every_imprint_unit_is_capped_at_512m():
+    for unit in imprint_units_from_the_makefile_and_systemd(REPO):        # admit, use, sweep (skipped without the Makefile)
+        assert unit.memory_max == "512M" and unit.memory_swap_max == "0", unit.name
+
+@PI
+def test_pi_the_lighthouse_and_the_station_commands(tmp_path):
+    st = station(tmp_path); before = high_water()
+    upload_part_by_part(st, package_bytes=2 * 2**30)                         # 512 parts, then complete
+    assert high_water() - before < 32 * 2**20
+    for cmd in ("station-approve", "station-deny", "station-imprints", "station-imprint-admit-begin",      # every peer
+                "station-imprint-use-begin", "station-imprint-sync", "station-imprint-sweep",              # command of
+                "station-imprint-delete", "station-imprint-unit-env", "verify-imprint"):                    # I 14.1 (S7)
+        assert child_peak_rss(cmd=peer_command(st, cmd)) < PEAK_BUDGET, cmd
+```
+
+```python
+# agent/tests/test_imprint_memory.py
+@PI
+def test_pi_send_holds_one_part_at_a_time(tmp_path):
+    home = built_home(tmp_path, nbytes=512 * 2**20)                          # 128 parts
+    peak = child_peak_rss(cmd=agent_send_command(home, FakeStation.serving(tmp_path)))
+    assert peak < PEAK_BUDGET and peak < 64 * 2**20 + 2 * PART_BYTES
+```
+
+- [ ] **Step 2: Run them without the Pi variable, then with it on the Pi**
+
+Run: `cd engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_imprint_memory.py`
+Expected: PASS, 2 passed, 8 skipped (the six cap cases and the two new Pi tests; where `strace` is missing, 1 passed,
+9 skipped).
+Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_imprint_memory.py`
+Expected: PASS, 1 passed, 1 skipped.
+Run: `cd agent && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_imprint_memory.py`
+Expected: 1 skipped.
+The Pi runs are "Verification before merge", step 4.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add engram/tests/imprint_support.py engram/tests/test_imprint_memory.py peer/pyproject.toml peer/tests/test_imprint_memory.py agent/tests/test_imprint_memory.py
+git commit -m "Imprints: every process measured under 384 MiB on the Pi, every unit capped at 512M (A4, D42)"
+```
+
 ## Verification before merge (station law section 2)
 
 Section 2 merges a branch only when it was approved in the room, by a fresh reviewer agent started on the Pi that took
@@ -4183,12 +4729,23 @@ the room that replaced it), with the branch head and every result below. It neve
 3. **The engram suite on the Pi, capped:**
    `cd engram && LIGHTHOUSE_REPO="$(cd .. && pwd)/lighthouse" PYTHONDONTWRITEBYTECODE=1 systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 uv run --locked --extra dev python -m pytest -q -ra --tb=short -p no:cacheprovider`
    Expected: every test passes except any that also fail on `main` at the merge base (run the same command there
-   first and report both). `-ra` lists two skips this branch adds, and no other new one:
-   `test_count_matches_the_trail_functions` (trails.py not built yet; gate G13) and
-   `test_pi_budget_a_7500_episode_lane_fits_in_4g` (step 4).
-4. **The Pi measurement:**
-   `cd engram && ENGRAM_PI_BUDGET=1 PYTHONDONTWRITEBYTECODE=1 systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_imprint_calibrate.py::test_pi_budget_a_7500_episode_lane_fits_in_4g`
-   Expected: 1 passed; report the child's peak resident size.
+   first and report both). `-ra` lists the skips this branch adds, and no other new one:
+   `test_count_matches_the_trail_functions` (trails.py not built yet; gate G13), and the Pi measurements of step 4:
+   Task 5's `test_pi_budget_a_16000_episode_lane_in_blocks` and three `test_pi_budget_a_1024_source_semantic` cases,
+   and Task 50's six `test_pi_every_process_at_the_cap` cases, `test_pi_one_admission_at_its_bounds_timed` and
+   `test_pi_the_use_parent_with_a_sleeping_child`. `test_scratch_stays_on_disk_where_it_belongs` runs, since the Pi
+   has `strace`. The suite runs under 4G because it is the test
+   runner, not a process this branch adds (engram/CLAUDE.md measured the runner at 1.6 GB).
+4. **The Pi measurements** (R16, R27; A4, D42). Each test starts its own child under `MemoryMax=512M`, so the
+   runner needs no cap of its own beyond step 3's:
+   `cd engram && ENGRAM_PI_BUDGET=1 PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -s -p no:cacheprovider tests/test_imprint_calibrate.py tests/test_imprint_memory.py -k pi_`
+   `cd peer && ENGRAM_PI_BUDGET=1 PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -s -p no:cacheprovider tests/test_imprint_memory.py`
+   `cd agent && ENGRAM_PI_BUDGET=1 PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -s -p no:cacheprovider tests/test_imprint_memory.py`
+   Expected: every test passes; report each child's peak resident size, its base, the 16,000 lane's seconds, the
+   whole admission's seconds at its bounds, and the three dense ratios against I 10's 16. A peak at or over 384 MiB,
+   a lane over 600 s, or an admission over 3,300 s is a failure, and the bound is lowered in a revision of I, never
+   by sampling. This Pi runs 16 KiB pages (`getconf PAGESIZE`), so its peaks err high against a 4 KiB-page Pi
+   (I 14.1).
 5. **The peer suite on the Pi, capped:**
    `cd peer && PYTHONDONTWRITEBYTECODE=1 systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 uv run --locked python -m pytest -q -ra --tb=short -p no:cacheprovider`
    Expected: every test passes, the browser tests included (Playwright's Chromium is in `~/.cache/ms-playwright` on
@@ -4205,7 +4762,12 @@ the room that replaced it), with the branch head and every result below. It neve
 9. **Read the safety-critical code against the spec**, at least: `TABLE_RULES` against I 6.2; `row_key` against I
    5.4; `closed_sessions` and the two log scrubs against I 5.2 and 6.2; L1 to L4 against I 6.4; the 17 checks against I
    10; `decide_use`'s terms, order and codes against I 8; withdrawal's four steps and the sync's rules 1 to 7 against I
-   12; `station-imprint-unit-env` against D29 and R15; the confirm against D1 and D27; each receipt's `detail` keys
+   12; `station-imprint-unit-env` against D29 and R15; the confirm, its three texts (away, at home with n above 0,
+   at home with n = 0) and its attestation against D1, D27 and I 8; `cosubject_rows`, `Refusals` and `denied`,
+   `imprint_subjects` and the `others` rule against I 5.2, 6.2, 14 and D43; `ensure_scratch_env` against R26 and
+   I 6.1, step 7; the streamed digest against I 5.4's definition; `build_filtration_blocked` against R28, the edge
+   order (h, min, max) above all; every unit's `MemoryMax` and the job
+   lock against D42 and R29; each receipt's `detail` keys
    against `DETAIL_KEYS` (I 12's table with R25); the admission sync's six rules and `ADMISSION_BOUND` against R24.
 10. **Not a Pi suite.** `make check-integration` needs Node.js 24 and pnpm 11.20.0, which the Pi lacks (checked
     2026-10-25). This branch touches no Lighthouse protocol file, so it is run in CI or on the Mac only if a reviewer
@@ -4221,7 +4783,7 @@ None of these is run by this plan. Each waits for the person or the plan named.
 | # | Gate | Why it waits |
 |---|---|---|
 | G1 | The merge, under section 2 (above), then the merging ship's restart of `superyak-lighthouse` and its check. | Station law. |
-| G2 | Andy accepts the ceiling, the set C and the five items of I 8, as his home's rule for imprints (D38; the re-check's RN7). No imprint is approved before. | His home's consent layer. |
+| G2 | Andy accepts the ceiling, the set C and the six items of I 8, as his home's rule for imprints (D38; the re-check's RN7). No imprint is approved before. | His home's consent layer. |
 | G3 | `make setup-engram` succeeds on the Pi (aarch64 wheels), or the builder adds an admission environment holding numpy, scipy and sqlite-vec and says so (I 18). | Before the first live imprint. |
 | G4 | The lighthouse's installed unit `~/.config/systemd/user/superyak-lighthouse.service` gains `--imprints-dir %h/.engram/imprints`, the same root as the Makefile's `IMPRINTS` and the sweep's unit, and restarts under section 2. This turns the routes on (R8). | A deploy; after G1 and G2. |
 | G5 | `make station-units` installs and enables `superyak-imprint-sweep.timer`. | A deploy. |
@@ -4229,14 +4791,17 @@ None of these is run by this plan. Each waits for the person or the plan named.
 | G7 | The station's super admin is `andy` (`users.is_super_admin`), since the audience check names the super admin's home. | I 14, I 18. |
 | G8 | The CLAUDE.md rule about `~/.engram/imprints/` is on main and in the Pi's checkout. | I 18. |
 | G9 | `systemctl --user show-environment` lists no `ENGRAM_` variable. R15 covers the socket variable whatever it holds; this covers the rest. | I 18, D29. |
-| G10 | Before the first imprint is sent: the owner's machine is docked (`make dock`), and only the owner types the password and ticks the check. | D1, D27. |
-| G11 | Before the first trail-evaluation use: trails step 1 merged and on the Pi; the store's embedding model on the Pi, through the shared service named in `~/.config/superyak/runtime.json` or in `~/.kairos/models/fastembed`, loaded inside the 4 GB cap; the run never downloads (T 7 step 8.2). | I 18; the trails plan. |
+| G10 | Before the first imprint is sent: the owner's machine is docked (`make dock`), and only the owner types the password and ticks the check (the acknowledgment for a copy kept in the owner's home, the confirmation otherwise). | D1, D27. |
+| G11 | Before the first trail-evaluation use: trails step 1 merged and on the Pi; the store's embedding model on the Pi through the shared service named in `~/.config/superyak/runtime.json`, never in the use's process, which its 512 MiB cap can't hold; without the service, W is "not evaluable: no embedder"; the run never downloads (T 7 step 8.2; I 18). | I 18; the trails plan. |
 | G12 | The trails plan keeps the imprint check in the `trails.py` CLI, out of the pure functions admission calls (YN5), and fixes `_trail_derive`'s calls (R10). | The trails plan. |
 | G13 | Before the first imprint with `route` is approved: the trails plan's pure functions are on the Pi, so admission can count R(I); `test_count_matches_the_trail_functions` runs unskipped in that branch's verification. Until then such an admission fails closed with step `count`. | Build order. |
-| G14 | I 20, Andy's: which store first and its owner's yes; whether the station-signed browser yes is enough; whether memories that mention other people may move at all, and whether the first store must be work lane only. | Andy's. Each default stands until he answers. |
-| G15 | The spec's next revision takes YS1's words (5.4, 9), YN1 (what N means), YN2 ("every imported receipt with no N"), YN3 (`until` required, R14), YN4 (failure names, R11), YN6 (per action and purpose, R13), XN2 (R15) and R8; and, from the plan's review, R24 (a begun admission runs once; a run killed at its limit fails 1,860 s after `decided_at`, and I 10's "after a crash … resumes" covers only an admission that never began), R25 (receipt `detail` keys: `step`, never `check`; `term` on `denied` and `failed`), R7's `operator`, and the two dense sets I 10's list of three missed (`sheaf.measure_all`'s per-semantic matrices, `audit_unchecked_events`' per-event distance matrix; Task 5). | This plan edits no spec. |
+| G14 | I 20, Andy's. Answered 2026-10-26: the first store is Andy's full store, with his yes, and memories that mention other people may be copied into his home (A3); it need not be work lane only. Still open: whether the station-signed browser yes is enough, and whether an owner who isn't the operator may send memories that mention other people. | Andy's. Each open default stands until he answers. |
+| G15 | The spec's next revision takes YS1's words (5.4, 9), YN1 (what N means), YN2 ("every imported receipt with no N"), YN3 (`until` required, R14), YN4 (failure names, R11), YN6 (per action and purpose, R13), XN2 (R15) and R8; and, from the plan's review, R24 (a begun admission runs once; a run killed at its limit fails 3,660 s after `decided_at`, the unit's 3,600 s that I 10's "Time" now gives plus 60, and I 10's "after a crash … resumes" covers only an admission that never began), R25 (receipt `detail` keys: `step`, never `check`; `term` on `denied` and `failed`), R7's `operator`, and the two dense sets I 10's list of three missed (`sheaf.measure_all`'s per-semantic matrices, `audit_unchecked_events`' per-event distance matrix; Task 5). Revision 7 of I took that last item (I 10 now names both); the rest still wait. | This plan edits no spec. |
 | G16 | CN8: a withdrawal or station delete also stopping `superyak-imprint-use-<imprint id>`. | Not built in step 1; it only narrows, and the run's end checks and rules 2 to 4 already record it. |
 | G17 | I 17's later steps, XN6 (which item of P's `Req` holds the ceiling in a step-2 ledger), owner-held keys, encrypted imprints. | Later specs. |
+| G18 | **Other people inside the home** (I 18, D27). Before any imprint whose `others.memories` is above 0 is approved: I and the permissions spec, both revised for P36, are re-checked side by side by a fresh reviewer. P's revision 7 applies A3 as P36: inside the owner's home, his `imprint` and every bulk use that shows nothing to any agent read a co-subject's layer as a restriction layer, so silence passes and a deny refuses; I now follows it, and a co-subject's no keeps a memory home at the source (Task 8's `denied`; I 8, "Carried co-subjects in the meet"; I 17's ask (a)). The re-check confirms the two texts agree and settles two things: the bound of 8 subjects per road or trail, which P applies to a counted bulk use and I's check doesn't yet test (I 8, "The bound of 8 subjects on roads and trails"), and whether the roads-and-trails rows list the carried co-subjects (I 12; the check's S4). Until then Andy approves no such item, which `station-pending` marks. | Two specs must say the same before other people's memories are used (vision, principle 6); the check's M1 asked to keep this gate until then. |
+| G19 | **The trail spec fits the small Pi** (I 17's asks of it). T's revision 9 answers them on paper (its I7, R19 to R21; reviewed in `docs/superpowers/reviews/2026-10-25-small-hardware-trails-review.md`, which asked for a revision): its evaluation has a 320 MiB design peak in the use's 512 MiB unit, it loads no model in process there, and its `roads_and_trails` holds one session at a time for Task 35's count. Still waiting: that review's fixes, the trails plan's build, and its Pi tests. Until then a use may end `not evaluable: limit`, and admission with `route` fails closed (G13). | The trails plan. |
+| G20 | **The whole Pi** (I 18, 14.1). With one imprint job at its bounds, and the lighthouse and the shared embedder up if the station runs them, the sum of their measured peaks and the system's is under the 2 GB Pi's `MemTotal` less 256 MiB. `MemTotal` is measured on a 2 GB Pi; until one is, it is taken as 2,048 − 165 = 1,883 MiB (this Pi's `MemTotal` is 16,608,224 kB against 16 GiB = 16,777,216 kB, so 168,992 kB, 165 MiB, is held back), and the sum must be under 1,883 − 256 = 1,627 MiB (the check's S6). If not, the station runs without the embedder, and W is "not evaluable: no embedder". | A deploy check, after Task 50's measurements. |
 
 ## Self-review: every component and test to its task
 
@@ -4262,6 +4827,8 @@ None of these is run by this plan. Each waits for the person or the plan named.
 | `peer/API.md`, `engram/CLAUDE.md`, `CLAUDE.md` | 48 |
 | Every table classified | 6 |
 | Selection | 7, 8 |
+| Co-subjects carried (A3, D27, D43) | 8 (rows), 12 (digest), 13 (table), 15 (dry run, the n = 0 words), 18 (request, `subjects.json`), 24 (the `others` rule), 25 and 47 (the two checks; 25 tests both home texts), 26 (the pending line), 33 (checks 10, 12, 13), 34 (registered), 45 (`use_subjects`) |
+| A co-subject's no (I 5.2 `denied`, D27; the check's M1) | 8 (kept home, counted, no State without a deny), 15 (dry run), 19 (a deny between plan and build) |
 | Down-closure; Induced links | 9 |
 | Log rows | 10, 11 (rows), 19 (digest after the plan), 34 (calibration with and without `route`) |
 | No footpath without `route` | 10, 17, 19, 33 |
@@ -4292,7 +4859,8 @@ None of these is run by this plan. Each waits for the person or the plan named.
 | Shortening | 27, 31 |
 | Sweep; Backups | 42a (and 42b, the units) |
 | Each check fails; vec0 reading | 32, 33 |
-| Calibration | 4, 5, 34, 36 (a memory limit or timeout fails, R24) |
+| Calibration | 4, 5 (blocked lane and core sets, per-semantic bound, streaming reads, R28), 34, 36 (a memory limit or timeout fails, R24) |
+| Memory on the Pi; Memory, everywhere (A4, D42) | 5 (calibration's bounds and Pi tests), 40 and 42b (`MemoryMax=512M`, the job lock, `flock`'s exit 66), 42a (the sweep skips the lock), 38 (the use's parent imports no numpy), 43a (one part at a time), 15 (the re-exec), 50 (every process at the cap, one admission at its bounds timed, the use's parent under 64 MiB, every station command, no whole tables, scratch on disk under `strace`, every unit capped) |
 | Guards | 2, 3 |
 | Uses | 27, 37, 28 (40 touches) |
 | Admission stays inside its `Need`; The count of R(I) | 35, 39 (no receipt names a road, a trail or a session) |
@@ -4301,4 +4869,5 @@ None of these is run by this plan. Each waits for the person or the plan named.
 | Lineage | 1 |
 | Owner's use list | 45 |
 | Review Focus 1 to 5 | 34 and 36, 26, 14, 8, 19 and 43a |
+| Review Focus 6 and 7 | 50 and 5; 8 |
 | Carried YS1, YN1 to YN6, XN2, CN7, CN8, XN6 | 15, 25, 47; 35, 48; 45; 15, 24; 34, 35; G12; 45; 40; 39; G16; G17 |
