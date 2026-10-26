@@ -155,6 +155,16 @@ def test_u11_share_with_no_covering_allow_changes_nothing_and_returns_the_permit
     assert out["cli"].startswith("engram-permissions allow") and ledger_bytes() == before
 
 
+def test_needs_allow_cli_quotes_an_agent_supplied_reason(enforce_server):
+    import shlex
+    reason = "x'; touch /tmp/pwned; echo '"
+    out = server.share(memory_id=M["local"], audience="place:la-county/public-health", reason=reason)
+    toks = shlex.split(out["cli"])
+    assert toks[toks.index("--reason") + 1] == reason
+    assert len([x for x in toks if x == ";"]) == 0 and "touch" not in toks
+    assert out["permit"]["reason"] == reason
+
+
 def test_u11_with_a_covering_allow_it_places_a_copy_with_the_placement_audience_and_record_id(enforce_server):
     rid = andy_allows(M["local"], ["place:la-county/public-health"])
     out = server.share(memory_id=M["local"], audience="place:la-county/public-health", reason="r")

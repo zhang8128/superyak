@@ -1996,6 +1996,7 @@ def _utc(t: int) -> str:
 
 def _needs_allow(state, owner: str, obj: str, audience: str, reason: str, now: int) -> dict:
     """The `permit` call and the CLI command that would make the allow `share` found missing (P 12.1)."""
+    import shlex
     from lighthouse_protocol import canonical_json
     from permissions import home_of
     home = home_of(owner)
@@ -2007,8 +2008,8 @@ def _needs_allow(state, owner: str, obj: str, audience: str, reason: str, now: i
            "actions": ["recall", "read", "inject_context"],
            "purposes": ["<purpose>"] if outside else "*"}
     permit = {"op": "share", "selector": sel, "valid_from": now, "valid_until": end, "reason": reason}
-    cli = (f"engram-permissions allow --layer {home} --selector '{canonical_json(sel)}' --from {_utc(now)}"
-           + (f" --until {_utc(end)}" if end else "") + f" --reason '{reason}'")
+    cli = (f"engram-permissions allow --layer {home} --selector {shlex.quote(canonical_json(sel))} --from {_utc(now)}"
+           + (f" --until {_utc(end)}" if end else "") + f" --reason {shlex.quote(reason)}")
     out = {"status": "needs-allow", "permit": permit, "cli": cli}
     if outside:
         out["note"] = "an allow outside the home needs a finite purposes list: replace <purpose> with the purpose"
