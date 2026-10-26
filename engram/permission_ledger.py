@@ -8,7 +8,8 @@ A log row's `body` is canonical JSON with these optional parts (the `kind` is a 
     {"insert": [{"table": T, "row": {...}}],         # rows added to table T
      "update": [{"table": T, "where": {...}, "set": {...}}],   # columns set on the rows matching `where`
      "meta":   {key: value},                         # meta keys set
-     "name":   "Public Health"}                      # a register-place's display name (R4)
+     "name":   "Public Health",                      # a register-place's display name (R4)
+     "houses": [".engram/graph.db"]}                 # a gate act's record of the houses it marked (not projected)
 
 In a row or a `set`, the string "@seq" stands for the log row's own seq and "@at" for its time; a dict or list
 value is stored as canonical JSON text; a places row's `pseudonym_salt` is hex."""
@@ -21,11 +22,12 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping
+from datetime import datetime, timezone
+from typing import Callable, Mapping, Sequence
 
-from lighthouse_protocol import canonical_json
+from lighthouse_protocol import artifact_digest, canonical_json
 from permissions import (
-    CHANNELS, GRANT_OPS, JOINTS_PER_CHANGE, LANES, MAX_COPY_CHAIN, MAX_PLACES, MAX_REPLACES, MAX_SUBJECTS,
+    CHANNELS, GATE_HOUSES, GRANT_OPS, JOINTS_PER_CHANGE, LANES, MAX_COPY_CHAIN, MAX_PLACES, MAX_REPLACES, MAX_SUBJECTS,
     PROPOSAL_DAYS, REASON_CHARS, REGISTRY, Act, Authority, Grant, Record, Selector, State, RuleError,
     affected_joints, authorize, check_child_grant, check_id, check_new_members, check_new_parent,
     check_new_place, check_new_subject, check_record, check_root_grant, gluing, grant_chain, home_of,
@@ -101,12 +103,14 @@ class LedgerUnreadable(Exception):
 class Outcome:
     """What `Ledger.perform` did: `done`, or `proposal` (a proposal was filed, or one signature was added).
     `ref` is the thing written (or the proposal's id) and `seq` the log row. `reports` are the gluing reports of
-    up to JOINTS_PER_CHANGE joint places after a registry change (R5); `pending_checks` names the rest."""
+    up to JOINTS_PER_CHANGE joint places after a registry change (R5); `pending_checks` names the rest.
+    `lacking_029` is set by a gate act."""
     status: str
     ref: str
     seq: int
     reports: tuple = ()
     pending_checks: tuple = ()
+    lacking_029: tuple = ()       # a gate act: the houses without migration 029 (R27), for the CLI to print
 
 
 def ledger_path(engram_home: Path) -> Path:
@@ -137,26 +141,26 @@ class Ledger:
 
     # ---------------------------------------------------------------- opening
     @staticmethod
-    def _connect(path: Path, *, read_only: bool) -> sqlite3.Connection:
+    def _connect(path: Path, *, read_only: bool, busy_ms: int = BUSY_MS) -> sqlite3.Connection:
         try:
             if read_only:
                 conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, isolation_level=None,
-                                       timeout=BUSY_MS / 1000)
+                                       timeout=busy_ms / 1000)
                 conn.execute("PRAGMA query_only=ON")
             else:
-                conn = sqlite3.connect(path, isolation_level=None, timeout=BUSY_MS / 1000)
+                conn = sqlite3.connect(path, isolation_level=None, timeout=busy_ms / 1000)
             conn.row_factory = sqlite3.Row
-            conn.execute(f"PRAGMA busy_timeout={BUSY_MS}")
+            conn.execute(f"PRAGMA busy_timeout={busy_ms}")
             return conn
         except sqlite3.Error as e:
             raise LedgerUnreadable(f"{path}: {e}") from e
 
     @classmethod
-    def _open(cls, engram_home: Path, read_only: bool) -> "Ledger":
+    def _open(cls, engram_home: Path, read_only: bool, busy_ms: int = BUSY_MS) -> "Ledger":
         path = ledger_path(engram_home)
         if not path.is_file():
             raise FileNotFoundError(str(path))
-        conn = cls._connect(path, read_only=read_only)
+        conn = cls._connect(path, read_only=read_only, busy_ms=busy_ms)
         try:
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if row is None or row["value"] != SCHEMA_VERSION:
@@ -173,8 +177,8 @@ class Ledger:
         return cls._open(engram_home, False)
 
     @classmethod
-    def open_read_only(cls, engram_home: Path) -> "Ledger":
-        return cls._open(engram_home, True)
+    def open_read_only(cls, engram_home: Path, busy_ms: int = BUSY_MS) -> "Ledger":
+        return cls._open(engram_home, True, busy_ms)
 
     @classmethod
     def _blank(cls, engram_home: Path, ledger_id: str) -> "Ledger":
@@ -282,7 +286,7 @@ class Ledger:
             return v
 
         for key in body:
-            if key not in ("insert", "update", "meta", "name"):
+            if key not in ("insert", "update", "meta", "name", "houses"):
                 raise _bad(f"unknown part of a log body: {key}")
         for item in body.get("insert", ()):
             table, row = item["table"], dict(item["row"])
@@ -335,14 +339,27 @@ class Ledger:
         auth = spec.authority(state, actor, act, channel, now)
         if auth.outcome == "proposal":
             return self._file(state, spec, act, actor, channel, now)
-        ref, body = spec.make(state, actor, args, auth, now)
+        ref, body = self._make(spec, state, actor, args, auth, now)
         body = _stamp(body, channel, None)
         seq = self._append(act.kind, ref, actor, channel, body, under_grant=auth.under_grant, at=now)
         return self._outcome("done", ref, seq, act.kind, args)
 
+    def _make(self, spec: "_Act", state: State, actor: str, args: Mapping, auth: Authority, now: int):
+        """`spec.make`; an act that touches files (the gate) is also told the root of this ledger's engram home."""
+        if spec.rooted:
+            return spec.make(state, actor, args, auth, now, root=self.root)
+        return spec.make(state, actor, args, auth, now)
+
+    @property
+    def root(self) -> Path:
+        """The engram home this ledger was created or opened with: its file is `<root>/.engram/permissions.db`."""
+        return self.path.parent.parent
+
     def _outcome(self, status: str, ref: str, seq: int, kind: str, args: Mapping = ()) -> Outcome:
         """After a registry change, or a rule written in a place's layer, the gluing reports of up to
         JOINTS_PER_CHANGE joint places (R5)."""
+        if kind == "gate":
+            return Outcome(status, ref, seq, lacking_029=tuple(self.gate_plan()["lacking_029"]))
         if kind in _GLUED:
             changed = {REGISTRY}
         elif kind in _RECORD_ACTS:
@@ -416,7 +433,7 @@ class Ledger:
             return Outcome("proposal", pid, seq)
         spec = _ACTS[spec_act["kind"]]
         args = spec.prepare(state, p.by_agent, dict(spec_act["args"]))
-        ref, mbody = spec.make(state, p.by_agent, args, Authority("do", "person", None), now)
+        ref, mbody = self._make(spec, state, p.by_agent, args, Authority("do", "person", None), now)
         mbody = _signed(_stamp(mbody, channel, pid), pid)
         seq = self._append(spec_act["kind"], ref, actor, channel, mbody, proposal_id=pid, at=now)
         return self._outcome("done", ref, seq, spec_act["kind"], args)
@@ -436,7 +453,7 @@ class Ledger:
         auth = spec.authority(state, actor, act, "terminal", now)
         if auth.outcome != "do":
             raise RuleError(_ACT, f"{actor} cannot make this change alone")
-        ref, mbody = spec.make(state, actor, args, auth, now)
+        ref, mbody = self._make(spec, state, actor, args, auth, now)
         mbody = _signed(_stamp(mbody, "terminal", p.id), p.id)
         seq = self._append(kind, ref, actor, channel, mbody, under_grant=auth.under_grant, proposal_id=p.id, at=now)
         return self._outcome("done", ref, seq, kind, args)
@@ -504,6 +521,48 @@ class Ledger:
         return frozenset(r["subject"] for r in self.conn.execute(
             "SELECT subject FROM subjects WHERE object=? AND removed_seq IS NULL", (ref,)))
 
+    # ---------------------------------------------------------------- the gate's plan and PlaceRules (P 9.4, 12.3)
+    def gate_plan(self) -> dict:
+        """What a `gate` act would use if applied now: the published house, every house on disk, and those among
+        them that lack migration 029 (R27). The act computes the same at the yes, never from a caller."""
+        found = houses(self.root)
+        return {"published_house": self.root / PUBLISHED_HOUSE, "houses": found,
+                "lacking_029": [h for h in found if _lacks_029(h)]}
+
+    def place_rules(self, place: str, *, now: int) -> dict:
+        """P 9.4: the `PlaceRules` artifact for a place at the ledger's present seq. A home is not published."""
+        check_id("place", place)
+        if place == "place:home" or place.startswith("place:home/"):
+            raise RuleError("9.4 how a place publishes its rules",
+                            "home places are not published: their rules are readable only by the person and "
+                            "their agents")
+        state = self.state()
+        if place not in state.places:
+            raise RuleError("9.4 how a place publishes its rules", f"{place} is not a registered place")
+        seq = state.seq
+        last = self.conn.execute("SELECT digest FROM ledger_log WHERE seq=?", (seq,)).fetchone()
+        records = []
+        for r in sorted(state.records.values(), key=lambda r: (r.created_seq, r.id)):
+            if r.layer == place and r.revoked_seq is None:
+                row = r._asdict()
+                row["selector"] = json.loads(selector_json(r.selector))
+                records.append(row)
+        ledger_id = state.meta["ledger_id"]
+        art = {
+            "protocolVersion": "0.1", "kind": "PlaceRules",
+            "id": f"urn:engram:{ledger_id}:place-rules:{place}:{seq}",
+            "issuedAt": datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "issuer": f"urn:engram:{ledger_id}",
+            "payloadMediaType": "application/vnd.engram.place-rules+json",
+            "payload": {
+                "place": place,
+                "parents": sorted(r.parent for r in state.place_parents.get(place, ())),
+                "stewards": sorted(r.person for r in state.place_stewards.get(place, ()) if r.removed_seq is None),
+                "retired": state.places[place].retired_seq is not None,
+                "ledgerSeq": seq, "logDigest": last["digest"] if last else ZERO, "records": records}}
+        art["digest"] = artifact_digest(art)
+        return art
+
     # ---------------------------------------------------------------- rebuild
     def rebuild(self, dest: Path) -> Path:
         """Replay the log into a fresh ledger whose engram home is `dest`; the same tables. Returns `dest`."""
@@ -532,6 +591,7 @@ class _Act:
     make: Callable         # (state, actor, args, authority, now) -> (ref, log body)
     authority: Callable = None   # (state, actor, act, channel, now) -> Authority; default: the pure model's
     check: Callable = None       # (state, actor, args, now) -> None: the write-time rules (P 5.4, 7.1, 7.2); raises
+    rooted: bool = False         # make also takes root=<engram home>: the act reads or writes files on disk
 
 
 def _text(args: Mapping, key: str) -> str:
@@ -1180,6 +1240,199 @@ def _make_end_grant(state, actor, args, auth, now):
         revoke_reason=args["reason"], revoked_seq="@seq")]}
 
 
+# ---------------------------------------------------------------- the gate and the houses (P 12.3, R17, R26, R27, R32)
+
+_GATE = "12.3 the gate"
+GATE_MODES = ("off", "shadow", "enforce")
+PUBLISHED_HOUSE = Path(".engram") / "instances" / "lighthouse" / "graph.db"
+
+
+@dataclass(frozen=True)
+class Gate:
+    """The effective gate: `off`, `shadow`, `enforce` or `closed`. `cause` says why when it is `closed`."""
+    mode: str
+    cause: str | None = None
+
+
+def houses(engram_home: Path) -> list[Path]:
+    """Every engram store under the home: `.engram/graph.db` and each `.engram/instances/<name>/graph.db` that
+    exists, sorted."""
+    base = Path(engram_home) / ".engram"
+    found = [base / "graph.db"] if (base / "graph.db").is_file() else []
+    if (base / "instances").is_dir():
+        found += [d / "graph.db" for d in (base / "instances").iterdir() if (d / "graph.db").is_file()]
+    return sorted(found)
+
+
+def _house_name(db_path: Path) -> str:
+    return "default" if db_path.parent.name == ".engram" else db_path.parent.name
+
+
+def _house_id(db_path: Path) -> str | None:
+    """The `permissions_ledger_id` a house carries, read with `mode=ro`. A store with no `meta` table carries none;
+    any other failure raises sqlite3.Error."""
+    con = sqlite3.connect(f"{Path(db_path).resolve().as_uri()}?mode=ro", uri=True, timeout=BUSY_MS / 1000)
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key='permissions_ledger_id'").fetchone()
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            return None
+        raise
+    finally:
+        con.close()
+    return row[0] if row and row[0] else None
+
+
+def _lacks_029(db_path: Path) -> bool:
+    """R27: `shared_memories` lacks `source_instance_id` or `record_id`, or there is no `shared_memories_changes`."""
+    try:
+        con = sqlite3.connect(f"{Path(db_path).resolve().as_uri()}?mode=ro", uri=True, timeout=BUSY_MS / 1000)
+        try:
+            columns = {r[1] for r in con.execute("PRAGMA table_info(shared_memories)")}
+            changes = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_memories_changes'"
+                                  ).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return True
+    return not {"source_instance_id", "record_id"} <= columns or changes is None
+
+
+def _closed(cause: str) -> Gate:
+    return Gate("closed", cause)
+
+
+def effective_gate(engram_home: Path, served: Sequence[Path], *, busy_ms: int = BUSY_MS) -> Gate:
+    """P 12.3, rules 1 to 3, for a reader serving `served` (a path that is not a file is no house and is left out,
+    R32). Reads at most GATE_HOUSES houses' `meta` to decide `off`, and is `closed` past that. The ledger is opened
+    read-only with `busy_ms` as its busy timeout."""
+    root = Path(engram_home)
+    served = [Path(p) for p in dict.fromkeys(served) if Path(p).is_file()]
+    if not ledger_path(root).is_file():
+        every = sorted(set(houses(root)) | set(served))
+        if len(every) > GATE_HOUSES:
+            return _closed(f"no ledger and more than {GATE_HOUSES} houses, so it cannot be told whether one "
+                           "carries a ledger id")
+        for house in every:
+            try:
+                mark = _house_id(house)
+            except sqlite3.Error as e:
+                return _closed(f"no ledger and house {_house_name(house)} cannot be read ({e})")
+            if mark:
+                return _closed(f"ledger missing but house {_house_name(house)} carries its id")
+        return Gate("off", None)
+    try:
+        led = Ledger.open_read_only(root, busy_ms)
+    except (LedgerUnreadable, FileNotFoundError) as e:
+        hot = ledger_path(root).with_name("permissions.db-journal").exists() and "locked" not in str(e)
+        if hot:
+            return _closed("ledger has a hot journal; any writing open clears it, such as engram-permissions sweep")
+        return _closed(f"ledger cannot be read: {e}")
+    try:
+        meta = led.meta()
+    except sqlite3.Error as e:
+        return _closed(f"ledger cannot be read: {e}")
+    finally:
+        led.close()
+    ledger_id, mode, raised = meta.get("ledger_id"), meta.get("gate"), bool(meta.get("gate_raised"))
+    for house in served:
+        try:
+            mark = _house_id(house)
+        except sqlite3.Error as e:
+            return _closed(f"house {_house_name(house)} cannot be read ({e})")
+        if mark is None and raised:
+            return _closed(f"house {_house_name(house)} carries no ledger id but the gate was raised; run "
+                           "engram-permissions gate <current mode> to mark it")
+        if mark is not None and mark != ledger_id:
+            return _closed(f"house {_house_name(house)} carries ledger id {mark}, not this ledger's")
+    if mode is None:
+        return _closed("gate_raised is set but the gate is missing") if raised else Gate("off", None)
+    if mode not in GATE_MODES:
+        return _closed(f"the gate holds {mode!r}, which is not one of {', '.join(GATE_MODES)}")
+    return Gate(mode, None)
+
+
+def ledger_for_house(db_path: Path) -> Path | None:
+    """The ledger file of the engram home a house sits in (`.engram/graph.db` or `.engram/instances/<n>/graph.db`),
+    or None when the path is no house of that shape or the ledger file does not exist."""
+    db_path = Path(db_path)
+    if db_path.name != "graph.db":
+        return None
+    parent = db_path.parent
+    if parent.name == ".engram":
+        base = parent
+    elif parent.parent.name == "instances" and parent.parent.parent.name == ".engram":
+        base = parent.parent.parent
+    else:
+        return None
+    ledger = base / "permissions.db"
+    return ledger if ledger.is_file() else None
+
+
+def house_mark(db_path: Path) -> str | None:
+    """The id to write into a house created now (P 12.3, 'A house made later'): the ledger's id when its gate is
+    raised, 'unreadable' when the ledger exists but cannot be read, None when no raised ledger exists."""
+    ledger = ledger_for_house(db_path)
+    if ledger is None:
+        return None
+    try:
+        led = Ledger.open_read_only(ledger.parent.parent)
+    except (LedgerUnreadable, FileNotFoundError):
+        return "unreadable"
+    try:
+        meta = led.meta()
+    except sqlite3.Error:
+        return "unreadable"
+    finally:
+        led.close()
+    return meta.get("ledger_id") if meta.get("gate_raised") else None
+
+
+def _prep_gate(state, actor, args):
+    if set(args) - {"mode"}:
+        raise RuleError(_GATE, "the gate act takes only mode: the houses are those on disk at the yes")
+    mode = args.get("mode")
+    if mode not in GATE_MODES:
+        raise RuleError(_GATE, f"the gate is one of {', '.join(GATE_MODES)}")
+    return {"mode": mode}
+
+
+def _mark_house(db_path: Path, ledger_id: str) -> None:
+    """R17: plain sqlite3, one BEGIN IMMEDIATE per house."""
+    try:
+        con = sqlite3.connect(db_path, isolation_level=None, timeout=BUSY_MS / 1000)
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("INSERT INTO meta(key, value) VALUES('permissions_ledger_id', ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (ledger_id,))
+            con.execute("COMMIT")
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        raise RuleError(_GATE, f"house {_house_name(db_path)} could not be marked ({e}); nothing was recorded, "
+                               "run the gate again") from e
+
+
+def _make_gate(state, actor, args, auth, now, *, root: Path):
+    mode, raised = args["mode"], bool(state.meta.get("gate_raised"))
+    if mode != "off" and not raised and not (root / PUBLISHED_HOUSE).is_file():
+        raise RuleError(_GATE, f"the published house {root / PUBLISHED_HOUSE} does not exist, so there is nothing "
+                               "to serve or share from")
+    body: dict = {"meta": {"gate": mode}, "houses": []}
+    if mode != "off" or raised:
+        body["meta"]["gate_raised"] = "1"
+        ledger_id = state.meta["ledger_id"]
+        for house in houses(root):
+            try:
+                carries = _house_id(house) == ledger_id
+            except sqlite3.Error:
+                carries = False
+            if not carries:
+                _mark_house(house, ledger_id)
+                body["houses"].append(house.relative_to(root).as_posix())
+    return "gate:" + mode, body
+
+
 _ACTS = {
     "register-person": _Act(_prep_register_person, _make_register_person, _pure),
     "retire-person": _Act(_prep_retire_person, _make_retire_person, _local(_may_retire_person)),
@@ -1206,6 +1459,7 @@ _ACTS = {
     "grant": _Act(_prep_grant, _make_grant, _pure, _check_grant),
     "revoke-grant": _Act(_prep_end_grant, _make_end_grant, _pure),
     "give-up-grant": _Act(_prep_end_grant, _make_end_grant, _pure),
+    "gate": _Act(_prep_gate, _make_gate, _pure, rooted=True),
 }
 # the acts after which the gluing check reruns (R5): the registry of places, parents, agents, groups,
 # collections and stewards

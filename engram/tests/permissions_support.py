@@ -1657,3 +1657,115 @@ def applied(state: State, act: Act) -> bool:
         rows = live(state.collection_members.get(a["collection"], ()))
         return all(any(r.object == o and r.backing == "person" for r in rows) for o in a["objects"])
     raise AssertionError(act.kind)
+
+
+# ---------------------------------------------------------------- the gate and the houses (Task 13; PF28)
+
+def _house_path(root, name):
+    from pathlib import Path
+    base = Path(root) / ".engram"
+    return base / "graph.db" if name is None else base / "instances" / name / "graph.db"
+
+
+def make_house(root, name="lighthouse"):
+    """An engram store file with only its `meta` table: `.engram/instances/<name>/graph.db`, or the default store
+    `.engram/graph.db` for name None. Returns its path."""
+    import sqlite3
+    path = _house_path(root, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    con.commit()
+    con.close()
+    return path
+
+
+def make_house_with_029(root, name="lighthouse"):
+    """A house that has run migration 029: shared_memories with source_instance_id and record_id, and the
+    shared_memories_changes table."""
+    import sqlite3
+    path = make_house(root, name)
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE shared_memories (id TEXT PRIMARY KEY, source_instance_id TEXT, record_id TEXT)")
+    con.execute("CREATE TABLE shared_memories_changes (counter INTEGER PRIMARY KEY)")
+    con.commit()
+    con.close()
+    return path
+
+
+def house_meta(path) -> dict:
+    import sqlite3
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return dict(con.execute("SELECT key, value FROM meta").fetchall())
+    finally:
+        con.close()
+
+
+def raise_gate(led, mode, now="2026-11-02"):
+    return do(led, ANDY, "gate", now=now, mode=mode)
+
+
+def raised_ledger(root, houses=("lighthouse",), mode="shadow"):
+    """A ledger at `root` whose gate is raised to `mode` over the named houses (made first)."""
+    from permission_ledger import Ledger
+    led = Ledger.create(root, "andy", now=T("2026-11-01"))
+    for name in houses:
+        make_house(root, name)
+    raise_gate(led, mode)
+    return led
+
+
+def fresh_raised(root):
+    """`raised_ledger` over the lighthouse and one more house, closed again; returns `root`."""
+    raised_ledger(root, houses=("lighthouse", "why")).close()
+    return root
+
+
+def delete_ledger(root):
+    from permission_ledger import ledger_path
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        p = ledger_path(root).with_name("permissions.db" + suffix)
+        if p.exists():
+            p.unlink()
+
+
+def make_ledger_unreadable(root):
+    from permission_ledger import ledger_path
+    ledger_path(root).write_bytes(b"this is not a database " * 200)
+
+
+def swap_in_another_ledger(root):
+    from permission_ledger import Ledger
+    delete_ledger(root)
+    Ledger.create(root, "andy", now=T("2026-11-01")).close()
+
+
+def _edit_ledger_meta(root, sql, args=()):
+    import sqlite3
+    from permission_ledger import ledger_path
+    con = sqlite3.connect(ledger_path(root))
+    con.execute(sql, args)
+    con.commit()
+    con.close()
+
+
+def set_unknown_gate_value(root):
+    _edit_ledger_meta(root, "UPDATE meta SET value='loud' WHERE key='gate'")
+
+
+def delete_gate_key(root):
+    _edit_ledger_meta(root, "DELETE FROM meta WHERE key='gate'")
+
+
+def register_default_agent_at_home(led):
+    """agent:default, acting for Andy's home and put in it."""
+    do(led, ANDY, "register-agent", agent="agent:default", acts_for=HOME)
+    do(led, ANDY, "put-agent", agent="agent:default", place=HOME)
+
+
+def proposal_act(led, proposal_id) -> Act:
+    """The Act a proposal's body holds."""
+    import json
+    body = json.loads(led.state().proposals[proposal_id].body)["act"]
+    return Act(body["kind"], body["args"])
