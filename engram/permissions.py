@@ -825,7 +825,7 @@ def _in_force(state: State, added: int, removed: int | None, t: int) -> bool:
 
 def _meets(state: State, added: int, removed: int | None, anchor: int, t: int) -> bool:
     lo, hi = _span(state, added, removed)
-    return lo <= t and (hi is None or hi > anchor)
+    return anchor <= t and lo <= t and (hi is None or hi > anchor)
 
 
 def agent_place_at(state: State, agent: str, at: int) -> str | None:

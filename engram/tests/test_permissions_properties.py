@@ -11,7 +11,7 @@ from tests.permissions_oracle import (
 from tests.permissions_support import (
     HOME, M1, M2, M3, M4, REQUIRED_FEATURES, SEED, Bulk, T, World, andy_world, co_subject_world,
     copy_in_unregistered_house, dated_deny_use, e1_after_use_7, e1_after_use_9, e1_after_use_10, e1_use_1,
-    ended_allow_use, features, future_allow_use, legacy_json, legacy_refusal_use, nine_subjects_use,
+    deny_naming_collection_before_its_anchor, ended_allow_use, features, future_allow_use, legacy_json, legacy_refusal_use, nine_subjects_use,
     no_subject_use, object_in_unregistered_store, one_grant_backed_record,
     one_ref_two_houses, placement_without_source_instance_id, random_world, retired_subject_home_use,
     revoked_grant_use, sample_uses, silent_layer_use, two_owner_imprint_use, unregistered_agent_use, use,
@@ -133,7 +133,7 @@ HAND_WRITTEN_CASES = [
     _triple(unregistered_agent_use), _triple(retired_subject_home_use), _triple(no_subject_use),
     _triple(nine_subjects_use), _triple(dated_deny_use), _triple(ended_allow_use), _triple(revoked_grant_use),
     _triple(future_allow_use), _triple(silent_layer_use), _triple(legacy_refusal_use),
-    _pair(object_in_unregistered_store), _pair(placement_without_source_instance_id),
+    deny_naming_collection_before_its_anchor, _pair(object_in_unregistered_store), _pair(placement_without_source_instance_id),
     _pair(copy_in_unregistered_house), _amy(True), _amy(False), _world_pair(two_owner_imprint_use),
     _two_houses, _grant_backed, _e1_ph(e1_after_use_7, (M1, M2, M3, M4), _E1_TIMES),
     _e1_ph(e1_after_use_9, (M1, M2, M3, M4), _E1_TIMES), _e1_10, _e1_1,

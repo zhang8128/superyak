@@ -492,6 +492,16 @@ def dated_deny_use():
     return _case(w, at="2026-12-02")
 
 
+def deny_naming_collection_before_its_anchor():
+    """P 5.4: a deny reads a membership 'at any time in [anchor, t]', and that interval is empty for a use dated
+    before the deny's anchor, so the deny does not match and the allow stands."""
+    w = andy_world()
+    w.collect(MEDICAL, [M1])
+    _self_allow(w)
+    w.deny(HOME, audience=["self"], actions=["recall"], anchor=T("2026-12-01"), collections=[MEDICAL])
+    return [_case(w, at="2026-11-02")]
+
+
 def ended_allow_use():
     w = andy_world()
     _self_allow(w, valid_until=T("2026-11-10"))
