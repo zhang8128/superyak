@@ -152,6 +152,23 @@ class LogTimes(Mapping):
                 self._cache.popitem(last=False)
         return at
 
+    def prefetch(self, seqs) -> None:
+        """Read the times of these seqs (those within 1..the State's seq) in queries of 512, into the cache; any
+        other value is ignored. The cache keeps its cap."""
+        with self._lock:
+            want = sorted({s for s in seqs if isinstance(s, int) and not isinstance(s, bool)
+                           and 1 <= s <= self._seq and s not in self._cache})
+        for i in range(0, len(want), 512):
+            chunk = want[i:i + 512]
+            rows = self._query(f"SELECT seq, at FROM ledger_log WHERE seq IN ({','.join('?' * len(chunk))})",
+                               tuple(chunk))
+            with self._lock:
+                for s, at in rows:
+                    self._cache[s] = at
+                    self._cache.move_to_end(s)
+                while len(self._cache) > permissions.STATE_LOG_TIMES:
+                    self._cache.popitem(last=False)
+
     def __iter__(self) -> Iterator[int]:
         last = 0
         while True:
@@ -275,8 +292,11 @@ class StateRows:
         self._keep(name, key, rows)
         return rows
 
-    def prefetch(self, refs: Sequence[str]) -> None:
+    def prefetch(self, refs: Sequence[str]) -> set:
+        """Load the rows of up to 512 refs a query. Returns the seqs the subjects and membership rows read were
+        added and removed at, which the State's log times read in batches too."""
         wanted = list(dict.fromkeys(r for r in refs if isinstance(r, str)))
+        seqs: set = set()
         for i in range(0, len(wanted), self.BATCH):
             chunk = wanted[i:i + self.BATCH]
             for name in ("subjects", "member_of", "lane_notes", "copies"):
@@ -285,6 +305,12 @@ class StateRows:
                 if need:
                     for k, rows in self.load(name, need).items():
                         self._keep(name, k, rows)
+                        if name in ("subjects", "member_of"):
+                            for r in rows:
+                                seqs.add(r.added_seq)
+                                if r.removed_seq is not None:
+                                    seqs.add(r.removed_seq)
+        return seqs
 
     def count(self, name: str) -> int:
         spec = _SPECS[name]

@@ -25,6 +25,7 @@ FOLD_BATCH = 4_096               # receipts one fold batch reads, verifies and a
 LANE_TESTS_KEPT = 4096           # lane tests a State keeps, (object, lanes, anchor, t, deny) -> bool
 PREFETCH_CHUNK = 512            # refs a bulk decision or an eligible set prefetches at once
 STATE_ROWS = 65_536             # per-object rows a State keeps at once; the rest are read again on demand (5.6, 15)
+SEQ_TIMES_KEPT = 4_096          # log times a State keeps in front of its own cache (a plain dict, no lock)
 STATE_LOG_TIMES = 65_536        # log times a State keeps at once; the rest are read again on demand (5.6, 15)
 MAX_AUDIENCE = 32
 MAX_LIST = 64
@@ -484,7 +485,9 @@ class State:
         """Load the per-object rows of up to 512 refs in one query each, so a chunk of decisions reads them from
         the cache. A no-op for a State built whole."""
         if self._loader is not None:
-            self._loader.prefetch(refs)
+            seqs = self._loader.prefetch(refs)
+            if seqs and hasattr(self.seq_at, "prefetch"):
+                self.seq_at.prefetch(seqs)
 
     @classmethod
     def from_tables(cls, tables: Mapping[str, Sequence], *, seq: int, seq_at: Mapping[int, int],
@@ -858,12 +861,25 @@ def acts_for_place(state: State, agent: str) -> str | None:
     return None if row is None else row.acts_for
 
 
+def _seq_time(state: State, seq: int) -> int:
+    """state.seq_at[seq], kept per State for the last SEQ_TIMES_KEPT seqs read: a State's log times never change,
+    and a lazy State's own cache takes a lock and moves an entry per read."""
+    memo = state._memo(("seq-times",), dict)
+    got = memo.get(seq)
+    if got is None:
+        got = state.seq_at[seq]
+        if len(memo) >= SEQ_TIMES_KEPT:
+            memo.clear()
+        memo[seq] = got
+    return got
+
+
 def _span(state: State, added: int, removed: int | None) -> tuple[int, int | None]:
     """The time interval [lo, hi) a membership row is in force; hi None is open (PF22)."""
-    lo = state.seq_at[added]
+    lo = _seq_time(state, added)
     if removed is None or removed > state.seq:
         return lo, None
-    return lo, state.seq_at[removed]
+    return lo, _seq_time(state, removed)
 
 
 def _in_force(state: State, added: int, removed: int | None, t: int) -> bool:
@@ -995,7 +1011,7 @@ def _object_dims(state: State, sel: Selector, layer: str, anchor: int, use: Use,
     if sel.lanes != STAR and not _lanes_ok(state, use.obj, sel.lanes, anchor, t, deny):
         return False
     if sel.collections != STAR:
-        rows = [r for r in state.member_of.get(use.obj, ()) if r.collection in sel.collections]
+        rows = [r for r in _members(state, use.obj)[0] if r.collection in sel.collections]
         if not any(_membership_counts(state, r, layer, anchor, use, action, deny, assume, check_validity)
                    for r in rows):
             return False
@@ -1503,7 +1519,7 @@ def _candidate_positions(state: State, layer_id: str, use: Use, action: str) -> 
             if i is not None:
                 picked.add(i)
     if by_coll:
-        for m in state.member_of.get(obj, ()):
+        for m in _members(state, obj)[0]:
             hit = by_coll.get(m.collection)
             if hit:
                 if picked is None:
@@ -1607,7 +1623,7 @@ def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool
     for sel, layer in selectors:
         if sel.collections == STAR:
             continue
-        rows = [m for m in state.member_of.get(use.obj, ())
+        rows = [m for m in _members(state, use.obj)[0]
                 if m.collection in sel.collections
                 and _membership_counts(state, m, layer, record.anchor, use, action, False, frozenset(), valid_only)]
         if not rows or any(not m.backing.startswith("grant:") for m in rows):
@@ -1733,7 +1749,7 @@ def _program_verdict(state: State, layer: Layer, use: Use, action: str):
             if i is not None:
                 extra.add(i)
     if by_coll:
-        for m in state.member_of.get(obj, ()):
+        for m in _members(state, obj)[0]:
             hit = by_coll.get(m.collection)
             if hit:
                 extra.update(hit)
@@ -1773,7 +1789,19 @@ def _program_verdict(state: State, layer: Layer, use: Use, action: str):
 
 def _grant_rows(state: State, obj) -> bool:
     """Does the object have a grant-backed membership row (so `_terms` reads a route through it)?"""
-    return any(m.backing.startswith("grant:") for m in state.member_of.get(obj, ()))
+    return _members(state, obj)[1]
+
+
+def _members(state: State, obj) -> tuple:
+    """(state.member_of.get(obj, ()), whether one of them is grant-backed), kept for the last object only, which
+    every layer of its decision reads; replaced whole, so safe to read from any thread."""
+    last = state._cache.get(("members",))
+    if last is not None and last[0] == obj:
+        return last[1]
+    rows = state.member_of.get(obj, ())
+    got = (rows, any(m.backing.startswith("grant:") for m in rows))
+    state._cache[("members",)] = (obj, got)
+    return got
 
 
 def _record_rank(state: State, r: Record, t: int) -> tuple:
@@ -1897,7 +1925,7 @@ def _horizon(state: State, t: int, layers: Sequence[str], objs: Sequence[str]) -
     out: list[int] = [] if least is None else [least]
     if named:
         for obj in objs:
-            for m in state.member_of.get(obj, ()):
+            for m in _members(state, obj)[0]:
                 if m.collection in named:
                     out.extend(e for e in _chain_expiries(state, m.backing) if e > t)
     return min(out) if out else None
@@ -2049,7 +2077,7 @@ class _Run:
             return None
         state = self.state
         return (parsed.kind, parsed.instance_id, parsed.layer, tuple(state.lane_notes.get(ref, ())),
-                tuple(state.member_of.get(ref, ())), ref if ref in _listed_memories(state) else None, subjects)
+                tuple(_members(state, ref)[0]), ref if ref in _listed_memories(state) else None, subjects)
 
     # -- one row: a layer's verdict for one action
     def _row(self, layer: Layer, sub: Use, action: str) -> tuple:
@@ -2238,6 +2266,8 @@ def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = 
                 if ok:
                     fresh = sorted([m for m in names - run.recall_done if not done.get(m, 0) & recall_bit],
                                    key=_units)
+                    for k in range(0, len(fresh), PREFETCH_CHUNK):   # the names' own rows, 512 at a time
+                        state.prefetch(fresh[k:k + PREFETCH_CHUNK])
                     for m in fresh:
                         subjects = run.subjects(m)
                         ok = run.process(replace(proto, obj=m), ("recall",), subjects,

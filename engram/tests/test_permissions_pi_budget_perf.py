@@ -86,3 +86,36 @@ def test_p4_bulk_1000_trails_of_512_touches_within_8_seconds():
     took = time.perf_counter() - start
     assert d.allowed, d.refusal
     assert took <= P4_BULK_1000X512_S, f"{took:.1f} s for 1,000 trails of 512 touches"
+
+
+# ---------------------------------------------------------------- P5: the lazy State, on the reference ledger
+
+P5_BULK_2000_S = 140.0             # reference-ledger probe, bulk 2,000 trails x 512 touches, State read lazily
+P5_ELIGIBLE_20000_S = 32.0         # reference-ledger probe, eligible set 20,000 (sharing off: none exists yet)
+
+
+@pytest.fixture(scope="module")
+def reference(tmp_path_factory):
+    from pathlib import Path
+
+    from tests.permissions_budget_ledger import ensure_reference
+    given = os.environ.get("ENGRAM_PI_BUDGET_DIR")
+    base = Path(given) if given else tmp_path_factory.mktemp("pi-budget-p5")
+    base.mkdir(parents=True, exist_ok=True)
+    return ensure_reference(base)
+
+
+def test_p5_probe_bulk_2000_trails_within_140_seconds(reference):
+    from tests.permissions_budget_ledger import prepare, run_probe
+    home, extra = prepare(reference, "bulk", trails=2_000)
+    got = run_probe("bulk", home, extra)
+    assert got["detail"]["allowed"], got["detail"]["refusal"]
+    assert got["seconds"] <= P5_BULK_2000_S, f"{got['seconds']} s for 2,000 trails"
+
+
+def test_p5_probe_eligible_set_of_20000_within_32_seconds(reference):
+    from tests.permissions_budget_ledger import prepare, run_probe
+    home, extra = prepare(reference, "eligible")
+    got = run_probe("eligible", home, extra)
+    assert got["detail"]["eligible"] == got["detail"]["placements"] == 20_000
+    assert got["seconds"] <= P5_ELIGIBLE_20000_S, f"{got['seconds']} s for 20,000 placements"

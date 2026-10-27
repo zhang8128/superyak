@@ -380,3 +380,108 @@ def test_a_state_closes_its_reader(tmp_path):
                 c.execute("SELECT 1")
     finally:
         led.close()
+
+
+# ---------------------------------------------------------------- P5: read once per object and per log time
+
+COLL = "collection:andy/memories"
+
+
+def _member_world(home, n, *, log_rows=1600):
+    """n memories whose record lists the collection (so each decision reads the object's memberships), each
+    membership added at its own seq."""
+    from permission_ledger import ledger_path
+    synthetic_ledger(home, n, records=True, log_rows=log_rows)
+    _with_agent(home)
+    conn = sqlite3.connect(ledger_path(home), isolation_level=None)
+    try:
+        sel = conn.execute("SELECT selector FROM records LIMIT 1").fetchone()[0].replace('"collections": "*"',
+                                                                                          f'"collections": ["{COLL}"]')
+        conn.execute("UPDATE records SET selector = ?", (sel,))
+        conn.execute("UPDATE collection_members SET added_seq = 1 + (rowid % ?)", (log_rows - 100,))
+    finally:
+        conn.close()
+
+
+def test_a_decision_reads_the_objects_memberships_once(tmp_path, monkeypatch):
+    from permission_ledger import RowMap
+    _member_world(tmp_path, 30)
+    real, reads = RowMap.get, []
+    monkeypatch.setattr(RowMap, "get", lambda self, key, default=None:
+                        (reads.append((self._name, key)), real(self, key, default))[1])
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        state = led.state()
+        for ref in _mems(30):
+            reads.clear()
+            got = decide(state, permissions.Use(requester=RIO, place=HOME, obj=ref, copy="store:house",
+                                                action="recall", purpose="care-coordination", at=AT))
+            assert got.allowed, got.refusal
+            assert [r for r in reads if r[0] == "member_of"] == [("member_of", ref)]
+    finally:
+        led.close()
+
+
+def test_log_times_are_read_a_batch_of_512_a_query_after_a_prefetch(tmp_path, monkeypatch):
+    from permission_ledger import LogTimes
+    _member_world(tmp_path, 1300)
+    real, queries = LogTimes._query, []
+    monkeypatch.setattr(LogTimes, "_query", lambda self, sql, args: (queries.append(sql), real(self, sql, args))[1])
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        seqs = {s for (s,) in led.conn.execute("SELECT added_seq FROM collection_members")}
+        assert len(seqs) > 1000
+        state = led.state()
+        queries.clear()
+        assert decide_bulk(state, _bulk(_mems(1300))).allowed
+        assert len(queries) <= -(-len(seqs) // 512) + 1, (len(queries), len(seqs))
+    finally:
+        led.close()
+
+
+def test_log_times_prefetch_ignores_seqs_past_the_state_and_keeps_its_cap(tmp_path, monkeypatch):
+    synthetic_ledger(tmp_path, 0, log_rows=40)
+    monkeypatch.setattr(permissions, "STATE_LOG_TIMES", 8)
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        times = led.state().seq_at
+        times.prefetch(list(range(1, 41)) + [0, -3, 41, 500, "x", None])
+        assert len(times._cache) <= 8 and set(times._cache) <= set(range(1, 41))
+        times.prefetch([39, 40, 41, 42])
+        assert times[40] == 1_000_040 and 41 not in times._cache and 42 not in times._cache
+        with pytest.raises(KeyError):
+            times[41]
+    finally:
+        led.close()
+
+
+def test_a_prefetch_reads_the_memberships_log_times_whatever_they_are(tmp_path):
+    _member_world(tmp_path, 40)
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        state = led.state()
+        state.prefetch(_mems(40))
+        assert all(r.added_seq in state.seq_at._cache for m in _mems(40) for r in state.member_of[m])
+    finally:
+        led.close()
+
+
+def test_a_trails_names_are_prefetched_512_at_a_time(tmp_path, monkeypatch):
+    from tests.permissions_budget_core import derived_trails, touches
+    synthetic_ledger(tmp_path, 1300, records=True)
+    _with_agent(tmp_path)
+    seen = []
+    real = State.prefetch
+    monkeypatch.setattr(State, "prefetch", lambda self, refs: (seen.append(list(refs)), real(self, refs))[1])
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        state = led.state()
+        bulk = BulkUse(requester=RIO, place=HOME, objects=derived_trails(2), copy="store:house", action="imprint",
+                       purpose="trail-evaluation", at=AT, named=False,
+                       names=lambda t: touches(t, 700, universe=1300))
+        decide_bulk(state, bulk, group=False)
+        assert all(len(c) <= 512 for c in seen)
+        wanted = {m for t in derived_trails(2) for m in touches(t, 700, universe=1300)}
+        assert wanted <= {r for c in seen for r in c}
+    finally:
+        led.close()
