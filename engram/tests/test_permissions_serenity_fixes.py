@@ -283,3 +283,62 @@ def test_item4_a_connection_given_back_after_a_reset_is_closed(tmp_path):
     assert house.storage is None and second._conn_closed and not first._conn_closed
     house.checkin(first)
     assert first._conn_closed and house.checkout() is None
+
+
+# ---------------------------------------------------------------- item 5: migration 029 under openers at once
+
+def _open_at_once(path, barrier, results):
+    """One opener of a store with migration 029 pending. It waits for the other opener after reading the store's
+    state and before writing, so both race for 029 (at most 2 s, as the second opener may never get there)."""
+    import threading
+    import storage
+    real = storage._skip_existing_columns
+
+    def wait_then(conn, sql):
+        out = real(conn, sql)
+        try:
+            barrier.wait(timeout=2)
+        except threading.BrokenBarrierError:
+            pass
+        return out
+    storage._skip_existing_columns = wait_then
+    try:
+        storage.Storage(str(path)).close()
+        results.put("ok")
+    except Exception as e:                  # the failure under test: "duplicate column name: source_instance_id"
+        results.put(f"{type(e).__name__}: {e}")
+
+
+def _store_at_028(path):
+    """A store whose migrations ran through 028 only."""
+    import shutil
+    import storage
+    from resources import resource_path
+    older = path.parent / "migrations-028"
+    older.mkdir()
+    for f in Path(resource_path("migrations")).iterdir():
+        if f.suffix == ".sql" and int(f.name.split("_", 1)[0]) <= 28:
+            shutil.copy(f, older / f.name)
+    storage.Storage(str(path), migrations_dir=str(older)).close()
+
+
+def test_item5_two_processes_opening_one_schema_28_store_at_once_both_open_it(tmp_path):
+    import multiprocessing
+    import storage
+    path = tmp_path / "graph.db"
+    _store_at_028(path)
+    ctx = multiprocessing.get_context("spawn")
+    barrier, results = ctx.Barrier(2), ctx.Queue()
+    procs = [ctx.Process(target=_open_at_once, args=(path, barrier, results)) for _ in range(2)]
+    for p in procs:
+        p.start()
+    got = sorted(results.get(timeout=120) for _ in procs)
+    for p in procs:
+        p.join(30)
+    assert got == ["ok", "ok"]
+    s = storage.Storage(str(path))
+    try:
+        assert s.conn.execute("SELECT COUNT(*) FROM schema_version WHERE version = 29").fetchone()[0] == 1
+        assert s.placement_changes() == 0
+    finally:
+        s.close()

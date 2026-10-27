@@ -261,27 +261,45 @@ class Storage:
         # open; any other store predates whichever migrations are pending.
         created_now = not applied
         for ver, path in sorted(migrations):
-            sql = _skip_existing_columns(self.conn, path.read_text())
-            try:
-                self.conn.executescript("BEGIN IMMEDIATE;\n" + sql)
-                if ver == 28:
-                    self._assign_instance_id(created_now)
-                if ver == 29:
-                    self._mark_house_for_ledger(created_now)
-                self.conn.execute(
-                    "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-                    (ver, _now_iso()),
-                )
-                self.conn.commit()
-            except Exception:
-                if self.conn.in_transaction:
-                    self.conn.rollback()
-                raise
-            finally:
-                self._restore_pragmas()
+            if not self._apply_migration(ver, path, created_now):
+                continue
             logger.info("Migration %d applied: %s", ver, path.name)
             if ver == 7:
                 self._backfill_content_hashes()
+
+    def _apply_migration(self, ver: int, path: Path, created_now: bool) -> bool:
+        """Apply one migration in its own ``BEGIN IMMEDIATE``. Returns False when another opener of the same
+        store applied it first: the version is read again, and the columns a migration adds are looked up, only
+        once the write lock is held, so two openers at once never both run its ALTERs ("duplicate column
+        name"). ``autocommit`` is True for the transaction because a legacy-mode ``executescript`` commits a
+        pending transaction before it runs."""
+        legacy = self.conn.autocommit
+        self.conn.autocommit = True
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            if self.conn.execute(
+                "SELECT 1 FROM schema_version WHERE version = ?", (ver,)
+            ).fetchone():
+                self.conn.execute("ROLLBACK")
+                return False
+            self.conn.executescript(_skip_existing_columns(self.conn, path.read_text()))
+            if ver == 28:
+                self._assign_instance_id(created_now)
+            if ver == 29:
+                self._mark_house_for_ledger(created_now)
+            self.conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                (ver, _now_iso()),
+            )
+            self.conn.execute("COMMIT")
+            return True
+        except BaseException:
+            if self.conn.in_transaction:
+                self.conn.execute("ROLLBACK")
+            raise
+        finally:
+            self.conn.autocommit = legacy
+            self._restore_pragmas()
 
     def _assign_instance_id(self, created_now: bool) -> None:
         """Give the store its identity inside migration 028's transaction.
