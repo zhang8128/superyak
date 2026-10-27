@@ -149,4 +149,3 @@ def test_a_removed_membership_is_never_counted_for_an_allow():
     boxes = layer_boxes(w.state(), HOME, at_place=CLINIC)
     assert any(box_contains(b, _pt(M1, T("2026-11-02"))) for b in boxes)
     assert not any(box_contains(b, _pt(M2, T("2026-11-02"))) for b in boxes)   # not even before its removal
-

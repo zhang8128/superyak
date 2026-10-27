@@ -1856,11 +1856,11 @@ def read(pub, memory_id):
     return read_frame(**_daemon_frame_kwargs(pub), turn_id="turn-1", memory_ids=[memory_id])
 
 
-def _daemon_over(root, publishers, busy_timeout_ms=None, clock=None):
+def _daemon_over(root, publishers, clock=None):
+    """A daemon over `publishers`. A test that lowers the ledger's busy timeout sets
+    `lighthouse_daemon.LEDGER_BUSY_MS` with `monkeypatch`, which puts it back after the test."""
     import lighthouse_daemon
     from tests.test_lighthouse_daemon import FakeEmbeddings
-    if busy_timeout_ms is not None:
-        lighthouse_daemon.LEDGER_BUSY_MS = busy_timeout_ms     # conftest restores it after the test
     return lighthouse_daemon.PublisherDaemon(
         {p.name: p for p in publishers}, root / "s.sock", FakeEmbeddings(), engram_home=root,
         clock=clock or at(DAEMON_CLOCK))
@@ -2092,7 +2092,7 @@ def e1_daemon_at(root, t, mode="enforce"):
     return rig, ids
 
 
-def raised_daemon(root, mode="enforce", busy_timeout_ms=None, house=None, placements=None):
+def raised_daemon(root, mode="enforce", house=None, placements=None):
     """A daemon over house `why` (three commons placements, so a recall finds them) under a ledger raised to `mode`,
     with an inside-home allow covering them. `house(root, name)` builds the house instead (one made before 029);
     `placements=n` makes the house hold n placement rows in all. Returns (daemon, "why")."""
@@ -2102,7 +2102,7 @@ def raised_daemon(root, mode="enforce", busy_timeout_ms=None, house=None, placem
         pub = make_placed_house(root, orphans=0 if placements is None else max(placements - 3, 0))
     daemon_ledger(root, mode)
     write_receiver_files(root, DAEMON_RECEIVER)
-    return _daemon_over(root, [pub], busy_timeout_ms), HOUSE_NAME
+    return _daemon_over(root, [pub]), HOUSE_NAME
 
 
 def _plain_house(root, builder):
@@ -2155,14 +2155,14 @@ def _outside_home_house(root, name, audiences):
                           disclosures_path=inst / "lighthouse-disclosures.db"), memory_id
 
 
-def daemon_with_outside_home_placement(root, mode, hand_written_audiences, busy_timeout_ms=None):
+def daemon_with_outside_home_placement(root, mode, hand_written_audiences):
     """A daemon over house `why` holding one outside-home placement. `mode` is `no-ledger`, `off` (a ledger whose gate
     was never raised), `shadow` or `enforce`. Returns (daemon, "why", the memory's id)."""
     pub, memory_id = _outside_home_house(root, "why", hand_written_audiences)
     if mode != "no-ledger":
         daemon_ledger(root, mode)
         write_receiver_files(root, DAEMON_RECEIVER)
-    return _daemon_over(root, [pub], busy_timeout_ms), "why", memory_id
+    return _daemon_over(root, [pub]), "why", memory_id
 
 
 def add_publisher_house(daemon, root, name):
