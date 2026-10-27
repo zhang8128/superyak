@@ -320,3 +320,32 @@ def test_a_station_made_before_removal_files_gains_the_column(tmp_path):
     Store(tmp_path, signing=False)
     with sqlite3.connect(tmp_path / "peer.sqlite3") as raw:
         assert "removal_files" in {r[1] for r in raw.execute("PRAGMA table_info(imprint_requests)")}
+
+
+# ---- A tombstone found by the sweep leaves its receipts in the chain (final review M2; logged item 3b) ----
+
+def test_a_tombstone_found_by_the_sweep_puts_its_receipts_in_the_chain_and_sets_the_reason(tmp_path):
+    st = at_status(tmp_path, "admitted")
+    assert withdraw(st, "owner").status_code == 200
+    held = [r["record"]["id"] for r in __import__("json").loads(tombstone(st).read_text())["receipts"]]
+    with st.store.transaction() as db:                 # a restore from before the withdrawal: the row is live again
+        db.execute("DELETE FROM imprint_receipts WHERE request_id=? AND json_extract(record, '$.event') IN "
+                   "('withdrawn', 'deleted')", (st.request_id,))
+        db.execute("UPDATE imprint_requests SET status='admitted', ended_at=NULL, delete_reason=NULL WHERE id=?",
+                   (st.request_id,))
+    st.store.station_imprint_sweep(root=st.root)
+    found = row(st, st.request_id)
+    assert (found["status"], found["delete_reason"]) == ("deleted", "withdrawn")
+    chain = receipts(st)
+    assert [r["record"]["id"] for r in chain][-2:] == held
+    assert chain[-1]["record"]["event"] == "deleted" and chain[-1]["signature"]      # the tombstone's, as signed
+
+
+def test_an_unreadable_tombstone_still_closes_the_row_with_a_deleted_receipt(tmp_path):
+    st = at_status(tmp_path, "admitted")
+    tombstone(st).parent.mkdir(exist_ok=True); tombstone(st).write_text("{}")
+    st.store.station_imprint_sweep(root=st.root)
+    found = row(st, st.request_id)
+    assert (found["status"], found["delete_reason"]) == ("deleted", "restore")
+    last = receipts(st)[-1]["record"]
+    assert (last["event"], last["detail"]["reason"]) == ("deleted", "restore")

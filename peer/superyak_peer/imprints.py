@@ -603,6 +603,19 @@ def _unlink(path):
     os.unlink(path)
 
 
+def _tombstone_held(path):
+    """The receipts a tombstone holds, each {record, signature} with a record id; [] for one that can't be read (its
+    existence still stops a restore and a use)."""
+    try:
+        held = json.loads(path.read_bytes())['receipts']
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    if not isinstance(held, list):
+        return []
+    return [r for r in held if isinstance(r, dict) and isinstance(r.get('record'), dict)
+            and isinstance(r['record'].get('id'), str)]
+
+
 def _remove_denied(staged):
     """A denied request's staging, removed after its receipts commit. A failure is logged; the sweep's reconcile step
     removes the directory of a `deleted` row (final review M1)."""
@@ -1537,9 +1550,10 @@ class Imprints:
                     continue
                 base = self._imprint_folders(found, root)[0]
                 now = int(self.clock())
-                if base is not None and os.path.lexists(base / 'tombstones' / f'{found["imprint_id"]}.json'):
-                    db.execute("UPDATE imprint_requests SET status='deleted', ended_at=? WHERE id=?", (now, request_id))
-                    out['reconciled'] += 1
+                tomb = base / 'tombstones' / f'{found["imprint_id"]}.json' if base is not None else None
+                if tomb is not None and os.path.lexists(tomb):
+                    if self._close_from_tombstone(db, found, tomb, root, now):
+                        out['reconciled'] += 1
                     continue
                 if found['status'] == 'deleting':
                     continue
@@ -1572,6 +1586,38 @@ class Imprints:
                 out['reconciled'] += 1
         self._sweep_denied_staging(out)
         self._sweep_orphans(Path(root), out)
+
+    def _close_from_tombstone(self, db, found, tomb, root, now):
+        """A live row whose tombstone exists, as after a restore (I 12): the tombstone's receipts the chain lacks are
+        added, as `backups._hold_imprints` adds them, and the reason is its `deleted` receipt's. A tombstone with no
+        `deleted` receipt (unreadable) closes the row with reason `restore`, removing whatever files remain. So the
+        owner's `copies_held` sees the deletion confirmed (final review M2; logged item 3b). False when a removal
+        failed: the row is then `deleting` with a `delete-failed` receipt, for the retry."""
+        request_id = found['id']
+        have = {r['id'] for r in db.execute('SELECT id FROM imprint_receipts WHERE request_id=?', (request_id,))}
+        for receipt in _tombstone_held(tomb):
+            if receipt['record']['id'] not in have:
+                have.add(receipt['record']['id'])
+                db.execute('INSERT INTO imprint_receipts(id, request_id, record, signature) VALUES(?,?,?,?)',
+                           (receipt['record']['id'], request_id, canonical(receipt['record']).decode(),
+                            receipt['signature'] if isinstance(receipt.get('signature'), str) else None))
+        deleted = [r for r in self._receipt_records(db, request_id) if r['event'] == 'deleted']
+        reason = deleted[-1]['detail'].get('reason') if deleted and isinstance(deleted[-1].get('detail'), dict) else None
+        if not deleted:
+            try:
+                files = self._hash_for_removal(db, found, root)
+                self._remove_imprint(db, found, files, reason='restore', actor_id=None, root_flag=root)
+            except _RemovalFailed:
+                db.execute("UPDATE imprint_requests SET status='deleting' WHERE id=?", (request_id,))
+                return False
+            self._append_imprint_receipt(db, request_id, 'deleted', None,
+                                         {'reason': 'restore', 'files': files, 'limits': KNOWN_LIMITS}, sign=False)
+            reason = 'restore'
+        if reason not in DELETE_REASONS:
+            reason = 'restore'
+        db.execute("UPDATE imprint_requests SET status='deleted', ended_at=?, delete_reason=? WHERE id=?",
+                   (now, reason, request_id))
+        return True
 
     def _sweep_denied_staging(self, out):
         """A denial removes its staging only after its receipts commit (M1); a crash between leaves the directory of

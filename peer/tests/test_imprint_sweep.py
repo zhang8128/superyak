@@ -198,7 +198,8 @@ def test_restore_reconciliation(tmp_path):
     st.store.station_imprint_sweep(root=st.root)
     assert status_reasons(st) == {"approved-gone": ("deleted", "missing"), "received-gone": ("deleted", "missing"),
                                   "requested-gone": ("expired", None), "tombstoned": ("deleted", None)}
-    assert row(st, "tombstoned")["delete_reason"] is None
+    assert row(st, "tombstoned")["delete_reason"] == "restore"           # an unreadable tombstone: no reason of its own
+    assert last_event_of(st, "tombstoned") == ("deleted", "restore")     # but a receipt in the chain (review M2)
     assert not imprint_dir(st, "orphan").exists() and not state_dir(st, "orphan").exists()
     assert last_event_of(st, "orphan") == ("deleted", "restore")
     assert last_event_of(st, "approved-gone") == ("deleted", "missing")
