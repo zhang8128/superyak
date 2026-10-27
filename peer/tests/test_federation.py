@@ -414,7 +414,7 @@ def test_a_received_room_has_no_brief_and_takes_none(two_peers):
     remote = b[0].list_rooms(b[1])[0]['id']
     assert ':' in remote
     got = b[0].get_room(b[1], remote)
-    assert got['brief'] is None and got['brief_revision'] == 0
+    assert got['brief'] is None and got['brief_revision'] == 0 and got['moderators'] == []
     with pytest.raises(Problem) as refused:
         b[0].save_brief(b[1], remote, 'Mine.', 0)
     assert refused.value.status == 404

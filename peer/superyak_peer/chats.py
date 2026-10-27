@@ -51,6 +51,7 @@ class Chats:
                 message['source'] = None  # a paired peer's payload is passed through: a label in it is never ours
                 message['reply_to'] = None
             room['brief'], room['brief_revision'] = None, 0  # briefs never cross stations
+            room['moderators'] = []  # moderators never cross stations
             return room
         with self.transaction() as db:
             room = self._room(db, actor, key)
