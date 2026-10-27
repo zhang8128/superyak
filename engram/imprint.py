@@ -6,6 +6,7 @@ numpy: ``calibrate`` is imported inside the functions that need it (P35).
 from __future__ import annotations
 
 import argparse
+import heapq
 import itertools
 import json
 import os
@@ -250,15 +251,44 @@ def _plan_file(plan: Plan) -> str:
         "package_bytes": plan.package_bytes, "parts": plan.parts}, indent=2, sort_keys=True) + "\n"
 
 
+def _working_copy(store: Path, work: Path, *, engram_home: Path, home: Path, ledger, owner: str,
+                  expected_id: str, wrong_id: str):
+    """Snapshot ``store`` into ``work``, check it is a source the plan may read, and migrate a working copy.
+    Returns ``(source_id, identity, ancestry, complete, not_copied, working_path)``. The source is read only
+    through ``calibrate.snapshot``."""
+    import calibrate                                    # numpy: only when a plan runs (P35)
+    from storage import Storage
+
+    snap = work / "snapshot.db"
+    calibrate.snapshot(store, snap)
+    reader = store_reader.connect(snap)
+    try:
+        check_source(store, reader, engram_home=engram_home,
+                     imprint_roots=(Path.home() / ".engram" / "imprints", home / "imprints"))
+        source_id = store_identity.effective_id(reader)
+        if source_id != expected_id:
+            raise PlanRefused(wrong_id)
+        check_owner(ledger, source_id, owner)
+        identity = store_identity.describe(reader)
+        ancestry, complete = store_identity.ancestry(reader)
+        not_copied = classify_source(reader).unnamed
+        pending = store_reader._schema(reader, store_reader._tables(reader))["pending"]
+    finally:
+        reader.close()
+    working = work / "working.db"
+    shutil.copyfile(snap, working)
+    working.chmod(0o600)
+    if pending:
+        Storage(str(working)).close()                   # imprint_working_copy stays False: an imprint fails closed
+    return source_id, identity, ancestry, complete, not_copied, working
+
+
 def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, home: Path, now: int, *,
               scratch_dir: Path | None = None, engram_home: Path | None = None, list_to: Path | None = None) -> Plan:
     """Snapshot the source, migrate a working copy, compute M, the digest, the contents and the size, save the plan
     and return it. The source is read only through ``calibrate.snapshot``. The snapshot, the working copy and the
     scratch file live in a 0700 directory under ``home/imprints/plans/`` (``scratch_dir``, which the caller removes,
     or one made here and removed here). ``make_plan`` sets no environment variable (R26)."""
-    import calibrate                                    # numpy: only when a plan runs (P35)
-    from storage import Storage
-
     store, home = Path(store), Path(home)
     if ctx.owner != context.owner:
         raise PlanRefused("The plan's owner is not the owner the station named; nothing was planned.")
@@ -266,27 +296,10 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
     work = _new_scratch(home) if scratch_dir is None else Path(scratch_dir)
     scratch = conn = None
     try:
-        snap = work / "snapshot.db"
-        calibrate.snapshot(store, snap)
-        reader = store_reader.connect(snap)
-        try:
-            check_source(store, reader, engram_home=engram_home,
-                         imprint_roots=(Path.home() / ".engram" / "imprints", home / "imprints"))
-            source_id = store_identity.effective_id(reader)
-            if source_id != ctx.source_id:
-                raise PlanRefused("The source store is not the one this plan was set up for; nothing was planned.")
-            check_owner(ctx.ledger, source_id, context.owner)
-            identity = store_identity.describe(reader)
-            ancestry, complete = store_identity.ancestry(reader)
-            not_copied = classify_source(reader).unnamed
-            pending = store_reader._schema(reader, store_reader._tables(reader))["pending"]
-        finally:
-            reader.close()
-        working = work / "working.db"
-        shutil.copyfile(snap, working)
-        working.chmod(0o600)
-        if pending:
-            Storage(str(working)).close()               # imprint_working_copy stays False: an imprint fails closed
+        source_id, identity, ancestry, complete, not_copied, working = _working_copy(
+            store, work, engram_home=engram_home, home=home, ledger=ctx.ledger, owner=context.owner,
+            expected_id=ctx.source_id,
+            wrong_id="The source store is not the one this plan was set up for; nothing was planned.")
         scratch = Scratch(work / "scratch.db")
         c = replace(ctx, scratch=scratch, terms=terms, now=now)
         conn = _connect(working, read_only=True, vec=True)
@@ -486,6 +499,125 @@ def plan_dict(plan: Plan) -> dict:
             "not_copied": list(plan.not_copied)}
 
 
+# ---- Reading what would leave ----------------------------------------------------------------------------------
+
+_CHANGED = "Your store changed since the plan. Run the plan again."
+
+
+def resolve_plan(home: Path, prefix: str) -> Path:
+    """The saved plan a unique prefix of at least 4 characters names (R6)."""
+    prefix = (prefix or "").strip().lower()
+    if len(prefix) < 4 or not all(c in "0123456789abcdef" for c in prefix):
+        raise PlanRefused("Name a plan by at least its first 4 characters, as the dry run showed them.")
+    found = sorted(plans_dir(home).glob(f"{prefix}*.json"))
+    if not found:
+        raise PlanRefused(f"There is no plan {prefix}. Run the plan again.")
+    if len(found) > 1:
+        raise PlanRefused(f"More than one plan starts with {prefix}; give more of its characters.")
+    return found[0]
+
+
+def _saved_plan(path: Path) -> dict:
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        scope, terms = saved["scope"], saved["terms"]
+        for key in ("id", "store", "source_id", "owner", "digest"):
+            if not isinstance(saved[key], str):
+                raise ValueError(key)
+        int(saved["created"])
+        Terms(audience=terms["audience"], actions=frozenset(terms["actions"]),
+              purposes=frozenset(terms["purposes"]), days=int(terms["days"]))
+        scope["lanes"], scope["layers"], scope["until"]
+    except (OSError, ValueError, KeyError, TypeError):
+        raise PlanRefused("The saved plan can't be read. Run the plan again.") from None
+    return saved
+
+
+def _selection_of(saved: dict) -> tuple[Selection, Terms]:
+    scope, t = saved["scope"], saved["terms"]
+    sel = parse_selection(lanes=",".join(scope["lanes"]), layers=",".join(scope["layers"]), since=scope.get("since"),
+                          until=scope["until"], shared_with=scope.get("shared_with"), exclude_file=None,
+                          unsourced=bool(scope.get("unsourced_semantics")), now=int(saved["created"]))
+    sel = replace(sel, exclude=frozenset(saved.get("exclude") or ()))
+    return sel, Terms(audience=t["audience"], actions=frozenset(t["actions"]), purposes=frozenset(t["purposes"]),
+                      days=int(t["days"]))
+
+
+def _semantic_rows_in_order(conn: sqlite3.Connection, ids: Iterable[str]) -> Iterator[dict]:
+    """The shipped semantics as stored, in ``(created_at, id)`` order. imprint.py's own reader: store_reader reads
+    only episodes."""
+    stays = frozenset(ids)
+    cur = conn.cursor()
+    cur.row_factory = sqlite3.Row
+    for r in cur.execute("SELECT * FROM semantics ORDER BY created_at, id"):
+        if r["id"] in stays:
+            yield dict(r)
+
+
+def read_plan(plan_id: str, *, home: Path, start: int = 0, limit: int = 1, engram_home: Path | None = None,
+              scratch_dir: Path | None = None) -> list[dict]:
+    """A page of what would leave, every memory in ``(created_at, id)`` order, episodes and semantics together.
+    It takes a new snapshot, rebuilds the package rows the plan was made from and refuses unless the digest is the
+    plan's. Episodes are read by ``store_reader.read_episodes`` and shown with the ``session_id`` the package holds;
+    ``position`` is the place in this reading. ``engram_home`` names the machine's permissions ledger, as
+    ``plan`` was told."""
+    home = Path(home)
+    if start < 0 or limit < 1:
+        raise PlanRefused("--start can't be negative and --limit must be at least 1.")
+    saved = _saved_plan(resolve_plan(home, plan_id))
+    sel, terms = _selection_of(saved)
+    store, owner, now = Path(saved["store"]), saved["owner"], int(saved["created"])
+    engram_home = _default_engram_home() if engram_home is None else Path(engram_home)
+    work = _new_scratch(home) if scratch_dir is None else Path(scratch_dir)
+    scratch = conn = ledger = None
+    try:
+        if not store.is_file():
+            raise PlanRefused(_CHANGED)
+        ledger = open_ledger(engram_home)
+        try:
+            source_id, _, _, _, _, working = _working_copy(store, work, engram_home=engram_home, home=home,
+                                                          ledger=ledger, owner=owner,
+                                                          expected_id=saved["source_id"], wrong_id=_CHANGED)
+        except sqlite3.Error:
+            raise PlanRefused(_CHANGED) from None
+        from imprint_filter import SourceContext
+
+        scratch = Scratch(work / "scratch.db")
+        published = published_house_path(engram_home)
+        ctx = SourceContext(source_path=store, source_id=source_id, instance_name=_instance_name(store), owner=owner,
+                            published=published if published.is_file() else None, ledger=ledger,
+                            home=bool(saved.get("home")), scratch=scratch, terms=terms, now=now)
+        conn = _connect(working, read_only=True, vec=True)
+        conn.row_factory = sqlite3.Row
+        pr = package_rows(conn, sel, terms, ctx)
+        if plan_digest(scope_of(sel), pr.rows, scratch=scratch) != saved["digest"]:
+            raise PlanRefused(_CHANGED)
+        episodes = ((r["created_at"], r["id"], 0, r) for r in pr.rows["episodes"])
+        semantics = ((r["created_at"], r["id"], 1, r) for r in _semantic_rows_in_order(conn, pr.shipped.semantics))
+        merged = heapq.merge(episodes, semantics, key=lambda t: t[:3])
+        page = []
+        for i, (at, id, layer, row) in enumerate(itertools.islice(merged, start, start + limit), start=start):
+            if layer == 0:
+                before = conn.execute("SELECT COUNT(*) FROM episodes WHERE created_at < ? OR (created_at = ? AND id < ?)",
+                                      (at, at, id)).fetchone()[0]
+                memory, = store_reader.read_episodes(conn, start=before, limit=1)
+                memory["session_id"] = row["session_id"]
+                memory["layer"] = "episode"
+            else:
+                memory = dict(row, layer="semantic")
+            memory["position"] = i
+            page.append(memory)
+        return page
+    finally:
+        if conn is not None:
+            conn.close()
+        if scratch is not None:
+            scratch.close()
+        if ledger is not None:
+            ledger.conn.close()
+        _remove_work(work, whole=scratch_dir is None)
+
+
 # ---- The command ---------------------------------------------------------------------------------------------
 
 def ensure_scratch_env(scratch: Path, *, environ, execve) -> None:
@@ -538,6 +670,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print the dry run as JSON")
     p.add_argument("--superyak-home", type=Path, default=Path.home() / ".superyak")
     p.add_argument("--engram-home", type=Path)
+    r = sub.add_parser("read", help="page through what a plan would send, one JSON line a memory")
+    r.add_argument("--plan", required=True, help="the plan's first 4 or more characters")
+    r.add_argument("--start", type=int, default=0)
+    r.add_argument("--limit", type=int, default=1)
+    r.add_argument("--superyak-home", type=Path, default=Path.home() / ".superyak")
+    r.add_argument("--engram-home", type=Path)
     return ap
 
 
@@ -557,8 +695,12 @@ def _identity_of(store: Path) -> tuple[str, str]:
         conn.close()
     if source_id is None:
         raise PlanRefused("The source store has no identity this code can derive; nothing was planned.")
+    return source_id, _instance_name(store)
+
+
+def _instance_name(store: Path) -> str:
     here = Path(store).resolve()
-    return source_id, here.parent.name if here.parent.parent.name == "instances" else "default"
+    return here.parent.name if here.parent.parent.name == "instances" else "default"
 
 
 def _plan(args, *, clock) -> int:
@@ -601,6 +743,26 @@ def _plan(args, *, clock) -> int:
     return 0
 
 
+def _read(args) -> int:
+    home = Path(args.superyak_home)
+    engram_home = Path(args.engram_home) if args.engram_home else _default_engram_home()
+    resolve_plan(home, args.plan)                       # a bad name is refused before anything runs
+    scratch = _run_scratch(home)
+    try:
+        ensure_scratch_env(scratch, environ=os.environ, execve=os.execve)
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
+    try:
+        page = read_plan(args.plan, home=home, start=args.start, limit=args.limit, engram_home=engram_home,
+                         scratch_dir=scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    for memory in page:
+        print(json.dumps(memory, sort_keys=True))
+    return 0
+
+
 def published_house_path(engram_home: Path) -> Path:
     from imprint_filter import published_house
 
@@ -612,6 +774,8 @@ def main(argv: list[str] | None = None, *, clock=time.time) -> int:
     try:
         if args.command == "plan":
             return _plan(args, clock=clock)
+        if args.command == "read":
+            return _read(args)
     except PlanRefused as refusal:
         print(str(refusal), file=sys.stderr)
         return 2

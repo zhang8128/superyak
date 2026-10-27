@@ -10,9 +10,11 @@ from pathlib import Path
 import pytest
 
 import calibrate
-from imprint import Context, ensure_scratch_env, main, make_plan, read_context, render_dry_run, resolve_store
+from imprint import (Context, ensure_scratch_env, main, make_plan, read_context, read_plan, render_dry_run,
+                     resolve_plan, resolve_store)
 from imprint_filter import (DIGEST_TABLES, OTHERS_NO_LEDGER_WORDS, PlanRefused, TIMES_WORDS, scope_of)
-from tests.imprint_support import (PLAN_NOW, deny, ep, live_source, plan_args, plan_context, vec, write_context)
+from tests.imprint_support import (EH, HOME, PLAN_NOW, deny, edit_source, ep, expected_order, live_source, plan_args,
+                                   plan_context, vec, write_context)
 
 CONTEXT = plan_context("sam")
 ANDY_CONTEXT = plan_context("andy")
@@ -175,3 +177,63 @@ def test_a_source_the_plan_refuses_leaves_nothing_behind(tmp_path):
     with pytest.raises(PlanRefused):
         make_plan(*args)
     assert list((tmp_path / "home" / "imprints" / "plans").glob("*")) == []
+
+
+PACKAGE_SESSIONS = {"e0": "sx", "e1": "sx", "e2": "sx"}
+
+
+def test_read_pages_through_what_would_leave(tmp_path):
+    plan = make_plan(*plan_args(tmp_path, route=False))
+    first = read_plan(plan.id[:4], home=HOME(tmp_path), engram_home=EH(tmp_path))
+    rest = read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path), start=1, limit=99)
+    seen = first + rest
+    assert len(first) == 1 and [m["id"] for m in seen] == expected_order(plan) == ["e0", "e1", "e2", "s1"]
+    assert [m["position"] for m in seen] == [0, 1, 2, 3] and [m["layer"] for m in seen][-1] == "semantic"
+    assert all(m.get("session_id") is None for m in seen if m["layer"] == "episode")      # route off: the package holds null
+    assert seen[0]["content"].startswith("Jenn drove") and "content" in seen[3]
+    assert list((HOME(tmp_path) / "imprints" / "plans").glob("*/")) == []                # scratch removed
+
+
+def test_read_shows_the_session_where_the_package_keeps_it(tmp_path):
+    plan = make_plan(*plan_args(tmp_path, route=True))
+    seen = read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path), limit=99)
+    sessions = {m["id"]: m["session_id"] for m in seen if m["layer"] == "episode"}
+    assert sessions == PACKAGE_SESSIONS
+
+
+def test_read_refuses_when_the_store_changed(tmp_path):
+    plan = make_plan(*plan_args(tmp_path))
+    edit_source(tmp_path, "e1", content="changed")
+    with pytest.raises(PlanRefused, match="changed since the plan"):
+        read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path))
+
+
+def test_read_with_a_ledger_reaches_the_same_digest(tmp_path):
+    cos = {"e1": "person:jenn"}
+    plan = make_plan(*plan_args(tmp_path, owner="andy", cosubjects=cos))
+    seen = read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path), limit=99)
+    assert [m["id"] for m in seen] == expected_order(plan)
+
+
+def test_resolve_plan_takes_a_unique_prefix_of_four_or_more(tmp_path):
+    plan = make_plan(*plan_args(tmp_path))
+    home = HOME(tmp_path)
+    assert resolve_plan(home, plan.id[:4]) == home / "imprints" / "plans" / f"{plan.id}.json"
+    for bad in (plan.id[:3], "zzzz", ""):
+        with pytest.raises(PlanRefused, match="plan"):
+            resolve_plan(home, bad)
+    twin = home / "imprints" / "plans" / (plan.id[:4] + "f" * 28 + ".json")
+    twin.write_text("{}")
+    with pytest.raises(PlanRefused, match="(?i)more than one"):
+        resolve_plan(home, plan.id[:4])
+
+
+def test_the_read_command_prints_a_page(tmp_path, monkeypatch, capsys):
+    home = tmp_path / "home"
+    write_context(home, ANDY_CONTEXT)
+    plan = make_plan(*plan_args(tmp_path, owner="andy"))
+    scratch_env(monkeypatch, home)
+    assert main(["read", "--plan", plan.id[:4], "--start", "1", "--limit", "2", "--superyak-home", str(home),
+                 "--engram-home", str(EH(tmp_path))]) == 0
+    shown = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [m["id"] for m in shown] == ["e1", "e2"]

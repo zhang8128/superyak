@@ -1110,3 +1110,34 @@ def plan_args(tmp_path: Path, *, owner: str = "sam", route: bool = False, episod
                     operator=context.operator)
     c = ctx(s, ledger=led, owner=owner, home=owner == context.operator, terms=t, now=PLAN_NOW)
     return Path(s.db_path), sel, t, c, context, tmp_path / "home", PLAN_NOW
+
+
+def HOME(tmp_path: Path) -> Path:
+    """The superyak home ``plan_args`` plans into."""
+    return tmp_path / "home"
+
+
+def EH(tmp_path: Path) -> Path:
+    """The engram home ``plan_args`` puts its permissions ledger in."""
+    return tmp_path / "eh"
+
+
+def edit_source(tmp_path: Path, id: str, *, content: str, name: str = "src") -> None:
+    """Change an episode of the plan's source store behind the plan's back."""
+    conn = sqlite3.connect(_path(tmp_path, name))
+    try:
+        with conn:
+            conn.execute("UPDATE episodes SET content = ? WHERE id = ?", (content, id))
+    finally:
+        conn.close()
+
+
+def expected_order(plan) -> list[str]:
+    """Ids of every episode and semantic of the plan's source in ``(created_at, id)`` order (layers interleaved)."""
+    conn = sqlite3.connect(plan.store)
+    try:
+        rows = [(r[0], r[1]) for table in ("episodes", "semantics")
+                for r in conn.execute(f"SELECT created_at, id FROM {table}")]
+    finally:
+        conn.close()
+    return [id for _, id in sorted(rows)]
