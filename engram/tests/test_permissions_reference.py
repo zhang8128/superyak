@@ -51,6 +51,8 @@ def same(label, live, old):
 
 
 M2_CHANGED = []          # the eligible sets whose horizon the final review's M2 moved earlier, by label
+M2_COMPARED = []         # every eligible-set comparison, by label
+WORLDS_RUN = set()       # (test, case): the random worlds checked in this session
 
 
 def m2_terms(s, placements, requester, t):
@@ -85,6 +87,7 @@ def m2_terms(s, placements, requester, t):
 def same_set(label, live, old, m2=()):
     """Equal eligible sets, except that M2 (the final review) may move the horizon earlier: to the earliest of the
     reference's horizon and `m2`, the times `m2_terms` reads."""
+    M2_COMPARED.append(label)
     if isinstance(live, Exception) or isinstance(old, Exception):
         assert fields(live) == fields(old), label
         return
@@ -174,6 +177,7 @@ def check_world(tag, w, s, rng, n_uses, when=None):
 
 @pytest.mark.parametrize("case", range(CASES))
 def test_random_world_decisions_equal_the_reference(case, tmp_path):
+    WORLDS_RUN.add(("from-t0", case))
     w = random_world(random.Random(f"perf-diff-{case}"))
     check_world(f"rw{case}", w, w.state(), random.Random(f"perf-diff-uses-{case}"), USES)
     if case % 6 == 0:
@@ -187,6 +191,7 @@ def test_uses_drawn_before_a_records_anchor_equal_the_reference(case, tmp_path):
     is ever after t there. These uses are drawn before t0, from a day before the first anchor, or a second either
     side of an anchor: every decision must still equal the reference, and an eligible set's horizon may move only
     to `m2_terms`, whose last term is then the earliest anchor after t."""
+    WORLDS_RUN.add(("before-t0", case))
     w = random_world(random.Random(f"perf-diff-{case}"))
     s = w.state()
     anchors = sorted({r.anchor for r in s.records.values()})
@@ -261,3 +266,19 @@ def test_the_comparison_notices_one_changed_cited_id():
             return j
     with pytest.raises(AssertionError):
         same("mutated", Mutated, d)
+
+
+def test_the_random_worlds_keep_exercising_m2(tmp_path, capsys):
+    """The re-review's Minor 3: the random worlds must keep moving some eligible-set horizons by M2's terms, both
+    the uses drawn from t0 on and those drawn before it, or `same_set`'s M2 allowance would go untested. Prints
+    the counts. Runs first the worlds that a selection (`-k`) left out, so the counts are always all of them."""
+    for case in range(CASES):
+        if ("from-t0", case) not in WORLDS_RUN:
+            test_random_world_decisions_equal_the_reference(case, tmp_path / f"from-t0-{case}")
+        if ("before-t0", case) not in WORLDS_RUN:
+            test_uses_drawn_before_a_records_anchor_equal_the_reference(case, tmp_path / f"before-t0-{case}")
+    before = [x for x in M2_CHANGED if "-before" in x]
+    with capsys.disabled():
+        print(f"\nM2 moved {len(M2_CHANGED)} of {len(M2_COMPARED)} eligible-set horizons, {len(before)} of them in "
+              f"uses drawn before t0")
+    assert len(M2_CHANGED) - len(before) > 0 and len(before) > 0
