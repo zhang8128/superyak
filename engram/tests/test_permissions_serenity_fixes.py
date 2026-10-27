@@ -373,3 +373,26 @@ def test_item6_gate_off_never_raised_leaves_an_unmarked_house_unmarked(tmp_path)
     do(led, ANDY, "gate", now="2026-11-02", mode="off")
     assert "permissions_ledger_id" not in house_meta(house) and effective_gate(tmp_path, [house]).mode == "off"
     led.close()
+
+
+# ---------------------------------------------------------------- item 8: the memory probes run off Linux
+
+def test_item8_off_linux_the_probe_reads_its_peak_from_getrusage_and_has_no_swap_figure(monkeypatch):
+    import resource
+    import sys
+    from tests import pi_budget_probe
+
+    def no_proc(key):
+        raise AssertionError("/proc/self/status is read only on Linux")
+    monkeypatch.setattr(pi_budget_probe, "_status_kb", no_proc)
+    monkeypatch.setattr(sys, "platform", "darwin")              # macOS gives ru_maxrss in bytes
+    low = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+    peak = pi_budget_probe.peak_kb()
+    assert low <= peak <= resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+    assert pi_budget_probe.swap_kb() is None
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("linux"), reason="/proc/self/status is Linux's")
+def test_item8_on_linux_the_probe_still_reads_vmhwm_and_vmswap():
+    from tests import pi_budget_probe
+    assert pi_budget_probe.peak_kb() > 0 and isinstance(pi_budget_probe.swap_kb(), int)
