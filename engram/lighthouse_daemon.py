@@ -46,7 +46,7 @@ from lighthouse_protocol import (
     validate_frame,
 )
 from permission_ledger import LedgerUnreadable
-from permissions import CACHE_BYTES, CACHE_ENTRIES, FRAMES_AT_ONCE
+from permissions import CACHE_BYTES, CACHE_ENTRIES, FRAMES_AT_ONCE, REBUILD_WAIT_S
 from sharing import validate_audience
 from storage import Storage, vec0_distance_to_similarity
 
@@ -373,6 +373,35 @@ class _CacheEntry:
                 and self.eligible.at <= t and (self.eligible.horizon is None or t < self.eligible.horizon))
 
 
+class EligibleSetBuilding(LedgerUnreadable):
+    """A frame found no eligible set it may be served from: one is being built past the rebuild wait, its build
+    failed, or it was built for another ledger state (P 12.2, "While a set is being built"). The frame is answered
+    as for a failed ledger read."""
+
+
+class _Build:
+    """One background build of an eligible set, for one key of the cache."""
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.entry = None       # a _CacheEntry, once built
+        self.error = None       # the exception that ended it, if it did
+
+
+class _Turn:
+    """A frame's turn of ``FRAMES_AT_ONCE``, held by the frame and the build it started until both are done."""
+
+    def __init__(self, release, holders: int):
+        self._release, self._holders, self._lock = release, holders, threading.Lock()
+
+    def release(self) -> None:
+        with self._lock:
+            self._holders -= 1
+            last = self._holders == 0
+        if last and self._release is not None:
+            self._release()
+
+
 @dataclass
 class _Placed:
     """What the permission decisions say of every placed copy of a house, for one recall."""
@@ -584,14 +613,18 @@ class PublisherDaemon:
         self._cache: collections.OrderedDict = collections.OrderedDict()
         self._cache_lock = threading.Lock()
         self.rebuilds = 0
+        # The builds under way, one per key; a build holds a State, so it holds a turn of ``_frames`` (P 12.2).
+        self._builds: dict = {}
+        self._build_threads: set = set()
         # At most FRAMES_AT_ONCE frames build or hold a State at once; a frame waits for its turn (P 12.2, 15).
         self._frames = threading.BoundedSemaphore(FRAMES_AT_ONCE)
 
     def _eligible(self, side: "_LedgerSide"):
-        """This frame's eligible set of ``recall`` decisions for the house, from the cache while it is valid,
-        otherwise built from every placement the house holds and kept. The house is its ``db_path``: an entry is
-        read against that house's own change count and no other's."""
-        from permissions import Placement, eligible_set
+        """This frame's eligible set of ``recall`` decisions for the house: from the cache while it is valid,
+        otherwise from the one background build for its key, waited for at most ``REBUILD_WAIT_S`` (P 12.2, "While
+        a set is being built"). Raises ``EligibleSetBuilding`` when nothing may be served: the wait ran out, the
+        build failed, or it was built for another ledger state. The house is the cache key's ``db_path``: an entry
+        is read against that house's own change count and no other's."""
         publisher, action = side.publisher, "recall"
         key = (publisher.db_path, side.agent, side.place, side.frame["purpose"], action)
         changes = publisher.storage.placement_changes()      # read before the rows: a later change only shows stale
@@ -600,26 +633,87 @@ class PublisherDaemon:
             if entry is not None and entry.serves(side.state.seq, side.ledger_id, changes, side.copy, side.t):
                 self._cache.move_to_end(key)
                 return entry.eligible
-        placements = [
-            Placement(row["memory_id"], _object_of(row["layer"], row["source_instance_id"], row["source_id"]),
-                      side.copy)
-            for row in publisher.storage.conn.execute(
-                "SELECT memory_id, layer, source_instance_id, source_id FROM shared_memories")]
-        got = eligible_set(side.state, placements, requester=side.agent, place=side.place,
-                           purpose=side.frame["purpose"], action=action, at=side.t)
-        for obj in sorted({p.obj for p in placements if p.obj and p.obj not in got.decisions}):
-            logger.warning("permission: %s is not a decidable object in %s", obj, publisher.name)
-        entry = _CacheEntry(side.state.seq, side.ledger_id, changes, side.copy, got)
-        with self._cache_lock:
-            self.rebuilds += 1
-            self._cache.pop(key, None)
-            if entry.estimate() <= CACHE_BYTES:          # an entry over the bound alone serves this frame only
-                self._cache[key] = entry
-                total = sum(e.estimate() for e in self._cache.values())
-                while len(self._cache) > CACHE_ENTRIES or total > CACHE_BYTES:
-                    _, dropped = self._cache.popitem(last=False)
-                    total -= dropped.estimate()
-        return got
+            build = self._builds.get(key)
+            starter = build is None
+            if starter:
+                build = self._builds[key] = _Build()
+        if starter:
+            self._start_build(key, build, side, changes)
+        if not build.done.wait(REBUILD_WAIT_S):
+            raise EligibleSetBuilding(f"eligible set building for {publisher.name}")
+        if build.error is not None:
+            raise EligibleSetBuilding(f"eligible set for {publisher.name} failed to build: {build.error}")
+        entry = build.entry
+        if not entry.serves(side.state.seq, side.ledger_id, changes, side.copy, side.t):
+            raise EligibleSetBuilding(f"eligible set building for {publisher.name} (built for another state)")
+        return entry.eligible
+
+    def _start_build(self, key, build: _Build, side: "_LedgerSide", changes: int) -> None:
+        """Start the build of ``key`` in a worker thread, with the frame's State. The build takes a share of the
+        frame's turn, so the turn is given back only when the frame and the build are both done."""
+        from permissions import Placement
+        publisher = side.publisher
+        turn = _Turn(side._release, 2)
+        side._release = turn.release
+        try:
+            placements = [
+                Placement(row["memory_id"], _object_of(row["layer"], row["source_instance_id"], row["source_id"]),
+                          side.copy)
+                for row in publisher.storage.conn.execute(
+                    "SELECT memory_id, layer, source_instance_id, source_id FROM shared_memories")]
+            thread = threading.Thread(
+                target=self._build, args=(key, build, side.state, side.ledger_id, changes, side.copy, side.agent,
+                                          side.place, side.frame["purpose"], side.t, publisher, placements, turn),
+                name=f"eligible-set-{publisher.name}", daemon=True)
+            with self._cache_lock:
+                self._build_threads.add(thread)
+            thread.start()
+        except BaseException as error:
+            with self._cache_lock:
+                self._builds.pop(key, None)
+            build.error = error
+            build.done.set()
+            turn.release()
+            logger.warning("eligible set for %s not started: %s", publisher.name, error)
+
+    def _build(self, key, build, state, ledger_id, changes, copy, agent, place, purpose, t, publisher, placements,
+               turn) -> None:
+        """The worker: build the set, keep it if the ledger and the placements are still as it was built from,
+        and tell the frames waiting on it. A failure is logged and leaves no entry."""
+        from permission_ledger import Ledger
+        from permissions import eligible_set
+        try:
+            got = eligible_set(state, placements, requester=agent, place=place, purpose=purpose, action=key[-1],
+                               at=t)
+            for obj in sorted({p.obj for p in placements if p.obj and p.obj not in got.decisions}):
+                logger.warning("permission: %s is not a decidable object in %s", obj, publisher.name)
+            entry = _CacheEntry(state.seq, ledger_id, changes, copy, got)
+            moved = publisher.storage.placement_changes() != changes
+            if not moved:
+                ledger = Ledger.open_read_only(self.engram_home, LEDGER_BUSY_MS)
+                try:
+                    moved = (ledger.seq(), ledger.meta()["ledger_id"]) != (state.seq, ledger_id)
+                finally:
+                    ledger.close()
+            with self._cache_lock:
+                self.rebuilds += 1
+                self._cache.pop(key, None)
+                if not moved and entry.estimate() <= CACHE_BYTES:    # an entry over the bound alone serves its frame
+                    self._cache[key] = entry
+                    total = sum(e.estimate() for e in self._cache.values())
+                    while len(self._cache) > CACHE_ENTRIES or total > CACHE_BYTES:
+                        _, dropped = self._cache.popitem(last=False)
+                        total -= dropped.estimate()
+            build.entry = entry
+        except BaseException as error:
+            build.error = error
+            logger.warning("eligible set for %s failed to build: %s", publisher.name, error, exc_info=True)
+        finally:
+            with self._cache_lock:
+                self._builds.pop(key, None)
+                self._build_threads.discard(threading.current_thread())
+            build.done.set()
+            turn.release()
 
     def _request(self, frame: dict, action: str) -> PolicyRequest:
         # A receiver's recorded request time cannot extend a publisher grant.
@@ -805,6 +899,9 @@ class PublisherDaemon:
 
     @staticmethod
     def _unreadable(publisher: PublisherStore, error: Exception) -> None:
+        if isinstance(error, EligibleSetBuilding):
+            logger.warning("permission: %s: serving nothing to this frame", error)
+            return
         logger.warning("permission ledger unreadable while serving %s: %s", publisher.name, error)
 
     def _read(

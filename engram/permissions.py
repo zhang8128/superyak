@@ -61,6 +61,7 @@ CACHE_BYTES = 96 * 2**20        # the daemon's eligible-set cache, in estimated 
 FRAMES_AT_ONCE = 2              # frames that build or hold a State at once in the daemon (12.2, 15)
 MAX_PLACEMENTS = 20_000
 REBUILD_BUDGET_S = 2
+REBUILD_WAIT_S = 1.0            # how long a frame waits for an eligible set being built (12.2, 15)
 BULK_BUDGET_S = 40
 GUARD_RECEIPTS = 200
 GUARD_SECONDS = 24 * 3600
