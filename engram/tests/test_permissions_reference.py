@@ -56,7 +56,8 @@ M2_CHANGED = []          # the eligible sets whose horizon the final review's M2
 def m2_terms(s, placements, requester, t):
     """The final review's M2, read from the State apart from the code under test: every time after t at which a
     row an eligible set reads by its log time comes into or goes out of force. The requester's places and group
-    memberships; each placed object's memberships, subject rows (up its `copies` chain) and lane notes."""
+    memberships; each placed object's memberships, subject rows (up its `copies` chain) and lane notes; and the
+    re-review's term, the anchor of every unrevoked record whose anchor is after t."""
     def later(added, removed):
         lo = s.seq_at[added]
         hi = None if removed is None or removed > s.seq else s.seq_at[removed]
@@ -76,6 +77,8 @@ def m2_terms(s, placements, requester, t):
             out += [x for r in s.subjects.get(cur, ()) for x in later(r.added_seq, r.removed_seq)]
             cur = s.copies.get(cur)
         out += [n.at for n in s.lane_notes.get(o, ()) if n.at > t]
+    out += [r.anchor for r in s.records.values()
+            if r.anchor > t and (r.revoked_seq is None or r.revoked_seq > s.seq)]
     return out
 
 
@@ -131,9 +134,14 @@ def lazy_state(w, home):
     return s
 
 
-def check_world(tag, w, s, rng, n_uses):
+def check_world(tag, w, s, rng, n_uses, when=None):
+    """With `when`, each sampled use (a bulk use's every part) is moved to the time `when()` draws."""
     roads = getattr(w.cfg, "roads", {}) if w.cfg else {}
     for i, u in enumerate(sample_uses(rng, w, n_uses)):
+        if when is not None:
+            at = when()
+            u = (Bulk(tuple(dataclasses.replace(x, at=at) for x in u.uses)) if isinstance(u, Bulk)
+                 else dataclasses.replace(u, at=at))
         leg = legacy_for(f"{tag}-{i}")
         if isinstance(u, Bulk):
             first = u.uses[0]
@@ -171,6 +179,27 @@ def test_random_world_decisions_equal_the_reference(case, tmp_path):
     if case % 6 == 0:
         check_world(f"rw{case}-lazy", w, lazy_state(w, tmp_path / "ledger"),
                     random.Random(f"perf-diff-uses-{case}"), USES // 2)
+
+
+@pytest.mark.parametrize("case", range(CASES))
+def test_uses_drawn_before_a_records_anchor_equal_the_reference(case, tmp_path):
+    """The re-review's M2: a random world draws no use before every record exists (its `t0`), so no record's anchor
+    is ever after t there. These uses are drawn before t0, from a day before the first anchor, or a second either
+    side of an anchor: every decision must still equal the reference, and an eligible set's horizon may move only
+    to `m2_terms`, whose last term is then the earliest anchor after t."""
+    w = random_world(random.Random(f"perf-diff-{case}"))
+    s = w.state()
+    anchors = sorted({r.anchor for r in s.records.values()})
+    rng = random.Random(f"perf-diff-before-{case}")
+
+    def when():
+        if rng.random() < 0.5:
+            return rng.randint(anchors[0] - 86_400, w.cfg.t0 - 1)
+        return rng.choice(anchors) + rng.choice([-1, 0, 1])
+    check_world(f"rw{case}-before", w, s, random.Random(f"perf-diff-uses-{case}"), USES // 2, when)
+    if case % 6 == 0:
+        check_world(f"rw{case}-before-lazy", w, lazy_state(w, tmp_path / "ledger"),
+                    random.Random(f"perf-diff-uses-{case}"), USES // 2, when)
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)

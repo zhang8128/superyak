@@ -2452,6 +2452,17 @@ def _requester_times_after(state: State, agent: str, t: int) -> list[int]:
     return out
 
 
+def _anchor_after(state: State, t: int) -> int | None:
+    """The earliest anchor after t of an unrevoked record, or None. A record's anchor is its write time: before
+    it, its lane and membership tests read nothing (P 5.3), so a deny written by a clock ahead of the decider's
+    (a backward step) with a valid_from at or before t, such as a `--from` in the past or a deny proposal signed
+    after it was filed, starts to count at its anchor, and nothing else would end a cached decision then (the
+    re-review's M2). Every record, whatever its layer or effect: cheap, and only ever earlier. Made once per
+    (State, t)."""
+    return state._memo(("anchor-after", t), lambda: (min(
+        (r.anchor for r in state.records.values() if r.anchor > t and not _revoked(state, r)), default=None),))[0]
+
+
 def eligible_set(state: State, placements: Sequence[Placement], *, requester: str, place: str, purpose: str,
                  action: str, at: int) -> EligibleSet:
     """Decide `action` for each placement, with no legacy layer: the subjects', places', holding place's and
@@ -2460,11 +2471,16 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
     place, purpose and time (`_prefilter` keeps it on the State), and each object is matched against those
     records alone. Objects that read alike (`_share_key`) are decided once, up to SHARED_DECISIONS readings.
     The set's horizon is the earliest of its decisions' and of every time after `at` at which a row they read by
-    its log time comes into or goes out of force (`_object_times_after`): after a backward clock step, the cache
-    ends when such a row starts to count, not at the next ledger write (the final review's M2)."""
+    its log time comes into or goes out of force (`_object_times_after`), and of the earliest anchor after `at` of
+    an unrevoked record (`_anchor_after`): after a backward clock step, the cache ends when such a row or record
+    starts to count, not at the next ledger write (the final review's M2), so it equals a fresh `decide` at every
+    t before the horizon."""
     decisions: dict[str, Decision] = {}
     made: dict[tuple, Decision | None] = {}
     horizons: list[int] = _requester_times_after(state, requester, at)
+    anchor = _anchor_after(state, at)
+    if anchor is not None:
+        horizons.append(anchor)
     pool_cited: dict = {}           # equal Cited, equal `cited` tuples and equal `versions` are shared by every
     pool_tuples: dict = {}          # decision that holds them (frozen, so safe to share)
     pool_versions: dict = {}

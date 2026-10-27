@@ -483,3 +483,22 @@ def test_m2_a_requester_moved_out_past_the_daemons_clock_ends_the_cached_allow_a
     assert M1_ID in d.recall_ids() and d.cache_horizon() == STEPPED
     d.clock_to(STEPPED + 60)
     assert M1_ID not in d.recall_ids()
+
+
+def test_m2_a_back_dated_deny_written_past_the_daemons_clock_ends_the_cached_allow_at_its_anchor(tmp_path):
+    """The re-review's probe: m1 has been in the collection since 11-01, and a deny on it with valid_from 11-01
+    is written by the ledger's clock at 11-03 (a `--from` in the past, or a deny proposal signed after it was
+    filed). Its anchor is 11-03, so at the daemon's 11-02 its membership does not count yet (P 5.3), and the
+    cached allow must end at the anchor, not at the allow's end or the next ledger write."""
+    d, root, _house = cached_daemon(tmp_path)
+    cid = "collection:andy/stop"
+    sel = parse_selector(_doc_of(["self"], kinds=["memory"], collections=[cid]))
+    _write(root, (ANDY, "make-collection", "2026-11-01", {"collection": cid}),
+           (ANDY, "collect", "2026-11-01", {"collection": cid, "refs": [M1_REF]}),
+           (ANDY, "deny", "2026-11-03", {"layer": HOME, "selector": sel, "valid_from": T("2026-11-01"),
+                                         "valid_until": None, "reason": "stop"}))
+    d.clock_to(T("2026-11-02"))
+    assert M1_ID in d.recall_ids()                # at 11-02 the deny's anchor is not reached
+    assert d.cache_horizon() == STEPPED            # so the entry ends at the anchor
+    d.clock_to(STEPPED + 60)
+    assert M1_ID not in d.recall_ids()             # no ledger write since: the horizon re-decides it
