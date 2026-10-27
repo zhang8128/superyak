@@ -115,6 +115,7 @@ only-include = [
     "tests/test_instructions.py",
     "tests/test_key_refusal.py",
     "tests/test_layers.py",
+    "tests/test_login.py",
     "tests/test_mentions.py",
     "tests/test_models.py",
     "tests/test_packaging.py",

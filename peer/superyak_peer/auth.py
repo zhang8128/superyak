@@ -1,6 +1,7 @@
 """Local scrypt credentials, revocable sessions and atomic invitations."""
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,30 @@ def token_hash(token):
 
 def password_hash(password, salt):
     return hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+
+# Public route spec 3, the holds: (limit, window in seconds). A pair is a username from one source.
+PAIR_HOLD, SOURCE_HOLD, USER_HOLD = (8, 300), (40, 300), (30, 3600)
+
+
+def login_source(host, public):
+    """Public route spec 3: the bucket a sign-in's failures count in. A public source is its IPv6 /64 or its full
+    IPv4 address; a tailnet source is its full address, so tailnet nodes never share one. IPv4-mapped addresses are
+    unmapped first. A source that isn't an IP address is public and its own bucket."""
+    try:
+        address = ipaddress.ip_address(host)
+    except (TypeError, ValueError):
+        return str(host)
+    if address.version == 6 and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    if public and address.version == 6:
+        return str(ipaddress.IPv6Network((int(address) >> 64 << 64, 64)))
+    return str(address)
+
+
+def attempts_key(*parts):
+    """A login_attempts key: a JSON array such as ["user-source", source, username], unambiguous for any username."""
+    return json.dumps(parts)
+
 
 def public_user(row):
     return {key: row[key] for key in ('id', 'username', 'name', 'is_admin', 'is_super_admin', 'role_version', 'activation_pending', 'created', 'kind', 'owner_id')}
@@ -72,35 +97,51 @@ class Auth:
                 (actor,),
             )]
 
-    def login(self, username, password, source):
+    def login(self, username, password, source, *, public=True):
+        """Public route spec 3, reserve first. Step 1 deletes expired counters, then refuses a held attempt (429,
+        without hashing) or counts it in every applicable counter, which reserves it. Step 2 hashes outside any
+        transaction, the dummy hash for an unknown name, so a 401 takes as long either way. Step 3 re-reads the user,
+        since an activation can change the hash in between: a failure keeps the reservation as the counted failure,
+        a success deletes the pair's counter and gives the others back. The answers are today's: 401 for a wrong name
+        or password, 429 when held, the same for unknown and known names."""
         text(username, 'username', 254)
         text(password, 'password', 1024)
-        # Commit failed attempts before raising; source budget prevents username rotation.
-        failure = None
-        result = None
+        bucket = login_source(source, public)
+        holds = {attempts_key('user-source', bucket, username): PAIR_HOLD, attempts_key('source', bucket): SOURCE_HOLD}
+        if public:  # hold 3 counts and holds public sign-ins only
+            holds[attempts_key('user', username)] = USER_HOLD
+        held, reserved = False, {}
         with self.transaction() as db:
             now = self.clock()
-            keys = ['user:' + username, 'source:' + source]
-            attempts = [db.execute('SELECT * FROM login_attempts WHERE key=?', (key,)).fetchone() for key in keys]
-            if any(row and row['reset'] > now and row['count'] >= limit for row, limit in zip(attempts, [8, 40])):
-                failure = Problem(429, 'Too many attempts; try again later')
+            db.execute('DELETE FROM login_attempts WHERE reset<=?', (now,))
+            rows = {key: db.execute('SELECT count,reset FROM login_attempts WHERE key=?', (key,)).fetchone() for key in holds}
+            if any(rows[key] and rows[key]['count'] >= limit for key, (limit, _) in holds.items()):
+                held = True
             else:
-                row = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
-                candidate = password_hash(password, row['salt'] if row else b'\0' * 16)
-                valid = hmac.compare_digest(candidate, row['password_hash'] if row else b'\0' * 32) and row and not row['activation_pending'] and row['kind'] == 'person'
-                if not valid:
-                    for key, attempt in zip(keys, attempts):
-                        count = attempt['count'] + 1 if attempt and attempt['reset'] > now else 1
-                        reset = attempt['reset'] if attempt and attempt['reset'] > now else now + 300
-                        db.execute('INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)', (key, count, reset))
-                    failure = Problem(401, 'Invalid username or password')
-                else:
-                    db.execute('DELETE FROM login_attempts WHERE key=?', (keys[0],))
-                    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-                    db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), row['id'], csrf, now + 86400))
-                    result = {'user': public_user(row), 'csrf_token': csrf, 'token': token}
-        if failure:
-            raise failure
+                for key, (_, window) in holds.items():
+                    count, reserved[key] = (rows[key]['count'] + 1, rows[key]['reset']) if rows[key] else (1, now + window)
+                    db.execute('INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)', (key, count, reserved[key]))
+                user = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
+        if held:  # committed: the expired rows stay deleted
+            raise Problem(429, 'Too many attempts; try again later')
+        salt, stored = (user['salt'], user['password_hash']) if user else (b'\0' * 16, b'\0' * 32)
+        matches = hmac.compare_digest(password_hash(password, salt), stored)
+        result = None
+        with self.transaction() as db:
+            current = db.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone() if user else None
+            if (matches and current and current['salt'] == salt and current['password_hash'] == stored
+                    and not current['activation_pending'] and current['kind'] == 'person'):
+                pair, *others = reserved
+                db.execute('DELETE FROM login_attempts WHERE key=?', (pair,))
+                for key in others:  # only within the window it was reserved in, and never below zero
+                    db.execute('UPDATE login_attempts SET count=max(count-1,0) WHERE key=? AND reset=?', (key, reserved[key]))
+                if not public:  # recovery: a tailnet sign-in clears the username's public hold
+                    db.execute('DELETE FROM login_attempts WHERE key=?', (attempts_key('user', username),))
+                token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+                db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), current['id'], csrf, self.clock() + 86400))
+                result = {'user': public_user(current), 'csrf_token': csrf, 'token': token}
+        if result is None:
+            raise Problem(401, 'Invalid username or password')
         return result
 
     def session(self, token):

@@ -270,7 +270,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return {'ok': True}
 
     def login_response(request, username, password):
-        result = store.login(username, password, request.client.host if request.client else 'unknown')
+        result = store.login(username, password, request.client.host if request.client else 'unknown', public=is_public(request.scope))
         token = result.pop('token')
         response = JSONResponse(result)
         response.set_cookie(COOKIE, token, httponly=True, samesite='strict', secure=secure_cookies or request.url.scheme == 'https', max_age=86400)
