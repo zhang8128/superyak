@@ -12,14 +12,17 @@ import re
 import sqlite3
 from collections import Counter
 from collections.abc import MutableMapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, NamedTuple
+from typing import Any, Iterable, Iterator, NamedTuple, Sequence
 
 import sharing
+import store_identity
 import store_reader
 from lighthouse_protocol import content_digest
+from permissions import (MAX_COPY_CHAIN, MAX_SUBJECTS, Use, home_of, parse_object_ref, place_retired,
+                         record_matches)
 
 # Every table of I 6.2, in its order.
 TABLE_RULES: dict[str, str] = {
@@ -323,6 +326,9 @@ class SourceContext:
     ledger: object | None
     home: bool                  # the audience is place:home/<owner> (I 5.2)
     scratch: Scratch
+    terms: Terms | None = None  # the plan's terms: the purposes a deny is tested against (I 5.2 denied(m))
+    now: int = 0                # the plan's clock, integer UTC seconds
+    _memo: dict = field(default_factory=dict, compare=False, repr=False)   # what is built once per plan
 
 
 class _House:
@@ -363,19 +369,199 @@ def shared(published_conn: sqlite3.Connection, row: dict, layer: str, ctx: Sourc
                for c in candidates)
 
 
+
+
 _TABLES = {"episode": "episodes", "semantic": "semantics"}
+
+AGENT = "agent:station-imprints"        # the requester of the uses the imprint needs (I 5.2 denied(m))
+NAMES_SHOWN = 10
+NEEDED_ACTIONS = ("recall", "read", "imprint")      # Need(admission); with route, Need(trail-evaluation) adds route
+ROAD_NAME = "imprint"                   # the name of the road ref a deny is tested on; its content is never read
+
+# ---- The permissions ledger (I 5.1, 5.2) -------------------------------------------------------------------
+
+# cosubjects(m): subjects_of (permissions.py) at the plan's clock, less the owner. The ref and up to MAX_COPY_CHAIN
+# sources up the copies chain, each with its subjects rows not removed and its store's owner when the store is
+# registered and no imprint.
+COSUBJECTS_SQL = """
+WITH RECURSIVE chain(ref, links) AS (
+  SELECT :ref, 0
+  UNION
+  SELECT copies.source, chain.links + 1 FROM chain JOIN copies ON copies.object = chain.ref
+   WHERE chain.links < :max_links)
+SELECT subjects.subject FROM chain JOIN subjects
+    ON subjects.object = chain.ref AND subjects.removed_seq IS NULL
+UNION
+SELECT stores.owner FROM chain JOIN stores
+    ON chain.ref LIKE 'mem:%'
+   AND stores.instance_id = substr(chain.ref, 5, instr(substr(chain.ref, 5), '/') - 1)
+   AND stores.imprint_of IS NULL
+EXCEPT SELECT :owner
+ORDER BY 1 LIMIT :limit
+"""
+
+# One query: every deny that is not revoked or ended outside the owner's home, and every retirement (I 5.2).
+REFUSALS_SQL = """
+SELECT 'deny' AS kind, id FROM records
+ WHERE effect = 'deny' AND revoked IS NULL AND (valid_until IS NULL OR valid_until > :now) AND layer != :home
+UNION ALL SELECT 'retired', id FROM persons WHERE retired_seq IS NOT NULL
+UNION ALL SELECT 'retired', id FROM places WHERE retired_seq IS NOT NULL
+"""
+
+
+def open_ledger(engram_home: Path):
+    """The machine's permissions ledger, read-only; None when it has none."""
+    from permission_ledger import Ledger, LedgerUnreadable
+
+    try:
+        return Ledger.open_read_only(Path(engram_home))
+    except FileNotFoundError:
+        return None
+    except (LedgerUnreadable, sqlite3.Error):
+        raise PlanRefused("The permissions ledger can't be read; nothing was planned.") from None
+
+
+def check_owner(ledger, source_id: str, owner: str) -> None:
+    """D37: with a ledger, the source store is registered there with the ship's owner as its owner."""
+    if ledger is None:
+        return
+    row = ledger.store_row(source_id)
+    if row is None:
+        raise PlanRefused("The source store is not registered in the permissions ledger; nothing was planned.")
+    if row["owner"] != f"person:{owner}":
+        raise PlanRefused(f"The source store belongs to {row['owner']} in the permissions ledger, "
+                          f"not to person:{owner}; nothing was planned.")
+
+
+def cosubjects_of(ledger, ref: str, *, owner: str) -> frozenset[str]:
+    """I 5.2's cosubjects(m): at most MAX_SUBJECTS of them, which is enough to tell ``bound``."""
+    if ledger is None:
+        return frozenset()
+    rows = ledger.conn.execute(COSUBJECTS_SQL, {"ref": ref, "max_links": MAX_COPY_CHAIN, "owner": f"person:{owner}",
+                                                "limit": MAX_SUBJECTS}).fetchall()
+    return frozenset(r[0] for r in rows)
+
+
+def _with_agent(state, place: str):
+    """P26: the State with agent:station-imprints acting for and placed in ``place``, when the ledger has no
+    such agent or placement. Added to this State's tables only, never to the ledger."""
+    from permissions import State
+
+    tables = state.to_tables()
+    if AGENT not in state.agents:
+        tables["agents"].append(dict(id=AGENT, acts_for=place, created_seq=0, retired_seq=None))
+    if not state.agent_places.get(AGENT):
+        tables["agent_places"].append(dict(agent=AGENT, place=place, added_seq=0, removed_seq=None))
+    return State.from_tables(tables, seq=state.seq, seq_at={**state.seq_at, 0: 0}, meta=state.meta,
+                             names=state.names)
+
+
+class Refusals:
+    """What the ledger refuses whole or by a co-subject's deny (I 5.2 retired(m) and denied(m)).
+
+    One query decides ``any``. With no deny outside the owner's home and no retirement, no State is built.
+    """
+
+    def __init__(self, ledger, ctx: SourceContext):
+        self._now = ctx.now
+        self._home = f"place:home/{ctx.owner}"
+        self._route = bool(ctx.terms is not None and ctx.terms.route)
+        self._purposes = sorted(ctx.terms.purposes) if ctx.terms is not None else []
+        rows = ledger.conn.execute(REFUSALS_SQL, {"now": ctx.now, "home": self._home}).fetchall()
+        self.any = bool(rows)
+        self._state = None
+        self._denies: dict[str, list] = {}
+        if not self.any:
+            return
+        self._state = _with_agent(ledger.state(), self._home)
+        for r in rows:
+            record = self._state.records.get(r["id"]) if r["kind"] == "deny" else None
+            if record is not None:
+                self._denies.setdefault(record.layer, []).append(record)
+
+    def retired(self, subject: str) -> bool:
+        """A person with a retirement, or whose home or a place above it is retired; never a place."""
+        if not self.any:
+            return False
+        row = self._state.persons.get(subject)
+        return row is not None and (row.retired_seq is not None or place_retired(self._state, row.home))
+
+    def _layer(self, subject: str) -> str:
+        row = self._state.persons.get(subject)
+        if row is not None:
+            return row.home
+        return home_of(subject) if subject.startswith("person:") else subject
+
+    def refuses(self, ref: str, subject: str) -> bool:
+        """Does one of ``subject``'s denies refuse a use the imprint needs on ``ref`` (or, with route, on a road)?"""
+        if not self.any:
+            return False
+        uses = [(ref, x) for x in NEEDED_ACTIONS]
+        if self._route:
+            road = f"road:{parse_object_ref(ref).instance_id}/{ROAD_NAME}"
+            uses += [(road, x) for x in (*NEEDED_ACTIONS, "route")]
+        for record in self._denies.get(self._layer(subject), ()):
+            at = max(self._now, record.valid_from)
+            for obj, x in uses:
+                for p in self._purposes:
+                    use = Use(requester=AGENT, place=self._home, obj=obj, copy="", action=x, purpose=p, at=at)
+                    if record_matches(self._state, record, use, x):
+                        return True
+        return False
+
+
+def _refusals(ctx: SourceContext) -> Refusals:
+    key = ("refusals", id(ctx.ledger), ctx.now, ctx.owner, ctx.terms)
+    if key not in ctx._memo:
+        ctx._memo[key] = Refusals(ctx.ledger, ctx)
+    return ctx._memo[key]
+
+
+# ---- The people a plan counts (I 5.2, S3) -------------------------------------------------------------------
+
+class People(NamedTuple):
+    count: int                              # distinct people
+    named: tuple[tuple[str, int], ...]      # (person, distinct memories), most first, ties by id
+    more: int                               # count - len(named)
+
+
+def _people_table(scratch: Scratch) -> None:
+    scratch.conn.execute("CREATE TABLE IF NOT EXISTS plan_people(reason TEXT NOT NULL, subject TEXT NOT NULL, "
+                         "memory_id TEXT NOT NULL, layer TEXT NOT NULL)")
+
+
+def _note_people(scratch: Scratch, reason: str, memory_id: str, layer: str, subjects: Iterable[str]) -> None:
+    _people_table(scratch)
+    scratch.conn.executemany("INSERT INTO plan_people VALUES (?, ?, ?, ?)",
+                             [(reason, s, memory_id, layer) for s in sorted(subjects)])
+
+
+def people(scratch: Scratch, reason: str, *, names: int = NAMES_SHOWN) -> People:
+    """By SQL on ``plan_people``: the distinct people for ``reason``, at most ``names`` of them."""
+    _people_table(scratch)
+    conn = scratch.conn
+    count = conn.execute("SELECT COUNT(DISTINCT subject) FROM plan_people WHERE reason = ?", (reason,)).fetchone()[0]
+    named = tuple((s, n) for s, n in conn.execute(
+        "SELECT subject, COUNT(DISTINCT memory_id || '/' || layer) AS n FROM plan_people WHERE reason = ? "
+        "GROUP BY subject ORDER BY n DESC, subject LIMIT ?", (reason, names)))
+    return People(count, named, count - len(named))
 
 
 def base(conn: sqlite3.Connection, layer: str, sel: Selection, ctx: SourceContext,
          counts: Counter) -> Iterator[str]:
-    """Ids of ``layer`` that pass I 5.2's base(m) less its ledger terms, in (created_at, id) order.
+    """Ids of ``layer`` that pass I 5.2's base(m), in (created_at, id) order.
 
     The source is read one row at a time from a cursor, so a row and its content are all that is in memory.
-    A row whose time does not parse is counted in ``counts["unparseable_time"]`` and left out.
+    A row whose time does not parse is counted in ``counts["unparseable_time"]`` and left out. With a ledger a
+    memory is also left out, and counted once, for an unsettled lane (``lane_unsettled``); without ``home`` for a
+    co-subject (``needs_yes``); with it, in this order, for a retired co-subject (``retired``), more than 8
+    subjects (``bound``) or a co-subject's no (``said_no``). One that ships with co-subjects is counted in
+    ``others_memories``. The people go to ``plan_people``; no key of ``counts`` names one.
     """
     table = _TABLES[layer]
     t0 = None if sel.since is None else datetime.fromtimestamp(sel.since, timezone.utc)
     t1 = datetime.fromtimestamp(sel.until, timezone.utc)
+    ledger = ctx.ledger
     house = None
     try:
         if sel.shared_with is not None and ctx.published is not None:
@@ -395,7 +581,88 @@ def base(conn: sqlite3.Connection, layer: str, sel: Selection, ctx: SourceContex
                     house is None or not shared(house, {"id": id, "content": content}, layer, ctx,
                                                 sel.shared_with)):
                 continue
+            if ledger is not None and not _admits(ledger, ctx, layer, id, lane, counts):
+                continue
             yield id
     finally:
         if house is not None:
             house.close()
+
+
+def _admits(ledger, ctx: SourceContext, layer: str, id: str, lane: str, counts: Counter) -> bool:
+    """The ledger's terms of base(m) for one memory (D40, D27, I 5.2)."""
+    ref = f"mem:{ctx.source_id}/{layer}/{id}"
+    note = ledger.latest_lane_note(ref)
+    if note is not None and (note == "pending" or note != lane):
+        counts["lane_unsettled"] += 1
+        return False
+    cos = cosubjects_of(ledger, ref, owner=ctx.owner)
+    if not cos:
+        return True
+    scratch = ctx.scratch
+    if not ctx.home:
+        counts["needs_yes"] += 1
+        _note_people(scratch, "needs_yes", id, layer, cos)
+        return False
+    refusals = _refusals(ctx)
+    if refusals.any:
+        retired = [s for s in cos if refusals.retired(s)]
+        if retired:
+            counts["retired"] += 1
+            _note_people(scratch, "retired", id, layer, retired)
+            return False
+    if len(cos) >= MAX_SUBJECTS:
+        counts["bound"] += 1
+        return False
+    if refusals.any:
+        said_no = [s for s in cos if refusals.refuses(ref, s)]
+        if said_no:
+            counts["said_no"] += 1
+            _note_people(scratch, "said_no", id, layer, said_no)
+            return False
+    counts["others_memories"] += 1
+    _note_people(scratch, "others", id, layer, cos)
+    return True
+
+
+class Shipped(NamedTuple):
+    """The memories that ship: episode ids and semantic ids (Task 9 adds ``members`` and ``refs``)."""
+    episodes: tuple[str, ...]
+    semantics: tuple[str, ...]
+
+
+def cosubject_rows(sh: Shipped, ctx: SourceContext) -> Iterator[tuple[str, str, str]]:
+    """I 6.2's ``imprint_subjects``: ``(memory_id, layer, subject)`` sorted, one memory at a time; empty without
+    ``home`` or a ledger (D43)."""
+    if not ctx.home or ctx.ledger is None:
+        return
+    for id, layer in sorted([(i, "episode") for i in sh.episodes] + [(i, "semantic") for i in sh.semantics]):
+        for subject in sorted(cosubjects_of(ctx.ledger, f"mem:{ctx.source_id}/{layer}/{id}", owner=ctx.owner)):
+            yield id, layer, subject
+
+
+# ---- The source (I 5.1) -------------------------------------------------------------------------------------
+
+def published_house(engram_home: Path) -> Path:
+    return Path(engram_home) / ".engram" / "instances" / "lighthouse" / "graph.db"
+
+
+def check_source(path: Path, conn: sqlite3.Connection, *, engram_home: Path,
+                 imprint_roots: Sequence[Path] = ()) -> None:
+    """The plan refuses the published house, an imprint, a store newer than this code and one with no identity.
+
+    Paths are compared resolved. The messages name the reason, never a memory."""
+    here = Path(path).resolve()
+    if here == published_house(engram_home).resolve():
+        raise PlanRefused("The source is the published house; nothing was planned.")
+    for root in imprint_roots:
+        if here == Path(root).resolve() or Path(root).resolve() in here.parents:
+            raise PlanRefused("The source is inside the imprints directory; nothing was planned.")
+    if store_identity.is_imprint(conn):
+        raise PlanRefused("The source is an imprint; nothing was planned.")
+    tables = store_reader._tables(conn)
+    if store_reader._schema(conn, tables)["unknown"]:
+        raise PlanRefused("The source store is newer than this code (it has migrations this code doesn't know); "
+                          "nothing was planned.")
+    if store_identity.effective_id(conn) is None:
+        raise PlanRefused("The source store has no identity this code can derive; nothing was planned.")

@@ -25,6 +25,7 @@ def _path(tmp_path: Path, name: str) -> Path:
 
 
 def new_store(tmp_path: Path, name: str) -> Storage:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     return Storage(str(_path(tmp_path, name)))
 
 
@@ -497,17 +498,26 @@ def terms(**over):
     return Terms(**values)
 
 
-def ctx(store: Storage, *, published: Path | None = None, owner: str = "andy", home: bool = True,
-        instance_name: str = "default", ledger=None):
-    """A SourceContext for ``store``, with a scratch file beside it (a new one each call)."""
+def ctx(store: Storage, *, published: Path | None = None, owner: str | None = None, home: bool = True,
+        instance_name: str = "default", ledger=None, terms=None, now: int = None):
+    """A SourceContext for ``store``, with a scratch file beside it (a new one each call). ``terms`` default to
+    the home place of ``owner`` without route; ``now`` to NOW; ``owner`` to the ledger's owner, else andy."""
     import store_identity
     from imprint_filter import Scratch, SourceContext
+
+    if owner is None:
+        owner = ledger.meta()["owner"].removeprefix("person:") if ledger is not None else "andy"
 
     path = Path(store.db_path)
     return SourceContext(
         source_path=path, source_id=store_identity.effective_id(store.conn), instance_name=instance_name,
         owner=owner, published=published, ledger=ledger, home=home,
-        scratch=Scratch(path.parent / f"{path.stem}-scratch-{uuid.uuid4().hex[:8]}.db"))
+        scratch=Scratch(path.parent / f"{path.stem}-scratch-{uuid.uuid4().hex[:8]}.db"),
+        terms=_terms(audience=f"place:home/{owner}") if terms is None else terms,
+        now=NOW if now is None else now)
+
+
+_terms = terms
 
 
 def published_house(tmp_path: Path) -> Path:
@@ -541,3 +551,172 @@ def share_as(store: Storage, published: Path, id: str, audience: str, *, layer: 
             source_instance_id=source_instance_id or store_identity.effective_id(store.conn))
     finally:
         house.close()
+
+
+# Task 8: a permissions ledger in the fixture, and the refused sources. Rows are written straight into the
+# ledger with their own log rows (``Ledger._append``), since no step-1 command writes another person's layer
+# (P 7.6) and a source gains subjects after a copy. Imports are inside the helpers, as above.
+
+NOW = T("2026-10-26T12:00:00Z")
+FIXTURE_AT = NOW - 86400                   # every fixture log row is older than the plan's clock
+GENOME_ID = "9a1c7e20-4b3d-4f58-8e6a-0d2c1b7f3e55"
+
+
+def ref_of(store: Storage, id: str, layer: str = "episode") -> str:
+    return f"mem:{iid(store)}/{layer}/{id}"
+
+
+def _put(led, kind: str, ref: str, body: dict) -> int:
+    return led._append(kind, ref, "fixture", "tool", body, at=FIXTURE_AT)
+
+
+def _ins(table: str, **row) -> dict:
+    return {"table": table, "row": row}
+
+
+def deny(*, audience=("place:home/andy",), requesters="*", kinds="*", stores="*", actions="*", purposes="*",
+         valid_from: int | None = None, valid_until: int | None = None, revoked: bool = False) -> dict:
+    """A deny record's fields, for ``ledger(denies=...)``. The audience defaults to the owner's home, which refuses
+    a use of agent:station-imprints in it."""
+    def lst(v):
+        return v if v == "*" else list(v)
+    return dict(selector={"audience": list(audience), "requesters": lst(requesters),
+                          "objects": {"kinds": lst(kinds), "stores": lst(stores), "layers": "*", "lanes": "*",
+                                      "collections": "*", "memories": "*"},
+                          "actions": lst(actions), "purposes": lst(purposes)},
+                valid_from=valid_from, valid_until=valid_until, revoked=revoked)
+
+
+def _layer_of(subject: str) -> str:
+    from permissions import home_of
+
+    return home_of(subject) if subject.startswith("person:") else subject
+
+
+def write_denies(led, person: str, *records: dict) -> None:
+    """A deny record in ``person``'s layer (the person's home, or the place itself)."""
+    from permission_ledger import new_id
+
+    for rec in records:
+        row = dict(id=new_id("r-"), layer=_layer_of(person), effect="deny", selector=rec["selector"],
+                   valid_from=FIXTURE_AT if rec["valid_from"] is None else rec["valid_from"],
+                   valid_until=rec["valid_until"], anchor=FIXTURE_AT, backing="person", set_by=person,
+                   channel="tool", reason="fixture", created=FIXTURE_AT, created_seq="@seq")
+        if rec["revoked"]:
+            row.update(revoked="@at", revoked_by=person, revoke_reason="fixture", revoked_seq="@seq")
+        _put(led, "fixture-deny", row["id"], {"insert": [_ins("records", **row)]})
+
+
+def add_subject(led, ref: str, subject: str) -> None:
+    _put(led, "fixture-subject", ref, {"insert": [_ins(
+        "subjects", object=ref, subject=subject, added_seq="@seq", added_by="person:" + "fixture",
+        self_claimed=0)]})
+
+
+def remove_cosubject(led, ref: str, subject: str, *, by: str) -> None:
+    """Mark a subjects row removed. ``ref`` may be an episode id of the ledger's one registered store."""
+    if not ref.startswith("mem:"):
+        ref = f"mem:{led.conn.execute('SELECT instance_id FROM stores').fetchone()[0]}/episode/{ref}"
+    _put(led, "fixture-unsubject", ref, {"update": [{
+        "table": "subjects", "where": {"object": ref, "subject": subject},
+        "set": {"removed_seq": "@seq", "removed_by": by}}]})
+
+
+def copy_of(led, copy_ref: str, source_ref: str) -> None:
+    led.record_copy(copy_ref, source_ref, now=FIXTURE_AT)
+
+
+def link_copies(led, refs) -> None:
+    """``copies`` rows straight in: refs[0] is a copy of refs[1], which is a copy of refs[2], and so on."""
+    _put(led, "fixture-copies", refs[0], {"insert": [
+        _ins("copies", object=a, source=b, added_seq="@seq") for a, b in zip(refs, refs[1:])]})
+
+
+def retire(led, person: str) -> None:
+    """A person row with ``retired_seq``, as ``person retire`` writes it (permission_cli.py:396-397)."""
+    from permissions import home_of
+
+    _put(led, "fixture-retire", person, {"insert": [_ins(
+        "persons", id=person, home=home_of(person), is_admin=0, created_seq="@seq", retired_seq="@seq")]})
+
+
+def retire_place(led, place: str) -> None:
+    """A place row with ``retired_seq``; for a home place also its person's row, not retired."""
+    rows = [_ins("places", id=place, is_root=1, created_seq="@seq", retired_seq="@seq", pseudonym_salt="00" * 16)]
+    if place.startswith("place:home/"):
+        rows.append(_ins("persons", id="person:" + place.split("/", 1)[1], home=place, is_admin=0,
+                         created_seq="@seq"))
+    _put(led, "fixture-retire-place", place, {"insert": rows})
+
+
+def forbid_state(monkeypatch) -> None:
+    """Any ``Ledger.state`` call fails the test (the plan builds no State without a deny or a retirement)."""
+    from permission_ledger import Ledger
+
+    def refuse(self, *args, **kwargs):
+        raise AssertionError("Ledger.state() was called")
+    monkeypatch.setattr(Ledger, "state", refuse)
+
+
+def ledger(home: Path, *, owner: str, store: Storage | None, store_owner: str | None = None,
+           cosubjects: dict | None = None, lane_notes: dict | None = None, denies: dict | None = None):
+    """A permissions ledger under ``home`` for ``owner``. ``store`` is registered with its owner unless None.
+    ``cosubjects`` and ``lane_notes`` map an episode id to one person (or a list) and a lane; ``denies`` maps a
+    person to deny records (``deny(...)``)."""
+    from permission_ledger import Ledger
+
+    home.mkdir(parents=True, exist_ok=True)
+    led = Ledger.create(home, owner, now=FIXTURE_AT)
+    if store is not None:
+        _put(led, "register-store", iid(store), {"insert": [_ins(
+            "stores", instance_id=iid(store), name=Path(store.db_path).stem,
+            owner=store_owner or f"person:{owner}", place=f"place:home/{owner}", created_seq="@seq")]})
+    for id, who in (cosubjects or {}).items():
+        for subject in ([who] if isinstance(who, str) else who):
+            add_subject(led, ref_of(store, id), subject)
+    for id, lane in (lane_notes or {}).items():
+        _put(led, "fixture-lane", id, {"insert": [_ins(
+            "lane_notes", object=ref_of(store, id), lane=lane, at=FIXTURE_AT, seq="@seq")]})
+    for person, records in (denies or {}).items():
+        write_denies(led, person, *records)
+    return led
+
+
+def base_ids(store: Storage, led, *, route: bool) -> set:
+    """The episode ids ``base`` keeps at the owner's home, with the route terms or without."""
+    from collections import Counter
+
+    from imprint_filter import base
+
+    t = (terms(actions=frozenset({"imprint", "route"}), purposes=frozenset({"calibration", "trail-evaluation"}))
+         if route else terms())
+    c = ctx(store, ledger=led, owner="andy", home=True, now=NOW, terms=t)
+    return set(base(store.conn, "episode", selection(), c, Counter()))
+
+
+def published_house_file(engram_home: Path) -> Path:
+    """The published house of ``engram_home``: a migrated store at ``.engram/instances/lighthouse/graph.db``."""
+    path = published_house(engram_home)
+    (path.parent.parent / "x").mkdir(exist_ok=True)     # a sibling instance, so a path through ``x/..`` exists
+    return path
+
+
+def empty_old_store(tmp_path: Path) -> Path:
+    """A migrated store with no episodes and no identity keys: no identity can be derived."""
+    path = _path(tmp_path, "unidentified")
+    s = Storage(str(path))
+    s.conn.execute(f"DELETE FROM meta WHERE key IN ({', '.join('?' * len(store_identity.KEYS))})",
+                   store_identity.KEYS)
+    s.conn.commit()
+    s.close()
+    return path
+
+
+def future_store(tmp_path: Path) -> Path:
+    """A store that holds a migration this code doesn't know."""
+    path = _path(tmp_path, "future")
+    s = Storage(str(path))
+    s.conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (99999, '2026-10-26T00:00:00+00:00')")
+    s.conn.commit()
+    s.close()
+    return path
