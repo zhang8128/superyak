@@ -921,16 +921,21 @@ def stored_instance_id(store: Storage) -> str | None:
     return store_identity.read(store.conn).get("instance_id")
 
 
-def written_with_source(tmp_path: Path, *, source: str = "gaps", cosubjects: dict | None = None, home: bool = True):
-    """``(source store, package path)``: the package of the source's work lane, written by ``write_package``."""
+def written_with_source(tmp_path: Path, *, source: str = "gaps", cosubjects: dict | None = None, home: bool = True,
+                        name: str | None = None, store: Storage | None = None):
+    """``(source store, package path)``: the package of the source's work lane, written by ``write_package``.
+    ``name`` keeps a second package beside the first; ``store`` is a source the caller built."""
     from imprint import write_package
     from imprint_filter import package_rows
 
-    s = {"gaps": gap_source, "before_identity": before_identity_source}.get(source)
-    s = s(tmp_path) if s else fork_of(tmp_path, gap_source(tmp_path, "parent"), "fork")
+    if store is not None:
+        s = store
+    else:
+        s = {"gaps": gap_source, "before_identity": before_identity_source}.get(source)
+        s = (s(tmp_path, name) if name else s(tmp_path)) if s else fork_of(tmp_path, gap_source(tmp_path, "parent"), "fork")
     led = ledger(tmp_path / "home", owner="andy", store=s, cosubjects=cosubjects) if cosubjects else None
     rows = package_rows(s.conn, selection(), terms(), ctx(s, ledger=led, home=home))
-    out = tmp_path / "out"
+    out = tmp_path / (f"out-{name}" if name else "out")
     out.mkdir(parents=True, exist_ok=True)
     path = out / "imprint.db"
     ids, complete = store_identity.ancestry(s.conn)
@@ -939,8 +944,82 @@ def written_with_source(tmp_path: Path, *, source: str = "gaps", cosubjects: dic
     return s, path
 
 
-def written(tmp_path: Path) -> Path:
-    return written_with_source(tmp_path)[1]
+def written(tmp_path: Path, name: str | None = None) -> Path:
+    return written_with_source(tmp_path, name=name)[1]
+
+
+def written_with_x_star(tmp_path: Path, contents=None):
+    """``(package path, X*, expected)``: a package of work-lane episodes (with ``contents`` as their text) and
+    semantics, X* the lower-case ids of the left-out rows and a stranger, and the vec0 expectations hashed from the
+    source's embedding bytes."""
+    import hashlib
+
+    s = new_store(tmp_path, "xstar")
+    left_out = [str(uuid.uuid4()) for _ in range(2)]
+    texts = contents or ["episode one", "episode two", "episode three"]
+    kept = [ep(s, f"e{i}", content=t, at=f"2026-10-25T1{i}:00:00+00:00") for i, t in enumerate(texts, 1)]
+    for u in left_out:
+        ep(s, u, lane="personal", content=f"personal {u[:8]}", at="2026-10-25T09:00:00+00:00")
+    sem(s, "s1", sources=[kept[0]], at="2026-10-25T14:00:00+00:00")
+    for i, id in enumerate(kept + left_out):
+        vec(s, "episode", id, seed=i + 3)
+    vec(s, "semantic", "s1", seed=40)
+    _, path = written_with_source(tmp_path, store=s)
+    expected = {f"{layer}_vectors": {k: hashlib.sha256(v).hexdigest()
+                                    for k, v in vectors_of(path, layer).items()}
+                for layer in ("episode", "semantic")}
+    for layer in ("episode", "semantic"):   # the source's bytes, not the package's own
+        src = vectors_of(s, layer, only=set(expected[f"{layer}_vectors"]))
+        assert {k: hashlib.sha256(v).hexdigest() for k, v in src.items()} == expected[f"{layer}_vectors"]
+    return path, frozenset(left_out + [str(uuid.uuid4()).upper().lower()]), expected
+
+
+def load_vec(conn: sqlite3.Connection) -> None:
+    import sqlite_vec
+
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+
+
+def writable_copy(path: Path) -> sqlite3.Connection:
+    """A writable connection (sqlite-vec loaded) to a fresh copy of a package, for planting a defect."""
+    copy = path.with_name(f"copy-{uuid.uuid4().hex[:8]}.db")
+    shutil.copyfile(path, copy)
+    return _writable(copy)
+
+
+def plant_index_only_term(conn: sqlite3.Connection, fts: str, *, rowid: int, term: str) -> None:
+    """An FTS entry for a rowid that has no content row (an external-content index accepts it)."""
+    conn.execute(f"INSERT INTO {fts}(rowid, content) VALUES (?, ?)", (rowid, term))
+    conn.commit()
+
+
+def poke_invalid_slot(conn: sqlite3.Connection, table: str, *, byte: int) -> None:
+    """Write ``byte`` into the first invalid slot's vector bytes."""
+    dim = int(re.search(r"float\[(\d+)\]", conn.execute("SELECT sql FROM sqlite_master WHERE name=?",
+                                                         (table,)).fetchone()[0]).group(1))
+    chunk_id, size, validity = conn.execute(f"SELECT chunk_id, size, validity FROM {table}_chunks").fetchone()
+    slot = next(i for i in range(size) if not validity[i // 8] >> (i % 8) & 1)
+    vectors = bytearray(conn.execute(f"SELECT vectors FROM {table}_vector_chunks00 WHERE rowid=?",
+                                     (chunk_id,)).fetchone()[0])
+    vectors[4 * dim * slot] = byte
+    conn.execute(f"UPDATE {table}_vector_chunks00 SET vectors=? WHERE rowid=?", (bytes(vectors), chunk_id))
+    conn.commit()
+
+
+def rename_rowids_id(conn: sqlite3.Connection, table: str, *, to: str) -> None:
+    conn.execute(f"UPDATE {table}_rowids SET id=? WHERE rowid=(SELECT min(rowid) FROM {table}_rowids)", (to,))
+    conn.commit()
+
+
+def put_value_across_page_boundary(conn: sqlite3.Connection, table: str, column: str, token: str) -> None:
+    """Set ``column`` of the table's first row to a value longer than three pages with ``token`` straddling the
+    first page boundary of the row's payload."""
+    page = conn.execute("PRAGMA page_size").fetchone()[0]
+    value = "x" * (page - len(token) // 2 - 40) + token + "y" * (3 * page)
+    conn.execute(f"UPDATE {table} SET {column}=? WHERE rowid=(SELECT min(rowid) FROM {table})", (value,))
+    conn.commit()
 
 
 def vectors_of(where, layer: str, only=None) -> dict:
