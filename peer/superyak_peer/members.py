@@ -20,6 +20,10 @@ ADDED = '{by} added {names} to this room. It continues room {old}.'
 REMOVED = '{by} removed {name} from {where}.'
 GRANT_GONE = "{name}'s moderate grant here is revoked."
 NOT_A_MEMBER = '{x} is not a member of this room'
+NOT_THE_OWNER = "A moderator can't remove the room's owner"
+WORMHOLE_REMOVE = "Removing wormhole unbridges the room; only the room's owner does that (make station-unbridge)"
+OTHER_MODERATOR = '{name} moderates this room too; only {owner} can remove a moderator'
+REMOTE_MEMBER = '{name} is on another station; only {owner} manages them'
 BRIDGED_NOTE = " This room is bridged to Stanley's aDNA lattice: posts that mention a lattice persona cross to it."
 
 
@@ -210,12 +214,32 @@ class Members:
                     earlier_rooms=len(earlier), claims_released=released, grant_revoked=bool(gone), bridged=bridged)
         return view
 
+    def _moderator_remove(self, db, actor, room, grant, typed, member_id):
+        """M8's refusals in order, in the caller's transaction, then the one removal, charged to the grant."""
+        if member_id not in room['member_ids'] and not self._earlier_with(db, room['owner_id'], room, member_id):
+            raise Problem(404, NOT_A_MEMBER.format(x=safe_line(typed)))
+        owner = self._account_name(db, room['owner_id'])
+        name = self._account_name(db, member_id)
+        if member_id == room['owner_id']:
+            raise Problem(403, NOT_THE_OWNER)
+        if member_id == self._wormhole_id(db):
+            raise Problem(403, WORMHOLE_REMOVE)
+        user = db.execute('SELECT kind, owner_id FROM users WHERE id=?', (member_id,)).fetchone()
+        if user is None:
+            raise Problem(403, REMOTE_MEMBER.format(name=name, owner=owner))
+        if user['kind'] == 'ship' and user['owner_id'] is None:
+            raise Problem(403, OWNERLESS.format(name=name))
+        if member_id != actor and any(m['id'] == member_id for m in self._moderators(db, room['id'])):
+            raise Problem(403, OTHER_MODERATOR.format(name=name, owner=owner))
+        return self._remove_member(db, room, member_id, actor, grant['id'])
+
     def remove_participant(self, actor, key, user_id, grant_id=None):
         text(user_id, 'user ID', 100)
         with self.transaction() as db:
             room = self._act_room(db, actor, key, adding=False)
             if room['owner_id'] != actor:
-                raise Problem(403, NOT_A_MODERATOR)  # Task 6 puts the moderator's path here
+                grant = self._acting_grant(db, actor, room['id'], 'remove_member', grant_id, self_removal=user_id == actor)
+                return self._moderator_remove(db, actor, room, grant, user_id, user_id)
             if user_id == actor:
                 raise Problem(400, 'Cannot remove the room owner')
             if user_id not in room['member_ids'] and not self._earlier_with(db, actor, room, user_id):

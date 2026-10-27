@@ -165,3 +165,85 @@ def test_moderating_adds_no_brief_or_grant_power(city):
     assert [(r.status_code, r.json()['error']) for r in (saved, history, revoked)] == [
         (403, 'Only the room owner can change its brief'), (403, 'Only the room owner can read its brief history'),
         (403, 'Only its issuer or the owner of one of its ships can revoke this grant')]
+
+
+def test_a_moderators_removal_takes_the_member_out_of_the_chain_and_says_who(city):
+    c = city
+    grant = moderate(c.store, c.andy, c.jenn, c.room)
+    newer = c.store.add_participants(c.andy['id'], c.room, [c.tardis['id']])['id']
+    removed = drop(login(c.app, 'jenn'), newer, c.doctor['id'])
+    assert removed.status_code == 200, removed.text
+    assert removed.json()['earlier_rooms'] == 1 and c.store.list_rooms(c.doctor['id']) == []
+    row = rows(c.store)[-1]
+    assert (row['change'], row['grant_id'], row['actor_id']) == ('remove', grant, c.jenn['id'])
+    assert notices(c.store, newer)[-1] == (f'member-{row["id"]}', 'Jenn, a moderator, removed Doctor from this room and the room before it.')
+    assert validity(c.store, grant) == (True, None)
+    assert next(g for g in login(c.app, 'andy').get('/api/grants').json() if g['id'] == grant)['budget_left'] == 9
+
+
+@pytest.mark.parametrize('case, status, error', [
+    ('nobody', 404, '{typed} is not a member of this room'),
+    ('system', 404, '{typed} is not a member of this room'),
+    ('owner', 403, "A moderator can't remove the room's owner"),
+    ('wormhole', 403, "Removing wormhole unbridges the room; only the room's owner does that (make station-unbridge)"),
+    ('odo', 403, 'Odo is a station ship with no owner; a moderator never adds or removes it'),
+    ('moderator', 403, 'Rio Grande moderates this room too; only Andy can remove a moderator'),
+    ('remote', 403, 'Willa is on another station; only Andy manages them'),
+])
+def test_a_moderators_removal_refuses_each_member_and_writes_nothing(city, monkeypatch, case, status, error):
+    c, store = city, city.store
+    moderate(store, c.andy, c.jenn, c.room)
+    moderate(store, c.andy, c.rio, c.room)
+    contact = remote_contact(store)
+    with store.transaction() as db:
+        system = store.system_author_id(db)
+        db.execute('INSERT INTO room_members VALUES(?,?)', (c.room, c.wormhole['id']))  # bridged by hand
+        if case == 'remote':
+            db.execute('INSERT INTO remote_room_members VALUES(?,?)', (c.room, contact))
+    if case == 'remote':  # check 5 pauses every grant in such a room; this refusal is the defence behind it (M8)
+        monkeypatch.setattr(type(store), '_grant_validity', lambda self, db, grant, budget=True: (True, None))
+    typed = {'nobody': 'nobody', 'system': system, 'owner': c.andy['id'], 'wormhole': c.wormhole['id'],
+             'odo': c.odo['id'], 'moderator': c.rio['id'], 'remote': contact}[case]
+    jenn, before = login(c.app, 'jenn'), snapshot(store)
+    refused = drop(jenn, c.room, typed)
+    assert (refused.status_code, refused.json()['error']) == (status, error.format(typed=typed))
+    assert snapshot(store) == before
+
+
+def test_a_holder_whose_grant_expired_is_no_longer_a_moderator(city):
+    """Ruling 5: the 403 and the moderators list agree; the removal still revokes the expired grant it finds."""
+    c = city
+    moderate(c.store, c.andy, c.jenn, c.room)
+    old = moderate(c.store, c.andy, c.rio, c.room, hours=1)
+    c.clock[0] += 3600
+    assert drop(login(c.app, 'jenn'), c.room, c.rio['id']).status_code == 200
+    assert grant_row(c.store, old)['revoke_reason'] == 'removed from the room'
+
+
+def test_a_moderator_may_remove_itself_under_either_action_even_when_spent(city):
+    c = city
+    grant = moderate(c.store, c.andy, c.jenn, c.room, actions=['add_member'], budget=1)
+    charge(c.store, grant, c.room, 5)
+    assert drop(login(c.app, 'jenn'), c.room, c.jenn['id']).status_code == 200
+    row = grant_row(c.store, grant)
+    assert (row['revoked_by'], row['revoke_reason']) == (c.jenn['id'], 'removed from the room')
+    assert notices(c.store, c.room)[-1][1] == "Jenn, a moderator, removed Jenn from this room. Jenn's moderate grant here is revoked."
+
+
+def test_a_self_removed_moderator_added_back_by_another_keeps_its_grant_revoked(city):
+    c = city
+    grant = moderate(c.store, c.andy, c.jenn, c.room)
+    moderate(c.store, c.andy, c.doctor, c.room)
+    assert drop(login(c.app, 'jenn'), c.room, c.jenn['id']).status_code == 200
+    assert add(login(c.app, 'doctor'), c.room, c.jenn['id']).status_code == 201  # not the owner's removal: allowed
+    assert validity(c.store, grant) == (False, f'Grant #{grant[:4]} was revoked by Jenn')
+
+
+def test_a_removal_under_an_add_only_grant_is_refused_and_writes_nothing(city):
+    """T3, the reverse of Task 5's remove-only case: only self-removal ignores the grant's actions (R-S4)."""
+    c = city
+    grant = moderate(c.store, c.andy, c.jenn, c.room, actions=['add_member'])
+    jenn, before = login(c.app, 'jenn'), snapshot(c.store)
+    refused = drop(jenn, c.room, c.doctor['id'])
+    assert (refused.status_code, refused.json()['error']) == (403, f"Grant #{grant[:4]} doesn't let you remove members")
+    assert snapshot(c.store) == before

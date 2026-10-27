@@ -108,3 +108,17 @@ class Moderators:
                 return grant
             reason = why if not valid else NO_ACTION.format(short=grant['id'][:4], verb='add' if action == 'add_member' else 'remove')
         raise Problem(403, reason)
+
+    def _moderators(self, db, room_id):
+        """Ruling 5: the room's moderators, one entry per covering grant that is unrevoked, unexpired and moderate, whose
+        holder is in the room: {id, name, username, grant}, by name (case-folded), then the grant's creation."""
+        now, found = self.clock(), []
+        for g in db.execute('SELECT * FROM grants WHERE revoked IS NULL AND expires>? ORDER BY created, id', (now,)).fetchall():
+            if not is_moderate(g) or self._covered_room(db, g) != room_id:
+                continue
+            who = db.execute('SELECT u.id, u.name, u.username FROM users u JOIN room_members m ON m.user_id=u.id '
+                             'WHERE m.room_id=? AND u.id=?', (room_id, g['grantee_id'])).fetchone()
+            if who is not None:
+                found.append({'id': who['id'], 'name': who['name'], 'username': who['username'], 'grant': g['id'], '_created': g['created']})
+        found.sort(key=lambda m: (m['name'].casefold(), m['_created']))
+        return [{k: v for k, v in m.items() if k != '_created'} for m in found]
