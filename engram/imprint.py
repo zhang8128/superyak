@@ -13,6 +13,7 @@ import itertools
 import json
 import os
 import re
+import shlex
 import shutil
 import sqlite3
 import sys
@@ -20,13 +21,14 @@ import tempfile
 import time
 import uuid
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 import store_identity
 import store_reader
-from imprint_checks import l1_values, l2_fts, l3_vec0, l4_raw
+from imprint_checks import l1_values, l2_fts, l3_vec0, l4_raw, terms_of, verify
 from imprint_filter import (CLOSED_SECONDS, FILTER, DIGEST_TABLES, IMPRINT_SUBJECTS_DDL, NAMES_SHOWN, OTHERS_AWAY_WORDS,
                             OTHERS_HOME_WORDS, OTHERS_NO_LEDGER_WORDS, TIMES_WORDS, WITHOUT_ROUTE_WORDS, IdSet,
                             PackageRows, People, PlanRefused, Scratch, ScratchMap, Selection, Terms, check_owner,
@@ -1007,6 +1009,196 @@ def build(plan_id: str, *, home: Path, now: int, if_needed: bool = False, engram
         os.close(fd)
 
 
+# ---- Admission (I 10, D39) -----------------------------------------------------------------------------------
+
+RERUN_REFUSED = "This admission already began once, and an admission runs once. Nothing was admitted."
+CALIBRATION_FAILED = "Calibration did not finish. Nothing was admitted."
+MAX_LANE_EPISODES = 16_000          # calibrate.py's bounds, repeated here so that no numpy loads at import (P35)
+MAX_SEMANTIC_EPISODES = 1_024
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+WITHOUT_ROUTE_NOTE = "0 sessions and 0 log rows, because route was not chosen"
+
+
+class _Stopped(Exception):
+    """Withdrawn (4) or ended (5) during admission: nothing more is written."""
+
+    def __init__(self, code: int):
+        super().__init__(code)
+        self.code = code
+
+
+def _still_allowed(root: Path, imprint_id: str, now: float) -> str | None:
+    """None, ``"withdrawn"`` (a tombstone, or ``approved.json`` gone) or ``"ended"`` (``admission.json`` gone, or its
+    ``valid_until`` at or before ``now``). It creates nothing."""
+    root = Path(root)
+    if (root / "tombstones" / f"{imprint_id}.json").exists() or not (root / imprint_id / "approved.json").is_file():
+        return "withdrawn"
+    try:
+        valid_until = json.loads((root / f"{imprint_id}.state" / "admission.json").read_text())["valid_until"]
+        return None if valid_until > now else "ended"
+    except (OSError, ValueError, KeyError, TypeError):
+        return "ended"
+
+
+def _gate(root: Path, imprint_id: str, now: Callable[[], float]) -> None:
+    reason = _still_allowed(root, imprint_id, now())
+    if reason is not None:
+        raise _Stopped(4 if reason == "withdrawn" else 5)
+
+
+def _write_state(root: Path, imprint_id: str, name: str, doc: dict, *, now: Callable[[], float] = time.time) -> None:
+    """Write ``name`` atomically, after checking that admission is still allowed. ``imprint.json`` goes in the
+    imprint's directory (0444); every other name goes in the state directory (0600)."""
+    _gate(root, imprint_id, now)
+    registered = name == "imprint.json"
+    folder = Path(root) / (imprint_id if registered else f"{imprint_id}.state")
+    tmp = folder / f".{name}.{os.getpid()}.tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444 if registered else 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(doc, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, folder / name)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _failed(root: Path, imprint_id: str, step, message: str, now) -> int:
+    _write_state(root, imprint_id, "result.json",
+                 {"status": "failed", "step": step, "message": message, "ended_at": int(now())}, now=now)
+    return 1
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(_HASH_READ), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _count_roads_and_trails(route: bool, derive) -> tuple[int, int]:
+    """``(N, K)``: 0 and 0 without ``route``. The count with ``route`` is Task 35's; until it lands, it counts none."""
+    return 0, 0
+
+
+def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callable[[], float] = time.time,
+          derive=None, record_use=None, calibrate_fn=None, calibration_now: datetime | None = None,
+          scratch_dir: Path | None = None) -> int:
+    """Admit a handed-off imprint: verify it, calibrate it content-free, register it. Exits (R11): 0 admitted, 1
+    failed (with ``result.json``), 4 withdrawn during admission, 5 ended during admission. Admission never creates
+    ``<id>/`` or ``<id>.state/``, and every write checks first that it is still allowed (D39). ``calibrate_fn``
+    None means ``calibrate.calibrate``, imported after verification (P35, I 14.1)."""
+    root = Path(root)
+    folder, state = root / imprint_id, root / f"{imprint_id}.state"
+    own_scratch = scratch_dir is None
+    scratch = state / "scratch" if own_scratch else Path(scratch_dir)
+    try:
+        _gate(root, imprint_id, now)
+        if (state / "calibration").exists():
+            return _failed(root, imprint_id, "calibration", RERUN_REFUSED, now)
+        if own_scratch:
+            scratch.mkdir(mode=0o700, exist_ok=True)            # no parents: a removed state stays removed
+        failure = verify(folder, verify_cmd=verify_cmd, migrations_dir=store_reader.MIGRATIONS_DIR, scratch=scratch)
+        if failure is not None:
+            return _failed(root, imprint_id, failure.step, failure.message, now)
+        manifest = json.loads((folder / "manifest.json").read_text())
+        permission = json.loads((folder / "permission.json").read_text())
+        route = terms_of(permission).route
+        _gate(root, imprint_id, now)
+        if calibrate_fn is None:
+            import calibrate                                    # numpy and scipy load here, after verification
+
+            calibrate_fn = calibrate.calibrate
+        out = state / "calibration"
+        notes = None if route else {"snapshot": WITHOUT_ROUTE_NOTE}
+        report = {}
+        try:
+            report = calibrate_fn(folder / "imprint.db", out, migrate=True, no_content=True, no_paths=True, notes=notes,
+                                  max_lane_episodes=MAX_LANE_EPISODES, max_semantic_episodes=MAX_SEMANTIC_EPISODES,
+                                  create_parents=False, now=calibration_now)
+            done = bool(report.get("source_unchanged"))
+        except Exception:                                       # a MemoryError included; its text may hold a path
+            done = False
+        for big in ("snapshot.db", "working.db"):
+            (out / big).unlink(missing_ok=True)
+        _gate(root, imprint_id, now)
+        if not done:
+            return _failed(root, imprint_id, "calibration", CALIBRATION_FAILED, now)
+        report_sha = _sha256_file(out / "report.json")
+        n, k = _count_roads_and_trails(route, derive)
+        conn = store_reader.connect(folder / "imprint.db", immutable=True)
+        try:
+            subjects = conn.execute("SELECT count(*) FROM imprint_subjects").fetchone()[0]
+        finally:
+            conn.close()
+        _write_state(root, imprint_id, "imprint.json",
+                     {"status": "admitted", "manifest": manifest, "permission": permission,
+                      "admitted_at": int(now()), "report_sha256": report_sha, "engram_commit": engram_commit_of(),
+                      "others": manifest.get("others"), "imprint_subjects": subjects}, now=now)
+        for path in folder.iterdir():
+            path.chmod(0o444)
+        folder.chmod(0o555)
+        _write_state(root, imprint_id, "result.json",
+                     {"status": "admitted", "checks": 17, "report_sha256": report_sha,
+                      "skipped": report.get("analyses", {}).get("skipped_dense_sets", []),
+                      "roads_and_trails": n, "sessions_too_large": k, "ended_at": int(now())}, now=now)
+        return 0
+    except _Stopped as stop:
+        return stop.code
+    finally:
+        if own_scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+def list_imprints(root: Path) -> list[dict]:
+    """One row for each admitted imprint under ``root``, by id."""
+    root = Path(root)
+    rows = []
+    for folder in sorted(root.iterdir()) if root.is_dir() else []:
+        if not _UUID.fullmatch(folder.name):
+            continue
+        try:
+            reg = json.loads((folder / "imprint.json").read_text())
+        except (OSError, ValueError):
+            continue
+        row = {"imprint_id": folder.name, "status": reg.get("status"), "admitted_at": reg.get("admitted_at"),
+               "report_sha256": reg.get("report_sha256"), "others": reg.get("others")}
+        try:
+            row["valid_until"] = json.loads((root / f"{folder.name}.state" / "admission.json").read_text())["valid_until"]
+        except (OSError, ValueError, KeyError):
+            row["valid_until"] = None
+        rows.append(row)
+    return rows
+
+
+def _admit(args) -> int:
+    root = Path(args.imprints_dir)
+    if not _UUID.fullmatch(args.id):
+        print("That is not an imprint id.", file=sys.stderr)
+        return 2
+    reason = _still_allowed(root, args.id, time.time())
+    if reason is not None:                                      # nothing is made for a stopped admission
+        return 4 if reason == "withdrawn" else 5
+    scratch = root / f"{args.id}.state" / "scratch"
+    try:
+        scratch.mkdir(mode=0o700, exist_ok=True)                # no parents (R26)
+    except OSError:
+        return 4
+    try:
+        ensure_scratch_env(scratch, environ=os.environ, execve=os.execve)
+        return admit(args.id, root=root, verify_cmd=shlex.split(args.verify_cmd), scratch_dir=scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _list(args) -> int:
+    for row in list_imprints(Path(args.imprints_dir)):
+        print(json.dumps(row, sort_keys=True))
+    return 0
+
+
 # ---- The command ---------------------------------------------------------------------------------------------
 
 def ensure_scratch_env(scratch: Path, *, environ, execve) -> None:
@@ -1072,6 +1264,12 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--if-needed", action="store_true", help="a plan already built prints nothing and succeeds")
     b.add_argument("--superyak-home", type=Path, default=Path.home() / ".superyak")
     b.add_argument("--engram-home", type=Path)
+    a = sub.add_parser("admit", help="on the Pi: verify, calibrate and register a handed-off imprint")
+    a.add_argument("--id", required=True)
+    a.add_argument("--imprints-dir", type=Path, required=True)
+    a.add_argument("--verify-cmd", required=True, help="the command that verifies a signed permission (one string)")
+    ls = sub.add_parser("list", help="on the Pi: the admitted imprints")
+    ls.add_argument("--imprints-dir", type=Path, required=True)
     return ap
 
 
@@ -1196,6 +1394,10 @@ def main(argv: list[str] | None = None, *, clock=time.time) -> int:
             return _read(args)
         if args.command == "build":
             return _build(args, clock=clock)
+        if args.command == "admit":
+            return _admit(args)
+        if args.command == "list":
+            return _list(args)
     except PlanBusy as busy:
         print(str(busy), file=sys.stderr)
         return 4

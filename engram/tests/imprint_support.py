@@ -1884,3 +1884,119 @@ def tampered(tmp_path: Path, change: str) -> tuple[Path, str]:
     else:
         raise ValueError(change)
     return root, imprint_id
+
+
+# ---- Admission (Task 34) --------------------------------------------------------------------------------------
+
+def built_texts(tmp_path: Path) -> list[str]:
+    """The text of every memory in the source store ``plan_args(tmp_path)`` planned from."""
+    return memory_texts(_path(tmp_path, "src"))
+
+
+def session_ids(tmp_path: Path) -> list[str]:
+    """The session ids the source store's episodes hold."""
+    conn = sqlite3.connect(f"file:{_path(tmp_path, 'src')}?mode=ro", uri=True)
+    try:
+        return [r[0] for r in conn.execute("SELECT DISTINCT session_id FROM episodes WHERE session_id IS NOT NULL")]
+    finally:
+        conn.close()
+
+
+def no_memory_text(report, texts) -> bool:
+    import json
+
+    dumped = json.dumps(report, default=str)
+    return all(text[:24] not in dumped for text in texts)
+
+
+def mentions_any(report, ids) -> bool:
+    import json
+
+    dumped = json.dumps(report, default=str)
+    return any(f'"{i}"' in dumped for i in ids)
+
+
+def survey_minus(report: dict) -> dict:
+    """The snapshot survey without what ``route`` legitimately changes: the episodes' session count, the log tables'
+    row counts, the file facts and the identity."""
+    import copy
+
+    snap = copy.deepcopy(report["snapshot"])
+    snap.get("episodes", {}).pop("sessions", None)
+    for name in ("memory_log", "operation_log"):
+        snap.get("row_counts", {}).pop(name, None)
+    snap.pop("file", None)
+    snap.pop("identity", None)
+    return snap
+
+
+def raise_(exc: BaseException):
+    def fn(*args, **kwargs):
+        raise exc
+
+    return fn
+
+
+def must_not_be_called(*args, **kwargs):
+    raise AssertionError("this must not run")
+
+
+class Withdrawal:
+    """What a withdrawal does on the Pi: both directories go, and a tombstone is written. Callable in process, or as
+    a command (for a ``verify_cmd``, which runs in a child)."""
+
+    def __init__(self, root: Path, imprint_id: str):
+        self.root, self.imprint_id = Path(root), imprint_id
+
+    def __call__(self) -> None:
+        for name in (self.imprint_id, f"{self.imprint_id}.state"):
+            shutil.rmtree(self.root / name, ignore_errors=True)
+        (self.root / "tombstones").mkdir(exist_ok=True)
+        (self.root / "tombstones" / f"{self.imprint_id}.json").write_text("{}")
+
+    def command(self) -> list[str]:
+        import sys
+
+        code = ("import shutil, sys\nfrom pathlib import Path\nroot, i = Path(sys.argv[1]), sys.argv[2]\n"
+                "[shutil.rmtree(root / n, ignore_errors=True) for n in (i, i + '.state')]\n"
+                "(root / 'tombstones').mkdir(exist_ok=True)\n(root / 'tombstones' / (i + '.json')).write_text('{}')\n")
+        return [sys.executable, "-c", code, str(self.root), self.imprint_id]
+
+
+def remove_like_withdrawal(root: Path, imprint_id: str) -> Withdrawal:
+    return Withdrawal(root, imprint_id)
+
+
+def hooked_verify(hook: Withdrawal) -> list[str]:
+    return hook.command()
+
+
+def hooked_calibrate(hook):
+    """A ``calibrate_fn`` that runs ``hook`` first and then the real calibration."""
+    def fn(*args, **kwargs):
+        import calibrate
+
+        hook()
+        return calibrate.calibrate(*args, **kwargs)
+
+    return fn
+
+
+def shorten_admission_json(root: Path, imprint_id: str, *, to: int) -> None:
+    import json
+
+    path = Path(root) / f"{imprint_id}.state" / "admission.json"
+    doc = json.loads(path.read_text())
+    doc["valid_until"] = to
+    path.write_text(json.dumps(doc))
+
+
+def admitted_report(tmp_path: Path, *, route: bool, now) -> dict:
+    """The ``report.json`` an admission of a fresh package leaves."""
+    import json
+
+    from imprint import admit
+
+    root, imprint_id = handed_off(tmp_path, built_package(tmp_path, route=route), route=route, valid_until=FAR)
+    assert admit(imprint_id, root=root, verify_cmd=stub_verify(ok=True), calibration_now=now) == 0
+    return json.loads((root / f"{imprint_id}.state" / "calibration" / "report.json").read_text())
