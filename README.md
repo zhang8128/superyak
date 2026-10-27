@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/brand/superyak-logo.svg" width="260" alt="Three super yaks in capes and sunglasses on a jutting rock at sunrise; the leader holds a baby super yak up into the light"></p>
+<p align="center"><img src="docs/brand/superyak-logo.svg" width="260" alt="Superyak: a shaggy yak hero in sunglasses with a billowing red cape and a gold diamond Y on its chest"></p>
 
 # Superyak
 
