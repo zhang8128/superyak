@@ -417,3 +417,15 @@ def test_an_expired_request_is_final_and_drops_the_local_copy(tmp_path):       #
     station2, home2 = FakeStation(status='expired', receipts=[]), sent_home(tmp_path / 'b')
     Imprint(home2, station2.client()).status(IMPRINT_ID)
     assert not (home2 / 'imprints' / IMPRINT_ID / 'imprint.db').exists()
+
+
+@pytest.mark.parametrize('manifest', ['{', '[]', '{"package": {}}', '{"package": {"parts": "ab", "part_bytes": 4, "bytes": 4}}',
+                                      '{"package": {"parts": ["a"], "part_bytes": "x", "bytes": 4}}',
+                                      '{"package": {"parts": ["a"], "part_bytes": 4, "bytes": null}}'])
+def test_a_malformed_manifest_is_a_clean_refusal_and_sends_nothing(tmp_path, manifest):     # review's Task 43a item
+    from superyak_agent.imprint import ImprintRefused
+    station, home = FakeStation(status='allowed'), built_home(tmp_path)
+    (home / 'imprints' / IMPRINT_ID / 'manifest.json').write_text(manifest)
+    with pytest.raises(ImprintRefused, match='manifest'):
+        Imprint(home, station.client()).send(PLAN)
+    assert not [c for c in station.calls if c.method == 'PUT']

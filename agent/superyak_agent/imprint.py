@@ -112,9 +112,8 @@ class Imprint:
 
     def _upload(self, folder, saved, status):
         base = f'/api/imprints/{saved["request_id"]}'
-        manifest = json.loads((folder / 'manifest.json').read_text())
-        package = manifest['package']
-        count, size = len(package['parts']), int(package['part_bytes'])
+        package = _package_of(folder / 'manifest.json')
+        count, size = len(package['parts']), package['part_bytes']
         if not 0 < size <= PART_BYTES:
             raise ImprintRefused('The manifest names a part longer than 4 MiB.')
         try:
@@ -286,6 +285,21 @@ class Imprint:
 def _canonical(value):
     """The peer's canonical JSON: sorted keys, no spaces, UTF-8 as it is."""
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()
+
+
+def _package_of(path):
+    """The manifest's `package`: its parts a list of digests, `part_bytes` and `bytes` whole numbers. A manifest that
+    is not one is refused before anything is sent, not a traceback (the review's Task 43a item)."""
+    try:
+        package = json.loads(path.read_text())['package']
+        ok = (isinstance(package['parts'], list) and all(isinstance(p, str) for p in package['parts'])
+              and type(package['part_bytes']) is int and type(package['bytes']) is int)
+    except (OSError, ValueError, KeyError, TypeError):
+        ok = False
+    if not ok:
+        raise ImprintRefused('This imprint\'s manifest.json cannot be read; nothing was sent. Run the plan and '
+                             'make imprint-send again.')
+    return package
 
 
 def _shown(value, limit=80):
