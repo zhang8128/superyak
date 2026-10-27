@@ -42,6 +42,8 @@ def bounds_store(tmp_path):
 def test_pi_every_process_at_the_cap(cap_store, step):
     peak = child_peak_rss(cmd=cap_command(cap_store, step), env=cap_store.env)
     assert peak < PEAK_BUDGET, (step, mib(peak))
+    if step == "admit":                                         # no analysis lost to a MemoryError (review I4)
+        assert analysis_errors(cap_store) == []
     if step == "import-receipts":                               # it did the work: the use list holds the rows
         from permission_uses import Uses
         uses = Uses.open_read_only(cap_store.work / "engram")
