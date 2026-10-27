@@ -45,7 +45,8 @@ def fork_instance(name: str, engram_dir: Path | None = None, from_source: str = 
         # identity is named by the id its own migration will derive; the
         # source itself is never written.
         source_instance_id = store_identity.effective_id(src)
-        instance_id = store_identity.stamp_fork(dst, source_instance_id)
+        instance_id = store_identity.stamp_fork(
+            dst, source_instance_id, *store_identity.ancestry(src))
         dst.commit()
     finally:
         src.close()

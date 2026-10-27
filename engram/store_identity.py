@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from typing import NamedTuple
 
 # Fixed namespace for retroactive ids. Changing it would change every
 # retroactive identity, so it is part of the on-disk contract.
@@ -37,6 +38,8 @@ RETROACTIVE_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "engram:store-identity:re
 ORIGIN_CREATION = "creation"
 ORIGIN_RETROACTIVE = "retroactive"
 ORIGIN_FORK = "fork"
+ORIGIN_IMPRINT = "imprint"
+MAX_ANCESTRY = 64
 BASIS_RANDOM = "random"
 BASIS_EARLIEST_EPISODE = "earliest_episode"
 
@@ -46,6 +49,8 @@ KEYS = (
     "instance_id_basis",
     "instance_id_basis_episode",
     "forked_from_instance_id",
+    "ancestry",
+    "ancestry_complete",
 )
 
 
@@ -140,21 +145,97 @@ def assign(conn: sqlite3.Connection, fresh: bool) -> dict:
     return values
 
 
-def stamp_fork(conn: sqlite3.Connection, forked_from_instance_id: str | None) -> str:
+class ImprintRefused(RuntimeError):
+    """An imprint is read-only evidence: it is never opened for writing."""
+
+
+def is_imprint(conn: sqlite3.Connection) -> bool:
+    return read(conn).get("instance_id_origin") == ORIGIN_IMPRINT
+
+
+def ancestry(conn: sqlite3.Connection) -> tuple[list[str], bool]:
+    """``(ids nearest first, complete)``. Reads only; a malformed value is incomplete."""
+    stored = read(conn)
+    raw = stored.get("ancestry")
+    if raw is not None:
+        try:
+            ids = json.loads(raw)
+        except (TypeError, ValueError):
+            return [], False
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            return [], False
+        return [i.lower() for i in ids], stored.get("ancestry_complete") == "true"
+    parent = stored.get("forked_from_instance_id")
+    if parent:
+        return [parent.lower()], False
+    if stored.get("instance_id_origin") == ORIGIN_CREATION:
+        return [], True
+    return [], False
+
+
+class Lineage(NamedTuple):
+    ids: frozenset[str]
+    complete: bool
+
+
+def lineage(conn: sqlite3.Connection) -> Lineage:
+    own = effective_id(conn)
+    ids, complete = ancestry(conn)
+    members = {i.lower() for i in ids}
+    if own:
+        members.add(own.lower())
+    return Lineage(frozenset(members), bool(complete and own))
+
+
+def independent(a: Lineage, b: Lineage) -> bool | None:
+    """False when the two share an id, True when disjoint and both complete, else None."""
+    if a.ids & b.ids:
+        return False
+    return True if a.complete and b.complete else None
+
+
+def _child_ancestry(parent: str | None, source_ancestry: list[str] | None,
+                    source_complete: bool) -> tuple[list[str], bool]:
+    chain = ([parent] if parent else []) + list(source_ancestry or [])
+    ids: list[str] = []
+    for i in chain:
+        i = i.lower()
+        if i not in ids:
+            ids.append(i)
+    cut = len(ids) > MAX_ANCESTRY
+    return ids[:MAX_ANCESTRY], bool(source_complete and parent and not cut)
+
+
+def _stamp(conn: sqlite3.Connection, origin: str, new_id: str, parent: str | None,
+           source_ancestry: list[str] | None, source_complete: bool) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute(f"DELETE FROM meta WHERE key IN ({', '.join('?' * len(KEYS))})", KEYS)
+    ids, complete = _child_ancestry(parent, source_ancestry, source_complete)
+    _write(conn, {
+        "instance_id": new_id,
+        "instance_id_origin": origin,
+        "instance_id_basis": BASIS_RANDOM,
+        "forked_from_instance_id": parent,
+        "ancestry": json.dumps(ids, separators=(",", ":")),
+        "ancestry_complete": "true" if complete else "false",
+    })
+
+
+def stamp_fork(conn: sqlite3.Connection, forked_from_instance_id: str | None,
+               source_ancestry: list[str] | None = None, source_complete: bool = False) -> str:
     """Replace a freshly copied store's identity with a new one of its own.
 
     Does not commit. ``forked_from_instance_id`` may be ``None`` when the
     source had no identity and none could be derived (an empty old store).
     """
-    conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-    conn.execute(
-        f"DELETE FROM meta WHERE key IN ({', '.join('?' * len(KEYS))})", KEYS
-    )
     new_id = str(uuid.uuid4())
-    _write(conn, {
-        "instance_id": new_id,
-        "instance_id_origin": ORIGIN_FORK,
-        "instance_id_basis": BASIS_RANDOM,
-        "forked_from_instance_id": forked_from_instance_id,
-    })
+    _stamp(conn, ORIGIN_FORK, new_id, forked_from_instance_id, source_ancestry, source_complete)
     return new_id
+
+
+def stamp_imprint(conn: sqlite3.Connection, source_instance_id: str, source_ancestry: list[str],
+                  source_complete: bool, imprint_id: str) -> None:
+    """Give a freshly copied store the identity of an imprint of the source. Does not commit."""
+    if not source_instance_id:
+        raise ValueError("an imprint needs the source's instance id")
+    _stamp(conn, ORIGIN_IMPRINT, imprint_id, source_instance_id, source_ancestry, source_complete)
