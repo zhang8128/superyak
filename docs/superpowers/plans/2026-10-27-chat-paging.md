@@ -20,7 +20,7 @@
 - `system_author` is room-wide on every page: present when any message in the room is by the system author.
 - `since` returns the oldest `limit` matches by event id; `seq` is the last returned event id when `more` is true, otherwise the room's newest `chat.message` event id (0 if none).
 - Remote rooms (key contains `:`) ignore paging and return today's answer.
-- Index: `CREATE INDEX IF NOT EXISTS events_kind_resource ON events(kind, resource_id, id)`.
+- No new index: the `since` and `seq` queries use the existing `events_kind_room_id ON events(kind, resource_id, id)` (`inbox.py:31`).
 - `station_read` output, errors included, is identical to today's for the same room; `thread` keeps the full read.
 - Run the peer suite with `cd peer && uv run --locked python -m pytest -q`, and the agent suite with `cd agent && uv run --locked --extra dev python -m pytest -q`.
 
@@ -55,21 +55,20 @@
   - `test_before_at_start_after_windows`: 30 messages; `before=20&limit=5` → positions 15-19; `at=3&limit=4` → 3-6; `start=<id of 7>&limit=2` → 7-8; `after=<id of 7>&limit=2` → 8-9. Each checked against the full read's slice.
   - `test_local_and_peer_with_the_same_created_keep_todays_order`: a local message and a peer message with the same `created`, between others; for `at=0&limit=100`, `before=total&limit=100`, `start=<first id>`, the ids equal the full read's ids in the same order.
   - `test_empty_room_pages`: `?limit=5` → `messages == []`, `total == 0`, `first_position == 0`.
-  - `test_bad_parameters_are_400`: `limit=0`, `limit=501`, `at=-1`, `before=x`, `at=1&before=2` → 400; `at=30` on a 30-message room → 400 with `'at must be between 0 and 29'` in the body.
+  - `test_bad_parameters_are_400`: `limit=0`, `limit=501`, `at=-1`, `before=x`, `at=1&before=2` → 400; `at=30` on a 30-message room → 400 with `'at must be between 0 and 29'` in the body; `before=31` on a 30-message room → 400 with `'before must be between 0 and 30'`.
   - `test_unknown_start_is_404_and_a_non_member_learns_nothing`: `start=nope` → 404; a non-member's `?limit=5` → 404 with today's body.
   - `test_system_author_is_room_wide`: a system notice at position 0 and 10 posts after it; `?limit=3` → `system_author` present.
 - [ ] **Step 2: Run the tests and see them fail.** `cd peer && uv run --locked python -m pytest tests/test_chat_paging.py -q` → failures on missing `paged`/`total` and on 400s (parameters ignored today).
 - [ ] **Step 3: Add `ids=None` to `_sources` and `_replies`.** With `ids`, add `AND messages.id IN (…)` to each of their room-scoped queries (the run sources, the kinds and the final message list in `_sources`; the join in `_replies`). Pages are at most 500, under SQLite's variable limit.
-- [ ] **Step 4: Implement `_message_order`, `_room_seq` and the paged branch of `get_room`.** `_message_order` is one query: `SELECT id, 0 AS source, created, rowid FROM messages WHERE room_id=? UNION ALL SELECT id, 1, created, rowid FROM peer_messages WHERE room_id=? ORDER BY created, source, rowid`. The paged branch keeps the membership check and every room field from today's code, picks positions per the table in the spec, reads full rows for the picked ids from each table, attaches `source`/`reply_to` exactly as today (peer rows get `reply_to: None`), and sets `system_author` from `EXISTS (SELECT 1 FROM messages WHERE room_id=? AND author_id=?)`. A key with `:` ignores `page`.
+- [ ] **Step 4: Implement `_message_order`, `_room_seq` and the paged branch of `get_room`.** `_message_order` is one query: `SELECT id, 0 AS source, created, rowid FROM messages WHERE room_id=? UNION ALL SELECT id, 1, created, rowid FROM peer_messages WHERE room_id=? ORDER BY created, source, rowid`, returned as `(id, source)` pairs only (`created` and `rowid` exist only for the order). The paged branch keeps the membership check and every room field from today's code, picks positions per the table in the spec, reads full rows for the picked ids from each table, attaches `source`/`reply_to` exactly as today (peer rows get `reply_to: None`), and sets `system_author` from `EXISTS (SELECT 1 FROM messages WHERE room_id=? AND author_id=?)`. A key with `:` ignores `page`.
 - [ ] **Step 5: Parse the query in `app.py` `chat_get`.** Read `limit`, `before`, `at`, `start`, `after`, `since` from `request.query_params`; integers via `int()` with a 400 on failure; enforce the bounds and the one-window rule from Global Constraints; pass `page` only when at least one parameter is present.
 - [ ] **Step 6: Run the new tests and the whole peer suite.** Both pass; `tests/test_chats.py` unchanged.
 - [ ] **Step 7: Commit.** `git commit -m "Chat paging: the station returns a window of a room by position"`
 
-### Task 2: Server `since`, `more` and the events index
+### Task 2: Server `since` and `more`
 
 **Files:**
 - Modify: `peer/superyak_peer/chats.py` (the `since` branch of `get_room`)
-- Modify: `peer/superyak_peer/db.py` (the index in `SCHEMA`)
 - Test: `peer/tests/test_chat_paging.py`
 
 **Interfaces:**
@@ -81,9 +80,9 @@
   - `test_since_sees_a_late_peer_message_with_an_older_created`: after taking `seq`, insert a `peer_messages` row with `created` earlier than every local message and emit `chat.message` for it (`store.emit(db, 'chat.message', key, epoch, {'message_id': …, 'author_id': …})`, as `federation.py` does); `?since=<seq>` → that message, with `first_position == 0`.
   - `test_since_pages_from_the_oldest_and_never_skips`: take `seq`, post 150; `?since=<seq>&limit=100` → the first 100 by arrival, `more is True`; `?since=<returned seq>&limit=100` → the remaining 50, `more is False`; together exactly the 150 ids, none repeated.
   - `test_since_with_nothing_new`: `?since=<newest seq>` → `messages == []`, `more is False`, `first_position == total`.
-  - `test_the_events_index_exists`: `PRAGMA index_list(events)` names `events_kind_resource`.
+  - `test_since_uses_the_existing_index`: `EXPLAIN QUERY PLAN` for the `since` query mentions `events_kind_room_id`.
 - [ ] **Step 2: Run and see them fail** (`since` is accepted by Task 1's parser but not yet handled).
-- [ ] **Step 3: Implement the `since` branch:** ids from `SELECT id, json_extract(payload, '$.message_id') FROM events WHERE kind='chat.message' AND resource_id=? AND id>? ORDER BY id`; take the first `limit` whose message is in the room's order (skip any that aren't, but count them toward advancing `seq`); `more` = rows remain after them; `seq` per Global Constraints; return the taken messages sorted by position. Add the index line to `SCHEMA` in `db.py`.
+- [ ] **Step 3: Implement the `since` branch:** ids from `SELECT id, json_extract(payload, '$.message_id') FROM events WHERE kind='chat.message' AND resource_id=? AND id>? ORDER BY id`; take the first `limit` whose message is in the room's order (skip any that aren't, but count them toward advancing `seq`); `more` = rows remain after them; `seq` per Global Constraints; return the taken messages sorted by position.
 - [ ] **Step 4: Run the new tests and the whole peer suite.** All pass.
 - [ ] **Step 5: Commit.** `git commit -m "Chat paging: since reads by events seq, oldest first, with more"`
 
@@ -104,7 +103,7 @@
   - `test_fake_station_pages_like_the_server`: for a 30-message room, `limit=10`, `before`, `at`, `start`, `after` and `since` give the same ids, `total`, `first_position`, `seq` and `more` as the rules in Global Constraints.
   - `test_fake_station_as_an_older_station_ignores_parameters`: with `pages = False`, `?limit=1` returns every message and no `paged`.
 - [ ] **Step 2: Run and see them fail.** `cd agent && uv run --locked --extra dev python -m pytest tests/test_station_paging.py -q`
-- [ ] **Step 3: Implement `room(**page)` and the fake's paging.** In the fake, keep the paging rules in one helper (`_page(room, query) -> dict`) next to `view`, with `seq` taken from a per-room counter that increments on every message the fake appends.
+- [ ] **Step 3: Implement `room(**page)` and the fake's paging.** In the fake, keep the paging rules in one helper (`_page(room, query) -> dict`) next to `view`, with `seq` taken from one station-wide counter that increments on every message the fake appends to any room, as the real station's events id is global. A fake's `seq` never needs to match a real station's numbering.
 - [ ] **Step 4: Run the new tests and the whole agent suite.** All pass.
 - [ ] **Step 5: Commit.** `git commit -m "Chat paging: StationClient.room passes a page; the test station pages like the station"`
 
@@ -121,10 +120,10 @@
 - [ ] **Step 1: Write the failing tests:**
   - `test_each_read_mode_asks_for_a_page`: with a recording transport over the fake, the newest view requests `limit=<limit>`, `oldest=true` requests `at=0&limit=`, `at=5` requests `at=5&limit=`, `start=X` requests `start=X&limit=`, `after=X` requests `after=X&limit=`, `message=X` requests `start=X&limit=1`, and `thread=X` requests no parameters.
   - `test_paged_and_full_reads_print_the_same`: for a 40-message room with a brief, a system notice and a long message, every mode's output with `pages = True` equals its output with `pages = False`.
-  - `test_errors_keep_todays_wording`: an unknown `start` id → `ValueError` whose text is today's (`No message '<id>' in this room`); `at=99` on a 40-message room → `at must be between 0 and 39`.
+  - `test_errors_keep_todays_wording`: an unknown id given as `start`, as `after` and as `message` → each a `ValueError` whose text is today's (`No message '<id>' in this room`, with that id); `at=99` on a 40-message room → `at must be between 0 and 39`.
   - `test_an_empty_room_reads_no_messages`: the newest view of an empty room → `(no messages)` after the header.
 - [ ] **Step 2: Run and see them fail.**
-- [ ] **Step 3: Implement.** `station_read` keeps its argument checks that need no room (types, `oldest` values, one mode at a time), asks for the page per the mode, and passes `offset=room['first_position']` and `total=room['total']` to the renderers when `room.get('paged')`; otherwise it keeps today's full-list path. It maps a `StationError` with status 404 or 400 from the room call to `ValueError` with today's wording. The brief opens a read only when the window starts at position 0, as today.
+- [ ] **Step 3: Implement.** `station_read` keeps its argument checks that need no room (types, `oldest` values, one mode at a time), asks for the page per the mode, and passes `offset=room['first_position']` and `total=room['total']` to the renderers when `room.get('paged')`; otherwise it keeps today's full-list path. It maps a `StationError` with status 404 or 400 from the room call to `ValueError` with today's wording. The brief rule stays exactly as today: the newest view always opens with the brief, and a forward read (`start`, `after`, `oldest`, `at`) shows it only when its window starts at position 0.
 - [ ] **Step 4: Run the agent suite.** All pass, including every existing `test_mcp.py` read test unchanged.
 - [ ] **Step 5: Commit.** `git commit -m "Chat paging: station_read asks for the window it shows"`
 

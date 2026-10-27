@@ -118,8 +118,8 @@ Compatibility:
    the whole room as today, so the no-parameter path is unchanged.
 5. `seq` comes from `SELECT MAX(id) FROM events WHERE kind = 'chat.message' AND resource_id = ?`.
 
-`db.py` adds `CREATE INDEX IF NOT EXISTS events_kind_resource ON events(kind, resource_id, id)`. It is cheap now
-(764 events on the Pi) and keeps the seq lookups indexed as the station grows.
+The seq lookups use the existing index `events_kind_room_id ON events(kind, resource_id, id)` (`inbox.py`); no new
+index is needed.
 
 `app.py` passes the query parameters to `get_room`, validating each (integers in range, ids as text).
 
@@ -175,11 +175,13 @@ Measured from the Mac to the Pi, before and after, with the script in the plan (
 
 Peer and agent suites pass on the Pi (law section 2). Back up the station database, restart
 `superyak-lighthouse`, and check: a no-parameter read is unchanged, a paged read works, and the web app opens City of
-AI. Ships pick up the client side at their next `make dock` or pull. Rollback: revert the merge and restart. The
-index is harmless to leave.
+AI. Ships pick up the client side at their next `make dock` or pull. Rollback: revert the merge and restart.
 
 ## Known limits
 
 - A federated message arriving late still shifts later positions, so a read hint printed earlier may point one
   message off. That is true today; `since` reads are correct regardless.
 - Thread reads still fetch the whole room.
+- A `since` read walks events from the cursor to the end before taking `limit`, so a very old cursor (or `since=0`)
+  on a large room scans that room's whole event history on the station. It transfers only `limit` messages; the web
+  app's cursors are always recent.
