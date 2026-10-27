@@ -852,3 +852,36 @@ def inst(store: Storage, id: str) -> str:
                        "'2026-01-01T00:00:00+00:00')", (id,))
     store.conn.commit()
     return id
+
+
+# Task 12: a store with a row in every table that can ship, and its ledger.
+
+def digest_store(tmp_path: Path, *, every_table: bool = False, cosubjects: bool = False) -> Storage:
+    """Work-lane episodes ``e1`` and ``e2``, a semantic ``s1`` sourced on ``e1``, their vectors and one resonance.
+    ``every_table`` adds a peer edge, a subdivision, an instinct, a recall, a route_shown row and a citing
+    operation in the closed session ``sx`` (so a route plan ships all eleven tables with ``cosubjects``); ``cosubjects``
+    is used by ``digest_ledger``."""
+    s = new_store(tmp_path, "digest")
+    ep(s, "e1", session="sx", at="2026-10-25T10:00:00+00:00")
+    ep(s, "e2", session="sx", at="2026-10-25T10:05:00+00:00")
+    sem(s, "s1", sources=["e1"], at="2026-10-25T10:10:00+00:00")
+    for i, (layer, id) in enumerate([("episode", "e1"), ("episode", "e2"), ("semantic", "s1")]):
+        vec(s, layer, id, seed=i + 1)
+    resonance(s, "r1", "e1", "e2")
+    if every_table:
+        sem(s, "s2", sources=["e2"], at="2026-10-25T10:15:00+00:00")
+        vec(s, "semantic", "s2", seed=9)
+        peer_edge(s, "s1", "s2")
+        subdivision(s, "d1", "s2", ["s1"])
+        recall(s, "l1", targets=["e1", "e2"], session="sx", outcome="used", recall_id="rc1")
+        route_shown(s, "l2", targets=["e1", "s1"], session="sx")
+        op(s, "o1", session="sx", at="2026-10-25T10:20:00+00:00", operation="mark_core", targets=["e1"])
+    return s
+
+
+def digest_ledger(tmp_path: Path, s: Storage):
+    """A ledger on which ``e1`` names jenn and ``s1`` names lee and jenn as co-subjects."""
+    led = ledger(tmp_path / "digest-home", owner="andy", store=s, cosubjects={"e1": "person:jenn"})
+    add_subject(led, ref_of(s, "s1", "semantic"), "person:lee")
+    add_subject(led, ref_of(s, "s1", "semantic"), "person:jenn")
+    return led

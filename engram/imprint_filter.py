@@ -7,11 +7,13 @@ and ``never`` (not copied, not created).
 """
 from __future__ import annotations
 
+import hashlib
+import itertools
 import json
 import re
 import sqlite3
 from collections import Counter
-from collections.abc import MutableMapping
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -942,6 +944,176 @@ def memory_log_rows(conn: sqlite3.Connection, sel: Selection, terms: Terms, clos
         row["target_ids"] = json.dumps(targets)
         row["context"] = json.dumps({k: context[k] for k in _LOG_KEEP[r["event_type"]] if k in context})
         yield row
+
+
+# ---- The package's rows and the plan digest (I 5.4, D22, D42, R5, R26) -------------------------------------
+
+FILTER = "imprint-filter-v1"
+
+
+def _refuse_floats(value: Any) -> None:
+    if isinstance(value, float):
+        raise ValueError("canonical JSON holds no float")
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if not isinstance(k, str):
+                raise ValueError("canonical JSON object keys are strings")
+            _refuse_floats(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            _refuse_floats(v)
+    elif value is not None and not isinstance(value, (str, int, bool)):
+        raise ValueError(f"{type(value).__name__} is not a JSON value")
+
+
+def canonical(value: Any) -> bytes:
+    """The peer's canonical JSON (``identity.py:20-23``): sorted keys, no spaces, UTF-8, no NaN; no floats (R5)."""
+    _refuse_floats(value)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+
+
+def sha256_value(v: str | bytes | None) -> str:
+    """Hex SHA-256 of a TEXT value's UTF-8 bytes or a BLOB's bytes; a null hashes as the empty string."""
+    if v is None:
+        return ""
+    return hashlib.sha256(v if isinstance(v, (bytes, bytearray, memoryview)) else v.encode()).hexdigest()
+
+
+def _json(text: Any) -> Any:
+    return json.loads(text) if isinstance(text, (str, bytes)) else text
+
+
+_ROW_KEYS: dict[str, Callable[[dict], list]] = {
+    "episodes": lambda r: [r["id"], r["lane"], r["created_at"], r["session_id"], sha256_value(r["content"]),
+                           sha256_value(r["context"])],
+    "semantics": lambda r: [r["id"], r["lane"], r["created_at"], sha256_value(r["content"])],
+    "episode_vectors": lambda r: [r["id"], sha256_value(r["embedding"])],
+    "semantic_vectors": lambda r: [r["id"], sha256_value(r["embedding"])],
+    "semantic_sources": lambda r: [r["semantic_id"], r["episode_id"]],
+    "resonances": lambda r: [r["id"], r["memory_a"], r["layer_a"], r["memory_b"], r["layer_b"], r["created_at"]],
+    "semantic_peers": lambda r: [r["peer_id"], r["parent_id"]],
+    "subdivision_events": lambda r: [r["id"], r["parent_id"], sorted(_json(r["peer_ids"]))],
+    "memory_log": lambda r: [r["id"], r["timestamp"], r["event_type"], r["layer"], _json(r["target_ids"]),
+                             _json(r["context"]), r["outcome"]],
+    "operation_log": lambda r: [r["id"], r["timestamp"], r["operation"], r["session_id"], _json(r["target_ids"]),
+                                r["outcome"]],
+    "imprint_subjects": lambda r: [r["memory_id"], r["layer"], r["subject"]],
+}
+
+
+def row_key(table: str, row: dict) -> list:
+    """The row key of I 5.4's table for a row as the package will hold it."""
+    return _ROW_KEYS[table](row)
+
+
+def _instant_text(seconds: int) -> str:
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def scope_of(sel: Selection) -> dict:
+    """The request's ``scope`` (I 7.1): lists sorted, times as ``YYYY-MM-DDTHH:MM:SSZ``, ``since`` null for -inf."""
+    return {"lanes": sorted(sel.lanes), "layers": sorted(sel.layers),
+            "since": None if sel.since is None else _instant_text(sel.since), "until": _instant_text(sel.until),
+            "shared_with": sel.shared_with, "unsourced_semantics": bool(sel.unsourced)}
+
+
+class RowSource(Mapping):
+    """``DIGEST_TABLES`` to rows. Every lookup starts a new cursor over the working copy, so nothing holds a table
+    (R26)."""
+
+    def __init__(self, makers: Mapping[str, Callable[[], Iterable[dict]]]):
+        self._makers = dict(makers)
+
+    def __getitem__(self, table: str) -> Iterable[dict]:
+        return self._makers[table]()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(DIGEST_TABLES)
+
+    def __len__(self) -> int:
+        return len(DIGEST_TABLES)
+
+
+class PackageRows(NamedTuple):
+    rows: Mapping[str, Iterable[dict]]      # a RowSource
+    counts: Counter                         # admissible()'s counts
+    shipped: Shipped
+    others: dict                            # {"memories": n, "people": p} (I 7.1, D27, D43)
+
+
+def _others(sh: Shipped, ctx: SourceContext) -> dict:
+    """The shipped memories with at least one co-subject, and the distinct co-subjects among them. The rows come
+    sorted by memory, so a memory is counted when its id changes; the people go to an id set in the scratch file."""
+    people = IdSet(ctx.scratch)
+    memories = 0
+    last = None
+    for id, layer, subject in cosubject_rows(sh, ctx):
+        if (id, layer) != last:
+            memories += 1
+            last = (id, layer)
+        people.add(subject)
+    return {"memories": memories, "people": len(people)}
+
+
+def package_rows(conn: sqlite3.Connection, sel: Selection, terms: Terms, ctx: SourceContext) -> PackageRows:
+    """Assemble the rows of the eleven digest tables (Tasks 8 to 11) over one connection. The id sets are built
+    once in ``ctx.scratch``; each table's rows are read from a new cursor when asked."""
+    adm = admissible(conn, sel, ctx)
+    sh = shipped(adm, sel)
+    closed = closed_sessions(conn, sel.until, scratch=ctx.scratch)
+    instincts = instinct_ids(conn, ctx.scratch)
+    links = lambda name: (lambda: link_rows(conn, sel, sh)[name])
+    makers = {
+        "episodes": lambda: episode_rows(conn, sh, terms, closed),
+        "semantics": lambda: semantic_rows(conn, sh),
+        "episode_vectors": lambda: vector_rows(conn, "episode", sh.episodes),
+        "semantic_vectors": lambda: vector_rows(conn, "semantic", sh.semantics),
+        "semantic_sources": links("semantic_sources"),
+        "resonances": links("resonances"),
+        "semantic_peers": links("semantic_peers"),
+        "subdivision_events": links("subdivision_events"),
+        "memory_log": lambda: memory_log_rows(conn, sel, terms, closed, sh, instincts),
+        "operation_log": lambda: operation_rows(conn, sel, terms, closed, sh),
+        "imprint_subjects": lambda: ({"memory_id": i, "layer": l, "subject": s} for i, l, s in cosubject_rows(sh, ctx)),
+    }
+    return PackageRows(RowSource(makers), adm.counts, sh, _others(sh, ctx))
+
+
+def contents_of(rows: Mapping[str, Iterable[dict]]) -> dict[str, int]:
+    """The digest tables with at least one row, and their counts (I 7.1), each counted in one pass over a new
+    cursor, so no table is held."""
+    found = {}
+    for table in DIGEST_TABLES:
+        n = sum(1 for _ in rows[table])
+        if n:
+            found[table] = n
+    return found
+
+
+def plan_digest(scope: dict, rows: Mapping[str, Iterable[dict]], *, scratch: Scratch | None = None) -> str:
+    """SHA-256 of ``canonical({"filter", "scope", "rows"})`` in bounded memory (I 5.4): each key's canonical bytes
+    go into a scratch table with no key constraint (a repeated key stays), SQLite sorts the BLOBs, and the pieces
+    are fed to SHA-256 in order. The pieces are exactly the bytes of the whole object."""
+    own = scratch if scratch is not None else Scratch(":memory:")
+    try:
+        digest = hashlib.sha256()
+        digest.update(b'{"filter":' + canonical(FILTER) + b',"rows":{')
+        for n, table in enumerate(sorted(DIGEST_TABLES)):
+            t = own.new_table("CREATE TABLE {t} (k BLOB NOT NULL)")
+            keys = (canonical(row_key(table, r)) for r in rows[table])
+            while batch := list(itertools.islice(keys, 1000)):
+                own.conn.executemany(f"INSERT INTO {t} (k) VALUES (?)", [(k,) for k in batch])
+            digest.update((b"," if n else b"") + canonical(table) + b":[")
+            cur = own.conn.cursor()
+            for i, (k,) in enumerate(cur.execute(f"SELECT k FROM {t} ORDER BY k")):
+                digest.update((b"," if i else b"") + bytes(k))
+            digest.update(b"]")
+            own.conn.execute(f"DROP TABLE {t}")
+        digest.update(b'},"scope":' + canonical(scope) + b"}")
+        return digest.hexdigest()
+    finally:
+        if scratch is None:
+            own.close()
 
 
 # ---- The source (I 5.1) -------------------------------------------------------------------------------------
