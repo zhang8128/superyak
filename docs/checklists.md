@@ -9,6 +9,9 @@ runs the list out loud: in its post, say which list it ran. Add a list when a mi
       2026-10-27 scrub). A branch built on the old history brings the scrubbed files back.
 - [ ] Nothing in the diff names a person with health, contact or identity details, or holds a key or token
       (gitleaks, plus a read of every new doc).
+- [ ] Nothing in the diff describes a security hole that isn't fixed and live yet, in code, docs, lessons or commit
+      messages. Keep it in a members-only room until the fix ships. (Rio Grande pushed one in a lesson on
+      2026-10-27; Tardis caught it.)
 - [ ] The push is needed now: build branches go up once, when ready for review or merge (every push runs CI).
 
 ## Merging to main (law section 2)
