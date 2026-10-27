@@ -5,7 +5,12 @@ Reads no file, opens no database, reads no clock, draws no randomness.
 from __future__ import annotations
 
 import contextvars
+import heapq
 import json
+from array import array
+from bisect import bisect_left
+from itertools import repeat
+from functools import lru_cache
 import re
 from collections import namedtuple
 from dataclasses import dataclass, field, replace
@@ -17,6 +22,7 @@ from lighthouse_protocol import canonical_json
 MAX_RECORDS_PER_LAYER = 256
 MAX_RECORDS = 16_384            # records in one ledger, revoked and replaced ones included (5.4, 15)
 FOLD_BATCH = 4_096               # receipts one fold batch reads, verifies and anchors (9.1, 15)
+LANE_TESTS_KEPT = 4096           # lane tests a State keeps, (object, lanes, anchor, t, deny) -> bool
 PREFETCH_CHUNK = 512            # refs a bulk decision or an eligible set prefetches at once
 STATE_ROWS = 65_536             # per-object rows a State keeps at once; the rest are read again on demand (5.6, 15)
 STATE_LOG_TIMES = 65_536        # log times a State keeps at once; the rest are read again on demand (5.6, 15)
@@ -189,6 +195,22 @@ def parse_object_ref(ref: str) -> ObjectRef:
         if all(_NAME.fullmatch(p) for p in parts):
             return ObjectRef(head, parts[0], None, parts[1])
     raise _bad(rule, "not a mem:, road: or trail: ref", ref)
+
+
+@lru_cache(maxsize=8192)
+def _parsed_or_none(ref: str):
+    """parse_object_ref for a str ref, or None when it raises: a decision parses its object once per record it
+    tests, so the parse is kept for the few refs being decided."""
+    try:
+        return parse_object_ref(ref)
+    except RuleError:
+        return None
+
+
+def _parsed(ref) -> ObjectRef:
+    """parse_object_ref, cached for a well-formed str ref; a malformed one raises as parse_object_ref does."""
+    got = _parsed_or_none(ref) if isinstance(ref, str) else None
+    return got if got is not None else parse_object_ref(ref)
 
 
 def parse_copy_ref(ref: str) -> CopyRef:
@@ -941,9 +963,26 @@ def _audience_entry(state: State, v: str, layer: str, use: Use, anchor: int, den
     return False
 
 
+def _lanes_ok(state: State, obj: str, lanes: tuple, anchor: int, t: int, deny: bool) -> bool:
+    """The lanes dimension (P 5.3's table): some lane of `lanes` touched (a deny) or held (an allow). Kept per State
+    for the last LANE_TESTS_KEPT (object, lanes, anchor, t, deny), so the layers of one decision share it."""
+    memo = state._memo(("lane-tests",), dict)
+    key = (obj, lanes, anchor, t, deny)
+    held = memo.get(key)
+    if held is None:
+        if deny:
+            held = any(lane_touched(state, obj, lane, anchor, t) for lane in lanes)
+        else:
+            held = any(lane_held(state, obj, lane, anchor, t) for lane in lanes)
+        if len(memo) >= LANE_TESTS_KEPT:
+            memo.clear()
+        memo[key] = held
+    return held
+
+
 def _object_dims(state: State, sel: Selector, layer: str, anchor: int, use: Use, action: str, deny: bool,
                  assume: frozenset, check_validity: bool) -> bool:
-    ref = parse_object_ref(use.obj)
+    ref = _parsed(use.obj)
     if not _star_or_in(sel.kinds, ref.kind):
         return False
     if not _star_or_in(sel.stores, ref.instance_id):
@@ -953,12 +992,8 @@ def _object_dims(state: State, sel: Selector, layer: str, anchor: int, use: Use,
     if sel.memories != STAR and use.obj not in sel.memories:
         return False
     t = use.at
-    if sel.lanes != STAR:
-        if deny:
-            if not any(lane_touched(state, use.obj, lane, anchor, t) for lane in sel.lanes):
-                return False
-        elif not any(lane_held(state, use.obj, lane, anchor, t) for lane in sel.lanes):
-            return False
+    if sel.lanes != STAR and not _lanes_ok(state, use.obj, sel.lanes, anchor, t, deny):
+        return False
     if sel.collections != STAR:
         rows = [r for r in state.member_of.get(use.obj, ()) if r.collection in sel.collections]
         if not any(_membership_counts(state, r, layer, anchor, use, action, deny, assume, check_validity)
@@ -1055,6 +1090,29 @@ def record_matches(state: State, record: Record, use: Use, action: str) -> bool:
         return False
     return (_chain_ok(state, record, use, action, deny, True)
             and _grant_ok(state, record, use, action, deny, True))
+
+
+def _matches_prefiltered(state: State, record: Record, use: Use, action: str) -> bool:
+    """record_matches for a record of `_prefilter(state, layer, use, action)`: rule 2 on the record's own selector
+    (requesters, actions, purposes, audience) is what the pre-filter tested, for this requester, place, purpose,
+    time and action, so only the object dimensions, rule 1, and rules 4 and 5 are tested here."""
+    deny = record.effect == "deny"
+    if _revoked(state, record) or not _in_interval(record, use.at):
+        return False
+    if not _object_dims(state, record.selector, record.layer, record.anchor, use, action, deny, frozenset(), True):
+        return False
+    return (_chain_ok(state, record, use, action, deny, True)
+            and _grant_ok(state, record, use, action, deny, True))
+
+
+def _candidate_prefiltered(state: State, record: Record, use: Use, action: str) -> bool:
+    """record_candidate for a record of `_prefilter(state, layer, use, action)` (see `_matches_prefiltered`)."""
+    if record.effect != "allow" or _revoked(state, record):
+        return False
+    if not _object_dims(state, record.selector, record.layer, record.anchor, use, action, False, frozenset(), False):
+        return False
+    return (_chain_ok(state, record, use, action, False, False)
+            and _grant_ok(state, record, use, action, False, False))
 
 
 def record_candidate(state: State, record: Record, use: Use, action: str) -> bool:
@@ -1325,6 +1383,137 @@ def _prefilter(state: State, layer_id: str, use: Use, action: str) -> list:
     return state._memo(("prefilter", layer_id, use.requester, use.place, use.purpose, use.at, action), compute)
 
 
+def _memory_index(state: State) -> tuple:
+    """(refs, positions, records): every (memory ref, record) pair where the record's own selector lists the ref
+    in `memories`, sorted by ref; refs[i] is listed by records[positions[i]]. Revoked records too: a replaced one is
+    read through its replacement's chain (P 5.3 rule 4). A list of the refs the records already hold and an array
+    of 4-byte positions, merged from each list sorted on its own, so building it holds little more than the
+    result. Made once per State."""
+    def compute():
+        listing = [r for r in state.records.values() if r.selector.memories != STAR]
+        refs, positions = [], array("I")
+        for m, k in heapq.merge(*[zip(sorted(r.selector.memories), repeat(k)) for k, r in enumerate(listing)]):
+            refs.append(m)
+            positions.append(k)
+        return refs, positions, tuple(listing)
+    return state._memo(("memory-index",), compute)
+
+
+def _listing(state: State, obj: str) -> dict:
+    """{layer: ids of its records whose own selector lists obj in `memories`}, for the object being decided: kept
+    for the last object only, which every layer of its decision asks for."""
+    last = state._cache.get(("listing",))           # (obj, its listing), replaced whole: safe to read anywhere
+    if last is not None and last[0] == obj:
+        return last[1]
+    refs, positions, listing = _memory_index(state)
+    hit: dict = {}
+    i = bisect_left(refs, obj)
+    while i < len(refs) and refs[i] == obj:
+        r = listing[positions[i]]
+        hit.setdefault(r.layer, set()).add(r.id)
+        i += 1
+    state._cache[("listing",)] = (obj, hit)
+    return hit
+
+
+def _plan(state: State, layer_id: str, use: Use, action: str) -> tuple:
+    """The pre-filtered records of a layer for this requester, place, purpose, time and action, split by what an
+    object must have for each to match: (records, positions of those whose own selector names no memory and no
+    collection, {collection: positions of those naming it and no memory}, {record id: position}, {static object
+    key: the first group with kind, store and layer tested}). A record whose own selector names memories can
+    match only a listed object (`_listing`); one naming collections, only an object with a membership row in one
+    of them. Made once per pre-filter."""
+    def compute():
+        recs = _prefilter(state, layer_id, use, action)
+        always, by_coll, pos, how = [], {}, {}, []
+        t = use.at
+        for i, r in enumerate(recs):
+            pos[r.id] = i
+            sel = r.selector
+            if _revoked(state, r) or not _in_interval(r, t):
+                how.append(_DEAD)
+            elif r.replaces is not None or not r.backing == "person":
+                how.append(_FULL)
+            elif sel.memories == STAR and sel.collections == STAR:
+                how.append(_STATIC if sel.lanes == STAR else _LANES)
+            else:
+                how.append(_FULL)
+            if sel.memories != STAR:
+                continue
+            if sel.collections != STAR:
+                for c in sel.collections:
+                    by_coll.setdefault(c, []).append(i)
+            else:
+                always.append(i)
+        return recs, tuple(always), by_coll, pos, {}, tuple(how)
+    return state._memo(("plan", layer_id, use.requester, use.place, use.purpose, use.at, action), compute)
+
+
+_FULL, _STATIC, _LANES, _DEAD = 0, 1, 2, 3
+
+
+def _plan_match(state: State, plan: tuple, i: int, use: Use, action: str, first: frozenset) -> bool:
+    """record_matches for record i of a plan whose candidates `first` passed the static object test: a live,
+    person-backed record with no `replaces` and no memory or collection list matches by its lanes alone."""
+    r = plan[0][i]
+    how = plan[5][i]
+    if how == _DEAD:
+        return False
+    if i in first:
+        if how == _STATIC:
+            return True
+        if how == _LANES:
+            return _lanes_ok(state, use.obj, r.selector.lanes, r.anchor, use.at, r.effect == "deny")
+    return _matches_prefiltered(state, r, use, action)
+
+
+def _static_ok(sel: Selector, ref: ObjectRef) -> bool:
+    return (_star_or_in(sel.kinds, ref.kind) and _star_or_in(sel.stores, ref.instance_id)
+            and (sel.layers == STAR or ref.layer in sel.layers))
+
+
+def _candidates(state: State, layer_id: str, use: Use, action: str) -> list:
+    """The records of `_prefilter(state, layer_id, use, action)` that can match use.obj, in pre-filter order: every
+    other one fails an object dimension for it (kind, store, layer, `memories`, or `collections` with no row of
+    the object), so it matches no use on it and is no candidate (P 6.5). A malformed object gets them all, so it
+    is refused or raises as before."""
+    return [_plan(state, layer_id, use, action)[0][i] for i in _candidate_positions(state, layer_id, use, action)[1]]
+
+
+def _candidate_positions(state: State, layer_id: str, use: Use, action: str) -> tuple:
+    """(the plan, the positions of `_candidates` in it, the positions that passed the static test). A malformed
+    object gets every position and none passed."""
+    plan = _plan(state, layer_id, use, action)
+    recs, always, by_coll, pos, static = plan[:5]
+    obj = use.obj
+    ref = _parsed_or_none(obj) if isinstance(obj, str) else None
+    if ref is None:
+        return plan, range(len(recs)), frozenset()
+    skey = (ref.kind, ref.instance_id, ref.layer)
+    first = static.get(skey)
+    if first is None:
+        kept = tuple(i for i in always if _static_ok(recs[i].selector, ref))
+        first = static[skey] = (kept, frozenset(kept))
+    picked = None
+    listed = _listing(state, obj).get(layer_id)
+    if listed:
+        picked = set(first[0])
+        for rid in listed:
+            i = pos.get(rid)
+            if i is not None:
+                picked.add(i)
+    if by_coll:
+        for m in state.member_of.get(obj, ()):
+            hit = by_coll.get(m.collection)
+            if hit:
+                if picked is None:
+                    picked = set(first[0])
+                picked.update(hit)
+    if picked is None:
+        return plan, first[0], first[1]
+    return plan, sorted(picked), first[1]
+
+
 def layer_version(state: State, layer_id: str) -> int:
     """The highest seq that touches the layer: its records and grants (made, revoked), and the place's own
     creation, retirement and stewards. It reads nothing of a use, so it is made once per layer for a State."""
@@ -1381,13 +1570,26 @@ def effective_end(state: State, record: Record, matched_memberships: Sequence) -
     return min(ends) if ends else None
 
 
+def _record_terms(state: State, record: Record, t: int) -> tuple[int | None, bool]:
+    """`_terms` for an object with no grant-backed membership: no membership route, so the record's own end and
+    its own grant chain's validity at t. Made once per (record, t) for a State."""
+    def compute():
+        invalid = False
+        if record.backing.startswith("grant:"):
+            invalid = not _grant_terms(state, record.backing[len("grant:"):], t)[1]
+        return effective_end(state, record, ()), invalid
+    return state._memo(("record-terms", record.id, t), compute)
+
+
 def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool) -> tuple[int | None, bool]:
     """(effective end, grant chain invalid at t) of an allow for this use (P 6.5 step 5 and the codes). For each
     selector with a collections list (the record's, its replaces chain's and its grants' envelopes), the
     membership route is: none when the object is in the collection by a person-backed row, else the best
     grant-backed row, the one whose chain ends latest. With valid_only, only memberships that count with their
-    chains valid are read."""
+    chains valid are read. An object with no grant-backed row has no route (`_record_terms`)."""
     t = use.at
+    if not _grant_rows(state, use.obj):
+        return _record_terms(state, record, t)
     invalid = False
     selectors = [(record.selector, record.layer)]
     cur, n = record.replaces, 0
@@ -1438,19 +1640,39 @@ def _ledger_verdict(state: State, layer: Layer, use: Use, action: str) -> tuple[
     exists = layer.id in (state.agents if layer.kind == "restriction" else state.places)
     if not exists:
         return "missing", ()
-    candidates = _prefilter(state, layer.id, use, action)
-    if any(r.effect == "deny" and record_matches(state, r, use, action) for r in candidates):
+    plan, positions, first = _candidate_positions(state, layer.id, use, action)
+    recs = plan[0]
+    if any(recs[i].effect == "deny" and _plan_match(state, plan, i, use, action, first) for i in positions):
         return "deny", ()
     if layer.kind in ("restriction", "co-subject"):
         return "silent", ()               # a restriction layer, and a co-subject's (P36), is only its denies
-    allows = [r for r in candidates if r.effect == "allow" and record_matches(state, r, use, action)]
+    allows = [recs[i] for i in positions if recs[i].effect == "allow" and _plan_match(state, plan, i, use, action, first)]
     if not allows:
         return "silent", ()
+    if len(allows) == 1:
+        return "allow", (allows[0].id,)
+    if not _grant_rows(state, use.obj):
+        t = use.at
+        return "allow", (min(allows, key=lambda r: _record_rank(state, r, t)).id,)
 
     def rank(r):
         end = _terms(state, r, use, action, True)[0]
         return (end is not None, -(end or 0), _units(r.id))
     return "allow", (min(allows, key=rank).id,)
+
+
+def _grant_rows(state: State, obj) -> bool:
+    """Does the object have a grant-backed membership row (so `_terms` reads a route through it)?"""
+    return any(m.backing.startswith("grant:") for m in state.member_of.get(obj, ()))
+
+
+def _record_rank(state: State, r: Record, t: int) -> tuple:
+    """The citation order of P 6.5 step 5 for an object with no grant-backed membership: latest effective end
+    (none is latest), then smallest id. Made once per (record, t) for a State."""
+    def compute():
+        end = _record_terms(state, r, t)[0]
+        return (end is not None, -(end or 0), _units(r.id))
+    return state._memo(("record-rank", r.id, t), compute)
 
 
 def layer_verdict(state: State, layer: Layer, use: Use, action: str) -> str:
@@ -1463,8 +1685,8 @@ def layer_verdict(state: State, layer: Layer, use: Use, action: str) -> str:
 def _silent_code(state: State, layer: Layer, use: Use, action: str) -> str:
     """P 6.5 step 8 for a consent layer with no matching allow: read every candidate (and its chains)."""
     expired = invalid = not_yet = False
-    for r in _prefilter(state, layer.id, use, action):
-        if not record_candidate(state, r, use, action):
+    for r in _candidates(state, layer.id, use, action):
+        if not _candidate_prefiltered(state, r, use, action):
             continue
         end, bad = _terms(state, r, use, action, False)
         expired = expired or (end is not None and end <= use.at)

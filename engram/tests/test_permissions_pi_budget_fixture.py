@@ -118,3 +118,17 @@ def test_u24_derived_trails_are_decided_object_by_object_and_allowed():
                    purpose="trail-evaluation", at=AT, named=False, names=lambda t: touches(t, 32, universe=800))
     d = decide_bulk(state, bulk, group=False)
     assert d.allowed, d.refusal
+
+
+def test_the_bulk_world_has_7_memory_lists_and_one_road_trail_allow_in_each_layer():
+    s, _ = generated_world(placements=0, layers=43, records_per_layer=256, universe=800, trails=6)
+    by_layer = {}
+    for r in s.records.values():
+        by_layer.setdefault(r.layer, []).append(r)
+    assert len(by_layer) == 41
+    for layer, recs in by_layer.items():
+        lists = [r for r in recs if r.effect == "allow" and r.selector.memories != permissions.STAR
+                 and len(r.selector.memories) == 512]
+        assert len(lists) == 7, layer
+        trail = [r for r in recs if r.effect == "allow" and tuple(r.selector.kinds) == ("road", "trail")]
+        assert len(trail) == 1 and trail[0].selector.memories == permissions.STAR, layer
