@@ -2,6 +2,7 @@
 hash chain. A receipt names what happened and never what the store holds, so each event's detail keys are listed once,
 in DETAIL_KEYS (R25), and a receipt holding any other key is refused."""
 import base64
+import copy
 import errno
 import fcntl
 import hashlib
@@ -12,6 +13,7 @@ import secrets
 import shutil
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from .auth import token_hash
@@ -418,6 +420,133 @@ def permission_record(*, station, request_id, owner, owner_id, ship_id, request,
             'request_sha256': request_sha256, 'plan_digest': request['plan_digest'],
             'attestation': 'others-copied-at-home-v1' if at_home else 'no-unconsented-others-v1',
             'created': now, 'records': records}
+
+
+CEILING = frozenset({('recall', 'calibration'), ('read', 'calibration'), ('imprint', 'calibration'),
+                     ('recall', 'trail-evaluation'), ('read', 'trail-evaluation'), ('imprint', 'trail-evaluation'),
+                     ('route', 'trail-evaluation')})
+AGENT = 'agent:station-imprints'
+_STATUS_OF = {'admission': 'approved', 'trail-evaluation': 'admitted'}
+_RECORD_KINDS = {'memory': ('memory',), 'road-or-trail': ('road', 'trail')}
+_RANK = {'audience': 0, 'requester': 1, 'action': 2, 'purpose': 3}
+
+
+def need(kind, *, route):
+    """I 8's Need(admission, t) and Need(trail-evaluation, t) as (object kind, action, purpose): the object kind is
+    `memory` or `road-or-trail`. Only admission reads `route`: R(I) is empty without it."""
+    if kind == 'admission':
+        out = {('memory', a, 'calibration') for a in ('recall', 'read', 'imprint')}
+        if route:
+            out |= {('road-or-trail', a, 'trail-evaluation') for a in ('recall', 'read', 'imprint')}
+            out |= {('memory', a, 'trail-evaluation') for a in ('recall', 'read')}
+        return frozenset(out)
+    if kind == 'trail-evaluation':
+        return frozenset({('memory', 'recall', 'trail-evaluation'), ('memory', 'read', 'trail-evaluation'),
+                          ('road-or-trail', 'route', 'trail-evaluation')})
+    raise ValueError(f'Unknown imprint use kind {kind!r}')
+
+
+def _shortenings(receipts, by=None):
+    return [r['detail']['valid_until'] for r in receipts
+            if r['event'] == 'shortened' and (by is None or r.get('actor_id') == by)]
+
+
+def effective_end(permission, receipts):
+    """The earliest of the records' `valid_until` and every `shortened` receipt's, by the owner or the ship (I 8,
+    item 4). A shortening only narrows: a later time changes nothing."""
+    return min([r['valid_until'] for r in permission['records']] + _shortenings(receipts))
+
+
+def owner_layer(imprints, *, owner_id):
+    """The owner's layer at the station (I 8): every inner record of the owner's imprints, less those the owner
+    withdrew, each `valid_until` cut by the owner's own shortenings. The ship's withdrawal revokes nothing of the
+    owner's, and its shortening narrows the ceiling only. `imprints` holds (permission, receipts) pairs."""
+    layer = []
+    for permission, receipts in imprints:
+        if permission['owner_id'] != owner_id:
+            continue
+        if any(r['event'] == 'withdrawn' and r.get('actor_id') == owner_id for r in receipts):
+            continue
+        cut = _shortenings(receipts, owner_id)
+        for record in permission['records']:
+            record = copy.deepcopy(record)
+            record['valid_until'] = min([record['valid_until']] + cut)
+            layer.append(record)
+    return layer
+
+
+@dataclass(frozen=True)
+class UseDecision:
+    allowed: bool
+    term: str | None
+    code: str | None
+    valid_until: int
+    records: tuple[str, ...]
+
+
+def _holds(listed, value):
+    return listed == '*' or value in listed
+
+
+def _failing_stage(records, need_, source, home, t):
+    """The first stage at which no one record speaks for `need_`, or None and the records that do. A record speaks
+    when its stores, audience, requesters, kinds, action and purpose hold and `valid_from <= t < valid_until`. Records
+    of other stores are not about this copy and are set aside first; an object kind or date no record covers is
+    reported as `action`, the stage that asks what the record allows on this object."""
+    kind, action, purpose = need_
+    live = [r for r in records if _holds(r['selector']['objects']['stores'], source)]
+    live = [r for r in live if _holds(r['selector']['audience'], home)]
+    if not live:
+        return 'audience', []
+    live = [r for r in live if _holds(r['selector']['requesters'], AGENT)]
+    if not live:
+        return 'requester', []
+    live = [r for r in live if r['valid_from'] <= t < r['valid_until']
+            and all(_holds(r['selector']['objects']['kinds'], k) for k in _RECORD_KINDS[kind])]
+    live = [r for r in live if _holds(r['selector']['actions'], action)]
+    if not live:
+        return 'action', []
+    live = [r for r in live if _holds(r['selector']['purposes'], purpose)]
+    if not live:
+        return 'purpose', []
+    return None, live
+
+
+def decide_use(permission, receipts, owner_records, *, status, kind, t, operator, uses=None):
+    """The station's check for one use of one copy (I 8, "The decision"): allowed exactly when Need is inside the
+    owner's layer and inside this copy's ceiling. A refusal names the first failing term, in I 8's order. Item 6 is
+    not read: every admitted imprint satisfies it by Task 24's request rule and check 12, and every step-1 use is in
+    the operator's home. `uses` replaces `need` in tests only."""
+    end = effective_end(permission, receipts)
+    source, home = permission['source_instance_id'], f'place:home/{operator}'
+    own = permission['records']
+
+    def refuse(term):
+        code = {'valid_from': 'NOT_YET', 'end': 'EXPIRED'}.get(term, 'NO_ALLOW')
+        return UseDecision(False, term, code, end, ())
+
+    if status != _STATUS_OF.get(kind):
+        return refuse('status')
+    if t < min(r['valid_from'] for r in own):
+        return refuse('valid_from')
+    if t >= end:
+        return refuse('end')
+    if any(r['event'] == 'withdrawn' and r['at'] <= t for r in receipts):
+        return refuse('withdrawal')
+    if uses is None:
+        uses = need(kind, route=any('route' in r['selector']['actions'] for r in own))
+    uses = list(uses)
+    failed = [_failing_stage(owner_records, u, source, home, t)[0] for u in uses]
+    failed = [s for s in failed if s]
+    if failed:
+        return refuse(min(failed, key=_RANK.__getitem__))
+    used = []
+    for u in uses:
+        stage, speaking = _failing_stage(own, u, source, home, t)
+        if stage or (u[1], u[2]) not in CEILING:
+            return refuse('ceiling')
+        used += [r['id'] for r in speaking if r['id'] not in used]
+    return UseDecision(True, None, None, end, tuple(used))
 
 
 class Imprints:
