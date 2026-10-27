@@ -72,6 +72,38 @@ class Auth:
                 (actor,),
             )]
 
+    def _attempt(self, db, username, password, source):
+        """Checks a password against the login limits (8 per user and 40 per source per 5 minutes) inside the caller's
+        transaction, counting a failure. Returns (row, problem): the user's row when the password is right and a 429
+        or 401 Problem when not. The caller raises the problem after its transaction commits, so failures persist."""
+        now = self.clock()
+        keys = ['user:' + username, 'source:' + source]
+        attempts = [db.execute('SELECT * FROM login_attempts WHERE key=?', (key,)).fetchone() for key in keys]
+        if any(row and row['reset'] > now and row['count'] >= limit for row, limit in zip(attempts, [8, 40])):
+            return None, Problem(429, 'Too many attempts; try again later')
+        row = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
+        candidate = password_hash(password, row['salt'] if row else b'\0' * 16)
+        valid = hmac.compare_digest(candidate, row['password_hash'] if row else b'\0' * 32) and row and not row['activation_pending'] and row['kind'] == 'person'
+        if not valid:
+            for key, attempt in zip(keys, attempts):
+                count = attempt['count'] + 1 if attempt and attempt['reset'] > now else 1
+                reset = attempt['reset'] if attempt and attempt['reset'] > now else now + 300
+                db.execute('INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)', (key, count, reset))
+            return None, Problem(401, 'Invalid username or password')
+        db.execute('DELETE FROM login_attempts WHERE key=?', (keys[0],))
+        return row, None
+
+    def check_password_attempt(self, username, password, source):
+        """R19: a person's password typed again, checked and counted as /api/login checks it. True when right, False
+        when wrong (the attempt is counted and committed); too many attempts raise Problem(429)."""
+        text(username, 'username', 254)
+        text(password, 'password', 1024)
+        with self.transaction() as db:
+            row, problem = self._attempt(db, username, password, source)
+        if problem is not None and problem.status == 429:
+            raise problem
+        return problem is None
+
     def login(self, username, password, source):
         text(username, 'username', 254)
         text(password, 'password', 1024)
@@ -79,26 +111,11 @@ class Auth:
         failure = None
         result = None
         with self.transaction() as db:
-            now = self.clock()
-            keys = ['user:' + username, 'source:' + source]
-            attempts = [db.execute('SELECT * FROM login_attempts WHERE key=?', (key,)).fetchone() for key in keys]
-            if any(row and row['reset'] > now and row['count'] >= limit for row, limit in zip(attempts, [8, 40])):
-                failure = Problem(429, 'Too many attempts; try again later')
-            else:
-                row = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
-                candidate = password_hash(password, row['salt'] if row else b'\0' * 16)
-                valid = hmac.compare_digest(candidate, row['password_hash'] if row else b'\0' * 32) and row and not row['activation_pending'] and row['kind'] == 'person'
-                if not valid:
-                    for key, attempt in zip(keys, attempts):
-                        count = attempt['count'] + 1 if attempt and attempt['reset'] > now else 1
-                        reset = attempt['reset'] if attempt and attempt['reset'] > now else now + 300
-                        db.execute('INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)', (key, count, reset))
-                    failure = Problem(401, 'Invalid username or password')
-                else:
-                    db.execute('DELETE FROM login_attempts WHERE key=?', (keys[0],))
-                    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-                    db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), row['id'], csrf, now + 86400))
-                    result = {'user': public_user(row), 'csrf_token': csrf, 'token': token}
+            row, failure = self._attempt(db, username, password, source)
+            if failure is None:
+                token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+                db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), row['id'], csrf, self.clock() + 86400))
+                result = {'user': public_user(row), 'csrf_token': csrf, 'token': token}
         if failure:
             raise failure
         return result

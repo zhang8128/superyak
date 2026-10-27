@@ -640,6 +640,21 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
                 return store.imprint_context(user['id'])
             return {'imprints': store.list_imprints(user['id'])}
 
+        @app.get('/api/imprints/code/{code}')
+        def imprint_view(code: str, request: Request):
+            return store.imprint_preview(actor(request), code)  # the ship's owner only; anyone else gets 404
+
+        @app.post('/api/imprints/{request_id}/confirm')
+        async def imprint_confirm(request_id: str, request: Request):
+            who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403
+            return store.confirm_imprint(who, request_id, code=data.get('code'), password=data.get('password'),
+                                         attest=data.get('attest'),
+                                         source=request.client.host if request.client else 'unknown')
+
+        @app.post('/api/imprints/{request_id}/decline')
+        def imprint_decline(request_id: str, request: Request):
+            return store.decline_imprint(actor(request), request_id)
+
     @app.get('/api/mentions')
     def mentions(request: Request, after: int = 0, limit: int = 50):
         return store.mentions(member(request)['id'], after, limit)

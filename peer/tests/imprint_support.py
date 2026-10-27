@@ -158,6 +158,15 @@ def request_doc(**changes):
     for key, value in changes.items():
         if key == 'owner_ship':
             continue
+        if key == 'route':
+            doc['terms']['actions'] = ['imprint', 'route'] if value else ['imprint']
+            doc['terms']['purposes'] = ['calibration', 'trail-evaluation'] if value else ['calibration']
+            if not value:
+                doc['contents'].pop('memory_log', None)
+            continue
+        if key == 'ancestry':
+            doc['source_ancestry'] = list(value)
+            continue
         target = doc
         *path, last = key.split('.')
         for part in path:

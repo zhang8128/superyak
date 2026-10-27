@@ -1,13 +1,14 @@
 """Store-copy imprints on the station (spec I 7, 8, 12; plan Task 23): the request and receipt tables, and the receipts'
 hash chain. A receipt names what happened and never what the store holds, so each event's detail keys are listed once,
 in DETAIL_KEYS (R25), and a receipt holding any other key is refused."""
+import base64
 import hashlib
 import json
 import os
 import re
 import secrets
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from .auth import token_hash
 from .common import Problem, uid
@@ -23,6 +24,42 @@ CREATE TABLE IF NOT EXISTS imprint_requests(id TEXT PRIMARY KEY, imprint_id TEXT
 CREATE TABLE IF NOT EXISTS imprint_receipts(seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
   request_id TEXT NOT NULL REFERENCES imprint_requests(id), record TEXT NOT NULL, signature TEXT);
 '''
+
+STATION_NAME = 'Deep Space 9'
+PERMISSION_LIFE = 7 * 86400
+TIMES_WORDS = ('Each memory keeps when it was written. Each episode keeps how often and when last it was recalled. '
+               'Resonances, pairs of memories recalls returned together, keep when they formed and when either was '
+               'last recalled. These show when memories were recalled together.')
+KEEPS_WORDS = ('If you allow, the station keeps this permission, its receipts and a row with the ids, your ship and the '
+               'times (no memory content) until 400 days after the copy is deleted, then removes them all. Its nightly '
+               'backups keep copies of them for about 8 weeks more, longer if the Pi was off, and also off the Pi if an '
+               'off-Pi copy is set up. If you decline, it keeps only that row, with no scope or counts, for 30 days. '
+               'Nothing is kept with no end.')
+OTHERS_AT_HOME_WORDS = ('{n} of these memories have other people recorded on them ({p} people). They will be copied, '
+                        'and each keeps those people as co-subjects, so no use of it outside your home, and none that '
+                        'shows it to an agent, can happen without their yes. Other memories may mention people Engram '
+                        'has no record of, such as family, colleagues, patients or study participants. They are copied '
+                        'too, on your yes alone, with no one else recorded on them.')
+OTHERS_AT_HOME_NONE_WORDS = ('Engram has no record of the people these memories mention, so no one but you is recorded '
+                             'on them. Memories that mention family, colleagues, patients or study participants are '
+                             'copied too, on your yes alone.')
+OTHERS_AWAY_WORDS = ('Memories with other people recorded on them stay on your machine. Other memories may mention '
+                     'people Engram has no record of. They leave on your yes.')
+CHECK_TEXT = ("Nothing I am sending is about another person who hasn't agreed to share it, and none of it is patient "
+              "or participant data.")
+CHECK_ADVICE = "If you can't confirm this, don't allow. Narrow the plan on your machine, or stop."
+CHECK_TEXT_AT_HOME = ('I know these memories may be about other people, such as family, colleagues, patients or study '
+                      'participants. {n} of them have other people recorded on them ({p} people). They are copied with '
+                      'those people as co-subjects, so no use of them outside my home, and none that shows them to an '
+                      'agent, can happen without their yes. Other memories may mention people Engram has no record of. '
+                      'They are copied on my yes alone, with no one else recorded on them.')
+CHECK_TEXT_AT_HOME_NONE = ('I know these memories may be about other people, such as family, colleagues, patients or '
+                           'study participants. Engram has no record of the people they mention, so no one but me is '
+                           'recorded on them. They are copied on my yes alone.')
+ACTIONS_WORDS = 'recall, read and imprint on these memories'
+ROUTE_WORDS = ('; for the trail evaluation, keeping which session wrote each memory and the recall log, which make your '
+               'trails, and route over their roads and trails')
+NO_ROUTE_WORDS = 'which session wrote each memory, and the recall log, stay on your machine'
 
 STATUSES = ('requested', 'allowed', 'received', 'approved', 'admitted', 'deleting', 'deleted', 'declined', 'expired')
 DELETE_REASONS = ('denied', 'failed', 'withdrawn', 'ended', 'upload-expired', 'review-expired', 'station', 'missing',
@@ -192,6 +229,48 @@ def check_request(doc, *, super_admin, owner_username):
     return doc
 
 
+def _filled(words, others):
+    text = words.format(n=others['memories'], p=others['people'])
+    return text.replace('(1 people)', '(1 person)')
+
+
+def _mib(size):
+    return f'{size / 2**20:.1f} MiB'
+
+
+def _stamp(seconds):
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def permission_record(*, station, request_id, owner, owner_id, ship_id, request, request_sha256, now):
+    """I 8's imprint-permission: r_M, and with `route` r_T. The attestation follows the stored request's owner and
+    audience and never the browser (D27). Every list is sorted; ids are `r-` and 32 random hex."""
+    terms, imprint_id, source = request['terms'], request['imprint_id'], request['source_instance_id']
+    route = 'route' in terms['actions']
+    at_home = terms['audience'] == [f'place:home/{owner}']
+    ends = now + terms['days'] * 86400
+
+    def inner(kinds, objects, actions, purposes):
+        return {'id': 'r-' + secrets.token_hex(16), 'layer': f'place:home/{owner}', 'effect': 'allow',
+                'selector': {'audience': sorted(terms['audience']), 'requesters': ['agent:station-imprints'],
+                             'objects': {'kinds': kinds, 'stores': [source], 'layers': '*', 'lanes': '*',
+                                         'collections': '*', 'memories': '*', **objects},
+                             'actions': sorted(actions), 'purposes': sorted(purposes)},
+                'valid_from': now, 'valid_until': ends, 'anchor': now, 'backing': 'person', 'set_by': f'person:{owner}',
+                'channel': 'browser', 'under_grant': None, 'proposal_id': None, 'replaces': None,
+                'reason': f'imprint {imprint_id[:4]} at {STATION_NAME}', 'created': now}
+
+    records = [inner(['memory'], {'collections': [f'collection:{owner}/imprint-{imprint_id}']},
+                     ['imprint', 'read', 'recall'], ['calibration', 'trail-evaluation'] if route else ['calibration'])]
+    if route:
+        records.append(inner(['road', 'trail'], {}, ['imprint', 'read', 'recall', 'route'], ['trail-evaluation']))
+    return {'kind': 'imprint-permission', 'station': station, 'id': request_id, 'owner': f'person:{owner}',
+            'owner_id': owner_id, 'ship_id': ship_id, 'imprint_id': imprint_id, 'source_instance_id': source,
+            'request_sha256': request_sha256, 'plan_digest': request['plan_digest'],
+            'attestation': 'others-copied-at-home-v1' if at_home else 'no-unconsented-others-v1',
+            'created': now, 'records': records}
+
+
 class Imprints:
     def _append_imprint_receipt(self, db, request_id, event, actor_id, detail, *, sign):
         """Appends one receipt to the permission's chain inside the caller's transaction (BEGIN IMMEDIATE, so two
@@ -316,3 +395,112 @@ class Imprints:
                           f'r.delete_reason, u.username AS ship FROM imprint_requests r JOIN users u ON u.id=r.ship_id '
                           f'WHERE r.{column}=? ORDER BY r.created DESC, r.rowid DESC', (value,)).fetchall()
         return [dict(row) for row in rows]
+
+    def _owned_open_request(self, db, actor, *, code=None, request_id=None):
+        """The `requested` row of a ship the actor owns, whose unexpired code matches (a 404 for anything else, so a
+        stranger learns nothing), with its staged request."""
+        if code is not None:
+            if not isinstance(code, str) or not 1 <= len(code) <= 64:
+                raise Problem(404, 'No such imprint request')
+            found = db.execute('SELECT * FROM imprint_requests WHERE code_hash=?', (token_hash(code),)).fetchone()
+        else:
+            found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+        if (found is None or found['owner_id'] != actor or found['status'] != 'requested'
+                or (code is not None and found['expires'] <= self.clock())):
+            raise Problem(404, 'No such imprint request')
+        return found
+
+    def _staged_request(self, found):
+        try:
+            raw = (self.data_dir / 'imprints' / found['id'] / 'request.json').read_bytes()
+        except OSError:
+            raise Problem(404, 'No such imprint request') from None
+        if hashlib.sha256(raw).hexdigest() != found['request_sha256']:
+            raise Problem(404, 'No such imprint request')
+        return json.loads(raw)
+
+    def imprint_preview(self, actor, code):
+        """The confirm view's data (I 9): every field of the request in words, for the ship's owner only."""
+        with self.transaction() as db:
+            found = self._owned_open_request(db, actor, code=code)
+            doc = self._staged_request(found)
+            ship = db.execute('SELECT username FROM users WHERE id=?', (found['ship_id'],)).fetchone()['username']
+            machine = db.execute('SELECT machine FROM dockings WHERE ship_id=? ORDER BY created DESC LIMIT 1',
+                                 (found['ship_id'],)).fetchone()
+            owner = db.execute('SELECT username FROM users WHERE id=?', (actor,)).fetchone()['username']
+            operator = db.execute('SELECT username, name FROM users WHERE username=?',
+                                  (self._imprint_operator(db),)).fetchone()
+        scope, terms, others = doc['scope'], doc['terms'], doc['others']
+        route, at_home = 'route' in terms['actions'], terms['audience'] == [f'place:home/{owner}']
+        ancestry = [a[:4] for a in doc['source_ancestry']]
+        if not ancestry and doc['source_ancestry_complete']:
+            lineage = 'copied from no recorded store'
+        else:
+            lineage = 'lineage complete' if doc['source_ancestry_complete'] else 'lineage incomplete'
+        if at_home and others['memories'] > 0:
+            other_words, check = _filled(OTHERS_AT_HOME_WORDS, others), _filled(CHECK_TEXT_AT_HOME, others)
+        elif at_home:
+            other_words, check = OTHERS_AT_HOME_NONE_WORDS, CHECK_TEXT_AT_HOME_NONE
+        else:
+            other_words, check = OTHERS_AWAY_WORDS, CHECK_TEXT
+        now = int(self.clock())
+        return {
+            'id': found['id'], 'ship': ship, 'machine': machine['machine'] if machine else None,
+            'imprint_short': doc['imprint_id'][:4], 'request_short': found['id'][:4],
+            'store': {'id': doc['source_instance_id'], 'copied_from': ancestry, 'lineage': lineage},
+            'scope': {'lanes': scope['lanes'], 'layers': scope['layers'], 'since': scope['since'],
+                      'until': scope['until'], 'shared_with': scope['shared_with'],
+                      'unsourced_semantics': scope['unsourced_semantics']},
+            'counts': doc['contents'], 'size': f"{_mib(doc['package']['bytes'])} in {doc['package']['parts']} parts",
+            'audience': f"{terms['audience'][0]} (the station's imprint agent, acting for {operator['username']})",
+            'actions': ACTIONS_WORDS + (ROUTE_WORDS if route else '') + ('' if route else '; ' + NO_ROUTE_WORDS),
+            'purposes': terms['purposes'], 'times': TIMES_WORDS,
+            'ends': _stamp(now + terms['days'] * 86400), 'days': terms['days'],
+            'digest': f"{doc['plan_digest'][:8]} (the whole 64-character digest is sent)",
+            'others': other_words, 'check': check, 'check_advice': None if at_home else CHECK_ADVICE,
+            'keeps': KEEPS_WORDS,
+            'closing': (f"This store is about you. Allow sends this copy to {STATION_NAME}. {operator['name']} then "
+                        "decides whether the station takes it. You can withdraw it at any time, and it is deleted on "
+                        "the end date."),
+            'expires': found['expires']}
+
+    def confirm_imprint(self, actor, request_id, *, code, password, attest, source):
+        """The owner's yes (D1): the code, the ticked check and the password, counted as a login; then, in one
+        transaction, the permission is built, signed and stored and the request is `allowed`."""
+        with self.transaction() as db:
+            self._owned_open_request(db, actor, code=code)
+            found = db.execute('SELECT id FROM imprint_requests WHERE code_hash=?', (token_hash(code),)).fetchone()
+            if found['id'] != request_id:
+                raise Problem(404, 'No such imprint request')
+            username = db.execute('SELECT username FROM users WHERE id=?', (actor,)).fetchone()['username']
+        if attest is not True:
+            raise Problem(400, 'Tick the box to confirm')
+        if not self.check_password_attempt(username, password, source):
+            raise Problem(401, 'Invalid password')
+        with self.transaction() as db:
+            found = self._owned_open_request(db, actor, code=code)
+            if found['id'] != request_id:
+                raise Problem(404, 'No such imprint request')
+            doc = self._staged_request(found)
+            now = int(self.clock())
+            identity = self._station_identity(db)
+            record = permission_record(station=identity.peer_id, request_id=request_id, owner=username, owner_id=actor,
+                                       ship_id=found['ship_id'], request=doc, request_sha256=found['request_sha256'],
+                                       now=now)
+            signature = identity.sign_record(record)
+            db.execute('UPDATE imprint_requests SET status=?, code_hash=NULL, decided_at=?, decided_by=?, expires=?, '
+                       'permission=?, permission_signature=?, station_key=? WHERE id=?',
+                       ('allowed', now, actor, now + PERMISSION_LIFE, canonical(record).decode(), signature,
+                        base64.b64encode(identity.public_key).decode(), request_id))
+            return {'id': request_id, 'status': 'allowed', 'imprint_short': doc['imprint_id'][:4],
+                    'valid_until': record['records'][0]['valid_until'], 'expires': now + PERMISSION_LIFE}
+
+    def decline_imprint(self, actor, request_id):
+        """The owner's no: the staging directory goes at once; the row stays, with no scope or counts."""
+        with self.transaction() as db:
+            self._owned_open_request(db, actor, request_id=request_id)
+            now = int(self.clock())
+            db.execute("UPDATE imprint_requests SET status='declined', code_hash=NULL, decided_at=?, decided_by=?, "
+                       "ended_at=? WHERE id=?", (now, actor, now, request_id))
+            shutil.rmtree(self.data_dir / 'imprints' / request_id)
+            return {'id': request_id, 'status': 'declined'}
