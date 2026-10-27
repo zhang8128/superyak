@@ -41,7 +41,10 @@ def peak_kb() -> int:
 
 
 def swap_kb() -> int:
-    """The process's memory in swap now, in kB, read when its peak is."""
+    """The process's memory in swap, in kB, read at exit, once the operation is done, not at the moment of the
+    peak: what was in swap then may have come back in or gone further out since. So `peak_kb + swap_kb`, which
+    the gated peak check counts, is a proxy for the most the run held, not a measure of it (the re-review's
+    Minor 5)."""
     return _status_kb("VmSwap")
 
 
