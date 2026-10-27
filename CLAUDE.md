@@ -22,7 +22,7 @@ the Superyak station on Andy's Pi.
   in the browser it ends with a `STATUS:` line, and make reports `Error 3`; that is expected, not
   a failure. Relay the instructions it showed, then run it again until it prints `STATUS: docked`
   (`STATUS: denied` or `expired` means stop and tell them). `STATUS: refused-public` means stop and
-  relay its message; running `make dock` again won't help. Never ask for or type their password;
+  relay its message; running `make dock` again won't help until the cause it names is fixed. Never ask for or type their password;
   they choose it in the browser.
 
 # Approving on the station (on the Pi only)

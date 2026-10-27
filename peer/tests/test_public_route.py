@@ -429,3 +429,16 @@ def test_proxy_headers_need_an_ipv4_loopback_bind(monkeypatch, tmp_path, capsys,
         served(monkeypatch, tmp_path, '--host', host, '--proxy-headers', '--origin', 'https://station.example.ts.net')
     assert refused.value.code == 1 and 'IPv4 loopback' in capsys.readouterr().err
     assert served(monkeypatch, tmp_path, '--host', '127.0.0.1', '--proxy-headers', '--origin', 'https://station.example.ts.net')['proxy_headers']
+
+
+@pytest.mark.parametrize('path', ['/api/me/', '/API/me', '/api%2Fme', '/api/%6De', '//api/me', '/assets/../api/me',
+                                  '/api/./me', '/api/dockings/', '/public/../api/home'])
+def test_odd_path_forms_never_slip_past_the_allow_list(env, path):
+    """The allow-list matches with the router's own route matching, so these are safe today; this pins it, so a later
+    switch to prefix matching can't open them. Each is refused by the middleware or reaches only a 404 it can't use."""
+    app, _clients, _users, _clock = env
+    client = public(app)
+    for method in ('GET', 'POST'):
+        response = client.request(method, path)
+        assert response.status_code in (401, 404, 405), (method, path, response.status_code)
+        assert 'user' not in (response.json() if response.headers.get('content-type', '').startswith('application/json') else {})
