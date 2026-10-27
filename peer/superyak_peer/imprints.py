@@ -1318,14 +1318,19 @@ class Imprints:
             fd = os.open(folder / f'{found["imprint_id"]}.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
             return      # an earlier try wrote it; its existence is what stops a restore and a use
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(canonical({'imprint_id': found['imprint_id'], 'request_id': found['id'], 'receipts': held}))
-            stream.flush()
-            os.fsync(stream.fileno())
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(canonical({'imprint_id': found['imprint_id'], 'request_id': found['id'], 'receipts': held}))
+                stream.flush()
+                os.fsync(stream.fileno())
+        except BaseException:           # a partial file would stop the retry: take back what this try made
+            (folder / f'{found["imprint_id"]}.json').unlink(missing_ok=True)
+            raise
 
     def _end_imprint(self, request_id, *, reason, actor_id, root, withdrawn):
-        """I 12's four steps. 1: `deleting` and, for a withdrawal, the signed `withdrawn` receipt (one transaction).
-        2 to 4, in a second: the removal, the tombstone, `deleted` and status `deleted`. A failed removal stays
+        """I 12's four steps, in three transactions. 1: `deleting` and, for a withdrawal, the signed `withdrawn`
+        receipt. 2: the hashes of the files, committed before any file goes. 3: the removal, the tombstone (a failed
+        write takes back the partial file), the `deleted` receipt and status `deleted`. A failed removal stays
         `deleting` with a `delete-failed` receipt. Calling it again on a `deleting` row retries from step 2, on a
         `deleted` one changes nothing."""
         with self.transaction() as db:

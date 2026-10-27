@@ -348,3 +348,23 @@ def test_a_restore_reports_what_it_held(tmp_path):
     st.store.station_imprint_delete("andy", ids_of("admitted-live")[1][:8], root=st.root)
     report = backups.reconcile(copy)
     assert report["counts"]["imprints kept deleted"] == 1
+
+
+def test_a_tombstone_write_that_fails_leaves_no_partial_file_for_the_retry(tmp_path, monkeypatch):
+    st = several(tmp_path, ["admitted-live"])
+    real, seen = imprints.os.fsync, []
+
+    def fsync(fd):
+        if not seen and tombstone_of(st, "admitted-live").exists():     # the first tombstone write fails after O_EXCL
+            seen.append(1)
+            raise OSError("disk full")
+        return real(fd)
+    monkeypatch.setattr(imprints.os, "fsync", fsync)
+    prefix = ids_of("admitted-live")[1][:8]
+    assert st.store.station_imprint_delete("andy", prefix, root=st.root)["status"] == "deleting"
+    assert seen and not tombstone_of(st, "admitted-live").exists()
+    monkeypatch.undo()
+    st.store.station_imprint_sweep(root=st.root)
+    assert row(st, "admitted-live")["status"] == "deleted"
+    held = [r["record"]["event"] for r in json.loads(tombstone_of(st, "admitted-live").read_text())["receipts"]]
+    assert "deleted" in held
