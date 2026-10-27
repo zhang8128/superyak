@@ -147,3 +147,84 @@ def test_i1_a_parent_grant_has_at_most_64_live_children(tmp_path):
     with pytest.raises(RuleError, match=f"at most {CHILDREN} live child grants"):
         child()
     child(now="2026-11-04T01:00:00Z")                              # the first 64 expired after 24 hours
+
+
+# ---------------------------------------------------------------- I2 (SH-13): a chunked collect or uncollect is honest
+
+import permission_cli
+from tests.permissions_support import cli_home, fake_tty, log_rows       # noqa: F401 (fixtures)
+
+C = "collection:andy/c"
+REFS = [f"mem:elsewhere/episode/m{i}" for i in range(9)]
+
+
+def _members_of(home):
+    led = Ledger.open(home)
+    try:
+        return {r.object for r in led.state().collection_members.get(C, ()) if r.removed_seq is None}
+    finally:
+        led.close()
+
+
+@pytest.fixture
+def small_acts(cli_home, fake_tty, monkeypatch):
+    """The review's repro: acts of at most 3 objects, and m3 to m5 already in the collection."""
+    monkeypatch.setattr(permission_cli, "MAX_ACT_OBJECTS", 3)
+    import permissions
+    monkeypatch.setattr(permissions, "MAX_ACT_OBJECTS", 3)
+    fake_tty.answer_the_printed_code()
+    assert permission_cli.main(["collection", "add", C, *REFS[3:6]]) == 0
+    return cli_home
+
+
+def test_i2_collection_add_leaves_out_members_and_writes_every_new_one(small_acts, fake_tty, capsys):
+    capsys.readouterr()
+    fake_tty.answer_the_printed_code()
+    assert permission_cli.main(["collection", "add", C, *REFS]) == 0
+    out = capsys.readouterr()
+    assert _members_of(small_acts) == set(REFS)
+    assert "3 of the refs are already in" in out.out and out.out.index("already in") < out.out.index("code:")
+    assert "refused" not in out.err
+
+
+def test_i2_collection_add_with_nothing_new_is_refused_before_the_yes(small_acts, fake_tty, capsys):
+    before = len(log_rows(small_acts))
+    capsys.readouterr()
+    assert permission_cli.main(["collection", "add", C, *REFS[3:6]]) == 1
+    out = capsys.readouterr()
+    assert "already in" in out.err and "code:" not in out.out and len(log_rows(small_acts)) == before
+
+
+def test_i2_collection_remove_names_each_ref_not_in_it_before_the_yes(small_acts, fake_tty, capsys):
+    before = len(log_rows(small_acts))
+    capsys.readouterr()
+    assert permission_cli.main(["collection", "remove", C, *REFS]) == 1
+    out = capsys.readouterr()
+    assert "code:" not in out.out and len(log_rows(small_acts)) == before
+    for i in (0, 1, 2, 6, 7, 8):
+        assert REFS[i] in out.err
+    for i in (3, 4, 5):
+        assert REFS[i] not in out.err
+    fake_tty.answer_the_printed_code()
+    assert permission_cli.main(["collection", "remove", C, *REFS[3:6]]) == 0
+    assert _members_of(small_acts) == set()
+
+
+def test_i2_an_act_that_fails_after_others_were_written_says_which_were(small_acts, fake_tty, capsys, monkeypatch):
+    """A concurrent writer can still make a later act fail: the person is told which acts were written."""
+    real, calls = Ledger.perform, []
+
+    def perform(self, act, **kw):
+        calls.append(act.kind)
+        if len(calls) == 2:
+            raise RuleError("7.1 who may set what", "another writer got there first")
+        return real(self, act, **kw)
+    monkeypatch.setattr(Ledger, "perform", perform)
+    seq = len(log_rows(small_acts))
+    capsys.readouterr()
+    fake_tty.answer_the_printed_code()
+    assert permission_cli.main(["collection", "add", C, *REFS]) == 1
+    err = capsys.readouterr().err
+    assert f"act 1 of 2 done (log {seq + 1}); the rest were not written" in err
+    assert err.index("the rest were not written") < err.index("refused: ")
+    assert _members_of(small_acts) == set(REFS[:3]) | set(REFS[3:6])

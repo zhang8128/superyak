@@ -269,7 +269,17 @@ def _perform(led: Ledger, owner: str, acts: list[Act], notes: list[str], words: 
         print("That was not the code. Nothing was written.", file=sys.stderr)
         return 3
     now = _now()
-    outcomes = [led.perform(act, actor=owner, channel="terminal", now=now) for act in acts]
+    outcomes = []
+    for act in acts:
+        try:
+            outcomes.append(led.perform(act, actor=owner, channel="terminal", now=now))
+        except BaseException:
+            if outcomes:              # SH-13: say which acts of the one yes were written before this one failed
+                n, seqs = len(outcomes), ", ".join(str(o.seq) for o in outcomes)
+                print(f"{'act 1' if n == 1 else f'acts 1 to {n}'} of {len(acts)} done "
+                      f"({'log' if n == 1 else 'logs'} {seqs}); the rest were not written.", file=sys.stderr)
+                run_sweep(led, now)   # R18: the acts written are a write the house follows
+            raise
     for act, out in zip(acts, outcomes):
         if act.kind in ("sign", "decline"):
             if out.status == "proposal":
@@ -460,9 +470,26 @@ def _collection(adding: bool):
             refs = list(dict.fromkeys(a.refs))
             acts: list[Act] = []
             notes: list[str] = []
+            # SH-13: refs are checked against the State before they are split into acts, so every act is valid
+            # at the yes and a refusal comes before it, never after some acts were written
+            held = ({r.object for r in st.collection_members.get(cid, ()) if r.removed_seq is None}
+                    if cid in st.collections else set())
             if not adding:
+                if cid not in st.collections:
+                    raise RuleError("7.1 who may set what", f"{_clean(cid)} is not a collection")
+                missing = [r for r in refs if r not in held]
+                if missing:
+                    raise RuleError("7.1 who may set what", f"not in {_clean(cid)}, so nothing was asked or "
+                                    f"written: {', '.join(_clean(r) for r in missing)}")
                 return [Act("uncollect", {"collection": cid, "objects": refs[i:i + MAX_ACT_OBJECTS]})
                         for i in range(0, len(refs), MAX_ACT_OBJECTS)], notes
+            new = [r for r in refs if r not in held]
+            if not new:
+                raise RuleError("7.1 who may set what", f"every one is already in {_clean(cid)}: nothing to add")
+            if len(new) < len(refs):
+                notes.append(f"note: {len(refs) - len(new):,} of the refs are already in {_clean(cid)} and are "
+                             "left out")
+            refs = new
             if cid not in st.collections:
                 acts.append(Act("make-collection", {"collection": cid}))
             lanes: dict[str, dict] = {}
