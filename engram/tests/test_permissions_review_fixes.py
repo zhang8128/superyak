@@ -360,3 +360,27 @@ def test_m5_confirm_cleans_what_it_prints_and_keeps_its_lines(fake_tty, capsys):
     out = capsys.readouterr().out
     assert "\x1b" not in out and "\x07" not in out
     assert "Allow ?[2Jplace:x to read.\nSecond line" in out and "change ?]0;title? here" in out
+
+
+# ---------------------------------------------------------------- M6: cosubjects follows copies (P 7.4, 19)
+
+from tests.permissions_support import COPY_OF_M3, M3, add_subject, remove_subject
+
+
+def test_m6_cosubjects_of_a_copy_holds_its_sources_later_subjects_and_not_its_default_subject(tmp_path):
+    led = e1_ledger_through_andys_side(tmp_path)
+    led.record_copy(COPY_OF_M3, M3, now=T("2026-11-03"))
+    add_subject(led, M3, "person:amy", actor=ANDY, now="2026-11-04")       # after the copy was made
+    assert led.cosubjects(COPY_OF_M3) == frozenset({"person:jenn", "person:amy"})
+    assert ANDY not in led.cosubjects(COPY_OF_M3) and led.cosubjects(M3) == frozenset({"person:jenn", "person:amy"})
+    remove_subject(led, M3, "person:amy", actor=ANDY, now="2026-11-05")
+    assert led.cosubjects(COPY_OF_M3) == frozenset({"person:jenn"})
+    assert led.cosubjects(COPY_OF_M3, at=T("2026-11-04") + 60) == frozenset({"person:jenn", "person:amy"})
+
+
+def test_m6_cosubjects_of_a_copy_another_person_keeps_names_the_sources_owner(tmp_path):
+    led = e1_ledger_through_andys_side(tmp_path)
+    do(led, "person:jenn", "register-store", instance_id="J", name="jenn's", owner="person:jenn",
+       place="place:home/jenn")
+    led.record_copy("mem:J/episode/c1", "mem:S/episode/m1", now=T("2026-11-03"))
+    assert led.cosubjects("mem:J/episode/c1") == frozenset({ANDY})

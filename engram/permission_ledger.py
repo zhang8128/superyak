@@ -1006,10 +1006,17 @@ class Ledger:
                               "WHERE instance_id=?", (instance_id,)).fetchone()
         return None if r is None else dict(r)
 
-    def cosubjects(self, ref: str) -> frozenset[str]:
-        """The effective co-subjects of ref, other than the default subject (its store's owner)."""
-        return frozenset(r["subject"] for r in self.conn.execute(
-            "SELECT subject FROM subjects WHERE object=? AND removed_seq IS NULL", (ref,)))
+    def cosubjects(self, ref: str, at: int | None = None) -> frozenset[str]:
+        """The co-subjects of ref: `subjects_of` (its own and, through `copies`, its sources' up to MAX_COPY_CHAIN
+        links, so a source's later subjects too; P 7.4, 19), less its default subject, its store's owner. `at`
+        None reads every subject row not removed; a time reads those in force then. The imprints plan's
+        `cosubjects(m)` (the final review's M6)."""
+        state = self.state()
+        out = set(subjects_of(state, ref, at))
+        store = state.stores.get(parse_object_ref(ref).instance_id)
+        if store is not None and store.imprint_of is None:
+            out.discard(store.owner)
+        return frozenset(out)
 
     # ---------------------------------------------------------------- the gate's plan and PlaceRules (P 9.4, 12.3)
     def gate_plan(self) -> dict:
