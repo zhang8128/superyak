@@ -129,10 +129,9 @@ class PublisherStore:
             self.storage = None
 
     def store_digest(self) -> dict:
-        return {
-            "algorithm": "sha256",
-            "value": hashlib.sha256(self.db_path.read_bytes()).hexdigest(),
-        }
+        with self.db_path.open("rb") as handle:
+            value = hashlib.file_digest(handle, "sha256").hexdigest()
+        return {"algorithm": "sha256", "value": value}
 
     def record_disclosure(self, event: dict) -> str:
         disclosure_id = str(uuid.uuid4())
