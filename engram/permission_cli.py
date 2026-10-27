@@ -710,19 +710,21 @@ def _rebuild(a) -> int:
 
 
 def _verify(a) -> int:
-    """P 5.6: the log's hash chain, `meta.head` and every table's seqs against the log's last row. It writes
-    nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does not."""
+    """P 5.6: the log's hash chain, `meta.head`, every table's seqs against the log's last row, and that row's
+    change in the tables. It writes nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does
+    not."""
     with _ledger(read_only=True) as led:
         top, problems = led.integrity()
     if not problems:
-        print(f"The ledger verifies: {top} log rows, the hash chain is whole, and no table names a seq past the "
-              f"log's last row.")
+        print(f"The ledger verifies: {top} log rows, the hash chain is whole, no table names a seq past the "
+              f"log's last row, and that row's change is in the tables.")
         return 0
     print(f"The ledger does not verify ({top} log rows):")
     print("\n".join(f"  - {p}" for p in problems))
-    print("Every reader refuses a ledger whose tables name a seq past its log, or whose head is not its last row, so "
-          "under `enforce` nothing is served. Restore the file together with its journal, or replay the log that "
-          "is left with `engram-permissions rebuild --out <dir>` and make the lost acts again.")
+    print("Every reader refuses a ledger whose tables name a seq past its log, whose head is not its last row, or "
+          "whose last row's change is not in its tables, so under `enforce` nothing is served. Restore the file "
+          "together with its journal, or replay the log that is left with `engram-permissions rebuild --out <dir>` "
+          "and make the lost acts again.")
     return 1
 
 

@@ -117,15 +117,16 @@ _HOT = ("This ledger has a hot journal from a writer that stopped mid-commit, wh
         "such as `engram-permissions sweep`.")
 # Every column that holds the seq of the log row that wrote it (P 5.6). A file copy taken mid-commit without its
 # journal (a torn restore) can keep a log row's projection and lose the row: that seq is then past the log's last.
+# Or it can keep the row and lose its projection: a column the last row sets then does not hold the row's seq.
 _SEQ_COLUMNS = {t: cs for t, cs in ((t, tuple(c for c in cols if c == "seq" or c.endswith("_seq")))
                                     for t, cols in _COLUMNS.items()) if cs}
 # the seq columns an update sets on an older row; every other one is set only when its row is inserted
 _SET_LATER = frozenset({"retired_seq", "removed_seq", "revoked_seq", "decided_seq"})
 _CUT = ("The log's tail was cut, as by a copy or restore of the file taken mid-write without its journal, so the "
-        "tables may hold a change, such as a revocation, that the log has lost. Every reader refuses the ledger "
-        "until it verifies (P 5.6): `engram-permissions verify` reports it. Restore the file together with its "
-        "journal, or replay the log that is left with `engram-permissions rebuild --out <dir>` and make the lost "
-        "acts again.")
+        "tables may hold a change, such as a revocation, that the log has lost, or lack one the log holds. Every "
+        "reader refuses the ledger until it verifies (P 5.6): `engram-permissions verify` reports it. Restore the "
+        "file together with its journal, or replay the log that is left with `engram-permissions rebuild --out "
+        "<dir>` and make the lost acts again.")
 
 
 class LedgerUnreadable(Exception):
@@ -714,19 +715,41 @@ class Ledger:
         row = self.conn.execute(sql).fetchone()
         return None if row is None else row[0]
 
+    def _last_sets(self, top: int) -> tuple[set, str | None]:
+        """The seq columns, as (table, column), that the log's last row sets to its own seq ("@seq"), and why its
+        body cannot be read, if it cannot."""
+        row = self.conn.execute("SELECT body FROM ledger_log WHERE seq = ?", (top,)).fetchone()
+        if row is None:
+            return set(), None
+        try:
+            body = json.loads(row[0])
+            sets = [(i["table"], i["row"]) for i in body.get("insert", ())]
+            sets += [(i["table"], i["set"]) for i in body.get("update", ())]
+            return {(t, c) for t, values in sets for c, v in values.items()
+                    if v == "@seq" and c in _SEQ_COLUMNS.get(t, ())}, None
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            return set(), f"the body of the log's last row, seq {top}, cannot be read ({e!r})"
+
     def _tail_problems(self, top: int, meta: Mapping, loaded: Mapping | None = None) -> list[str]:
-        """P 5.6: the tables are the log's projection, so no seq column names a seq past the log's last row, and
-        `meta.head`, when the ledger keeps one, is that row. Each way this fails, in words; none for a whole
-        tail. Read inside the caller's read transaction."""
+        """P 5.6: the tables are the log's projection, so no seq column names a seq past the log's last row,
+        `meta.head`, when the ledger keeps one, is that row, and each seq column that row sets to its own seq holds
+        that seq (a tear can keep the row and its head and lose the page that held its change). Each way this
+        fails, in words; none for a whole tail. Read inside the caller's read transaction."""
         out = []
         cut = self._head_problem(top, meta)
         if cut:
             out.append(cut)
+        last, unread = self._last_sets(top)
+        if unread:
+            out.append(unread)
         for table, columns in _SEQ_COLUMNS.items():
             for column in columns:
                 v = self._max_seq(table, column, loaded)
                 if v is not None and v > top:
                     out.append(f"{table}.{column} names seq {v}, past the log's last row {top}")
+                elif (table, column) in last and v != top:
+                    out.append(f"the log's last row, seq {top}, sets {table}.{column}, but the highest seq that "
+                               f"column holds is {'none' if v is None else v}: the row's change is not in the table")
         return out
 
     def integrity(self) -> tuple[int, list[str]]:
