@@ -1,0 +1,217 @@
+"""Builds the Superyak logo: three super yaks on a rock at sunrise, the leader holding up a calf.
+
+Run: python3 build_logo.py OUT.svg
+Each yak is drawn in its own 512 x 512 space in a three-quarter view facing left, then placed in the scene.
+"""
+import sys
+
+HORNS = {
+    'long': ('M198 158 C156 156 120 130 116 90 C114 70 124 54 140 48 C136 72 146 102 188 120 Z',
+             'M296 150 C326 146 350 124 354 92 C356 78 350 66 340 60 C342 78 334 100 304 116 Z'),
+    'short': ('M200 150 C176 146 156 130 152 106 C164 114 182 120 198 124 Z',
+              'M298 144 C318 140 334 126 338 106 C328 114 314 120 302 122 Z'),
+    'wide': ('M196 156 C150 160 100 150 80 116 C76 104 82 94 92 90 C96 110 130 128 190 124 Z',
+             'M298 148 C334 150 368 140 382 112 C386 102 382 94 374 92 C370 110 344 124 304 120 Z'),
+}
+
+TUFTS = {
+    'pompadour': 'M198 140 C206 108 238 96 264 102 C292 94 318 104 340 90 C330 108 342 116 326 128 '
+                 'C314 138 300 130 292 142 C282 132 266 144 254 136 C242 146 228 136 220 148 C212 142 206 146 198 140 Z',
+    'mop': 'M182 156 C186 118 220 102 250 102 C286 102 312 118 318 156 L306 176 L298 158 L286 180 L274 160 '
+           'L262 182 L250 160 L238 182 L226 160 L214 180 L202 158 L190 176 Z',
+    'spikes': 'M204 142 L210 92 L230 126 L242 76 L258 122 L276 72 L284 122 L310 88 L304 138 C272 130 236 132 204 142 Z',
+}
+
+
+def glasses(kind):
+    shine = 'stroke="#e0f2fe" stroke-linecap="round" opacity="0.85"'
+    lens = 'fill="url(#lens)" stroke="#020617" stroke-width="4" stroke-linejoin="round"'
+    arm = '<path d="M292 186 L322 178" stroke="#020617" stroke-width="5" stroke-linecap="round"/>'
+    if kind == 'round':
+        return (arm + f'<path d="M228 194 Q240 186 252 194" stroke="#020617" stroke-width="5" fill="none"/>'
+                f'<circle cx="206" cy="198" r="24" {lens}/><ellipse cx="272" cy="198" rx="19" ry="22" {lens}/>'
+                f'<path d="M194 194 L206 186 M196 206 L216 192" stroke-width="3.5" {shine}/>'
+                f'<path d="M264 194 L274 188 M266 205 L281 194" stroke-width="3" {shine}/>')
+    if kind == 'visor':
+        return (arm + f'<path d="M170 182 C200 172 280 172 302 180 L298 202 C282 218 254 214 240 204 '
+                f'C228 216 196 220 178 206 Z" {lens}/>'
+                f'<path d="M184 190 L232 182 M190 202 L250 188" stroke-width="3.5" {shine}/>')
+    return (arm + '<path d="M174 182 H298" stroke="#020617" stroke-width="7" stroke-linecap="round"/>'
+            f'<path d="M178 182 H234 V196 C234 213 222 219 206 219 C190 219 178 211 178 196 Z" {lens}/>'
+            f'<path d="M248 182 H294 V195 C294 210 284 216 271 216 C257 216 248 210 248 196 Z" {lens}/>'
+            f'<path d="M188 192 L202 186 M190 202 L214 190" stroke-width="3.5" {shine}/>'
+            f'<path d="M256 192 L268 187 M258 201 L278 191" stroke-width="3" {shine}/>')
+
+
+def emblem():
+    return ('<g transform="translate(-14 0) translate(256 340) scale(0.86 1) translate(-256 -340)">'
+            '<path d="M216 300 H296 L320 324 L256 392 L192 324 Z" fill="url(#gold)" stroke="#b91c1c" stroke-width="6" stroke-linejoin="round"/>'
+            '<path d="M226 310 L247 310 L256 327 L265 310 L286 310 L264 345 L264 374 L248 374 L248 345 Z" '
+            'fill="#dc2626" stroke="#7f1d1d" stroke-width="2.5" stroke-linejoin="round"/>'
+            '<path d="M222 306 H252" stroke="#fffbeb" stroke-width="4" stroke-linecap="round" opacity="0.8"/></g>')
+
+
+def calf(cape):
+    """The baby super yak, centred near (238, 0) in its parent's space, hooves out."""
+    return f'''
+    <path d="M206 -6 C176 -2 150 22 156 54 C176 44 192 30 204 14 Z" fill="{cape}" stroke="#1f130b" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M270 -6 C302 -4 330 14 330 48 C310 42 290 30 272 14 Z" fill="{cape}" stroke="#1f130b" stroke-width="4" stroke-linejoin="round"/>
+    <ellipse cx="238" cy="20" rx="46" ry="36" fill="#b07a4f" stroke="#1f130b" stroke-width="4.5"/>
+    <path d="M202 32 L196 52 L208 44 L212 58 L222 46 L230 60 L238 48 L246 60 L254 46 L264 58 L268 44 L280 52 L274 32 Z"
+          fill="#8a5a36" stroke="#1f130b" stroke-width="3.5" stroke-linejoin="round"/>
+    <path d="M222 6 H254 L264 16 L238 44 L212 16 Z" fill="url(#gold)" stroke="#b91c1c" stroke-width="3.5" stroke-linejoin="round"/>
+    <path d="M228 11 L236 11 L238 17 L240 11 L248 11 L241 23 L241 33 L235 33 L235 23 Z" fill="#dc2626"/>
+    <path d="M214 -66 C210 -80 214 -92 222 -96 C222 -86 226 -78 230 -72 Z" fill="url(#horn)" stroke="#8a7a55" stroke-width="3.5"/>
+    <path d="M262 -66 C266 -80 262 -92 254 -96 C254 -86 250 -78 246 -72 Z" fill="url(#horn)" stroke="#8a7a55" stroke-width="3.5"/>
+    <ellipse cx="200" cy="-42" rx="16" ry="9" transform="rotate(-20 200 -42)" fill="#8a5a36" stroke="#1f130b" stroke-width="3.5"/>
+    <ellipse cx="276" cy="-42" rx="16" ry="9" transform="rotate(20 276 -42)" fill="#8a5a36" stroke="#1f130b" stroke-width="3.5"/>
+    <circle cx="238" cy="-38" r="38" fill="#b07a4f" stroke="#1f130b" stroke-width="4.5"/>
+    <path d="M220 -74 C226 -90 248 -92 256 -78 C250 -82 242 -80 238 -72 C234 -80 226 -80 220 -74 Z" fill="#8a5a36" stroke="#1f130b" stroke-width="3"/>
+    <ellipse cx="238" cy="-20" rx="24" ry="15" fill="#e3b88f" stroke="#1f130b" stroke-width="3.5"/>
+    <ellipse cx="230" cy="-22" rx="3.5" ry="2.5" fill="#3b2416"/><ellipse cx="246" cy="-22" rx="3.5" ry="2.5" fill="#3b2416"/>
+    <path d="M226 -12 C234 -2 244 -2 252 -12 C248 -6 230 -5 226 -12 Z" fill="#7f1d1d" stroke="#1f130b" stroke-width="2"/>
+    <path d="M212 -48 H236 V-42 C236 -34 230 -31 224 -31 C217 -31 212 -35 212 -42 Z M242 -48 H266 V-42 C266 -34 260 -31 254 -31 C247 -31 242 -35 242 -42 Z"
+          fill="url(#lens)" stroke="#020617" stroke-width="3"/>
+    <path d="M236 -46 H242" stroke="#020617" stroke-width="3"/>
+    <path d="M216 -44 L224 -47 M246 -44 L254 -47" stroke="#e0f2fe" stroke-width="2.5" stroke-linecap="round"/>'''
+
+
+def yak(uid, fur, hair, muzzle, cape, horn, specs, tuft, arms_up=False, calf_cape=None):
+    near_horn, far_horn = HORNS[horn]
+    hooves = '''<g stroke="#1f130b" stroke-width="4">
+      <rect x="272" y="434" width="30" height="34" rx="6" fill="{h}"/>
+      <path d="M270 464 h34 v12 a6 6 0 0 1 -6 6 h-22 a6 6 0 0 1 -6 -6z" fill="#8b929c"/>
+      <rect x="196" y="440" width="36" height="36" rx="6" fill="{h}"/>
+      <path d="M193 472 h42 v14 a6 6 0 0 1 -6 6 h-30 a6 6 0 0 1 -6 -6z" fill="#9ca3af"/>
+    </g>'''.format(h=hair)
+    far_arm = near_arm = held = ''
+    if arms_up:
+        far_arm = (f'<path d="M300 296 L326 250 L344 190 L350 120 L340 50 L326 14 L298 18 L318 56 L322 120 L316 186 L300 240 L278 286 Z" '
+                   f'fill="url(#fur{uid})" stroke="#1f130b" stroke-width="5" stroke-linejoin="round"/>'
+                   '<rect x="290" y="-12" width="38" height="28" rx="7" fill="#8b929c" stroke="#1f130b" stroke-width="4"/>')
+        near_arm = (f'<path d="M200 300 L168 256 L140 196 L128 130 L132 60 L146 16 L176 16 L160 62 L158 130 L170 192 L196 248 L228 292 Z" '
+                    f'fill="url(#fur{uid})" stroke="#1f130b" stroke-width="5" stroke-linejoin="round"/>'
+                    '<rect x="140" y="-10" width="42" height="30" rx="7" fill="#9ca3af" stroke="#1f130b" stroke-width="4"/>')
+        held = f'<g transform="translate(236 -48) scale(1.2) translate(-238 20)">{calf(calf_cape)}</g>'
+    return f'''
+  <linearGradient id="fur{uid}" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="{fur[0]}"/><stop offset="1" stop-color="{fur[1]}"/>
+  </linearGradient>
+  <g id="yak{uid}">
+    <g stroke="#1f130b" stroke-width="5" stroke-linejoin="round">
+      <path d="M176 266 C150 304 136 356 154 412 C170 406 182 394 194 388 Z" fill="{cape}"/>
+      <path d="M314 244 C368 222 404 164 476 146 C470 178 506 202 486 234 C470 258 504 280 480 308
+               C462 330 490 358 458 382 C432 400 446 428 404 434 C380 438 370 416 346 424 L322 364 Z" fill="{cape}"/>
+    </g>
+    <g stroke="#000000" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.25">
+      <path d="M336 254 C384 232 420 196 462 176"/><path d="M342 294 C392 286 430 258 470 252"/>
+      <path d="M342 334 C386 336 422 326 458 332"/><path d="M340 370 C374 384 402 390 432 400"/>
+    </g>
+    {hooves}
+    <path d="M156 300 C158 262 196 240 250 240 C306 240 346 262 350 300 L360 330 L368 362 L358 392 L364 420
+             L346 412 L336 444 L318 424 L302 454 L286 428 L270 458 L252 430 L234 460 L218 428 L202 456 L186 424
+             L168 446 L158 412 L138 420 L146 392 L136 362 L146 330 Z"
+          fill="url(#fur{uid})" stroke="#1f130b" stroke-width="5" stroke-linejoin="round"/>
+    <g stroke="#000000" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.3">
+      <path d="M170 340 l-6 34"/><path d="M184 364 l-4 32"/><path d="M326 340 l5 32"/><path d="M314 366 l3 28"/>
+    </g>
+    {emblem()}
+    {far_arm}
+    <path d="{far_horn}" fill="url(#horn)" stroke="#8a7a55" stroke-width="5" stroke-linejoin="round"/>
+    <ellipse cx="322" cy="186" rx="18" ry="10" transform="rotate(24 322 186)" fill="{hair}" stroke="#1f130b" stroke-width="4.5"/>
+    <g fill="{hair}" stroke="#1f130b" stroke-width="4.5" stroke-linejoin="round">
+      <path d="M312 186 L330 226 L322 230 L338 262 L324 258 L330 288 L312 268 L306 282 L298 256 L302 226 Z"/>
+      <path d="M186 188 L158 230 L170 234 L146 272 L168 266 L154 304 L182 280 L188 300 L200 264 L196 228 Z"/>
+      <path d="M202 268 L210 296 L222 284 L230 304 L236 288 L242 304 L250 284 L260 296 L268 268 Z"/>
+    </g>
+    <ellipse cx="160" cy="196" rx="28" ry="14" transform="rotate(-20 160 196)" fill="{hair}" stroke="#1f130b" stroke-width="5"/>
+    <path d="M180 170 C180 128 212 108 248 108 C284 108 312 126 316 164 L318 214 C316 250 290 276 246 278
+             C204 278 174 256 174 222 Z" fill="url(#fur{uid})" stroke="#1f130b" stroke-width="5" stroke-linejoin="round"/>
+    <path d="{near_horn}" fill="url(#horn)" stroke="#8a7a55" stroke-width="5" stroke-linejoin="round"/>
+    <path d="{TUFTS[tuft]}" fill="{hair}" stroke="#1f130b" stroke-width="4.5" stroke-linejoin="round"/>
+    {near_arm}
+    <ellipse cx="232" cy="242" rx="52" ry="34" transform="rotate(-5 232 242)" fill="{muzzle}" stroke="#1f130b" stroke-width="4.5"/>
+    <ellipse cx="214" cy="236" rx="7" ry="5" fill="#1f130b"/><ellipse cx="251" cy="234" rx="5.5" ry="4.5" fill="#1f130b"/>
+    <path d="M204 252 C218 270 248 270 264 250 C256 268 214 276 204 252 Z" fill="#7f1d1d" stroke="#1f130b" stroke-width="3.5" stroke-linejoin="round"/>
+    <path d="M216 258 L249 257" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+    <g transform="rotate(-6 238 192)">{glasses(specs)}</g>
+    <path d="M292 168 l4 10 10 4 -10 4 -4 10 -4 -10 -10 -4 10 -4z" fill="#ffffff"/>
+    {held}
+  </g>'''
+
+
+def place(uid, cx, feet_y, scale):
+    return f'<use href="#yak{uid}" transform="translate({cx - 250 * scale:.0f} {feet_y - 492 * scale:.0f}) scale({scale})"/>'
+
+
+YAKS = [
+    # the leader: classic dark brown, long horns, wayfarers, a pompadour, holding up the calf
+    yak('A', ('#7a4b2b', '#3b2416'), '#4a2c17', '#b98159', '#ef4444', 'long', 'wayfarer', 'pompadour',
+        arms_up=True, calf_cape='#db2777'),
+    # charcoal black, wide horns, round glasses, a shaggy mop
+    yak('B', ('#57534e', '#1c1917'), '#292524', '#a8a29e', '#0d9488', 'wide', 'round', 'mop'),
+    # golden tan, short horns, a wraparound visor, a spiky crest
+    yak('C', ('#d6a05c', '#8a531f'), '#7c4a1e', '#f1cf9f', '#1d4ed8', 'short', 'visor', 'spikes'),
+]
+
+SCENE = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="t d">
+  <title id="t">Superyak</title>
+  <desc id="d">Three super yaks in capes and sunglasses, each with a gold diamond Y, on a jutting rock at sunrise. On the tip, the leader holds a baby super yak up into a beam of light while the other two watch proudly.</desc>
+  <defs>
+    <linearGradient id="horn" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#e7d6ad"/><stop offset="1" stop-color="#fffaf0"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fef08a"/><stop offset="0.5" stop-color="#facc15"/><stop offset="1" stop-color="#ca8a04"/></linearGradient>
+    <linearGradient id="lens" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#334155"/><stop offset="1" stop-color="#020617"/></linearGradient>
+    <linearGradient id="dawn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4c1d95"/><stop offset="0.38" stop-color="#db2777"/>
+      <stop offset="0.62" stop-color="#f97316"/><stop offset="0.86" stop-color="#fde047"/>
+    </linearGradient>
+    <radialGradient id="sun"><stop offset="0" stop-color="#fffbeb"/><stop offset="0.7" stop-color="#fef3c7"/><stop offset="1" stop-color="#fde68a" stop-opacity="0"/></radialGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/><stop offset="1" stop-color="#fffbeb" stop-opacity="0.15"/></linearGradient>
+    <linearGradient id="rock" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a8a29e"/><stop offset="0.25" stop-color="#78716c"/><stop offset="1" stop-color="#44403c"/></linearGradient>
+    <clipPath id="badge"><circle cx="256" cy="256" r="244"/></clipPath>
+    {"".join(YAKS)}
+  </defs>
+
+  <circle cx="256" cy="256" r="248" fill="#0f172a"/>
+  <g clip-path="url(#badge)">
+    <rect width="512" height="512" fill="url(#dawn)"/>
+    <circle cx="176" cy="268" r="150" fill="url(#sun)" opacity="0.55"/>
+    <circle cx="176" cy="268" r="104" fill="#fffbeb" opacity="0.9"/>
+    <!-- the beam onto the calf, through parted clouds -->
+    <path d="M120 -10 H236 L196 100 H148 Z" fill="url(#beam)"/>
+    <g fill="#fdf2f8" opacity="0.6">
+      <ellipse cx="96" cy="44" rx="48" ry="14"/><ellipse cx="270" cy="40" rx="52" ry="15"/><ellipse cx="300" cy="28" rx="30" ry="12"/>
+    </g>
+    <g fill="#fffbeb" opacity="0.9">
+      <path d="M402 76 l5 13 13 5 -13 5 -5 13 -5 -13 -13 -5 13 -5z"/>
+      <path d="M456 136 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3z"/>
+    </g>
+    <g stroke="#3b0764" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.7">
+      <path d="M336 112 q8 -8 16 0 q8 -8 16 0"/><path d="M378 138 q6 -6 12 0 q6 -6 12 0"/>
+    </g>
+    <path d="M0 418 C70 396 130 404 196 420 C262 436 320 410 512 404 V512 H0 Z" fill="#9a3412" opacity="0.85"/>
+    <path d="M0 452 C90 434 170 446 250 458 C330 470 420 446 512 450 V512 H0 Z" fill="#7c2d12"/>
+    <path d="M132 512 C150 492 204 482 200 462 C196 444 166 438 186 424 L208 419 C192 434 226 446 222 466 C218 490 184 498 190 512 Z"
+          fill="#2dd4bf" stroke="#115e59" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M160 500 C184 488 206 478 206 462 M196 432 C200 426 204 423 208 421" stroke="#ccfbf1" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.8"/>
+    <g fill="#431407">
+      <path d="M250 482 L256 444 L261 444 L260 482 Z"/><path d="M258 448 L276 436 L278 439 L262 450 Z"/>
+      <path d="M220 446 C234 432 284 430 300 444 C286 452 236 454 220 446 Z"/>
+    </g>
+    <path d="M100 342 L118 334 L236 332 L262 312 L298 304 L354 302 L370 286 L398 264 L420 252 L480 248 L520 244 V520 H300 L312 444 L292 396 L232 370 L152 362 Z"
+          fill="url(#rock)" stroke="#1c1917" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M100 342 L152 362 L232 370 L292 396 L312 444 L300 520 H350 L350 436 L326 388 Z" fill="#292524" opacity="0.55"/>
+    <path d="M120 336 L236 334 M298 306 L354 304 M420 252 L480 248 L520 244" stroke="#e7e5e4" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.7"/>
+    <g stroke="#292524" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.6">
+      <path d="M380 320 l-14 36 l10 22"/><path d="M452 300 l8 40"/><path d="M262 352 l-20 14"/><path d="M330 310 l6 26"/>
+    </g>
+    {place('B', 326, 303, 0.40)}
+    {place('C', 440, 250, 0.36)}
+    {place('A', 168, 336, 0.48)}
+  </g>
+  <circle cx="256" cy="256" r="244" fill="none" stroke="#facc15" stroke-width="8"/>
+</svg>
+'''
+
+if __name__ == '__main__':
+    open(sys.argv[1], 'w').write(SCENE)
