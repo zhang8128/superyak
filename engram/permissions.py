@@ -49,6 +49,7 @@ MAX_COPY_CHAIN = 4
 OUTSIDE_HOME_DAYS = 366
 MAX_GRANT_LINKS = 3
 MAX_GRANT_DEPTH = 2
+ROUTE_STEPS = 1024              # membership routes one allow's terms make for one use; past it the use is refused
 MAX_GRANT_HOURS = 720
 MAX_REPLACES = 16
 PROPOSAL_DAYS = 7
@@ -728,7 +729,10 @@ def grant_chain(state: State, grant_id: str) -> tuple[Grant, ...]:
         if gid in seen:
             raise RuleError("7.2 grants", f"grant {gid} is its own ancestor")
         seen.add(gid)
-        out.append(_grant_of(row))
+        parsed = state._cache.get(("grant", gid))      # parsed once per State: the envelope's JSON is the cost
+        if parsed is None or parsed[0] is not row:
+            parsed = state._cache[("grant", gid)] = (row, _grant_of(row))
+        out.append(parsed[1])
         gid = row.parent_id
     return tuple(reversed(out))
 
@@ -1646,35 +1650,96 @@ def _record_terms(state: State, record: Record, t: int) -> tuple[int | None, boo
     return state._memo(("record-terms", record.id, t), compute)
 
 
+class _Routes:
+    """One `_terms` call's membership routes (Serenity's section 2, item 2): every `_route` it makes reads the same
+    object, anchor, use, action, `valid_only` and t, so a route is kept by what else it reads, each grant's
+    `_grant_terms` is read once, and `steps` counts the routes made, at most ROUTE_STEPS."""
+    __slots__ = ("memo", "reach", "terms", "steps")
+
+    def __init__(self):
+        self.memo: dict = {}
+        self.reach: dict = {}
+        self.terms: dict = {}
+        self.steps = 0
+
+    def grant_terms(self, state: State, backing: str, t: int):
+        """`_grant_terms` of a `grant:<id>` backing at t, read once."""
+        hit = self.terms.get(backing)
+        if hit is None:
+            hit = self.terms[backing] = _grant_terms(state, backing[len("grant:"):], t)
+        return hit
+
+
+def _reach(state: State, obj: str, use_at: int, colls: tuple, routes: _Routes) -> frozenset:
+    """The membership rows of obj whose place in `assume` a `_route` over `colls` can read: those in `colls` and,
+    through each grant-backed one's chain, those in every collection its envelopes name, and so on. A route's
+    answer depends on `assume` only through these rows, so it is kept by `assume` met with them."""
+    hit = routes.reach.get(colls)
+    if hit is not None:
+        return hit
+    by_coll: dict = {}
+    for m in _members(state, obj)[0]:
+        by_coll.setdefault(m.collection, []).append(m)
+    seen, todo, out = set(colls), list(colls), set()
+    while todo:
+        for m in by_coll.get(todo.pop(), ()):
+            out.add(m)
+            if not m.backing.startswith("grant:"):
+                continue
+            for g in routes.grant_terms(state, m.backing, use_at)[0]:
+                if g.envelope.collections != STAR:
+                    for c in g.envelope.collections:
+                        if c not in seen:
+                            seen.add(c)
+                            todo.append(c)
+    got = routes.reach[colls] = frozenset(out)
+    return got
+
+
 def _route(state: State, colls: tuple, layer: str, anchor: int, use: Use, action: str, valid_only: bool,
-           assume: frozenset) -> tuple[tuple, bool]:
-    """(the membership rows of the route, whether every route is invalid at t) by which the object is in one of
+           assume: frozenset, routes: _Routes) -> tuple[tuple, bool, int | None]:
+    """(the membership rows of the route, whether every route is invalid at t, the route's end: the earliest
+    `expires` of a grant behind a row on it, None for no route) by which the object is in one of
     `colls`. None when it is there by a person-backed row, or by a row `assume` already holds. Else each
     grant-backed row that counts is a route, with, for each envelope of its grant chain that names collections,
     the route there (assuming the row: Tardis's T1), and the best is the one that ends latest. With valid_only,
-    only memberships that count with their chains valid are read."""
-    t = use.at
+    only memberships that count with their chains valid are read. Each route is made once per `_terms` call,
+    keyed by `colls`, `layer` and the rows of `assume` it can read (`_reach`); past ROUTE_STEPS routes the use is
+    refused (RuleError), never decided on a part of them."""
+    key = (colls, layer, assume & _reach(state, use.obj, use.at, colls, routes))
+    hit = routes.memo.get(key)
+    if hit is not None:
+        return hit
+    routes.steps += 1
+    if routes.steps > ROUTE_STEPS:
+        raise RuleError("6.5 decide", f"{use.obj} has more than {ROUTE_STEPS:,} membership routes for one allow "
+                                      "to read; the use is refused")
     rows = [m for m in _members(state, use.obj)[0]
             if m.collection in colls
             and _membership_counts(state, m, layer, anchor, use, action, False, assume, valid_only)]
     if not rows or any(m in assume or not m.backing.startswith("grant:") for m in rows):
-        return (), False
+        routes.memo[key] = got = ((), False, None)
+        return got
     best, best_end, all_invalid = None, None, True
     for m in rows:
-        chain, ok = _grant_terms(state, m.backing[len("grant:"):], t)
+        chain, ok = routes.grant_terms(state, m.backing, use.at)
         route, bad = [m], not ok
+        ends = [g.expires for g in chain]          # the route's end: the earliest expiry of any grant on it
         for g in chain:
             if g.envelope.collections != STAR:
-                inner, inner_bad = _route(state, g.envelope.collections, g.layer, anchor, use, action, valid_only,
-                                          assume | {m})
+                inner, inner_bad, inner_end = _route(state, g.envelope.collections, g.layer, anchor, use, action,
+                                                     valid_only, assume | {m}, routes)
                 route.extend(inner)
                 bad = bad or inner_bad
+                if inner_end is not None:
+                    ends.append(inner_end)
         if chain:
-            end = min(e for r in route for e in _chain_expiries(state, r.backing))
+            end = min(ends)
             if best_end is None or end > best_end:
                 best, best_end = route, end
         all_invalid = all_invalid and bad
-    return (tuple(best) if best is not None else ()), all_invalid
+    routes.memo[key] = got = ((tuple(best) if best is not None else ()), all_invalid, best_end)
+    return got
 
 
 def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool) -> tuple[int | None, bool]:
@@ -1700,12 +1765,12 @@ def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool
         chain, ok = _grant_terms(state, record.backing[len("grant:"):], t)
         invalid = invalid or not ok
         selectors.extend((g.envelope, record.layer) for g in chain)
-    routes = []
+    routes, made = [], _Routes()
     for sel, layer in selectors:
         if sel.collections == STAR:
             continue
-        route, all_invalid = _route(state, sel.collections, layer, record.anchor, use, action, valid_only,
-                                    frozenset())
+        route, all_invalid, _ = _route(state, sel.collections, layer, record.anchor, use, action, valid_only,
+                                       frozenset(), made)
         routes.extend(route)
         invalid = invalid or all_invalid
     return effective_end(state, record, routes), invalid

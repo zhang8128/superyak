@@ -146,3 +146,73 @@ def test_item1_verify_writes_nothing(tmp_path, monkeypatch, capsys):
     before = ledger_path(tmp_path).read_bytes()
     assert cli_main(["verify"]) == 1
     assert ledger_path(tmp_path).read_bytes() == before
+
+
+# ---------------------------------------------------------------- item 2: T1's routes are made once per decision
+
+def _nested_levels(levels, width, *, bottom="*"):
+    """m1 at Andy's home in `width` collections at each of `levels` levels. Each membership is backed by a grant of
+    its own whose envelope names every collection of the next level (the last level's names `bottom`). The allow
+    names the first level. Level i, column j's grant expires 2026-11-30 less i hours and j seconds."""
+    from permissions import parse_selector, selector_json
+    from tests.permissions_support import andy_world
+
+    def envelope(collections):
+        return selector_json(parse_selector({
+            "audience": ["self"], "requesters": "*", "actions": "*", "purposes": "*",
+            "objects": {"kinds": ["memory"], "stores": "*", "layers": "*", "lanes": "*",
+                        "collections": collections, "memories": "*"}}))
+    w = andy_world()
+    w.agent("helper", HOME, at=HOME)
+    colls = [[f"collection:andy/c{i}-{j}" for j in range(width)] for i in range(levels)]
+    for i in range(levels):
+        env = envelope(colls[i + 1] if i + 1 < levels else bottom)
+        for j in range(width):
+            g = w.grant(ANDY, "agent:helper", HOME, ops=("collect",), envelope=env,
+                        expires=T("2026-11-30") - i * 3600 - j)
+            w.collect(colls[i][j], [M1], backing="grant:" + g)
+    w.allow(HOME, audience=["self"], collections=colls[0], actions=["recall"])
+    return w.state()
+
+
+def _counted_grant_terms(monkeypatch):
+    import permissions
+    calls, real = [0], permissions._grant_terms
+
+    def counted(*a):
+        calls[0] += 1
+        return real(*a)
+    monkeypatch.setattr(permissions, "_grant_terms", counted)
+    return calls
+
+
+def test_item2_five_levels_of_six_memberships_are_decided_in_a_few_milliseconds(monkeypatch):
+    import time
+    from tests.permissions_support import home_use
+    state, use = _nested_levels(5, 6), home_use(M1, T("2026-11-02"))
+    calls = _counted_grant_terms(monkeypatch)
+    start = time.perf_counter()
+    d = decide(state, use)
+    took = time.perf_counter() - start
+    # the latest-ending route takes column 0 at every level, so it ends with level 4's grant
+    assert d.allowed and d.until == T("2026-11-30") - 4 * 3600
+    assert calls[0] <= 5 * 6 * 2           # each membership's grant read once per route made (it was 6^5 paths)
+    assert took < 0.2, f"decide took {took:.3f} s"      # 92f0c1c: about 3.5 ms on the Pi; 503fd97: 1.27 s
+
+
+def test_item2_a_refusal_through_nested_routes_still_reads_each_route_once(monkeypatch):
+    from permissions import Refusal
+    from tests.permissions_support import home_use
+    d = decide(_nested_levels(4, 4, bottom=["collection:andy/nowhere"]), home_use(M1, T("2026-11-02")))
+    assert d.refusal == Refusal("NO_ALLOW", HOME, "recall")
+
+
+def test_item2_past_the_step_budget_the_use_is_refused_never_decided_on_a_part(monkeypatch):
+    import permissions
+    from permissions import RuleError
+    from tests.permissions_support import home_use
+    state, use = _nested_levels(3, 2), home_use(M1, T("2026-11-02"))
+    assert decide(state, use).allowed
+    monkeypatch.setattr(permissions, "ROUTE_STEPS", 2)
+    with pytest.raises(RuleError, match="membership routes"):
+        decide(state, use)
