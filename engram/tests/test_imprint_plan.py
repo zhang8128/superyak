@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import sqlite3
 import stat
 import sys
 from dataclasses import replace
@@ -192,6 +193,17 @@ def test_read_pages_through_what_would_leave(tmp_path):
     assert all(m.get("session_id") is None for m in seen if m["layer"] == "episode")      # route off: the package holds null
     assert seen[0]["content"].startswith("Jenn drove") and "content" in seen[3]
     assert list((HOME(tmp_path) / "imprints" / "plans").glob("*/")) == []                # scratch removed
+
+
+def test_read_shows_a_semantic_as_the_package_holds_it(tmp_path):
+    args = plan_args(tmp_path, route=False)
+    conn = sqlite3.connect(args[0])
+    with conn:
+        conn.execute("UPDATE semantics SET contradicted_by = 'home-only' WHERE id = 's1'")
+    conn.close()
+    plan = make_plan(*args)
+    seen = read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path), limit=99)
+    assert [m["contradicted_by"] for m in seen if m["layer"] == "semantic"] == [None]
 
 
 def test_read_shows_the_session_where_the_package_keeps_it(tmp_path):

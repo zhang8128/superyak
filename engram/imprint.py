@@ -26,7 +26,7 @@ from imprint_filter import (CLOSED_SECONDS, DIGEST_TABLES, IMPRINT_SUBJECTS_DDL,
                             OTHERS_HOME_WORDS, OTHERS_NO_LEDGER_WORDS, TIMES_WORDS, WITHOUT_ROUTE_WORDS, IdSet,
                             PackageRows, People, PlanRefused, Scratch, Selection, Terms, check_owner,
                             check_package_tables, check_source, classify_source, contents_of, open_ledger,
-                            package_rows, parse_selection, parse_terms, people, plan_digest, row_key, scope_of)
+                            package_rows, parse_selection, parse_terms, people, plan_digest, row_key, scope_of, semantic_rows)
 
 BATCH_ROWS = 1000                   # rows per insert batch (D42, I 14)
 BATCH_BYTES = 8 * 2**20             # bytes per insert batch; a row alone over it is a batch of one
@@ -543,15 +543,10 @@ def _selection_of(saved: dict) -> tuple[Selection, Terms]:
                       days=int(t["days"]))
 
 
-def _semantic_rows_in_order(conn: sqlite3.Connection, ids: Iterable[str]) -> Iterator[dict]:
-    """The shipped semantics as stored, in ``(created_at, id)`` order. imprint.py's own reader: store_reader reads
-    only episodes."""
-    stays = frozenset(ids)
-    cur = conn.cursor()
-    cur.row_factory = sqlite3.Row
-    for r in cur.execute("SELECT * FROM semantics ORDER BY created_at, id"):
-        if r["id"] in stays:
-            yield dict(r)
+def _semantic_rows_in_order(conn: sqlite3.Connection, pr: PackageRows) -> Iterator[dict]:
+    """The shipped semantics as the package will hold them (``contradicted_by`` null when it names a semantic
+    outside S), in ``(created_at, id)`` order."""
+    return iter(sorted(semantic_rows(conn, pr.shipped), key=lambda r: (r["created_at"], r["id"])))
 
 
 def read_plan(plan_id: str, *, home: Path, start: int = 0, limit: int = 1, engram_home: Path | None = None,
@@ -593,7 +588,7 @@ def read_plan(plan_id: str, *, home: Path, start: int = 0, limit: int = 1, engra
         if plan_digest(scope_of(sel), pr.rows, scratch=scratch) != saved["digest"]:
             raise PlanRefused(_CHANGED)
         episodes = ((r["created_at"], r["id"], 0, r) for r in pr.rows["episodes"])
-        semantics = ((r["created_at"], r["id"], 1, r) for r in _semantic_rows_in_order(conn, pr.shipped.semantics))
+        semantics = ((r["created_at"], r["id"], 1, r) for r in _semantic_rows_in_order(conn, pr))
         merged = heapq.merge(episodes, semantics, key=lambda t: t[:3])
         page = []
         for i, (at, id, layer, row) in enumerate(itertools.islice(merged, start, start + limit), start=start):
