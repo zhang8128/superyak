@@ -552,3 +552,77 @@ def test_a_breakout_never_gets_a_ship_this_way(fleet, capsys):
         db.execute('INSERT INTO breakouts(room_id,creator_id,created) VALUES(?,?,?)', (f.city['id'], f.rio['id'], store.clock()))
     assert refused(capsys, store, f.city['id'][:6], 'tardis') == (
         f'Room {f.city["id"][:6]} is a breakout, which its ships keep among themselves; no one is added to it here\n')
+
+
+# station-moderate and station-unmoderate: the owner lets someone moderate a room, from the terminal ----------------
+
+from superyak_peer.grants import _utc
+from superyak_peer.identity import verify_record
+from test_signatures import card_of
+
+
+def test_station_moderate_makes_a_signed_cli_grant_and_tells_the_room(fleet, capsys):
+    f, store = fleet, fleet.store
+    city = f.city['id']
+    out = run(capsys, store, 'station-moderate', '--id', city[:6], '--grantee', 'rio-grande', '--as', 'andy')
+    [grant] = store.list_grants(f.andy['id'])
+    assert (grant['grantee']['id'], grant['actions'], grant['budget'], grant['made_via'], grant['expires'] - grant['created']) == (
+        f.rio['id'], ['add_member', 'remove_member'], 10, 'cli', 720 * 3600)
+    assert out == (f'Made grant {grant["short"]}: Rio Grande moderates room {city[:6]} Superyak: city of AI, to add and remove '
+                   f'members, until {_utc(grant["expires"])}, with 10 changes a day. The room was told.\n')
+    with store.transaction() as db:
+        row = db.execute('SELECT signature FROM grants WHERE id=?', (grant['id'],)).fetchone()
+        assert verify_record(card_of(store._station_identity(db)), store._grant_record(db, grant['id']), row['signature'])
+    run(capsys, store, 'station-moderate', '--id', city[:6], '--grantee', 'doctor', '--hours', '24', '--budget', '3',
+        '--actions', 'add', '--as', 'andy')
+    second = store.list_grants(f.andy['id'])[0]
+    assert (second['actions'], second['budget'], second['expires'] - second['created']) == (['add_member'], 3, 24 * 3600)
+    line = next(l for l in run(capsys, store, 'station-rooms', '--as', 'andy').splitlines() if l.startswith(city[:6]))
+    assert line.endswith(f'  moderators: doctor {second["short"]}, rio-grande {grant["short"]}')
+
+
+@pytest.mark.parametrize('args, message', [
+    (['--id', 'doctors', '--grantee', 'rio-grande'], 'No room you own starts with'),
+    (['--id', 'city', '--grantee', 'odo'], 'A moderator is a person in this room or one of your own ships in it'),
+    (['--id', 'city', '--grantee', 'kestrel'], 'A moderator is a person in this room or one of your own ships in it'),
+    (['--id', 'city', '--grantee', 'rio-grande', '--actions', 'kick'], 'actions is a list of add_member and remove_member, each at most once'),
+    (['--id', 'city', '--grantee', 'rio-grande', '--as', 'rio-grande'], 'Only people can do this'),
+])
+def test_station_moderate_refuses_and_writes_nothing(fleet, capsys, args, message):
+    f, store = fleet, fleet.store
+    doctors = store.create_room(f.doctor['id'], "Doctor's room", [f.andy['id']])
+    args = [{'city': f.city['id'][:6], 'doctors': doctors['id'][:6]}.get(a, a) for a in args]
+    with pytest.raises(SystemExit) as stopped:
+        cli(['station-moderate', '--data-dir', str(store.data_dir), *args, *([] if '--as' in args else ['--as', 'andy'])])
+    assert stopped.value.code == 1 and capsys.readouterr().err.startswith(message)
+    assert store.list_grants(f.andy['id']) == []
+
+
+def test_station_unmoderate_revokes_one_moderate_grant_by_its_short_id(fleet, capsys, monkeypatch):
+    f, store = fleet, fleet.store
+    made = iter(['abcd1111' + '0' * 24, 'abcd2222' + '0' * 24, 'abce3333' + '0' * 24])
+    monkeypatch.setattr('superyak_peer.grants.uid', lambda: next(made))
+    for grantee in (f.rio, f.doctor):
+        store.make_moderate_grant(f.andy['id'], grantee['id'], f.city['id'])
+    with store.transaction() as db:  # a direct grant whose id also starts abce: never matched (ruling 6)
+        store._insert_grant(db, f.andy['id'], f.doctor['id'], [f.rio['id']], [f.city['id']], 24, 5)
+    monkeypatch.undo()
+    for prefix, message in (('abc', 'Give at least 4 characters of the short id'),
+                            ('#abcd', 'abcd matches more than one of your moderate grants; give more characters'),
+                            ('abce', 'No moderate grant of yours starts with abce')):
+        with pytest.raises(SystemExit):
+            run(capsys, store, 'station-unmoderate', '--grant', prefix, '--as', 'andy')
+        assert capsys.readouterr().err.startswith(message)
+    out = run(capsys, store, 'station-unmoderate', '--grant', '#abcd1', '--as', 'andy')
+    assert out == f'Ended grant #abcd: Rio Grande no longer moderates room {f.city["id"][:6]} Superyak: city of AI. The room was told.\n'
+    assert store.list_grants(f.andy['id'])[-1]['revoke_reason'] == 'revoked'
+
+
+def test_station_moderate_needs_the_station_identity(fleet, capsys):
+    """§6: it signs, so it is not on G4a's signing=False list: a damaged identity stops it before anything is written."""
+    f, store = fleet, fleet.store
+    store.make_moderate_grant(f.andy['id'], f.doctor['id'], f.city['id'])  # the identity exists now
+    (store.data_dir / 'identity.json').write_text('not json')
+    with pytest.raises(SystemExit):
+        run(capsys, store, 'station-moderate', '--id', f.city['id'][:6], '--grantee', 'rio-grande', '--as', 'andy')
+    assert 'identity.json' in capsys.readouterr().err

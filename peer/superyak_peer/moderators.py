@@ -6,8 +6,9 @@ are in grants.py."""
 import json
 
 from .common import REPLACED_ROOMS, Problem
-from .grants import GRANTEE_IS_YOU, MODERATE_ACTIONS, _utc, _whole, is_moderate
+from .grants import GRANTEE_IS_YOU, MODERATE_ACTIONS, _utc, _whole, is_moderate, short_id
 from .ships import safe_line
+from .ships import short_id as typed_short_id
 
 MODERATE_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS member_changes(id TEXT PRIMARY KEY, grant_id TEXT REFERENCES grants(id),
@@ -146,3 +147,38 @@ class Moderators:
                 found.append({'id': who['id'], 'name': who['name'], 'username': who['username'], 'grant': g['id'], '_created': g['created']})
         found.sort(key=lambda m: (m['name'].casefold(), m['_created']))
         return [{k: v for k, v in m.items() if k != '_created'} for m in found]
+
+    def station_moderate(self, username, prefix, grantee, hours=MODERATE_DEFAULT_HOURS, budget=MODERATE_DEFAULT_BUDGET,
+                         actions=MODERATE_ACTIONS):
+        """Trusted local operator only (§6): `username`, a person, lets `grantee` (a username) moderate a current room they
+        own, named by a short id. The same checks as the browser's route, the grant stored and signed, `made_via` 'cli',
+        the room told. Returns (the grant's view, the room)."""
+        prefix = typed_short_id(prefix)
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            room, _ = self._owned_room(db, actor, prefix)
+            found = db.execute('SELECT id FROM users WHERE username=?', (grantee.strip().lower(),)).fetchone() if isinstance(grantee, str) else None
+            key = self._make_moderate(db, actor, found['id'] if found else grantee, room['id'], hours, budget, actions, 'cli')
+            return self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (key,)).fetchone()), room
+
+    def station_unmoderate(self, username, prefix):
+        """Trusted local operator only (§6): ends one of the operator's own moderate grants, named by at least 4
+        characters of its id, with or without the #. Revoked as G10 does. Returns (the view, the current room it covered
+        as {id, title}, or None)."""
+        prefix = typed_short_id(prefix[1:] if isinstance(prefix, str) and prefix.startswith('#') else prefix)
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            matches = [g for g in db.execute('SELECT * FROM grants WHERE issuer_id=? ORDER BY created, id', (actor,)).fetchall()
+                       if is_moderate(g) and g['id'].startswith(prefix)]
+            if not matches:
+                raise Problem(404, f'No moderate grant of yours starts with {prefix}')
+            if len(matches) > 1:
+                raise Problem(409, f'{prefix} matches more than one of your moderate grants; give more characters')
+            grant = matches[0]
+            if grant['revoked'] is not None:
+                raise Problem(409, f'Grant {short_id(grant["id"])} is already revoked')
+            self._revoke(db, actor, grant, 'revoked')
+            covered = self._covered_room(db, grant)
+            room = db.execute('SELECT id, title FROM rooms WHERE id=?', (covered,)).fetchone() if covered else None
+            return (self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (grant['id'],)).fetchone()),
+                    dict(room) if room else None)

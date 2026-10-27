@@ -228,7 +228,8 @@ class Ships:
             for room in self._current_rooms(db, actor):
                 members = [r[0] for r in db.execute('SELECT users.username FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_id=? ORDER BY users.username', (room['id'],))]
                 bridged = wormhole is not None and db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (room['id'], wormhole)).fetchone() is not None
-                rooms.append({'id': room['id'], 'title': room['title'], 'members': members, 'bridged': bridged})
+                rooms.append({'id': room['id'], 'title': room['title'], 'members': members, 'bridged': bridged,
+                              'moderators': [f'{m["username"]} #{m["grant"][:4]}' for m in self._moderators(db, room['id'])]})
             return rooms
 
     def _owned_room(self, db, actor, prefix):
