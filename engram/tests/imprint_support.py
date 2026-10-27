@@ -1080,13 +1080,16 @@ def live_source(tmp_path: Path) -> Storage:
 
 
 def plan_args(tmp_path: Path, *, owner: str = "sam", route: bool = False, episodes: int = 2, cosubjects=None,
-              ledger=_AUTO, denies=None, until="2026-10-25T18:00:00Z"):
+              ledger=_AUTO, denies=None, until="2026-10-25T18:00:00Z", ancestry=None):
     """``(store path, selection, terms, ctx, context, home, now)``: the arguments of ``make_plan``. Episodes
     ``e0`` (never given a co-subject) and ``e1`` to ``e<episodes>`` in the work lane hold text naming Jenn; ``s1`` is sourced on ``e1``. A ledger is made
     when ``cosubjects`` or ``denies`` are given (``ledger=None`` forbids one)."""
     from imprint_filter import parse_selection, parse_terms
 
     s = new_store(tmp_path, "src")
+    if ancestry:                                # a store copied from these stores, nearest first
+        store_identity.stamp_fork(s.conn, ancestry[0], list(ancestry[1:]), True)
+        s.conn.commit()
     ep(s, "e0", content="Jenn drove the truck to the clinic, trip 0", session="sx", at="2026-10-25T09:00:00+00:00")
     vec(s, "episode", "e0", seed=100)           # no one else is recorded on e0, so a plan always has a memory
     for i in range(1, episodes + 1):

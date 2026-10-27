@@ -6,10 +6,12 @@ numpy: ``calibrate`` is imported inside the functions that need it (P35).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import heapq
 import itertools
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -23,11 +25,12 @@ from pathlib import Path
 
 import store_identity
 import store_reader
-from imprint_filter import (CLOSED_SECONDS, DIGEST_TABLES, IMPRINT_SUBJECTS_DDL, NAMES_SHOWN, OTHERS_AWAY_WORDS,
+from imprint_filter import (CLOSED_SECONDS, FILTER, DIGEST_TABLES, IMPRINT_SUBJECTS_DDL, NAMES_SHOWN, OTHERS_AWAY_WORDS,
                             OTHERS_HOME_WORDS, OTHERS_NO_LEDGER_WORDS, TIMES_WORDS, WITHOUT_ROUTE_WORDS, IdSet,
                             PackageRows, People, PlanRefused, Scratch, Selection, Terms, check_owner,
-                            check_package_tables, check_source, classify_source, contents_of, cross_references, left_out_keys, open_ledger,
+                            canonical, check_package_tables, check_source, classify_source, contents_of, cross_references, left_out_keys, open_ledger,
                             package_rows, parse_selection, parse_terms, people, plan_digest, row_key, scope_of, semantic_rows)
+from imprint_filter import _instant_text
 
 BATCH_ROWS = 1000                   # rows per insert batch (D42, I 14)
 BATCH_BYTES = 8 * 2**20             # bytes per insert batch; a row alone over it is a batch of one
@@ -532,6 +535,172 @@ def plan_dict(plan: Plan, *, show_cross_references: bool = False) -> dict:
 
 
 # ---- Reading what would leave ----------------------------------------------------------------------------------
+
+# ---- The request (I 7.1), the manifest (I 7.2) and the owner's lists (R30) ---------------------------------------
+
+REQUEST_KEYS = {
+    "kind": None, "version": None, "imprint_id": None, "plan_digest": None, "source_instance_id": None,
+    "source_ancestry": None, "source_ancestry_complete": None,
+    "scope": {"lanes": None, "layers": None, "since": None, "until": None, "shared_with": None,
+              "unsourced_semantics": None},
+    "contents": None,                               # table name -> row count; which tables is data, not form
+    "others": {"memories": None, "people": None},
+    "package": {"bytes": None, "parts": None},
+    "terms": {"audience": None, "actions": None, "purposes": None, "days": None},
+}
+
+STATION_KEEPS_WORDS = (
+    "This goes to the station now, before you say yes. It holds only what your browser will show. No memory leaves "
+    "until you allow it. If you decline, or don't answer within 10 minutes, the station deletes the request (at once "
+    "when you decline, within an hour when it expires) and keeps a row with its ids, your ship and its times, and no "
+    "scope or counts, for 30 days. Its nightly backups keep that row about 8 weeks more. If you allow, the station "
+    "keeps the permission, its receipts and that row until 400 days after the copy is deleted (backups about 8 weeks "
+    "more). Nothing is kept with no end.")
+
+_HASH_READ = 2**20                  # the package is hashed 1 MiB at a time (I 14)
+
+
+def request_for(plan: Plan, imprint_id: str, package_bytes: int) -> dict:
+    """The request of I 7.1 from a plan: only what the confirm view shows, and no name or memory id."""
+    return {
+        "kind": "engram-imprint-request", "version": 1, "imprint_id": imprint_id, "plan_digest": plan.digest,
+        "source_instance_id": plan.source_id, "source_ancestry": list(plan.ancestry),
+        "source_ancestry_complete": bool(plan.ancestry_complete), "scope": scope_of(plan.selection),
+        "contents": {t: int(n) for t, n in plan.contents.items()},
+        "others": {"memories": int(plan.others["memories"]), "people": int(plan.others["people"])},
+        "package": {"bytes": int(package_bytes), "parts": max(1, -(-int(package_bytes) // PART_BYTES))},
+        "terms": {"audience": [plan.terms.audience], "actions": sorted(plan.terms.actions),
+                  "purposes": sorted(plan.terms.purposes), "days": int(plan.terms.days)}}
+
+
+def engram_commit_of(checkout: Path | None = None) -> str | None:
+    """``git rev-parse HEAD`` in the engram checkout, or None when that fails."""
+    import subprocess
+
+    try:
+        done = subprocess.run(["git", "rev-parse", "HEAD"], cwd=checkout or Path(__file__).resolve().parent,
+                              capture_output=True, text=True, timeout=10, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    commit = done.stdout.strip()
+    return commit or None
+
+
+def _package_facts(package: Path, parts: int) -> tuple[str, list[str], int]:
+    """``(sha256, part hashes, size)``: part n covers bytes [n*B, min((n+1)*B, size)); reads are 1 MiB."""
+    whole = hashlib.sha256()
+    hashes = []
+    with open(package, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        for n in range(parts):
+            part = hashlib.sha256()
+            left = max(0, min(PART_BYTES, size - n * PART_BYTES))
+            while left:
+                chunk = f.read(min(_HASH_READ, left))
+                if not chunk:
+                    raise OSError("the package is shorter than its size")
+                part.update(chunk)
+                whole.update(chunk)
+                left -= len(chunk)
+            hashes.append(part.hexdigest())
+        if f.read(1):
+            raise OSError("the package grew while it was hashed")
+    return whole.hexdigest(), hashes, size
+
+
+def manifest_for(request: dict, package: Path, *, built_at: int, engram_commit: str | None,
+                 source_identity: str = "present") -> dict:
+    """The manifest of I 7.2. ``source_identity`` is ``Plan.source_identity`` ("present" or "derived")."""
+    from embeddings import NomicEmbedProvider
+
+    conn = _connect(package, read_only=True)
+    try:
+        applied = [r[0] for r in conn.execute("SELECT version FROM schema_version ORDER BY version")]
+        ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'episode_vectors'").fetchone()
+        found = re.search(r"float\[(\d+)\]", ddl[0] if ddl else "")
+        row = conn.execute("SELECT value FROM episode_vectors_info WHERE key = 'CREATE_VERSION'").fetchone()
+    finally:
+        conn.close()
+    if not found or row is None:
+        raise ValueError("the package holds no episode_vectors table to describe")
+    parts = request["package"]["parts"]
+    sha, hashes, size = _package_facts(Path(package), parts)
+    if size != request["package"]["bytes"]:
+        raise ValueError("the package is not the size the request named")
+    return {
+        "kind": "engram-imprint-manifest", "version": 1, "imprint_id": request["imprint_id"], "filter": FILTER,
+        "plan_digest": request["plan_digest"], "request_sha256": hashlib.sha256(canonical(request)).hexdigest(),
+        "built_at": _instant_text(built_at), "engram_commit": engram_commit,
+        "source": {"instance_id": request["source_instance_id"], "identity": source_identity,
+                   "ancestry": list(request["source_ancestry"]),
+                   "ancestry_complete": request["source_ancestry_complete"]},
+        "schema": {"applied": applied},
+        "embedding": {"model": NomicEmbedProvider.MODEL_NAME, "dimension": int(found.group(1))},
+        "vec": {"create_version": row[0]},
+        "scope": request["scope"], "contents": request["contents"], "others": request["others"],
+        "package": {"file": "imprint.db", "bytes": size, "sha256": sha, "part_bytes": PART_BYTES, "parts": hashes}}
+
+
+def render_request(request: dict) -> str:
+    """The request in words, then what the station keeps and for how long (I 7.1)."""
+    scope, terms, pkg = request["scope"], request["terms"], request["package"]
+    since = "the beginning" if scope["since"] is None else scope["since"]
+    ancestry = request["source_ancestry"]
+    copied = ("copied from " + ", ".join(i[:8] for i in ancestry) if ancestry else "copied from no recorded store")
+    lines = [
+        f"Imprint request {request['imprint_id'][:4]}",
+        f"Source store: {request['source_instance_id'][:8]} ({copied}; "
+        f"{'lineage complete' if request['source_ancestry_complete'] else 'lineage incomplete'})",
+        f"Scope: lanes {', '.join(scope['lanes'])}; layers {', '.join(scope['layers'])}; from {since} "
+        f"until {scope['until']}" + (f"; shared with {scope['shared_with']}" if scope["shared_with"] else "")
+        + ("; semantic memories with no source included" if scope["unsourced_semantics"] else ""),
+        "Rows: " + ", ".join(f"{t} {n}" for t, n in request["contents"].items()),
+        f"Other people: {_n(request['others']['memories'], 'memory', 'memories')} with other people recorded on "
+        f"them ({_n(request['others']['people'], 'person', 'people')})",
+        f"Package: {pkg['bytes']} bytes in {_n(pkg['parts'], 'part', 'parts')}",
+        f"Terms: for {', '.join(terms['audience'])}; actions {', '.join(terms['actions'])}; purposes "
+        f"{', '.join(terms['purposes'])}; {terms['days']} days",
+        f"Plan digest: {request['plan_digest'][:8]} (the whole 64-character digest is sent)",
+        "", STATION_KEEPS_WORDS]
+    return "\n".join(lines) + "\n"
+
+
+def objects_for(rows: PackageRows, source_id: str) -> Iterator[str]:
+    """The sorted ``mem:`` ref of every memory that ships: ``objects.json``."""
+    yield from rows.shipped.refs(source_id)
+
+
+def subjects_for(rows: PackageRows, source_id: str) -> Iterator[list[str]]:
+    """The sorted ``[ref, subject]`` pairs of ``imprint_subjects``: ``subjects.json``. The rows come sorted by id and
+    then layer; refs sort by layer first, so one pass for each layer (the same prefix keeps ids in order)."""
+    for layer in ("episode", "semantic"):
+        for row in rows.rows["imprint_subjects"]:
+            if row["layer"] == layer:
+                yield [f"mem:{source_id}/{layer}/{row['memory_id']}", row["subject"]]
+
+
+def _write_json_lines(path: Path, items: Iterable) -> None:
+    """A JSON array, one element per line, ``[`` and ``]`` on lines of their own (R30)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("[\n")
+        last = None
+        for item in items:
+            if last is not None:
+                f.write(last + ",\n")
+            last = json.dumps(item, ensure_ascii=True)
+        if last is not None:
+            f.write(last + "\n")
+        f.write("]\n")
+
+
+def write_owner_lists(dir: Path, rows: PackageRows, source_id: str) -> None:
+    """``objects.json`` and ``subjects.json`` in ``dir``, written as the rows are read (R30)."""
+    dir = Path(dir)
+    dir.mkdir(parents=True, exist_ok=True)
+    _write_json_lines(dir / "objects.json", objects_for(rows, source_id))
+    _write_json_lines(dir / "subjects.json", subjects_for(rows, source_id))
+
 
 _CHANGED = "Your store changed since the plan. Run the plan again."
 
