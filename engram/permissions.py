@@ -14,6 +14,8 @@ from typing import Callable, Iterable, Mapping, NamedTuple, Sequence
 from lighthouse_protocol import canonical_json
 
 MAX_RECORDS_PER_LAYER = 256
+MAX_RECORDS = 16_384            # records in one ledger, revoked and replaced ones included (5.4, 15)
+STATE_LOG_TIMES = 65_536        # log times a State keeps at once; the rest are read again on demand (5.6, 15)
 MAX_AUDIENCE = 32
 MAX_LIST = 64
 MAX_MEMORIES = 512
@@ -489,7 +491,9 @@ class State:
         kw["member_of"] = {k: tuple(v) for k, v in by_obj.items()}
         given = dict(names or {})
         kw["names"] = {p: given.get(p, p.rsplit("/", 1)[-1].removeprefix("place:")) for p in kw["places"]}
-        return cls(seq=seq, seq_at=dict(seq_at), meta=dict(meta), **kw)
+        # a dict is copied; any other mapping (the ledger's lazy log times) is kept as given
+        seq_at = dict(seq_at) if isinstance(seq_at, dict) else seq_at
+        return cls(seq=seq, seq_at=seq_at, meta=dict(meta), **kw)
 
     def to_tables(self) -> dict:
         def dump(table, items):

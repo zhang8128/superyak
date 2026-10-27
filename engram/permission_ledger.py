@@ -19,11 +19,16 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 import uuid
+import weakref
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
+
+import permissions
 
 from lighthouse_protocol import artifact_digest, canonical_json
 from permissions import (
@@ -99,6 +104,65 @@ class LedgerUnreadable(Exception):
     pass
 
 
+class LogTimes(Mapping):
+    """The time of each log row up to `seq`, read from the ledger when a decision asks (P 5.6, 15). A read-only
+    `Mapping` of seq to `at` over `ledger_log`: it answers only for 1 <= seq <= the State's seq, keeps at most
+    `permissions.STATE_LOG_TIMES` times (the least recently used leave first) and iterates in seq order,
+    streaming. The log is append-only, so a row at or below the State's seq reads the same whenever it is read.
+    A failed read raises `LedgerUnreadable`; a caller treats that as a failed `state()`. The reader connection
+    is shared between threads under a lock and closed when this object is collected."""
+    _CHUNK = 1024
+
+    def __init__(self, conn: sqlite3.Connection, seq: int):
+        self._conn, self._seq = conn, seq
+        self._lock = threading.Lock()
+        self._cache: OrderedDict = OrderedDict()
+        weakref.finalize(self, conn.close)
+
+    def _query(self, sql: str, args: tuple) -> list:
+        try:
+            with self._lock:
+                return self._conn.execute(sql, args).fetchall()
+        except sqlite3.Error as e:
+            raise LedgerUnreadable(f"the permission ledger's log could not be read: {e}") from e
+
+    def _fetch(self, seq: int) -> int | None:
+        rows = self._query("SELECT at FROM ledger_log WHERE seq = ?", (seq,))
+        return rows[0][0] if rows else None
+
+    def __getitem__(self, seq: int) -> int:
+        if not isinstance(seq, int) or isinstance(seq, bool) or not 1 <= seq <= self._seq:
+            raise KeyError(seq)
+        with self._lock:
+            hit = self._cache.get(seq)
+            if hit is not None:
+                self._cache.move_to_end(seq)
+                return hit
+        at = self._fetch(seq)
+        if at is None:
+            raise KeyError(seq)
+        with self._lock:
+            self._cache[seq] = at
+            self._cache.move_to_end(seq)
+            while len(self._cache) > permissions.STATE_LOG_TIMES:
+                self._cache.popitem(last=False)
+        return at
+
+    def __iter__(self) -> Iterator[int]:
+        last = 0
+        while True:
+            rows = self._query("SELECT seq FROM ledger_log WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
+                               (last, self._seq, self._CHUNK))
+            if not rows:
+                return
+            for (s,) in rows:
+                yield s
+            last = rows[-1][0]
+
+    def __len__(self) -> int:
+        return self._query("SELECT COUNT(*) FROM ledger_log WHERE seq <= ?", (self._seq,))[0][0]
+
+
 @dataclass(frozen=True)
 class Outcome:
     """What `Ledger.perform` did: `done`, or `proposal` (a proposal was filed, or one signature was added).
@@ -141,11 +205,11 @@ class Ledger:
 
     # ---------------------------------------------------------------- opening
     @staticmethod
-    def _connect(path: Path, *, read_only: bool, busy_ms: int = BUSY_MS) -> sqlite3.Connection:
+    def _connect(path: Path, *, read_only: bool, busy_ms: int = BUSY_MS, shared: bool = False) -> sqlite3.Connection:
         try:
             if read_only:
                 conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, isolation_level=None,
-                                       timeout=busy_ms / 1000)
+                                       timeout=busy_ms / 1000, check_same_thread=not shared)
                 conn.execute("PRAGMA query_only=ON")
             else:
                 conn = sqlite3.connect(path, isolation_level=None, timeout=busy_ms / 1000)
@@ -234,20 +298,28 @@ class Ledger:
             seq = top if seq is None else seq
             if not 0 <= seq <= top:
                 raise ValueError(f"seq {seq} is outside the log (0 to {top})")
-            log = [dict(r) for r in self.conn.execute("SELECT seq, at, kind, ref, body FROM ledger_log ORDER BY seq")]
+            n_records = self.conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+            if n_records > permissions.MAX_RECORDS:
+                raise LedgerUnreadable(
+                    f"{self.path}: the ledger holds {n_records:,} records, more than the {permissions.MAX_RECORDS:,} "
+                    f"a State holds whole (P 5.4, 15); it reads as unreadable (P 5.6) until the records are read "
+                    f"per layer")
             tables = {t: [dict(r) for r in self.conn.execute(
                 f"SELECT {', '.join(_COLUMNS[t])} FROM {t} ORDER BY rowid")] for t in _TABLES}
             meta = self.meta()
-        finally:
-            self.conn.execute("COMMIT")
-        names = {}
-        for r in log:
-            if r["seq"] <= seq and r["kind"] == "register-place":
+            # the only log bodies a State reads: place names. Log times are read when a decision asks.
+            names = {}
+            for r in self.conn.execute(
+                    "SELECT ref, body FROM ledger_log WHERE kind = 'register-place' AND seq <= ? ORDER BY seq",
+                    (seq,)):
                 name = json.loads(r["body"]).get("name")
                 if name:
                     names[r["ref"]] = name
-        return State.from_tables(tables, seq=seq, seq_at={r["seq"]: r["at"] for r in log}, meta=meta,
-                                 names=names)
+        finally:
+            self.conn.execute("COMMIT")
+        # a second read-only connection: the log is append-only, so rows up to `seq` read the same later
+        reader = self._connect(self.path, read_only=True, shared=True)
+        return State.from_tables(tables, seq=seq, seq_at=LogTimes(reader, seq), meta=meta, names=names)
 
     def verify(self) -> int | None:
         prev, expect = ZERO, 1
