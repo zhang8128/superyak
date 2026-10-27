@@ -250,3 +250,104 @@ def test_station_imprint_admit_runs_begin_admit_and_sync_in_order(tmp_path):
     assert [step_of(l) for l in lines] == ['station-imprint-admit-begin', 'imprint.py admit', 'station-imprint-sync']
     assert all(f'--imprints-dir {IMPRINTS_OF(tmp_path)}' in l for l in lines if 'imprints' in l)
     assert '--verify-cmd uv run --locked --project ' + str(REPO / 'peer') + ' python -m superyak_peer verify-imprint' in lines[1]
+
+
+# The owner's targets (Task 46, I 13). The agent and engram commands are the spec's; nothing here reaches a station.
+import shlex
+
+AGENT = ['python3', 'agent/run_agent.py']
+ENGRAM = ['uv', 'run', '--locked', 'python', 'imprint.py']
+
+
+def owner_dry_run(base, *args):
+    fake_home(base, {})
+    done = subprocess.run(['make', '-n', '--no-print-directory', '-C', str(REPO), *args], env={**os.environ, 'HOME': str(Path(base) / 'home')},
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    commands = []
+    for line in done.stdout.splitlines():
+        if line.startswith('test -n'):          # the usage guard
+            continue
+        for part in line.split(' && '):
+            if part.strip() != 'cd engram':
+                commands.append(shlex.split(part))
+    return commands
+
+
+def test_the_owner_targets_run_the_spec_commands(tmp_path):
+    assert owner_dry_run(tmp_path, 'imprint-plan', 'IMPRINT_ARGS=--lanes work --layers episode,semantic --days 90') == [
+        AGENT + ['imprint', 'context'],
+        ENGRAM + ['plan', '--project-root', str(REPO), '--lanes', 'work', '--layers', 'episode,semantic', '--days', '90']]
+    assert owner_dry_run(tmp_path, 'imprint-send', 'PLAN=7c41') == [ENGRAM + ['build', '--plan', '7c41', '--if-needed'],
+                                                                   AGENT + ['imprint', 'send', '--plan', '7c41']]
+    assert owner_dry_run(tmp_path, 'imprint-shorten', 'ID=c0a8', 'DAYS=30')[-1][-4:] == ['--id', 'c0a8', '--days', '30']
+    assert owner_dry_run(tmp_path, 'imprint-withdraw', 'ID=c0a8') == [AGENT + ['imprint', 'withdraw', '--id', 'c0a8']]
+    assert owner_dry_run(tmp_path, 'imprint-read', 'PLAN=7c41', 'START=5', 'LIMIT=2') == [
+        ENGRAM + ['read', '--plan', '7c41', '--start', '5', '--limit', '2']]
+
+
+def test_the_plan_root_is_where_make_ran_not_the_engram_checkout(tmp_path):
+    root = tmp_path / 'elsewhere'
+    plan = owner_dry_run(tmp_path, 'imprint-plan', f'ENGRAM_PROJECT_ROOT={root}')[-1]
+    assert plan == ENGRAM + ['plan', '--project-root', str(root)]
+
+
+@pytest.mark.parametrize('target', ['imprint-read', 'imprint-send', 'imprint-withdraw', 'imprint-shorten', 'imprint-verify'])
+def test_targets_without_their_variable_print_usage(tmp_path, target):
+    fake_home(tmp_path, {})
+    done = subprocess.run(['make', '-s', '-C', str(REPO), target], env={**os.environ, 'HOME': str(tmp_path / 'home')},
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 2 and done.stdout.startswith(f'Usage: make {target}')
+
+
+def test_shorten_without_days_prints_usage(tmp_path):
+    fake_home(tmp_path, {})
+    done = subprocess.run(['make', '-s', '-C', str(REPO), 'imprint-shorten', 'ID=c0a8'], env={**os.environ, 'HOME': str(tmp_path / 'home')},
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 2 and done.stdout.startswith('Usage: make imprint-shorten')
+
+
+def owner_run(base, target, *args, folders=('c0a8f5e2-0000-4000-8000-000000000001', 'd1b9a6f3-0000-4000-8000-000000000002')):
+    home = fake_home(base, {})
+    for name in folders:
+        (home / '.superyak' / 'imprints' / name).mkdir(parents=True)
+        (home / '.superyak' / 'imprints' / name / 'send.json').write_text('{}')
+    bin_dir = Path(base) / 'bin'
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / 'agentpy').write_text(SHIM.format(python=sys.executable))
+    (bin_dir / 'agentpy').chmod(0o755)
+    return run_make(base, [target, 'AGENT_PYTHON=agentpy', *args], {}, home)
+
+
+def test_status_verifies_and_imports_each_local_imprint(tmp_path):
+    done, calls = owner_run(tmp_path, 'imprint-status')
+    assert done.returncode == 0, done.stderr + done.stdout
+    names = [c[0] for c in calls]
+    assert calls[0][:3] == ['agentpy', 'agent/run_agent.py', 'imprint'] and calls[0][3] == 'status'
+    verifies = [c for c in calls if 'verify-imprint' in c]
+    imports = [c for c in calls if 'import-receipts' in c]
+    assert [c[c.index('--dir') + 1].rsplit('/', 1)[1][:4] for c in verifies] == ['c0a8', 'd1b9']
+    assert [c[c.index('--id') + 1][:4] for c in imports] == ['c0a8', 'd1b9'] and names[0] == 'agentpy'
+
+
+def test_status_with_an_id_looks_at_that_imprint_only(tmp_path):
+    done, calls = owner_run(tmp_path, 'imprint-status', 'ID=d1b9')
+    assert done.returncode == 0, done.stderr
+    assert calls[0][-2:] == ['--id', 'd1b9']
+    assert [c[c.index('--dir') + 1].rsplit('/', 1)[1][:4] for c in calls if 'verify-imprint' in c] == ['d1b9']
+    assert len([c for c in calls if 'import-receipts' in c]) == 1
+
+
+def test_status_fails_when_a_verify_fails_but_still_checks_the_rest(tmp_path):
+    done, calls = owner_run(tmp_path, 'imprint-status', 'ID=zzzz', folders=())
+    assert done.returncode != 0
+
+
+def test_verify_resolves_a_short_id_and_refuses_an_unknown_or_ambiguous_one(tmp_path):
+    done, calls = owner_run(tmp_path, 'imprint-verify', 'ID=c0a8')
+    assert done.returncode == 0, done.stderr
+    assert calls[-1][calls[-1].index('--dir') + 1].endswith('/.superyak/imprints/c0a8f5e2-0000-4000-8000-000000000001')
+    done, calls = owner_run(tmp_path / 'b', 'imprint-verify', 'ID=ffff')
+    assert done.returncode == 2 and calls == [] and 'ffff' in done.stdout + done.stderr
+    done, calls = owner_run(tmp_path / 'c', 'imprint-verify', 'ID=c0a8', folders=('c0a8aaaa-1', 'c0a8bbbb-2'))
+    assert done.returncode == 2 and calls == []

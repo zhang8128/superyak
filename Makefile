@@ -39,6 +39,13 @@ LANE ?=
 IMPRINTS ?= $(HOME)/.engram/imprints
 REPLACED ?=
 UNPAIR ?=
+IMPRINT_ARGS ?=
+PLAN ?=
+START ?=
+LIMIT ?=
+DAYS ?=
+ENGRAM_PROJECT_ROOT ?= $(CURDIR)
+SUPERYAK_HOME ?= $(HOME)/.superyak
 # Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
 # and any project ship's watcher on this machine (a later one gets it when make station-units runs again).
 STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-imprint-sweep.service superyak-imprint-sweep.timer superyak-alert@.service
@@ -51,7 +58,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -211,9 +218,56 @@ station-deny:
 	@test -n "$(ID)" || { echo 'Usage: make $@ ID=<short id from make station-pending> [APPROVER=andy]'; exit 2; }
 	uv run --locked --project peer python -m superyak_peer $@ --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --imprints-dir "$(IMPRINTS)"
 
+# The owner's imprint targets (I 13). They run on the owner's machine: the agent over the ship key, and the engram
+# commands from engram/. imprint-plan passes the directory make ran in, so the default store (I 5.1) is found from
+# there and not from engram/; --store in IMPRINT_ARGS still wins.
+OWNER_AGENT = $(AGENT_PYTHON) agent/run_agent.py imprint
+OWNER_ENGRAM = cd engram && uv run --locked python imprint.py
+# Shell fragment: sets dirs to the local imprint folders (those sent from here) that start with $(ID), all when ID is empty.
+OWNER_DIRS = dirs=$$(for d in "$(SUPERYAK_HOME)"/imprints/*/; do d=$${d%/}; test -f "$$d/send.json" && case "$${d\#\#*/}" in "$(ID)"*) echo "$$d";; esac; done)
+
+imprint-plan:
+	$(OWNER_AGENT) context
+	$(OWNER_ENGRAM) plan --project-root "$(ENGRAM_PROJECT_ROOT)" $(IMPRINT_ARGS)
+
+imprint-read:
+	@test -n "$(PLAN)" || { echo 'Usage: make $@ PLAN=<first 4+ characters of a plan> [START=0 LIMIT=1]'; exit 2; }
+	$(OWNER_ENGRAM) read --plan "$(PLAN)"$(if $(START), --start "$(START)")$(if $(LIMIT), --limit "$(LIMIT)")
+
+imprint-send:
+	@test -n "$(PLAN)" || { echo 'Usage: make $@ PLAN=<first 4+ characters of a plan>'; exit 2; }
+	$(OWNER_ENGRAM) build --plan "$(PLAN)" --if-needed
+	$(OWNER_AGENT) send --plan "$(PLAN)"
+
+# What the station says, then each local imprint's receipts checked and entered in the use list. A failing step does not
+# stop the others; the target fails if any did.
+imprint-status:
+	@$(OWNER_DIRS); fail=0; \
+	test -z "$(ID)" -o -n "$$dirs" || { echo 'There is no imprint "$(ID)" sent from this machine.'; exit 2; }; \
+	$(OWNER_AGENT) status$(if $(ID), --id "$(ID)") || fail=1; \
+	for d in $$dirs; do \
+	  uv run --locked --project peer python -m superyak_peer verify-imprint --dir "$$d" --home "$(SUPERYAK_HOME)" || fail=1; \
+	  (cd engram && uv run --locked python imprint.py import-receipts --id "$$(basename "$$d")" --superyak-home "$(SUPERYAK_HOME)") || fail=1; \
+	done; exit $$fail
+
+imprint-withdraw:
+	@test -n "$(ID)" || { echo 'Usage: make $@ ID=<first 4+ characters of the imprint id>'; exit 2; }
+	$(OWNER_AGENT) withdraw --id "$(ID)"
+
+imprint-shorten:
+	@test -n "$(ID)" -a -n "$(DAYS)" || { echo 'Usage: make $@ ID=<first 4+ characters of the imprint id> DAYS=<days from now>'; exit 2; }
+	$(OWNER_AGENT) shorten --id "$(ID)" --days "$(DAYS)"
+
+imprint-verify:
+	@test -n "$(ID)" || { echo 'Usage: make $@ ID=<first 4+ characters of the imprint id>'; exit 2; }
+	@$(OWNER_DIRS); \
+	n=$$(printf '%s' "$$dirs" | grep -c .); \
+	[ "$$n" -eq 1 ] || { if [ "$$n" -eq 0 ]; then echo 'There is no imprint "$(ID)" sent from this machine.'; else echo 'More than one imprint starts with "$(ID)"; give more of its characters.'; fi; exit 2; }; \
+	uv run --locked --project peer python -m superyak_peer verify-imprint --dir "$$dirs" --home "$(SUPERYAK_HOME)"
+
 # Imprints (I 10, 12; R15, R20, R23, R29, D42). The peer's commands, the imprint job lock, and the one unit recipe.
 PEER_CLI = uv run --locked --project peer python -m superyak_peer
-IMPRINT_ARGS = --data-dir "$(STATION_DATA)" --as "$(APPROVER)" --imprints-dir "$(IMPRINTS)"
+PEER_IMPRINT_ARGS = --data-dir "$(STATION_DATA)" --as "$(APPROVER)" --imprints-dir "$(IMPRINTS)"
 # Variables given on the command line (or the environment) go on to the unit's make; the defaults need no passing.
 UNIT_VARS = $(foreach v,IMPRINTS STATION_DATA APPROVER,$(if $(filter-out file default undefined,$(origin $(v))),$(v)="$($(v))"))
 # Shell fragment: sets lock to flock's status: 0 free, 1 held (util-linux), anything else (66: no imprints root) not takeable.
@@ -238,13 +292,13 @@ station-approve:
 	$(call ADMISSION_UNIT,$$id) || { echo "Approved $$short, but its admission did not start. Run make station-imprint-admit."; exit 1; }
 
 station-imprints:
-	$(PEER_CLI) station-imprints $(IMPRINT_ARGS)
+	$(PEER_CLI) station-imprints $(PEER_IMPRINT_ARGS)
 
 # With ID=<full imprint id>: begin, admit only when begin allows it (R24), then the sync whatever happened (this is what the
 # unit runs). Without: start the unit for the first approved imprint whose admission never began (R29).
 station-imprint-admit:
 ifeq ($(ID),)
-	@ids=$$($(PEER_CLI) station-imprints $(IMPRINT_ARGS) --awaiting-admission) || exit 1; \
+	@ids=$$($(PEER_CLI) station-imprints $(PEER_IMPRINT_ARGS) --awaiting-admission) || exit 1; \
 	first=; more=0; \
 	for id in $$ids; do \
 	  test "$$(systemctl --user show -p LoadState --value superyak-imprint-admit-$$id)" = loaded && continue; \
@@ -260,15 +314,15 @@ ifeq ($(ID),)
 	elif [ $$more -eq 0 ]; then echo "Started the admission of $$short in the background; no more wait."; \
 	else echo "Started the admission of $$short in the background; $$more more wait. Run make station-imprint-admit again."; fi
 else
-	@$(PEER_CLI) station-imprint-admit-begin $(IMPRINT_ARGS) --id "$(ID)"; begin=$$?; admit=0; \
+	@$(PEER_CLI) station-imprint-admit-begin $(PEER_IMPRINT_ARGS) --id "$(ID)"; begin=$$?; admit=0; \
 	if [ $$begin -eq 0 ]; then uv run --locked --project engram python engram/imprint.py admit --id "$(ID)" --imprints-dir "$(IMPRINTS)" --verify-cmd "uv run --locked --project $(CURDIR)/peer python -m superyak_peer verify-imprint" || admit=$$?; fi; \
-	$(PEER_CLI) station-imprint-sync $(IMPRINT_ARGS); sync=$$?; \
+	$(PEER_CLI) station-imprint-sync $(PEER_IMPRINT_ARGS); sync=$$?; \
 	test $$begin -ne 0 && exit $$begin; test $$admit -ne 0 && exit $$admit; exit $$sync
 endif
 
 station-imprint-use:
 	@test -n "$(ID)" -a -n "$(USE)" || { echo 'Usage: make $@ ID=<short id from make station-imprints> USE=trail-evaluation [LANE=<lane>]'; exit 2; }
-	@id=$$($(PEER_CLI) station-imprints $(IMPRINT_ARGS) --resolve "$(ID)") || exit 2; \
+	@id=$$($(PEER_CLI) station-imprints $(PEER_IMPRINT_ARGS) --resolve "$(ID)") || exit 2; \
 	env=$$($(PEER_CLI) station-imprint-unit-env) || exit 2; \
 	short=$$(printf '%.4s' "$$id"); \
 	$(JOBS_LOCK_CHECK); \
@@ -284,14 +338,14 @@ station-imprint-use:
 # What the use unit runs (R23): the begin step prints the use id, imprint.py runs the use, the sync records how it ended.
 station-imprint-use-run:
 	@test -n "$(ID)" -a -n "$(USE)" || { echo 'Usage: make $@ ID=<full imprint id> USE=trail-evaluation [LANE=<lane>]'; exit 2; }
-	@use_id=$$($(PEER_CLI) station-imprint-use-begin $(IMPRINT_ARGS) --id "$(ID)" --use "$(USE)"); begin=$$?; run=0; \
+	@use_id=$$($(PEER_CLI) station-imprint-use-begin $(PEER_IMPRINT_ARGS) --id "$(ID)" --use "$(USE)"); begin=$$?; run=0; \
 	if [ $$begin -eq 0 ]; then uv run --locked --project engram python engram/imprint.py use --id "$(ID)" --use-id "$$use_id" --imprints-dir "$(IMPRINTS)"$(if $(LANE), --lane "$(LANE)") || run=$$?; fi; \
-	$(PEER_CLI) station-imprint-sync $(IMPRINT_ARGS); sync=$$?; \
+	$(PEER_CLI) station-imprint-sync $(PEER_IMPRINT_ARGS); sync=$$?; \
 	test $$begin -ne 0 && exit $$begin; test $$run -ne 0 && exit $$run; exit $$sync
 
 station-imprint-delete:
 	@test -n "$(ID)" || { echo 'Usage: make $@ ID=<short id from make station-imprints> [APPROVER=andy]'; exit 2; }
-	$(PEER_CLI) station-imprint-delete $(IMPRINT_ARGS) --id "$(ID)"
+	$(PEER_CLI) station-imprint-delete $(PEER_IMPRINT_ARGS) --id "$(ID)"
 
 station-rooms:
 	uv run --locked --project peer python -m superyak_peer station-rooms --data-dir "$(STATION_DATA)" --as "$(APPROVER)"
