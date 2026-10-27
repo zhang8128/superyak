@@ -1924,10 +1924,10 @@ def remember(
     )
     episode_id = str(uuid.uuid4())
     embedding = _embeddings.embed([content], prefix="search_document")[0]
-    cause = keep.record_copy(episode_id)
-    if cause is not None:
+    refusal = keep.record_copy(episode_id)
+    if refusal is not None:
         if not keep.shadow:
-            return _keep_reply(None, _agent_ref(), cause=cause)
+            return refusal
         keep.would_refuse = True
 
     _storage.add_episode(
@@ -2013,20 +2013,22 @@ class _Keep:
     also: tuple = ()          # the other delivered objects the content matched: their subjects are carried too
     shadow: bool = False
     receipts: tuple = ()      # (row, subjects) for each allowed decision, not yet written
+    unwritten: dict | None = None     # the reply that refuses the keep when those receipts cannot be written
 
-    def record_copy(self, episode_id: str) -> str | None:
+    def record_copy(self, episode_id: str) -> dict | None:
         """P25: the kept episode is a copy of the delivered item; recorded before the episode is written, and then
-        the keep's receipts held for it. None when both are written; otherwise why not: the kept episode would
-        carry none of the source's subjects, or no receipt would name the keep. A copy that cannot be recorded
-        leaves no receipt, so under `enforce` a refused keep has none that says it was allowed (the section 2
-        re-check's should-fix, as Serenity's item 3)."""
+        the keep's receipts held for it. None when both are written; otherwise the reply that refuses the keep:
+        the kept episode would carry none of the source's subjects, or no receipt would name the keep. A copy that
+        cannot be recorded leaves no receipt, so under `enforce` a refused keep has none that says it was allowed
+        (the section 2 re-check's should-fix, as Serenity's item 3)."""
         if self.source is None:
             return None
         from permission_ledger import Ledger
+        unrecorded = _keep_reply(None, _agent_ref(), cause="the kept copy could not be recorded")
         sid = _store_id()
         if sid is None:
             logger.warning("Could not record the kept copy of %s: the store has no id", self.source)
-            return "the kept copy could not be recorded"
+            return unrecorded
         try:
             led = Ledger.open(ENGRAM_HOME)
             try:
@@ -2036,9 +2038,9 @@ class _Keep:
                 led.close()
         except Exception:
             logger.warning("Could not record the kept copy of %s", self.source, exc_info=True)
-            return "the kept copy could not be recorded"
+            return unrecorded
         if self.receipts and not _write_keep_receipts(self.receipts):
-            return "the receipt could not be written"
+            return self.unwritten
         return None
 
 
@@ -2166,7 +2168,8 @@ def _decide_keep(deliveries, *, agent: str, now: int, shadow: bool) -> _Keep:
     source, also = decided[0][0].obj, tuple(u.obj for u, _ in decided[1:])
     if refused is None and not shadow:
         # under `enforce` the keep happens only once its copy is recorded, so its receipts wait for that
-        return _Keep(source=source, also=also, receipts=receipts)
+        return _Keep(source=source, also=also, receipts=receipts,
+                     unwritten=_keep_reply(state, agent, cause="the receipt could not be written"))
     _write_keep_receipts(receipts)        # a failure is logged: a refusal still refuses, and shadow goes on
     if refused is not None:
         return _Keep(would_refuse=True) if shadow else _Keep(reply=_keep_reply(state, agent, refused[1].refusal))

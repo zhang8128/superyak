@@ -10,6 +10,7 @@ from tests.permissions_support import (  # noqa: F401
     ANDY, M1, M1_TEXT, M3, T, add_subject, cli_home, cli_home_with_house, deliver_m1_through, do, fake_tty,
     keep_world, keep_world_with_imprint_allowed, raise_gate, raised_ledger, receipt_rows, remove_subject)
 from tests.test_permissions_serenity_fixes import _revoked_r1
+from tests.test_permissions_p36 import guard_ledger  # noqa: F401
 from tests.test_recall_margins import engram_server_env  # noqa: F401
 
 
@@ -261,3 +262,35 @@ def test_nit_the_gate_plan_says_which_houses_the_yes_marks(cli_home_with_house, 
         assert "the yes marks only each that carries `unreadable` or another ledger's id" in out
     else:
         assert "the yes marks each that does not carry this ledger's id" in out
+
+
+def test_should_fix_4_held_receipts_that_cannot_be_written_refuse_the_keep_under_enforce(
+        keep_world_with_imprint_allowed, monkeypatch):
+    """The receipts are written after the copy now; when they cannot be, the keep is still refused, as before."""
+    import permission_uses
+    import server
+    from tests.test_permissions_keep import REFUSED
+    world = keep_world_with_imprint_allowed
+    deliver_m1_through(world, "neighbors")
+    before = server._storage.conn.execute("SELECT count(*) FROM episodes").fetchone()[0]
+
+    def boom(self, row, subjects):
+        raise sqlite3.OperationalError("disk I/O error")
+    monkeypatch.setattr(permission_uses.Uses, "append", boom)
+    assert server.remember(content=M1_TEXT) == REFUSED
+    assert server._storage.conn.execute("SELECT count(*) FROM episodes").fetchone()[0] == before
+    assert receipt_rows(world.root, "imprint") == []
+
+
+def test_should_fix_4_the_guard_holds_an_allowed_keeps_receipt_and_the_owners_agent_is_told_why_it_failed(
+        guard_ledger, monkeypatch):
+    """Under `enforce` the guard writes no receipt for an allowed keep: it holds it for `record_copy`, with the reply
+    the owner's agent gets, the cause included, if it cannot be written."""
+    from permission_uses import uses_path
+    from tests.test_permissions_keep import REFUSED
+    from tests.test_permissions_p36 import _guard
+    out = _guard("K", monkeypatch)
+    assert out.reply is None and out.source == M3
+    assert [(row.action, row.allowed) for row, _ in out.receipts] == [("imprint", 1)]
+    assert out.unwritten == {**REFUSED, "cause": "the receipt could not be written"}
+    assert not uses_path(guard_ledger).exists() or receipt_rows(guard_ledger, "imprint") == []
