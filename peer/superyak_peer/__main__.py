@@ -406,7 +406,7 @@ def main(argv=None):
                 parser.exit(3, f'Use {args.use} of {args.id[:4]} did not start: the check refused it ({result["term"]}).\n')
         elif args.command == 'station-imprint-sync':
             result = Store(args.data_dir, signing=False).station_imprint_sync(root=args.imprints_dir)
-            print(f'Imprint admissions: {result["admitted"]} admitted, {result["failed"]} failed and deleted, {result["waiting"]} waiting.')
+            print(f'Imprint admissions: {result["admitted"]} admitted, {result["failed"]} failed and deleted, {result["waiting"]} waiting; {result["finished"]} uses finished.')
         elif args.command == 'station-imprints':
             store = Store(args.data_dir, signing=False)
             if args.resolve is not None:

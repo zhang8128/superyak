@@ -144,3 +144,190 @@ def test_an_unknown_use_a_short_prefix_and_an_unknown_imprint_are_problems(tmp_p
     for prefix, use in ((st.imprint_id[:4], "calibration"), (st.imprint_id[:3], "trail-evaluation"), ("ffff", "trail-evaluation")):
         with pytest.raises(Problem):
             st.store.station_imprint_use_begin("andy", prefix, use, root=st.root)
+
+
+# Task 39: the sync finishes uses (spec I 12, D41, CN7).
+
+import hashlib
+import multiprocessing
+
+from test_imprint_withdrawal import withdraw
+
+REPORT_BYTES = json.dumps({"sessions": ["sess-aaaa-1111", "sess-bbbb-2222"], "trails": ["trail-key-7f3", "trail-key-9c1"],
+                           "steps": ["step-id-42"]}).encode()
+SHA_OF_STUB_REPORT = hashlib.sha256(REPORT_BYTES).hexdigest()
+
+
+def package_session_ids(st):
+    return ["sess-aaaa-1111", "sess-bbbb-2222", "step-id-42"]
+
+
+def stub_report_trail_keys():
+    return ["trail-key-7f3", "trail-key-9c1"]
+
+
+def allow_file(st, use_id):
+    return state_of(st) / "uses" / f"{use_id}.allow.json"
+
+
+def use_dir(st, use_id):
+    path = state_of(st) / "uses" / use_id
+    path.mkdir(mode=0o700, exist_ok=True)
+    return path
+
+
+def write_report(st, use_id):
+    (use_dir(st, use_id) / "report.json").write_bytes(REPORT_BYTES)
+
+
+def write_use_result(st, use_id, *, exit=0, error=None, report=None, ended_at=None):
+    doc = {"kind": "imprint-use-result", "use_id": use_id, "exit": exit, "error": error,
+           "report": exit == 0 if report is None else report,
+           "ended_at": int(st.clock[0]) if ended_at is None else ended_at}
+    (use_dir(st, use_id) / "result.json").write_text(json.dumps(doc))
+
+
+def started_without_result(tmp_path, route=True):
+    st = admitted(tmp_path, route=route, n=4 if route else 0)
+    out = st.store.station_imprint_use_begin("andy", st.imprint_id[:4], "trail-evaluation", root=st.root)
+    return st, out["use_id"]
+
+
+def started_at(st, use_id):
+    return next(r["record"]["at"] for r in receipts(st) if r["record"]["event"] == "use-started"
+                and r["record"]["detail"]["use_id"] == use_id)
+
+
+def finished(st, use_id):
+    found = [r["record"] for r in receipts(st) if r["record"]["event"] == "use-finished"
+             and r["record"]["detail"]["use_id"] == use_id]
+    return found[0] if found else None
+
+
+def force_status(st, status):
+    with st.store.transaction() as db:
+        db.execute("UPDATE imprint_requests SET status=? WHERE id=?", (status, st.request_id))
+
+
+def run_ending(tmp_path, ending, route=True):
+    st, use_id = started_without_result(tmp_path, route=route)
+    st.clock[0] += 10
+    if ending == "report":
+        write_report(st, use_id)
+        write_use_result(st, use_id, exit=0, report=True)
+    elif ending == "report_written_result_not_yet":
+        write_report(st, use_id)
+    elif ending == "withdrawn_during_run":
+        assert withdraw(st, "owner").status_code == 200
+    elif ending == "ended_during_run":
+        end = effective_end_of(st)
+        st.clock[0] = end + 1
+        write_use_result(st, use_id, exit=3, ended_at=end)
+    elif ending == "station_deleted_during_run":
+        st.store.station_imprint_delete("andy", st.imprint_id[:4], root=st.root)
+    elif ending == "shortened_still_ahead":
+        write_use_result(st, use_id, exit=3, report=False)
+    elif ending == "killed_by_signal":
+        write_use_result(st, use_id, exit=-9, report=False)
+    elif ending == "trails_exit_1":
+        write_use_result(st, use_id, exit=1, report=False)
+    elif ending == "use_raised":
+        write_use_result(st, use_id, exit=None, error="ValueError", report=False)
+    else:
+        raise AssertionError(ending)
+    return st, use_id
+
+
+def sync_once(data_dir, root):
+    from superyak_peer.db import Store
+    Store(data_dir, signing=False, clock=lambda: float(NOW) + 10).station_imprint_sync(root=root)
+
+
+def sync_in_two_processes(st):
+    context = multiprocessing.get_context("fork")
+    procs = [context.Process(target=sync_once, args=(st.store.data_dir, st.root)) for _ in range(2)]
+    for proc in procs:
+        proc.start()
+    for proc in procs:
+        proc.join(60)
+        assert proc.exitcode == 0
+
+
+@pytest.mark.parametrize("ending,expected", [
+    ("report", {"end": "report", "report_sha256": SHA_OF_STUB_REPORT}),
+    ("withdrawn_during_run", {"end": "withdrawn"}), ("ended_during_run", {"end": "ended"}),
+    ("station_deleted_during_run", {"end": "deleted", "reason": "station"}),
+    ("shortened_still_ahead", {"end": "allow changed"}), ("killed_by_signal", {"end": "not evaluable: limit"}),
+    ("trails_exit_1", {"end": "failed", "exit": 1}), ("use_raised", {"end": "failed", "error": "ValueError"})])
+def test_use_finished_records_how_the_run_ended(tmp_path, ending, expected):
+    st, use_id = run_ending(tmp_path, ending)
+    st.store.station_imprint_sync(root=st.root)
+    finished_ = [r["record"] for r in receipts(st) if r["record"]["event"] == "use-finished"]
+    assert len(finished_) == 1 and expected.items() <= finished_[0]["detail"].items()
+    assert not allow_file(st, use_id).exists()
+
+
+def test_a_stopped_unit_is_finished_by_the_first_sync_after_1860_s(tmp_path):
+    st, use_id = started_without_result(tmp_path)
+    st.clock[0] = started_at(st, use_id) + 1859
+    st.store.station_imprint_sync(root=st.root)
+    assert not finished(st, use_id)
+    st.clock[0] += 1
+    st.store.station_imprint_sync(root=st.root)
+    assert finished(st, use_id)["detail"]["end"] == "not evaluable: limit"
+
+
+def test_two_syncs_at_once_write_one_use_finished(tmp_path):
+    st, use_id = run_ending(tmp_path, "report")
+    sync_in_two_processes(st)
+    assert len([r for r in receipts(st) if r["record"]["event"] == "use-finished"]) == 1
+
+
+def test_a_sync_between_the_two_writes_finishes_nothing(tmp_path):
+    st, use_id = run_ending(tmp_path, "report_written_result_not_yet")
+    st.store.station_imprint_sync(root=st.root)
+    assert not finished(st, use_id)
+    write_use_result(st, use_id, exit=0)
+    st.store.station_imprint_sync(root=st.root)
+    assert finished(st, use_id)["detail"]["end"] == "report"
+
+
+def test_no_use_is_finished_while_deleting(tmp_path):
+    st, use_id = run_ending(tmp_path, "report")
+    force_status(st, "deleting")
+    st.store.station_imprint_sync(root=st.root)
+    assert not finished(st, use_id)
+
+
+def test_no_receipt_names_a_road_a_trail_or_a_session(tmp_path):
+    st, use_id = run_ending(tmp_path, "report", route=True)
+    st.store.station_imprint_sync(root=st.root)
+    text = json.dumps([r["record"] for r in receipts(st)])
+    assert not any(s in text for s in package_session_ids(st) + stub_report_trail_keys())
+    assert {tuple(sorted(r["record"]["detail"]["objects"])) for r in receipts(st) if "objects" in r["record"]["detail"]} == {
+        ("count", "imprint", "roads_and_trails")}
+
+
+# Added by the task: what the brief's seven tests leave open.
+
+def test_a_missing_allow_file_is_no_error_and_a_finished_use_is_not_finished_again(tmp_path):
+    st, use_id = run_ending(tmp_path, "report")
+    allow_file(st, use_id).unlink()
+    st.store.station_imprint_sync(root=st.root)
+    st.store.station_imprint_sync(root=st.root)
+    assert len([r for r in receipts(st) if r["record"]["event"] == "use-finished"]) == 1
+
+
+def test_the_finish_keeps_the_start_terms_and_objects(tmp_path):
+    st, use_id = run_ending(tmp_path, "report", route=True)
+    st.store.station_imprint_sync(root=st.root)
+    started = next(r["record"]["detail"] for r in receipts(st) if r["record"]["event"] == "use-started")
+    done = finished(st, use_id)["detail"]
+    assert {k: done[k] for k in started} == started and done["objects"]["roads_and_trails"] == 4
+
+
+def test_a_report_without_a_result_still_ends_as_a_report_after_1860_s(tmp_path):
+    st, use_id = run_ending(tmp_path, "report_written_result_not_yet")
+    st.clock[0] = started_at(st, use_id) + 1860
+    st.store.station_imprint_sync(root=st.root)
+    assert finished(st, use_id)["detail"]["end"] == "report"

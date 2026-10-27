@@ -99,6 +99,8 @@ EVENTS = tuple(DETAIL_KEYS)
 
 # The admission unit's RuntimeMaxSec=3600 plus its TimeoutStopSec=60 (R24; I 10, "Time"): after this a unit is gone.
 ADMISSION_BOUND = 3660
+# A use's RuntimeMaxSec=1800 counts from the unit's start, before `use-started`; SIGKILL follows after TimeoutStopSec=60.
+USE_BOUND = 1860
 ADMISSION_STOPPED = ('Admission stopped before it wrote a result: it reached its memory or time limit, or the station '
                      'stopped. Nothing was admitted; send it again.')
 
@@ -1444,10 +1446,77 @@ class Imprints:
         with self.transaction() as db:
             ids = [r['id'] for r in db.execute("SELECT id FROM imprint_requests WHERE status='approved' "
                                                "ORDER BY created, rowid")]
-        out = {'admitted': 0, 'failed': 0, 'waiting': 0}
+        out = {'admitted': 0, 'failed': 0, 'waiting': 0, 'finished': 0}
         for request_id in ids:
             out[self._sync_admission(request_id, root)] += 1
+        with self.transaction() as db:
+            unfinished = [r['request_id'] for r in db.execute(
+                "SELECT DISTINCT request_id FROM imprint_receipts WHERE json_extract(record, '$.event')='use-started' "
+                "ORDER BY request_id")]
+        for request_id in unfinished:
+            out['finished'] += self._finish_uses(request_id, root)
         return out
+
+    def _finish_uses(self, request_id, root):
+        """Finishes every use of one imprint that has `use-started` and no `use-finished` (I 12, D41): once its
+        `result.json` exists, the imprint is `deleted`, or USE_BOUND seconds have passed since `use-started`; never
+        while the imprint is `deleting`. One transaction per imprint, so two syncs write each receipt once. Returns
+        how many uses it finished."""
+        count = 0
+        with self.transaction() as db:
+            found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+            if found is None or found['permission'] is None or found['status'] == 'deleting':
+                return 0
+            records = self._receipt_records(db, request_id)
+            done = {r['detail']['use_id'] for r in records if r['event'] == 'use-finished'}
+            state = self._imprint_state(found, root)
+            base = self._imprint_folders(found, root)[0]
+            tombstone = base is not None and os.path.lexists(base / 'tombstones' / f'{found["imprint_id"]}.json')
+            now = int(self.clock())
+            permission_end = effective_end(json.loads(found['permission']), records)
+            for started in [r for r in records if r['event'] == 'use-started' and r['detail']['use_id'] not in done]:
+                use_id, begun = started['detail']['use_id'], started['at']
+                folder = None if state is None else state / 'uses' / use_id
+                result = None if folder is None else _read_json(folder / 'result.json')
+                if result is None and found['status'] != 'deleted' and now - begun < USE_BOUND:
+                    continue
+                t_end = result['ended_at'] if result is not None and _is_count(result.get('ended_at')) \
+                    else min(now, begun + USE_BOUND)
+                detail = {k: started['detail'][k] for k in ('use', 'use_id', 'actions', 'purpose', 'objects')}
+                detail.update(self._use_end(records, folder, result, tombstone, permission_end, t_end))
+                if state is not None:
+                    try:
+                        _unlink(state / 'uses' / f'{use_id}.allow.json')
+                    except FileNotFoundError:
+                        pass
+                self._append_imprint_receipt(db, request_id, 'use-finished', None, detail, sign=False)
+                count += 1
+        return count
+
+    @staticmethod
+    def _use_end(records, folder, result, tombstone, permission_end, t_end):
+        """The first of I 12's rules 1 to 7 that holds at t_end, as the keys `use-finished` adds to the use's own."""
+        report = None if folder is None else folder / 'report.json'
+        if report is not None and report.is_file() and not report.is_symlink():
+            return {'end': 'report', 'report_sha256': hashlib.sha256(report.read_bytes()).hexdigest()}
+        if tombstone:
+            if any(r['event'] == 'withdrawn' and r['at'] <= t_end for r in records):
+                return {'end': 'withdrawn'}
+        if permission_end <= t_end:
+            return {'end': 'ended'}
+        if tombstone:
+            deleted = next((r for r in records if r['event'] == 'deleted' and r['at'] <= t_end), None)
+            if deleted is not None:
+                return {'end': 'deleted', 'reason': deleted['detail']['reason']}
+        code = None if result is None else result.get('exit')
+        if code == 3 and type(code) is int:
+            return {'end': 'allow changed'}
+        if result is None or (type(code) is int and code < 0):
+            return {'end': 'not evaluable: limit'}
+        if type(code) is int:
+            return {'end': 'failed', 'exit': code}
+        error = result.get('error')
+        return {'end': 'failed', 'error': error if isinstance(error, str) and error.isidentifier() else 'Error'}
 
     def _sync_admission(self, request_id, root):
         with self.transaction() as db:
