@@ -2099,12 +2099,14 @@ def _decide_keep(deliveries, *, agent: str, now: int, shadow: bool) -> _Keep:
     row = state.agents.get(agent)
     acting_for = "" if row is None else row.acts_for
     decided, seen = [], set()
+    kept_id = _store_id()
+    keeps = f"store:{kept_id}" if kept_id else ""      # the store this keep writes into (P 6.3, P36)
     for d in deliveries:
         if d.object is None or d.object in seen:
             continue
         seen.add(d.object)
         use = Use(requester=agent, place=place, obj=d.object, copy=d.copy or "", action="imprint",
-                  purpose=d.purpose, at=now)
+                  purpose=d.purpose, at=now, keeps=keeps)
         try:
             decided.append((use, decide(state, use)))
         except RuleError as exc:

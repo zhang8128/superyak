@@ -826,6 +826,7 @@ class Use:
     at: int
     names: tuple = ()
     shows: frozenset = frozenset()
+    keeps: str = ""     # the copy ref of the store a single `imprint` keeps into (P 6.3, P36); "" never qualifies
 
 
 def acts_for_place(state: State, agent: str) -> str | None:
@@ -1141,7 +1142,7 @@ def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = ()) -> t
 @dataclass(frozen=True)
 class Layer:
     id: str
-    kind: str       # consent, restriction, legacy or outside
+    kind: str       # consent, restriction, legacy, outside or co-subject (P36, P 6.3)
 
 
 @dataclass(frozen=True)
@@ -1168,12 +1169,47 @@ def _subject_layer(state: State, subject: str) -> str:
     return subject
 
 
+def _owner_of_store(state: State, obj: str) -> str | None:
+    """The owner of the store the object's ref names (P12), or None when it names no registered store."""
+    try:
+        parsed = parse_object_ref(obj)
+    except RuleError:
+        return None
+    store = state.stores.get(parsed.instance_id)
+    return None if store is None else store.owner
+
+
+def qualifies(state: State, use: Use, bulk: bool = False) -> bool:
+    """P36 (P 6.3): does the use, on its own object, read each co-subject's layer as a restriction layer? The
+    owner of the object's store is the requester's principal; `place:home/<owner>` dominates P and the holding
+    place H; and the use is a bulk use (the kept copy is h) or an `imprint` whose kept copy `use.keeps` is held
+    inside his home. A copy or store with no `stores` row has no place, so it never qualifies."""
+    owner = _owner_of_store(state, use.obj)
+    if owner is None:
+        return False
+    home = home_of(owner)
+    if acts_for_place(state, use.requester) != home:
+        return False
+    held = holding_place(state, use.copy)
+    if held is None or home not in dominators(state, use.place) or home not in dominators(state, held):
+        return False
+    if bulk:
+        return True
+    if use.action != "imprint":
+        return False
+    kept = holding_place(state, use.keeps) if use.keeps else None
+    return kept is not None and home in dominators(state, kept)
+
+
 def required_layers(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
-                    outside: Mapping | None = None, subjects: Sequence[str] | None = None) -> tuple[Layer, ...]:
+                    outside: Mapping | None = None, subjects: Sequence[str] | None = None,
+                    bulk: bool = False) -> tuple[Layer, ...]:
     """Req(u) in P 6.5 step 2's order, each layer once: subjects by id, the requester's places by id, the holding
     places by id (a holding place with no `stores` row is a layer that does not exist, named by the copy), the
     legacy layers, the agent's restriction layer. A place id in `outside` is an `outside` layer there. A caller
-    that has the use's subjects already (a bulk decision) passes them."""
+    that has the use's subjects already (a bulk decision) passes them. For a use that qualifies under P36 (`bulk`
+    says it is part of a bulk use) a subject's layer is a `co-subject` layer, unless it is also a layer of
+    anc(P) or anc(H), or an `outside` layer, which stay consent layers (P 6.3)."""
     outside = outside or {}
     out: list[Layer] = []
     seen: set = set()
@@ -1184,15 +1220,20 @@ def required_layers(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (
             seen.add(key)
             out.append(Layer(layer_id, "outside" if kind == "consent" and layer_id in outside else kind))
 
-    for s in (subjects_of(state, use.obj, use.at, use.names) if subjects is None else subjects):
-        add(_subject_layer(state, s), "consent")
-    for p in sorted(ancestors(state, use.place), key=_units):
-        add(p, "consent")
     held = holding_place(state, use.copy)
+    places = sorted(ancestors(state, use.place), key=_units)
+    held_places = [] if held is None else sorted(ancestors(state, held), key=_units)
+    carried = qualifies(state, use, bulk)
+    fixed = set(places) | set(held_places) | set(outside)
+    for s in (subjects_of(state, use.obj, use.at, use.names) if subjects is None else subjects):
+        layer_id = _subject_layer(state, s)
+        add(layer_id, "co-subject" if carried and layer_id not in fixed else "consent")
+    for p in places:
+        add(p, "consent")
     if held is None:
         add(use.copy, "consent")
     else:
-        for p in sorted(ancestors(state, held), key=_units):
+        for p in held_places:
             add(p, "consent")
     for layer in legacy:
         add(layer.name, "legacy")
@@ -1395,8 +1436,8 @@ def _ledger_verdict(state: State, layer: Layer, use: Use, action: str) -> tuple[
     candidates = _prefilter(state, layer.id, use, action)
     if any(r.effect == "deny" and record_matches(state, r, use, action) for r in candidates):
         return "deny", ()
-    if layer.kind == "restriction":
-        return "silent", ()               # a restriction layer is only its denies
+    if layer.kind in ("restriction", "co-subject"):
+        return "silent", ()               # a restriction layer, and a co-subject's (P36), is only its denies
     allows = [r for r in candidates if r.effect == "allow" and record_matches(state, r, use, action)]
     if not allows:
         return "silent", ()
@@ -1408,8 +1449,8 @@ def _ledger_verdict(state: State, layer: Layer, use: Use, action: str) -> tuple[
 
 
 def layer_verdict(state: State, layer: Layer, use: Use, action: str) -> str:
-    """`allow`, `deny`, `silent` or `missing` for a ledger layer (consent or restriction)."""
-    if layer.kind not in ("consent", "restriction"):
+    """`allow`, `deny`, `silent` or `missing` for a ledger layer (consent, restriction or co-subject)."""
+    if layer.kind not in ("consent", "restriction", "co-subject"):
         raise RuleError("6.3 layers", f"{layer.kind} layer {layer.id} is decided by its own callable")
     return _ledger_verdict(state, layer, use, action)[0]
 
@@ -1656,7 +1697,8 @@ class _Run:
                 end = _terms(self.state, self.state.records[rid], sub, action, True)[0]
                 if end is not None:
                     ends.append(end)
-        passes = verdict == "allow" or (layer.kind == "restriction" and verdict == "silent")
+        passes = (verdict == "allow" or (layer.kind == "restriction" and verdict == "silent") or
+                  (layer.kind == "co-subject" and verdict != "deny"))
         return (layer, action, verdict, passes, recs, ends)
 
     def _merge(self, row: tuple, sub: Use) -> None:
@@ -1667,7 +1709,10 @@ class _Run:
         else:       # the same (layer, action) over several objects: the first failing verdict, all records
             _, _, was, was_passes, held_recs = self.entries[key]
             keep = was_passes and not passes
-            self.entries[key] = (layer, action, verdict if keep else was, was_passes and passes,
+            # a consent reading of the layer by another object outranks a co-subject reading that also passes
+            lift = passes == was_passes and self.entries[key][0].kind == "co-subject" and layer.kind != "co-subject"
+            self.entries[key] = (layer if keep or lift else self.entries[key][0],
+                                 action, verdict if keep or lift else was, was_passes and passes,
                                  held_recs | set(recs))
         if ends:
             low = min(ends)
@@ -1682,7 +1727,7 @@ class _Run:
     def _register(self, layers: Sequence[Layer]) -> None:
         for layer in layers:
             self.layer_pos.setdefault(layer.id, len(self.layer_pos))
-            if layer.kind in ("consent", "restriction") and layer.id not in self._ledger_seen:
+            if layer.kind in ("consent", "restriction", "co-subject") and layer.id not in self._ledger_seen:
                 self._ledger_seen.add(layer.id)
                 self.ledger_layers.append(layer.id)
                 self.versions[layer.id] = layer_version(self.state, layer.id)
@@ -1703,7 +1748,8 @@ class _Run:
         self._mark_done(sub.obj, todo)
         shared = self._shared.get(gkey) if gkey is not None else None
         if shared is None:
-            layers = required_layers(self.state, sub, legacy=self.legacy, outside=self.outside, subjects=subjects)
+            layers = required_layers(self.state, sub, legacy=self.legacy, outside=self.outside, subjects=subjects,
+                                     bulk=self.bulk)
             self._register(layers)
             if gkey is not None:
                 shared = self._shared[gkey] = (layers, set())
@@ -1715,7 +1761,7 @@ class _Run:
             self.objs.append(sub.obj)
             self._mark_read(sub, fresh)
         for layer in layers:
-            ledger = layer.kind in ("consent", "restriction")
+            ledger = layer.kind in ("consent", "restriction", "co-subject")
             for action in todo:
                 if ledger and action not in fresh:
                     continue        # an object of the same group made this decision
