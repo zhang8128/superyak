@@ -342,3 +342,34 @@ def test_item5_two_processes_opening_one_schema_28_store_at_once_both_open_it(tm
         assert s.placement_changes() == 0
     finally:
         s.close()
+
+
+# ---------------------------------------------------------------- item 6: `gate off` clears a mark that is not this ledger's
+
+@pytest.mark.parametrize("mark", ["unreadable", "an-earlier-ledger"])
+def test_item6_gate_off_re_marks_a_house_whose_mark_is_not_this_ledgers(tmp_path, mark):
+    from permission_ledger import effective_gate
+    from tests.permissions_support import house_meta, make_house
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    house = make_house(tmp_path, "lighthouse")
+    con = sqlite3.connect(house)
+    con.execute("INSERT INTO meta VALUES ('permissions_ledger_id', ?)", (mark,))
+    con.commit()
+    con.close()
+    assert effective_gate(tmp_path, [house]).mode == "closed"
+    out = do(led, ANDY, "gate", now="2026-11-02", mode="off")
+    assert house_meta(house)["permissions_ledger_id"] == led.meta()["ledger_id"]
+    assert effective_gate(tmp_path, [house]).mode == "off" and "gate_raised" not in led.meta()
+    body = led.conn.execute("SELECT body FROM ledger_log WHERE seq = ?", (out.seq,)).fetchone()[0]
+    assert '".engram/instances/lighthouse/graph.db"' in body
+    led.close()
+
+
+def test_item6_gate_off_never_raised_leaves_an_unmarked_house_unmarked(tmp_path):
+    from permission_ledger import effective_gate
+    from tests.permissions_support import house_meta, make_house
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    house = make_house(tmp_path, "lighthouse")
+    do(led, ANDY, "gate", now="2026-11-02", mode="off")
+    assert "permissions_ledger_id" not in house_meta(house) and effective_gate(tmp_path, [house]).mode == "off"
+    led.close()

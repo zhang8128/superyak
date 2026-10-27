@@ -2112,17 +2112,22 @@ def _make_gate(state, actor, args, auth, now, *, root: Path):
         raise RuleError(_GATE, f"the published house {root / PUBLISHED_HOUSE} does not exist, so there is nothing "
                                "to serve or share from")
     body: dict = {"meta": {"gate": mode}, "houses": []}
-    if mode != "off" or raised:
+    marking = mode != "off" or raised
+    if marking:
         body["meta"]["gate_raised"] = "1"
-        ledger_id = state.meta["ledger_id"]
-        for house in houses(root):
-            try:
-                carries = _house_id(house) == ledger_id
-            except sqlite3.Error:
-                carries = False
-            if not carries:
-                _mark_house(house, ledger_id)
-                body["houses"].append(house.relative_to(root).as_posix())
+    ledger_id = state.meta["ledger_id"]
+    for house in houses(root):
+        try:
+            mark = _house_id(house)
+        except sqlite3.Error:
+            if not marking:
+                continue        # never raised: a house whose mark cannot be read is left as it is
+            mark = None
+        # Under every mode a house marked `unreadable`, or with an earlier ledger's id, is marked with this one's,
+        # so `gate off` opens it (Serenity's section 2, item 6); an unmarked house is marked once the gate is raised.
+        if mark != ledger_id and (marking or mark is not None):
+            _mark_house(house, ledger_id)
+            body["houses"].append(house.relative_to(root).as_posix())
     return "gate:" + mode, body
 
 
