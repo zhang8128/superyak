@@ -2,17 +2,19 @@
 test names its finding."""
 import dataclasses
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
+import federation
 import server
-from permission_ledger import Ledger
+from permission_ledger import Ledger, effective_gate, ledger_path
 from permissions import (STAR, Act, Placement, Refusal, RuleError, authorize, check_narrower, decide, eligible_set,
-                         parse_selector, placement_still_counts, selector_json, share_cover)
+                         parse_selector, placement_still_counts, selector_json, share_cover, subjects_of)
 from storage import Storage
 from tests.permissions_support import (  # noqa: F401
-    ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, andy_world, deliver_m1_through, home_use, keep_world,
-    keep_world_with_imprint_allowed)
+    ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, andy_world, deliver_m1_through, fails_the_test, genome_world, home_use,
+    keep_world, keep_world_with_imprint_allowed)
 from tests.test_recall_margins import engram_server_env  # noqa: F401
 
 
@@ -189,3 +191,43 @@ def test_t3_an_agents_narrowing_grant_covers_a_record_only_where_its_chain_meets
     w.collect(MEDICAL, [M4])                                   # now R itself meets the envelope through m4
     got = authorize(w.state(), "agent:rio-grande", act, channel="tool", at=T("2026-11-02"))
     assert (got.outcome, got.under_grant) == ("do", gid)
+
+
+# ---------------------------------------------------------------- T4: genome sync under a closed gate (P 12.3, P25)
+
+def _mark(instance, value):
+    if value is None:
+        instance.conn.execute("DELETE FROM meta WHERE key = 'permissions_ledger_id'")
+    else:
+        instance.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('permissions_ledger_id', ?)", (value,))
+    instance.conn.commit()
+
+
+def _synced(instance):
+    return [r["id"] for r in instance.conn.execute("SELECT id FROM episodes WHERE episode_type = 'genome_sync'")]
+
+
+def test_t4_genome_sync_under_a_closed_gate_skips_and_a_later_sync_keeps_the_subjects(tmp_path, monkeypatch):
+    led, genome_path, instance, ids = genome_world(tmp_path, mode="enforce")
+    ledger_id = led.meta()["ledger_id"]
+    led.close()
+    _mark(instance, "a-ledger-from-another-home")          # the store's mark is not this ledger's: closed
+    assert effective_gate(tmp_path, [Path(instance.db_path)]).mode == "closed"
+    monkeypatch.setattr(server, "ENGRAM_HOME", tmp_path)
+    monkeypatch.setattr(server, "_storage", instance)
+    monkeypatch.setattr(server, "_genome_db_path", genome_path)
+    assert server._sync_genome_kept(fails_the_test) == 0 and _synced(instance) == []
+    _mark(instance, ledger_id)                              # the gate opens again: the sync now records the copy
+    assert server._sync_genome_kept(federation.sync_genome) == 1
+    [local] = _synced(instance)
+    s = Ledger.open_read_only(tmp_path).state()
+    assert "person:jenn" in subjects_of(s, f"mem:{ids.I}/episode/{local}", T("2026-11-02"))
+
+
+def test_t4_genome_sync_with_no_ledger_is_mains(tmp_path, monkeypatch):
+    _, genome_path, instance, _ = genome_world(tmp_path, mode=None)
+    monkeypatch.setattr(server, "ENGRAM_HOME", tmp_path)
+    monkeypatch.setattr(server, "_storage", instance)
+    monkeypatch.setattr(server, "_genome_db_path", genome_path)
+    assert server._sync_genome_kept(federation.sync_genome) == 1 and len(_synced(instance)) == 1
+    assert not ledger_path(tmp_path).exists()

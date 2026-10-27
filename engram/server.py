@@ -1312,9 +1312,14 @@ def _lane_notes(phase: str, rows: list[dict], target: str) -> None:
 
 
 def _sync_genome_kept(sync_genome) -> int:
-    """Genome sync; under `shadow` and `enforce` it records each synced episode as a kept copy (P25)."""
+    """Genome sync; under `shadow` and `enforce` it records each synced episode as a kept copy (P25). Under a
+    closed gate it syncs nothing: a copy written then would carry none of its source's subjects, and a later sync
+    skips an episode already present (Tardis's T4). Under `off` it is main's sync."""
     from permission_ledger import Ledger
     gate = _permission_gate_for_store()
+    if gate.mode == "closed":
+        logger.warning("Genome sync skipped: the permissions gate is closed (%s)", gate.cause)
+        return 0
     if gate.mode not in ("shadow", "enforce"):
         return sync_genome(str(_genome_db_path), _storage)
     led = Ledger.open(ENGRAM_HOME)
