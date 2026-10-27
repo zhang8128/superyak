@@ -23,8 +23,8 @@ from permissions import (RETENTION_DAYS, STAR, Act, Placement, Refusal, RuleErro
                          eligible_set, parse_selector, placement_still_counts, selector_json, share_cover, subjects_of)
 from storage import Storage
 from tests.permissions_support import (  # noqa: F401
-    ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, World, andy_world, cli_home, deliver_m1_through, e1_ledger_through_andys_side,
-    fails_the_test, fake_tty, genome_world, home_use, keep_world, keep_world_with_imprint_allowed, make_ledger_unreadable,
+    ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, World, andy_world, cli_home, deliver_m1_through, do, e1_county_ledger,
+    e1_ledger_through_andys_side, fails_the_test, fake_tty, genome_world, home_use, keep_world, keep_world_with_imprint_allowed, make_ledger_unreadable,
     use_json)
 from tests.permissions_oracle import oracle_decide
 from tests.test_permissions_migrate import NOW as MIGRATE_NOW, legacy_home  # noqa: F401
@@ -458,3 +458,19 @@ def test_t13_the_owner_comes_from_the_process_uid_not_from_the_environment(monke
     for name in ("LOGNAME", "USER", "LNAME", "USERNAME"):
         monkeypatch.setenv(name, "mallory")
     assert permission_cli._owner_login() == pwd.getpwuid(os.getuid()).pw_name != "mallory"
+
+
+# ---------------------------------------------------------------- T14: a place publishes the records in force (P 9.4)
+
+def test_t14_place_rules_leaves_out_a_record_past_its_end_and_keeps_one_that_starts_later(tmp_path):
+    led = e1_county_ledger(tmp_path)
+    sw = "place:la-county/summer-wellness"
+    shorter = do(led, "person:sw-steward", "shorten", now="2026-11-02", record=led.ids.W1,
+                 valid_until=T("2026-12-01"), reason="ends sooner").ref
+    w1 = led.state().records[shorter]
+    later = do(led, "person:sw-steward", "deny", now="2026-11-02", layer=sw, selector=w1.selector,
+               valid_from=T("2027-01-01"), valid_until=None, reason="from January").ref
+    published = lambda at: {r["id"] for r in led.place_rules(sw, now=at)["payload"]["records"]}   # noqa: E731
+    assert published(T("2026-11-30")) == {shorter, later}
+    assert published(T("2026-12-01")) == {later}           # past its valid_until: no longer in force
+    assert led.ids.W1 not in published(T("2026-11-02"))    # the revoked record it replaced

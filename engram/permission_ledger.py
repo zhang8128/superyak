@@ -1071,7 +1071,9 @@ class Ledger:
                 "lacking_029": [h for h in found if _lacks_029(h)]}
 
     def place_rules(self, place: str, *, now: int) -> dict:
-        """P 9.4: the `PlaceRules` artifact for a place at the ledger's present seq. A home is not published."""
+        """P 9.4: the `PlaceRules` artifact for a place at the ledger's present seq. A home is not published. Its
+        records are those in force at `now`: not revoked and not past their `valid_until` (Tardis's T14); one that
+        starts later is published, so a reader sees a dated deny before it starts."""
         check_id("place", place)
         if place == "place:home" or place.startswith("place:home/"):
             raise RuleError("9.4 how a place publishes its rules",
@@ -1084,7 +1086,7 @@ class Ledger:
         last = self.conn.execute("SELECT digest FROM ledger_log WHERE seq=?", (seq,)).fetchone()
         records = []
         for r in sorted(state.records.values(), key=lambda r: (r.created_seq, r.id)):
-            if r.layer == place and r.revoked_seq is None:
+            if r.layer == place and r.revoked_seq is None and (r.valid_until is None or now < r.valid_until):
                 row = r._asdict()
                 row["selector"] = json.loads(selector_json(r.selector))
                 records.append(row)
