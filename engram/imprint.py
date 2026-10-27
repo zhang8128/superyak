@@ -23,7 +23,7 @@ import uuid
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import store_identity
@@ -1078,9 +1078,83 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _count_roads_and_trails(route: bool, derive) -> tuple[int, int]:
-    """``(N, K)``: 0 and 0 without ``route``. The count with ``route`` is Task 35's; until it lands, it counts none."""
-    return 0, 0
+class CountUnavailable(RuntimeError):
+    """R(I) can't be counted: the trail functions are missing. Admission with ``route`` fails closed, with step
+    ``count`` and this message (R10, YN4)."""
+
+
+@dataclass(frozen=True)
+class RoadCount:
+    n: int
+    sessions_too_large: int
+
+
+@dataclass(frozen=True)
+class UseRecord:
+    """One use admission performs, as ``record_use`` gets it before the use: the kind of its objects (``memory`` or
+    ``road-or-trail``), the action and purpose, the batch it is (0 for the counted use) and how many objects it names
+    (0 for the counted use, whose objects are not known before they are derived)."""
+    object_kind: str
+    action: str
+    purpose: str
+    batch: int
+    count: int
+
+
+_CALIBRATION, _TRAIL_EVALUATION = "calibration", "trail-evaluation"
+USE_BATCH = 512                      # memories named by one bulk use (I 8, "Bulk uses")
+COUNT_UNAVAILABLE = "roads and trails can't be counted: trails.py is not installed"
+COUNT_FAILED = "roads and trails can't be counted: the count did not finish"
+
+
+def NEED_ADMISSION(route: bool) -> frozenset[tuple[str, str, str]]:
+    """I 8's Need(admission) as ``(object kind, action, purpose)``: the memories for ``calibration`` (``recall``,
+    ``read``, ``imprint``) and, with ``route``, the memories for ``trail-evaluation`` (``recall``, ``read``) and R(I)
+    for ``trail-evaluation`` (``recall``, ``read``, ``imprint``). Never a road or trail for ``calibration``."""
+    need = {("memory", x, _CALIBRATION) for x in ("recall", "read", "imprint")}
+    if route:
+        need |= {("memory", x, _TRAIL_EVALUATION) for x in ("recall", "read")}
+        need |= {("road-or-trail", x, _TRAIL_EVALUATION) for x in ("recall", "read", "imprint")}
+    return frozenset(need)
+
+
+def _trail_derive(conn: sqlite3.Connection, *, lane: str, as_of: int, counts: dict) -> int:
+    """The one place that names the trails plan's function (TR20). ``as_of`` is in seconds here and in integer
+    microseconds there (TR22). ``trails`` is imported now, never at import time, so that without it the count fails
+    closed."""
+    try:
+        import trails
+        roads_and_trails = trails.roads_and_trails
+    except (ImportError, AttributeError):
+        raise CountUnavailable(COUNT_UNAVAILABLE) from None
+    return roads_and_trails(conn, lane=lane, as_of=as_of * 10**6, counts=counts)
+
+
+def count_roads_and_trails(conn: sqlite3.Connection, *, lanes: Sequence[str], as_of: int,
+                           derive: Callable | None = None) -> RoadCount:
+    """N, the sum over ``lanes`` of ``derive(conn, lane=lane, as_of=as_of, counts=counts)``, the trail spec's count of
+    one lane's roads and trails (I 10, D42), and K, the largest of what each lane's call counted into its own
+    ``counts["sessions_too_large"]``: the sessions over the trail spec's bound that N leaves out. The largest, so that
+    a session seen in two lanes counts once.
+
+    N is R(I) as ``Need`` names it, at ``as_of`` = t1 over the scope's lanes, and may exceed what one evaluation
+    derives (YN1). ``derive=None`` reaches the trail functions and raises ``CountUnavailable`` when it can't."""
+    derive = derive or _trail_derive
+    n = k = 0
+    for lane in lanes:
+        counts = {"sessions_too_large": 0}
+        n += int(derive(conn, lane=lane, as_of=as_of, counts=counts))
+        k = max(k, int(counts["sessions_too_large"]))
+    return RoadCount(n, k)
+
+
+def _batch_sizes(total: int) -> list[int]:
+    return [min(USE_BATCH, total - i) for i in range(0, total, USE_BATCH)] or [0]
+
+
+def _record_memory_uses(record_use, action: str, purpose: str, total: int) -> None:
+    for batch, size in enumerate(_batch_sizes(total)):
+        record_use(UseRecord("memory", action, purpose, batch, size))
 
 
 def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callable[[], float] = time.time,
@@ -1111,6 +1185,13 @@ def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callab
             import calibrate                                    # numpy and scipy load here, after verification
 
             calibrate_fn = calibrate.calibrate
+        record_use = record_use or (lambda use: None)
+        conn = store_reader.connect(folder / "imprint.db", immutable=True)
+        try:
+            memories = sum(conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("episodes", "semantics"))
+        finally:
+            conn.close()
+        _record_memory_uses(record_use, "imprint", _CALIBRATION, memories)
         out = state / "calibration"
         notes = None if route else {"snapshot": WITHOUT_ROUTE_NOTE}
         report = {}
@@ -1127,9 +1208,22 @@ def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callab
         if not done:
             return _failed(root, imprint_id, "calibration", CALIBRATION_FAILED, now)
         report_sha = _sha256_file(out / "report.json")
-        n, k = _count_roads_and_trails(route, derive)
+        n = k = 0
+        if route:
+            _record_memory_uses(record_use, "read", _TRAIL_EVALUATION, memories)
+            record_use(UseRecord("road-or-trail", "imprint", _TRAIL_EVALUATION, 0, 0))
         conn = store_reader.connect(folder / "imprint.db", immutable=True)
         try:
+            if route:
+                until = datetime.strptime(manifest["scope"]["until"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                try:
+                    counted = count_roads_and_trails(conn, lanes=manifest["scope"]["lanes"],
+                                                     as_of=int(until.timestamp()), derive=derive)
+                except CountUnavailable as unavailable:
+                    return _failed(root, imprint_id, "count", str(unavailable), now)
+                except Exception:                               # its text may hold a path or a memory's text
+                    return _failed(root, imprint_id, "count", COUNT_FAILED, now)
+                n, k = counted.n, counted.sessions_too_large
             subjects = conn.execute("SELECT count(*) FROM imprint_subjects").fetchone()[0]
         finally:
             conn.close()

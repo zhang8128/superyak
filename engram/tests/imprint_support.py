@@ -9,6 +9,7 @@ import re
 import shutil
 import sqlite3
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -1082,7 +1083,7 @@ def live_source(tmp_path: Path) -> Storage:
 
 def plan_args(tmp_path: Path, *, owner: str = "sam", route: bool = False, episodes: int = 2, cosubjects=None,
               ledger=_AUTO, denies=None, until="2026-10-25T18:00:00Z", ancestry=None, store=None,
-              every_table: bool = False, cross_ref: bool = False, exclude=()):
+              every_table: bool = False, cross_ref: bool = False, exclude=(), lanes=("work",)):
     """``(store path, selection, terms, ctx, context, home, now)``: the arguments of ``make_plan``. Episodes
     ``e0`` (never given a co-subject) and ``e1`` to ``e<episodes>`` in the work lane hold text naming Jenn; ``s1`` is sourced on ``e1``. A ledger is made
     when ``cosubjects`` or ``denies`` are given (``ledger=None`` forbids one)."""
@@ -1116,7 +1117,8 @@ def plan_args(tmp_path: Path, *, owner: str = "sam", route: bool = False, episod
     if ledger is True:
         led = globals()["ledger"](tmp_path / "eh", owner=owner, store=s, cosubjects=cosubjects, denies=denies)
     context = plan_context(owner)
-    sel = parse_selection(lanes="work", layers="episode,semantic", since=None, until=until, shared_with=None,
+    until = iso_of(until) if isinstance(until, int) else until          # seconds or ISO text
+    sel = parse_selection(lanes=",".join(lanes), layers="episode,semantic", since=None, until=until, shared_with=None,
                           exclude_file=None, unsourced=False, now=PLAN_NOW)
     sel = replace(sel, exclude=frozenset(exclude))
     t = parse_terms(audience="place:home/andy", actions="imprint,route" if route else "imprint",
@@ -1732,20 +1734,25 @@ def handed_off(tmp_path: Path, built, *, route: bool, valid_until: int, owner: s
     for name in ("imprint.db", "manifest.json"):
         shutil.copyfile(built.dir / name, folder / name)
     manifest = built.manifest
-    def inner(kinds, actions):
-        return {"id": "r-" + "0" * 32, "layer": f"place:home/{owner}", "effect": "allow",
-                "selector": {"audience": ["place:home/andy"], "requesters": ["agent:station-imprints"],
-                             "objects": {"kinds": kinds}, "actions": actions, "purposes": ["calibration"]}}
+    created, source = 1_761_415_451, manifest["source"]["instance_id"]
+    purposes = ["calibration", "trail-evaluation"] if route else ["calibration"]
 
-    records = [inner(["memory"], ["imprint", "read", "recall"])]
+    def inner(kinds, actions, purposes, collections):
+        return {"id": "r-" + "0" * 32, "layer": f"place:home/{owner}", "effect": "allow",
+                "valid_from": created, "valid_until": created + 604_800,
+                "selector": {"audience": ["place:home/andy"], "requesters": ["agent:station-imprints"],
+                             "objects": {"kinds": kinds, "collections": collections, "stores": [source]},
+                             "actions": actions, "purposes": purposes}}
+
+    records = [inner(["memory"], ["imprint", "read", "recall"], purposes, [f"collection:{owner}/imprint-{imprint_id}"])]
     if route:
-        records.append(inner(["road", "trail"], ["imprint", "read", "recall", "route"]))
+        records.append(inner(["road", "trail"], ["imprint", "read", "recall", "route"], ["trail-evaluation"], "*"))
     record = {"kind": "imprint-permission", "station": "ab" * 32, "id": str(uuid.uuid4()), "owner": f"person:{owner}",
               "owner_id": "u1", "ship_id": "s1", "imprint_id": imprint_id,
-              "source_instance_id": manifest["source"]["instance_id"],
+              "source_instance_id": source,
               "request_sha256": manifest["request_sha256"], "plan_digest": manifest["plan_digest"],
               "attestation": "others-copied-at-home-v1" if owner == "andy" else "no-unconsented-others-v1",
-              "created": 1_761_415_451, "records": records}
+              "created": created, "records": records}
     (folder / "permission.json").write_text(json.dumps({"record": record, "signature": "", "station_key": ""}))
     (folder / "approved.json").write_text(json.dumps({"imprint_id": imprint_id, "request_id": "r1",
                                                       "approved_at": 1_761_415_500, "approved_by": "andy"}))
@@ -1998,5 +2005,70 @@ def admitted_report(tmp_path: Path, *, route: bool, now) -> dict:
     from imprint import admit
 
     root, imprint_id = handed_off(tmp_path, built_package(tmp_path, route=route), route=route, valid_until=FAR)
-    assert admit(imprint_id, root=root, verify_cmd=stub_verify(ok=True), calibration_now=now) == 0
+    assert admit(imprint_id, root=root, verify_cmd=stub_verify(ok=True), calibration_now=now,
+                 derive=counting_stub(0)) == 0
     return json.loads((root / f"{imprint_id}.state" / "calibration" / "report.json").read_text())
+
+
+# ---- Counting R(I) (Task 35) ---------------------------------------------------------------------------------------
+
+def counting_stub(n: int):
+    """A ``derive`` that counts ``n`` roads and trails in every lane and no session over the bound."""
+    return per_lane_stub(defaultdict(lambda: n))
+
+
+def per_lane_stub(lane_counts, too_large=None):
+    """A ``derive`` that returns ``lane_counts[lane]`` and adds ``too_large[lane]`` to that call's own ``counts``."""
+    too_large = too_large or {}
+
+    def derive(conn, *, lane, as_of, counts):
+        counts["sessions_too_large"] += too_large.get(lane, 0)
+        return lane_counts[lane]
+
+    return derive
+
+
+def recording_stub(seen: list):
+    """A ``derive`` that records its keywords in ``seen`` and counts nothing."""
+    def derive(conn, *, lane, as_of, counts):
+        seen.append({"lane": lane, "as_of": as_of})
+        return 0
+
+    return derive
+
+
+def fixture_for(root: Path, imprint_id: str) -> dict:
+    """The ceiling fixture's shape (Task 27) for one handed-off imprint, read from its ``permission.json``."""
+    import json
+
+    permission = json.loads((Path(root) / imprint_id / "permission.json").read_text())["record"]
+    return {"operator": "andy", "now": permission["created"] + 1,
+            "imprints": {"admitted": {"permission": permission, "receipts": [], "status": "approved"}}}
+
+
+def as_bulk(use, root: Path, imprint_id: str):
+    """P's bulk use for one ``UseRecord`` of admission: the memories of its batch, or R(I) counted. The decision reads
+    an object only through its kind (I 8, "A finite check"), so the ceiling fixture's objects stand in for the package's."""
+    fixture = fixture_for(root, imprint_id)
+    source = fixture["imprints"]["admitted"]["permission"]["source_instance_id"]
+    if use.object_kind == "memory":
+        return _bulk(fixture, "admitted", _batches(_memories_of(source))[0], use.action, use.purpose, fixture["now"],
+                     named=True)
+    derived = _derived_of(source)
+    return _bulk(fixture, "admitted", derived, use.action, use.purpose, fixture["now"], named=False,
+                 names=derived.__getitem__)
+
+
+def trail_rich_store(tmp_path: Path) -> Storage:
+    """A route plan's store with a closed session of used recalls, cited touches and an operation (Task 21's)."""
+    return mixed_lane_recall_store(tmp_path, "nothing_at_or_after_t1")[0]
+
+
+def roads_and_trails_by_hand(trails, db: Path, *, as_of: int, lanes=("work",)) -> int:
+    """The trail functions' count over ``lanes`` of one package, as the trails plan's ``roads_and_trails`` gives it."""
+    conn = store_reader.connect(db, immutable=True)
+    try:
+        counts = {"sessions_too_large": 0}
+        return sum(trails.roads_and_trails(conn, lane=lane, as_of=as_of * 10**6, counts=counts) for lane in lanes)
+    finally:
+        conn.close()

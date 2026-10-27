@@ -8,12 +8,16 @@ import pytest
 
 import calibrate
 from calibrate import PATHS_NOT_MEASURED
-from imprint import CALIBRATION_FAILED, RERUN_REFUSED, _still_allowed, admit, list_imprints
-from tests.imprint_support import (FAR, ENGRAM_DIR, admitted_report, built_package, built_texts, handed_off,
-                                   has_key, hooked_calibrate, hooked_verify, mentions_any, must_not_be_called,
-                                   no_memory_text, raise_, remove_like_withdrawal, session_ids,
-                                   shorten_admission_json, stub_verify, survey_minus, tampered)
+from imprint import CALIBRATION_FAILED, NEED_ADMISSION, RERUN_REFUSED, _still_allowed, admit, list_imprints
+from permissions import decide_bulk
+from tests.imprint_support import (FAR, ENGRAM_DIR, T, admitted_report, as_bulk, built_package, built_texts,
+                                   ceiling_world, counting_stub, fixture_for, handed_off, has_key, hooked_calibrate,
+                                   hooked_verify, mentions_any, must_not_be_called, no_memory_text, per_lane_stub,
+                                   raise_, recording_stub, remove_like_withdrawal, roads_and_trails_by_hand,
+                                   session_ids, shorten_admission_json, stub_verify, survey_minus, tampered,
+                                   trail_rich_store)
 
+T1 = T("2026-10-25T18:00:00Z")
 CAL_NOW = datetime(2026, 10, 25, 19, 30, tzinfo=timezone.utc)
 OK = stub_verify(ok=True)
 must_not_run = stub_verify(ok=False)
@@ -108,3 +112,56 @@ def test_still_allowed_names_what_changed(tmp_path):
 def test_importing_imprint_loads_no_numpy():
     code = "import sys; sys.path.insert(0, %r); import imprint; sys.exit(1 if 'numpy' in sys.modules else 0)" % str(ENGRAM_DIR)
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+
+
+# ---- Counting R(I) (Task 35) ----
+
+def test_the_count_reaches_result_json_and_is_zero_without_route(tmp_path):
+    for route, expected in ((True, 3), (False, 0)):
+        root, iid_ = handed_off(tmp_path / str(route), built_package(tmp_path / str(route), route=route), route=route, valid_until=FAR)
+        derive = counting_stub(3) if route else must_not_be_called
+        assert admit(iid_, root=root, verify_cmd=OK, derive=derive) == 0
+        assert json.loads((root / f"{iid_}.state" / "result.json").read_text())["roads_and_trails"] == expected
+
+
+def test_admission_with_route_fails_closed_without_the_trail_functions(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "trails", None)
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True), route=True, valid_until=FAR)
+    assert admit(iid_, root=root, verify_cmd=OK) == 1
+    result = json.loads((root / f"{iid_}.state" / "result.json").read_text())
+    assert (result["step"], result["message"]) == ("count", "roads and trails can't be counted: trails.py is not installed")
+
+
+def test_counting_reads_the_package_at_t1(tmp_path):
+    seen = []
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, until=T1, lanes=("personal", "work")), route=True, valid_until=FAR)
+    admit(iid_, root=root, verify_cmd=OK, derive=recording_stub(seen))
+    assert sorted((s["lane"], s["as_of"]) for s in seen) == [("personal", T1), ("work", T1)]   # one call per lane
+
+
+def test_the_count_is_the_sum_of_the_trail_specs_lane_counts(tmp_path):     # R10; the check's S8
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, until=T1, lanes=("personal", "work")), route=True, valid_until=FAR)
+    stub = per_lane_stub({"personal": 2, "work": 3}, too_large={"personal": 1, "work": 1})   # one session, seen in both lanes
+    assert admit(iid_, root=root, verify_cmd=OK, derive=stub) == 0
+    result = json.loads((root / f"{iid_}.state" / "result.json").read_text())
+    assert (result["roads_and_trails"], result["sessions_too_large"]) == (5, 1)    # K beside N, counted once (the re-check's S4)
+    assert not (root / f"{iid_}.state" / "scratch").exists()
+
+
+def test_admission_stays_inside_its_need(tmp_path):
+    recorded = []
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True), route=True, valid_until=FAR)
+    admit(iid_, root=root, verify_cmd=OK, derive=counting_stub(2), record_use=recorded.append)
+    assert {(u.object_kind, u.action, u.purpose) for u in recorded} <= NEED_ADMISSION(route=True)
+    assert not [u for u in recorded if u.object_kind == "road-or-trail" and u.purpose == "calibration"]
+    state, ceiling = ceiling_world(fixture_for(root, iid_))
+    assert all(decide_bulk(state, as_bulk(u, root, iid_), outside={"place:home/andy": ceiling}).allowed for u in recorded)
+
+
+def test_count_matches_the_trail_functions(tmp_path):
+    trails = pytest.importorskip("trails", reason="trails.py comes with the trails plan (gate G13)")
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, store=trail_rich_store, until=T1), route=True, valid_until=FAR)
+    assert admit(iid_, root=root, verify_cmd=OK) == 0
+    n = json.loads((root / f"{iid_}.state" / "result.json").read_text())["roads_and_trails"]
+    assert n == roads_and_trails_by_hand(trails, root / iid_ / "imprint.db", as_of=T1) == roads_and_trails_by_hand(
+        trails, root / iid_ / "imprint.db", as_of=T1 + 86_400)
