@@ -552,10 +552,13 @@ class _LedgerSide:
         from permission_uses import row_for_decision
         from permissions import Refusal, annotation, subjects_of
         legacy_delivers = content is not None
-        objs = sorted({o for o in (_object_of(r["layer"], r["source_instance_id"], r["source_id"])
-                                   for r in self.publisher.storage.conn.execute(
-                                       "SELECT layer, source_instance_id, source_id FROM shared_memories "
-                                       "WHERE memory_id = ?", (memory_id,))) if o})
+        found = [_object_of(r["layer"], r["source_instance_id"], r["source_id"])
+                 for r in self.publisher.storage.conn.execute(
+                     "SELECT layer, source_instance_id, source_id FROM shared_memories WHERE memory_id = ?",
+                     (memory_id,))]
+        if None in found:        # a placement with no object is refused under enforce (12.2), as `recall_set` does
+            return (legacy_delivers and self.shadow), None        # no object to name: no receipt
+        objs = sorted(set(found))
         decided = [(o, self.decide(o, "inject_context")) for o in objs]
         if not decided or any(d is None for _, d in decided):
             return (legacy_delivers and self.shadow), None        # no object to name: no receipt

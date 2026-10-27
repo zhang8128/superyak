@@ -228,3 +228,39 @@ def test_i2_an_act_that_fails_after_others_were_written_says_which_were(small_ac
     assert f"act 1 of 2 done (log {seq + 1}); the rest were not written" in err
     assert err.index("the rest were not written") < err.index("refused: ")
     assert _members_of(small_acts) == set(REFS[:3]) | set(REFS[3:6])
+
+
+# ---------------------------------------------------------------- M3: a read refuses an item with a sourceless row (12.2)
+
+import hashlib
+import sqlite3
+
+from tests.permissions_support import HOUSE_NAME, M1_ITEM, M1_TEXT, enforce_daemon, house_dir, receipt_rows, shadow_daemon
+
+
+def _add_sourceless_row(root, memory_id):
+    """A second placement of the same copy, written by older code: it has no source_instance_id, so no object."""
+    con = sqlite3.connect(house_dir(root, HOUSE_NAME) / "graph.db")
+    con.execute("INSERT INTO shared_memories (share_id, memory_id, source_instance, source_id, layer, audience, "
+                "reason, content_digest, shared_at, source_instance_id, record_id) "
+                "VALUES ('old-share', ?, 'engram', 'm1-old', 'episode', 'commons', 'old', ?, '2026-10-01', NULL, NULL)",
+                (memory_id, hashlib.sha256(M1_TEXT.encode()).hexdigest()))
+    con.commit()
+    con.close()
+
+
+def test_m3_under_enforce_a_read_refuses_a_copy_one_of_whose_placements_has_no_object(tmp_path):
+    rig = enforce_daemon(tmp_path)
+    assert rig.read(M1_ITEM)["content"] is not None                  # its one sourced placement is allowed
+    _add_sourceless_row(tmp_path, M1_ITEM)
+    assert M1_ITEM not in {c["memoryId"] for c in rig.recall()["candidates"]}     # recall already filters it
+    before = len(receipt_rows(tmp_path, action="inject_context"))
+    item = rig.read(M1_ITEM)
+    assert item["content"] is None and "permission" not in item
+    assert len(receipt_rows(tmp_path, action="inject_context")) == before         # no object to name: no receipt
+
+
+def test_m3_under_shadow_the_legacy_path_still_delivers_it(tmp_path):
+    rig = shadow_daemon(tmp_path)
+    _add_sourceless_row(tmp_path, M1_ITEM)
+    assert rig.read(M1_ITEM)["content"] is not None
