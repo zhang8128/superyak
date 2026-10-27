@@ -1,5 +1,4 @@
 """Task 28: engram-permissions migrate, P 12.3 step 2 (U13; the re-check's RN6; ledger ruling 'Task 28, FM1')."""
-import getpass
 import json
 import re
 import sqlite3
@@ -89,7 +88,7 @@ def raise_to_gate(home, mode):
 
 def _as_andy(tmp_path, monkeypatch):
     monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
-    monkeypatch.setattr(getpass, "getuser", lambda: "andy")
+    monkeypatch.setattr(permission_cli, "_login_name", lambda: "andy")
     monkeypatch.setattr(permission_cli, "_now", lambda: NOW)
 
 

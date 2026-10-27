@@ -228,10 +228,9 @@ def op_daemon(home, a):
 
 
 def op_migrate(home, a):
-    import getpass
     import permission_cli
     os.environ["ENGRAM_HOME"] = str(home)
-    getpass.getuser = lambda: "andy"
+    permission_cli._login_name = lambda: "andy"
     permission_cli.confirm = lambda words, change: True
     out = io.StringIO()
     with contextlib.redirect_stdout(out):

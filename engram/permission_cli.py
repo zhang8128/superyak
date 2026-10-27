@@ -14,10 +14,10 @@ from __future__ import annotations
 import argparse
 import calendar
 import contextlib
-import getpass
 import hmac
 import json
 import os
+import pwd
 import re
 import select
 import sqlite3
@@ -384,10 +384,16 @@ class _Stores:
 
 # ---------------------------------------------------------------- the commands
 
+def _login_name() -> str:
+    """The login name of the process's own uid. Not `getpass.getuser()`, which reads LOGNAME, USER, LNAME and
+    USERNAME first, so a variable could name another owner (Tardis's T13)."""
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
 def _owner_login() -> str:
     """R24: the owner's handle is the Unix login."""
     try:
-        login = getpass.getuser()
+        login = _login_name()
         check_id("person", "person:" + login)
     except (RuleError, OSError, KeyError) as e:
         raise RuleError("24 the owner is the login", f"the Unix login name is not a person handle ({e}); "

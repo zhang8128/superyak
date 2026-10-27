@@ -3,6 +3,7 @@ test names its finding."""
 import dataclasses
 import json
 import os
+import pwd
 import signal
 import subprocess
 import sys
@@ -449,3 +450,11 @@ def test_t9_with_no_terminal_nothing_is_shown_and_the_yes_is_refused(monkeypatch
         permission_cli.confirm("THE WORDS", "THE CHANGE")
     out = capsys.readouterr()
     assert out.out == "" and out.err == ""
+
+
+# ---------------------------------------------------------------- T13: the owner is the process's own login (R24)
+
+def test_t13_the_owner_comes_from_the_process_uid_not_from_the_environment(monkeypatch):
+    for name in ("LOGNAME", "USER", "LNAME", "USERNAME"):
+        monkeypatch.setenv(name, "mallory")
+    assert permission_cli._owner_login() == pwd.getpwuid(os.getuid()).pw_name != "mallory"

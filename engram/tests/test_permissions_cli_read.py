@@ -1,5 +1,4 @@
 """Task 27: engram-permissions, the gate and the reading and checking commands (P 12.3, 14, 9.2 to 9.4, 8)."""
-import getpass
 import json
 
 import pytest
@@ -21,7 +20,7 @@ HOUSE_COPY = "store:HOUSE"          # the published house's instance_id in the E
 
 def _as_andy(tmp_path, monkeypatch):
     monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
-    monkeypatch.setattr(getpass, "getuser", lambda: "andy")
+    monkeypatch.setattr(permission_cli, "_login_name", lambda: "andy")
 
 
 @pytest.fixture

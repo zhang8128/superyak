@@ -2706,10 +2706,9 @@ def fake_tty(monkeypatch):
 @_pytest.fixture
 def cli_home(tmp_path, monkeypatch, fake_tty):
     """ENGRAM_HOME at tmp_path, the Unix login `andy`, and a ledger made by `init`. Returns the home."""
-    import getpass
     import permission_cli
     monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
-    monkeypatch.setattr(getpass, "getuser", lambda: "andy")
+    monkeypatch.setattr(permission_cli, "_login_name", lambda: "andy")
     fake_tty.answer_the_printed_code()
     assert permission_cli.main(["init"]) == 0
     return tmp_path
