@@ -236,6 +236,14 @@ Spec: docs/superpowers/specs/2026-09-29-inheritance-reading-design.md.
 never submitted content. Migration 026 scrubs historical `operation_log.details`
 payloads down to the same metadata-only representation.
 
+**Imprints:** An imprint is a store copy that leaves a machine only with its owner's yes
+(`imprint.py`: plan, request, send, verify, use; filter in `imprint_filter.py`, leak and admission checks in
+`imprint_checks.py`). A copy kept in the owner's home may carry memories that name other people, as co-subjects the
+owner acknowledges with counts. Each imprint process stays under 512 MiB resident on the Pi, and each unit it adds
+carries `MemoryMax=512M`. One imprint job (an admission or a use) runs at a time (`flock` on `.jobs.lock`). Nothing
+loads an embedder. Imprint files are never opened with `Storage(path)`. Spec:
+docs/superpowers/specs/2026-10-25-store-imprint-design.md.
+
 ## MCP Tools
 
 | Tool | Purpose |
@@ -292,6 +300,9 @@ payloads down to the same metadata-only representation.
 | `store_reader.py` | Read-only survey and chronological reading of a store or reader.db, no migration |
 | `store_identity.py` | Store identity (`meta.instance_id`): creation, retroactive derivation, fork stamping; read-only describe/plan |
 | `calibrate.py` | Snapshot a store read-only, migrate only a working copy, report store identity, first-open decay/prune, cohesion and persistence |
+| `imprint.py` | Store-copy CLI — plan, request, send, verify, import receipts, use; one job at a time, bounded memory |
+| `imprint_filter.py` | What may leave: the lane and memory filter, co-subject rows (`imprint_subjects`) |
+| `imprint_checks.py` | Leak checks and admission checks over a copy's values, FTS vocabularies and vec0 slots |
 
 ## Testing
 

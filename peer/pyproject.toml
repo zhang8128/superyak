@@ -116,6 +116,7 @@ only-include = [
     "tests/fixtures/imprints/ceiling_agreement.json",
     "tests/test_imprint_confirm.py",
     "tests/test_imprint_decide.py",
+    "tests/test_imprint_docs.py",
     "tests/test_imprint_receipts.py",
     "tests/test_imprint_records.py",
     "tests/test_imprint_requests.py",
