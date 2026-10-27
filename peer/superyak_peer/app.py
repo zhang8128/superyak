@@ -673,6 +673,17 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         def imprint_withdraw(request_id: str, request: Request):
             return store.withdraw_imprint(member(request), request_id, root=imprints_dir)  # the owner or the ship; else 404
 
+        @app.post('/api/imprints/{request_id}/shorten')
+        async def imprint_shorten(request_id: str, request: Request):
+            who = member(request)
+            try:
+                body = await request.json()
+            except ValueError:
+                body = None
+            if not isinstance(body, dict) or set(body) != {'valid_until'}:
+                raise Problem(400, 'Send {"valid_until": seconds}')
+            return store.shorten_imprint(who, request_id, body['valid_until'], root=imprints_dir)
+
         @app.get('/api/imprints/{request_id}')
         def imprint_one(request_id: str, request: Request):
             return store.imprint_status(member(request)['id'], request_id)

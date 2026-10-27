@@ -1,5 +1,7 @@
 """Withdrawal in every status and the station's delete (spec I 12, D17; plan Task 30)."""
+import json
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -170,3 +172,61 @@ def test_a_withdrawal_after_a_failed_station_delete_is_recorded(tmp_path, monkey
     assert events.count("withdrawn") == 1 and events[-1] == "deleted"
     held = [r["record"]["event"] for r in __import__("json").loads(tombstone(st).read_text())["receipts"]]
     assert held == ["withdrawn", "deleted"]
+
+
+USE_ID = "use-1"
+
+
+def current_end(st):
+    found = row(st, st.request_id)
+    return imprints.effective_end(json.loads(found["permission"]), [r["record"] for r in receipts(st)])
+
+
+def shorten(st, who, to):
+    client = st.sam if who == "owner" else st.voyager
+    return client.post(f"/api/imprints/{st.request_id}/shorten", json={"valid_until": to})
+
+
+def write_atomically(path, doc):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc))
+    path.chmod(0o400)
+
+
+def write_admission_json(st):
+    write_atomically(st.root / f"{st.imprint_id}.state" / "admission.json",
+                     {"decided_at": int(st.clock[0]), "valid_until": current_end(st), "kind": "admission"})
+
+
+def write_allow_file(st, use_id):
+    write_atomically(st.root / f"{st.imprint_id}.state" / "uses" / f"{use_id}.allow.json",
+                     {"use": use_id, "valid_until": current_end(st)})
+
+
+def allow_files(st):
+    state = st.root / f"{st.imprint_id}.state"
+    return [state / "admission.json", *sorted((state / "uses").glob("*.allow.json"))]
+
+
+def original_permission(st):
+    return st.original_permission
+
+
+def test_shortening_narrows_only(tmp_path):
+    st = at_status(tmp_path, "admitted"); end = current_end(st)
+    for bad in (end, end + 1, st.clock[0] - 1, st.clock[0]):
+        assert shorten(st, "owner", bad).status_code == 400
+    assert shorten(st, "ship", end - 100).status_code == 200 and current_end(st) == end - 100
+    assert shorten(st, "owner", end - 50).status_code == 400              # later than the effective end now
+
+
+def test_shortening_replaces_admission_json_and_allow_files_atomically(tmp_path):
+    st = at_status(tmp_path, "approved"); st.original_permission = row(st, st.request_id)["permission"]
+    write_admission_json(st); write_allow_file(st, USE_ID)
+    inodes = {p: p.stat().st_ino for p in allow_files(st)}
+    docs = {p: json.loads(p.read_text()) for p in allow_files(st)}
+    assert shorten(st, "ship", current_end(st) - 100).status_code == 200
+    for p in allow_files(st):
+        doc = json.loads(p.read_text())                         # only valid_until moves; decided_at stays (R24)
+        assert doc == {**docs[p], "valid_until": current_end(st)} and p.stat().st_ino != inodes[p] and stat.S_IMODE(p.stat().st_mode) == 0o400
+    assert row(st, st.request_id)["permission"] == original_permission(st)

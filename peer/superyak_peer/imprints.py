@@ -597,6 +597,39 @@ def _restore_write(folder):
         os.chmod(here, 0o700)
 
 
+def _replace_allow_files(state_dir, valid_until):
+    """Rewrites `admission.json` and every `uses/*.allow.json` under a state directory with a new `valid_until`
+    and nothing else changed (so `decided_at` stays), each atomically: a temporary file in the same directory,
+    0400, then `os.replace`. A file that already ends no later is left alone."""
+    state_dir = Path(state_dir)
+    targets = [state_dir / 'admission.json', *sorted((state_dir / 'uses').glob('*.allow.json'))]
+    for path in targets:
+        if path.is_symlink() or not path.is_file():
+            continue
+        doc = json.loads(path.read_text())
+        if not isinstance(doc.get('valid_until'), int) or doc['valid_until'] <= valid_until:
+            continue
+        doc['valid_until'] = valid_until
+        folder = path.parent
+        mode = folder.stat().st_mode
+        if not mode & 0o200:        # a registered directory is read-only: open it for this one swap only
+            folder.chmod(mode | 0o200)
+        temporary = folder / f'.{path.name}.{secrets.token_hex(4)}.tmp'
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+            with os.fdopen(fd, 'wb') as out:
+                out.write(json.dumps(doc, indent=2, sort_keys=True).encode() + b'\n')
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, path)
+            _fsync_dir(folder)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+            if not mode & 0o200:
+                folder.chmod(mode)
+
+
 class _RemovalFailed(Exception):
     pass
 
@@ -1178,6 +1211,34 @@ class Imprints:
             if found is None or principal['id'] not in (found['ship_id'], found['owner_id']):
                 raise Problem(404, 'No such imprint request')
         return self._end_imprint(request_id, reason='withdrawn', actor_id=principal['id'], root=root, withdrawn=True)
+
+    def shorten_imprint(self, principal, request_id, valid_until, *, root):
+        """The owner or the requesting ship moves the end earlier (I 12, D18). The signed `shortened` receipt is
+        written first, then the allow files, so a reader of one never sees an end later than the station's. The
+        owner's shortening is P 5.3 rule 4's replacement and counts in `owner_layer`; the ship's narrows the ceiling
+        only. Anyone else gets a 404."""
+        with self.transaction() as db:
+            found = db.execute('SELECT * FROM imprint_requests WHERE id=?',
+                               (request_id,)).fetchone() if isinstance(request_id, str) else None
+            if found is None or principal['id'] not in (found['ship_id'], found['owner_id']):
+                raise Problem(404, 'No such imprint request')
+            if found['permission'] is None or found['status'] not in LIVE_STATUSES or found['status'] == 'deleting':
+                raise Problem(409, 'This imprint has no permission to shorten')
+            if type(valid_until) is not int:
+                raise Problem(400, 'valid_until is a whole number of seconds')
+            records = [json.loads(r['record']) for r in db.execute(
+                'SELECT record FROM imprint_receipts WHERE request_id=? ORDER BY seq', (request_id,))]
+            end = effective_end(json.loads(found['permission']), records)
+            if not int(self.clock()) < valid_until < end:
+                raise Problem(400, 'An end can only move earlier. A later end needs a new imprint and a new yes.')
+            self._append_imprint_receipt(db, request_id, 'shortened', principal['id'], {'valid_until': valid_until},
+                                         sign=True)
+            base = self._imprint_folders(found, root)[0]
+        if base is not None:
+            state = base / f'{found["imprint_id"]}.state'
+            if state.is_dir() and not state.is_symlink():
+                _replace_allow_files(state, valid_until)
+        return {'id': request_id, 'valid_until': valid_until}
 
     def station_imprint_delete(self, username, prefix, *, root):
         """Trusted local operator only: deletes one imprint by a short id of its imprint id (reason `station`)."""
