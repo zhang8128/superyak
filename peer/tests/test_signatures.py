@@ -353,6 +353,8 @@ def test_the_door_and_the_station_commands_work_while_the_identity_is_damaged(tm
     bridged = next(listed for listed in Store(store.data_dir, signing=False).station_rooms('andy') if listed['bridged'])
     code, out, err = run_cli(capsys, 'station-unbridge', *data, '--id', bridged['id'][:8], '--as', 'andy')
     assert code == 0, err
+    code, out, err = run_cli(capsys, 'station-add-ship', *data, '--id', bridged['id'][:8], '--ship', 'serenity', '--as', 'andy')
+    assert code == 0 and out.startswith('Added serenity to a new room'), err
     with Store(store.data_dir, signing=False).transaction() as db:
         assert db.execute('SELECT count(*) FROM revision_signatures WHERE layer_id=?', (late['id'],)).fetchone()[0] == 0
 
