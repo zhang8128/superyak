@@ -546,7 +546,13 @@ async function refreshRoom(room) {
   const current = state.room?.id === room.id ? state.room : shown;
   const arrived = new Set(fresh.map((message) => message.id));
   const messages = [...(current.messages || []).filter((message) => !arrived.has(message.id)), ...fresh];
-  return { ...answer, messages, more: undefined, first_position: Math.min(shown.first_position, current.first_position) };
+  // A fresh message that sorts at or before the first one shown (a peer row with an older `created`) belongs above
+  // the window, so the window's real start is that many positions later. Counting a tie is safe: `before` then
+  // overlaps what is shown, and withoutRepeats absorbs it; counting too few would skip a message.
+  const start = Math.min(shown.first_position, current.first_position), top = (current.messages || [])[0];
+  const shownIds = new Set((current.messages || []).map((message) => message.id));
+  const above = top && start > 0 ? fresh.filter((message) => !shownIds.has(message.id) && message.created <= top.created).length : 0;
+  return { ...answer, messages, more: undefined, first_position: Math.min(start + above, answer.total) };
 }
 
 // Earlier messages go in front of the shown ones; the page keeps the line the reader was on.
