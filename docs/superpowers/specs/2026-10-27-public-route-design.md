@@ -15,7 +15,7 @@ enforces.
 | M2 a 404 broke the browser's sign-in | §2: refused `/api/*` gets 401 "Sign in required"; everything else gets 404 |
 | S1 Goal 4 | Goal 4 restated; §3, the known-device cookie; tailnet sign-in clears a hold; no global hold |
 | S2 counters racing the hash | §3, reserve first |
-| S3 the threadpool | §3, a login limiter of 2, with a full queue answering 429 |
+| S3 the threadpool | §3, sign-in lanes (public, tailnet and known browsers), with a full lane answering 429 |
 | S4 buckets | §3, the /64 for public sources only, IPv4-mapped addresses unmapped, non-IP sources public |
 | S5 the middleware | §2, how the check runs |
 | S6 tests | §6 |
@@ -136,7 +136,7 @@ names, and the dummy hash for unknown names kept explicitly, so a 401 takes the 
 2. **Per source:** 40 failures in 5 minutes, as today's `source:` limit.
 3. **Username-wide, public only:** after 30 public failures on one username in an hour, public sign-ins to that
    username from a browser without a known-device cookie wait out the hour.
-4. **No global hold.** The login limiter (below) bounds the cost instead.
+4. **No global hold.** The sign-in lanes (below) bound the cost instead.
 
 - **Known-device cookie,** the OWASP device-cookie pattern in full (re-check should-fix 3(b)):
   - A successful sign-in sets `superyak_device`: a random 256-bit token with HttpOnly, Secure, SameSite=Strict and a
