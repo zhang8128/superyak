@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta
+import itertools
 import json
 import os
 from pathlib import Path
@@ -47,6 +49,18 @@ def seed_project(project: Path) -> Path:
     return project
 
 
+def pilot_clock(project: Path):
+    """The pilot's own evaluation time: a day after its newest view was published, ticking a microsecond per call.
+    The views carry time-limited rules (the prediction view's allow rule runs 30 days), so evaluating the offline
+    demo at today's date would show them expired. Evaluated as of its publication, the pilot reads as published,
+    and nothing in the demo expires on its own. Returns (start, clock)."""
+    issued = [datetime.fromisoformat(json.loads((project / relative).read_text())["issued_at"])
+              for relative in SEED_FILES if relative.startswith("workbench/data/lighthouses/")]
+    start = max(issued) + timedelta(days=1)
+    ticks = itertools.count()
+    return start, lambda: (start + timedelta(microseconds=next(ticks))).isoformat(timespec="microseconds")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, default=ROOT / ".engram/atlas/project")
@@ -56,10 +70,14 @@ def main(argv=None):
     from workbench.validation import WorkbenchError
 
     try:
-        inbox = ResearchInbox(seed_project(args.project))
+        project = seed_project(args.project)
+        start, clock = pilot_clock(project)
+        inbox = ResearchInbox(project, clock=clock)
         refreshed = inbox.refresh()
         report = inbox.status()
         report["research_views"] = refreshed["research_views"]
+        report["evaluated_as_of"] = start.isoformat()
+        report["clock"] = "the pilot's publication, so its time-limited rules read as published"
         print(json.dumps(report, indent=2))
         return 0 if report["publication_status"] == "current" and report["research_views"]["status"] == "current" else 2
     except (OSError, ValueError, WorkbenchError) as error:
