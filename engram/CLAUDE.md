@@ -244,10 +244,11 @@ memory, for what, and where. Four modules: `permissions.py` holds the pure rules
 `permission_uses.py` is the receipts file and the views over it; `permission_cli.py` is `engram-permissions`, the
 person's side. The ledger lives at `ENGRAM_HOME/.engram/permissions.db` and the receipts at
 `ENGRAM_HOME/.engram/permission-uses.db`, fixed paths. The gate is `off` until the owner raises it (`shadow`, then
-`enforce`), so with no ledger or an `off` gate engram behaves as before apart from two fail-closed changes (the
-daemon never serves `group:outside-home`, and `share` refuses that name) and one requirement on small machines: the
-lighthouse daemon no longer refuses to start without `ENGRAM_EMBEDDER_SOCKET`. Without it, it loads the model in
-process and logs a warning, as before this branch. Small-hardware machines (the Pi) still need `embedder_socket` in
+`enforce`). With no ledger, engram behaves as before apart from two fail-closed changes: the daemon never serves
+`group:outside-home`, and `share` refuses that name. Once a ledger exists, even under an `off` gate, the `shares` and
+`unshare` tools answer only an agent acting for the owner (plan gate G13), and `remember(genome=True)` of delivered
+content is refused under `enforce`. The lighthouse daemon does not refuse to start without `ENGRAM_EMBEDDER_SOCKET`:
+without it, it loads the model in process and logs a warning, as before this branch. Small-hardware machines (the Pi) still need `embedder_socket` in
 their `runtime.json` and the `superyak-embedder` unit running, so the model is never loaded twice there (spec 12.2;
 the plan's gate G0).
 
