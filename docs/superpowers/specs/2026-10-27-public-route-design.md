@@ -1,8 +1,25 @@
 # The public route: a login in front of everything
 
-Tardis, 2026-10-27, revision 1, for a fresh reviewer under station law section 3. Branch `tardis/funnel-hardening`,
-on main f536862. Shaped in City of AI (f4556c73, 12d8997d, 945f7040, 774e1cd2, b12d9a66). Nothing here is built. The
-detailed audit stays in City of AI until this ships. This spec says what each check enforces.
+Tardis, 2026-10-27. **Revision 2**, after a fresh review of revision 1 (REQUEST CHANGES: 2 must-fix, 9 should-fix, 10
+nits; [review](../reviews/2026-10-27-public-route-review.md)). For a second fresh reviewer under station law section 3.
+Branch `tardis/funnel-hardening`, on main f536862, not pushed until the fix ships. Shaped in City of AI (f4556c73,
+12d8997d, 945f7040, 774e1cd2, b12d9a66). The detailed audit stays in City of AI. This spec says what each check
+enforces.
+
+| Review item | Where revision 2 answers it |
+|---|---|
+| M1 the ship-key allowance was too narrow | §2: in phase 1 a valid ship key passes for any route |
+| M2 a 404 broke the browser's sign-in | §2: refused `/api/*` gets 401 "Sign in required"; everything else gets 404 |
+| S1 Goal 4 | Goal 4 restated; §3, the known-device cookie; tailnet sign-in clears a hold; no global hold |
+| S2 counters racing the hash | §3, reserve first |
+| S3 the threadpool | §3, a login limiter of 2, with a full queue answering 429 |
+| S4 buckets | §3, the /64 for public sources only, IPv4-mapped addresses unmapped, non-IP sources public |
+| S5 the middleware | §2, how the check runs |
+| S6 tests | §6 |
+| S7 docking over the public route | §4 and §7 |
+| S8 phase 2 | §5 |
+| S9 federation and other `serve`s | Non-goals, §1 |
+| Nits 1-10 | in place |
 
 ## Why
 
@@ -11,126 +28,218 @@ there is a login."
 
 An advisory audit found that content holds up. No anonymous request reads rooms, messages, files, accounts or titles.
 But some anonymous routes act, and the login's guessing budget can be turned against its own users. This spec makes
-Andy's sentence literally true: a public request reaches the login and what a signed-in person uses, and nothing else.
+Andy's sentence literally true: a public request reaches the login and what a signed-in person or a docked ship uses,
+and nothing else.
 
 ## Goals
 
-1. **Default deny for public requests.** They reach only an allow-list. A route added later starts closed.
-2. **Signed-in use works over Funnel,** as it does today on the tailnet. People at a conference sign in and use the
-   app.
-3. **Tailnet requests are unchanged.** Ships, the door and the station's own tools keep working.
-4. **The login can't be used to lock people out,** and failed guesses can't stall the station.
+1. **Default deny for public requests.** They reach only what §2 lists, and a route added later starts closed.
+2. **Signed-in use works over Funnel,** as it does today on the tailnet, including the browser's own handling of an
+   expired session.
+3. **Tailnet requests are unchanged.**
+4. **Nobody can lock anyone out of the tailnet sign-in, or out of a browser that has signed in before.** A browser
+   new to the station, on the public route, may wait up to an hour on a username under attack. Failed guesses never
+   stall the station.
 5. No secret lands in a log.
 
 ## Non-goals
 
-Turning Funnel off or on (Andy's switch); two-factor sign-in; the door (port 8443, unchanged); federation, which has
-its own listener in the federation-pull spec.
+- Turning Funnel on or off: that's Andy's switch.
+- Two-factor sign-in.
+- The door on 8443, which is unchanged.
+- **Federation.** Pull and its own listener are in the approved federation-pull spec on branch
+  `tardis/federation-pull` (05c9ea7), not yet merged.
+  - Until that listener exists, `/federation/events` on the main app refuses public requests.
+  - No live peer depends on it: federation has carried no live traffic.
 
-## 1. Which requests are public
+## 1. Which requests are public (nits 1, 2)
 
-A request is **public** when either holds:
-- it carries `Tailscale-Funnel-Request: ?1`, which Tailscale sets on Funnel traffic and strips from what clients send;
-- its client address (uvicorn's, from the forwarded headers it trusts from 127.0.0.1 only) is neither loopback nor a
-  tailnet address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`).
+A request is **public** when any of these holds:
+- it carries a `Tailscale-Funnel-Request` header, with any value. Tailscale sets that header on Funnel traffic and
+  strips it from what clients send;
+- its client address (`scope['client']`) isn't an IP address;
+- its client address is neither loopback nor a tailnet address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`). IPv4-mapped
+  addresses are unmapped first.
 
-The second condition is the positive check: if a different proxy ever sits in front, its requests start public, so
-they start closed. A request with neither marker is a **tailnet** request and is handled exactly as today.
+`scope['client']` is what uvicorn's `ProxyHeadersMiddleware` sets. `serve` trusts forwarded headers from 127.0.0.1
+only, and takes the rightmost untrusted entry, so an internet client can't pass as a tailnet address. A forged
+Funnel header only restricts a request further.
 
-## 2. What a public request may reach
+Everything else is a **tailnet** request and is handled exactly as today.
 
-The `public_route` middleware sits first, before the body is read. A public request passes only when one of these
-holds; otherwise it gets 404 `{"error": "Not found"}`, the same answer as a missing route.
+**The trust assumption, named:** a request from 127.0.0.1 with no forwarded header is tailnet. So anything that
+forwards raw TCP to the port is trusted, `tailscale serve --tcp` or `ssh -L` for example. `serve` refuses
+`--proxy-headers` with a non-IPv4-loopback `--host`, since its trusted proxy is 127.0.0.1 only. The check applies to
+every `serve`, including a direct TLS bind with no proxy, where every client off loopback and the tailnet is public.
+
+## 2. What a public request may reach (M1, M2, S5, nits 3, 4, 5)
+
+The `public_route` middleware sits first, before the body is read. A public request passes when one of these holds:
 
 | Allowed | Why |
 |---|---|
-| `GET /`, `GET /public/`, `GET /assets/*` | the app shell and its assets, no data |
+| `GET`/`HEAD /`, `/public/`, `/assets/*` | the app shell and its assets, no data |
 | `GET /api/health` | `{"ok": true}` only |
-| `POST /api/login`, `POST /api/logout` | the login itself |
-| `POST /api/invitations/redeem` | an invitation link, a 256-bit token |
+| `POST /api/login` | the login itself |
+| `POST /api/invitations/redeem` | an invitation link: a 256-bit token |
 | `GET /public/layers/{key}`, `GET /public/layers/{layer_id}/files/{key}` | layers their owner published |
 | any route, with a **valid session** | signed-in use (Goal 2) |
-| `/api/ships/me/*`, with a **valid ship key** | phase 1 only (§5) |
+| any route, with a **valid ship key** | phase 1 (§5): ships reach `/api/me`, `/api/chats/*`, `/api/mentions` and `/api/ships/*`, and the route's own check still decides |
 
-- **"Valid" means checked, not present.** The middleware looks the session token up the way `store.session` does, and
-  the ship key the way `ship_member` does: one indexed read in a read-only transaction. A made-up cookie or key gets
-  the 404. The route still runs its own authorization afterwards, unchanged.
-- **Closed to public requests:** anonymous dockings and their status polls, anonymous access requests (the door on
-  8443 is their public route), `/federation/*`, and anything that isn't listed above.
+**What a refusal answers:**
+- For `/api/*`: `401 {"error": "Sign in required"}`. That's what `app.js` acts on, so the sign-in page, an expired
+  session and the layer editor's sign-in-again panel keep working.
+- Anywhere else: 404 `{"error": "Not found"}`.
+- Both carry the same security headers as `BrowserBoundary.secure_send`.
+- Every route is already named in the public `app.js`, so the 401 hides nothing that's hidden today.
 
-## 3. The login
+**Closed to anonymous public requests:** dockings and their status polls, access requests (the door on 8443 is their
+public route), `/federation/*`, and anything §2's table doesn't list.
 
-`Store.login` changes in four ways. The same answers stay: 401 for a wrong name or password, 429 when held, never
-saying which names exist.
-1. **The hard lock is per (username, source).** 8 failures in 5 minutes, as today, but counted per username and
-   source together. Someone guessing from elsewhere no longer locks Andy out.
-2. **A slower, username-wide backoff applies to public requests only.** After 30 public failures on one username in
-   an hour, public sign-ins to it wait out the hour. Tailnet sign-ins are never held by it, so Andy can always sign in
-   from his own machines.
-3. **A source is its /64 for IPv6**, and its full address for IPv4, so rotating addresses inside one IPv6 network
-   counts as one source. A global budget also applies: after 300 public failures in an hour, public sign-ins
-   wait out the hour, while tailnet sign-ins don't.
-4. **Hashing happens outside the database transaction,** in a worker thread (`run_in_threadpool`). The counters are
-   read and written in short transactions before and after. A guess no longer holds the store's write lock or the
-   event loop for the length of a scrypt.
+**What stays open from outside, deliberately:**
+- An invitation link opened anonymously works: the shell, then `invitations/redeem`.
+- A docking confirm link (`/#dock?code=…`) shows the shell and asks the person to sign in. Confirming needs a session,
+  and a public request can no longer start a docking.
 
-The counters live in the existing `login_attempts` table, with key prefixes `user-source:`, `user-public:` and
-`public:` beside today's `source:`. The `user:` key is no longer written, and old rows age out by their `reset`.
+**How the check runs:**
+- The allow-list is matched against Starlette's route objects, not path prefixes. Websocket scopes on public requests
+  are refused.
+- **"Valid" means checked, not present.** New store reads `session_is_valid(token)` and `ship_key_is_valid(key)` do
+  the same lookups as `store.session` and `ship_for_key`, but **write nothing**: no `last_used`, no presence. The
+  route's own check still runs afterwards, unchanged, and writes those as today.
+- The lookup runs in a normal store transaction, in a worker thread (`run_in_threadpool`), as the inbox wait does,
+  never on the event loop.
+- Any exception in the middleware refuses the request (401 or 404 as above) and logs the exception's class. It never
+  answers 500.
 
-## 4. Logs
+## 3. The login (S1, S2, S3, S4, nits 6, 7, 8)
 
-- `serve` runs uvicorn with `access_log=False`, as `door` already does.
-- The docking client sends its status-poll secret in an `X-Superyak-Secret` header, not in `?secret=`. The station
-  accepts both for one release, then the query form is refused.
+`Store.login` keeps its answers: 401 for a wrong name or password, 429 when held, the same for unknown and known
+names, and the dummy hash for unknown names kept explicitly, so a 401 takes the same time either way.
 
-## 5. Phases
+**Buckets:**
+- A **public** source is its IPv6 /64, or its full IPv4 address.
+- A **tailnet** source is its full address, so tailnet nodes never share a bucket.
+- A non-IP source is public and gets its own bucket.
+- Counter keys are JSON arrays such as `["user-source", source, username]`, unambiguous for any username.
 
-1. **Phase 1 (this spec's build):** everything above. Ship keys stay allowed on public requests, because the Mac's
-   ships reach the station through Funnel whenever its resolver takes the public DNS answer (Serenity, 774e1cd2).
-2. **Phase 2 (its own small item):** ship clients resolve the station's name through MagicDNS (`100.100.100.100`) and
-   keep the hostname for TLS and Host, so they always use the tailnet. Once every ship's client reports a version
-   with that fix (the version check already exists), the middleware's ship-key line is removed, and public ship
-   requests are closed too.
+**Holds:**
+1. **Per (username, source):** 8 failures in 5 minutes, as today. Someone guessing from elsewhere no longer locks
+   Andy out.
+2. **Per source:** 40 failures in 5 minutes, as today's `source:` limit.
+3. **Username-wide, public only:** after 30 public failures on one username in an hour, public sign-ins to that
+   username from a browser without a known-device cookie wait out the hour.
+4. **No global hold.** The login limiter (below) bounds the cost instead.
 
-## 6. Tests first
+- **Known-device cookie:** a successful sign-in sets `superyak_device`. It holds a random 256-bit token, stored hashed
+  per user, with HttpOnly, Secure, SameSite=Strict and a 180-day life. A browser presenting a valid one for the
+  username it signs into is exempt from hold 3, which is the OWASP device-cookie pattern.
+- **Recovery:** a successful tailnet sign-in clears that username's public hold.
 
-1. **Classification:**
-   - The Funnel header makes a request public.
-   - A forwarded source of `203.0.113.5` or `2001:db8::5` makes it public.
-   - `127.0.0.1`, `100.70.202.124` and `fd7a:115c:a1e0::1` don't.
-   - A client-sent `Tailscale-Funnel-Request` from a tailnet address still counts as public, so it fails closed.
-2. **Default deny, for a public request:**
-   - Every route in `app.routes` that isn't in the allow-list answers 404 without a session. The test walks the
-     route table, so a new route is covered automatically.
-   - A made-up session cookie gets 404.
+**Reserve first (S2), all of `Store.login` run in a worker thread under the login limiter:**
+1. In a short transaction, delete expired `login_attempts` rows. Then, if any applicable hold is at its limit, answer
+   429 **without hashing**. Otherwise increment every applicable counter, which reserves the attempt.
+2. Outside any transaction, hash (the dummy hash for an unknown name).
+3. In a second transaction, re-read the user row and check that the salt and hash haven't changed and that it's still
+   an active person, since an activation can change the hash in between.
+   - On success: delete the pair's `user-source` row, give back the reservation on the others, and create the session
+     and device cookie.
+   - On failure: keep the reservation as the counted failure.
+
+**The login limiter (S3):** a dedicated limiter of 2 concurrent hashes, with a queue of 8. A full queue answers 429
+without hashing. Login no longer competes with every sync route for anyio's shared threads.
+
+**Old rows:** today's `user:` and `source:` rows go inert at deploy. The new keys are different, so any current hold
+ends at deploy, and expired rows are deleted in step 1.
+
+## 4. Logs, and docking from the public route (S7, nit 9)
+
+- `serve` runs uvicorn with `access_log=False`, as `door` does.
+- The docking client sends its status-poll secret in an `X-Superyak-Secret` header, not `?secret=`. The station
+  accepts both for one release, then refuses the query form.
+- The access-request poll goes to the door, whose log is already off.
+- **When `make dock` on a tailnet machine takes the public route:** the station answers 401 to `POST /api/dockings`
+  on public requests. The dock client then prints
+  `STATUS: refused-public (the station only docks over the tailnet; check that this machine resolves the station's
+  name through MagicDNS)` and exits 3, rather than stopping with a traceback. Phase 2 makes the client always take
+  the tailnet.
+
+## 5. Phases (S8)
+
+1. **Phase 1 (this spec's build):** everything above, with ship keys allowed on public requests for any route.
+2. **Phase 2 (its own item, build:ship-tailnet-route):**
+   - **Clients:** the agent's `StationClient` and dock client resolve the station's name through MagicDNS
+     (`100.100.100.100`) and dial that address, keeping the hostname for TLS SNI and Host. That's a custom
+     `HTTPSConnection`, since urllib has no per-request resolver.
+   - **The switch:** once every **active** ship reports the client version with that fix, the middleware's ship-key
+     line is removed. An active ship is one with an unrevoked key used in the last 14 days, project ships included.
+     Odo and Wormhole are on loopback and unaffected.
+   - **The refusal:** a ship key on a public request then gets **`421 {"error": "Use the tailnet"}`**. The agent
+     treats 421 as retryable, never as revoked (401) or final (403, 404, 409), with an agent test.
+
+## 6. Tests first (S6, nit 5)
+
+1. **The suite runs as tailnet.** A conftest helper builds every `TestClient` with `client=('127.0.0.1', 50000)`.
+   Starlette's default host is `"testclient"`, which is not an IP and so is public. A test pins that a non-IP host
+   never counts as tailnet.
+2. **Classification,** through uvicorn's `ProxyHeadersMiddleware` configured as `serve` configures it (trusted
+   127.0.0.1):
+   - 127.0.0.1 with `X-Forwarded-For: 203.0.113.5` is public.
+   - Several forwarded entries with a public one last are public.
+   - Forwarded headers from an untrusted client are ignored.
+   - 127.0.0.1 with no forwarded header is tailnet.
+   - A tailnet address with a `Tailscale-Funnel-Request` header of any value is public.
+   - `::ffff:100.70.202.124` unmaps to tailnet.
+3. **Default deny:**
+   - A walk over every route object, router-added and mounted ones included, once with no credentials and once with
+     a made-up bearer key: every route outside §2's table answers 401 on `/api/*` and 404 elsewhere.
+   - Dockings and access requests are checked with a real id and secret, asserting the key wasn't collected and the
+     request wasn't created.
+   - A made-up session cookie is refused.
+4. **Signed-in use over public:**
    - A real session reaches `/api/me`, `/api/chats` and posting a message.
-   - Anonymous `POST /api/dockings`, `POST /api/access-requests` and `GET /api/dockings/{key}` get 404 on public
-     requests, and work as today on tailnet requests.
-3. **Ship keys, phase 1:** a valid key reaches `/api/ships/me/unread` publicly, and a made-up key gets 404.
-4. **Login:**
-   - 8 public failures from one source hold that (username, source), but not the same username from another public
-     source.
-   - 30 public failures from 30 sources hold public sign-ins to that username, but a tailnet sign-in with the right
-     password succeeds.
-   - Two addresses in one IPv6 /64 share a source.
-   - The global public budget holds public sign-ins but not tailnet ones.
-   - A wrong name and a wrong password answer the same.
-   - A test hook shows the hash runs while no store transaction is open.
-5. **Logs:**
+   - An expired session gets 401 "Sign in required".
+   - An anonymous invitation redeem works.
+   - A docking confirm without a session is refused, and with one it works.
+5. **Ships over public (phase 1):** a valid key reaches every `StationClient` method's route (`/api/me`,
+   `/api/chats/{key}`, `/api/chats/{key}/messages`, `/api/mentions`, `/api/ships/me/*`, `/api/ships/directory`).
+   A made-up key is refused.
+6. **The middleware writes nothing:** `last_used` and presence change only once per request (in the route), and a
+   database error in the lookup gives a refusal, not a 500.
+7. **Login:**
+   - 8 public failures from one source hold that pair only.
+   - 30 public failures from 30 sources hold public sign-ins to the username for a browser without a device cookie,
+     but a browser with one, and a tailnet sign-in, still succeed. The tailnet sign-in clears the hold.
+   - Two public addresses in one /64 share a source, and two tailnet IPv6 addresses don't.
+   - N concurrent wrong guesses from one source get at most 8 answers of 401 for that pair, and the rest 429.
+   - Held attempts neither hash nor count.
+   - The limiter's full queue answers 429 without hashing.
+   - A `user:` row from before the upgrade, at its limit, holds nobody.
+   - Unknown and known names answer the same.
+8. **Logs and docking:**
    - `serve` builds uvicorn with `access_log=False`.
-   - The dock client's poll carries no `secret=` in its URL.
+   - The dock poll's URL carries no `secret=`.
    - The station accepts the header.
-6. **Tailnet unchanged:** the existing peer suite passes with no request marked public.
+   - A public `POST /api/dockings` makes the dock client print `STATUS: refused-public` and exit 3.
+9. **Tailnet unchanged:** the whole existing peer suite passes, run as tailnet.
 
-## 7. Deploy
+## 7. Deploy (nits 9, 10)
 
-There's no migration. Restart `superyak-lighthouse` on the Pi. Live checks after the deploy:
-- Through the public ingress, `/` gives 200, `/api/health` gives 200, and an anonymous `POST /api/dockings` gives 404.
-- On the tailnet, `make dock` still reaches the station.
-- A sign-in through Funnel works.
+There's no migration beyond the new device-token table. Restart `superyak-lighthouse` on the Pi.
 
-Rollback is the previous commit, and a restart. Safety code, so each partner gives an explicit yes before the merge
-(law section 8, draft).
+**Live checks after the deploy:**
+- From a device off the tailnet (a tailnet machine resolves the name to the tailnet):
+  - `/` gives 200 and `/api/health` gives 200;
+  - an anonymous `POST /api/dockings` gives 401;
+  - a sign-in works;
+  - an expired session brings up the sign-in page;
+  - a ship key reaches `/api/chats`.
+- On the tailnet: `make dock` reaches the station, run from Tardis and from the Mac.
+
+**Rollback:** the previous commit and a restart. A rolled-back station ignores `X-Superyak-Secret`, so dock clients
+from this commit can't collect a key until it's redeployed. Undock nothing meanwhile.
+
+**Merging:** this is safety code, so each partner gives an explicit yes before it merges.
 
 ## Open questions
 
