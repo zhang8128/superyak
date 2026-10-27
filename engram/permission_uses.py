@@ -383,11 +383,12 @@ class Uses:
         return count
 
     # ---------------------------------------------------------------- views (P 9.2, 9.3)
-    def _query(self, where: str, params: Sequence, limit: int | None = USE_LIST_ROWS) -> list:
+    def _query(self, where: str, params: Sequence, limit: int | None = USE_LIST_ROWS):
+        """A cursor over the matching rows, newest first: callers that stop early do not read the rest."""
         sql = f"SELECT * FROM uses WHERE {where} ORDER BY at DESC, seq DESC"
         if limit is not None:
             sql += f" LIMIT {int(limit)}"
-        return self.conn.execute(sql, tuple(params)).fetchall()
+        return self.conn.execute(sql, tuple(params))
 
     def _filters(self, state: State, *, scope=None, since=None, until=None, action=None, purpose=None,
                  collection=None, obj=None, refused=False) -> tuple[list, list]:
@@ -427,11 +428,23 @@ class Uses:
             f"WHERE {where}", (ledger_id, *params)).fetchone()
         return {"total": total, "local": total - imported, "imported": imported, "filtered": filtered}
 
-    def _subjects_of_rows(self, rows) -> dict:
+    def _subjects_of_rows(self, rows, objects=None) -> dict:
+        """Each row's (subject, object) pairs, read only as far as a view shows them. `objects` None: the distinct
+        subjects alone (the steward view shows persons' pseudonyms only; the object is ""). Else only the pairs on
+        those objects (the owner view reads the objects a live self-claim names), and nothing when it is empty."""
         out: dict[int, list] = {r["seq"]: [] for r in rows}
+        if objects is None:
+            for r in rows:
+                out[r["seq"]] = [(s[0], "") for s in self.conn.execute(
+                    "SELECT DISTINCT subject FROM use_subjects WHERE use_seq = ?", (r["seq"],))]
+            return out
+        objects = sorted(objects)
         for r in rows:
-            out[r["seq"]] = [(s["subject"], s["object"]) for s in self.conn.execute(
-                "SELECT subject, object FROM use_subjects WHERE use_seq = ? ORDER BY rowid", (r["seq"],))]
+            for i in range(0, len(objects), 500):
+                chunk = objects[i:i + 500]
+                out[r["seq"]] += [(s["subject"], s["object"]) for s in self.conn.execute(
+                    "SELECT subject, object FROM use_subjects WHERE use_seq = ? AND object IN "
+                    f"({','.join('?' * len(chunk))}) ORDER BY rowid", (r["seq"], *chunk))]
         return out
 
     def owner_list(self, state: State, *, since=None, until=None, place=None, action=None, purpose=None,
@@ -447,9 +460,9 @@ class Uses:
         where = " AND ".join(terms)
         counts = self._count(where, params, ledger_id)
         del counts["filtered"]
-        rows = self._query(where, params)
-        subjects = self._subjects_of_rows(rows)
+        rows = self._query(where, params).fetchall()
         claims = _self_claims(state)
+        subjects = self._subjects_of_rows(rows, {obj for obj, _, _ in claims})
         return UseList(counts, [_owner_row(state, r, subjects[r["seq"]], claims, ledger_id) for r in rows])
 
     def place_view(self, state: State, place: str, *, since=None, until=None, action=None, purpose=None,
@@ -466,7 +479,7 @@ class Uses:
         terms.append("shadow = 0")
         where = " AND ".join(terms)
         counts = self._count(where, params, ledger_id)
-        rows = self._query(where, params)
+        rows = self._query(where, params).fetchall()
         subjects = self._subjects_of_rows(rows)
         return UseList(counts, [_steward_row(r, subjects[r["seq"]], row.pseudonym_salt, ledger_id) for r in rows])
 
@@ -475,13 +488,16 @@ class Uses:
         "not allowed". No filtered counts, which would tell it that refused memories exist (P23)."""
         out: list[dict] = []
         for r in self._query("agent = ? AND shadow = 0", (agent,)):
+            if len(out) >= USE_LIST_ROWS:
+                break
             returned = _json(r["returned"])
             outcome = "allowed" if r["allowed"] else "not allowed"
             if r["object"] is not None:
                 out.append({"object": r["object"], "at": r["at"], "outcome": outcome})
                 continue
             if isinstance(returned, list):          # a recall: one allowed item per memory it returned
-                out += [{"object": m, "at": r["at"], "outcome": outcome} for m in returned]
+                out += [{"object": m, "at": r["at"], "outcome": outcome}
+                        for m in returned[:USE_LIST_ROWS - len(out)]]
                 continue
             row = {"at": r["at"], "outcome": outcome}
             if isinstance(returned, dict):
