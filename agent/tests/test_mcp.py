@@ -822,15 +822,48 @@ def test_errors_keep_todays_wording(station):
     for n in range(40):
         fake.say(room, jenn, f'note {n}')
     tools = tools_for(fake)
-    for key in ('start', 'after', 'message'):
-        result = call(tools, 'station_read', room=room, **{key: 'nope'})
-        assert result['isError'] is True and "No message 'nope' in this room" in result['content'][0]['text'], key
-    for at in (99, -1):
-        result = call(tools, 'station_read', room=room, at=at)
-        assert result['isError'] is True and 'at must be between 0 and 39' in result['content'][0]['text'], at
+    for fake.pages in (True, False):
+        for key in ('start', 'after', 'message'):
+            result = call(tools, 'station_read', room=room, **{key: 'nope'})
+            assert result['isError'] is True and "No message 'nope' in this room" in result['content'][0]['text'], key
+        for at in (99, -1):
+            result = call(tools, 'station_read', room=room, at=at)
+            assert result['isError'] is True and 'at must be between 0 and 39' in result['content'][0]['text'], at
 
 
 def test_an_empty_room_reads_no_messages(station):
     fake, andy, jenn, serenity = station
     room = fake.room('Promenade', andy, jenn, serenity)
     assert call_text(tools_for(fake), {'room': room}) == f'Room Promenade ({room})\n\n(no messages)'
+
+
+def read_error(tools, **args):
+    result = call(tools, 'station_read', **args)
+    assert result['isError'] is True, args
+    return result['content'][0]['text']
+
+
+def test_invalid_calls_raise_in_the_order_a_full_read_does(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn, f'note {n}') for n in range(5)]
+    tools, real = tools_for(fake), sent[1]['id']
+    cases = [{'start': 'nope', 'after': real},               # unknown id and a second mode
+             {'at': 99, 'start': real},                      # at out of range and a second mode
+             {'at': 'x', 'start': 'nope'},                   # a bad at type and an unknown id
+             {'message': 'nope', 'start': 5},                # a type error and an unknown id
+             {'oldest': 'maybe', 'start': 'nope'},
+             {'message': real, 'oldest': True},
+             {'room': 'no-such-room', 'start': 5},           # a malformed argument and an inaccessible room
+             {'room': 'r-999', 'at': 'x'}]
+    for case in cases:
+        args = {'room': room, **case}
+        fake.pages = False
+        today = read_error(tools, **args)
+        fake.pages = True
+        assert read_error(tools, **args) == today, case
+    # today's order, pinned: ids are checked key by key before at, and at's range before the one-mode check
+    assert "No message 'nope'" in read_error(tools, room=room, start='nope', after=real)
+    assert 'at must be between 0 and 4' in read_error(tools, room=room, at=99, start=real)
+    assert "No message 'nope'" in read_error(tools, room=room, at='x', start='nope')
+    assert "No message 'nope'" in read_error(tools, room=room, message='nope', start=5)
