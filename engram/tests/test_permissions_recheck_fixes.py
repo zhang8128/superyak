@@ -294,3 +294,78 @@ def test_should_fix_4_the_guard_holds_an_allowed_keeps_receipt_and_the_owners_ag
     assert [(row.action, row.allowed) for row, _ in out.receipts] == [("imprint", 1)]
     assert out.unwritten == {**REFUSED, "cause": "the receipt could not be written"}
     assert not uses_path(guard_ledger).exists() or receipt_rows(guard_ledger, "imprint") == []
+
+
+# ---------------------------------------------------------------- item 6 (Serenity's change to R55): memberships
+# that all fail are read once per decision, not once per path
+
+NOWHERE = ["collection:andy/nowhere"]
+
+
+def _counted_membership_counts(monkeypatch):
+    import permissions
+    calls, real = [0], permissions._membership_counts
+
+    def counted(*a, **k):
+        calls[0] += 1
+        return real(*a, **k)
+    monkeypatch.setattr(permissions, "_membership_counts", counted)
+    return calls
+
+
+@pytest.mark.parametrize("levels,width", [(5, 4), (5, 6)])
+def test_item6_nested_memberships_that_all_fail_are_refused_in_about_a_millisecond(monkeypatch, levels, width):
+    """Every level's memberships are backed by grants whose envelopes name the next level, and the last level's name
+    a collection m1 is not in, so no membership counts. The `any` over them read every path, width^levels of them
+    (5 levels of 6: 18,660 calls and 0.18 s on the Pi)."""
+    import time
+    from permissions import Refusal
+    from tests.permissions_support import HOME, home_use
+    from tests.test_permissions_serenity_fixes import _nested_levels
+    state, use = _nested_levels(levels, width, bottom=NOWHERE), home_use(M1, T("2026-11-02"))
+    calls = _counted_membership_counts(monkeypatch)
+    start = time.perf_counter()
+    d = decide(state, use)
+    took = time.perf_counter() - start
+    assert d.refusal == Refusal("NO_ALLOW", HOME, "recall")
+    # the allow is read twice, matched and as a candidate (PF23); each read reads a row once a route to its level
+    assert calls[0] <= 2 * levels * width * (width + 1), calls[0]
+    assert took < 0.05, f"decide took {took:.4f} s"
+
+
+def test_item6_past_the_step_budget_the_use_is_refused_never_decided_on_a_part(monkeypatch):
+    import permissions
+    from permissions import RuleError
+    from tests.permissions_support import home_use
+    from tests.test_permissions_serenity_fixes import _nested_levels
+    state, use = _nested_levels(3, 2, bottom=NOWHERE), home_use(M1, T("2026-11-02"))
+    assert decide(state, use).refusal.code == "NO_ALLOW"
+    monkeypatch.setattr(permissions, "MEMBERSHIP_STEPS", 2)
+    with pytest.raises(RuleError, match="memberships to read"):
+        decide(state, use)
+
+
+def _decisions(state, uses):
+    return [decide(state, u).to_json() for u in uses]
+
+
+def test_item6_the_memo_changes_no_decision(monkeypatch):
+    """Random nested worlds, and nests that fail, succeed, or cycle back to their first level: every decision is
+    the same with the memo as with every lookup missing."""
+    import random
+    import permissions
+    from tests.permissions_support import Bulk, home_use, random_world, sample_uses
+    from tests.test_permissions_serenity_fixes import _nested_levels
+    cases = []
+    for seed in range(12):
+        rng = random.Random(f"item6-{seed}")
+        w = random_world(rng)
+        uses = [x for u in sample_uses(rng, w, 20) for x in (u.uses if isinstance(u, Bulk) else (u,))]
+        cases.append((w.state(), uses))
+    at = [T("2026-11-02"), T("2026-11-30") - 3 * 3600, T("2026-12-01")]
+    for bottom in (NOWHERE, "*", [f"collection:andy/c0-{j}" for j in range(3)]):
+        cases.append((_nested_levels(3, 3, bottom=bottom), [home_use(M1, t) for t in at]))
+    with_memo = [_decisions(s, uses) for s, uses in cases]
+    monkeypatch.setattr(permissions._MembershipMemo, "get", lambda self, key: None)
+    assert [_decisions(s, uses) for s, uses in cases] == with_memo
+    assert sum(len(d) for d in with_memo) > 200

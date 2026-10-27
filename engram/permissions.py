@@ -50,6 +50,8 @@ OUTSIDE_HOME_DAYS = 366
 MAX_GRANT_LINKS = 3
 MAX_GRANT_DEPTH = 2
 ROUTE_STEPS = 1024              # membership routes one allow's terms make for one use; past it the use is refused
+MEMBERSHIP_STEPS = 1024         # grant-backed membership answers one read of a selector's collections makes; past
+                                # it the use is refused
 MAX_GRANT_HOURS = 720
 MAX_REPLACES = 16
 PROPOSAL_DAYS = 7
@@ -1008,7 +1010,7 @@ def _lanes_ok(state: State, obj: str, lanes: tuple, anchor: int, t: int, deny: b
 
 
 def _object_dims(state: State, sel: Selector, layer: str, anchor: int, use: Use, action: str, deny: bool,
-                 assume: frozenset, check_validity: bool) -> bool:
+                 assume: frozenset, check_validity: bool, memo: _MembershipMemo | None = None) -> bool:
     ref = _parsed(use.obj)
     if not _star_or_in(sel.kinds, ref.kind):
         return False
@@ -1022,15 +1024,23 @@ def _object_dims(state: State, sel: Selector, layer: str, anchor: int, use: Use,
     if sel.lanes != STAR and not _lanes_ok(state, use.obj, sel.lanes, anchor, t, deny):
         return False
     if sel.collections != STAR:
-        rows = [r for r in _members(state, use.obj)[0] if r.collection in sel.collections]
-        if not any(_membership_counts(state, r, layer, anchor, use, action, deny, assume, check_validity)
+        held, grant_backed = _members(state, use.obj)
+        rows = [r for r in held if r.collection in sel.collections]
+        if memo is None and grant_backed and not deny:
+            memo = _MembershipMemo(state, anchor, use, action, check_validity)    # shared by this `any`'s rows
+        if not any(_membership_counts(state, r, layer, anchor, use, action, deny, assume, check_validity, memo)
                    for r in rows):
             return False
     return True
 
 
 def _membership_counts(state: State, row, layer: str, anchor: int, use: Use, action: str, deny: bool,
-                       assume: frozenset, check_validity: bool) -> bool:
+                       assume: frozenset, check_validity: bool, memo: _MembershipMemo | None = None) -> bool:
+    """Does this membership row count for the use (P 6.5)? A grant-backed row counts for an allow when every
+    envelope of its grant chain matches, assuming the row (Tardis's T1). When an envelope names collections, the
+    answer reads the memberships there in turn, so it is kept in `memo` by the rows of `assume` it can read
+    (`_MembershipMemo`): memberships nested L levels deep, w at each, none of which counts, read each row once a
+    route to its level, not once a path, w^L of them (Serenity's change to R55)."""
     t = use.at
     if deny:
         return _meets(state, row.added_seq, row.removed_seq, anchor, t)
@@ -1049,12 +1059,86 @@ def _membership_counts(state: State, row, layer: str, anchor: int, use: Use, act
         chain = grant_chain(state, gid)
     except RuleError:
         return False
-    return all(_selector_match(state, g.envelope, g.layer, anchor, use, action, False, assume | {row},
-                               check_validity) for g in chain)
+    if all(g.envelope.collections == STAR for g in chain):
+        # no envelope names a collection, so the answer reads no other membership: nothing to keep
+        return all(_selector_match(state, g.envelope, g.layer, anchor, use, action, False, assume | {row},
+                                   check_validity) for g in chain)
+    if memo is None or not memo.serves(state, anchor, use, action, check_validity):
+        memo = _MembershipMemo(state, anchor, use, action, check_validity)
+    key = (row, assume & _membership_reach(state, use.obj, row))
+    hit = memo.get(key)
+    if hit is not None:
+        return hit
+    memo.steps += 1
+    if memo.steps > MEMBERSHIP_STEPS:
+        raise RuleError("6.5 decide", f"{use.obj} has more than {MEMBERSHIP_STEPS:,} grant-backed memberships to "
+                                      "read for one selector; the use is refused")
+    got = memo.memo[key] = all(_selector_match(state, g.envelope, g.layer, anchor, use, action, False,
+                                               assume | {row}, check_validity, memo) for g in chain)
+    return got
+
+
+class _MembershipMemo:
+    """One read of a selector's collections (an `_object_dims`, or a `_terms` call's routes through `_Routes`):
+    every `_membership_counts` it serves reads the same State, anchor, use, action and validity flag, so a
+    grant-backed row's answer depends on `assume` only through `_membership_reach`, and is kept by `assume` met
+    with it, the key `_route` uses (R49). `steps` counts the answers made, at most MEMBERSHIP_STEPS."""
+    __slots__ = ("state", "anchor", "use", "action", "valid", "memo", "steps")
+
+    def __init__(self, state: State, anchor: int, use: Use, action: str, valid: bool):
+        self.state, self.anchor, self.use, self.action, self.valid = state, anchor, use, action, valid
+        self.memo: dict = {}
+        self.steps = 0
+
+    def serves(self, state: State, anchor: int, use: Use, action: str, valid: bool) -> bool:
+        return (self.state is state and self.use is use and self.anchor == anchor and self.action == action
+                and self.valid == valid)
+
+    def get(self, key):
+        return self.memo.get(key)
+
+
+def _membership_reach(state: State, obj: str, row) -> frozenset:
+    """The rows whose place in `assume` the answer of `_membership_counts` for `row` can read: the row, and obj's
+    memberships in each collection its grant chain's envelopes name, and so on through theirs. It depends on the
+    State and obj alone, so it is kept per State for the last object only, as `_members` is (replaced whole)."""
+    last = state._cache.get(("membership-reach",))
+    if last is None or last[0] != obj:
+        by_coll: dict = {}
+        for m in _members(state, obj)[0]:
+            by_coll.setdefault(m.collection, []).append(m)
+        last = state._cache[("membership-reach",)] = (obj, by_coll, {})
+    _, by_coll, kept = last
+    hit = kept.get(row)
+    if hit is not None:
+        return hit
+    out, seen, todo = {row}, set(), [row]
+    while todo:
+        m = todo.pop()
+        if not m.backing.startswith("grant:"):
+            continue
+        try:
+            chain = grant_chain(state, m.backing[len("grant:"):])
+        except RuleError:
+            continue            # its answer is False, read before any envelope
+        for g in chain:
+            if g.envelope.collections == STAR:
+                continue
+            for c in g.envelope.collections:
+                if c in seen:
+                    continue
+                seen.add(c)
+                for r in by_coll.get(c, ()):
+                    if r not in out:
+                        out.add(r)
+                        todo.append(r)
+    got = kept[row] = frozenset(out)
+    return got
 
 
 def _selector_match(state: State, sel: Selector, layer: str, anchor: int, use: Use, action: str, deny: bool,
-                    assume: frozenset = frozenset(), check_validity: bool = True) -> bool:
+                    assume: frozenset = frozenset(), check_validity: bool = True,
+                    memo: _MembershipMemo | None = None) -> bool:
     """P 5.3 rules 2 and 3."""
     if not _star_or_in(sel.requesters, use.requester):
         return False
@@ -1064,7 +1148,7 @@ def _selector_match(state: State, sel: Selector, layer: str, anchor: int, use: U
         return False
     if not any(_audience_entry(state, v, layer, use, anchor, deny) for v in sel.audience):
         return False
-    return _object_dims(state, sel, layer, anchor, use, action, deny, assume, check_validity)
+    return _object_dims(state, sel, layer, anchor, use, action, deny, assume, check_validity, memo)
 
 
 def _revoked(state: State, record) -> bool:
@@ -1654,13 +1738,20 @@ class _Routes:
     """One `_terms` call's membership routes (Serenity's section 2, item 2): every `_route` it makes reads the same
     object, anchor, use, action, `valid_only` and t, so a route is kept by what else it reads, each grant's
     `_grant_terms` is read once, and `steps` counts the routes made, at most ROUTE_STEPS."""
-    __slots__ = ("memo", "reach", "terms", "steps")
+    __slots__ = ("memo", "reach", "terms", "steps", "members")
 
     def __init__(self):
         self.memo: dict = {}
         self.reach: dict = {}
         self.terms: dict = {}
         self.steps = 0
+        self.members: _MembershipMemo | None = None
+
+    def membership_memo(self, state: State, anchor: int, use: Use, action: str, valid: bool) -> _MembershipMemo:
+        """The `_membership_counts` memo every route of this call shares."""
+        if self.members is None or not self.members.serves(state, anchor, use, action, valid):
+            self.members = _MembershipMemo(state, anchor, use, action, valid)
+        return self.members
 
     def grant_terms(self, state: State, backing: str, t: int):
         """`_grant_terms` of a `grant:<id>` backing at t, read once."""
@@ -1716,7 +1807,8 @@ def _route(state: State, colls: tuple, layer: str, anchor: int, use: Use, action
                                       "to read; the use is refused")
     rows = [m for m in _members(state, use.obj)[0]
             if m.collection in colls
-            and _membership_counts(state, m, layer, anchor, use, action, False, assume, valid_only)]
+            and _membership_counts(state, m, layer, anchor, use, action, False, assume, valid_only,
+                                   routes.membership_memo(state, anchor, use, action, valid_only))]
     if not rows or any(m in assume or not m.backing.startswith("grant:") for m in rows):
         routes.memo[key] = got = ((), False, None)
         return got
