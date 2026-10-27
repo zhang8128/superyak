@@ -9,7 +9,7 @@ import re
 import shutil
 import sqlite3
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import store_identity
@@ -1367,3 +1367,174 @@ def canary_store(tmp_path: Path) -> tuple[Storage, list[str]]:
         side.close()
     _PLANTED_VECTORS[str(s.db_path)] = left_vectors
     return s, canaries
+
+
+# Task 21: recall-row touches. The reader below is written from the trail spec's section 4 alone and imports nothing
+# from imprint*.py or trails.py.
+
+def iso_of(seconds: int) -> str:
+    """UTC seconds to the ISO-8601 text a plan's ``until`` takes."""
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _at(text: str) -> int:
+    from datetime import datetime
+
+    return int(datetime.fromisoformat(text).timestamp())
+
+
+def _uid(n: int) -> str:
+    return str(uuid.UUID(int=n))
+
+
+def mixed_lane_recall_store(tmp_path: Path, fixture: str) -> tuple[Storage, int]:
+    """A route plan's store with a closed session ``sx``, plus its end ``t1`` (18:00 UTC). Kept work-lane episodes
+    ``e0``, ``e1``, ``e2`` (uuid ids, so a mention is never an accident) and ``e3`` (naming ``e1`` and ``e2``); a
+    personal ``p1``; a ``route_shown`` row listing ``e1``; used recalls of ``[instinct, e2, e1]`` (cited by ``e3``),
+    of ``[e0]`` (one target), of ``[instinct, e2]`` (one target once the instinct goes), and of ``[e0, e1]`` (cited by
+    an operation); a not-used recall; and a mixed-lane used recall ``[e2, p1]`` and a used recall of ``[p1]`` that
+    stay home. ``nothing_at_or_after_t1`` adds a session open at t1 and no row at or after t1 (XS1);
+    ``as_of_t1_nothing_at_t1`` adds rows after t1 and none at exactly t1."""
+    assert fixture in ("nothing_at_or_after_t1", "as_of_t1_nothing_at_t1")
+    t1 = T("2026-10-25T18:00:00Z")
+    s = new_store(tmp_path, "src")
+    day = "2026-10-25T"
+    e0, e1, e2, p1, e3 = (_uid(i) for i in range(1, 6))
+    ep(s, e0, content="Jenn drove the truck to the clinic, trip 0", session="sx", at=day + "09:00:00+00:00")
+    ep(s, e1, content="Jenn drove the truck to the clinic, trip 1", session="sx", at=day + "10:01:00+00:00")
+    ep(s, e2, content="Jenn drove the truck to the clinic, trip 2", session="sx", at=day + "10:02:00+00:00")
+    ep(s, p1, content="A private errand", lane="personal", session="sx", at=day + "10:03:00+00:00")
+    ep(s, e3, content=f"Went back over {e1} and then {e2}.", session="sx", at=day + "11:30:00+00:00")
+    for i, id in enumerate((e0, e1, e2, e3)):
+        vec(s, "episode", id, seed=i + 1)
+    key, key2 = inst(s, _uid(100)), inst(s, _uid(101))
+    route_shown(s, "rs1", targets=[e1, p1], session="sx", at=day + "10:50:00+00:00")
+    recall(s, "l1", targets=[key, e2, e1], session="sx", at=day + "11:00:00+00:00", outcome="used: auto: cited",
+           recall_id="rc1")
+    recall(s, "l2", targets=[e2, p1], session="sx", at=day + "12:00:00+00:00", outcome="used", recall_id="rc2")
+    recall(s, "l2b", targets=[p1], session="sx", at=day + "12:30:00+00:00", outcome="used", recall_id="rc2b")
+    recall(s, "l3", targets=[e0], session="sx", at=day + "13:00:00+00:00", outcome="used", recall_id="rc3")
+    recall(s, "l4", targets=[key2, e2], session="sx", at=day + "14:00:00+00:00", outcome="used", recall_id="rc4")
+    recall(s, "l6", targets=[e0, e1], session="sx", at=day + "14:20:00+00:00", outcome="used", recall_id="rc6")
+    op(s, "o1", session="sx", at=day + "14:30:00+00:00", operation="mark_core", targets=[e1])
+    recall(s, "l5", targets=[e1], session="sx", at=day + "14:40:00+00:00", outcome="not_used", recall_id="rc5")
+    if fixture == "nothing_at_or_after_t1":
+        ep(s, _uid(7), content="Still working at t1", session="sy", at=day + "17:30:00+00:00")
+    else:
+        ep(s, _uid(7), content="Back again after t1", session="sx", at=day + "23:20:00+00:00")
+        ep(s, _uid(8), content="Another session after t1", session="sz", at=day + "18:01:40+00:00")
+    return s, t1
+
+
+@dataclass(frozen=True)
+class Touch:
+    session: str
+    memory: str
+    kind: str                 # "wrote" or "cited"
+    time: int
+    rank: int
+    recall_id: str | None
+    suggested: bool
+
+
+def touches_from(path: Path, as_of: int) -> list[Touch]:
+    """Wrote and cited touches of every closed session as of ``as_of`` (trail spec section 4), in no set order."""
+    import json
+
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        instincts = {r[0] for r in conn.execute("SELECT id FROM instincts")} if "instincts" in names else set()
+        episodes = [(i, s, _at(c), content or "", ctx or "") for i, s, c, content, ctx in conn.execute(
+            "SELECT id, session_id, created_at, content, context FROM episodes") if _at(c) <= as_of]
+        logs = []
+        for id, at, event, targets, ctx in conn.execute(
+                "SELECT id, timestamp, event_type, target_ids, context FROM memory_log "
+                "WHERE event_type IN ('recall', 'route_shown')"):
+            if _at(at) > as_of:
+                continue
+            c = json.loads(ctx) if ctx else {}
+            logs.append((id, _at(at), event, json.loads(targets), c.get("session_id"), c.get("recall_id")))
+        ops = [(s, _at(at), op_, json.loads(t)) for s, at, op_, t in conn.execute(
+            "SELECT session_id, timestamp, operation, target_ids FROM operation_log") if _at(at) <= as_of]
+        existing = {r[0] for r in conn.execute("SELECT id FROM episodes UNION SELECT id FROM semantics")}
+    finally:
+        conn.close()
+    newest: dict[str, int] = {}
+    made = {s for _, s, *_ in episodes if s} | {s for _, _, e, _, s, _ in logs if e == "recall" and s}
+    for _, s, at, *_ in episodes:
+        if s:
+            newest[s] = max(newest.get(s, at), at)
+    for _, at, _, _, s, _ in logs:
+        if s in made:                       # a route_shown row never makes a session by itself
+            newest[s] = max(newest.get(s, at), at)
+    closed = {s for s in made if newest[s] < as_of - 3600}
+    out = [Touch(s, i, "wrote", at, 0, None, False) for i, s, at, *_ in episodes if s in closed]
+    citing = {"mark_core", "instinct_feedback", "dream_react"}
+    for id, at, event, targets, s, rid in logs:
+        if event != "recall" or s not in closed:
+            continue
+        outcome = conn_outcome(path, id)
+        if not (outcome or "").startswith("used"):
+            continue
+        targets = [t for t in targets if t not in instincts]
+        for rank, m in enumerate(targets):
+            later_text = any(es == s and eat > at and (m in content or m in ctx)
+                             for _, es, eat, content, ctx in episodes)
+            later_op = any(os == s and oat > at and o in citing and m in ot for os, oat, o, ot in ops)
+            if m in existing and (later_text or later_op or len(targets) == 1):
+                shown = any(k == "route_shown" and ks == s and kat <= at and m in kt
+                            for _, kat, k, kt, ks, _ in logs)
+                out.append(Touch(s, m, "cited", at, rank, rid or id, shown))
+    return out
+
+
+def conn_outcome(path: Path, id: str) -> str | None:
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT outcome FROM memory_log WHERE id = ?", (id,)).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+def order_within_recalls(touches, only=None) -> dict:
+    """Each recall's cited memories in delivered order (rank), for the recalls in ``only`` when given."""
+    by: dict = {}
+    for t in sorted((t for t in touches if t.kind == "cited"), key=lambda t: (t.recall_id, t.rank)):
+        if only is None or t.recall_id in only:
+            by.setdefault(t.recall_id, []).append(t.memory)
+    return by
+
+
+def recalls_of(touches) -> set:
+    return {t.recall_id for t in touches if t.kind == "cited"}
+
+
+def _recall_rows(path: Path):
+    import json
+
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        instincts = {r[0] for r in conn.execute("SELECT id FROM instincts")} if "instincts" in names else set()
+        rows = conn.execute("SELECT id, target_ids, context, outcome FROM memory_log WHERE event_type = 'recall'"
+                            ).fetchall()
+    finally:
+        conn.close()
+    for id, targets, ctx, outcome in rows:
+        c = json.loads(ctx) if ctx else {}
+        yield c.get("recall_id") or id, [t for t in json.loads(targets) if t not in instincts], outcome
+
+
+def exactly_one_target_answers(path: Path, only=None) -> dict:
+    """For each used recall row (in ``only`` when given): does the rule "exactly one target, instincts removed" hold."""
+    return {rid: len(targets) == 1 for rid, targets, outcome in _recall_rows(path)
+            if (outcome or "").startswith("used") and (only is None or rid in only)}
+
+
+def kept_recalls(built) -> set:
+    """The recall ids of the package's recall rows."""
+    return {rid for rid, _, _ in _recall_rows(built.dir / "imprint.db")}
