@@ -16,6 +16,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -1246,6 +1247,85 @@ def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callab
             shutil.rmtree(scratch, ignore_errors=True)
 
 
+USE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
+USE_DEADLINE = "1740"                # seconds the trail evaluation may take; the admission bound is 1,860 s (I 12)
+DEFAULT_TRAILS_CMD = (sys.executable, str(Path(__file__).resolve().parent / "trails.py"))
+
+
+def _use_allowed(root: Path, imprint_id: str, use_id: str, now: float) -> bool:
+    """Whether the imprint still stands and its allow file for this use exists, names it and has not ended."""
+    if _still_allowed(root, imprint_id, now) is not None:
+        return False
+    try:
+        doc = json.loads((root / f"{imprint_id}.state" / "uses" / f"{use_id}.allow.json").read_text())
+        return doc["use_id"] == use_id and doc["instance_id"] == imprint_id and doc["valid_until"] > now
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _run_trails(argv: Sequence[str], env: Mapping[str, str] | None = None) -> tuple[int, str]:
+    """Run the trails command: stdout captured, stderr left to the unit's journal. A signal is a negative status."""
+    done = subprocess.run(list(argv), stdout=subprocess.PIPE, env=None if env is None else dict(env), check=False)
+    return done.returncode, done.stdout.decode("utf-8", "replace")
+
+
+def use(imprint_id: str, use_id: str, *, root: Path, lane: str | None = None, trails_cmd: Sequence[str] | None = None,
+        now: Callable[[], float] = time.time) -> int:
+    """Run one trail evaluation over an admitted imprint (I 12, D41, D42). Exits 2, writing nothing, for a use id that
+    is not a lowercase uuid4, no allow file, a tombstone, a passed end or a use that already began. Otherwise it makes
+    ``uses/<use id>/`` and always writes ``result.json`` (the exit status, or the class name of what raised), and
+    ``report.json`` only when the child exited 0. Returns 0 when the report was written, else 1. It imports no numpy."""
+    root = Path(root)
+    if not USE_ID.fullmatch(use_id) or not _UUID.fullmatch(imprint_id) or not _use_allowed(root, imprint_id, use_id, now()):
+        return 2
+    state = root / f"{imprint_id}.state"
+    here = state / "uses" / use_id
+    try:
+        here.mkdir(mode=0o700)                                  # no parents; an existing directory is a used id
+    except OSError:
+        return 2
+    scratch = state / "scratch"
+    exit_, error, reported = None, None, False
+    try:
+        scratch.mkdir(mode=0o700, exist_ok=True)                # no parents (D42)
+        if lane is None:
+            lanes = json.loads((root / imprint_id / "manifest.json").read_text())["scope"]["lanes"]
+            if len(lanes) != 1:
+                raise ValueError("a use names one lane")
+            lane = lanes[0]
+        argv = [*(trails_cmd if trails_cmd is not None else DEFAULT_TRAILS_CMD), str(root / imprint_id / "imprint.db"),
+                "--evaluate", "--lane", lane, "--seed", str(int(use_id[:8], 16)), "--deadline", USE_DEADLINE,
+                "--json", "--imprint-use", use_id]
+        env = {**os.environ, "SQLITE_TMPDIR": str(scratch), "TMPDIR": str(scratch)}
+        exit_, out = _run_trails(argv, env)
+        if exit_ == 0:
+            _write_atomic(here / "report.json", out)
+            reported = True
+    except Exception as exc:                                    # only its class is kept: its text may hold a path
+        error = type(exc).__name__
+    finally:
+        try:
+            _write_atomic(here / "result.json", json.dumps(
+                {"kind": "imprint-use-result", "use_id": use_id, "exit": exit_, "error": error, "report": reported,
+                 "ended_at": int(now())}, sort_keys=True))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+    return 0 if reported else 1
+
+
 def list_imprints(root: Path) -> list[dict]:
     """One row for each admitted imprint under ``root``, by id."""
     root = Path(root)
@@ -1285,6 +1365,11 @@ def _admit(args) -> int:
         return admit(args.id, root=root, verify_cmd=shlex.split(args.verify_cmd), scratch_dir=scratch)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _use(args) -> int:
+    return use(args.id, args.use_id, root=Path(args.imprints_dir), lane=args.lane,
+               trails_cmd=shlex.split(args.trails_cmd) if args.trails_cmd else None)
 
 
 def _list(args) -> int:
@@ -1362,6 +1447,12 @@ def _parser() -> argparse.ArgumentParser:
     a.add_argument("--id", required=True)
     a.add_argument("--imprints-dir", type=Path, required=True)
     a.add_argument("--verify-cmd", required=True, help="the command that verifies a signed permission (one string)")
+    u = sub.add_parser("use", help="on the Pi: run one allowed trail evaluation over an admitted imprint")
+    u.add_argument("--id", required=True)
+    u.add_argument("--use-id", required=True)
+    u.add_argument("--imprints-dir", type=Path, required=True)
+    u.add_argument("--lane")
+    u.add_argument("--trails-cmd", help="the trails command (one string); default trails.py")
     ls = sub.add_parser("list", help="on the Pi: the admitted imprints")
     ls.add_argument("--imprints-dir", type=Path, required=True)
     return ap
@@ -1490,6 +1581,8 @@ def main(argv: list[str] | None = None, *, clock=time.time) -> int:
             return _build(args, clock=clock)
         if args.command == "admit":
             return _admit(args)
+        if args.command == "use":
+            return _use(args)
         if args.command == "list":
             return _list(args)
     except PlanBusy as busy:

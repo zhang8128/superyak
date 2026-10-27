@@ -2072,3 +2072,77 @@ def roads_and_trails_by_hand(trails, db: Path, *, as_of: int, lanes=("work",)) -
         return sum(trails.roads_and_trails(conn, lane=lane, as_of=as_of * 10**6, counts=counts) for lane in lanes)
     finally:
         conn.close()
+
+
+# ---- Using an imprint (Task 38) ------------------------------------------------------------------------------------
+
+def _stub(code: str) -> list[str]:
+    """A ``trails_cmd`` that runs ``code`` with the argv ``use`` appends in ``sys.argv[1:]``."""
+    import sys
+
+    return [sys.executable, "-c", code]
+
+
+STUB_OK = _stub("import json, sys; print(json.dumps({'ok': True}))")
+STUB_EXIT_3 = _stub("import sys; sys.exit(3)")
+STUB_EXIT_1 = _stub("import sys; print('{}'); sys.exit(1)")
+STUB_KILLED = _stub("import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
+STUB_PRINTS_ENV = _stub("import json, os; print(json.dumps({k: os.environ.get(k) for k in ('SQLITE_TMPDIR', 'TMPDIR')}"
+                        " | {'exists': os.path.isdir(os.environ['TMPDIR'])}))")
+STUB_PRINTS_ARGV = _stub("import json, sys; print(json.dumps(sys.argv[1:]))")
+
+
+def admitted_imprint(tmp_path: Path, *, lanes=("work",)) -> tuple[Path, str]:
+    """``(root, imprint id)`` of a handed-off imprint with no use allowed yet."""
+    return handed_off(tmp_path, built_package(tmp_path, lanes=lanes), route=False, valid_until=FAR)
+
+
+def with_allow(tmp_path: Path, *, lanes=("work",), fault: str | None = None) -> tuple[Path, str, str]:
+    """``(root, imprint id, use id)``: an imprint and the allow file the station writes for one use (Task 37).
+    ``fault`` is ``tombstone``, ``ended`` (the allow file's end has passed) or ``no_allow_file``."""
+    import json
+    import uuid
+
+    root, imprint_id = admitted_imprint(tmp_path, lanes=lanes)
+    use_id = str(uuid.uuid4())
+    uses = root / f"{imprint_id}.state" / "uses"
+    uses.mkdir(mode=0o700)
+    if fault != "no_allow_file":
+        doc = {"kind": "imprint-use-allow", "use_id": use_id, "instance_id": imprint_id, "use": "trail-evaluation",
+               "actions": ["read"], "purpose": "trail-evaluation", "decided_at": 1_761_415_500,
+               "valid_until": 1 if fault == "ended" else FAR}
+        (uses / f"{use_id}.allow.json").write_text(json.dumps(doc))
+    if fault == "tombstone":
+        (root / "tombstones").mkdir()
+        (root / "tombstones" / f"{imprint_id}.json").write_text("{}")
+    return root, imprint_id, use_id
+
+
+def uses_dir(root: Path, imprint_id: str, use_id: str) -> Path:
+    return Path(root) / f"{imprint_id}.state" / "uses" / use_id
+
+
+def uses_dirs(root: Path, imprint_id: str) -> list[Path]:
+    uses = Path(root) / f"{imprint_id}.state" / "uses"
+    return [p for p in uses.iterdir() if p.is_dir()] if uses.is_dir() else []
+
+
+def result_of(root: Path, imprint_id: str, use_id: str) -> str:
+    return (uses_dir(root, imprint_id, use_id) / "result.json").read_text()
+
+
+def report_exists(root: Path, imprint_id: str, use_id: str) -> bool:
+    return (uses_dir(root, imprint_id, use_id) / "report.json").exists()
+
+
+def recording_replace(order: list):
+    """An ``os.replace`` that records ``(src, dst)`` in ``order`` and then replaces."""
+    import os
+
+    real = os.replace
+
+    def replace(src, dst, *args, **kwargs):
+        order.append((src, dst))
+        return real(src, dst, *args, **kwargs)
+
+    return replace
