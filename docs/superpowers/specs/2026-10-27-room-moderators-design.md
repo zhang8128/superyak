@@ -200,7 +200,8 @@ owner can remove a remote contact.
 - **M19. Appointments.** Making a moderate grant posts one notice in the room it covers, for example "Andy made Rio
   Grande a moderator of this room, to add and remove members, until 2026-11-26 14:00 UTC." Its client id is
   `moderator-<grant id>`. Revoking one through G10 or `make station-unmoderate` posts "Andy ended Rio Grande's
-  moderation of this room." with client id `moderator-<grant id>-revoked`. A removal's own revocation is told in the
+  moderation of this room." with client id `moderator-<grant id>-revoked`. Both notices pass names through
+  `safe_line`, as M14's do, so neither mentions anyone or crosses the bridge (M21). A removal's own revocation is told in the
   removal's notice (M14). An expiry posts nothing, and the room's moderators list stops showing the holder. This is
   the fourth caller of `_post_as_system`.
 - **M20. The record.**
@@ -381,8 +382,9 @@ G13), the tools, the make targets and CLAUDE.md. Wormhole doesn't change. It bui
   (409).
 - **T9.** The owner's add and remove, `station-bridge`, `station-unbridge` and `station-add-ship` each post M14's
   notice without the moderator clause. `station-unbridge` still works with a damaged identity.
-- **T10.** In a bridged room the notice and the act's result say so. Wormhole writes no memo for a `member-` notice,
-  or for any other system-author post.
+- **T10.** In a bridged room the notice and the act's result say so. Wormhole writes no memo for a `member-` or
+  `moderator-` notice, or for any other system-author post, including an M14 and an M19 notice that name an account
+  whose display name is `@<persona>`; each stores `(at)<persona>`.
 - **T11.** `GET /api/chats` shows `moderating` only to the holder, and `GET /api/chats/{key}` shows `moderators` by
   name. The grant view shows `changes` to the issuer only. A restore copies `member_changes`, so `budget_left`
   doesn't reset.
