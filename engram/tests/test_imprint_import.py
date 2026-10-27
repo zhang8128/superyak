@@ -116,4 +116,4 @@ def test_the_uses_command_shows_the_copy_first_and_imports_nothing_it_does_not_h
     assert json.loads(capsys.readouterr().out)["copies"][0]["imprint_id"] == IMPRINT_ID
     monkeypatch.setenv("SUPERYAK_HOME", str(tmp_path / "nothing-here"))
     assert permission_cli.main(["uses", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["copies"] == []
+    assert json.loads(capsys.readouterr().out).get("copies") is None

@@ -698,7 +698,7 @@ def _uses(a) -> int:
                 uses.close()
     counts, rows = (shown.counts, shown.rows) if shown else ({"total": 0, "local": 0, "imported": 0}, [])
     if a.json:
-        print(json.dumps({"counts": counts, "rows": rows, "copies": copies}, sort_keys=True))
+        print(json.dumps({"counts": counts, "rows": rows, **({"copies": copies} if copies else {})}, sort_keys=True))
         return 0
     for c in copies:
         print(_clean(c["line"]))
