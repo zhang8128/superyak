@@ -169,3 +169,32 @@ def test_perform_holds_one_state(tmp_path, monkeypatch):
     do(led, "person:ph-steward", "allow", layer=PH, selector=sel("read"), valid_from=NOW, valid_until=None)
     do(led, ANDY, "collect", collection="collection:andy/c", refs=["mem:S/episode/m2"])
     assert worst and max(worst) <= 1, worst
+
+
+def test_a_collect_reads_the_collections_members_once(tmp_path, monkeypatch):
+    """U24 (Task 31): `_prep_collect` took the collection's members again for every object it named, so a collect
+    of 10,000 into a collection of 90,000 did 900 million membership tests."""
+    led = Ledger.create(tmp_path, "andy", now=NOW)
+    do(led, ANDY, "make-collection", collection="collection:andy/big")
+    refs = [f"mem:S/episode/m{i}" for i in range(300)]
+    do(led, ANDY, "collect", collection="collection:andy/big", objects=refs[:100])
+    calls = []
+    real = permission_ledger._members
+    monkeypatch.setattr(permission_ledger, "_members", lambda state, cid: calls.append(cid) or real(state, cid))
+    do(led, ANDY, "collect", collection="collection:andy/big", objects=refs[50:])
+    assert len(calls) <= 2, f"{len(calls)} reads of the members"
+    assert count(led, "collection_members") == 300
+    led.close()
+
+
+def test_an_uncollect_reads_the_collections_members_once(tmp_path, monkeypatch):
+    led = Ledger.create(tmp_path, "andy", now=NOW)
+    do(led, ANDY, "make-collection", collection="collection:andy/big")
+    refs = [f"mem:S/episode/m{i}" for i in range(300)]
+    do(led, ANDY, "collect", collection="collection:andy/big", objects=refs)
+    calls = []
+    real = permission_ledger._members
+    monkeypatch.setattr(permission_ledger, "_members", lambda state, cid: calls.append(cid) or real(state, cid))
+    do(led, ANDY, "uncollect", collection="collection:andy/big", objects=refs[:200])
+    assert len(calls) <= 2, f"{len(calls)} reads of the members"
+    led.close()

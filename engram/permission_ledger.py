@@ -1290,7 +1290,8 @@ def _prep_collect(state, actor, args):
     _bound_objects(objects)
     for o in objects:
         parse_object_ref(o)
-    new = [o for o in objects if o not in _members(state, cid)]
+    held = _members(state, cid)
+    new = [o for o in objects if o not in held]
     if not new:
         raise RuleError(_ACT, f"every one is already in {cid}")
     check_new_members(state, cid, len(new))
@@ -1335,8 +1336,9 @@ def _prep_uncollect(state, actor, args):
         raise RuleError(_ACT, f"{cid} is not a collection")
     objects = _texts(args, "refs" if "refs" in args else "objects", at_least=1)
     _bound_objects(objects)
+    held = _members(state, cid)
     for o in objects:
-        if o not in _members(state, cid):
+        if o not in held:
             raise RuleError(_ACT, f"{o} is not in {cid}")
     out = {"collection": cid, "objects": objects}
     if args.get("grant") is not None:
