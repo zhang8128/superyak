@@ -114,6 +114,25 @@ class Members:
                 raise Problem(400, ONE_MEMBER)
             return self._moderator_add(db, actor, room, grant, member_ids[0], False)
 
+    def ship_add_member(self, actor, key, member, grant_id=None):
+        """POST /api/ships/me/rooms/{key}/members: a ship moderator adds one member by username, in one transaction. A ship
+        never owns a person's room and check 1 refuses breakouts, so there is no owner branch."""
+        with self.transaction() as db:
+            room = self._act_room(db, actor, key, adding=True)
+            grant = self._acting_grant(db, actor, room['id'], 'add_member', grant_id)
+            return self._moderator_add(db, actor, room, grant, member, True)
+
+    def ship_remove_member(self, actor, key, member, grant_id=None):
+        """DELETE /api/ships/me/rooms/{key}/members/{member}: the username is read as people write it (ruling 17); an
+        unknown one stays the typed name and fails the chain test with the 404."""
+        typed = member.strip().removeprefix('@').lower()
+        with self.transaction() as db:
+            row = db.execute('SELECT id FROM users WHERE username=?', (typed,)).fetchone()
+            member_id = row['id'] if row else typed
+            room = self._act_room(db, actor, key, adding=False)
+            grant = self._acting_grant(db, actor, room['id'], 'remove_member', grant_id, self_removal=member_id == actor)
+            return self._moderator_remove(db, actor, room, grant, typed, member_id)
+
     def _owner_removed(self, db, room_id, member_id, owner_id):
         """M7: the owner (not a moderator) removed the member and nothing has changed them since: their latest row in this
         room's chain is a removal with no grant by the owner (or by no one)."""

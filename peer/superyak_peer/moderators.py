@@ -109,6 +109,30 @@ class Moderators:
             reason = why if not valid else NO_ACTION.format(short=grant['id'][:4], verb='add' if action == 'add_member' else 'remove')
         raise Problem(403, reason)
 
+    def _moderating(self, db, actor):
+        """Ruling 14: {room: {grant, actions, budget_left}} for the actor's own moderate grants, the oldest covering grant
+        per room that is valid apart from its budget, so budget_left can read 0."""
+        found, now = {}, self.clock()
+        for g in db.execute('SELECT * FROM grants WHERE grantee_id=? AND revoked IS NULL AND expires>? ORDER BY created, id',
+                            (actor, now)).fetchall():
+            room = self._covered_room(db, g) if is_moderate(g) else None
+            if room is None or room in found or not self._grant_validity(db, g, budget=False)[0]:
+                continue
+            found[room] = {'grant': f'#{g["id"][:4]}', 'actions': json.loads(g['actions']),
+                           'budget_left': max(0, g['budget'] - self._budget_used(db, g['id'], now))}
+        return found
+
+    def _grant_changes(self, db, actor, grant):
+        """M20: the issuer's act log for a grant, newest first, at most 50."""
+        changes = []
+        for r in db.execute('SELECT member_id, change, room_id, created FROM member_changes WHERE grant_id=? '
+                            'ORDER BY created DESC, rowid DESC LIMIT 50', (grant['id'],)).fetchall():
+            user = db.execute('SELECT name FROM users WHERE id=?', (r['member_id'],)).fetchone()
+            name = user['name'] if user else self._account_name(db, r['member_id'])
+            changes.append({'member': {'id': r['member_id'], 'name': name}, 'change': r['change'],
+                            'room': {'id': r['room_id'], 'title': self._room_label(db, actor, r['room_id'])}, 'created': r['created']})
+        return changes
+
     def _moderators(self, db, room_id):
         """Ruling 5: the room's moderators, one entry per covering grant that is unrevoked, unexpired and moderate, whose
         holder is in the room: {id, name, username, grant}, by name (case-folded), then the grant's creation."""

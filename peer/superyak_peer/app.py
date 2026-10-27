@@ -308,6 +308,15 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = ship_member(request)['id'], await body(request)  # ship briefs S3: a ship key only; a person gets 403
         return store.save_ship_brief(who, key, data.get('body'), data.get('revision'))
 
+    @app.post('/api/ships/me/rooms/{key}/members', status_code=201)
+    async def ship_member_add(key: str, request: Request):
+        who, data = ship_member(request)['id'], await body(request)  # room moderators §6: a ship key only
+        return store.ship_add_member(who, key, data.get('member'), data.get('grant_id'))
+
+    @app.delete('/api/ships/me/rooms/{key}/members/{member}')
+    def ship_member_remove(key: str, member: str, request: Request, grant_id: str | None = None):
+        return store.ship_remove_member(ship_member(request)['id'], key, member, grant_id)
+
     @app.post('/api/ships/me/tickets/{key}/finish')
     def ticket_finish(key: str, request: Request):
         return store.finish_ticket(ship_member(request)['id'], key, app.state.federation.identity.peer_id)

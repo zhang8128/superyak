@@ -255,6 +255,8 @@ class Grants:
                 'made_via': origin['made_via'] if origin else None}
         if not valid:
             view['reason'] = reason
+        if is_moderate(grant) and actor == grant['issuer_id']:
+            view['changes'] = self._grant_changes(db, actor, grant)
         return view
 
     def list_grants(self, actor):

@@ -37,6 +37,10 @@ class Chats:
     def list_rooms(self, actor):
         with self.transaction() as db:
             rooms = [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=?', (actor,)).fetchall()]
+            moderating = self._moderating(db, actor)
+            for room in rooms:
+                if room['id'] in moderating:
+                    room['moderating'] = moderating[room['id']]
         rooms = [room for room in rooms if not self._off_the_lists(room)]  # breakouts S12: still readable by id
         return sorted(rooms + self.remote_rooms(actor), key=lambda room: (-room['last_activity'], room['id']))
 
@@ -64,6 +68,7 @@ class Chats:
             if any(m.get('author_id') == system for m in room['messages']):
                 room['system_author'] = self.system_author_public(db)
             room['claims'] = self._active_claims(db, key)
+            room['moderators'] = [{'id': m['id'], 'name': m['name']} for m in self._moderators(db, key)]
             return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):

@@ -247,3 +247,92 @@ def test_a_removal_under_an_add_only_grant_is_refused_and_writes_nothing(city):
     refused = drop(jenn, c.room, c.doctor['id'])
     assert (refused.status_code, refused.json()['error']) == (403, f"Grant #{grant[:4]} doesn't let you remove members")
     assert snapshot(c.store) == before
+
+
+from test_instructions import ship_client
+
+
+def test_a_ship_moderator_adds_and_removes_by_username_through_its_own_routes(city):
+    c = city
+    grant = moderate(c.store, c.andy, c.rio, c.room)
+    rio = ship_client(c.app, c.rio_key)
+    added = rio.post(f'/api/ships/me/rooms/{c.room}/members', json={'member': 'tardis'})
+    assert added.status_code == 201, added.text
+    new = added.json()
+    assert (new['added'][0]['username'], new['short'], new['owner_id']) == ('tardis', new['id'][:6], c.andy['id'])
+    assert notices(c.store, new['id'], 'member-')[0][1] == f'Rio Grande, a moderator, added Tardis to this room. It continues room {c.room[:6]}.'
+    removed = rio.delete(f'/api/ships/me/rooms/{new["id"]}/members/tardis')
+    assert removed.status_code == 200 and removed.json()['removed']['username'] == 'tardis'
+    assert [r['grant_id'] for r in rows(c.store)] == [grant, grant]
+
+
+def test_the_ship_route_reads_the_member_as_people_write_it(city):
+    """Review Focus 1 and 2."""
+    c = city
+    moderate(c.store, c.andy, c.rio, c.room)
+    rio = ship_client(c.app, c.rio_key)
+    added = rio.post(f'/api/ships/me/rooms/{c.room}/members', json={'member': ' @Tardis '})
+    assert added.status_code == 201 and added.json()['added'][0]['username'] == 'tardis'
+    stale = rio.post(f'/api/ships/me/rooms/{c.room}/members', json={'member': 'doctor'})
+    assert (stale.status_code, stale.json()['error']) == (409, 'This room was replaced by a newer linked room; add members there')
+    for blank in ('  ', None, 7):
+        refused = rio.post(f'/api/ships/me/rooms/{added.json()["id"]}/members', json={'member': blank})
+        assert (refused.status_code, refused.json()['error']) == (400, 'Name the member to add')
+
+
+def test_each_member_route_takes_one_kind_of_caller(city):
+    c = city
+    jenn, rio = login(c.app, 'jenn'), ship_client(c.app, c.rio_key)
+    for answer in (jenn.post(f'/api/ships/me/rooms/{c.room}/members', json={'member': 'tardis'}),
+                   jenn.delete(f'/api/ships/me/rooms/{c.room}/members/doctor')):
+        assert (answer.status_code, answer.json()['error']) == (403, 'Only a ship key can use this route')
+    for answer in (add(rio, c.room, c.tardis['id']), drop(rio, c.room, c.doctor['id'])):
+        assert (answer.status_code, answer.json()['error']) == (403, 'Ship keys cannot use this route')
+    refused = rio.post(f'/api/ships/me/rooms/{c.room}/members', json={'member': 'tardis'})
+    assert (refused.status_code, refused.json()['error']) == (403, NOT_A_MODERATOR)
+
+
+def test_moderating_shows_only_the_callers_own_grant(city):
+    c = city
+    grant = moderate(c.store, c.andy, c.jenn, c.room, actions=['add_member'], budget=2)
+    charge(c.store, grant, c.room, 5, 6)  # spent: still shown, with 0 left (ruling 14)
+
+    def mark(client):
+        return {r['id']: r.get('moderating') for r in client.get('/api/chats').json()}[c.room]
+    assert mark(login(c.app, 'jenn')) == {'grant': f'#{grant[:4]}', 'actions': ['add_member'], 'budget_left': 0}
+    rio = ship_client(c.app, c.rio_key)
+    assert mark(login(c.app, 'doctor')) is None and mark(login(c.app, 'andy')) is None and mark(rio) is None
+    mine = moderate(c.store, c.andy, c.rio, c.room)
+    assert mark(rio) == {'grant': f'#{mine[:4]}', 'actions': ['add_member', 'remove_member'], 'budget_left': 10}
+
+
+def test_the_room_lists_its_moderators_by_name_only(city):
+    c = city
+    jenn_grant = moderate(c.store, c.andy, c.jenn, c.room)
+    moderate(c.store, c.andy, c.rio, c.room, hours=1)
+    doctor = login(c.app, 'doctor')
+
+    def listed():
+        return doctor.get(f'/api/chats/{c.room}').json()['moderators']
+    assert listed() == [{'id': c.jenn['id'], 'name': 'Jenn'}, {'id': c.rio['id'], 'name': 'Rio Grande'}]
+    c.clock[0] += 3600
+    assert listed() == [{'id': c.jenn['id'], 'name': 'Jenn'}]
+    c.store.revoke_grant(c.andy['id'], jenn_grant)
+    assert listed() == []
+
+
+def test_the_grant_view_shows_its_changes_to_the_issuer_only(city):
+    c = city
+    grant = moderate(c.store, c.andy, c.jenn, c.room)
+    jenn, andy = login(c.app, 'jenn'), login(c.app, 'andy')
+    new = add(jenn, c.room, c.tardis['id']).json()['id']
+    assert drop(jenn, new, c.tardis['id']).status_code == 200
+
+    def view(client):
+        return next(g for g in client.get('/api/grants').json() if g['id'] == grant)
+    changes = view(andy)['changes']
+    assert [(ch['member']['name'], ch['change'], ch['room']['id'], ch['room']['title']) for ch in changes] == [
+        ('Tardis', 'remove', new, 'Superyak: city of AI'), ('Tardis', 'add', c.room, 'Superyak: city of AI')]
+    assert all(set(ch) == {'member', 'change', 'room', 'created'} for ch in changes) and 'changes' not in view(jenn)
+    charge(c.store, grant, c.room, *range(10, 70))
+    assert len(view(andy)['changes']) == 50
