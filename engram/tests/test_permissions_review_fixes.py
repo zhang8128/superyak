@@ -502,3 +502,47 @@ def test_m2_a_back_dated_deny_written_past_the_daemons_clock_ends_the_cached_all
     assert d.cache_horizon() == STEPPED            # so the entry ends at the anchor
     d.clock_to(STEPPED + 60)
     assert M1_ID not in d.recall_ids()             # no ledger write since: the horizon re-decides it
+
+
+# ---------------------------------------------------------------- the fix wave's concern 3: a proposal is decided once,
+# and a person or place is retired once (M1's fix for the other rows a second writer can find already changed)
+
+def _proposal_records(root, pid):
+    return [r for r in Ledger.open(root).state().records.values() if r.proposal_id == pid]
+
+
+@pytest.mark.parametrize("first, second", [("sign", "sign"), ("decline", "sign"), ("sign", "decline"),
+                                           ("decline", "decline")])
+def test_concern3_a_proposal_one_writer_decided_is_not_decided_again_by_another(tmp_path, first, second):
+    led = e1_ledger_through_andys_side(tmp_path)
+    pid = _propose(led, RIO, 0)
+    other = Ledger.open(tmp_path)
+    _another_writer_goes_first(led, lambda: do(other, ANDY, first, now=WHEN, proposal=pid))
+    with pytest.raises(RuleError, match="matched no row"):
+        do(led, ANDY, second, now=WHEN, proposal=pid)
+    assert Ledger.open(tmp_path).state().proposals[pid].status == ("signed" if first == "sign" else "declined")
+    assert len(_proposal_records(tmp_path, pid)) == (1 if first == "sign" else 0)      # its act ran at most once
+    assert Ledger.open(tmp_path).verify() is None
+
+
+def test_concern3_a_person_one_writer_retired_is_not_retired_again_by_another(tmp_path):
+    led = county_ledger(tmp_path)
+    other = Ledger.open(tmp_path)
+    _another_writer_goes_first(led, lambda: do(other, ANDY, "retire-person", now="2026-11-05", person="person:amy"))
+    with pytest.raises(RuleError, match="matched no row"):
+        do(led, ANDY, "retire-person", now="2026-11-06", person="person:amy")
+    s = Ledger.open(tmp_path).state()
+    first = s.persons["person:amy"].retired_seq
+    assert s.seq_at[first] == T("2026-11-05") and s.places[s.persons["person:amy"].home].retired_seq == first
+
+
+def test_concern3_a_place_one_writer_retired_is_not_retired_again_by_another(tmp_path):
+    from tests.permissions_support import CLINIC_3
+    led = county_ledger(tmp_path)
+    other = Ledger.open(tmp_path)
+    _another_writer_goes_first(led, lambda: do(other, "person:ph-steward", "retire-place", now="2026-11-05",
+                                               place=CLINIC_3))
+    with pytest.raises(RuleError, match="matched no row"):
+        do(led, "person:ph-steward", "retire-place", now="2026-11-06", place=CLINIC_3)
+    s = Ledger.open(tmp_path).state()
+    assert s.seq_at[s.places[CLINIC_3].retired_seq] == T("2026-11-05")

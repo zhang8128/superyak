@@ -855,8 +855,9 @@ class Ledger:
         if act.kind == "decline":
             if actor not in had and actor != p.for_person and not (needs and _covers(state, needs, {actor})):
                 raise RuleError(_ACT, f"{actor} has no say in {pid}")
-            seq = self._append("proposal-decline", pid, actor, channel, {"update": [{
-                "table": "proposals", "where": {"id": pid}, "set": {"status": "declined", "decided_seq": "@seq"}}]},
+            seq = self._append("proposal-decline", pid, actor, channel, {"update": [{      # decided once (P 5.1)
+                "table": "proposals", "where": {"id": pid, "status": "pending"},
+                "set": {"status": "declined", "decided_seq": "@seq"}}]},
                 proposal_id=pid, at=now)
             return Outcome("done", pid, seq)
         if channel == "tool":
@@ -1213,9 +1214,10 @@ def _prep_retire_person(state, actor, args):
 
 
 def _make_retire_person(state, actor, args, auth, now):
-    person = args["person"]
-    return person, {"update": [_upd("persons", {"id": person}, retired_seq="@seq"),
-                               _upd("places", {"id": state.persons[person].home}, retired_seq="@seq")]}
+    person = args["person"]                     # a second retirement matches no row (P 5.1)
+    return person, {"update": [_upd("persons", {"id": person, "retired_seq": None}, retired_seq="@seq"),
+                               _upd("places", {"id": state.persons[person].home, "retired_seq": None},
+                                    retired_seq="@seq")]}
 
 
 # -- places
@@ -1310,7 +1312,8 @@ def _prep_retire_place(state, actor, args):
 
 
 def _make_retire_place(state, actor, args, auth, now):
-    return args["place"], {"update": [_upd("places", {"id": args["place"]}, retired_seq="@seq")]}
+    return args["place"], {"update": [_upd("places", {"id": args["place"], "retired_seq": None},  # once (P 5.1)
+                                           retired_seq="@seq")]}
 
 
 # -- agents
@@ -1573,8 +1576,10 @@ def _stamp(body: Mapping, channel: str, proposal_id: str | None) -> dict:
 
 
 def _signed(body: Mapping, pid: str) -> dict:
-    return {**body, "update": [*body.get("update", ()), _upd("proposals", {"id": pid}, status="signed",
-                                                             decided_seq="@seq")]}
+    """`body` and the proposal marked signed. A proposal another writer decided first matches no row, so its act
+    is not run twice (P 5.1)."""
+    return {**body, "update": [*body.get("update", ()), _upd("proposals", {"id": pid, "status": "pending"},
+                                                             status="signed", decided_seq="@seq")]}
 
 
 # a record edit names its kind by the record's effect: P 7.1's rows for an allow and for a deny
