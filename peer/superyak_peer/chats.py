@@ -108,21 +108,6 @@ class Chats:
                     sent['deferred_here'] = waiting
             return sent
 
-    def remove_participant(self, actor, key, user_id):
-        text(user_id, 'user ID', 100)
-        with self.transaction() as db:
-            room = self._room(db, actor, key)
-            if room['owner_id'] != actor:
-                raise Problem(403, 'Room owner required')
-            if user_id == actor:
-                raise Problem(400, 'Cannot remove the room owner')
-            if user_id in room['member_ids']:
-                db.execute('DELETE FROM room_members WHERE room_id=? AND user_id=?', (key, user_id))
-                db.execute('DELETE FROM remote_room_members WHERE room_id=? AND contact_id=?', (key, user_id))
-                db.execute('UPDATE rooms SET epoch=epoch+1 WHERE id=?', (key,))
-                self.emit(db, 'chat.membership', key, room['epoch'] + 1, {'removed_user_id': user_id})
-            return self._room(db, actor, key)
-
     def can_deliver_message(self, message_id, recipient_id, epoch):
         """Trusted transport hook: rejects messages queued under obsolete room epochs."""
         with self.transaction() as db:

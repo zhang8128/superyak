@@ -429,7 +429,7 @@ allows someone else to retrieve bytes; withdrawal immediately closes those route
 | GET `/api/chats/{id}` | — | Room plus `messages`, `members`, `brief` and `brief_revision` |
 | POST `/api/chats/{id}/messages` | `{client_message_id,body}` | Message, 201 |
 | POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null}` | New linked room plus `short`, `added` (`{id,username,name}` each), `brief_carried`, `board_carried`, `bridged`, 201; the room's owner (a moderator's path comes with room moderators); 404 for a non-member or a breakout, 409 `This room was replaced by a newer linked room; add members there` before 403 `Only the room's owner or one of its moderators can change its members`, 409 `Everyone named is already a member of room {short}; nothing changed` when no one named is new |
-| DELETE `/api/chats/{id}/participants/{user_id}` | — | Updated room; owner only |
+| DELETE `/api/chats/{id}/participants/{user_id}` | — | The room's view plus `removed` (`{id,username,name}`), `earlier_rooms`, `claims_released`, `grant_revoked`, `bridged`; the room's owner (a moderator's path comes with room moderators); optional `?grant_id=`; 404 for a non-member or a breakout, 409 `This room was replaced by a newer linked room; remove members there` before 403 `Only the room's owner or one of its moderators can change its members`, 400 `Cannot remove the room owner` for the owner himself, 404 `{x} is not a member of this room` for someone in no room of the chain |
 | PUT `/api/chats/{id}/brief` | `{body,revision}` | The brief, or null once removed; owner only (a person, with CSRF) |
 | GET `/api/chats/{id}/brief/revisions` | — | The brief's history, newest first; the room's owner only |
 
@@ -452,6 +452,15 @@ old and added participants; old messages stay in the old room; the new room hold
 may refer to an inaccessible room; it grants no ability to fetch it. A room that a linked room already replaced takes no
 more participants: 409 `This room was replaced by a newer linked room; add members there`, after the 404 for a non-member and before
 the 403, so a room's chain never forks (work board 8.4).
+
+**Removing a member (M8)** is one transaction for every path (the participants route and `make station-unbridge`): the member
+leaves the room and every earlier room of its chain that the same owner owns and they are still in, each room's epoch
+rising by one with a `chat.membership` event; each of their unrevoked moderate grants covering the room is revoked
+(`removed from the room`) and signed; their deferrals in those rooms are dropped; their active claims there are released
+silently (no claim line); one `remove` row goes to `member_changes`; and the current room gets one station notice,
+`member-<log row id>`, naming who removed whom and from where (earlier rooms get none), with the revoked grant and the
+released claims mentioned, and a note when the room is still bridged to the lattice. A removal is refused with 409 in a
+replaced room (the member is removed in the current one), so the chain never forks.
 
 Message: `{id,room_id,author_id,client_message_id,body,epoch,created,source,reply_to}`. A post may
 name the message it answers with `reply_to`: a message in the same local room (a local post or a

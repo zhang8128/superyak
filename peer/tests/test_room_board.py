@@ -729,8 +729,8 @@ def test_claims_mark_board_items(env):
 def test_adding_members_carries_open_items_and_leaves_the_record(env):
     """5.x: the new room holds the open items with their ids, keys, posters, created times and links; add_participants
     answers board_carried and the carry posts nothing. A taken item stays taken there by the same holder until the same
-    expiry, through the same claim row; the old room holds no active claim on its key, and the holder's count is
-    unchanged. Done and dropped items stay as the record. A claim whose holder isn't in the new room stays behind."""
+    expiry, through the same claim row; the old room holds no active claim on its key (Defiant's removal released its
+    `build:left` claim, M8), and the holder's count is unchanged. Done and dropped items stay as the record. A claim whose holder isn't in the new room stays behind."""
     s = Station(env)
     serenity, rio, defiant = s.ship('serenity'), s.ship('rio-grande'), s.ship('defiant')
     for key in ('build:waiting', 'build:taken', 'build:done', 'build:dropped', 'build:left'):
@@ -740,7 +740,7 @@ def test_adding_members_carries_open_items_and_leaves_the_record(env):
     assert claim(rio, s.room, 'build:taken', note='on it', minutes=60).status_code == 201
     assert done(serenity, s.room, 'build:done').status_code == 200 and drop(serenity, s.room, 'build:dropped').status_code == 200
     assert claim(defiant, s.room, 'build:left').status_code == 201
-    assert s.andy.delete(f'/api/chats/{s.room}/participants/{s.id("defiant")}').status_code == 200
+    assert s.andy.delete(f'/api/chats/{s.room}/participants/{s.id("defiant")}').status_code == 200  # M8 releases its `build:left` claim
     was = {i['key']: i for i in board(s.andy, s.room).json()}
     rio_holds = s.rows('SELECT count(*) FROM claims WHERE holder_id=? AND released IS NULL', s.id('rio-grande'))
     messages = s.rows('SELECT count(*) FROM messages')
@@ -759,7 +759,7 @@ def test_adding_members_carries_open_items_and_leaves_the_record(env):
     assert (taken['id'], taken['room_id'], taken['holder_id'], taken['note'], taken['expires']) == (
         held['id'], new, s.id('rio-grande'), 'on it', held['expires'])
     assert s.rows('SELECT count(*) FROM claims WHERE holder_id=? AND released IS NULL', s.id('rio-grande')) == rio_holds
-    assert [c['key'] for c in claims(s.andy, s.room)] == ['build:left']
+    assert claims(s.andy, s.room) == []
     assert {i['key']: i['state'] for i in board(s.andy, s.room).json()} == {'build:done': 'done', 'build:dropped': 'dropped'}
 
 
@@ -770,7 +770,8 @@ def test_a_holder_removed_and_added_back_in_the_add_keeps_its_claim(env):
     s = Station(env)
     insert_item(s, s.room, 'build:back')
     assert claim(s.ship('defiant'), s.room, 'build:back').status_code == 201
-    assert s.andy.delete(f'/api/chats/{s.room}/participants/{s.id("defiant")}').status_code == 200
+    with s.store.transaction() as db:  # a removal made before merge 1, which released nothing and left the earlier rooms
+        db.execute('DELETE FROM room_members WHERE room_id=? AND user_id=?', (s.room, s.id('defiant')))
     added = s.andy.post(f'/api/chats/{s.room}/participants', json={'member_ids': [s.users[3]['id'], s.id('defiant')]})
     assert added.status_code == 201, added.text
     moved = board(s.andy, added.json()['id']).json()[0]['claim']

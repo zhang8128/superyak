@@ -231,20 +231,6 @@ class Ships:
                 rooms.append({'id': room['id'], 'title': room['title'], 'members': members, 'bridged': bridged})
             return rooms
 
-    def _earlier_bridged(self, db, actor, room, wormhole):
-        """Rooms earlier in this room's linked chain, owned by the same person, that still have the wormhole ship:
-        a replaced room keeps its members, so once the current room loses Wormhole the bridge would take it as current."""
-        found, seen, key = [], set(), room['linked_room_id']
-        while key and key not in seen:
-            seen.add(key)
-            row = db.execute('SELECT owner_id,linked_room_id FROM rooms WHERE id=?', (key,)).fetchone()
-            if row is None:
-                break
-            if row['owner_id'] == actor and db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (key, wormhole)).fetchone():
-                found.append(key)
-            key = row['linked_room_id']
-        return found
-
     def _owned_room(self, db, actor, prefix):
         """The current room this person owns that a short id (from short_id) names, and the brief revision a member
         add carries: adding members is the same room continuing, so its brief comes along (None when it has none)."""
@@ -281,16 +267,13 @@ class Ships:
             if wormhole is None:
                 raise Problem(404, 'There is no wormhole ship on the station; create it first (create-ship --username wormhole)')
             room, carry = self._owned_room(db, actor, prefix)
-            earlier = [] if bridge else self._earlier_bridged(db, actor, room, wormhole)
-            if (wormhole in room['member_ids']) == bridge and not earlier:
-                return room, False
             if bridge:  # the read and the add share this transaction
+                if wormhole in room['member_ids']:
+                    return room, False
                 return self._station_add(db, actor, room, wormhole, carry, 'bridging', 'station-bridge'), True
-        for key in earlier:  # the earlier rooms first: if this stops halfway, the current room still shows bridged
-            self.remove_participant(actor, key, wormhole)
-        if wormhole in room['member_ids']:
-            room = self.remove_participant(actor, room['id'], wormhole)
-        return room, True
+            if wormhole not in room['member_ids'] and not self._earlier_with(db, actor, room, wormhole):
+                return room, False
+            return self._remove_member(db, room, wormhole, actor), True  # the one removal: the whole chain, announced
 
     def station_add_ship(self, username, prefix, ship):
         """Trusted local operator only: add one of the owner's own ships to a current room they own, named by a short

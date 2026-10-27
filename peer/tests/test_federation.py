@@ -328,7 +328,7 @@ def test_received_room_withdrawal_cancels_reply_atomically(two_peers,prior_statu
     assert restarted.sync_once(send=must_not_send)['pending']==0
     with pytest.raises(Obsolete):
         restarted._prepare(key)
-    assert not a[0].get_room(a[1],room['id'])['messages']
+    assert [m['client_message_id'].startswith('member-') for m in a[0].get_room(a[1],room['id'])['messages']]==[True]  # only the removal's notice
 
 
 def test_withdrawal_during_reply_ack_cannot_restore_canceled_status(two_peers):

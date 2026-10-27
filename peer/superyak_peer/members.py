@@ -2,13 +2,24 @@
 transaction: the checks, the new linked room, each member's row in the act log (`member_changes`) and the one notice
 the system author posts in the new room. The owner's routes (the participants route, make station-bridge and
 make station-add-ship) call `_add_members`; a moderator's path joins `add_participants` in a later task."""
-from .common import REPLACED_ADD, REPLACED_ROOMS, Problem, ids, uid
+from .common import REPLACED_ADD, REPLACED_REMOVE, REPLACED_ROOMS, Problem, ids, text, uid
+from .grants import is_moderate
 from .ships import safe_line
 
 NOT_A_MODERATOR = "Only the room's owner or one of its moderators can change its members"
 NO_ONE_NEW = 'Everyone named is already a member of room {short}; nothing changed'
 ADDED = '{by} added {names} to this room. It continues room {old}.'
+REMOVED = '{by} removed {name} from {where}.'
+GRANT_GONE = "{name}'s moderate grant here is revoked."
+NOT_A_MEMBER = '{x} is not a member of this room'
 BRIDGED_NOTE = " This room is bridged to Stanley's aDNA lattice: posts that mention a lattice persona cross to it."
+
+
+def where(here, earlier):
+    """REMOVED's {where}: this room, the rooms before it, or both."""
+    if here:
+        return 'this room' + (' and the room before it' if earlier == 1 else f' and the {earlier} rooms before it' if earlier else '')
+    return 'the room before this one' if earlier == 1 else f'the {earlier} rooms before this one'
 
 
 def joined(names):
@@ -44,7 +55,7 @@ class Members:
         if self._breakout(db, key) is not None:
             raise Problem(404, 'Not found')
         if db.execute(f'SELECT 1 WHERE ? IN ({REPLACED_ROOMS})', (key,)).fetchone():
-            raise Problem(409, REPLACED_ADD)  # removing there is Task 4's REPLACED_REMOVE
+            raise Problem(409, REPLACED_ADD if adding else REPLACED_REMOVE)
         return room
 
     def _add_members(self, db, owner_id, room, member_ids, carry, actor_id, grant_id=None):
@@ -87,3 +98,75 @@ class Members:
             if room['owner_id'] == actor:
                 return self._add_members(db, actor, room, member_ids, carry_brief, actor)
             raise Problem(403, NOT_A_MODERATOR)  # Task 5 puts the moderator's path here
+
+    def _earlier_with(self, db, owner_id, room, member_id):
+        """Rooms earlier in this room's linked chain, owned by owner_id, that still have the member: a replaced room keeps
+        its members, so a removal that left them there would let them back in once the current room is current again."""
+        found, seen, key = [], set(), room['linked_room_id']
+        while key and key not in seen:
+            seen.add(key)
+            row = db.execute('SELECT owner_id,linked_room_id FROM rooms WHERE id=?', (key,)).fetchone()
+            if row is None:
+                break
+            if row['owner_id'] == owner_id and (
+                    db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (key, member_id)).fetchone()
+                    or db.execute('SELECT 1 FROM remote_room_members WHERE room_id=? AND contact_id=?', (key, member_id)).fetchone()):
+                found.append(key)
+            key = row['linked_room_id']
+        return found
+
+    def _remove_member(self, db, room, member_id, actor_id, grant_id=None):
+        """M8, the one removal for every path, in the caller's transaction: the member leaves the room and every earlier
+        room of its chain they are still in (epoch up, membership event), their moderate grants for this room are
+        revoked and signed, their deferrals there are dropped and their claims released silently; one row in the act log
+        and one notice in the current room. Returns the owner's view plus removed, earlier_rooms, claims_released,
+        grant_revoked and bridged."""
+        key, now = room['id'], self.clock()
+        here = member_id in room['member_ids']
+        earlier = self._earlier_with(db, room['owner_id'], room, member_id)
+        places = ([key] if here else []) + earlier
+        marks = ','.join('?' * len(places))
+        for place in places:
+            db.execute('DELETE FROM room_members WHERE room_id=? AND user_id=?', (place, member_id))
+            db.execute('DELETE FROM remote_room_members WHERE room_id=? AND contact_id=?', (place, member_id))
+            db.execute('UPDATE rooms SET epoch=epoch+1 WHERE id=?', (place,))
+            self.emit(db, 'chat.membership', place, db.execute('SELECT epoch FROM rooms WHERE id=?', (place,)).fetchone()[0],
+                      {'removed_user_id': member_id})
+        gone = [g['id'] for g in db.execute('SELECT * FROM grants WHERE grantee_id=? AND revoked IS NULL', (member_id,)).fetchall()
+                if is_moderate(g) and self._covered_room(db, g) == key]
+        for grant in gone:
+            db.execute('UPDATE grants SET revoked=?, revoked_by=?, revoke_reason=? WHERE id=?',
+                       (now, actor_id, 'removed from the room', grant))
+            self._sign_revocation(db, grant)
+        db.execute(f'DELETE FROM deferrals WHERE ship_id=? AND message_id IN (SELECT id FROM messages WHERE room_id IN ({marks}))',
+                   (member_id, *places))
+        released = db.execute(f'UPDATE claims SET released=?, released_by=? WHERE holder_id=? AND room_id IN ({marks})'
+                              ' AND released IS NULL AND expires>?', (now, actor_id, member_id, *places, now)).rowcount
+        logged = self._record_change(db, 'remove', key, member_id, actor_id, grant_id, earlier_rooms=len(earlier), claims_released=released)
+        name = self._account_name(db, member_id)
+        by = self._account_name(db, actor_id) + (', a moderator,' if grant_id else '')
+        bridged = self._bridged(db, key)
+        said = REMOVED.format(by=by, name=name, where=where(here, len(earlier)))
+        if gone:
+            said += ' ' + GRANT_GONE.format(name=name)
+        if released:
+            said += ' ' + ('1 claim was released.' if released == 1 else f'{released} claims were released.')
+        self._post_as_system(db, key, f'member-{logged}', said + (BRIDGED_NOTE if bridged else ''))
+        user = db.execute('SELECT username,name FROM users WHERE id=?', (member_id,)).fetchone()
+        view = self._room(db, room['owner_id'], key)
+        view.update(removed={'id': member_id, 'username': user['username'] if user else None,
+                             'name': user['name'] if user else self._account_name(db, member_id)},
+                    earlier_rooms=len(earlier), claims_released=released, grant_revoked=bool(gone), bridged=bridged)
+        return view
+
+    def remove_participant(self, actor, key, user_id, grant_id=None):
+        text(user_id, 'user ID', 100)
+        with self.transaction() as db:
+            room = self._act_room(db, actor, key, adding=False)
+            if room['owner_id'] != actor:
+                raise Problem(403, NOT_A_MODERATOR)  # Task 6 puts the moderator's path here
+            if user_id == actor:
+                raise Problem(400, 'Cannot remove the room owner')
+            if user_id not in room['member_ids'] and not self._earlier_with(db, actor, room, user_id):
+                raise Problem(404, NOT_A_MEMBER.format(x=safe_line(user_id)))
+            return self._remove_member(db, room, user_id, actor)

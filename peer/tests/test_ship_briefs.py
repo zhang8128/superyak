@@ -303,7 +303,7 @@ def test_a_brief_notice_never_wakes_answers_or_federates(env, two_peers):
 
 
 def test_only_these_notices_are_written_by_the_system_author(env):
-    """R18: _post_as_system has exactly these callers: the deferral notice, the brief notice, the appointment, the end notice and a member add, and every message the
+    """R18: _post_as_system has exactly these callers: the deferral notice, the brief notice, the appointment, the end notice and a member add, a member removal, and every message the
     system author writes carries one of their client ids. The deferral's is notice-<ship id>-<mention id>, as before,
     so a retry across the deploy still finds its notice."""
     callers = set()
@@ -314,7 +314,7 @@ def test_only_these_notices_are_written_by_the_system_author(env):
                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == '_post_as_system':
                         callers.add((path.name, function.name))
     assert callers == {('tickets.py', '_post_notice'), ('briefs.py', '_write_brief'), ('moderators.py', '_make_moderate'),
-                       ('grants.py', '_revoke'), ('members.py', '_add_members')}
+                       ('grants.py', '_revoke'), ('members.py', '_add_members'), ('members.py', '_remove_member')}
     app, clients, users, clock = env
     store = app.state.store
     ship, key = docked(store, users[0]['id'], 'serenity')

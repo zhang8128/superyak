@@ -284,11 +284,22 @@ def test_unbridging_also_takes_wormhole_out_of_the_earlier_rooms_it_replaced(roo
 def test_unbridging_cleans_earlier_rooms_even_when_wormhole_already_left_the_current_one(rooms, capsys):
     store, andy, doctor, wormhole, gamma = rooms
     bridged, later = bridged_twice(store, andy, gamma, capsys)
-    store.remove_participant(andy['id'], later['id'], wormhole['id'])  # removed in the browser, not by station-unbridge
+    with store.transaction() as db:  # a removal made before merge 1, which left the earlier room
+        db.execute('DELETE FROM room_members WHERE room_id=? AND user_id=?', (later['id'], wormhole['id']))
     assert [r['id'] for r in store.list_rooms(wormhole['id'])] == [bridged['id']]  # the bridge would take it as current
     assert 'Unbridged' in run(capsys, store, 'station-unbridge', '--id', later['id'][:6], '--as', 'andy')
     assert store.list_rooms(wormhole['id']) == []
+    with store.transaction() as db:
+        assert db.execute('SELECT body FROM messages WHERE room_id=? AND client_message_id LIKE ? ORDER BY created DESC, rowid DESC',
+                          (later['id'], 'member-%')).fetchone()[0] == 'Andy removed Wormhole from the room before this one.'
     assert 'is not bridged' in run(capsys, store, 'station-unbridge', '--id', later['id'][:6], '--as', 'andy')
+    # a browser removal on a fresh bridge now clears the whole chain at once
+    first, _ = store.station_bridge('andy', later['id'][:6], True)
+    current = store.add_participants(andy['id'], first['id'], [store.create_user('porter', 'Porter', 'long-password-porter')['id']])
+    assert {r['id'] for r in store.list_rooms(wormhole['id'])} == {first['id'], current['id']}
+    store.remove_participant(andy['id'], current['id'], wormhole['id'])
+    assert store.list_rooms(wormhole['id']) == []
+    assert 'is not bridged' in run(capsys, store, 'station-unbridge', '--id', current['id'][:6], '--as', 'andy')
 
 
 def test_unbridging_leaves_an_earlier_room_someone_else_owns_alone(rooms, capsys):

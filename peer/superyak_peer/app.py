@@ -623,8 +623,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return store.add_participants(who, key, data.get('member_ids', []), data.get('carry_brief'), data.get('grant_id'))
 
     @app.delete('/api/chats/{key}/participants/{user_id}')
-    def chat_remove(key: str, user_id: str, request: Request):
-        return store.remove_participant(actor(request), key, user_id)
+    def chat_remove(key: str, user_id: str, request: Request, grant_id: str | None = None):
+        return store.remove_participant(actor(request), key, user_id, grant_id)
 
     @app.get('/api/mentions')
     def mentions(request: Request, after: int = 0, limit: int = 50):
