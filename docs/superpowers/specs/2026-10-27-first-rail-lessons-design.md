@@ -139,7 +139,10 @@ learned from: own
   again. The Mac joins this way (section 11):
   - When an add brings in a member on a listed peer that no earlier room of the chain had, the origin carries the
     chain's live lessons into the new room in the add's own transaction, once. Each is a post by its own author, a
-    ship, never a person, with its body byte for byte, in the order laid. Retracted lessons aren't carried.
+    ship, never a person, with its body byte for byte, in the order laid. Retracted lessons aren't carried. Nor is a lesson whose author isn't a member of the new room, since every receiver refuses a post whose author isn't
+    on its roster (`receive`), as the board carries only claims whose holder is in the new room (`_carry_board`). Nor is
+    one that fails the origin's checks of sections 2 and 6, live ship keys included, as they stand at the add. The
+    backfill is one more door: it checks what the origin's post path checks, except the post budget.
   - They are ordinary posts of the new room, so federation sends them to every member's peer, and nothing on its wire
     changes.
   - Each copy keeps its lesson id, so every index collapses it with the original (section 2). On a ship's own peer,
@@ -171,8 +174,7 @@ learned from: own
 `federate` loop on the Mac (federation pull section 1), so the Mac gains no new job. Each run:
 
 1. Reads the room's chain in one short transaction, and exits if nothing changed since the index's watermark. The
-   watermark covers the chain's posts, its epoch and members, and this peer's accounts, since the prompt path
-   (section 5) trusts the index's own checks.
+   watermark covers the chain's posts, its epoch and members, and this peer's accounts, since the prompt path (section 5) trusts the index's own checks. Each run that completes, whether it exits here or after step 4, then sets the index file's modification time to when this step read the chain.
 2. Parses and checks every post (section 3's last door), merges copies by lesson id, keeps each author's first 32
    live lessons, and applies retractions.
 3. Embeds each new lesson's embedded text with `search_document`, at most 8 per embedder request, so a query waits
@@ -217,7 +219,7 @@ event sends some of them (section 8). At a prompt the hook sends `prompt` in the
   this machine's embedder, which logs no text (`engram/embedder_service.py`).
 - It imports no store, opens no database and writes nothing: no receipt, no query row, no log line, no cache. The
   index's last run (section 4) stands in for step 4's re-check, so a retraction or a new account takes effect here
-  at the next run, about 60 s later. It answers only a ship the index lists as a member.
+  at the next run, about 60 s later. It answers nothing when the index file's modification time is more than 180 s old, so a stopped or failing index run can't keep a retracted lesson showing. It answers only a ship the index lists as a member.
 - It applies steps 3 and 4's skips, `seen` included, and keeps at most 2 lessons, only on high-confidence matches:
   words, an `error`, `command` or `file` value of at least 6 bytes found literally in the prompt; or Near, within
   `r_prompt = arccos 0.75`, tighter than `r_max` and a calibration hypothesis like it (section 7), for a prompt of at
@@ -309,8 +311,7 @@ one.
   is a lesson, not a refusal: `Held once: lesson <id> from <ship> applies.`, then the fenced lesson (any other lesson
   found with it follows under its own `Lesson <id> from <ship>` line), then
   `Re-run the same command if you still want it.` Only a `command` value of at least 6 bytes holds a command. The
-  hook holds each head at most once, and at most 3 commands in a session. Each hold is recorded as (session, command
-  head, lesson), once for each lesson it carries, so a re-run passes straight through. Any other words match before a
+  hook holds each head at most once, and at most 3 commands in a session. Each hold is recorded as (session, the head's digest, lesson), once for each lesson it carries, so a re-run passes straight through. Any other words match before a
   command goes in `additionalContext`, which reaches the model with the command's result.
 - **After a failed command:** it sends `cwd`, the branch, the command and the last error line. The builder confirms on
   every ship's Claude Code version which event carries a non-zero Bash exit and a timeout (`PostToolUse` or
@@ -329,11 +330,15 @@ one.
   in a hold or after a failure, so a lesson already shown at a prompt never holds later. It sends the same command and
   error at most once per session.
 - **The session's record.** The events other than the prompt keep a small file per session in the hook's own state,
-  keyed like the room hook's (`session_key`, `agent/superyak_agent/station.py`): the heads and the digests of the
-  commands and errors sent, the lesson ids shown, and each hold. The hook writes nothing at a prompt, so the lessons
+  keyed like the room hook's (`session_key`, `agent/superyak_agent/station.py`): the SHA-256 digests of the heads, commands and errors sent, never their text, the lesson ids shown, and each hold. The hook writes nothing at a prompt, so the lessons
   it showed there are read back from the session's transcript (`transcript_path`, in every hook event's input), by
-  the hook's own id lines outside the fence. Text inside a fence can at most hide a lesson, never show one. `seen` is
-  the union of the two. The builder confirms on every ship's Claude Code version that a `UserPromptSubmit` hook's
+  the hook's own id lines outside the fence. Text inside a fence can at most hide a lesson, never show one. `seen` is the union of the two. From the transcript the hook takes only ids of the short form's exact shape, `[0-9a-f]{8}-[0-9a-f]{8}`, on lines of
+  the exact shape `Lesson <id> from <ship name>`. It holds them in memory for that one event and sends them only in
+  `seen`. It writes nothing it read from the transcript: its record holds only the ids it showed at its own events, so
+  a lesson shown at a prompt leaves no trace outside the transcript. If the transcript exists and the hook can't read
+  it to its end within the event's time limit, it adds nothing and holds nothing at that event. The no-writes test
+  also runs each other event after its marker prompt, against a transcript that holds the marker and a prompt-shown id
+  line, and fails on the marker or that id anywhere in the hook's state. The builder confirms on every ship's Claude Code version that a `UserPromptSubmit` hook's
   added context is in the transcript before the next hook event runs. On a version where it isn't, the prompt hook
   waits for the ships: the budget would then need a write that decision 7 forbids.
 
@@ -366,7 +371,7 @@ beyond the origin's own role in federation.
 person accepted; a lessons room bridged, readable outside Andy's home, or with another person's member; a ship posting
 under a person's account; context text stored, logged or put in a record; a prompt written anywhere, or any write by
 the hook at a prompt; a lesson id shown twice in one session; a hold that reads as a refusal; a lesson shown after it
-is refused, or after its retraction (at a prompt, after the next index run); a copy counted as a segment; a query sent
+is refused, or after its retraction (at a prompt, more than 180 s after the retraction reaches that peer); a copy counted as a segment; a query sent
 off its own peer; an embedding inside a station transaction; a query over 1 s at p95; a lessons process over 512 MiB.
 
 ## 11. The split, and what it waits on
