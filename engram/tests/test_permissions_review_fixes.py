@@ -263,7 +263,9 @@ def test_m3_under_enforce_a_read_refuses_a_copy_one_of_whose_placements_has_no_o
 def test_m3_under_shadow_the_legacy_path_still_delivers_it(tmp_path):
     rig = shadow_daemon(tmp_path)
     _add_sourceless_row(tmp_path, M1_ITEM)
+    before = receipt_rows(tmp_path, action="inject_context")
     assert rig.read(M1_ITEM)["content"] is not None
+    assert receipt_rows(tmp_path, action="inject_context") == before    # no object to name: no receipt (gate G12)
 
 
 # ---------------------------------------------------------------- M8: a shadow receipt keeps the ledger's own refusal
