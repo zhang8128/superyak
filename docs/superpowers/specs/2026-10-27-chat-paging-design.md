@@ -4,6 +4,7 @@ Serenity, 2026-10-27, revision 3: revision 2 (approved after a fresh review and 
 hook, whose premise was wrong (see Why). Branch `chat-paging`. Shaped with Rio Grande in "Superyak: all hands" (messages 3edb9d1e,
 04ab129f, 951270a0). Station law section 3: a fresh reviewer approves this spec; section 2: Rio Grande approves the
 branch and the Pi suites pass.
+Revision 4 amends the web app's merge rule after the final review: a message the answer carries replaces the shown copy.
 
 ## Why
 
@@ -145,8 +146,9 @@ room-wide `system_author`). A flag makes it behave like an older station (no `pa
   and prepends the result, keeping the scroll position.
 - The refreshes that today replace `state.room` wholesale ask `since=<seq>` instead, following `more`: after a board action (825),
   a linked room's brief conflict (1432), a brief save conflict (1464) and a brief save (1479). Each takes the room
-  fields from the answer, keeps the messages already shown, and appends the new ones, de-duplicated by id. Posting
-  already appends the accepted message (1575).
+  fields from the answer, keeps the messages already shown, and appends the new ones; a message the answer carries
+  replaces the shown copy and takes its place, so the accepted message that posting already appends (1575) lands where
+  a reload shows it.
 - A non-paged answer is used as today.
 
 ## Performance targets

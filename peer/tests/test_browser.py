@@ -3337,6 +3337,50 @@ def test_a_refresh_appends_a_new_message_once(browser_peer):
             assert shown.count("A word that arrived while you read.") == 1
 
 
+def test_a_sent_message_takes_its_place_among_those_that_arrived_first(browser_peer):
+    """Break caught: after a send, a message that arrived while the reader typed is shown below the sent one until reload."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(3):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            messages = page.locator(".messages .message p")
+            expect(messages).to_have_count(3)
+            store.send_message(users["family"]["id"], room["id"], "late", "A question while you typed.")
+            page.get_by_role("textbox", name="Message", exact=True).fill("My answer to it.")
+            page.get_by_role("button", name="Send message").click()
+            expect(messages).to_have_count(5)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")
+            shown = messages.all_inner_texts()
+            page.reload()
+            expect(messages).to_have_count(5)
+            assert shown == messages.all_inner_texts()
+
+
+def test_a_generic_refresh_keeps_the_earlier_messages_the_reader_loaded(browser_peer):
+    """Break caught: a refresh reloads the newest hundred and drops the earlier messages the reader asked for."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(150):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            messages = page.locator(".messages .message p")
+            expect(messages).to_have_count(100)
+            page.get_by_role("button", name="Load earlier messages").click()
+            expect(messages).to_have_count(150)
+            store.send_message(users["family"]["id"], room["id"], "late", "A word that arrived.")
+            page.evaluate("refresh()")
+            expect(messages).to_have_count(151)
+            assert messages.all_inner_texts() == [f"message {i}" for i in range(150)] + ["A word that arrived."]
+            expect(page.get_by_role("button", name="Load earlier messages")).to_have_count(0)
+
+
 def test_a_remote_room_still_opens(browser_peer):
     """Break caught: a paired peer's room, which has no pages, fails to open or loses its messages."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]

@@ -529,19 +529,24 @@ const withoutRepeats = (older, newer) => { const seen = new Set(older.map((messa
 
 function loadRoom(id) { return api(`${roomPath(id)}?limit=${ROOM_PAGE}`); }
 
-// The room as it is now: the messages already shown stay, what arrived since is appended once, and every other field
-// (brief, claims, members, ...) is the answer's. `room` is the room being refreshed; the copy on screen is the base.
+// The room as it is now: the messages already shown stay, what arrived since is appended, and every other field
+// (brief, claims, members, ...) is the answer's. A message the answer carries replaces the shown copy and takes its
+// place (the sender's own message is shown from the POST before the answer has it). `room` is the room being
+// refreshed; the copy on screen is the base, read again after the answers so a "Load earlier" that finished meanwhile stays.
 async function refreshRoom(room) {
   const shown = state.room?.id === room.id ? state.room : room;
   if (!shown.paged) return api(roomPath(room.id));
-  let messages = shown.messages || [], seq = shown.seq, answer;
+  let fresh = [], seq = shown.seq, answer;
   do {
     answer = await api(`${roomPath(room.id)}?since=${encodeURIComponent(seq)}&limit=${ROOM_PAGE}`);
     if (!answer.paged) return answer;  // the station stopped paging this room: take it whole
-    messages = [...messages, ...withoutRepeats(messages, answer.messages || [])];
+    fresh = [...fresh, ...(answer.messages || [])];
     seq = answer.seq;
   } while (answer.more);
-  return { ...answer, messages, more: undefined, first_position: shown.first_position };
+  const current = state.room?.id === room.id ? state.room : shown;
+  const arrived = new Set(fresh.map((message) => message.id));
+  const messages = [...(current.messages || []).filter((message) => !arrived.has(message.id)), ...fresh];
+  return { ...answer, messages, more: undefined, first_position: Math.min(shown.first_position, current.first_position) };
 }
 
 // Earlier messages go in front of the shown ones; the page keeps the line the reader was on.
@@ -553,7 +558,7 @@ async function loadEarlier() {
     const answer = await api(`${roomPath(room.id)}?before=${room.first_position}&limit=${ROOM_PAGE}`);
     if (state.room?.id !== room.id) return;
     const scroller = document.scrollingElement, height = scroller.scrollHeight, top = scroller.scrollTop;
-    const messages = [...(answer.messages || []), ...state.room.messages];
+    const messages = [...withoutRepeats(state.room.messages, answer.messages || []), ...state.room.messages];
     state.room = { ...state.room, messages, first_position: answer.first_position, total: answer.total };
     render();
     scroller.scrollTop = top + scroller.scrollHeight - height;
@@ -1125,7 +1130,11 @@ async function loadRoute() {
   if (route === "chats") {
     state.selectedChatId = id || state.selectedChatId || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
-      try { state.room = await loadRoom(state.selectedChatId); await loadBoard(state.room); }
+      try {
+        const paged = state.room?.id === state.selectedChatId && state.room.paged;  // keep the earlier messages the reader loaded
+        state.room = paged ? await refreshRoom(state.room) : await loadRoom(state.selectedChatId);
+        await loadBoard(state.room);
+      }
       catch (_) { state.room = null; }
     } else {
       state.room = null;

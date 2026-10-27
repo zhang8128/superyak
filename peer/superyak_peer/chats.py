@@ -88,7 +88,7 @@ class Chats:
             begin = max(0, end - limit)
         elif where:
             if where == ['at']:
-                if not 0 <= page['at'] < total:
+                if not 0 <= page['at'] < max(total, 1):  # an empty room has the one empty window
                     raise Problem(400, f'at must be between 0 and {total - 1}')
                 begin = page['at']
             else:

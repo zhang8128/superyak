@@ -816,6 +816,48 @@ def test_paged_and_full_reads_print_the_same(station):
         assert call_text(tools, {'room': room, **mode}) == paged, mode
 
 
+def test_an_empty_room_with_a_brief_reads_the_same_paged_or_not(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Empty', andy, jenn, serenity)
+    fake.brief(room, andy, 'The brief.')
+    tools = tools_for(fake)
+    for mode in ({}, {'oldest': True}, {'at': 0}, {'at': -1}, {'at': 3}):
+        fake.pages = True
+        paged = call(tools, 'station_read', room=room, **mode)
+        fake.pages = False
+        assert call(tools, 'station_read', room=room, **mode) == paged, mode
+    fake.pages = True
+    assert 'The brief.' in call_text(tools, {'room': room, 'oldest': True})
+    assert 'at must be between 0 and -1' in call(tools, 'station_read', room=room, at=0)['content'][0]['text']
+
+
+def test_absurd_inputs_keep_todays_wording(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    for n in range(3):
+        fake.say(room, jenn, f'note {n}')
+    tools = tools_for(fake)
+    texts = {}
+    for fake.pages in (True, False):
+        texts[fake.pages] = [call(tools, 'station_read', room=room, **args)['content'][0]['text']
+                             for args in ({'at': 10 ** 15}, {'at': 10 ** 20}, {'start': 'x' * 101}, {'after': 'x' * 101}, {'message': 'x' * 101})]
+    assert texts[True] == texts[False]
+    assert 'at must be between 0 and 2' in texts[True][0] and 'at must be between 0 and 2' in texts[True][1]
+    assert all("No message '" in t for t in texts[True][2:])
+
+
+def test_a_remote_room_is_never_paged(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Remote', andy, jenn, serenity)
+    fake.rooms['peer:r9'] = dict(fake.rooms.pop(room), id='peer:r9')
+    for n in range(3):
+        fake.say('peer:r9', jenn, f'hello {n}')
+    tools = tools_for(fake)
+    answer = tools.client.room('peer:r9', limit=1)  # the station ignores paging for a paired peer's room
+    assert 'paged' not in answer and len(answer['messages']) == 3
+    assert 'hello 0' in call_text(tools, {'room': 'peer:r9'})
+
+
 def test_errors_keep_todays_wording(station):
     fake, andy, jenn, serenity = station
     room = fake.room('Promenade', andy, jenn, serenity)

@@ -173,7 +173,7 @@ class FakeStation:
                 begin = max(0, page['before'] - limit)
                 picked = messages[begin:page['before']]
             elif 'at' in page:
-                if not 0 <= page['at'] < total:
+                if not 0 <= page['at'] < max(total, 1):
                     return 400, f'at must be between 0 and {total - 1}'
                 begin = page['at']
                 picked = messages[begin:begin + limit]
@@ -386,7 +386,7 @@ class FakeStation:
             if room is None or me not in room['member_ids']:
                 return 404, b'{"error": "Not found"}'
             if method == 'GET' and len(segments) == 3:
-                if query and self.pages:
+                if query and self.pages and ':' not in room['id']:  # the station does not page a paired peer's room
                     status, body = self._page(room, query)
                     return ok(body) if status == 200 else (status, json.dumps({'error': body}).encode())
                 return ok(self.view(room))

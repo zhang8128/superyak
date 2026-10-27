@@ -77,6 +77,9 @@ def test_empty_room_pages(env):
     key = clients[0].post('/api/chats', json={'title': 'Empty'}).json()['id']
     body = clients[0].get(f'/api/chats/{key}?limit=5').json()
     assert body['messages'] == [] and body['total'] == 0 and body['first_position'] == 0 and body['paged'] is True
+    body = clients[0].get(f'/api/chats/{key}?at=0&limit=5').json()
+    assert body['messages'] == [] and body['total'] == 0 and body['first_position'] == 0 and body['paged'] is True
+    assert clients[0].get(f'/api/chats/{key}?at=1').status_code == 400
 
 def test_bad_parameters_are_400(env):
     key = room_of(env)

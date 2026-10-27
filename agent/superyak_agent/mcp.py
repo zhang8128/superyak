@@ -220,7 +220,7 @@ class Tools:
             page = {'start': args['message'], 'limit': 1}
         elif forward:
             page = ({'start': args['start']} if args.get('start') else {'after': args['after']} if args.get('after')
-                    else {'at': max(at or 0, 0)})  # a negative at asks for 0; the total then refuses it below
+                    else {'at': min(max(at or 0, 0), 10 ** 15 - 1)})  # a negative at asks for 0, a huge one for the largest the station takes; the total then refuses either below
             page['limit'] = limit + 1
         else:
             page = {'limit': limit}
@@ -228,7 +228,7 @@ class Tools:
         try:
             room = self.client.room(room_id, **page)
         except StationError as exc:  # the station's refusals, in the words this tool has always used
-            if exc.status == 404 and asked:
+            if exc.status in (400, 404) and asked and (exc.status == 404 or exc.message.endswith('is the id of a message')):
                 raise ValueError(f'No message {label(str(asked), 100)!r} in this room') from None
             if exc.status == 400 and at is not None and exc.message.startswith('at must be between'):
                 raise ValueError(exc.message) from None
