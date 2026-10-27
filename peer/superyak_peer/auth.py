@@ -110,6 +110,15 @@ class Auth:
                 raise Problem(401, 'Sign in required')
             return {**public_user(row), 'csrf_token': row['csrf']}
 
+    def session_is_valid(self, token):
+        """Public route spec 2: the lookup `session` does, answered True or False. It writes nothing; the route's own
+        check still runs afterwards."""
+        if not isinstance(token, str):
+            return False
+        with self.transaction() as db:
+            row = db.execute('SELECT users.activation_pending, users.kind FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (token_hash(token), self.clock())).fetchone()
+        return row is not None and not row['activation_pending'] and row['kind'] == 'person'
+
     def logout(self, token):
         with self.transaction() as db:
             db.execute('DELETE FROM sessions WHERE token_hash=?', (token_hash(token or ''),))

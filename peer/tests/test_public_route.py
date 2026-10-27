@@ -68,3 +68,57 @@ def test_a_funnel_header_with_any_value_makes_a_tailnet_request_public(value):
     assert classified(('100.70.202.124', 50000), {'Tailscale-Funnel-Request': value})
     assert classified(PROXY, {'tailscale-funnel-request': value})
 
+PRESENCE = {'x-superyak-session': 'session-one', 'x-superyak-client': 'hook/0123456789ab', 'x-superyak-mode': 'write'}
+
+
+def docked(store, owner_id, name='serenity'):
+    started = store.start_docking(name, 'test-host')
+    ship = store.confirm_docking(owner_id, started['id'], started['code'])
+    return ship, store.docking_status(started['id'], started['secret'])['key']
+
+
+def written(store, ship_id):
+    """What a ship lookup writes: its keys' last_used and its presence rows."""
+    with store.transaction() as db:
+        return ([tuple(r) for r in db.execute('SELECT key_hash,last_used FROM ship_keys WHERE ship_id=? ORDER BY key_hash', (ship_id,))],
+                [tuple(r) for r in db.execute('SELECT * FROM presence WHERE ship_id=? ORDER BY name', (ship_id,))])
+
+
+def test_the_validity_reads_answer_as_the_routes_own_checks_do(env):
+    """Spec 2, "valid means checked": session_is_valid and ship_key_is_valid do the lookups store.session and
+    ship_for_key do, and answer True or False."""
+    app, clients, users, clock = env
+    store = app.state.store
+    token = clients[0].cookies.get('superyak_session')
+    assert store.session_is_valid(token) is True
+    for made_up in ('made-up', '', None, 42, 'x' * 5000):
+        assert store.session_is_valid(made_up) is False, made_up
+    ship, key = docked(store, users[0]['id'])
+    assert store.ship_key_is_valid(key) is True
+    for made_up in ('made-up', '', None, 42, key + 'x', 'x' * 129):
+        assert store.ship_key_is_valid(made_up) is False, made_up
+    assert store.session_is_valid(key) is False and store.ship_key_is_valid(token) is False  # not interchangeable
+    with store.transaction() as db:  # a person waiting on activation has no valid session, as store.session says
+        db.execute('UPDATE users SET activation_pending=1 WHERE id=?', (users[1]['id'],))
+    assert store.session_is_valid(clients[1].cookies.get('superyak_session')) is False
+    store.revoke_presented_key(key)
+    assert store.ship_key_is_valid(key) is False
+    clock[0] += 86401
+    assert store.session_is_valid(token) is False
+
+
+def test_the_validity_reads_write_nothing(env):
+    """Spec 2: no last_used and no presence, which ship_for_key writes (shown first, so the check can see a write)."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'])
+    store.ship_for_key(key, {'name': 'session-one', 'client': 'hook/0123456789ab', 'mode': 'write'})
+    before = written(store, ship['id'])
+    clock[0] += 3600
+    store.ship_for_key(key, {'name': 'session-one', 'client': 'hook/0123456789ab', 'mode': 'write'})
+    assert written(store, ship['id']) != before
+    before = written(store, ship['id'])
+    clock[0] += 3600
+    assert store.ship_key_is_valid(key) and store.session_is_valid(clients[0].cookies.get('superyak_session'))
+    assert written(store, ship['id']) == before
+
