@@ -939,7 +939,7 @@ class Ledger:
         new = None
         try:
             new = Ledger._blank(dest, self.meta()["ledger_id"], path=tmp)
-            for r in self.conn.execute("SELECT * FROM ledger_log ORDER BY seq").fetchall():
+            for r in self.conn.execute("SELECT * FROM ledger_log ORDER BY seq"):
                 got = new._append(r["kind"], r["ref"], r["actor"], r["channel"], json.loads(r["body"]),
                                   under_grant=r["under_grant"], proposal_id=r["proposal_id"], at=r["at"])
                 again = new.conn.execute("SELECT digest FROM ledger_log WHERE seq=?", (got,)).fetchone()[0]
