@@ -6,6 +6,7 @@ numpy: ``calibrate`` is imported inside the functions that need it (P35).
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import heapq
 import itertools
@@ -25,9 +26,10 @@ from pathlib import Path
 
 import store_identity
 import store_reader
+from imprint_checks import l1_values, l2_fts, l3_vec0, l4_raw
 from imprint_filter import (CLOSED_SECONDS, FILTER, DIGEST_TABLES, IMPRINT_SUBJECTS_DDL, NAMES_SHOWN, OTHERS_AWAY_WORDS,
                             OTHERS_HOME_WORDS, OTHERS_NO_LEDGER_WORDS, TIMES_WORDS, WITHOUT_ROUTE_WORDS, IdSet,
-                            PackageRows, People, PlanRefused, Scratch, Selection, Terms, check_owner,
+                            PackageRows, People, PlanRefused, Scratch, ScratchMap, Selection, Terms, check_owner,
                             canonical, check_package_tables, check_source, classify_source, contents_of, cross_references, left_out_keys, open_ledger,
                             package_rows, parse_selection, parse_terms, people, plan_digest, row_key, scope_of, semantic_rows)
 from imprint_filter import _instant_text
@@ -814,6 +816,197 @@ def read_plan(plan_id: str, *, home: Path, start: int = 0, limit: int = 1, engra
         _remove_work(work, whole=scratch_dir is None)
 
 
+# ---- Building the package (I 6.1) ------------------------------------------------------------------------------
+
+class PlanBusy(PlanRefused):
+    """Another ``build`` of this plan holds its lock (RF5)."""
+
+
+@dataclass(frozen=True)
+class Built:
+    imprint_id: str
+    dir: Path
+    request: dict
+    manifest: dict
+    fresh: bool = True              # False when ``--if-needed`` found the plan already built
+
+
+_BUSY = "Another make imprint-send of this plan is running."
+
+
+def _lock_plan(plan_path: Path) -> int:
+    """An exclusive, non-blocking ``flock`` on ``<plan id>.lock`` beside the plan file; the caller closes the fd."""
+    fd = os.open(plan_path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise PlanBusy(_BUSY) from None
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _built_of(home: Path, imprint_id: str) -> Built:
+    dir = Path(home) / "imprints" / imprint_id
+    try:
+        request = json.loads((dir / "request.json").read_text(encoding="utf-8"))
+        manifest = json.loads((dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise PlanRefused(f"The imprint {imprint_id[:4]} this plan made is gone. Run the plan again.") from None
+    return Built(imprint_id, dir, request, manifest, fresh=False)
+
+
+def _write_bytes_private(path: Path, data: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+
+
+def _vector_hashes(pr: PackageRows, scratch: Scratch) -> dict:
+    """``{"episode_vectors": {id: sha256}, "semantic_vectors": ...}``: the source's embedding bytes hashed into
+    ``ScratchMap``s in the scratch file (R26), which L3 looks up one chunk's ids at a time."""
+    expected = {}
+    for layer in ("episode", "semantic"):
+        table = f"{layer}_vectors"
+        hashes = ScratchMap(scratch)
+        scratch.conn.execute("BEGIN")
+        try:
+            for row in pr.rows[table]:
+                hashes[row["id"]] = hashlib.sha256(row["embedding"]).hexdigest()
+        finally:
+            scratch.conn.execute("COMMIT")
+        expected[table] = hashes
+    return expected
+
+
+def _leak_checks(package: Path, x_star, pr: PackageRows, scratch: Scratch, work: Path) -> list[str]:
+    """L1 to L4 on the finished package (I 6.4)."""
+    expected = _vector_hashes(pr, scratch)
+    l2_dir = work / "l2"
+    conn = _connect(package, read_only=True, immutable=True, vec=True)
+    try:
+        return l1_values(conn, x_star) + l2_fts(conn, l2_dir) + l3_vec0(conn, expected) + l4_raw(package, x_star)
+    finally:
+        conn.close()
+        shutil.rmtree(l2_dir, ignore_errors=True)
+
+
+def _cross_reference_refusal(crossed) -> str:
+    n = len({c.id for c in crossed})
+    return (f"{_n(n, 'memory', 'memories')} in this plan: the text of each names something staying here. "
+            "See them with --show-cross-references, then leave them out with --exclude FILE and plan again.")
+
+
+def _build_one(saved: dict, *, home: Path, now: int, engram_home: Path, work: Path) -> Built:
+    """I 6.1 steps 1 to 10 for a plan nobody has built. A failure removes the half-made imprint directory."""
+    from imprint_filter import SourceContext
+
+    sel, terms = _selection_of(saved)
+    store, owner, created = Path(saved["store"]), saved["owner"], int(saved["created"])
+    imprint_id = str(uuid.uuid4())
+    dest = home / "imprints" / imprint_id
+    scratch = conn = ledger = cold_conn = None
+    made = False
+    try:
+        if not store.is_file():
+            raise PlanRefused(_CHANGED)
+        ledger = open_ledger(engram_home)
+        try:
+            source_id, identity, ancestry, complete, _, working = _working_copy(
+                store, work, engram_home=engram_home, home=home, ledger=ledger, owner=owner,
+                expected_id=saved["source_id"], wrong_id=_CHANGED)
+        except sqlite3.Error:
+            raise PlanRefused(_CHANGED) from None
+        scratch = Scratch(work / "scratch.db")
+        published = published_house_path(engram_home)
+        ctx = SourceContext(source_path=store, source_id=source_id, instance_name=_instance_name(store), owner=owner,
+                            published=published if published.is_file() else None, ledger=ledger,
+                            home=bool(saved.get("home")), scratch=scratch, terms=terms, now=created)
+        conn = _connect(working, read_only=True, vec=True)
+        conn.row_factory = sqlite3.Row
+        pr = package_rows(conn, sel, terms, ctx)                      # the one reading of the rows (step 1)
+        digest = plan_digest(scope_of(sel), pr.rows, scratch=scratch)
+        if digest != saved["digest"]:
+            raise PlanRefused(_CHANGED)
+        cold = store.with_name("cold.db")
+        cold_conn = store_reader.connect(cold, immutable=True) if cold.is_file() else None
+        x_star = left_out_keys(conn, cold_conn, pr, scratch=scratch)
+        crossed = cross_references(pr, x_star)
+        if crossed:                                                    # step 2
+            raise PlanRefused(_cross_reference_refusal(crossed))
+        dest.mkdir(mode=0o700)                                         # step 3
+        made = True
+        dest.chmod(0o700)
+        package = dest / "imprint.db"
+        write_package(pr, package, source_id=source_id, source_ancestry=ancestry, source_complete=complete,
+                      imprint_id=imprint_id)                           # steps 4 to 7
+        failures = _leak_checks(package, x_star, pr, scratch, work)    # step 8
+        if failures:
+            raise PlanRefused("The package failed its leak checks, so nothing was kept: " + "; ".join(failures[:5]))
+        size = package.stat().st_size
+        plan = Plan(
+            id=saved["id"], created=created, store=store, source_id=source_id,
+            source_identity="present" if identity["status"] == "present" else "derived", ancestry=tuple(ancestry),
+            ancestry_complete=bool(complete), selection=sel, terms=terms, digest=digest,
+            counts=saved.get("counts") or {}, contents=contents_of(pr.rows), package_bytes=size,
+            parts=max(1, -(-size // PART_BYTES)), others=pr.others, home=bool(saved.get("home")), people={},
+            origin=identity.get("instance_id_origin"), not_copied=(), owner=owner)
+        request = request_for(plan, imprint_id, size)
+        manifest = manifest_for(request, package, built_at=now, engram_commit=engram_commit_of(),
+                                source_identity=plan.source_identity)
+        _write_bytes_private(dest / "request.json", canonical(request))
+        _write_bytes_private(dest / "manifest.json", canonical(manifest))
+        write_owner_lists(dest, pr, source_id)
+        package.chmod(0o400)                                           # step 9
+        return Built(imprint_id, dest, request, manifest)
+    except BaseException:
+        if made:
+            shutil.rmtree(dest, ignore_errors=True)
+        raise
+    finally:
+        for c in (conn, cold_conn):
+            if c is not None:
+                c.close()
+        if scratch is not None:
+            scratch.close()
+        if ledger is not None:
+            ledger.conn.close()
+
+
+def build(plan_id: str, *, home: Path, now: int, if_needed: bool = False, engram_home: Path | None = None,
+          scratch_dir: Path | None = None) -> Built:
+    """``imprint.py build`` (I 6.1). It holds the plan's lock from before it reads the plan file until the plan file
+    names the imprint (RF5). With ``if_needed`` a plan already built returns its ``Built``; without, it is refused.
+    ``scratch_dir`` is the 0700 directory the caller made and removes; without it one is made and removed here.
+    ``now`` is the build's time (``built_at``); the rows are read as of the plan's own time."""
+    home = Path(home)
+    engram_home = _default_engram_home() if engram_home is None else Path(engram_home)
+    path = resolve_plan(home, plan_id)
+    fd = _lock_plan(path)
+    work = None
+    try:
+        saved = _saved_plan(path)
+        if saved.get("imprint_id"):
+            if if_needed:
+                return _built_of(home, saved["imprint_id"])
+            raise PlanRefused(f"This plan was already built as imprint {saved['imprint_id'][:4]}; "
+                              "send it, or run the plan again.")
+        work = _new_scratch(home) if scratch_dir is None else Path(scratch_dir)
+        built = _build_one(saved, home=home, now=int(now), engram_home=engram_home, work=work)
+        try:
+            _write_private(path, json.dumps(dict(saved, imprint_id=built.imprint_id), indent=2, sort_keys=True) + "\n")
+        except BaseException:
+            shutil.rmtree(built.dir, ignore_errors=True)
+            raise
+        return built
+    finally:
+        if work is not None:
+            _remove_work(work, whole=scratch_dir is None)
+        os.close(fd)
+
+
 # ---- The command ---------------------------------------------------------------------------------------------
 
 def ensure_scratch_env(scratch: Path, *, environ, execve) -> None:
@@ -874,6 +1067,11 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument("--limit", type=int, default=1)
     r.add_argument("--superyak-home", type=Path, default=Path.home() / ".superyak")
     r.add_argument("--engram-home", type=Path)
+    b = sub.add_parser("build", help="build the package of a plan, check it and write its request and manifest")
+    b.add_argument("--plan", required=True, help="the plan's first 4 or more characters")
+    b.add_argument("--if-needed", action="store_true", help="a plan already built prints nothing and succeeds")
+    b.add_argument("--superyak-home", type=Path, default=Path.home() / ".superyak")
+    b.add_argument("--engram-home", type=Path)
     return ap
 
 
@@ -963,6 +1161,26 @@ def _read(args) -> int:
     return 0
 
 
+def _build(args, *, clock) -> int:
+    home = Path(args.superyak_home)
+    engram_home = Path(args.engram_home) if args.engram_home else _default_engram_home()
+    resolve_plan(home, args.plan)                       # a bad name is refused before anything runs
+    scratch = _run_scratch(home)
+    try:
+        ensure_scratch_env(scratch, environ=os.environ, execve=os.execve)
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
+    try:
+        built = build(args.plan, home=home, now=int(clock()), if_needed=args.if_needed, engram_home=engram_home,
+                      scratch_dir=scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    if built.fresh:
+        print(render_request(built.request), end="")
+    return 0
+
+
 def published_house_path(engram_home: Path) -> Path:
     from imprint_filter import published_house
 
@@ -976,6 +1194,11 @@ def main(argv: list[str] | None = None, *, clock=time.time) -> int:
             return _plan(args, clock=clock)
         if args.command == "read":
             return _read(args)
+        if args.command == "build":
+            return _build(args, clock=clock)
+    except PlanBusy as busy:
+        print(str(busy), file=sys.stderr)
+        return 4
     except PlanRefused as refusal:
         print(str(refusal), file=sys.stderr)
         return 2

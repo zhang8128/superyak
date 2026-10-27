@@ -9,6 +9,7 @@ import re
 import shutil
 import sqlite3
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import store_identity
@@ -1080,26 +1081,35 @@ def live_source(tmp_path: Path) -> Storage:
 
 
 def plan_args(tmp_path: Path, *, owner: str = "sam", route: bool = False, episodes: int = 2, cosubjects=None,
-              ledger=_AUTO, denies=None, until="2026-10-25T18:00:00Z", ancestry=None):
+              ledger=_AUTO, denies=None, until="2026-10-25T18:00:00Z", ancestry=None, store=None,
+              every_table: bool = False, cross_ref: bool = False, exclude=()):
     """``(store path, selection, terms, ctx, context, home, now)``: the arguments of ``make_plan``. Episodes
     ``e0`` (never given a co-subject) and ``e1`` to ``e<episodes>`` in the work lane hold text naming Jenn; ``s1`` is sourced on ``e1``. A ledger is made
     when ``cosubjects`` or ``denies`` are given (``ledger=None`` forbids one)."""
     from imprint_filter import parse_selection, parse_terms
 
-    s = new_store(tmp_path, "src")
-    if ancestry:                                # a store copied from these stores, nearest first
-        store_identity.stamp_fork(s.conn, ancestry[0], list(ancestry[1:]), True)
-        s.conn.commit()
-    ep(s, "e0", content="Jenn drove the truck to the clinic, trip 0", session="sx", at="2026-10-25T09:00:00+00:00")
-    vec(s, "episode", "e0", seed=100)           # no one else is recorded on e0, so a plan always has a memory
-    for i in range(1, episodes + 1):
-        ep(s, f"e{i}", content=f"Jenn drove the truck to the clinic, trip {i}", session="sx",
-           at=f"2026-10-25T10:{i % 60:02d}:00+00:00")
-        vec(s, "episode", f"e{i}", seed=i)
-    sem(s, "s1", sources=["e1"], at="2026-10-25T12:00:00+00:00")
-    vec(s, "semantic", "s1", seed=99)
-    if route:
-        recall(s, "l1", targets=["e1"], session="sx", outcome="used", recall_id="rc1")
+    if store is not None:                       # a store the caller builds: ``store(tmp_path)``
+        s = store(tmp_path)
+    elif every_table:                           # a row in every table that can ship (``digest_store``)
+        s = digest_store(tmp_path, every_table=True)
+    else:
+        s = new_store(tmp_path, "src")
+        if ancestry:                                # a store copied from these stores, nearest first
+            store_identity.stamp_fork(s.conn, ancestry[0], list(ancestry[1:]), True)
+            s.conn.commit()
+        ep(s, "e0", content="Jenn drove the truck to the clinic, trip 0", session="sx", at="2026-10-25T09:00:00+00:00")
+        vec(s, "episode", "e0", seed=100)           # no one else is recorded on e0, so a plan always has a memory
+        for i in range(1, episodes + 1):
+            ep(s, f"e{i}", content=f"Jenn drove the truck to the clinic, trip {i}", session="sx",
+               at=f"2026-10-25T10:{i % 60:02d}:00+00:00")
+            vec(s, "episode", f"e{i}", seed=i)
+        sem(s, "s1", sources=["e1"], at="2026-10-25T12:00:00+00:00")
+        vec(s, "semantic", "s1", seed=99)
+        if route:
+            recall(s, "l1", targets=["e1"], session="sx", outcome="used", recall_id="rc1")
+    if cross_ref:                               # ``names-it`` names an instinct that stays home
+        key = inst(s, str(uuid.uuid4()))
+        ep(s, "names-it", content=f"see {key} for the rest", at="2026-10-25T11:00:00+00:00")
     led = None
     if ledger is _AUTO and (cosubjects is not None or denies):
         ledger = True
@@ -1108,6 +1118,7 @@ def plan_args(tmp_path: Path, *, owner: str = "sam", route: bool = False, episod
     context = plan_context(owner)
     sel = parse_selection(lanes="work", layers="episode,semantic", since=None, until=until, shared_with=None,
                           exclude_file=None, unsourced=False, now=PLAN_NOW)
+    sel = replace(sel, exclude=frozenset(exclude))
     t = parse_terms(audience="place:home/andy", actions="imprint,route" if route else "imprint",
                     purposes="calibration,trail-evaluation" if route else "calibration", days=90,
                     operator=context.operator)
