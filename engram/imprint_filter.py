@@ -1109,6 +1109,122 @@ def package_rows(conn: sqlite3.Connection, sel: Selection, terms: Terms, ctx: So
     return PackageRows(RowSource(makers), adm.counts, sh, _others(sh, ctx))
 
 
+# ---- Cross-references (I 6.4 item 1, D23) ---------------------------------------------------------------------
+
+# The tables of the package whose rows are keyed by one `id` (episode and semantic ids come from `Shipped`).
+_SHIPPED_ID_TABLES = ("episode_vectors", "semantic_vectors", "resonances", "subdivision_events", "memory_log",
+                      "operation_log")
+
+
+class LeftOut(IdSet):
+    """X*: lower-case keys in the scratch file, each with the table that first named it (so the dry run can say
+    what a memory points at without ever printing the key)."""
+
+    def __init__(self, scratch: Scratch):
+        super().__init__(scratch)
+        self._owner = scratch.new_table("CREATE TABLE {t} (id TEXT PRIMARY KEY, tbl TEXT NOT NULL) WITHOUT ROWID")
+
+    def add_batch(self, table: str, keys: Iterable[str]) -> None:
+        self._conn.execute("BEGIN")
+        try:
+            for key in keys:
+                if key not in self:
+                    self.add(key)
+                    self._conn.execute(f"INSERT INTO {self._owner} (id, tbl) VALUES (?, ?)", (key, table))
+        finally:
+            self._conn.execute("COMMIT")
+
+    def table_of(self, key: str) -> str:
+        row = self._conn.execute(f"SELECT tbl FROM {self._owner} WHERE id = ?", (key,)).fetchone()
+        return row[0] if row else ""
+
+
+def _key_queries(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """``(table, SELECT of its key)`` for every single-column TEXT primary key of the file, ordinary tables first,
+    then each vec0 table's ``id`` (read from its ``_rowids`` shadow, which needs no extension)."""
+    ordinary, vec0 = [], []
+    for name, sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").fetchall():
+        sql = sql or ""
+        if sql.lstrip().upper().startswith("CREATE VIRTUAL"):
+            if "vec0" in sql.lower():
+                vec0.append((name, f'SELECT id FROM "{name}_rowids"'))
+            continue
+        pk = [r for r in conn.execute(f'PRAGMA table_info("{name}")') if r[5]]
+        if len(pk) == 1 and (pk[0][2] or "").upper() == "TEXT":
+            ordinary.append((name, f'SELECT "{pk[0][1]}" FROM "{name}"'))
+    return ordinary + vec0
+
+
+def _kept_session_ids(rows: Mapping[str, Iterable[dict]]) -> Iterator[str]:
+    """The session ids that shipped rows keep: ``session_id`` of episodes and operation rows, ``context.session_id``
+    of log rows."""
+    for table in ("episodes", "operation_log"):
+        for r in rows[table]:
+            if isinstance(r.get("session_id"), str):
+                yield r["session_id"]
+    for r in rows["memory_log"]:
+        context = _json(r.get("context"))
+        if isinstance(context, dict) and isinstance(context.get("session_id"), str):
+            yield context["session_id"]
+
+
+def left_out_keys(source_conn: sqlite3.Connection, cold_conn: sqlite3.Connection | None, rows: PackageRows, *,
+                  scratch: Scratch | None = None) -> LeftOut:
+    """X* (I 6.4): every single-column TEXT primary key (and vec0 ``id``) of a row of ``graph.db`` or ``cold.db``
+    that does not ship, lower case, minus the session ids that kept columns of shipped rows hold. A key that ships
+    as another table's key (a shipped memory's id in a table that stays) is not left out. The keys go to the
+    scratch file in batches and are looked up there. ``scratch`` is the plan's disk file; without it they sit in
+    memory."""
+    own = scratch if scratch is not None else Scratch(":memory:")
+    shipping = IdSet(own)
+    for ids in (rows.shipped.episodes, rows.shipped.semantics):
+        for batch in _batches(ids):
+            for i in batch:
+                shipping.add(i.lower())
+    for table in _SHIPPED_ID_TABLES:
+        for r in rows.rows[table]:
+            shipping.add(str(r["id"]).lower())
+    for sid in _kept_session_ids(rows.rows):
+        shipping.add(sid.lower())
+    x_star = LeftOut(own)
+    for conn in (source_conn, cold_conn):
+        if conn is None:
+            continue
+        for table, query in _key_queries(conn):
+            cur = conn.cursor()
+            cur.row_factory = None
+            cur.execute(query)
+            while batch := cur.fetchmany(1000):
+                x_star.add_batch(table, (k.lower() for (k,) in batch if isinstance(k, str) and k.lower() not in shipping))
+    return x_star
+
+
+class CrossRef(NamedTuple):
+    table: str          # the table of the key the memory names (never the key)
+    id: str             # the shipped memory
+    keys: int           # how many tokens of its text name left-out keys, in that table
+    layer: str = "episode"      # the shipped memory's layer, for the dry run's words
+
+
+def cross_references(rows: PackageRows, x_star) -> list[CrossRef]:
+    """A shipped memory whose text holds a UUID token in X*, ignoring case (I 6.4 item 1): every TEXT value of its
+    row is scanned. One entry a memory and table, in the memory's row order."""
+    from imprint_checks import UUID_TOKEN
+
+    found: list[CrossRef] = []
+    for source, layer in (("episodes", "episode"), ("semantics", "semantic")):
+        for r in rows.rows[source]:
+            counts: Counter = Counter()
+            for value in r.values():
+                if isinstance(value, str):
+                    for m in UUID_TOKEN.finditer(value):
+                        key = m.group(0).lower()
+                        if key in x_star:
+                            counts[x_star.table_of(key) if hasattr(x_star, "table_of") else ""] += 1
+            found.extend(CrossRef(table, r["id"], n, layer) for table, n in counts.items())
+    return found
+
+
 def contents_of(rows: Mapping[str, Iterable[dict]]) -> dict[str, int]:
     """The digest tables with at least one row, and their counts (I 7.1), each counted in one pass over a new
     cursor, so no table is held."""

@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -25,7 +26,7 @@ import store_reader
 from imprint_filter import (CLOSED_SECONDS, DIGEST_TABLES, IMPRINT_SUBJECTS_DDL, NAMES_SHOWN, OTHERS_AWAY_WORDS,
                             OTHERS_HOME_WORDS, OTHERS_NO_LEDGER_WORDS, TIMES_WORDS, WITHOUT_ROUTE_WORDS, IdSet,
                             PackageRows, People, PlanRefused, Scratch, Selection, Terms, check_owner,
-                            check_package_tables, check_source, classify_source, contents_of, open_ledger,
+                            check_package_tables, check_source, classify_source, contents_of, cross_references, left_out_keys, open_ledger,
                             package_rows, parse_selection, parse_terms, people, plan_digest, row_key, scope_of, semantic_rows)
 
 BATCH_ROWS = 1000                   # rows per insert batch (D42, I 14)
@@ -201,6 +202,7 @@ class Plan:
     origin: str | None              # the store's instance_id_origin
     not_copied: tuple[str, ...]     # source tables no rule names (D4)
     owner: str
+    cross_references: tuple = ()   # CrossRef(table, id, keys): shipped text that names something that stays
 
 
 PEOPLE_REASONS = ("others", "needs_yes", "said_no", "retired")
@@ -248,7 +250,8 @@ def _plan_file(plan: Plan) -> str:
         "terms": {"audience": plan.terms.audience, "actions": sorted(plan.terms.actions),
                   "purposes": sorted(plan.terms.purposes), "days": plan.terms.days},
         "digest": plan.digest, "counts": plan.counts, "contents": plan.contents, "others": plan.others,
-        "package_bytes": plan.package_bytes, "parts": plan.parts}, indent=2, sort_keys=True) + "\n"
+        "package_bytes": plan.package_bytes, "parts": plan.parts,
+        "cross_references": len({c.id for c in plan.cross_references})}, indent=2, sort_keys=True) + "\n"
 
 
 def _working_copy(store: Path, work: Path, *, engram_home: Path, home: Path, ledger, owner: str,
@@ -316,6 +319,13 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
                       source_episodes=conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0],
                       source_semantics=conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0])
         who = {reason: people(scratch, reason) for reason in PEOPLE_REASONS}
+        cold = Path(store).with_name("cold.db")
+        cold_conn = store_reader.connect(cold, immutable=True) if cold.is_file() else None
+        try:
+            crossed = tuple(cross_references(pr, left_out_keys(conn, cold_conn, pr, scratch=scratch)))
+        finally:
+            if cold_conn is not None:
+                cold_conn.close()
         if list_to is not None:
             _write_list(Path(list_to), pr.rows)
         package = work / "package.db"
@@ -328,7 +338,7 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
             ancestry_complete=bool(complete), selection=sel, terms=terms, digest=digest, counts=counts,
             contents=contents, package_bytes=size, parts=max(1, -(-size // PART_BYTES)), others=pr.others,
             home=bool(ctx.home), people=who, origin=identity.get("instance_id_origin"),
-            not_copied=tuple(not_copied), owner=context.owner)
+            not_copied=tuple(not_copied), owner=context.owner, cross_references=crossed)
         _write_private(plans_dir(home) / f"{plan.id}.json", _plan_file(plan))
         return plan
     finally:
@@ -408,7 +418,25 @@ def _others_paragraph(plan: Plan) -> str:
             "without that person's yes. " + OTHERS_AWAY_WORDS)
 
 
-def render_dry_run(plan: Plan, context: Context) -> str:
+def _cross_reference_lines(plan: Plan, show: bool) -> list[str]:
+    """The count of shipped memories whose text names something that stays (I 6.4 item 1), and with ``show`` each
+    one's id and the table of the key it names, never the key."""
+    ids: dict[str, str] = {}
+    for c in plan.cross_references:
+        ids.setdefault(c.id, c.layer)
+    if not ids:
+        return []
+    layers = Counter(ids.values())
+    what = " and ".join(_n(layers[k], k, plural) for k, plural in (("episode", "episodes"), ("semantic", "semantics"))
+                        if layers[k])
+    out = ["", f"Text that names something staying here: {what}. See them with --show-cross-references,",
+           "then leave them out with --exclude FILE and plan again."]
+    if show:
+        out += [f"  {c.id} names a key in {c.table} ({_n(c.keys, 'mention', 'mentions')})" for c in plan.cross_references]
+    return out
+
+
+def render_dry_run(plan: Plan, context: Context, *, show_cross_references: bool = False) -> str:
     sel, terms, c, k = plan.selection, plan.terms, plan.counts, plan.contents
     route = terms.route
     lanes = ", ".join(sorted(sel.lanes)) + (" lane" if len(sel.lanes) == 1 else " lanes")
@@ -471,6 +499,7 @@ def render_dry_run(plan: Plan, context: Context) -> str:
     if plan.not_copied:
         out.append("  Tables no rule names, not copied: " + ", ".join(plan.not_copied[:NAMES_SHOWN])
                    + (f" and {len(plan.not_copied) - NAMES_SHOWN} more" if len(plan.not_copied) > NAMES_SHOWN else ""))
+    out += _cross_reference_lines(plan, show_cross_references)
     out += ["", _others_paragraph(plan), "", "Permission you would give",
             f"  Audience  {terms.audience} (the station's imprint agent, acting for {context.operator})",
             "  Allows    recall, read and imprint on these memories"
@@ -485,7 +514,7 @@ def render_dry_run(plan: Plan, context: Context) -> str:
     return "\n".join(out) + "\n"
 
 
-def plan_dict(plan: Plan) -> dict:
+def plan_dict(plan: Plan, *, show_cross_references: bool = False) -> dict:
     """``--json``: the whole dry run as numbers and at most ``NAMES_SHOWN`` names a reason."""
     return {"id": plan.id, "created": plan.created, "store": str(plan.store), "source_id": plan.source_id,
             "source_identity": plan.source_identity, "ancestry": list(plan.ancestry),
@@ -496,7 +525,10 @@ def plan_dict(plan: Plan) -> dict:
             "home": plan.home, "package_bytes": plan.package_bytes, "parts": plan.parts,
             "people": {r: {"count": p.count, "named": [[_name(s), n] for s, n in p.named], "more": p.more}
                        for r, p in plan.people.items()},
-            "not_copied": list(plan.not_copied)}
+            "not_copied": list(plan.not_copied),
+            "cross_references": ({"memories": len({c.id for c in plan.cross_references}),
+                                  **({"named": [{"id": c.id, "table": c.table, "keys": c.keys}
+                                                for c in plan.cross_references]} if show_cross_references else {})})}
 
 
 # ---- Reading what would leave ----------------------------------------------------------------------------------
@@ -663,6 +695,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--days", type=int, default=DEFAULT_DAYS)
     p.add_argument("--list", type=Path, metavar="FILE", help="write one JSON line per row that would leave")
     p.add_argument("--json", action="store_true", help="print the dry run as JSON")
+    p.add_argument("--show-cross-references", action="store_true",
+                   help="list each memory whose text names something that stays here, and the table of that key")
     p.add_argument("--superyak-home", type=Path, default=Path.home() / ".superyak")
     p.add_argument("--engram-home", type=Path)
     r = sub.add_parser("read", help="page through what a plan would send, one JSON line a memory")
@@ -733,7 +767,9 @@ def _plan(args, *, clock) -> int:
         if ledger is not None:
             ledger.conn.close()
         shutil.rmtree(scratch, ignore_errors=True)
-    print(json.dumps(plan_dict(plan), indent=2, sort_keys=True) if args.json else render_dry_run(plan, context),
+    show = args.show_cross_references
+    print(json.dumps(plan_dict(plan, show_cross_references=show), indent=2, sort_keys=True) if args.json
+          else render_dry_run(plan, context, show_cross_references=show),
           end="\n" if args.json else "")
     return 0
 
