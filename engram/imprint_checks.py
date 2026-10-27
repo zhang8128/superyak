@@ -15,7 +15,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
-from collections.abc import Container, Mapping, Sequence
+from collections.abc import Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -287,6 +287,14 @@ CHECK_MESSAGES: dict[int, str] = {
        "machines on one commit.",
     8: "The package's identity is not the one the manifest describes.",
     9: "A table that never leaves the source holds rows.",
+    10: "A reference in the package does not resolve inside it, or a co-subject row is not a valid one.",
+    11: "A log row holds something a copy never carries.",
+    12: "The package holds something outside the scope and terms the owner allowed.",
+    13: "The package's row counts, or the digest of its rows, differ from the manifest's.",
+    14: "The package has free pages.",
+    15: "A memory table's rowids, or an index's document sizes, are not 1 to n.",
+    16: "A full-text index does not equal the one its content table builds.",
+    17: "A vector slot is not laid out as the vectors it ships.",
 }
 
 PACKAGE_FILES = ("approved.json", "imprint.db", "manifest.json", "permission.json")
@@ -420,11 +428,269 @@ def _check_9(conn: sqlite3.Connection) -> bool:
                for t, rule in TABLE_RULES.items() if rule == "dropped" and t in present)
 
 
+# ---- Checks 10 to 17 -----------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class AdmissionTerms:
+    """What the signed permission says about the copy (I 8): whether it carries ``route``, whether it stays in the
+    owner's home, and who the owner is. The default is the strictest reading: no route, not at home, no owner named."""
+    route: bool = False
+    at_home: bool = False
+    owner: str | None = None
+
+
+NO_TERMS = AdmissionTerms()
+_AT_HOME = "others-copied-at-home-v1"
+
+
+def terms_of(permission: Mapping) -> AdmissionTerms:
+    """The terms of a verified ``permission.json``: the station writes ``owner`` as ``person:<handle>``, the
+    attestation from the audience and owner, and r_T (an ``actions`` list with ``route``) exactly with ``route``."""
+    record = permission["record"]
+    owner = record["owner"]
+    return AdmissionTerms(
+        route=any("route" in r["selector"]["actions"] for r in record["records"]),
+        at_home=record["attestation"] == _AT_HOME,
+        owner=owner[len("person:"):] if isinstance(owner, str) and owner.startswith("person:") else owner)
+
+
+_MEMORY_TABLES = {"episode": "episodes", "semantic": "semantics"}
+_NOT_IN_PACKAGE = ("NOT EXISTS (SELECT 1 FROM episodes WHERE id = {v}) AND "
+                   "NOT EXISTS (SELECT 1 FROM semantics WHERE id = {v})")
+
+
+def _none(conn: sqlite3.Connection, sql: str, *args) -> bool:
+    """Whether a query that selects the offenders returns no row."""
+    return conn.execute(sql, args).fetchone() is None
+
+
+def _references_resolve(conn: sqlite3.Connection) -> bool:
+    if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        return False
+    out_e, out_s = (f"NOT EXISTS (SELECT 1 FROM {t} WHERE id = {{v}})" for t in ("episodes", "semantics"))
+    queries = [
+        # a vector row is a row of its base table (the vec0 table's _rowids shadow holds its ids)
+        f"SELECT 1 FROM episode_vectors_rowids r WHERE {out_e.format(v='r.id')}",
+        f"SELECT 1 FROM semantic_vectors_rowids r WHERE {out_s.format(v='r.id')}",
+        f"SELECT 1 FROM semantic_peers p WHERE {out_s.format(v='p.peer_id')} OR {out_s.format(v='p.parent_id')}",
+        f"SELECT 1 FROM subdivision_events e WHERE {out_s.format(v='e.parent_id')}",
+        f"SELECT 1 FROM subdivision_events e, json_each(e.peer_ids) j WHERE {out_s.format(v='j.value')}",
+        # a resonance's two ends: the memory under its layer
+        "SELECT 1 FROM resonances r WHERE r.layer_a NOT IN ('episode', 'semantic') OR r.layer_b NOT IN ('episode', 'semantic')",
+        f"SELECT 1 FROM resonances r WHERE (r.layer_a = 'episode' AND {out_e.format(v='r.memory_a')}) "
+        f"OR (r.layer_a = 'semantic' AND {out_s.format(v='r.memory_a')})",
+        f"SELECT 1 FROM resonances r WHERE (r.layer_b = 'episode' AND {out_e.format(v='r.memory_b')}) "
+        f"OR (r.layer_b = 'semantic' AND {out_s.format(v='r.memory_b')})",
+        # the log rows' targets, an instinct's id among them
+        f"SELECT 1 FROM memory_log l, json_each(l.target_ids) j WHERE {_NOT_IN_PACKAGE.format(v='j.value')}",
+        f"SELECT 1 FROM operation_log l, json_each(l.target_ids) j WHERE {_NOT_IN_PACKAGE.format(v='j.value')}",
+        # a co-subject row names a memory of the package in its layer
+        "SELECT 1 FROM imprint_subjects s WHERE s.layer NOT IN ('episode', 'semantic')",
+        f"SELECT 1 FROM imprint_subjects s WHERE (s.layer = 'episode' AND {out_e.format(v='s.memory_id')}) "
+        f"OR (s.layer = 'semantic' AND {out_s.format(v='s.memory_id')})",
+    ]
+    return all(_none(conn, q) for q in queries)
+
+
+def _subject_ok(subject: str, owner: str | None) -> bool:
+    from permissions import RuleError, check_id
+
+    if not isinstance(subject, str) or (owner is not None and subject == f"person:{owner}"):
+        return False
+    try:
+        check_id("person" if subject.startswith("person:") else "place", subject)
+    except RuleError:
+        return False
+    return subject.startswith(("person:", "place:"))
+
+
+def check_10(conn: sqlite3.Connection, manifest: dict, terms: AdmissionTerms = NO_TERMS) -> str | None:
+    """References resolve inside the package, and every ``imprint_subjects`` row is a valid co-subject (I 10, 10)."""
+    ok = _references_resolve(conn) and all(
+        _subject_ok(subject, terms.owner) for (subject,) in conn.execute("SELECT subject FROM imprint_subjects"))
+    return None if ok else CHECK_MESSAGES[10]
+
+
+_RECALL_KEYS = frozenset({"recall_id", "session_id"})
+_ROUTE_KEYS = frozenset({"receipt_id", "session_id", "tool", "lane"})
+_RECALL_OUTCOMES = (None, "used", "not_used", "used: auto: cited")
+
+
+_OUTSIDE_SQL = ("SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM episodes WHERE id = ?1) AND "
+                "NOT EXISTS (SELECT 1 FROM semantics WHERE id = ?1)")
+
+
+def _targets_ok(conn: sqlite3.Connection, text) -> bool:
+    try:
+        targets = json.loads(text)
+    except (TypeError, ValueError):
+        return False
+    if not (isinstance(targets, list) and targets and all(isinstance(t, str) for t in targets)):
+        return False
+    return all(conn.execute(_OUTSIDE_SQL, (t,)).fetchone() is None for t in targets)
+
+
+def _log_row_ok(conn: sqlite3.Connection, lanes: Container[str], event, target_ids, context, outcome) -> bool:
+    try:
+        keys = json.loads(context)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(keys, dict) or not _targets_ok(conn, target_ids):
+        return False
+    if event == "recall":
+        return set(keys) <= _RECALL_KEYS and outcome in _RECALL_OUTCOMES
+    if event == "route_shown":
+        return set(keys) <= _ROUTE_KEYS and keys.get("lane") in lanes and outcome is None
+    return False
+
+
+def check_11(conn: sqlite3.Connection, manifest: dict) -> str | None:
+    """The scrubs of I 6.2 hold for ``memory_log`` and ``operation_log`` (I 10, 11)."""
+    from imprint_filter import CITING_OPERATIONS
+
+    lanes = frozenset(manifest["scope"]["lanes"])
+    for event, target_ids, context, outcome in conn.execute(
+            "SELECT event_type, target_ids, context, outcome FROM memory_log"):
+        if not _log_row_ok(conn, lanes, event, target_ids, context, outcome):
+            return CHECK_MESSAGES[11]
+    for operation, harness, model, repo, details, target_ids in conn.execute(
+            "SELECT operation, harness, model, repo, details, target_ids FROM operation_log"):
+        if (operation not in CITING_OPERATIONS or harness is not None or model is not None or repo is not None
+                or details != "{}" or not _targets_ok(conn, target_ids)):
+            return CHECK_MESSAGES[11]
+    return None
+
+
+def _inside(at, t0, t1) -> bool:
+    from imprint_filter import parse_instant
+
+    when = parse_instant(at)
+    return when is not None and (t0 is None or when >= t0) and when < t1
+
+
+def check_12(conn: sqlite3.Connection, manifest: dict, terms: AdmissionTerms = NO_TERMS) -> str | None:
+    """Scope holds (I 10, 12): lanes, times, the layers chosen, D7's rule without ``route``, and no co-subject row
+    when the copy is not in the owner's home."""
+    from imprint_filter import parse_instant
+
+    scope = manifest["scope"]
+    lanes, layers = frozenset(scope["lanes"]), frozenset(scope["layers"])
+    t0 = None if scope["since"] is None else parse_instant(scope["since"])
+    t1 = parse_instant(scope["until"])
+    if t1 is None or (scope["since"] is not None and t0 is None):
+        return CHECK_MESSAGES[12]
+    empty = ["instincts", "instinct_vectors", "instinct_context_vectors"]
+    for layer, table in _MEMORY_TABLES.items():
+        if layer not in layers:
+            empty += [table, f"{layer}_vectors", "semantic_sources"]
+    if "semantic" not in layers:
+        empty += ["semantic_peers", "subdivision_events"]
+    if not terms.route:
+        empty += ["memory_log", "operation_log"]
+    if not terms.at_home:
+        empty.append("imprint_subjects")
+    if not all(_none(conn, f"SELECT 1 FROM {_q(t)} LIMIT 1") for t in empty):
+        return CHECK_MESSAGES[12]
+    if not terms.route and not _none(conn, "SELECT 1 FROM episodes WHERE session_id IS NOT NULL LIMIT 1"):
+        return CHECK_MESSAGES[12]
+    for layer in set(_MEMORY_TABLES) - layers:
+        if not _none(conn, "SELECT 1 FROM resonances WHERE layer_a = ?1 OR layer_b = ?1 LIMIT 1", layer):
+            return CHECK_MESSAGES[12]
+    if not _none(conn, "SELECT 1 FROM imprint_subjects WHERE layer NOT IN (SELECT value FROM json_each(?)) LIMIT 1",
+                 json.dumps(sorted(layers))):
+        return CHECK_MESSAGES[12]
+    for table in _MEMORY_TABLES.values():
+        for lane, created_at in conn.execute(f"SELECT lane, created_at FROM {table}"):
+            if lane not in lanes or not _inside(created_at, t0, t1):
+                return CHECK_MESSAGES[12]
+    for table, column in (("memory_log", "timestamp"), ("operation_log", "timestamp"), ("resonances", "created_at")):
+        for (at,) in conn.execute(f"SELECT {column} FROM {table}"):
+            if not _inside(at, t0, t1):
+                return CHECK_MESSAGES[12]
+    return None
+
+
+def _package_rows(conn: sqlite3.Connection, vectors: dict | None = None) -> Mapping[str, Iterable[dict]]:
+    """The eleven digest tables as the package holds them, each read from a new cursor when asked. With ``vectors``
+    (``{table: ScratchMap}``), each vector row's SHA-256 is written into its map as the row streams past."""
+    from imprint_filter import DIGEST_TABLES, RowSource
+
+    def rows(table: str):
+        def make():
+            cur = conn.cursor()
+            cur.execute(f"SELECT * FROM {_q(table)}")
+            names = [d[0] for d in cur.description]
+            for values in cur:
+                row = dict(zip(names, values))
+                if vectors is not None and table in vectors:
+                    vectors[table][row["id"]] = hashlib.sha256(row["embedding"]).hexdigest()
+                yield row
+        return make
+
+    return RowSource({t: rows(t) for t in DIGEST_TABLES})
+
+
+def check_13(conn: sqlite3.Connection, manifest: dict, *, scratch=None, vectors: dict | None = None) -> str | None:
+    """Counts equal ``manifest.contents`` and ``manifest.others``, and the plan digest recomputed from the package's
+    rows (I 5.4, with ``scratch`` a ``Scratch`` for its sort) equals ``manifest.plan_digest`` (I 10, 13). With
+    ``vectors`` (``{"episode_vectors": ScratchMap, "semantic_vectors": ScratchMap}``) the vector keys are kept for
+    check 17 while the digest reads them."""
+    from imprint_filter import DIGEST_TABLES, plan_digest
+
+    rows = _package_rows(conn, vectors)
+    counts = {}
+    for table in DIGEST_TABLES:
+        n = conn.execute(f"SELECT COUNT(*) FROM {_q(table)}").fetchone()[0]
+        if n:
+            counts[table] = n
+    memories, people = conn.execute(
+        "SELECT (SELECT COUNT(*) FROM (SELECT DISTINCT memory_id, layer FROM imprint_subjects)), "
+        "(SELECT COUNT(DISTINCT subject) FROM imprint_subjects)").fetchone()
+    if counts != manifest["contents"] or {"memories": memories, "people": people} != manifest["others"]:
+        return CHECK_MESSAGES[13]
+    if plan_digest(manifest["scope"], rows, scratch=scratch) != manifest["plan_digest"]:
+        return CHECK_MESSAGES[13]
+    return None
+
+
+def check_14(conn: sqlite3.Connection, manifest: dict) -> str | None:
+    return None if conn.execute("PRAGMA freelist_count").fetchone()[0] == 0 else CHECK_MESSAGES[14]
+
+
+def check_15(conn: sqlite3.Connection, manifest: dict) -> str | None:
+    """Each memory table's rowids, and each FTS table's ``_docsize`` ids, are exactly 1..n (D33), by count, min and
+    max (a rowid is unique, so those three say it)."""
+    tables = [(t, "rowid") for t in _MEMORY_TABLES.values()] + [(f"{n}_docsize", "id") for n, _ in _fts_tables(conn)]
+    for table, column in tables:
+        n, low, high = conn.execute(f"SELECT COUNT(*), MIN({column}), MAX({column}) FROM {_q(table)}").fetchone()
+        if n and (low != 1 or high != n):
+            return CHECK_MESSAGES[15]
+    return None
+
+
+def check_16(conn: sqlite3.Connection, manifest: dict, scratch: Path) -> str | None:
+    """FTS index equality, L2 (I 6.4). L2 makes one temporary ``fts5vocab`` table in the connection's temp schema,
+    which ``query_only`` forbids; the file itself stays ``mode=ro&immutable=1``, so it is lifted for this check
+    alone, with temp files on disk."""
+    conn.execute("PRAGMA temp_store = FILE")
+    conn.execute("PRAGMA query_only = OFF")
+    try:
+        failures = l2_fts(conn, scratch)
+    finally:
+        conn.execute("PRAGMA query_only = ON")
+    return None if not failures else CHECK_MESSAGES[16]
+
+
+def check_17(conn: sqlite3.Connection, manifest: dict, vectors: Mapping[str, Mapping[str, str]] | None = None) -> str | None:
+    """vec0 slots, L3 (I 6.4), against the plan digest's vector keys when ``check_13`` kept them."""
+    return None if not l3_vec0(conn, vectors) else CHECK_MESSAGES[17]
+
+
 def verify(imprint_dir: Path, *, verify_cmd: Sequence[str], migrations_dir: Path, scratch: Path) -> CheckFailure | None:
-    """I 10's checks in order, stopping at the first failure; this is 1 to 9. ``imprint.db`` is opened
-    ``mode=ro&immutable=1`` with sqlite-vec loaded, and every check reads rows from cursors. ``scratch`` is
-    ``<id>.state/scratch/`` in admission. A file that cannot be read as the check expects counts as that check's
-    failure."""
+    """I 10's 17 checks in order, stopping at the first failure. ``imprint.db`` is opened ``mode=ro&immutable=1``
+    with sqlite-vec loaded, and every check reads rows from cursors. ``scratch`` is ``<id>.state/scratch/`` in
+    admission: check 7's reference file, check 13's sort and vector keys, and check 16's side files go there and are
+    removed before this returns. A file that cannot be read as the check expects counts as that check's failure."""
     folder = Path(imprint_dir)
     db = folder / "imprint.db"
     if not _check_1(folder):
@@ -438,6 +704,7 @@ def verify(imprint_dir: Path, *, verify_cmd: Sequence[str], migrations_dir: Path
     try:
         if not _check_3(folder, manifest, verify_cmd):
             return _fail(3)
+        terms = terms_of(_load_json(folder / "permission.json"))
     except (OSError, ValueError, KeyError, TypeError):
         return _fail(3)
     try:
@@ -445,11 +712,26 @@ def verify(imprint_dir: Path, *, verify_cmd: Sequence[str], migrations_dir: Path
             return _fail(4)
     except OSError:
         return _fail(4)
+    scratch = Path(scratch)
+    scratch.mkdir(parents=True, exist_ok=True, mode=0o700)
+    from imprint_filter import Scratch, ScratchMap
+
     conn = store_reader.connect(db, immutable=True, vec=True)
+    digest_file, vector_file = scratch / "digest.db", scratch / "vectors.db"
+    sorter = keys = None
     try:
-        for step, run in ((5, lambda: _check_5(conn)), (6, lambda: _check_6(conn, manifest)),
-                          (7, lambda: _check_7(conn, manifest, migrations_dir, scratch)),
-                          (8, lambda: _check_8(conn, manifest)), (9, lambda: _check_9(conn))):
+        sorter, keys = Scratch(digest_file), Scratch(vector_file)
+        vectors = {t: ScratchMap(keys) for t in ("episode_vectors", "semantic_vectors")}
+        for step, run in (
+                (5, lambda: _check_5(conn)), (6, lambda: _check_6(conn, manifest)),
+                (7, lambda: _check_7(conn, manifest, migrations_dir, scratch)),
+                (8, lambda: _check_8(conn, manifest)), (9, lambda: _check_9(conn)),
+                (10, lambda: check_10(conn, manifest, terms) is None), (11, lambda: check_11(conn, manifest) is None),
+                (12, lambda: check_12(conn, manifest, terms) is None),
+                (13, lambda: check_13(conn, manifest, scratch=sorter, vectors=vectors) is None),
+                (14, lambda: check_14(conn, manifest) is None), (15, lambda: check_15(conn, manifest) is None),
+                (16, lambda: check_16(conn, manifest, scratch / "l2") is None),
+                (17, lambda: check_17(conn, manifest, vectors) is None)):
             try:
                 if not run():
                     return _fail(step)
@@ -458,3 +740,9 @@ def verify(imprint_dir: Path, *, verify_cmd: Sequence[str], migrations_dir: Path
         return None
     finally:
         conn.close()
+        for scratch_file, handle in ((digest_file, sorter), (vector_file, keys)):
+            if handle is not None:
+                handle.close()
+            for suffix in ("", "-journal", "-wal", "-shm"):
+                Path(str(scratch_file) + suffix).unlink(missing_ok=True)
+        shutil.rmtree(scratch / "l2", ignore_errors=True)

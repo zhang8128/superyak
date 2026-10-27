@@ -1716,10 +1716,12 @@ def stub_verify(*, ok: bool) -> list[str]:
     return [sys.executable, "-c", f"import sys; sys.exit({0 if ok else 1})"]
 
 
-def handed_off(tmp_path: Path, built, *, route: bool, valid_until: int) -> tuple[Path, str]:
+def handed_off(tmp_path: Path, built, *, route: bool, valid_until: int, owner: str = "andy") -> tuple[Path, str]:
     """``(root, imprint id)``: a root laid out as the station's hand-off leaves it (I 10): ``<id>/`` holding
     ``imprint.db``, ``manifest.json``, ``permission.json`` and ``approved.json``, and ``<id>.state/`` holding
-    ``admission.json``. The permission's signature is a stub; ``stub_verify`` stands in for the peer."""
+    ``admission.json``. The permission's signature is a stub; ``stub_verify`` stands in for the peer. The record has the
+    shape the station writes (``peer`` ``permission_record``): ``owner`` is ``person:<owner>``, ``attestation`` follows
+    whether the audience (always the operator ``andy``'s home) is the owner's, and ``route`` adds r_T."""
     import json
 
     root = tmp_path / "root"
@@ -1730,11 +1732,20 @@ def handed_off(tmp_path: Path, built, *, route: bool, valid_until: int) -> tuple
     for name in ("imprint.db", "manifest.json"):
         shutil.copyfile(built.dir / name, folder / name)
     manifest = built.manifest
-    record = {"kind": "imprint-permission", "station": "ab" * 32, "id": str(uuid.uuid4()), "owner": "andy",
+    def inner(kinds, actions):
+        return {"id": "r-" + "0" * 32, "layer": f"place:home/{owner}", "effect": "allow",
+                "selector": {"audience": ["place:home/andy"], "requesters": ["agent:station-imprints"],
+                             "objects": {"kinds": kinds}, "actions": actions, "purposes": ["calibration"]}}
+
+    records = [inner(["memory"], ["imprint", "read", "recall"])]
+    if route:
+        records.append(inner(["road", "trail"], ["imprint", "read", "recall", "route"]))
+    record = {"kind": "imprint-permission", "station": "ab" * 32, "id": str(uuid.uuid4()), "owner": f"person:{owner}",
               "owner_id": "u1", "ship_id": "s1", "imprint_id": imprint_id,
               "source_instance_id": manifest["source"]["instance_id"],
               "request_sha256": manifest["request_sha256"], "plan_digest": manifest["plan_digest"],
-              "attestation": {"route": route}, "created": 1_761_415_451, "records": []}
+              "attestation": "others-copied-at-home-v1" if owner == "andy" else "no-unconsented-others-v1",
+              "created": 1_761_415_451, "records": records}
     (folder / "permission.json").write_text(json.dumps({"record": record, "signature": "", "station_key": ""}))
     (folder / "approved.json").write_text(json.dumps({"imprint_id": imprint_id, "request_id": "r1",
                                                       "approved_at": 1_761_415_500, "approved_by": "andy"}))
@@ -1779,12 +1790,51 @@ _DB_CHANGES = {
 }
 
 
+_HOME_PLAN = {"owner": "andy", "cosubjects": {"e1": "person:jenn"}}      # a copy that stays at home, with a co-subject
+_BUILDS = {                                  # how the package of a tamper kind is built (default: owner sam, no route)
+    "dangling_target": {"route": True}, "unscrubbed_context": {"route": True}, "instinct_id_in_recall": {"route": True},
+    "subject_row_for_a_missing_memory": _HOME_PLAN, "subject_row_naming_the_owner": _HOME_PLAN,
+    "others_disagree_with_the_rows": _HOME_PLAN,
+}
+_INSTINCT = "5d1c0f3a-9b7e-4c2a-8f61-0a3b5c7d9e11"
+_BIG = "replace(hex(zeroblob(20000)), '0', 'x')"
+_DB_CHANGES.update({
+    "dangling_target": ("UPDATE memory_log SET target_ids = '[\"no-such-memory\"]'",),
+    "instinct_id_in_recall": (f"UPDATE memory_log SET target_ids = '[\"e1\", \"{_INSTINCT}\"]'",),
+    "unscrubbed_context": ("UPDATE memory_log SET context = "
+                           "'{\"recall_id\": \"rc1\", \"session_id\": \"sx\", \"query\": \"private words\"}'",),
+    "lane_outside_scope": ("UPDATE episodes SET lane = 'personal' WHERE id = 'e1'",),
+    "time_outside_scope": ("UPDATE episodes SET created_at = '2030-01-01T00:00:00+00:00' WHERE id = 'e1'",),
+    "session_id_without_route": ("UPDATE episodes SET session_id = 'sx' WHERE id = 'e1'",),
+    "digest_mismatch": ("UPDATE episodes SET content = 'Jenn drove somewhere else' WHERE id = 'e1'",),
+    "free_page": (f"INSERT INTO episodes (id, content, created_at, lane) VALUES ('big', {_BIG}, "
+                  "'2026-10-25T11:00:00+00:00', 'work')", "DELETE FROM episodes WHERE id = 'big'"),
+    "rowid_gap": ("UPDATE episodes SET rowid = 50 WHERE id = 'e2'",),
+    "fts_orphan": ("INSERT INTO episode_fts (episode_fts, rowid, content) VALUES ('delete', 2, "
+                   "'Jenn drove the truck to the clinic, trip 1')",
+                   "INSERT INTO episode_fts (rowid, content) VALUES (2, 'something the row never said')"),
+    "subject_row_for_a_missing_memory": ("INSERT INTO imprint_subjects VALUES ('no-such-memory', 'episode', 'person:jenn')",),
+    "subject_row_naming_the_owner": ("INSERT INTO imprint_subjects VALUES ('e2', 'episode', 'person:andy')",),
+    "subject_row_in_a_copy_leaving_home": ("INSERT INTO imprint_subjects VALUES ('e1', 'episode', 'person:jenn')",),
+})
+
+
+def open_checked(folder: Path):
+    """``(conn, manifest)``: the package opened as admission opens it, for one check at a time."""
+    import json
+
+    return (store_reader.connect(folder / "imprint.db", immutable=True, vec=True),
+            json.loads((folder / "manifest.json").read_text()))
+
+
 def tampered(tmp_path: Path, change: str) -> tuple[Path, str]:
     """``(root, imprint id)`` of a handed-off package with one defect. For a defect inside ``imprint.db``,
     ``manifest.package`` is then set to the file's facts, so every check before the target passes."""
     import json
 
-    root, imprint_id = handed_off(tmp_path, built_package(tmp_path), route=False, valid_until=FAR)
+    kind = _BUILDS.get(change, {})
+    root, imprint_id = handed_off(tmp_path, built_package(tmp_path, **kind), route=kind.get("route", False),
+                                  valid_until=FAR, owner=kind.get("owner", "sam"))
     folder = root / imprint_id
     db = folder / "imprint.db"
     if change == "extra_file":
@@ -1813,6 +1863,20 @@ def tampered(tmp_path: Path, change: str) -> tuple[Path, str]:
         with open(db, "r+b") as f:
             f.seek(size)                                    # page 2
             f.write(b"\xff" * size)
+        _refix_package(folder)
+    elif change == "others_disagree_with_the_rows":
+        manifest = json.loads((folder / "manifest.json").read_text())
+        manifest["others"]["people"] += 1
+        (folder / "manifest.json").write_text(json.dumps(manifest))
+    elif change == "non_zero_invalid_vec0_slot":
+        conn = sqlite3.connect(db)
+        try:
+            validity = bytearray(conn.execute("SELECT validity FROM episode_vectors_chunks").fetchone()[0])
+            validity[0] &= 0xFE                         # slot 0 invalid, but its rowid and vector bytes stay
+            conn.execute("UPDATE episode_vectors_chunks SET validity = ?", (bytes(validity),))
+            conn.commit()
+        finally:
+            conn.close()
         _refix_package(folder)
     elif change in _DB_CHANGES:
         _edit_db(db, *_DB_CHANGES[change])
