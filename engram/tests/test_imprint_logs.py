@@ -197,3 +197,11 @@ def test_normalize_outcome_and_the_window_start_and_sessionless_rows(tmp_path):
     late = selection(until=T1, since=T("2026-10-25T15:03:00Z"))
     got = memory_log_rows(s.conn, late, terms(route=True), closed_sessions(s.conn, T1), shipped_all(s), instinct_ids(s))
     assert [r["id"] for r in got] == ["rc3"]
+
+
+def test_a_route_shown_row_whose_lane_is_not_text_is_dropped_not_fatal(tmp_path):     # review's Task 11 item
+    s = _log_base(tmp_path, "odd-lane")
+    route_shown(s, "rs-list", targets=["e1"], lane=["work"], at="2026-10-25T15:00:00+00:00")
+    route_shown(s, "rs-dict", targets=["e1"], lane={"w": 1}, at="2026-10-25T15:01:00+00:00")
+    route_shown(s, "rs-ok", targets=["e1"], at="2026-10-25T15:02:00+00:00")
+    assert [r["id"] for r in rows_of(s) if r["event_type"] == "route_shown"] == ["rs-ok"]

@@ -965,7 +965,7 @@ def memory_log_rows(conn: sqlite3.Connection, sel: Selection, terms: Terms, clos
                 continue
             row["outcome"] = normalize_outcome(r["outcome"])
         else:
-            if context.get("lane") not in sel.lanes:
+            if not isinstance(context.get("lane"), str) or context["lane"] not in sel.lanes:   # a list would raise
                 continue
             targets = [t for t in targets if t in inside]
             if not targets:
