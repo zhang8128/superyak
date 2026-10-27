@@ -48,7 +48,12 @@ then the code, then green, then one commit. New peer test files join the sdist i
 - A known browser's successful sign-in resets its token's failures, as success deletes the pair's row elsewhere.
 - "The oldest goes" at 20 device rows: the row with the earliest expiry, that is the one signed in with longest ago.
 - A non-IP source's bucket is its host string; a missing client is `unknown`.
+- A give-back that brings a counter to zero leaves its row at 0 until its window ends (step 1 deletes it then).
+- A public websocket is closed whatever it carries: no route takes one.
+- `login_devices` is classified with `login_attempts` as coordination in test_restore: a device token grants no access.
 
 ## Open issues
 
-None yet.
+None: the spec was buildable as written. Two re-check nits that revision 3 did not take are left unbuilt, as the
+spec is binding: nit 6 (an index on `login_attempts(reset)`; spec 7 allows no migration beyond the device table, and
+the table stays small because expired rows go at every attempt) and nit 7 (redeem in a worker under the public lane).
