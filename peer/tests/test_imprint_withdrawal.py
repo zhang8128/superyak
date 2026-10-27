@@ -230,3 +230,93 @@ def test_shortening_replaces_admission_json_and_allow_files_atomically(tmp_path)
         doc = json.loads(p.read_text())                         # only valid_until moves; decided_at stays (R24)
         assert doc == {**docs[p], "valid_until": current_end(st)} and p.stat().st_ino != inodes[p] and stat.S_IMODE(p.stat().st_mode) == 0o400
     assert row(st, st.request_id)["permission"] == original_permission(st)
+
+
+# ---- A removal and its receipt are crash-consistent (final review M1; logged item 2) ----
+
+def hashes_of(st):
+    import hashlib
+    return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in every_file_of(st) if p.name != "imprint.db"}
+
+
+def committed_status(st):
+    """The row's status as another connection sees it: what is committed, not what a transaction holds."""
+    import sqlite3
+    with sqlite3.connect(st.store.db_path) as raw:
+        return raw.execute("SELECT status FROM imprint_requests WHERE id=?", (st.request_id,)).fetchone()[0]
+
+
+def test_a_failing_tombstone_leaves_deleting_with_a_receipt_and_the_retry_keeps_every_hash(tmp_path, monkeypatch):
+    st = at_status(tmp_path, "admitted"); hashes = hashes_of(st); paths = {str(p) for p in every_file_of(st)}
+    real = imprints.Imprints._write_tombstone
+    monkeypatch.setattr(imprints.Imprints, "_write_tombstone", lambda *a, **k: (_ for _ in ()).throw(OSError(28, "full")))
+    assert st.store.withdraw_imprint(owner_principal(st), st.request_id, root=st.root)["status"] == "deleting"
+    assert row(st, st.request_id)["status"] == "deleting" and not any(os.path.exists(p) for p in paths)
+    failed = receipts(st)[-1]["record"]
+    assert (failed["event"], failed["detail"]["error"]) == ("delete-failed", "OSError")
+    assert failed["detail"]["path"] == str(tombstone(st))
+    monkeypatch.setattr(imprints.Imprints, "_write_tombstone", real)
+    assert st.store.withdraw_imprint(owner_principal(st), st.request_id, root=st.root)["status"] == "deleted"
+    listed = {f["path"]: f["sha256"] for f in receipts(st)[-1]["record"]["detail"]["files"]}
+    assert set(listed) == paths and all(listed[k] == v for k, v in hashes.items()) and tombstone(st).is_file()
+
+
+def test_a_commit_lost_after_the_removal_keeps_every_hash_on_the_retry(tmp_path, monkeypatch):
+    st = at_status(tmp_path, "admitted"); hashes = hashes_of(st); paths = {str(p) for p in every_file_of(st)}
+    real = imprints.Imprints._write_tombstone
+
+    def crash(*args, **kwargs):                 # anything that rolls the last transaction back: a crash, a full disk
+        raise RuntimeError("lost")
+    monkeypatch.setattr(imprints.Imprints, "_write_tombstone", crash)
+    with pytest.raises(RuntimeError):
+        st.store.withdraw_imprint(owner_principal(st), st.request_id, root=st.root)
+    assert not any(os.path.exists(p) for p in paths) and "deleted" not in [r["record"]["event"] for r in receipts(st)]
+    monkeypatch.setattr(imprints.Imprints, "_write_tombstone", real)
+    assert st.store.withdraw_imprint(owner_principal(st), st.request_id, root=st.root)["status"] == "deleted"
+    listed = {f["path"]: f["sha256"] for f in receipts(st)[-1]["record"]["detail"]["files"]}
+    assert set(listed) == paths and all(listed[k] == v for k, v in hashes.items())
+
+
+def test_a_denial_removes_the_staged_bytes_only_after_its_receipts_are_committed(tmp_path, monkeypatch):
+    st = at_status(tmp_path, "received"); staged = st.store.data_dir / "imprints" / st.request_id
+    seen, real = [], imprints.shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        if Path(path) == staged:
+            seen.append(committed_status(st))
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(imprints.shutil, "rmtree", rmtree)
+    st.store.station_decide("andy", st.request_id[:4], False, imprints_root=st.root)
+    assert seen == ["deleted"] and not staged.exists()
+
+
+def test_a_denial_that_crashed_before_its_removal_is_finished_by_the_sweep(tmp_path, monkeypatch):
+    st = at_status(tmp_path, "received"); staged = st.store.data_dir / "imprints" / st.request_id
+    real = imprints.shutil.rmtree
+
+    def crash(path, *args, **kwargs):
+        if Path(path) == staged:
+            raise OSError("the process died here")
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(imprints.shutil, "rmtree", crash)
+    st.store.station_decide("andy", st.request_id[:4], False, imprints_root=st.root)
+    assert row(st, st.request_id)["status"] == "deleted" and staged.is_dir()
+    assert [r["record"]["event"] for r in receipts(st)][-2:] == ["denied", "deleted"]
+    monkeypatch.undo()
+    st.store.station_imprint_sweep(root=st.root)
+    assert not staged.exists() and [r["record"]["event"] for r in receipts(st)][-1] == "deleted"
+
+
+def test_a_station_made_before_removal_files_gains_the_column(tmp_path):
+    import sqlite3
+    from superyak_peer.db import Store
+    tmp_path.mkdir(exist_ok=True)
+    with sqlite3.connect(tmp_path / "peer.sqlite3") as raw:          # the imprint tables as this branch first made them
+        raw.execute("CREATE TABLE imprint_requests(id TEXT PRIMARY KEY, imprint_id TEXT UNIQUE NOT NULL, ship_id TEXT "
+                    "NOT NULL, owner_id TEXT NOT NULL, status TEXT NOT NULL, code_hash TEXT, created INTEGER NOT NULL, "
+                    "expires INTEGER NOT NULL, decided_at INTEGER, decided_by TEXT, ended_at INTEGER, request_sha256 "
+                    "TEXT NOT NULL, source_instance_id TEXT NOT NULL, imprints_root TEXT, permission TEXT, "
+                    "permission_signature TEXT, station_key TEXT, delete_reason TEXT)")
+    Store(tmp_path, signing=False)
+    with sqlite3.connect(tmp_path / "peer.sqlite3") as raw:
+        assert "removal_files" in {r[1] for r in raw.execute("PRAGMA table_info(imprint_requests)")}

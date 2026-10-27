@@ -76,6 +76,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             for name in ('share_url', 'share_status'):
                 if name not in request_columns:
                     db.execute(f'ALTER TABLE access_requests ADD COLUMN {name} TEXT')
+            imprint_columns = {row['name'] for row in db.execute('PRAGMA table_info(imprint_requests)')}
+            if 'removal_files' not in imprint_columns:  # store imprints, final review M1: hashes kept before a removal
+                db.execute('ALTER TABLE imprint_requests ADD COLUMN removal_files TEXT')
             ticket_columns = {row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
             if 'first_deferred' not in ticket_columns:  # ship-status fixes F3: the deferral a run resolved, on its ticket
                 db.execute('ALTER TABLE tickets ADD COLUMN first_deferred REAL')

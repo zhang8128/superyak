@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS imprint_requests(id TEXT PRIMARY KEY, imprint_id TEXT
   ship_id TEXT NOT NULL REFERENCES users(id), owner_id TEXT NOT NULL REFERENCES users(id), status TEXT NOT NULL,
   code_hash TEXT, created INTEGER NOT NULL, expires INTEGER NOT NULL, decided_at INTEGER, decided_by TEXT,
   ended_at INTEGER, request_sha256 TEXT NOT NULL, source_instance_id TEXT NOT NULL, imprints_root TEXT,
-  permission TEXT, permission_signature TEXT, station_key TEXT, delete_reason TEXT);
+  permission TEXT, permission_signature TEXT, station_key TEXT, delete_reason TEXT, removal_files TEXT);
 CREATE TABLE IF NOT EXISTS imprint_receipts(seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
   request_id TEXT NOT NULL REFERENCES imprint_requests(id), record TEXT NOT NULL, signature TEXT);
 '''
@@ -130,6 +130,7 @@ LIVE_STATUSES = ('requested', 'allowed', 'received', 'approved', 'admitted', 'de
 OPEN_STATUSES = ('requested', 'allowed', 'received', 'approved')
 
 _UUID4 = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
+_REQUEST_ID = re.compile(r'[0-9a-f]{32}')       # common.uid(): a request id and its staging directory's name
 _ANY_UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 _DIGEST = re.compile(r'[0-9a-f]{64}')
 _TIME = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ')
@@ -600,6 +601,18 @@ def _removed_files(folder, *, by_manifest=False):
 
 def _unlink(path):
     os.unlink(path)
+
+
+def _remove_denied(staged):
+    """A denied request's staging, removed after its receipts commit. A failure is logged; the sweep's reconcile step
+    removes the directory of a `deleted` row (final review M1)."""
+    try:
+        shutil.rmtree(staged)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        log.warning('removing the denied staging %s failed: %s; the sweep removes it', staged.name[:4],
+                    type(error).__name__)
 
 
 def _restore_write(folder):
@@ -1118,7 +1131,8 @@ class Imprints:
             with self.transaction() as db:
                 actor = self._operator(db, username)
                 found = self._received_row(db, item['id'])
-                self._deny_imprint(db, found, actor, {}, 'denied')
+                staged = self._deny_imprint(db, found, actor, {}, 'denied')
+            _remove_denied(staged)
             return item, {'status': 'deleted', 'imprint_id': found['imprint_id'], 'term': None}
         return item, self._approve_imprint(username, item['id'], Path(root))
 
@@ -1131,7 +1145,10 @@ class Imprints:
         return found
 
     def _deny_imprint(self, db, found, actor, detail, reason):
-        """Deletes the staged bytes and writes `denied` and `deleted`; the status becomes `deleted` at once."""
+        """Hashes the staged bytes and writes `denied` and `deleted`; the status becomes `deleted` at once. Returns the
+        staging directory, which the caller removes with `_remove_denied` only after the commit, so a crash leaves
+        the receipts and the bytes, never bytes gone with no receipt; the sweep's reconcile step removes what a crash
+        left (final review M1)."""
         staged = self.data_dir / 'imprints' / found['id']
         files = _removed_files(staged)
         self._append_imprint_receipt(db, found['id'], 'denied', actor, detail, sign=False)
@@ -1140,8 +1157,7 @@ class Imprints:
         now = int(self.clock())
         db.execute("UPDATE imprint_requests SET status='deleted', decided_at=?, decided_by=?, ended_at=?, "
                    "delete_reason=? WHERE id=?", (now, actor, now, reason, found['id']))
-        if staged.exists():
-            shutil.rmtree(staged)
+        return staged
 
     def _owner_layer_of(self, db, owner_id):
         pairs = []
@@ -1174,13 +1190,17 @@ class Imprints:
                 'SELECT record FROM imprint_receipts WHERE request_id=? ORDER BY seq', (request_id,))]
             decision = decide_use(permission, receipts, self._owner_layer_of(db, found['owner_id']),
                                   status='approved', kind='admission', t=int(self.clock()), operator=username)
+            staged = None
             if not decision.allowed:
-                self._deny_imprint(db, found, actor, {'term': decision.term}, 'denied')
-                return {'status': 'deleted', 'imprint_id': imprint_id, 'term': decision.term}
-            now = int(self.clock())
-            db.execute("UPDATE imprint_requests SET status='approved', decided_at=?, decided_by=?, imprints_root=? "
-                       "WHERE id=?", (now, actor, str(root), request_id))
-            self._append_imprint_receipt(db, request_id, 'approved', actor, {}, sign=False)
+                staged = self._deny_imprint(db, found, actor, {'term': decision.term}, 'denied')
+            else:
+                now = int(self.clock())
+                db.execute("UPDATE imprint_requests SET status='approved', decided_at=?, decided_by=?, "
+                           "imprints_root=? WHERE id=?", (now, actor, str(root), request_id))
+                self._append_imprint_receipt(db, request_id, 'approved', actor, {}, sign=False)
+        if staged is not None:
+            _remove_denied(staged)
+            return {'status': 'deleted', 'imprint_id': imprint_id, 'term': decision.term}
         self._hand_off(found, root, now, actor)
         return {'status': 'approved', 'imprint_id': imprint_id, 'term': None}
 
@@ -1218,26 +1238,36 @@ class Imprints:
             folders += [base / found['imprint_id'], base / f'{found["imprint_id"]}.state']
         return base, folders
 
-    def _remove_imprint(self, db, found, *, reason, actor_id, root_flag):
-        """Hashes, then removes, the staging, imprint and state directories. Returns each removed file's path, bytes
-        and SHA-256. A removal that fails writes `delete-failed` (path, error class) through `db`, then raises
-        _RemovalFailed, which the caller catches inside its transaction so the receipt is kept."""
+    def _hash_for_removal(self, db, found, root_flag):
+        """Restores write permission and hashes what the staging, imprint and state directories still hold, merged
+        with the hashes an earlier try kept: the row's `removal_files` and any `delete-failed` receipt's. Stores the
+        whole list in `removal_files` and returns it. `_end_imprint` commits this before any file goes, so a crash
+        or a failed commit after the removal loses no hash (I 12, hash before removing; final review M1)."""
         _, folders = self._imprint_folders(found, root_flag)
         for folder in folders:
             if folder.is_dir() and not folder.is_symlink():
                 _restore_write(folder)
         files = [entry for folder in folders for entry in _removed_files(folder, by_manifest=True)]
-        # An earlier try that failed part-way hashed files it then removed: its `delete-failed` receipt carries them,
-        # so the `deleted` receipt lists the whole set (I 12, hash before removing).
-        seen = {entry['path'] for entry in files}
-        earlier = []
+        try:
+            kept = json.loads(found['removal_files'] or '[]')
+        except (IndexError, KeyError):
+            kept = []
         for row in db.execute("SELECT record FROM imprint_receipts WHERE request_id=? AND "
                               "json_extract(record, '$.event')='delete-failed' ORDER BY seq", (found['id'],)):
-            for entry in json.loads(row['record'])['detail'].get('files', ()):
-                if entry['path'] not in seen:
-                    seen.add(entry['path'])
-                    earlier.append(entry)
-        files = earlier + files
+            kept += json.loads(row['record'])['detail'].get('files', ())
+        seen, merged = set(), []
+        for entry in kept + files:
+            if entry['path'] not in seen:
+                seen.add(entry['path'])
+                merged.append(entry)
+        db.execute('UPDATE imprint_requests SET removal_files=? WHERE id=?', (json.dumps(merged), found['id']))
+        return merged
+
+    def _remove_imprint(self, db, found, files, *, reason, actor_id, root_flag):
+        """Removes the staging, imprint and state directories, whose files `files` lists hashed
+        (`_hash_for_removal`). A removal that fails writes `delete-failed` (path, error class) through `db`, then
+        raises _RemovalFailed, which the caller catches inside its transaction so the receipt is kept."""
+        _, folders = self._imprint_folders(found, root_flag)
         path = None
         try:
             for folder in folders:
@@ -1258,7 +1288,6 @@ class Imprints:
             log.warning('removing the %s copy %s failed at %s: %s', reason, found['id'][:4], path,
                         type(error).__name__)
             raise _RemovalFailed from error
-        return files
 
     def _write_tombstone(self, base, found, db):
         """`<root>/tombstones/<imprint id>.json`, 0600 and exclusive, holding the `withdrawn` and `deleted` receipts."""
@@ -1297,19 +1326,37 @@ class Imprints:
                     "SELECT 1 FROM imprint_receipts WHERE request_id=? AND json_extract(record, '$.event')='withdrawn'",
                     (request_id,)).fetchone():
                 self._append_imprint_receipt(db, request_id, 'withdrawn', actor_id, {}, sign=True)
+        with self.transaction() as db:                     # the hashes, committed before any file goes (M1)
+            found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+            if found['status'] != 'deleting':
+                return {'id': request_id, 'status': found['status']}
+            self._hash_for_removal(db, found, root)
         with self.transaction() as db:
             found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
             if found['status'] != 'deleting':
                 return {'id': request_id, 'status': found['status']}
+            files = json.loads(found['removal_files'] or '[]')
             try:
-                files = self._remove_imprint(db, found, reason=reason, actor_id=actor_id, root_flag=root)
+                self._remove_imprint(db, found, files, reason=reason, actor_id=actor_id, root_flag=root)
             except _RemovalFailed:
                 return {'id': request_id, 'status': 'deleting'}
             base = self._imprint_folders(found, None)[0] or (Path(root) if root is not None else None)
+            db.execute('SAVEPOINT deleted_receipt')
             self._append_imprint_receipt(db, request_id, 'deleted', actor_id,
                                          {'reason': reason, 'files': files, 'limits': KNOWN_LIMITS}, sign=withdrawn)
             if base is not None:
-                self._write_tombstone(base, found, db)
+                try:
+                    self._write_tombstone(base, found, db)
+                except OSError as error:                    # the files are gone; the row stays `deleting` and says so
+                    db.execute('ROLLBACK TO deleted_receipt')
+                    db.execute('RELEASE deleted_receipt')
+                    self._append_imprint_receipt(
+                        db, request_id, 'delete-failed', actor_id,
+                        {'path': str(base / 'tombstones' / f'{found["imprint_id"]}.json'),
+                         'error': type(error).__name__, 'files': files}, sign=False)
+                    log.warning('writing the tombstone of %s failed: %s', request_id[:4], type(error).__name__)
+                    return {'id': request_id, 'status': 'deleting'}
+            db.execute('RELEASE deleted_receipt')
             now = int(self.clock())
             db.execute("UPDATE imprint_requests SET status='deleted', ended_at=?, delete_reason=? WHERE id=?",
                        (now, reason, request_id))
@@ -1511,7 +1558,8 @@ class Imprints:
                     out['reconciled'] += 1
                     continue
                 try:
-                    files = self._remove_imprint(db, found, reason='missing', actor_id=None, root_flag=root)
+                    files = self._hash_for_removal(db, found, root)
+                    self._remove_imprint(db, found, files, reason='missing', actor_id=None, root_flag=root)
                 except _RemovalFailed:
                     db.execute("UPDATE imprint_requests SET status='deleting' WHERE id=?", (request_id,))
                     continue
@@ -1522,7 +1570,25 @@ class Imprints:
                 db.execute("UPDATE imprint_requests SET status='deleted', ended_at=?, delete_reason='missing' "
                            "WHERE id=?", (now, request_id))
                 out['reconciled'] += 1
+        self._sweep_denied_staging(out)
         self._sweep_orphans(Path(root), out)
+
+    def _sweep_denied_staging(self, out):
+        """A denial removes its staging only after its receipts commit (M1); a crash between leaves the directory of
+        a `deleted` row, which goes here. Only a name shaped like a request id is touched, and only for a row that
+        is `deleted`."""
+        staging = self.data_dir / 'imprints'
+        if not staging.is_dir():
+            return
+        with os.scandir(staging) as entries:
+            for entry in entries:
+                if not _REQUEST_ID.fullmatch(entry.name) or entry.is_symlink() or not entry.is_dir():
+                    continue
+                with self.transaction() as db:
+                    found = db.execute('SELECT status FROM imprint_requests WHERE id=?', (entry.name,)).fetchone()
+                if found is not None and found['status'] == 'deleted':
+                    shutil.rmtree(entry.path, ignore_errors=True)
+                    out['reconciled'] += 1
 
     def _sweep_orphans(self, root, out):
         """Removes an imprint or state directory no live row owns, listing the root one entry at a time and skipping
@@ -1550,7 +1616,8 @@ class Imprints:
                         continue
                     here = {'id': found['id'], 'imprint_id': found['imprint_id'], 'imprints_root': str(root)}
                     try:
-                        files = self._remove_imprint(db, here, reason='restore', actor_id=None, root_flag=root)
+                        files = self._hash_for_removal(db, here, root)
+                        self._remove_imprint(db, here, files, reason='restore', actor_id=None, root_flag=root)
                     except _RemovalFailed:
                         continue
                     self._append_imprint_receipt(db, found['id'], 'deleted', None,
