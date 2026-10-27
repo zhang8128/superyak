@@ -128,7 +128,9 @@ class Members:
         typed = member.strip().removeprefix('@').lower()
         with self.transaction() as db:
             row = db.execute('SELECT id FROM users WHERE username=?', (typed,)).fetchone()
-            member_id = row['id'] if row else typed
+            if row is None and db.execute('SELECT 1 FROM users WHERE id=?', (typed,)).fetchone():  # an account is named by username only
+                raise Problem(404, NOT_A_MEMBER.format(x=safe_line(typed)))
+            member_id = row['id'] if row else typed  # a remote contact has no username: its id reaches REMOTE_MEMBER
             room = self._act_room(db, actor, key, adding=False)
             grant = self._acting_grant(db, actor, room['id'], 'remove_member', grant_id, self_removal=member_id == actor)
             return self._moderator_remove(db, actor, room, grant, typed, member_id)

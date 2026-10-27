@@ -38,9 +38,9 @@ REPLACED ?=
 UNPAIR ?=
 GRANTEE ?=
 GRANT ?=
-HOURS ?= 720
-BUDGET ?= 10
-ACTIONS ?= add,remove
+HOURS = 720
+BUDGET = 10
+ACTIONS = add,remove
 # Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
 # and any project ship's watcher on this machine (a later one gets it when make station-units runs again).
 STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-alert@.service

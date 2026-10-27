@@ -363,3 +363,25 @@ def test_the_ship_route_refuses_wormhole_early_and_writes_nothing(city):
         assert (refused.status_code, refused.json()['error']) == (403, (
             "Adding wormhole bridges the room to Stanley's aDNA lattice; only the room's owner bridges it (make station-bridge)"))
     assert snapshot(c.store) == before
+
+
+def test_the_ship_route_removal_refusals_and_self_removal(city):
+    """The ship route reads a username: wormhole by name, another moderator and a raw id are refused with nothing
+    written; the ship's own removal of itself is allowed."""
+    c = city
+    bridged, _ = c.store.station_bridge('andy', c.room[:6], True)
+    room = bridged['id']
+    moderate(c.store, c.andy, c.rio, room)
+    moderate(c.store, c.andy, c.jenn, room)
+    rio = ship_client(c.app, c.rio_key)
+    before = snapshot(c.store)
+
+    def refused(member, status, error):
+        answer = rio.delete(f'/api/ships/me/rooms/{room}/members/{member}')
+        assert (answer.status_code, answer.json()['error']) == (status, error)
+    refused('wormhole', 403, "Removing wormhole unbridges the room; only the room's owner does that (make station-unbridge)")
+    refused('jenn', 403, 'Jenn moderates this room too; only Andy can remove a moderator')
+    refused(c.doctor['id'], 404, f'{c.doctor["id"]} is not a member of this room')
+    assert snapshot(c.store) == before
+    mine = rio.delete(f'/api/ships/me/rooms/{room}/members/rio-grande')
+    assert mine.status_code == 200 and mine.json()['removed']['username'] == 'rio-grande'
