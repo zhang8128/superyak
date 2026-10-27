@@ -812,3 +812,43 @@ def footpath_store(tmp_path: Path) -> Storage:
     ep(s, "f1", session="walker", at="2026-10-25T10:00:00+00:00")
     ep(s, "f2", session="walker", at="2026-10-25T10:05:00+00:00")
     return s
+
+
+# Task 11: recall and route_shown rows, and instincts.
+
+def recall(store: Storage, id: str, *, targets, session: str | None = "s1", at: str = "2026-10-25T15:00:00+00:00",
+           outcome: str | None = None, **context) -> str:
+    """Insert a ``recall`` row; ``context`` keys (``recall_id``, ``query``, ...) join ``session_id``."""
+    import json
+
+    ctx_ = {"session_id": session, **context} if session is not None else dict(context)
+    store.conn.execute(
+        "INSERT INTO memory_log (id, timestamp, event_type, layer, target_ids, context, outcome) "
+        "VALUES (?, ?, 'recall', 'episode', ?, ?, ?)", (id, at, json.dumps(list(targets)), json.dumps(ctx_), outcome))
+    store.conn.commit()
+    return id
+
+
+def route_shown(store: Storage, id: str, *, targets, session: str | None = "s1", lane: str | None = "work",
+                at: str = "2026-10-25T15:00:00+00:00", **context) -> str:
+    """Insert a ``route_shown`` row whose context holds ``receipt_id``, ``session_id``, ``tool``, ``lane`` and more."""
+    import json
+
+    ctx_ = {"receipt_id": f"r-{id}", "tool": "recall", **context}
+    if session is not None:
+        ctx_["session_id"] = session
+    if lane is not None:
+        ctx_["lane"] = lane
+    store.conn.execute(
+        "INSERT INTO memory_log (id, timestamp, event_type, layer, target_ids, context, outcome) "
+        "VALUES (?, ?, 'route_shown', 'episode', ?, ?, NULL)", (id, at, json.dumps(list(targets)), json.dumps(ctx_)))
+    store.conn.commit()
+    return id
+
+
+def inst(store: Storage, id: str) -> str:
+    """Insert an instinct; returns its id."""
+    store.conn.execute("INSERT INTO instincts (id, trigger, action, created_at) VALUES (?, 't', 'a', "
+                       "'2026-01-01T00:00:00+00:00')", (id,))
+    store.conn.commit()
+    return id

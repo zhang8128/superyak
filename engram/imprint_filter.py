@@ -871,6 +871,79 @@ def operation_rows(conn: sqlite3.Connection, sel: Selection, terms: Terms, close
         yield row
 
 
+def normalize_outcome(text: str | None) -> str | None:
+    """A recall row's outcome as it ships: ``used: auto: cited`` when equal to it, else ``used`` or ``not_used``
+    by prefix, else null. Any free-text note after the prefix never leaves (I 6.2)."""
+    if not isinstance(text, str):
+        return None
+    if text == "used: auto: cited":
+        return text
+    if text.startswith("not_used"):
+        return "not_used"
+    if text.startswith("used"):
+        return "used"
+    return None
+
+
+def instinct_ids(conn: sqlite3.Connection, scratch: Scratch) -> IdSet:
+    """Every id in the source's ``instincts`` table, as an id set in the scratch file (R26)."""
+    found = IdSet(scratch)
+    cur = conn.cursor()
+    cur.row_factory = None
+    for (id,) in cur.execute("SELECT id FROM instincts ORDER BY id"):
+        found.add(id)
+    return found
+
+
+_LOG_KEEP = {"recall": ("recall_id", "session_id"), "route_shown": ("receipt_id", "session_id", "tool", "lane")}
+
+
+def memory_log_rows(conn: sqlite3.Connection, sel: Selection, terms: Terms, closed: IdSet, sh: Shipped,
+                    instinct_ids: IdSet) -> Iterator[dict]:
+    """The ``memory_log`` rows that ship (empty without ``route``; I 6.2, D35), in ``(timestamp, id)`` order.
+
+    A recall row loses its instinct ids and ships whole only when the rest is not empty and every id is in M.
+    A ``route_shown`` row ships with its targets cut to M, in order, unless that leaves nothing or ``context.lane``
+    is not in ``sel.lanes``; its outcome is null. Context keeps only the keys named for the event type. Every
+    other event type is dropped, as is a row without a closed session or outside ``t0 <= tau < t1``. No row
+    carries a mark of what was cut."""
+    if not terms.route:
+        return
+    inside = frozenset(sh.episodes) | frozenset(sh.semantics)
+    cur = conn.cursor()
+    cur.row_factory = sqlite3.Row
+    for r in cur.execute("SELECT * FROM memory_log WHERE event_type IN ('recall', 'route_shown') "
+                         "ORDER BY timestamp, id"):
+        at = parse_instant(r["timestamp"])
+        if at is None or (sel.since is not None and at.timestamp() < sel.since) or at.timestamp() >= sel.until:
+            continue
+        try:
+            context = json.loads(r["context"])
+            targets = json.loads(r["target_ids"])
+        except (TypeError, ValueError):
+            continue
+        sid = context.get("session_id") if isinstance(context, dict) else None
+        if not (isinstance(sid, str) and sid in closed and isinstance(targets, list)
+                and all(isinstance(t, str) for t in targets)):
+            continue
+        row = dict(r)
+        if r["event_type"] == "recall":
+            targets = [t for t in targets if t not in instinct_ids]
+            if not targets or not all(t in inside for t in targets):
+                continue
+            row["outcome"] = normalize_outcome(r["outcome"])
+        else:
+            if context.get("lane") not in sel.lanes:
+                continue
+            targets = [t for t in targets if t in inside]
+            if not targets:
+                continue
+            row["outcome"] = None
+        row["target_ids"] = json.dumps(targets)
+        row["context"] = json.dumps({k: context[k] for k in _LOG_KEEP[r["event_type"]] if k in context})
+        yield row
+
+
 # ---- The source (I 5.1) -------------------------------------------------------------------------------------
 
 def published_house(engram_home: Path) -> Path:
