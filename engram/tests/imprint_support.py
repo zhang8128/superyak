@@ -182,3 +182,51 @@ def vec(store: Storage, layer: str, id: str, seed: int) -> None:
     v = (v / np.linalg.norm(v)).tolist()
     store.conn.execute(f"INSERT INTO {layer}_vectors (id, embedding) VALUES (?, ?)", (id, _pack_embedding(v)))
     store.conn.commit()
+
+
+MEMORY_PREFIX = "private memory text number"
+
+
+def calibration_source(tmp_path: Path) -> Path:
+    """12 work episodes with vectors, one semantic over 10 of them, two cores."""
+    import numpy as np
+
+    def v(seed: int) -> list[float]:
+        base = np.zeros(768)
+        base[seed % 3] = 1.0
+        x = base + 0.05 * np.random.default_rng(seed).standard_normal(768)
+        return (x / np.linalg.norm(x)).tolist()
+
+    path = tmp_path / "src" / "graph.db"
+    path.parent.mkdir()
+    store = Storage(str(path))
+    ids = []
+    for i in range(12):
+        eid = str(uuid.uuid4())
+        store.add_episode(eid, f"s{i % 2}", f"{MEMORY_PREFIX} {i} about rivers and cheese", embedding=v(i))
+        ids.append(eid)
+    store.conn.execute("UPDATE episodes SET lane = 'work'")
+    store.conn.execute("UPDATE episodes SET core = 1 WHERE id IN (?, ?)", (ids[1], ids[2]))
+    store.conn.commit()
+    store.add_semantic(str(uuid.uuid4()), f"{MEMORY_PREFIX} semantic about rivers and also cheese", "fact", 0.8,
+                       v(0), ids[:10], lane="work")
+    store.close()
+    return path
+
+
+def memory_texts(path: Path) -> list[str]:
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return ([r[0] for r in conn.execute("SELECT content FROM episodes")]
+                + [r[0] for r in conn.execute("SELECT content FROM semantics")])
+    finally:
+        conn.close()
+
+
+def has_key(value, key: str) -> bool:
+    """True when ``key`` appears as a dict key at any depth."""
+    if isinstance(value, dict):
+        return key in value or any(has_key(x, key) for x in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(has_key(x, key) for x in value)
+    return False

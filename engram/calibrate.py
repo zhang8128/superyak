@@ -35,6 +35,7 @@ import sqlite3
 import stat
 import sys
 import traceback
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -162,6 +163,23 @@ def persistence_scores(conn) -> dict[str, dict]:
     return out
 
 
+PATHS_NOT_MEASURED = "not measured at admission; trails are used only by the trail evaluation"
+
+# Report sections a note may sit beside, by the key a caller names.
+NOTE_SECTIONS = ("snapshot", "identity", "migration", "first_open", "cohesion", "persistence", "paths")
+
+
+def strip_content(value):
+    """A copy of ``value`` with every ``content`` key removed at any depth."""
+    if isinstance(value, dict):
+        return {k: strip_content(v) for k, v in value.items() if k != "content"}
+    if isinstance(value, list):
+        return [strip_content(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(strip_content(v) for v in value)
+    return value
+
+
 def cohesion_report(store) -> dict:
     import sheaf
     from config import CohesionConfig
@@ -242,13 +260,19 @@ def _run(report: dict, name: str, fn, *args) -> None:
 
 
 def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
-              now: datetime | None = None) -> dict:
+              now: datetime | None = None, *, no_content: bool = False,
+              no_paths: bool = False, notes: Mapping[str, str] | None = None,
+              create_parents: bool = True) -> dict:
     from storage import Storage
+
+    unknown = sorted(set(notes or {}) - set(NOTE_SECTIONS))
+    if unknown:
+        raise ValueError(f"notes name no report section: {unknown}")
 
     source, out = Path(source), Path(out)
     if not source.is_file():
         raise FileNotFoundError(str(source))
-    out.mkdir(parents=True, exist_ok=False)
+    out.mkdir(parents=create_parents, exist_ok=False)
     source_before = store_reader.file_facts(source)
 
     snap = out / "snapshot.db"
@@ -292,8 +316,11 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
         store = _ReadOnlyStore(ro, scores)
         _run(report, "cohesion", cohesion_report, store)
         _run(report, "persistence", persistence_preview, store)
-        import paths
-        _run(report, "paths", paths.report, conn)
+        if no_paths:
+            report["analyses"]["paths"] = PATHS_NOT_MEASURED
+        else:
+            import paths
+            _run(report, "paths", paths.report, conn)
     finally:
         ro.close()
 
@@ -305,6 +332,10 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
         k for k in ("wal", "shm") if k in source_after and k not in source_before)
     if not report["source_unchanged"]:
         report["source_after"] = source_after
+    if notes:
+        report["notes"] = dict(notes)
+    if no_content:
+        report = strip_content(report)
     (out / "report.json").write_text(json.dumps(report, indent=2, default=str))
     (out / "report.md").write_text(render_markdown(report))
     return report
@@ -312,6 +343,11 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
 
 def render_markdown(report: dict) -> str:
     src, snap, a = report["source"], report["snapshot"], report["analyses"]
+    notes = report.get("notes", {})
+
+    def note(name):
+        return [f"- Note: {notes[name]}"] if name in notes else []
+
     lines = [
         "# Calibration report",
         "",
@@ -319,7 +355,7 @@ def render_markdown(report: dict) -> str:
         f"Source unchanged after calibration: **{report['source_unchanged']}**",
         "",
         "## Snapshot",
-    ]
+    ] + note("snapshot")
     schema = snap.get("schema", {})
     lines += [
         f"- Applied migrations: {schema.get('applied')}",
@@ -331,10 +367,11 @@ def render_markdown(report: dict) -> str:
                      f"to {e['last']}, {e['sessions']} sessions")
     ident = report.get("identity", {})
     if "error" in ident:
-        lines += ["", "## Store identity", f"- Not determined: {ident['error']}"]
+        lines += ["", "## Store identity", *note("identity"),
+                  f"- Not determined: {ident['error']}"]
     elif ident:
         src_id, wk = ident.get("source", {}), ident.get("working", {})
-        lines += ["", "## Store identity"]
+        lines += ["", "## Store identity", *note("identity")]
         if src_id.get("status") == "present":
             lines.append(f"- Source: `{src_id['instance_id']}` "
                          f"({src_id.get('instance_id_origin')})")
@@ -349,20 +386,23 @@ def render_markdown(report: dict) -> str:
             lines.append("- Working copy: none (not migrated)")
         lines.append(f"- Agrees: {ident.get('agrees')}")
     mig = report.get("migration", {})
-    lines += ["", "## Working copy migration", f"- Applied: {mig.get('applied')}"]
+    lines += ["", "## Working copy migration", *note("migration"), f"- Applied: {mig.get('applied')}"]
     if mig.get("applied"):
         lines.append(f"- Episode vector rows {mig.get('episode_vector_rows_before')} → "
                      f"{mig.get('episode_vector_rows_after')}")
 
-    def section(title, body):
-        lines.extend(["", f"## {title}"])
+    def section(title, body, key):
+        lines.extend(["", f"## {title}", *note(key)])
+        if isinstance(body, str):
+            lines.append(f"- {body}")
+            return False
         if isinstance(body, dict) and "error" in body:
             lines.append(f"- Not run: {body['error']}")
             return False
         return True
 
     fo = a.get("first_open", {})
-    if section("First normal open, if it happened now", fo):
+    if section("First normal open, if it happened now", fo, "first_open"):
         lines += [
             f"- Last touch in store: {fo['last_touch']}",
             f"- Stored strength: {fo['stored_strength']}",
@@ -370,21 +410,23 @@ def render_markdown(report: dict) -> str:
             f"- Would move to cold.db: **{fo['would_prune_to_cold']}** episodes",
         ]
     co = a.get("cohesion", {})
-    if section("Sheaf cohesion (hottest first)", co):
+    if section("Sheaf cohesion (hottest first)", co, "cohesion"):
         lines.append(f"- Semantics measured: {co['measured']}; histogram 0→1: {co['energy_histogram']}")
         for m in co["hottest"]:
-            lines.append(f"  - {m['energy']:.3f}  n={m['n']}  {m['content']}")
+            text = f"  {m['content']}" if "content" in m else ""
+            lines.append(f"  - {m['energy']:.3f}  n={m['n']}{text}")
     pe = a.get("persistence", {})
-    if section("Persistence", pe):
+    if section("Persistence", pe, "persistence"):
         for lane, s in pe["lanes"].items():
             lines.append(f"- [{lane}] {s}")
         lines.append(f"- Two-key prune: {pe['two_key_prune']}")
         for h in pe["hubs"]:
-            lines.append(f"  - {h['classification']:>11}  n={h['n']}  band={h['band']}  {h['content'][:60]}")
+            text = f"  {h['content'][:60]}" if "content" in h else ""
+            lines.append(f"  - {h['classification']:>11}  n={h['n']}  band={h['band']}{text}")
         lines.append(f"- Conjunct audit entries: {len(pe['conjunct_audit'])}; "
                      f"redundant cores flagged: {len(pe['redundant_cores'])}")
     pa = a.get("paths", {})
-    if section("Session paths (Layer 5)", pa):
+    if section("Session paths (Layer 5)", pa, "paths"):
         lines.append(f"- Sessions with paths: {pa['sessions_with_paths']} of {pa['sessions_total']}; "
                      f"basis {pa['basis']}")
         lines.append(f"- Tortuosity: {pa['tortuosity']}")
