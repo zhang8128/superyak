@@ -98,6 +98,20 @@ def test_the_estimate_is_near_the_measure():
     assert 1.0 <= est / current <= 1.6, f"estimate {est}, traced {current}, ratio {est / current:.2f}"
 
 
+def test_the_estimate_counts_a_decision_shared_by_objects_that_read_alike_once():
+    import dataclasses
+    w, prev = _ten_layer_world()
+    got, _ = _traced_set(w, prev)
+    keys = list(got.decisions)
+    one = got.decisions[keys[0]]
+    n = len(keys)
+    shared = dataclasses.replace(got, decisions={k: one for k in keys})
+    apart = dataclasses.replace(got, decisions={k: dataclasses.replace(one) for k in keys})
+    e_shared = lighthouse_daemon._CacheEntry(1, "l", 0, "store:house", shared).estimate()
+    e_apart = lighthouse_daemon._CacheEntry(1, "l", 0, "store:house", apart).estimate()
+    assert n > 10 and e_apart - e_shared == (n - 1) * 169, (n, e_apart, e_shared)
+
+
 def _five_agents(tmp_path, n_placements=N):
     daemon, name = raised_daemon(tmp_path, placements=n_placements)
     from permission_ledger import Ledger
@@ -126,8 +140,15 @@ def _side_for(daemon, pub, agent):
 
 
 def test_the_cache_keeps_to_its_bytes(tmp_path, monkeypatch):
-    monkeypatch.setattr(lighthouse_daemon, "CACHE_BYTES", 4 * MB)
     daemon, pub = _five_agents(tmp_path)
+    side = _side_for(daemon, pub, "agent:a0")          # one entry's size, so the bound holds two and a half
+    try:
+        one = lighthouse_daemon._CacheEntry(1, "l", 0, "store:house", daemon._eligible(side)).estimate()
+    finally:
+        side.close()
+    daemon._cache.clear()
+    daemon.rebuilds = 0
+    monkeypatch.setattr(lighthouse_daemon, "CACHE_BYTES", int(2.5 * one))
     for i in range(5):
         side = _side_for(daemon, pub, f"agent:a{i}")
         try:
@@ -137,10 +158,10 @@ def test_the_cache_keeps_to_its_bytes(tmp_path, monkeypatch):
     assert daemon.rebuilds == 5
     assert 1 <= len(daemon._cache)
     total = sum(e.estimate() for e in daemon._cache.values())
-    assert total <= 4 * MB, f"{total / MB:.2f} MB kept"
+    assert total <= lighthouse_daemon.CACHE_BYTES, f"{total / MB:.2f} MB kept"
     assert len(daemon._cache) < 5                            # the bound bit
     # an entry over the bound alone serves its frame and is not kept
-    monkeypatch.setattr(lighthouse_daemon, "CACHE_BYTES", 256 * 1024)
+    monkeypatch.setattr(lighthouse_daemon, "CACHE_BYTES", int(0.5 * one))
     daemon._cache.clear()
     side = _side_for(daemon, pub, "agent:a0")
     try:

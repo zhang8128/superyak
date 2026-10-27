@@ -356,12 +356,14 @@ class _CacheEntry:
     def estimate(self) -> int:
         """The bytes this entry holds, by the unit sizes measured for P 15: a decision 169 B, its dict entry 29 B
         and its object key 134 B; each distinct ``cited`` tuple 56 B and 8 B an entry; each memory id 80 B and
-        26 B of its frozenset's slots. Worked out once."""
+        26 B of its frozenset's slots. Objects that read alike share one Decision (P 6.5), counted once.
+        Worked out once."""
         est = self.__dict__.get("_est")
         if est is None:
             decisions = self.eligible.decisions
             tuples = {id(d.cited): len(d.cited) for d in decisions.values()}
-            est = (len(decisions) * (169 + 29 + 134) + sum(56 + 8 * n for n in tuples.values())
+            distinct = len({id(d) for d in decisions.values()})
+            est = (len(decisions) * (29 + 134) + distinct * 169 + sum(56 + 8 * n for n in tuples.values())
                    + len(self.eligible.memory_ids) * (80 + 26))
             object.__setattr__(self, "_est", est)
         return est

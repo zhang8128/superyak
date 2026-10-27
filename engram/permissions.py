@@ -22,6 +22,7 @@ from lighthouse_protocol import canonical_json
 MAX_RECORDS_PER_LAYER = 256
 MAX_RECORDS = 16_384            # records in one ledger, revoked and replaced ones included (5.4, 15)
 FOLD_BATCH = 4_096               # receipts one fold batch reads, verifies and anchors (9.1, 15)
+SHARED_DECISIONS = 4096          # distinct readings an eligible set keeps a shared decision for (P 15)
 LANE_TESTS_KEPT = 4096           # lane tests a State keeps, (object, lanes, anchor, t, deny) -> bool
 PREFETCH_CHUNK = 512            # refs a bulk decision or an eligible set prefetches at once
 STATE_ROWS = 65_536             # per-object rows a State keeps at once; the rest are read again on demand (5.6, 15)
@@ -2333,13 +2334,69 @@ class EligibleSet:
     horizon: int | None
 
 
+def _times_of_interest(state: State, t: int) -> tuple:
+    """Θ: every time a decision at t compares a lane note's or a membership's time with: t, and every record's
+    anchor and valid_from (anchors bound the lane and membership tests; a dated deny's valid_from is the time
+    `until` decides at). Sorted, made once per (State, t)."""
+    def compute():
+        out = {t}
+        for r in state.records.values():
+            out.add(r.anchor)
+            out.add(r.valid_from)
+        return tuple(sorted(out))
+    return state._memo(("times-of-interest", t), compute)
+
+
+def _envelopes_list_memories(state: State) -> bool:
+    return state._memo(("envelopes-list", ), lambda: any(
+        _grant_of(g).envelope.memories != STAR for g in state.grants.values()))
+
+
+def _share_key(state: State, obj, t: int):
+    """Everything a decision at t reads of a memory object, up to the order of times (P 6.5, How it is computed):
+    two objects with equal keys get equal decisions for the same requester, place, copy, action, purpose and t.
+    Its kind, store and layer; its subjects; which records list it in `memories`; its lane notes and its
+    memberships with each time replaced by its place among Θ (`_times_of_interest`) and, for notes, its rank among
+    the object's own times there, so every comparison a lane or membership test makes comes out the same. None
+    (decide it alone) for a malformed ref, a road or trail, an object with a grant-backed membership, or a ledger
+    whose grant envelopes list memories."""
+    ref = _parsed_or_none(obj) if isinstance(obj, str) else None
+    if ref is None or ref.kind != "memory" or _envelopes_list_memories(state):
+        return None
+    rows, grant = _members(state, obj)
+    if grant:
+        return None
+    theta = _times_of_interest(state, t)
+
+    def place(x):
+        i = bisect_left(theta, x)
+        return i, i < len(theta) and theta[i] == x
+    notes = []
+    last, rank = None, -1
+    for n in state.lane_notes.get(obj, ()):
+        here = place(n.at)
+        if last is None or here != last[0]:
+            rank = 0
+        elif n.at != last[1]:
+            rank += 1
+        last = (here, n.at)
+        notes.append((n.lane, here, rank))
+    members = []
+    for m in rows:
+        lo, hi = _span(state, m.added_seq, m.removed_seq)
+        members.append((m.collection, m.backing, m.removed_seq is not None and m.removed_seq <= state.seq,
+                        place(lo), None if hi is None else place(hi)))
+    listed = tuple(sorted(rid for ids in _listing(state, obj).values() for rid in ids))
+    return (ref.instance_id, ref.layer, subjects_of(state, obj, t), listed, tuple(notes), tuple(members))
+
+
 def eligible_set(state: State, placements: Sequence[Placement], *, requester: str, place: str, purpose: str,
                  action: str, at: int) -> EligibleSet:
     """Decide `action` for each placement, with no legacy layer: the subjects', places', holding place's and
     restriction layers only. A memory is eligible when each of its placements has an object that can be decided
     and the decision allows it. The pre-filter of P 6.5 is made once per (layer, action) for the requester,
     place, purpose and time (`_prefilter` keeps it on the State), and each object is matched against those
-    records alone."""
+    records alone. Objects that read alike (`_share_key`) are decided once, up to SHARED_DECISIONS readings."""
     decisions: dict[str, Decision] = {}
     made: dict[tuple, Decision | None] = {}
     horizons: list[int] = []
@@ -2348,18 +2405,36 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
     pool_versions: dict = {}
     pool_refusal: dict = {}
     pools = (pool_cited, pool_tuples, pool_versions, pool_refusal)
+    shared: dict = {}               # (what decide reads of an object (`_share_key`), copy) -> its Decision, or None
     for i, p in enumerate(placements):
         if i % PREFETCH_CHUNK == 0:
             state.prefetch([q.obj for q in placements[i:i + PREFETCH_CHUNK] if q.obj is not None])
         if p.obj is None or (p.obj, p.copy) in made:
             continue
+        skey = _share_key(state, p.obj, at)
+        if skey is not None:
+            skey = (skey, p.copy)
+            if skey in shared:
+                d = shared[skey]
+                made[(p.obj, p.copy)] = d
+                if d is None:
+                    continue
+                prior = decisions.get(p.obj)
+                if prior is None or (prior.allowed and not d.allowed):
+                    decisions[p.obj] = d
+                if d.horizon is not None:
+                    horizons.append(d.horizon)
+                continue
         u = Use(requester=requester, place=place, obj=p.obj, copy=p.copy, action=action, purpose=purpose, at=at)
         try:
             d = decide(state, u, _pools=pools)
         except RuleError:
-            made[(p.obj, p.copy)] = None
-            continue
+            d = None
+        if skey is not None and len(shared) < SHARED_DECISIONS:
+            shared[skey] = d
         made[(p.obj, p.copy)] = d
+        if d is None:
+            continue
         prior = decisions.get(p.obj)
         if prior is None or (prior.allowed and not d.allowed):
             decisions[p.obj] = d

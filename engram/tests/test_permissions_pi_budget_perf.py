@@ -139,3 +139,58 @@ def test_p5_probe_eligible_set_of_20000_within_32_seconds(reference):
     got = run_probe("eligible", home, extra)
     assert got["detail"]["eligible"] == got["detail"]["placements"] == 20_000
     assert got["seconds"] <= P5_ELIGIBLE_20000_S, f"{got['seconds']} s for 20,000 placements"
+
+
+# ---------------------------------------------------------------- P7: an eligible set decides once for objects that read alike
+
+P7_U24_ELIGIBLE_S = 2.0            # spec 12.2: U24's fixture (the prototype's 0.9 s, 1.5x rounded up)
+P7_U24_NO_SHARING_S = 30.0         # spec 12.2: when no two objects read alike (SHARED_DECISIONS = 0; the prototype's 17-20 s)
+P7_ANDY_S = 0.5                    # Andy's step 1, 20,000 placements (the prototype's 0.30-0.33 s)
+P7_REFERENCE_S = 6.0               # the reference-ledger probe, eligible set of 20,000 (the prototype's 3.6 s)
+P7_REFERENCE_KB = 130 * 1024       # and its peak, under 130 MB
+
+
+def test_p7_u24_eligible_set_of_20000_within_2_seconds():
+    s, placements = generated_world(placements=20_000, layers=43, records_per_layer=256)
+    start = time.perf_counter()
+    got = eligible_set(s, placements, requester=AGENT, place=PLACE, purpose="care-coordination", action="recall",
+                       at=T("2026-11-02"))
+    took = time.perf_counter() - start
+    assert len(got.memory_ids) == 20_000
+    assert took <= P7_U24_ELIGIBLE_S, f"{took:.1f} s for 20,000 placements"
+
+
+def test_p7_u24_eligible_set_of_20000_without_sharing_within_30_seconds(monkeypatch):
+    import permissions
+    monkeypatch.setattr(permissions, "SHARED_DECISIONS", 0)
+    s, placements = generated_world(placements=20_000, layers=43, records_per_layer=256)
+    start = time.perf_counter()
+    got = eligible_set(s, placements, requester=AGENT, place=PLACE, purpose="care-coordination", action="recall",
+                       at=T("2026-11-02"))
+    took = time.perf_counter() - start
+    assert len(got.memory_ids) == 20_000
+    assert took <= P7_U24_NO_SHARING_S, f"{took:.1f} s for 20,000 placements with no sharing"
+
+
+def test_p7_andy_step_1_rebuilds_20000_placements_within_half_a_second():
+    from permissions import Placement
+    w, _, placed = step1_world(memories=30_000, placements=20_000)
+    state = w.state()
+    placements = [Placement(f"id{i}", r, "store:HOUSE") for i, r in enumerate(placed)]
+    kw = dict(requester="agent:rcv0", place="place:home/andy", purpose="session-recall", action="recall",
+              at=T("2026-11-02"))
+    eligible_set(state, placements, **kw)               # warms the State's own caches, as the daemon's first build does
+    start = time.perf_counter()
+    got = eligible_set(state, placements, **kw)
+    took = time.perf_counter() - start
+    assert len(got.memory_ids) > 0
+    assert took <= P7_ANDY_S, f"{took:.2f} s for 20,000 placements"
+
+
+def test_p7_probe_eligible_set_of_20000_within_6_seconds_and_130_mb(reference):
+    from tests.permissions_budget_ledger import prepare, run_probe
+    home, extra = prepare(reference, "eligible")
+    got = run_probe("eligible", home, extra)
+    assert got["detail"]["eligible"] == got["detail"]["placements"] == 20_000
+    assert got["seconds"] <= P7_REFERENCE_S, f"{got['seconds']} s for 20,000 placements"
+    assert got["peak_kb"] < P7_REFERENCE_KB, f"{got['peak_kb'] / 1024:.1f} MB"
