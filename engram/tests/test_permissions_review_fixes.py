@@ -320,3 +320,21 @@ def test_m8_report_shadow_reads_the_audience_refusal_from_its_cited_entry_and_st
     assert cli_main(["report", "shadow"]) == 0
     out = capsys.readouterr().out
     assert f"{only_audience}" in out and "LEGACY_DENY at publisher" in out.split(only_audience)[1].splitlines()[0]
+
+
+# ---------------------------------------------------------------- M9: `sweep` says it failed when it failed
+
+def test_m9_a_sweep_that_fails_says_so_and_does_not_say_nothing_to_change(cli_home, monkeypatch, capsys):
+    from permission_ledger import Gate
+    from tests.permissions_support import make_house
+
+    def boom(*a, **k):
+        raise RuntimeError("sweep broke")
+    make_house(cli_home, "lighthouse")
+    monkeypatch.setattr(permission_cli, "effective_gate", lambda *a, **k: Gate("shadow"))
+    monkeypatch.setattr(permission_cli, "_sweep_house", boom)
+    capsys.readouterr()
+    assert cli_main(["sweep"]) == 1
+    out = capsys.readouterr()
+    assert "nothing to change" not in out.out + out.err
+    assert "sweep broke" in out.err and "The placement sweep failed" in out.err

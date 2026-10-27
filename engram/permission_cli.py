@@ -235,7 +235,12 @@ def run_sweep(led: Ledger, now: int):
     """R18: after a command that writes, sweep the published house under `shadow` and `enforce`, and fold receipts
     past their retention. A failure is a warning and never changes the exit code (ledger ruling FS1). Returns the
     sweep's report, or None when the gate is off or the sweep did not run."""
-    report = None
+    return _run_sweep(led, now)[0]
+
+
+def _run_sweep(led: Ledger, now: int) -> tuple:
+    """`run_sweep`'s work: (the sweep's report or None, whether the placement sweep failed)."""
+    report, failed = None, False
     try:
         house = led.root / PUBLISHED_HOUSE
         gate = effective_gate(led.root, [house])
@@ -245,6 +250,7 @@ def run_sweep(led: Ledger, now: int):
                 print(f"Placement sweep: {report.relinked} relinked, {report.removed} removed, "
                       f"{report.would_remove} would be removed, {report.settled} lane notes settled.")
     except Exception as e:
+        failed = True
         print(f"warning: the placement sweep failed: {e}", file=sys.stderr)
     try:
         from permission_uses import Uses, uses_path
@@ -256,7 +262,7 @@ def run_sweep(led: Ledger, now: int):
                 uses.close()
     except Exception as e:
         print(f"warning: the receipt fold failed: {e}", file=sys.stderr)
-    return report
+    return report, failed
 
 
 def _perform(led: Ledger, owner: str, acts: list[Act], notes: list[str], words: str | None = None) -> int:
@@ -756,7 +762,11 @@ def _check(a) -> int:
 def _sweep(a) -> int:
     with _ledger() as led:
         mode = effective_gate(led.root, houses(led.root)).mode
-        report = run_sweep(led, _now())
+        report, failed = _run_sweep(led, _now())
+    if failed:              # the final review's M9: a failed sweep is not "nothing to change"
+        print("The placement sweep failed (the warning above says why); the published house may not follow the "
+              "ledger yet. Run `engram-permissions sweep` again once the cause is fixed.", file=sys.stderr)
+        return 1
     if report is None:
         print(f"The gate is {mode}: nothing to sweep." if mode not in ("shadow", "enforce") else
               "Placement sweep: nothing to change.")
