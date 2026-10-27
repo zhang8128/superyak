@@ -92,7 +92,7 @@ DETAIL_KEYS: dict[str, tuple[frozenset[str], ...]] = {
     'withdrawn': (frozenset(),),
     'ended': (frozenset(),),
     'deleted': (frozenset({'reason', 'files', 'limits'}),),
-    'delete-failed': (frozenset({'path', 'error'}),),
+    'delete-failed': (frozenset({'path', 'error'}), frozenset({'path', 'error', 'files'})),
 }
 EVENTS = tuple(DETAIL_KEYS)
 
@@ -1081,6 +1081,17 @@ class Imprints:
             if folder.is_dir() and not folder.is_symlink():
                 _restore_write(folder)
         files = [entry for folder in folders for entry in _removed_files(folder, by_manifest=True)]
+        # An earlier try that failed part-way hashed files it then removed: its `delete-failed` receipt carries them,
+        # so the `deleted` receipt lists the whole set (I 12, hash before removing).
+        seen = {entry['path'] for entry in files}
+        earlier = []
+        for row in db.execute("SELECT record FROM imprint_receipts WHERE request_id=? AND "
+                              "json_extract(record, '$.event')='delete-failed' ORDER BY seq", (found['id'],)):
+            for entry in json.loads(row['record'])['detail'].get('files', ()):
+                if entry['path'] not in seen:
+                    seen.add(entry['path'])
+                    earlier.append(entry)
+        files = earlier + files
         path = None
         try:
             for folder in folders:
@@ -1096,7 +1107,8 @@ class Imprints:
                     os.rmdir(here)
         except OSError as error:
             self._append_imprint_receipt(db, found['id'], 'delete-failed', actor_id,
-                                         {'path': str(path), 'error': type(error).__name__}, sign=False)
+                                         {'path': str(path), 'error': type(error).__name__, 'files': files},
+                                         sign=False)
             log.warning('removing the %s copy %s failed at %s: %s', reason, found['id'][:4], path,
                         type(error).__name__)
             raise _RemovalFailed from error
@@ -1135,8 +1147,10 @@ class Imprints:
                 return {'id': request_id, 'status': 'declined'}
             if found['status'] != 'deleting':
                 db.execute("UPDATE imprint_requests SET status='deleting' WHERE id=?", (request_id,))
-                if withdrawn:
-                    self._append_imprint_receipt(db, request_id, 'withdrawn', actor_id, {}, sign=True)
+            if withdrawn and not db.execute(
+                    "SELECT 1 FROM imprint_receipts WHERE request_id=? AND json_extract(record, '$.event')='withdrawn'",
+                    (request_id,)).fetchone():
+                self._append_imprint_receipt(db, request_id, 'withdrawn', actor_id, {}, sign=True)
         with self.transaction() as db:
             found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
             if found['status'] != 'deleting':

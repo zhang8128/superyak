@@ -124,3 +124,49 @@ def test_the_station_may_delete(tmp_path):
     st = at_status(tmp_path, "admitted")
     st.store.station_imprint_delete("andy", st.imprint_id[:4], root=st.root)
     assert receipts(st)[-1]["record"]["detail"]["reason"] == "station"
+
+
+def fail_on_nth(n, error):
+    real, count = imprints._unlink, []
+
+    def unlink(path):
+        count.append(path)
+        if len(count) == n:
+            raise error
+        return real(path)
+    return unlink
+
+
+def test_a_retry_after_a_part_way_failure_keeps_every_hash(tmp_path, monkeypatch):
+    st = at_status(tmp_path, "admitted")
+    before = {str(p): p for p in every_file_of(st)}
+    assert len(before) >= 3
+    import hashlib
+    hashes = {k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in before.items() if p.name != "imprint.db"}
+    monkeypatch.setattr(imprints, "_unlink", fail_on_nth(3, PermissionError()))
+    withdraw(st, "owner")
+    assert row(st, st.request_id)["status"] == "deleting"
+    assert any(not p.exists() for p in before.values())      # the first attempt removed some
+    monkeypatch.undo()
+    assert withdraw(st, "ship").status_code == 200
+    assert row(st, st.request_id)["status"] == "deleted" and tombstone(st).is_file()
+    events = [r["record"]["event"] for r in receipts(st)]
+    assert events.count("withdrawn") == 1 and events[-1] == "deleted"
+    listed = {f["path"]: f["sha256"] for f in receipts(st)[-1]["record"]["detail"]["files"]}
+    assert set(listed) == set(before)
+    for k, digest in hashes.items():
+        assert listed[k] == digest
+
+
+def test_a_withdrawal_after_a_failed_station_delete_is_recorded(tmp_path, monkeypatch):
+    st = at_status(tmp_path, "admitted")
+    monkeypatch.setattr(imprints, "_unlink", raise_once(PermissionError()))
+    st.store.station_imprint_delete("andy", st.imprint_id[:4], root=st.root)
+    assert row(st, st.request_id)["status"] == "deleting"
+    assert "withdrawn" not in [r["record"]["event"] for r in receipts(st)]
+    monkeypatch.undo()
+    withdraw(st, "owner")
+    events = [r["record"]["event"] for r in receipts(st)]
+    assert events.count("withdrawn") == 1 and events[-1] == "deleted"
+    held = [r["record"]["event"] for r in __import__("json").loads(tombstone(st).read_text())["receipts"]]
+    assert held == ["withdrawn", "deleted"]
