@@ -11,7 +11,11 @@ import webbrowser
 from .station import HOME, StationClient, StationError, read_json, write_private, write_private_text
 
 WAITING = 3
-FINAL = {'docked': 0, 'denied': 1, 'expired': 1}
+FINAL = {'docked': 0, 'denied': 1, 'expired': 1, 'refused-public': WAITING}
+# Public route spec 4: the station answers 401 to a docking and to its status poll when they come by the public route
+# (Funnel). Running make dock again won't help, so the run ends at once; docking.json is kept for a run on the tailnet.
+REFUSED_PUBLIC = ("the station docks only over the tailnet. New here: install Tailscale, sign in, and accept the station's "
+                  "share link. On one of Andy's machines: check that the station's name resolves through MagicDNS")
 
 
 def open_browser(url):
@@ -37,10 +41,12 @@ class Dock:
     def _client(self, base, key=None):
         return StationClient(base, key, transport=self.transport)
 
-    def _say(self, status, message):
+    def _say(self, status, message, detail=None):
+        """The message (if any), then the STATUS line, once per change. `detail` goes in the STATUS line itself."""
         if (status, message) != self._last:
-            self.out(message)
-            self.out(f'STATUS: {status}')
+            if message:
+                self.out(message)
+            self.out(f'STATUS: {status}' + (f' ({detail})' if detail else ''))
             self._last = (status, message)
         return status
 
@@ -120,8 +126,12 @@ class Dock:
         if pending:
             if self.check is not None:
                 self.check()                # raises claims.Refused, which stops dock before this poll
-            # the secret in a header, never the URL (public route spec 4)
-            status = client.request('GET', f'/api/dockings/{quote(pending["id"])}', headers={'x-superyak-secret': pending['secret']})
+            try:  # the secret in a header, never the URL (public route spec 4)
+                status = client.request('GET', f'/api/dockings/{quote(pending["id"])}', headers={'x-superyak-secret': pending['secret']})
+            except StationError as error:
+                if error.status != 401:
+                    raise
+                return self._say('refused-public', None, REFUSED_PUBLIC)
             if status.get('key'):
                 ship = status['ship']
                 write_private(self.config_path, {'station': self.station, 'origin': None, 'ship': ship['username'], 'ship_id': ship['id'],
@@ -138,7 +148,12 @@ class Dock:
             # expired, or collected elsewhere: start again
         if not self.ship:
             raise SystemExit('Pass a ship name: make dock DOCK_ARGS="--ship <name>"')
-        started = client.request('POST', '/api/dockings', {'ship_name': self.ship, 'machine': self.machine})
+        try:
+            started = client.request('POST', '/api/dockings', {'ship_name': self.ship, 'machine': self.machine})
+        except StationError as error:
+            if error.status != 401:
+                raise
+            return self._say('refused-public', None, REFUSED_PUBLIC)
         write_private(self.docking_path, started)
         status = self._say('waiting-for-confirm', self._confirm_message(started))
         self.open_url(started['confirm_url'])  # after the code is printed, so the page can be checked against it
