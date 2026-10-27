@@ -693,6 +693,13 @@ class Ledger:
         row = self.conn.execute("SELECT seq, digest FROM ledger_log WHERE seq = ?", (top,)).fetchone()
         return None if row is None else f"{row[0]}:{row[1]}"
 
+    def _head_problem(self, top: int, meta: Mapping) -> str | None:
+        """How `meta.head`, when the ledger keeps one, is not the log's last row, in words; None when it is."""
+        head, last = meta.get("head"), self._head(top)
+        if head is None or head == last:
+            return None
+        return f"meta.head names seq {head.split(':', 1)[0]} ({head}), but the log's last row is {last or 'none'}"
+
     def _max_seq(self, table: str, column: str, loaded: Mapping | None):
         """The highest value of a seq column. A table the State read whole is read from `loaded`. Otherwise, with
         `loaded` given (a State, which must stay cheap), a column an update sets is read through its partial index,
@@ -712,10 +719,9 @@ class Ledger:
         `meta.head`, when the ledger keeps one, is that row. Each way this fails, in words; none for a whole
         tail. Read inside the caller's read transaction."""
         out = []
-        head = meta.get("head")
-        if head is not None and head != self._head(top):
-            out.append(f"meta.head names seq {head.split(':', 1)[0]} ({head}), but the log's last row is "
-                       f"{self._head(top) or 'none'}")
+        cut = self._head_problem(top, meta)
+        if cut:
+            out.append(cut)
         for table, columns in _SEQ_COLUMNS.items():
             for column in columns:
                 v = self._max_seq(table, column, loaded)
@@ -2033,11 +2039,21 @@ def effective_gate(engram_home: Path, served: Sequence[Path], *, busy_ms: int = 
             return _closed("ledger has a hot journal; any writing open clears it, such as engram-permissions sweep")
         return _closed(f"ledger cannot be read: {e}")
     try:
-        meta = led.meta()
+        # meta and the log's last row in one read: a gate act writes `gate` and `head` in one commit, so a meta page
+        # torn apart from the log names an older head, and the gate it holds is not the ledger's (P 5.6)
+        led.conn.execute("BEGIN")
+        try:
+            meta = led.meta()
+            cut = led._head_problem(led.seq(), meta)
+        finally:
+            led.conn.execute("COMMIT")
     except sqlite3.Error as e:
         return _closed(f"ledger cannot be read: {e}")
     finally:
         led.close()
+    if cut:
+        return _closed(f"{cut}: the log's tail was cut, so the gate it holds may be an older one; "
+                       "engram-permissions verify reports it")
     ledger_id, mode, raised = meta.get("ledger_id"), meta.get("gate"), bool(meta.get("gate_raised"))
     for house in served:
         try:
