@@ -105,3 +105,52 @@ def test_system_author_is_room_wide(env):
     fill(clients[0], key, 10, clock)
     assert 'system_author' in clients[0].get(f'/api/chats/{key}').json()
     assert 'system_author' in clients[0].get(f'/api/chats/{key}?limit=3').json()
+
+def mixed_room(env):
+    """A room with a person's posts, a ship post, a reply, a station notice (the brief), a claim note, and peer rows,
+    two of which share their instant with a local message."""
+    from test_presence import docked, ship_client
+    app, clients, users, clock = env
+    ship, ship_key = docked(app.state.store, users[0]['id'])
+    key = clients[0].post('/api/chats', json={'title': 'Mixed', 'member_ids': [users[1]['id'], ship['id']]}).json()['id']
+    first = fill(clients[0], key, 3, clock)
+    assert clients[0].put(f'/api/chats/{key}/brief', json={'body': 'The brief', 'revision': 0}).status_code == 200
+    clock[0] += 1
+    assert ship_client(app, ship_key).post(f'/api/chats/{key}/messages', json={'client_message_id': 'ship', 'body': 'from a ship'}).status_code == 201
+    clock[0] += 1
+    assert clients[1].post(f'/api/chats/{key}/messages', json={'client_message_id': 'r', 'body': 'a reply', 'reply_to': first[0]}).status_code == 201
+    assert clients[0].post(f'/api/chats/{key}/claims', json={'key': 'spec:mixed', 'note': 'working'}).status_code == 201
+    with app.state.store.transaction() as db:
+        for i in range(3):
+            db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)',
+                       (uuid.uuid4().hex, key, f'{"a" * 64}:remote', f'p{i}', f'relayed {i}', 1, clock[0]))
+        db.execute('UPDATE messages SET created=? WHERE client_message_id=?', (clock[0], 'r'))  # ties with the peer rows
+    clock[0] += 1
+    fill(clients[0], key, 2, clock, prefix='late')
+    return app, users, key
+
+def test_the_no_parameter_response_keeps_its_key_order(env):
+    app, users, key = mixed_room(env)
+    body = env[1][0].get(f'/api/chats/{key}').json()
+    assert list(body) == ['id', 'owner_id', 'title', 'epoch', 'linked_room_id', 'member_ids', 'created', 'last_activity',
+                          'messages', 'members', 'brief', 'brief_revision', 'system_author', 'claims']
+    local = [m for m in body['messages'] if 'source' in m]
+    peer = [m for m in body['messages'] if 'source' not in m]
+    assert len(local) + len(peer) == len(body['messages']) and len(peer) == 3
+    assert {tuple(m) for m in local} == {('id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'source', 'reply_to')}
+    assert {tuple(m) for m in peer} == {('id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'reply_to')}
+    assert list(body['members'][0]) == ['id', 'username', 'name', 'kind', 'owner_id']
+
+def test_paged_messages_equal_the_full_reads_slices(env):
+    app, users, key = mixed_room(env)
+    client = env[1][0]
+    full = client.get(f'/api/chats/{key}').json()['messages']
+    assert any(m.get('source') for m in full) and any(m.get('reply_to') for m in full)
+    tie = next(i for i, m in enumerate(full) if 'source' not in m) - 1  # the local message that precedes the peer rows
+    total = len(full)
+    for query, begin, end in (('at=0&limit=100', 0, total), (f'at={tie}&limit=3', tie, tie + 3), (f'at={tie + 1}&limit=4', tie + 1, tie + 5),
+                              ('limit=4', total - 4, total), (f'before={tie + 2}&limit=3', tie - 1, tie + 2),
+                              (f'start={full[2]["id"]}&limit=6', 2, 8)):
+        page = client.get(f'/api/chats/{key}?{query}').json()
+        assert page['messages'] == full[begin:end], query
+        assert page['first_position'] == begin

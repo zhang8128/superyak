@@ -58,15 +58,7 @@ class Chats:
                 message['source'], message['reply_to'] = sources.get(message['id']), replies.get(message['id'])
             room['messages'] += [dict(r, reply_to=None) for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created, rowid', (key,))]
             room['messages'].sort(key=lambda m: m['created'])  # stable: ids are random, so one instant keeps insertion order
-            room['members'] = [dict(r) for r in db.execute(
-                'SELECT users.id,users.username,users.name,users.kind,users.owner_id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? ORDER BY users.id',
-                (key,))]
-            room['brief'], room['brief_revision'] = self._room_brief(db, key)
-            system = self.system_author_id(db)
-            if any(m.get('author_id') == system for m in room['messages']):
-                room['system_author'] = self.system_author_public(db)
-            room['claims'] = self._active_claims(db, key)
-            return room
+            return self._room_fields(db, room, key)
 
     def _message_order(self, db, key):
         """(message id, source) for every message in the room, in display order: (created, source, rowid), local
@@ -112,6 +104,10 @@ class Chats:
         room['messages'] = [dict(rows[m], source=sources.get(m), reply_to=replies.get(m)) if source == 0 else dict(rows[m], reply_to=None)
                             for m, source in picked]
         room.update(paged=True, total=total, first_position=begin, seq=self._room_seq(db, key))
+        return self._room_fields(db, room, key)
+
+    def _room_fields(self, db, room, key):
+        """The room fields both reads share, whatever messages they hold. `system_author` is room-wide."""
         room['members'] = [dict(r) for r in db.execute(
             'SELECT users.id,users.username,users.name,users.kind,users.owner_id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? ORDER BY users.id',
             (key,))]
