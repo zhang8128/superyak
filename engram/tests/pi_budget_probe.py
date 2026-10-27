@@ -3,7 +3,9 @@
     python -m tests.pi_budget_probe OP HOME [--placements N] [--trails N] [--universe N] [--tail N] ...
 
 Prints one JSON line: the operation, its seconds and the process's peak resident memory, `VmHWM` in
-/proc/self/status, in kB. It imports nothing from pytest, so the peak is the code under test and its data.
+/proc/self/status, in kB, with `VmSwap` beside it: VmHWM counts only resident pages, so a run whose pages went to
+swap could understate its peak (the final review's M10). It imports nothing from pytest, so the peak is the code
+under test and its data.
 The operations: state, eligible, bulk, perform-allow, perform-collect, rebuild, check, uses-owner, uses-place,
 fold, daemon, migrate."""
 import argparse
@@ -27,11 +29,20 @@ CONTEXT = {"id": "memory/technical", "path": ["memory", "technical"]}
 PURPOSES = ("session-recall", "care-coordination", "trail-evaluation")
 
 
-def peak_kb() -> int:
+def _status_kb(key: str) -> int:
     for line in Path("/proc/self/status").read_text().splitlines():
-        if line.startswith("VmHWM:"):
+        if line.startswith(key + ":"):
             return int(line.split()[1])
-    raise RuntimeError("no VmHWM in /proc/self/status")
+    raise RuntimeError(f"no {key} in /proc/self/status")
+
+
+def peak_kb() -> int:
+    return _status_kb("VmHWM")
+
+
+def swap_kb() -> int:
+    """The process's memory in swap now, in kB, read when its peak is."""
+    return _status_kb("VmSwap")
 
 
 def _state(home):
@@ -240,7 +251,7 @@ def main(argv=None) -> int:
     start = time.perf_counter()
     detail = globals()["op_" + a.op.replace("-", "_")](a.home, a)
     print(json.dumps({"op": a.op, "seconds": round(time.perf_counter() - start, 2), "peak_kb": peak_kb(),
-                      "detail": detail}, sort_keys=True))
+                      "swap_kb": swap_kb(), "detail": detail}, sort_keys=True))
     return 0
 
 

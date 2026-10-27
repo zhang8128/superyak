@@ -76,11 +76,12 @@ def reference(tmp_path_factory):
 
 
 def record_peak(base, name, got):
-    line = {"op": name, "peak_kb": got["peak_kb"], "seconds": got["seconds"], "detail": got["detail"],
-            "spec_mb": BUDGET_MB.get(name)}
+    line = {"op": name, "peak_kb": got["peak_kb"], "swap_kb": got["swap_kb"], "seconds": got["seconds"],
+            "detail": got["detail"], "spec_mb": BUDGET_MB.get(name)}
     with open(Path(base) / "peaks.jsonl", "a") as f:
         f.write(json.dumps(line, sort_keys=True) + "\n")
-    print(f"U24 peak {name}: {got['peak_kb'] / 1024:.1f} MB (spec {BUDGET_MB.get(name)}) in {got['seconds']} s")
+    print(f"U24 peak {name}: {got['peak_kb'] / 1024:.1f} MB, {got['swap_kb'] / 1024:.1f} MB in swap "
+          f"(spec {BUDGET_MB.get(name)}) in {got['seconds']} s")
 
 
 def measure(reference, op, name=None, **given):
@@ -91,7 +92,9 @@ def measure(reference, op, name=None, **given):
         if home.parent.name == "work":
             shutil.rmtree(home, ignore_errors=True)
     record_peak(reference, name or op, got)
-    assert got["peak_kb"] < PEAK_LIMIT_KB, f"{name or op} peaked at {got['peak_kb']} kB, over {PEAK_LIMIT_KB}"
+    held = got["peak_kb"] + got["swap_kb"]          # a page in swap is not in VmHWM (final review M10)
+    assert held < PEAK_LIMIT_KB, (f"{name or op} peaked at {got['peak_kb']} kB with {got['swap_kb']} kB in swap, "
+                                  f"over {PEAK_LIMIT_KB}")
     return got
 
 
