@@ -1994,6 +1994,7 @@ class _Keep:
     reply: dict | None = None
     would_refuse: bool = False
     source: str | None = None
+    also: tuple = ()          # the other delivered objects the content matched: their subjects are carried too
     shadow: bool = False
 
     def record_copy(self, episode_id: str) -> bool:
@@ -2009,7 +2010,8 @@ class _Keep:
         try:
             led = Ledger.open(ENGRAM_HOME)
             try:
-                led.record_copy(f"mem:{sid}/episode/{episode_id}", self.source, now=_permission_now())
+                led.record_copy(f"mem:{sid}/episode/{episode_id}", self.source, now=_permission_now(),
+                                also=self.also)
             finally:
                 led.close()
         except Exception:
@@ -2099,12 +2101,14 @@ def _decide_keep(deliveries, *, agent: str, now: int, shadow: bool) -> _Keep:
     row = state.agents.get(agent)
     acting_for = "" if row is None else row.acts_for
     decided, seen = [], set()
+    kept_id = _store_id()
+    keeps = f"store:{kept_id}" if kept_id else ""      # the store this keep writes into (P 6.3, P36)
     for d in deliveries:
         if d.object is None or d.object in seen:
             continue
         seen.add(d.object)
         use = Use(requester=agent, place=place, obj=d.object, copy=d.copy or "", action="imprint",
-                  purpose=d.purpose, at=now)
+                  purpose=d.purpose, at=now, keeps=keeps)
         try:
             decided.append((use, decide(state, use)))
         except RuleError as exc:
@@ -2130,7 +2134,8 @@ def _decide_keep(deliveries, *, agent: str, now: int, shadow: bool) -> _Keep:
         return _Keep(would_refuse=True) if shadow else _Keep(reply=_keep_reply(state, agent, refused[1].refusal))
     if not written and not shadow:
         return _Keep(reply=_keep_reply(state, agent, cause="the receipt could not be written"))
-    return _Keep(source=decided[0][0].obj, shadow=shadow)
+    # P25: the kept copy carries the union of every matching source's subjects (the final review's M4)
+    return _Keep(source=decided[0][0].obj, also=tuple(u.obj for u, _ in decided[1:]), shadow=shadow)
 
 
 def _keep_check(content: str, *, agent: str, now: int, raw: str | None = None) -> dict | None:

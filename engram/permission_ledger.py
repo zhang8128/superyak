@@ -17,13 +17,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import dataclasses
 import os
 import sqlite3
+import threading
 import uuid
+import weakref
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
+
+import permissions
 
 from lighthouse_protocol import artifact_digest, canonical_json
 from permissions import (
@@ -81,11 +87,16 @@ CREATE INDEX records_layer ON records(layer);
 CREATE INDEX grants_layer ON permission_grants(layer);
 CREATE INDEX place_stewards_place ON place_stewards(place);
 CREATE INDEX collection_members_object ON collection_members(object);
+CREATE INDEX collection_members_collection ON collection_members(collection);
 CREATE INDEX subjects_object ON subjects(object);
 CREATE INDEX lane_notes_object ON lane_notes(object);
 CREATE INDEX group_members_group ON group_members(group_id);
 """
 
+# the tables a State reads per object, through StateRows, and not whole
+_PER_OBJECT = frozenset({"subjects", "lane_notes", "collection_members", "copies"})
+# the tables a State reads a row of when asked, and never holds: no decision reads them (ProposalMap)
+_ON_DEMAND = frozenset({"proposals"})
 # table order for tables(): the order of the schema
 _TABLES = tuple(_COLUMNS)
 _LOG_COLUMNS = ("seq", "at", "kind", "ref", "actor", "channel", "under_grant", "proposal_id", "body",
@@ -97,6 +108,341 @@ _HOT = ("This ledger has a hot journal from a writer that stopped mid-commit, wh
 
 class LedgerUnreadable(Exception):
     pass
+
+
+class LogTimes(Mapping):
+    """The time of each log row up to `seq`, read from the ledger when a decision asks (P 5.6, 15). A read-only
+    `Mapping` of seq to `at` over `ledger_log`: it answers only for 1 <= seq <= the State's seq, keeps at most
+    `permissions.STATE_LOG_TIMES` times (the least recently used leave first) and iterates in seq order,
+    streaming. The log is append-only, so a row at or below the State's seq reads the same whenever it is read.
+    A failed read raises `LedgerUnreadable`; a caller treats that as a failed `state()`. The reader connection
+    is shared between threads under a lock and closed when this object is collected."""
+    _CHUNK = 1024
+
+    def __init__(self, conn: sqlite3.Connection, seq: int):
+        self._conn, self._seq = conn, seq
+        self._lock = threading.Lock()
+        self._cache: OrderedDict = OrderedDict()
+        weakref.finalize(self, conn.close)
+
+    def _query(self, sql: str, args: tuple) -> list:
+        try:
+            with self._lock:
+                return self._conn.execute(sql, args).fetchall()
+        except sqlite3.Error as e:
+            raise LedgerUnreadable(f"the permission ledger's log could not be read: {e}") from e
+
+    def _fetch(self, seq: int) -> int | None:
+        rows = self._query("SELECT at FROM ledger_log WHERE seq = ?", (seq,))
+        return rows[0][0] if rows else None
+
+    def __getitem__(self, seq: int) -> int:
+        if not isinstance(seq, int) or isinstance(seq, bool) or not 1 <= seq <= self._seq:
+            raise KeyError(seq)
+        with self._lock:
+            hit = self._cache.get(seq)
+            if hit is not None:
+                self._cache.move_to_end(seq)
+                return hit
+        at = self._fetch(seq)
+        if at is None:
+            raise KeyError(seq)
+        with self._lock:
+            self._cache[seq] = at
+            self._cache.move_to_end(seq)
+            while len(self._cache) > permissions.STATE_LOG_TIMES:
+                self._cache.popitem(last=False)
+        return at
+
+    def prefetch(self, seqs) -> None:
+        """Read the times of these seqs (those within 1..the State's seq) in queries of 512, into the cache; any
+        other value is ignored. The cache keeps its cap."""
+        with self._lock:
+            want = sorted({s for s in seqs if isinstance(s, int) and not isinstance(s, bool)
+                           and 1 <= s <= self._seq and s not in self._cache})
+        for i in range(0, len(want), 512):
+            chunk = want[i:i + 512]
+            rows = self._query(f"SELECT seq, at FROM ledger_log WHERE seq IN ({','.join('?' * len(chunk))})",
+                               tuple(chunk))
+            with self._lock:
+                for s, at in rows:
+                    self._cache[s] = at
+                    self._cache.move_to_end(s)
+                while len(self._cache) > permissions.STATE_LOG_TIMES:
+                    self._cache.popitem(last=False)
+
+    def __iter__(self) -> Iterator[int]:
+        last = 0
+        while True:
+            rows = self._query("SELECT seq FROM ledger_log WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
+                               (last, self._seq, self._CHUNK))
+            if not rows:
+                return
+            for (s,) in rows:
+                yield s
+            last = rows[-1][0]
+
+    def __len__(self) -> int:
+        return self._query("SELECT COUNT(*) FROM ledger_log WHERE seq <= ?", (self._seq,))[0][0]
+
+class _Spec:
+    """How one per-object table is read: its key column, the column that says when a row was added, the rows'
+    order within a key, the columns that go back to null while their seq is in the future (`permissions._UNDONE`)
+    and the columns whose strings repeat, which a State pools."""
+    def __init__(self, table: str, key: str, order: str, pooled: Sequence[str]):
+        self.table, self.key, self.order = table, key, order
+        cols = permissions._COLUMNS[table]
+        self.cols = ", ".join(cols)
+        self.added = permissions._ADDED[table]
+        self.make = permissions._ROW[table]
+        self.key_at = cols.index(key)
+        self.pooled = tuple(cols.index(c) for c in pooled)
+        undone = permissions._UNDONE.get(table)
+        self.seq_at = cols.index(undone[0]) if undone else None
+        self.clear = tuple(cols.index(c) for c in undone[1]) if undone else ()
+
+
+_SPECS = {
+    "subjects": _Spec("subjects", "object", "rowid", ("subject", "added_by", "removed_by")),
+    "member_of": _Spec("collection_members", "object", "rowid", ("collection", "backing", "added_by", "removed_by")),
+    "collection_members": _Spec("collection_members", "collection", "rowid",
+                                ("collection", "backing", "added_by", "removed_by")),
+    "lane_notes": _Spec("lane_notes", "object", "at, seq, rowid", ("lane",)),
+    "copies": _Spec("copies", "object", "rowid", ()),
+}
+
+
+class StateRows:
+    """The per-object rows of one State, read from the ledger when a decision asks (P 5.6, 15). One bounded cache
+    serves every `RowMap` of the State: at most `permissions.STATE_ROWS` rows (an empty key counts as one), the
+    least recently used keys leaving first. A key whose rows alone pass the bound is returned and not kept.
+    Strings that repeat come from a pool of this State's. A row is read as `State.from_tables` reads it at the
+    State's seq: one added past it is left out, and the `_UNDONE` columns are cleared when their seq is past it.
+    The reader connection is shared between threads under a lock and closed when this object is collected."""
+    BATCH = 512
+
+    def __init__(self, conn: sqlite3.Connection, seq: int):
+        conn.row_factory = None
+        self.conn, self.seq = conn, seq
+        self._db_lock = threading.Lock()
+        self._lock = threading.Lock()
+        self._cache: OrderedDict = OrderedDict()
+        self._held = 0
+        self._pool: dict = {}
+        weakref.finalize(self, conn.close)
+
+    def cached_rows(self) -> int:
+        return self._held
+
+    def _query(self, sql: str, args: tuple) -> list:
+        try:
+            with self._db_lock:
+                return self.conn.execute(sql, args).fetchall()
+        except sqlite3.Error as e:
+            raise LedgerUnreadable(f"the permission ledger's rows could not be read: {e}") from e
+
+    def _build(self, spec: _Spec, vals: tuple):
+        if spec.seq_at is not None:
+            v = vals[spec.seq_at]
+            if v is not None and v > self.seq:
+                vals = list(vals)
+                for i in spec.clear:
+                    vals[i] = None
+        if spec.pooled:
+            vals = list(vals)
+            pool = self._pool
+            for i in spec.pooled:
+                v = vals[i]
+                if v is not None:
+                    vals[i] = pool.setdefault(v, v)
+        return spec.make(*vals)
+
+    def load(self, name: str, keys: Sequence[str]) -> dict:
+        """The rows of each key (an empty tuple for a key with none), read now and not cached."""
+        spec = _SPECS[name]
+        out: dict = {k: [] for k in keys}
+        marks = ", ".join("?" * len(keys))
+        rows = self._query(f"SELECT {spec.cols} FROM {spec.table} WHERE {spec.key} IN ({marks}) "
+                           f"AND {spec.added} <= ? ORDER BY {spec.order}", (*keys, self.seq))
+        for vals in rows:
+            out[vals[spec.key_at]].append(self._build(spec, vals))
+        return {k: tuple(v) for k, v in out.items()}
+
+    def _keep(self, name: str, key: str, rows: tuple) -> None:
+        cost = max(1, len(rows))
+        if cost > permissions.STATE_ROWS:
+            return
+        with self._lock:
+            old = self._cache.pop((name, key), None)
+            if old is not None:
+                self._held -= max(1, len(old))
+            self._cache[(name, key)] = rows
+            self._held += cost
+            while self._held > permissions.STATE_ROWS:
+                _, gone = self._cache.popitem(last=False)
+                self._held -= max(1, len(gone))
+
+    def rows(self, name: str, key) -> tuple:
+        if not isinstance(key, str):
+            return ()
+        with self._lock:
+            hit = self._cache.get((name, key))
+            if hit is not None:
+                self._cache.move_to_end((name, key))
+                return hit
+        rows = self.load(name, (key,))[key]
+        self._keep(name, key, rows)
+        return rows
+
+    def prefetch(self, refs: Sequence[str]) -> set:
+        """Load the rows of up to 512 refs a query. Returns the seqs the subjects and membership rows read were
+        added and removed at, which the State's log times read in batches too."""
+        wanted = list(dict.fromkeys(r for r in refs if isinstance(r, str)))
+        seqs: set = set()
+        for i in range(0, len(wanted), self.BATCH):
+            chunk = wanted[i:i + self.BATCH]
+            for name in ("subjects", "member_of", "lane_notes", "copies"):
+                with self._lock:
+                    need = [k for k in chunk if (name, k) not in self._cache]
+                if need:
+                    for k, rows in self.load(name, need).items():
+                        self._keep(name, k, rows)
+                        if name in ("subjects", "member_of"):
+                            for r in rows:
+                                seqs.add(r.added_seq)
+                                if r.removed_seq is not None:
+                                    seqs.add(r.removed_seq)
+        return seqs
+
+    def count(self, name: str) -> int:
+        spec = _SPECS[name]
+        return self._query(f"SELECT COUNT(DISTINCT {spec.key}) FROM {spec.table} WHERE {spec.added} <= ?",
+                           (self.seq,))[0][0]
+
+    def keys(self, name: str) -> Iterator[str]:
+        spec, last = _SPECS[name], None
+        while True:
+            after = "" if last is None else f"{spec.key} > ? AND "
+            args = (self.seq,) if last is None else (last, self.seq)
+            rows = self._query(f"SELECT DISTINCT {spec.key} FROM {spec.table} WHERE {after}{spec.added} <= ? "
+                               f"ORDER BY {spec.key} LIMIT {self.BATCH}", args)
+            if not rows:
+                return
+            for (k,) in rows:
+                yield k
+            last = rows[-1][0]
+
+    def batches(self, name: str) -> Iterator[dict]:
+        """Every key's rows, in batches of 512 keys, read and not cached."""
+        batch: list = []
+        for k in self.keys(name):
+            batch.append(k)
+            if len(batch) == self.BATCH:
+                yield self.load(name, batch)
+                batch = []
+        if batch:
+            yield self.load(name, batch)
+
+
+class RowMap(Mapping):
+    """A read-only `Mapping` over one per-object table at the State's seq, as `State.from_tables` makes it: the
+    rows of a key as a tuple (or, for `copies` and `copy_seqs`, the source or the seq). A key with no rows is
+    absent. `len` counts the keys at seq, and iteration and `items()` stream in batches of 512 keys."""
+    def __init__(self, reader: StateRows, name: str, project: Callable | None = None):
+        self._reader, self._name, self._project = reader, name, project
+
+    def _out(self, rows: tuple):
+        return rows if self._project is None else self._project(rows[0])
+
+    def __getitem__(self, key):
+        rows = self._reader.rows(self._name, key)
+        if not rows:
+            raise KeyError(key)
+        return self._out(rows)
+
+    def get(self, key, default=None):
+        rows = self._reader.rows(self._name, key)
+        return self._out(rows) if rows else default
+
+    def __contains__(self, key) -> bool:
+        return bool(self._reader.rows(self._name, key))
+
+    def __len__(self) -> int:
+        return self._reader.count(self._name)
+
+    def __iter__(self) -> Iterator[str]:
+        return self._reader.keys(self._name)
+
+    def items(self):
+        for batch in self._reader.batches(self._name):
+            for k, rows in batch.items():
+                if rows:
+                    yield k, self._out(rows)
+
+    def values(self):
+        for _k, v in self.items():
+            yield v
+
+
+class ProposalMap(Mapping):
+    """The State's `proposals`, read from the ledger when asked and never held (P 15, P37; the final review's I1):
+    no decision reads a proposal, and an agent can file up to `MAX_OPEN_PROPOSALS` of them, each holding a whole
+    act, besides every decided and expired one. A row reads as `State.from_tables` reads it at the State's seq:
+    one decided past the seq is pending. Iteration and `values()` stream in batches of 512 rows, by rowid."""
+    _COLS = ", ".join(permissions._COLUMNS["proposals"])
+
+    def __init__(self, reader: StateRows):
+        self._reader = reader
+
+    def _row(self, vals: tuple):
+        r = permissions._ROW["proposals"](*vals)
+        if r.decided_seq is not None and r.decided_seq > self._reader.seq:
+            r = r._replace(status="pending", decided_seq=None)
+        return r
+
+    def __getitem__(self, pid):
+        rows = self._reader._query(f"SELECT {self._COLS} FROM proposals WHERE id = ?", (pid,)) \
+            if isinstance(pid, str) else []
+        if not rows:
+            raise KeyError(pid)
+        return self._row(rows[0])
+
+    def __contains__(self, pid) -> bool:
+        return isinstance(pid, str) and bool(
+            self._reader._query("SELECT 1 FROM proposals WHERE id = ?", (pid,)))
+
+    def __len__(self) -> int:
+        return self._reader._query("SELECT COUNT(*) FROM proposals", ())[0][0]
+
+    def _batches(self, cols: str) -> Iterator[list]:
+        last = 0
+        while True:
+            rows = self._reader._query(f"SELECT rowid, {cols} FROM proposals WHERE rowid > ? ORDER BY rowid "
+                                       f"LIMIT {StateRows.BATCH}", (last,))
+            if not rows:
+                return
+            yield [r[1:] for r in rows]
+            last = rows[-1][0]
+
+    def __iter__(self) -> Iterator[str]:
+        for batch in self._batches("id"):
+            for (pid,) in batch:
+                yield pid
+
+    def items(self):
+        for batch in self._batches(self._COLS):
+            for vals in batch:
+                yield vals[0], self._row(vals)
+
+    def values(self):
+        for _pid, row in self.items():
+            yield row
+
+    def open_ids(self, now: int) -> list[str]:
+        """The ids of the open proposals (pending at the State's seq, not expired at `now`), oldest first."""
+        return [pid for (pid,) in self._reader._query(
+            "SELECT id FROM proposals WHERE (status = 'pending' OR decided_seq > ?) AND expires > ? "
+            "ORDER BY created, id", (self._reader.seq, now))]
 
 
 @dataclass(frozen=True)
@@ -141,11 +487,11 @@ class Ledger:
 
     # ---------------------------------------------------------------- opening
     @staticmethod
-    def _connect(path: Path, *, read_only: bool, busy_ms: int = BUSY_MS) -> sqlite3.Connection:
+    def _connect(path: Path, *, read_only: bool, busy_ms: int = BUSY_MS, shared: bool = False) -> sqlite3.Connection:
         try:
             if read_only:
                 conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, isolation_level=None,
-                                       timeout=busy_ms / 1000)
+                                       timeout=busy_ms / 1000, check_same_thread=not shared)
                 conn.execute("PRAGMA query_only=ON")
             else:
                 conn = sqlite3.connect(path, isolation_level=None, timeout=busy_ms / 1000)
@@ -170,6 +516,13 @@ class Ledger:
             conn.close()
             hot = path.with_name(path.name + "-journal").exists()
             raise LedgerUnreadable(f"{path}: {e}. {_HOT if hot else ''}".strip()) from e
+        if not read_only:
+            try:            # a ledger made before this index was in the schema reads a collection by it
+                conn.execute("CREATE INDEX IF NOT EXISTS collection_members_collection "
+                             "ON collection_members(collection)")
+            except sqlite3.Error as e:
+                conn.close()
+                raise LedgerUnreadable(f"{path}: {e}") from e
         return cls(conn, path, read_only)
 
     @classmethod
@@ -234,20 +587,59 @@ class Ledger:
             seq = top if seq is None else seq
             if not 0 <= seq <= top:
                 raise ValueError(f"seq {seq} is outside the log (0 to {top})")
-            log = [dict(r) for r in self.conn.execute("SELECT seq, at, kind, ref, body FROM ledger_log ORDER BY seq")]
+            n_records = self.conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+            if n_records > permissions.MAX_RECORDS:
+                raise LedgerUnreadable(
+                    f"{self.path}: the ledger holds {n_records:,} records, more than the {permissions.MAX_RECORDS:,} "
+                    f"a State holds whole (P 5.4, 15); it reads as unreadable (P 5.6) until the records are read "
+                    f"per layer")
             tables = {t: [dict(r) for r in self.conn.execute(
-                f"SELECT {', '.join(_COLUMNS[t])} FROM {t} ORDER BY rowid")] for t in _TABLES}
+                f"SELECT {', '.join(_COLUMNS[t])} FROM {t} ORDER BY rowid")] for t in _TABLES
+                if t not in _PER_OBJECT and t not in _ON_DEMAND}
             meta = self.meta()
-        finally:
-            self.conn.execute("COMMIT")
-        names = {}
-        for r in log:
-            if r["seq"] <= seq and r["kind"] == "register-place":
+            # the only log bodies a State reads: place names. Log times are read when a decision asks.
+            names = {}
+            for r in self.conn.execute(
+                    "SELECT ref, body FROM ledger_log WHERE kind = 'register-place' AND seq <= ? ORDER BY seq",
+                    (seq,)):
                 name = json.loads(r["body"]).get("name")
                 if name:
                     names[r["ref"]] = name
-        return State.from_tables(tables, seq=seq, seq_at={r["seq"]: r["at"] for r in log}, meta=meta,
-                                 names=names)
+            claims = tuple(self._self_claims(seq))
+        finally:
+            self.conn.execute("COMMIT")
+        # second read-only connections: the log is append-only and the per-object rows carry the seqs that say
+        # what they were, so rows up to `seq` read the same later
+        reader = StateRows(self._connect(self.path, read_only=True, shared=True), seq)
+        state = State.from_tables(tables, seq=seq, seq_at=LogTimes(self._connect(self.path, read_only=True,
+                                                                                  shared=True), seq),
+                                  meta=meta, names=names)
+        return dataclasses.replace(
+            state, subjects=RowMap(reader, "subjects"), lane_notes=RowMap(reader, "lane_notes"),
+            member_of=RowMap(reader, "member_of"), collection_members=RowMap(reader, "collection_members"),
+            copies=RowMap(reader, "copies", lambda r: r.source),
+            copy_seqs=RowMap(reader, "copies", lambda r: r.added_seq), proposals=ProposalMap(reader),
+            self_claims=claims, _loader=reader)
+
+    def _self_claims(self, seq: int) -> Iterator:
+        """The live self-claimed subject rows at `seq`, objects in the order of their first row (7.4)."""
+        cols = ", ".join("s." + c for c in _COLUMNS["subjects"])
+        for r in self.conn.execute(
+                f"SELECT {cols} FROM subjects s WHERE s.self_claimed != 0 AND s.added_seq <= ? "
+                f"AND (s.removed_seq IS NULL OR s.removed_seq > ?) "
+                f"ORDER BY (SELECT MIN(f.rowid) FROM subjects f WHERE f.object = s.object AND f.added_seq <= ?), "
+                f"s.rowid", (seq, seq, seq)).fetchall():
+            row = permissions._ROW["subjects"](*r)
+            yield row._replace(removed_seq=None, removed_by=None)
+
+    def pending_lane_notes(self) -> Iterator[str]:
+        """The objects whose latest lane note at the ledger's seq is `pending`, streamed (P 5.3)."""
+        seq = self.seq()
+        for (obj,) in self.conn.execute(
+                "SELECT n.object FROM lane_notes n WHERE n.lane = 'pending' AND n.seq <= ? AND NOT EXISTS ("
+                "SELECT 1 FROM lane_notes m WHERE m.object = n.object AND m.seq <= ? AND "
+                "(m.at, m.seq, m.rowid) > (n.at, n.seq, n.rowid)) ORDER BY n.object", (seq, seq)):
+            yield obj
 
     def verify(self) -> int | None:
         prev, expect = ZERO, 1
@@ -264,6 +656,14 @@ class Ledger:
         text = canonical_json(dict(body))
         self.conn.execute("BEGIN IMMEDIATE")
         try:
+            added = sum(1 for item in body.get("insert", ()) if item["table"] == "records")
+            if added:             # P 5.4, 15: counted here, under the write lock, so two writers can't both pass
+                held = self.conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+                if held + added > permissions.MAX_RECORDS:
+                    raise RuleError("5.4 validity rules",
+                                    f"a ledger holds at most {permissions.MAX_RECORDS:,} records, revoked and "
+                                    f"replaced ones included: it holds {held:,}, and this change adds {added:,}")
+            self._check_open_bounds(body, at)
             last = self.conn.execute("SELECT seq, digest FROM ledger_log ORDER BY seq DESC LIMIT 1").fetchone()
             seq, prev = (last["seq"] + 1, last["digest"]) if last else (1, ZERO)
             entry = {"seq": seq, "at": at, "kind": kind, "ref": ref, "actor": actor, "channel": channel,
@@ -280,6 +680,58 @@ class Ledger:
                 raise _bad(f"the change collides with an existing row ({e})") from e
             raise
         return seq
+
+    def _check_open_bounds(self, body: Mapping, at: int) -> None:
+        """Proposals and child grants an agent can add without a yes, bounded inside the write's BEGIN IMMEDIATE as
+        the records are (P 15, P37; the final review's I1): open (pending, unexpired) proposals per filer and per
+        ledger, and live (not revoked, not expired) child grants per parent grant."""
+        for item in body.get("insert", ()):
+            row = item["row"]
+            if item["table"] == "proposals":
+                by = row["by_agent"]
+                mine, held = self.conn.execute(
+                    "SELECT COALESCE(SUM(by_agent = ?), 0), COUNT(*) FROM proposals "
+                    "WHERE status = 'pending' AND expires > ?", (by, at)).fetchone()
+                if mine >= permissions.MAX_OPEN_PROPOSALS_PER_AGENT:
+                    raise RuleError("7.7 proposals",
+                                    f"{by} holds at most {permissions.MAX_OPEN_PROPOSALS_PER_AGENT} open proposals, "
+                                    f"and holds {mine}: the owner signs or declines them, or each expires "
+                                    f"{PROPOSAL_DAYS} days after it was filed")
+                if held >= permissions.MAX_OPEN_PROPOSALS:
+                    raise RuleError("7.7 proposals",
+                                    f"a ledger holds at most {permissions.MAX_OPEN_PROPOSALS:,} open proposals, "
+                                    f"and holds {held:,}: the owner signs or declines them, or each expires "
+                                    f"{PROPOSAL_DAYS} days after it was filed")
+            elif item["table"] == "permission_grants" and row.get("parent_id") is not None:
+                live = self.conn.execute(
+                    "SELECT COUNT(*) FROM permission_grants WHERE parent_id = ? AND revoked_seq IS NULL "
+                    "AND expires > ?", (row["parent_id"], at)).fetchone()[0]
+                if live >= permissions.MAX_CHILD_GRANTS:
+                    raise RuleError("7.2 grants",
+                                    f"a grant has at most {permissions.MAX_CHILD_GRANTS} live child grants, and "
+                                    f"{row['parent_id']} has {live}: end one, or wait for one to expire")
+
+    _ALREADY = {"revoked_seq": "is already revoked", "retired_seq": "is already retired"}
+
+    def _unmatched(self, table: str, where: Mapping) -> str:
+        """Why an update matched no row, in words. An update that names its row by id and guards it (unrevoked,
+        unretired, still pending: P 5.1, a row is changed once) finds that row already changed when another writer
+        changed it after this write's checks read the ledger: the act is refused for that reason (the re-review's
+        Minor 6). Anything else is the raw where clause."""
+        rid = where.get("id")
+        guards = [c for c in where if c in ("revoked_seq", "retired_seq", "status")]
+        if rid is not None and guards:
+            row = self.conn.execute(f"SELECT {', '.join(guards)} FROM {table} WHERE id IS ?", (rid,)).fetchone()
+            if row is not None:
+                for c in guards:
+                    if row[c] == where[c]:
+                        continue
+                    if c == "status":
+                        return f"{rid} is already {row[c]} (by another write)"
+                    if table == "permission_grants":
+                        return f"{rid} has already ended (by another write)"
+                    return f"{rid} {self._ALREADY[c]} (by another write)"
+        return f"{table} update matched no row: {where}"
 
     def _project(self, body: dict, seq: int, at: int) -> None:
         def fill(v):
@@ -316,7 +768,7 @@ class Ledger:
                 f"UPDATE {table} SET {', '.join(c + '=?' for c in sets)} WHERE {clause}",
                 [fill(v) for v in sets.values()] + [fill(v) for v in where.values()])
             if cur.rowcount < 1:
-                raise _bad(f"{table} update matched no row: {where}")
+                raise _bad(self._unmatched(table, where))
         for k, v in body.get("meta", {}).items():
             self.conn.execute("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                               (k, str(v)))
@@ -348,6 +800,7 @@ class Ledger:
         ref, body = self._make(spec, state, actor, args, auth, now)
         body = _stamp(body, channel, None)
         seq = self._append(act.kind, ref, actor, channel, body, under_grant=auth.under_grant, at=now)
+        del state                 # P 5.6: no frame holds a State while the check builds the next
         return self._outcome("done", ref, seq, act.kind, args)
 
     def _make(self, spec: "_Act", state: State, actor: str, args: Mapping, auth: Authority, now: int):
@@ -369,9 +822,11 @@ class Ledger:
         if kind in _GLUED:
             changed = {REGISTRY}
         elif kind in _RECORD_ACTS:
-            state = self.state()
-            rec = state.records.get(args.get("record")) if "record" in args else None
-            changed = {rec.layer if rec is not None else args.get("layer")}
+            layer = None
+            if "record" in args:
+                row = self.conn.execute("SELECT layer FROM records WHERE id = ?", (args["record"],)).fetchone()
+                layer = row["layer"] if row is not None else None
+            changed = {layer if layer is not None else args.get("layer")}
         else:
             return Outcome(status, ref, seq)
         state = self.state()
@@ -422,14 +877,17 @@ class Ledger:
         if act.kind == "decline":
             if actor not in had and actor != p.for_person and not (needs and _covers(state, needs, {actor})):
                 raise RuleError(_ACT, f"{actor} has no say in {pid}")
-            seq = self._append("proposal-decline", pid, actor, channel, {"update": [{
-                "table": "proposals", "where": {"id": pid}, "set": {"status": "declined", "decided_seq": "@seq"}}]},
+            seq = self._append("proposal-decline", pid, actor, channel, {"update": [{      # decided once (P 5.1)
+                "table": "proposals", "where": {"id": pid, "status": "pending"},
+                "set": {"status": "declined", "decided_seq": "@seq"}}]},
                 proposal_id=pid, at=now)
             return Outcome("done", pid, seq)
         if channel == "tool":
             raise RuleError("7.6 the person's yes", "a signature needs the terminal; the tools can give no yes")
         if needs is None:
-            return self._sign_alone(state, p, body, actor, channel, now)
+            done = self._sign_alone(state, p, body, actor, channel, now)
+            del state
+            return self._outcome("done", *done)
         spec_act = body["act"]
         now_covered = _covers(state, needs, had | {actor})
         if now_covered == _covers(state, needs, had):
@@ -442,9 +900,10 @@ class Ledger:
         ref, mbody = self._make(spec, state, p.by_agent, args, Authority("do", "person", None), now)
         mbody = _signed(_stamp(mbody, channel, pid), pid)
         seq = self._append(spec_act["kind"], ref, actor, channel, mbody, proposal_id=pid, at=now)
+        del state
         return self._outcome("done", ref, seq, spec_act["kind"], args)
 
-    def _sign_alone(self, state: State, p, body: Mapping, actor: str, channel: str, now: int) -> Outcome:
+    def _sign_alone(self, state: State, p, body: Mapping, actor: str, channel: str, now: int) -> tuple:
         """The owner's yes to an agent's proposal: run its Act as the owner on the terminal (R26). Everything the
         act checks, it checks again against the ledger as it is now; a refusal leaves the proposal open."""
         if actor != p.for_person:
@@ -462,16 +921,15 @@ class Ledger:
         ref, mbody = self._make(spec, state, actor, args, auth, now)
         mbody = _signed(_stamp(mbody, "terminal", p.id), p.id)
         seq = self._append(kind, ref, actor, channel, mbody, under_grant=auth.under_grant, proposal_id=p.id, at=now)
-        return self._outcome("done", ref, seq, kind, args)
+        return ref, seq, kind, args       # the caller drops its State, then `_outcome` builds the next
 
     def proposals(self, *, now: int) -> list[dict]:
         """The open proposals (pending and not yet expired), oldest first. `words` come from the body by one
         template per kind (P 7.7); the agent's `reason` is kept apart and is never in them."""
         state = self.state()
         out = []
-        for p in sorted(state.proposals.values(), key=lambda r: (r.created, r.id)):
-            if p.status != "pending" or p.expires <= now:
-                continue
+        for pid in state.proposals.open_ids(now):         # at most MAX_OPEN_PROPOSALS, each read when listed
+            p = state.proposals[pid]
             body = json.loads(p.body)
             act = body["act"]
             kind = "register-place" if p.kind == "joint-place" else p.kind
@@ -485,14 +943,22 @@ class Ledger:
         return out
 
     # ---------------------------------------------------------------- kept copies and read accessors (P 7.4)
-    def record_copy(self, copy_ref: str, source_ref: str, *, now: int) -> None:
+    def record_copy(self, copy_ref: str, source_ref: str, *, now: int, also: Sequence[str] = ()) -> None:
         """The `copies` row and the source's subjects as co-subjects of the copy (`added_by` copy:<source>), in one
-        transaction, before the store write. Refused past MAX_COPY_CHAIN links or MAX_SUBJECTS subjects."""
+        transaction, before the store write. Refused past MAX_COPY_CHAIN links or MAX_SUBJECTS subjects. `also`
+        names other objects the kept content matched (the `remember` guard, P25): their subjects at `now` are
+        carried too, each row `added_by` copy:<that object>, while `copies` keeps the one source (the final
+        review's M4)."""
         if self.read_only:
             raise _bad("this ledger is open read-only")
         rule = "7.4 kept copies"
         parse_object_ref(copy_ref)
         parse_object_ref(source_ref)
+        also = [o for o in dict.fromkeys(also) if o != source_ref]
+        for o in also:
+            parse_object_ref(o)
+            if o == copy_ref:
+                raise RuleError(rule, "a memory is not a copy of itself")
         state = self.state()
         if copy_ref == source_ref:
             raise RuleError(rule, "a memory is not a copy of itself")
@@ -508,13 +974,19 @@ class Ledger:
         if links > MAX_COPY_CHAIN:
             raise RuleError(rule, f"a copy chain is at most {MAX_COPY_CHAIN} links")
         own = _own_subjects(state, copy_ref)
-        carried = sorted(set(subjects_of(state, source_ref, now)) - own)
+        came_from: dict[str, str] = {}             # each carried subject and the first object it came from
+        for src in (source_ref, *also):
+            for s in subjects_of(state, src, now):
+                if s not in own:
+                    came_from.setdefault(s, src)
+        carried = sorted(came_from)
         if len(own) + len(carried) > MAX_SUBJECTS:
             raise RuleError(rule, f"a copy has at most {MAX_SUBJECTS} subjects, with its source's")
         by = "copy:" + source_ref
         insert = [{"table": "copies", "row": {"object": copy_ref, "source": source_ref, "added_seq": "@seq"}}]
         insert += [{"table": "subjects", "row": {"object": copy_ref, "subject": s, "added_seq": "@seq",
-                                                 "added_by": by, "self_claimed": 0}} for s in carried]
+                                                 "added_by": "copy:" + came_from[s], "self_claimed": 0}}
+                   for s in carried]
         self._append("record-copy", copy_ref, by, "tool", {"insert": insert}, at=now)
 
     def note_lanes(self, phase: str, rows: Sequence[Mapping], target: str, *, store_id: str, now: int) -> None:
@@ -571,10 +1043,17 @@ class Ledger:
                               "WHERE instance_id=?", (instance_id,)).fetchone()
         return None if r is None else dict(r)
 
-    def cosubjects(self, ref: str) -> frozenset[str]:
-        """The effective co-subjects of ref, other than the default subject (its store's owner)."""
-        return frozenset(r["subject"] for r in self.conn.execute(
-            "SELECT subject FROM subjects WHERE object=? AND removed_seq IS NULL", (ref,)))
+    def cosubjects(self, ref: str, at: int | None = None) -> frozenset[str]:
+        """The co-subjects of ref: `subjects_of` (its own and, through `copies`, its sources' up to MAX_COPY_CHAIN
+        links, so a source's later subjects too; P 7.4, 19), less its default subject, its store's owner. `at`
+        None reads every subject row not removed; a time reads those in force then. The imprints plan's
+        `cosubjects(m)` (the final review's M6)."""
+        state = self.state()
+        out = set(subjects_of(state, ref, at))
+        store = state.stores.get(parse_object_ref(ref).instance_id)
+        if store is not None and store.imprint_of is None:
+            out.discard(store.owner)
+        return frozenset(out)
 
     # ---------------------------------------------------------------- the gate's plan and PlaceRules (P 9.4, 12.3)
     def gate_plan(self) -> dict:
@@ -637,7 +1116,7 @@ class Ledger:
         new = None
         try:
             new = Ledger._blank(dest, self.meta()["ledger_id"], path=tmp)
-            for r in self.conn.execute("SELECT * FROM ledger_log ORDER BY seq").fetchall():
+            for r in self.conn.execute("SELECT * FROM ledger_log ORDER BY seq"):
                 got = new._append(r["kind"], r["ref"], r["actor"], r["channel"], json.loads(r["body"]),
                                   under_grant=r["under_grant"], proposal_id=r["proposal_id"], at=r["at"])
                 again = new.conn.execute("SELECT digest FROM ledger_log WHERE seq=?", (got,)).fetchone()[0]
@@ -757,9 +1236,10 @@ def _prep_retire_person(state, actor, args):
 
 
 def _make_retire_person(state, actor, args, auth, now):
-    person = args["person"]
-    return person, {"update": [_upd("persons", {"id": person}, retired_seq="@seq"),
-                               _upd("places", {"id": state.persons[person].home}, retired_seq="@seq")]}
+    person = args["person"]                     # a second retirement matches no row (P 5.1)
+    return person, {"update": [_upd("persons", {"id": person, "retired_seq": None}, retired_seq="@seq"),
+                               _upd("places", {"id": state.persons[person].home, "retired_seq": None},
+                                    retired_seq="@seq")]}
 
 
 # -- places
@@ -779,6 +1259,9 @@ def _prep_register_place(state, actor, args):
     if name is not None:
         if not isinstance(name, str) or not name.strip() or len(name) > 255:
             raise RuleError(_REG, "a place's name is a non-empty text of at most 255 characters")
+        if not name.strip().isprintable():       # every later yes that names the place prints it (final review M5)
+            raise RuleError(_REG, "a place's name is one line of text that prints: no control, format or "
+                                  "line-break character")
         out["name"] = name.strip()
     return out
 
@@ -851,7 +1334,8 @@ def _prep_retire_place(state, actor, args):
 
 
 def _make_retire_place(state, actor, args, auth, now):
-    return args["place"], {"update": [_upd("places", {"id": args["place"]}, retired_seq="@seq")]}
+    return args["place"], {"update": [_upd("places", {"id": args["place"], "retired_seq": None},  # once (P 5.1)
+                                           retired_seq="@seq")]}
 
 
 # -- agents
@@ -961,14 +1445,22 @@ def _members(state, cid):
     return {r.object for r in state.collection_members.get(cid, ()) if r.removed_seq is None}
 
 
+def _bound_objects(objects: list) -> None:
+    if len(objects) > permissions.MAX_ACT_OBJECTS:
+        raise RuleError(_ACT, f"one act names at most {permissions.MAX_ACT_OBJECTS:,} objects, not "
+                              f"{len(objects):,} (P 15); the command line splits a larger set into acts")
+
+
 def _prep_collect(state, actor, args):
     cid = _text(args, "collection")
     if cid not in state.collections:
         raise RuleError(_ACT, f"{cid} is not a collection")
     objects = _texts(args, "refs" if "refs" in args else "objects", at_least=1)
+    _bound_objects(objects)
     for o in objects:
         parse_object_ref(o)
-    new = [o for o in objects if o not in _members(state, cid)]
+    held = _members(state, cid)
+    new = [o for o in objects if o not in held]
     if not new:
         raise RuleError(_ACT, f"every one is already in {cid}")
     check_new_members(state, cid, len(new))
@@ -1012,8 +1504,10 @@ def _prep_uncollect(state, actor, args):
     if cid not in state.collections:
         raise RuleError(_ACT, f"{cid} is not a collection")
     objects = _texts(args, "refs" if "refs" in args else "objects", at_least=1)
+    _bound_objects(objects)
+    held = _members(state, cid)
     for o in objects:
-        if o not in _members(state, cid):
+        if o not in held:
             raise RuleError(_ACT, f"{o} is not in {cid}")
     out = {"collection": cid, "objects": objects}
     if args.get("grant") is not None:
@@ -1104,8 +1598,10 @@ def _stamp(body: Mapping, channel: str, proposal_id: str | None) -> dict:
 
 
 def _signed(body: Mapping, pid: str) -> dict:
-    return {**body, "update": [*body.get("update", ()), _upd("proposals", {"id": pid}, status="signed",
-                                                             decided_seq="@seq")]}
+    """`body` and the proposal marked signed. A proposal another writer decided first matches no row, so its act
+    is not run twice (P 5.1)."""
+    return {**body, "update": [*body.get("update", ()), _upd("proposals", {"id": pid, "status": "pending"},
+                                                             status="signed", decided_seq="@seq")]}
 
 
 # a record edit names its kind by the record's effect: P 7.1's rows for an allow and for a deny
@@ -1208,9 +1704,9 @@ def _prep_revoke(state, actor, args):
 
 
 def _make_revoke(state, actor, args, auth, now):
-    return args["record"], {"update": [_upd(
-        "records", {"id": args["record"]}, revoked="@at", revoked_by=actor, revoke_reason=args["reason"],
-        revoked_seq="@seq")]}
+    return args["record"], {"update": [_upd(            # a second revocation matches no row (P 5.1)
+        "records", {"id": args["record"], "revoked_seq": None}, revoked="@at", revoked_by=actor,
+        revoke_reason=args["reason"], revoked_seq="@seq")]}
 
 
 def _prep_shorten(state, actor, args):
@@ -1261,7 +1757,7 @@ def _make_replacement(state, actor, args, auth, now):
                         valid_from=old.valid_from, valid_until=new.valid_until, anchor=old.anchor,
                         backing=auth.backing, set_by=actor, under_grant=auth.under_grant, replaces=old.id,
                         reason=args["reason"], created=now, created_seq="@seq")],
-        "update": [_upd("records", {"id": old.id}, revoked="@at", revoked_by=actor,
+        "update": [_upd("records", {"id": old.id, "revoked_seq": None}, revoked="@at", revoked_by=actor,
                         revoke_reason=f"replaced by {rid}", revoked_seq="@seq")]}
 
 
@@ -1327,8 +1823,8 @@ def _prep_end_grant(state, actor, args):
 
 
 def _make_end_grant(state, actor, args, auth, now):
-    return args["grant"], {"update": [_upd(
-        "permission_grants", {"id": args["grant"]}, revoked="@at", revoked_by=actor,
+    return args["grant"], {"update": [_upd(             # a second end matches no row (P 5.1)
+        "permission_grants", {"id": args["grant"], "revoked_seq": None}, revoked="@at", revoked_by=actor,
         revoke_reason=args["reason"], revoked_seq="@seq")]}
 
 

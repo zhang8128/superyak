@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lighthouse_client import MAX_CANDIDATES
 from lighthouse_policy import Policy, PolicyRequest
 from lighthouse_validation import load_owned_policy
 from lighthouse_protocol import (
@@ -44,7 +45,8 @@ from lighthouse_protocol import (
     recall_result_frame,
     validate_frame,
 )
-from permissions import CACHE_ENTRIES
+from permission_ledger import LedgerUnreadable
+from permissions import CACHE_BYTES, CACHE_ENTRIES, FRAMES_AT_ONCE, REBUILD_WAIT_S
 from sharing import validate_audience
 from storage import Storage, vec0_distance_to_similarity
 
@@ -128,10 +130,9 @@ class PublisherStore:
             self.storage = None
 
     def store_digest(self) -> dict:
-        return {
-            "algorithm": "sha256",
-            "value": hashlib.sha256(self.db_path.read_bytes()).hexdigest(),
-        }
+        with self.db_path.open("rb") as handle:
+            value = hashlib.file_digest(handle, "sha256").hexdigest()
+        return {"algorithm": "sha256", "value": value}
 
     def record_disclosure(self, event: dict) -> str:
         disclosure_id = str(uuid.uuid4())
@@ -352,9 +353,53 @@ class _CacheEntry:
     copy: str
     eligible: object        # permissions.EligibleSet
 
+    def estimate(self) -> int:
+        """The bytes this entry holds, by the unit sizes measured for P 15: a decision 169 B, its dict entry 29 B
+        and its object key 134 B; each distinct ``cited`` tuple 56 B and 8 B an entry; each memory id 80 B and
+        26 B of its frozenset's slots. Objects that read alike share one Decision (P 6.5), counted once.
+        Worked out once."""
+        est = self.__dict__.get("_est")
+        if est is None:
+            decisions = self.eligible.decisions
+            tuples = {id(d.cited): len(d.cited) for d in decisions.values()}
+            distinct = len({id(d) for d in decisions.values()})
+            est = (len(decisions) * (29 + 134) + distinct * 169 + sum(56 + 8 * n for n in tuples.values())
+                   + len(self.eligible.memory_ids) * (80 + 26))
+            object.__setattr__(self, "_est", est)
+        return est
+
     def serves(self, seq: int, ledger_id: str, changes: int, copy: str, t: int) -> bool:
         return ((self.seq, self.ledger_id, self.changes, self.copy) == (seq, ledger_id, changes, copy)
                 and self.eligible.at <= t and (self.eligible.horizon is None or t < self.eligible.horizon))
+
+
+class EligibleSetBuilding(LedgerUnreadable):
+    """A frame found no eligible set it may be served from: one is being built past the rebuild wait, its build
+    failed, or it was built for another ledger state (P 12.2, "While a set is being built"). The frame is answered
+    as for a failed ledger read."""
+
+
+class _Build:
+    """One background build of an eligible set, for one key of the cache."""
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.entry = None       # a _CacheEntry, once built
+        self.error = None       # the exception that ended it, if it did
+
+
+class _Turn:
+    """A frame's turn of ``FRAMES_AT_ONCE``, held by the frame and the build it started until both are done."""
+
+    def __init__(self, release, holders: int):
+        self._release, self._holders, self._lock = release, holders, threading.Lock()
+
+    def release(self) -> None:
+        with self._lock:
+            self._holders -= 1
+            last = self._holders == 0
+        if last and self._release is not None:
+            self._release()
 
 
 @dataclass
@@ -372,9 +417,10 @@ class _LedgerSide:
     them afresh at every frame and never cached (P 6.3 item 4)."""
 
     def __init__(self, daemon: "PublisherDaemon", publisher: "PublisherStore", frame: dict, mode: str,
-                 frame_decision, state, ledger_id: str, now: datetime):
+                 frame_decision, state, ledger_id: str, now: datetime, release=None):
         from permission_uses import Uses  # noqa: F401  (opened lazily by ``_uses``)
         from permissions import LegacyLayer, acts_for_place, agent_place_at
+        self._release = release
         self.daemon, self.publisher, self.frame, self.mode = daemon, publisher, frame, mode
         self.state, self.ledger_id, self.now = state, ledger_id, now
         self.t = int(now.timestamp())
@@ -472,12 +518,17 @@ class _LedgerSide:
             return None
 
     def close(self) -> None:
+        """Close the receipts, drop the State and give the frame's turn back (once)."""
         if self._uses is not None:
             try:
                 self._uses.close()
             except Exception:
                 pass
             self._uses = None
+        self.state = None
+        release, self._release = self._release, None
+        if release is not None:
+            release()
 
     def receipt_recall(self, candidates: list[dict], placed: _Placed) -> bool:
         """One receipt for a recall: the object refs it returned and how many copies were filtered. False when it
@@ -499,23 +550,31 @@ class _LedgerSide:
         only when both paths allow it and its receipt is written; under ``shadow`` the legacy path decides."""
         from dataclasses import replace
         from permission_uses import row_for_decision
-        from permissions import Refusal, annotation, subjects_of
+        from permissions import Cited, Refusal, annotation, subjects_of
         legacy_delivers = content is not None
-        objs = sorted({o for o in (_object_of(r["layer"], r["source_instance_id"], r["source_id"])
-                                   for r in self.publisher.storage.conn.execute(
-                                       "SELECT layer, source_instance_id, source_id FROM shared_memories "
-                                       "WHERE memory_id = ?", (memory_id,))) if o})
+        found = [_object_of(r["layer"], r["source_instance_id"], r["source_id"])
+                 for r in self.publisher.storage.conn.execute(
+                     "SELECT layer, source_instance_id, source_id FROM shared_memories WHERE memory_id = ?",
+                     (memory_id,))]
+        if None in found:        # a placement with no object is refused under enforce (12.2), as `recall_set` does
+            return (legacy_delivers and self.shadow), None        # no object to name: no receipt
+        objs = sorted(set(found))
         decided = [(o, self.decide(o, "inject_context")) for o in objs]
         if not decided or any(d is None for _, d in decided):
             return (legacy_delivers and self.shadow), None        # no object to name: no receipt
         obj, decision = next(((o, d) for o, d in decided if not d.allowed), decided[0])
-        if decision.allowed and not legacy_delivers:
-            # The audience check is the publisher's policy refusing. Under enforce the receipt must not say
-            # "allowed" for an item not delivered; under shadow it keeps the ledger's verdict and only notes the
-            # legacy refusal, so the owner can see where the two paths disagree (P 12.3).
-            legacy_refusal = Refusal("LEGACY_DENY", "publisher", "inject_context")
-            decision = replace(decision, refusal=legacy_refusal) if self.shadow else replace(
-                decision, allowed=False, refusal=legacy_refusal)
+        if not legacy_delivers and (self.shadow or decision.allowed):
+            # The audience check is the publisher's policy refusing. Under shadow it is recorded on the receipt
+            # whether or not the ledger also refuses, so `report shadow` reads it instead of inferring it (P 12.3),
+            # in a `cited` entry of its own: the receipt keeps the ledger's own verdict and refusal (the final
+            # review's M8). Under enforce the receipt must not say "allowed" for an item not delivered; a ledger
+            # refusal there stays the receipt's refusal.
+            if self.shadow:
+                decision = replace(decision, cited=decision.cited + (
+                    Cited("publisher", "audience", "inject_context", "deny"),))
+            else:
+                decision = replace(decision, allowed=False,
+                                   refusal=Refusal("LEGACY_DENY", "publisher", "inject_context"))
         from lighthouse_protocol import content_digest as _digest
         row = row_for_decision(
             decision, self._use(obj, "inject_context"), acting_for=self.acting_for,
@@ -561,12 +620,18 @@ class PublisherDaemon:
         self._cache: collections.OrderedDict = collections.OrderedDict()
         self._cache_lock = threading.Lock()
         self.rebuilds = 0
+        # The builds under way, one per key; a build holds a State, so it holds a turn of ``_frames`` (P 12.2).
+        self._builds: dict = {}
+        self._build_threads: set = set()
+        # At most FRAMES_AT_ONCE frames build or hold a State at once; a frame waits for its turn (P 12.2, 15).
+        self._frames = threading.BoundedSemaphore(FRAMES_AT_ONCE)
 
     def _eligible(self, side: "_LedgerSide"):
-        """This frame's eligible set of ``recall`` decisions for the house, from the cache while it is valid,
-        otherwise built from every placement the house holds and kept. The house is its ``db_path``: an entry is
-        read against that house's own change count and no other's."""
-        from permissions import Placement, eligible_set
+        """This frame's eligible set of ``recall`` decisions for the house: from the cache while it is valid,
+        otherwise from the one background build for its key, waited for at most ``REBUILD_WAIT_S`` (P 12.2, "While
+        a set is being built"). Raises ``EligibleSetBuilding`` when nothing may be served: the wait ran out, the
+        build failed, or it was built for another ledger state. The house is the cache key's ``db_path``: an entry
+        is read against that house's own change count and no other's."""
         publisher, action = side.publisher, "recall"
         key = (publisher.db_path, side.agent, side.place, side.frame["purpose"], action)
         changes = publisher.storage.placement_changes()      # read before the rows: a later change only shows stale
@@ -575,22 +640,91 @@ class PublisherDaemon:
             if entry is not None and entry.serves(side.state.seq, side.ledger_id, changes, side.copy, side.t):
                 self._cache.move_to_end(key)
                 return entry.eligible
-        placements = [
-            Placement(row["memory_id"], _object_of(row["layer"], row["source_instance_id"], row["source_id"]),
-                      side.copy)
-            for row in publisher.storage.conn.execute(
-                "SELECT memory_id, layer, source_instance_id, source_id FROM shared_memories")]
-        got = eligible_set(side.state, placements, requester=side.agent, place=side.place,
-                           purpose=side.frame["purpose"], action=action, at=side.t)
-        for obj in sorted({p.obj for p in placements if p.obj and p.obj not in got.decisions}):
-            logger.warning("permission: %s is not a decidable object in %s", obj, publisher.name)
-        with self._cache_lock:
-            self.rebuilds += 1
-            self._cache[key] = _CacheEntry(side.state.seq, side.ledger_id, changes, side.copy, got)
-            self._cache.move_to_end(key)
-            while len(self._cache) > CACHE_ENTRIES:
-                self._cache.popitem(last=False)
-        return got
+            build = self._builds.get(key)
+            starter = build is None
+            if starter:
+                build = self._builds[key] = _Build()
+        if starter:
+            self._start_build(key, build, side, changes)
+        if not build.done.wait(REBUILD_WAIT_S):
+            raise EligibleSetBuilding(f"eligible set building for {publisher.name}")
+        if build.error is not None:
+            raise EligibleSetBuilding(f"eligible set for {publisher.name} failed to build: {build.error}")
+        entry = build.entry
+        if not entry.serves(side.state.seq, side.ledger_id, changes, side.copy, side.t):
+            raise EligibleSetBuilding(f"eligible set building for {publisher.name} (built for another state)")
+        return entry.eligible
+
+    def _start_build(self, key, build: _Build, side: "_LedgerSide", changes: int) -> None:
+        """Start the build of ``key`` in a worker thread, with the frame's State. The build takes a share of the
+        frame's turn, so the turn is given back only when the frame and the build are both done."""
+        from permissions import Placement
+        publisher = side.publisher
+        turn = _Turn(side._release, 2)
+        side._release = turn.release
+        try:
+            placements = [
+                Placement(row["memory_id"], _object_of(row["layer"], row["source_instance_id"], row["source_id"]),
+                          side.copy)
+                for row in publisher.storage.conn.execute(
+                    "SELECT memory_id, layer, source_instance_id, source_id FROM shared_memories")]
+            thread = threading.Thread(
+                target=self._build, args=(key, build, side.state, side.ledger_id, changes, side.copy, side.agent,
+                                          side.place, side.frame["purpose"], side.t, publisher, placements, turn),
+                name=f"eligible-set-{publisher.name}", daemon=True)
+            with self._cache_lock:
+                self._build_threads.add(thread)
+            thread.start()
+        except BaseException as error:
+            with self._cache_lock:
+                self._builds.pop(key, None)
+            build.error = error
+            build.done.set()
+            turn.release()
+            logger.warning("eligible set for %s not started: %s", publisher.name, error)
+
+    def _build(self, key, build, state, ledger_id, changes, copy, agent, place, purpose, t, publisher, placements,
+               turn) -> None:
+        """The worker: build the set, keep it if the ledger and the placements are still as it was built from,
+        and tell the frames waiting on it. A failure is logged and leaves no entry."""
+        from permission_ledger import Ledger
+        from permissions import eligible_set
+        try:
+            got = eligible_set(state, placements, requester=agent, place=place, purpose=purpose, action=key[-1],
+                               at=t)
+            for obj in sorted({p.obj for p in placements if p.obj and p.obj not in got.decisions}):
+                logger.warning("permission: %s is not a decidable object in %s", obj, publisher.name)
+            entry = _CacheEntry(state.seq, ledger_id, changes, copy, got)
+            counter = Storage.open_read_only(publisher.db_path)    # its own connection: not the frames' shared one
+            try:
+                moved = counter.placement_changes() != changes
+            finally:
+                counter.close()
+            if not moved:
+                ledger = Ledger.open_read_only(self.engram_home, LEDGER_BUSY_MS)
+                try:
+                    moved = (ledger.seq(), ledger.meta()["ledger_id"]) != (state.seq, ledger_id)
+                finally:
+                    ledger.close()
+            with self._cache_lock:
+                self.rebuilds += 1
+                self._cache.pop(key, None)
+                if not moved and entry.estimate() <= CACHE_BYTES:    # an entry over the bound alone serves its frame
+                    self._cache[key] = entry
+                    total = sum(e.estimate() for e in self._cache.values())
+                    while len(self._cache) > CACHE_ENTRIES or total > CACHE_BYTES:
+                        _, dropped = self._cache.popitem(last=False)
+                        total -= dropped.estimate()
+            build.entry = entry
+        except BaseException as error:
+            build.error = error
+            logger.warning("eligible set for %s failed to build: %s", publisher.name, error, exc_info=True)
+        finally:
+            with self._cache_lock:
+                self._builds.pop(key, None)
+                self._build_threads.discard(threading.current_thread())
+            build.done.set()
+            turn.release()
 
     def _request(self, frame: dict, action: str) -> PolicyRequest:
         # A receiver's recorded request time cannot extend a publisher grant.
@@ -675,6 +809,7 @@ class PublisherDaemon:
                 "serving nothing" if enforce else "deciding by the legacy path alone")
             return None, enforce
         from permission_ledger import Ledger
+        self._frames.acquire()          # held until the side closes: a frame waits, it is never refused
         try:
             ledger = Ledger.open_read_only(self.engram_home, LEDGER_BUSY_MS)
             try:
@@ -683,8 +818,10 @@ class PublisherDaemon:
                 ledger.close()
             now = self.clock()
             return _LedgerSide(self, publisher, frame, gate.mode, frame_decision, state, ledger_id,
-                               now if now.tzinfo else now.replace(tzinfo=timezone.utc)), False
+                               now if now.tzinfo else now.replace(tzinfo=timezone.utc),
+                               release=self._frames.release), False
         except Exception as error:
+            self._frames.release()
             logger.warning("permission ledger unreadable while serving %s: %s", publisher.name, error)
             return None, enforce
 
@@ -744,18 +881,39 @@ class PublisherDaemon:
         placement first: under ``enforce`` the refused are left out before ranking, under ``shadow`` they are only
         counted. The receipt is written before the reply, so a reply never names a candidate whose receipt failed
         (under ``enforce``, a recall with no receipt returns nothing)."""
-        placed = None if side is None else side.recall_set()
+        enforce = gate.mode == "enforce"
+        placed = None
+        try:
+            placed = None if side is None else side.recall_set()
+        except LedgerUnreadable as error:       # a lazy read failed: the gate's closed answer, or the legacy one
+            self._unreadable(publisher, error)
+            if enforce:
+                return []
+            side = None
         candidates = retrieve(
             publisher.storage,
             self.embeddings,
             frame["query"],
-            int(frame["k"]),
+            min(int(frame["k"]), MAX_CANDIDATES),
             _allowed_audiences(policy, f"urn:engram:{frame['receiver']}", mode=gate.mode),
-            eligible=placed.eligible if placed is not None and gate.mode == "enforce" else None,
+            eligible=placed.eligible if placed is not None and enforce else None,
         )
-        if side is not None and not side.receipt_recall(candidates, placed) and gate.mode == "enforce":
-            return []
+        if side is not None:
+            try:
+                written = side.receipt_recall(candidates, placed)
+            except LedgerUnreadable as error:
+                self._unreadable(publisher, error)
+                return [] if enforce else candidates
+            if not written and enforce:
+                return []
         return candidates
+
+    @staticmethod
+    def _unreadable(publisher: PublisherStore, error: Exception) -> None:
+        if isinstance(error, EligibleSetBuilding):
+            logger.warning("permission: %s: serving nothing to this frame", error)
+            return
+        logger.warning("permission ledger unreadable while serving %s: %s", publisher.name, error)
 
     def _read(
         self, publisher: PublisherStore, frame: dict, policy: Policy, gate
@@ -781,7 +939,11 @@ class PublisherDaemon:
                     content, audiences = self._legacy_item(publisher, memory_id, allowed_audiences)
                 item_permission = None
                 if side is not None and not serve_nothing:
-                    deliver, item_permission = side.read_item(memory_id, content)
+                    try:
+                        deliver, item_permission = side.read_item(memory_id, content)
+                    except LedgerUnreadable as error:       # enforce serves nothing, shadow the legacy content
+                        self._unreadable(publisher, error)
+                        deliver, item_permission = gate.mode == "shadow" and content is not None, None
                     if not deliver:
                         content, audiences, item_permission = None, [], None
                 if content is not None:
@@ -915,15 +1077,29 @@ def main(argv: list[str] | None = None) -> int:
         or config["socket"]
         or engram_home / ".engram" / "lighthouse.sock"
     )
-    from embeddings import create_embedding_provider
+    logging.basicConfig(level=os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
+    embedder_socket = os.environ.get("ENGRAM_EMBEDDER_SOCKET")
+    if embedder_socket:
+        from embeddings import RemoteEmbedProvider
+
+        provider = RemoteEmbedProvider(embedder_socket)
+    else:
+        logger.warning(
+            "ENGRAM_EMBEDDER_SOCKET is not set: the embedding model is loaded "
+            "in this process. Small machines should run the shared embedder "
+            "service (scripts/superyak-embedder.service) and set the variable, "
+            "so the model is not loaded twice"
+        )
+        from embeddings import create_embedding_provider
+
+        provider = create_embedding_provider()
 
     daemon = PublisherDaemon(
         build_publishers(engram_home, config["publishers"]),
         socket_path,
-        create_embedding_provider(),
+        provider,
         engram_home=engram_home,
     )
-    logging.basicConfig(level=os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
     logger.info("publishing %s on %s", ", ".join(config["publishers"]), socket_path)
     try:
         daemon.serve_forever()

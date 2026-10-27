@@ -63,8 +63,9 @@ def test_closed_answers_a_read_with_every_content_null(tmp_path):
     assert [i["content"] for i in daemon.handle_frame(read(pub, memory_id))["items"]] == [None]
 
 
-def test_rf2_locked_ledger_reads_closed(tmp_path):
-    daemon, pub = raised_daemon(tmp_path, mode="enforce", busy_timeout_ms=50)
+def test_rf2_locked_ledger_reads_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr("lighthouse_daemon.LEDGER_BUSY_MS", 50)       # put back after the test
+    daemon, pub = raised_daemon(tmp_path, mode="enforce")
     with hold_ledger_lock(tmp_path, "IMMEDIATE"):        # RESERVED: readers still read the last commit
         assert daemon.handle_frame(recall(pub))["candidates"]
     with hold_ledger_lock(tmp_path, "EXCLUSIVE"):        # what a commit or a cache spill holds

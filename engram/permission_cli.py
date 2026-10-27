@@ -29,8 +29,8 @@ from pathlib import Path
 
 from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
                                effective_gate, houses, ledger_path)
-from permissions import (CODE_CHARS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse, RuleError, Use,
-                         affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
+from permissions import (CODE_CHARS, MAX_ACT_OBJECTS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse,
+                         RuleError, Use, affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
                          home_of, parse_copy_ref, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
                          resolve_prefix, selector_json, share_cover, stewards)
 
@@ -88,9 +88,9 @@ def confirm(words: str, change: str) -> bool:
         raise NoTerminal(f"{TTY} cannot be opened ({e.strerror or e})") from e
     try:
         code = _code()
-        print(words)
+        print(_clean_lines(words))       # names in the words come from the ledger (final review M5)
         print()
-        print(change)
+        print(_clean_lines(change))
         print()
         print(f"To say yes, type this code and press enter.\ncode: {code}", flush=True)
         answer = _read_line(fd)
@@ -198,6 +198,11 @@ def _clean(value) -> str:
     return "".join(c if c.isprintable() else "?" for c in str(value))
 
 
+def _clean_lines(text: str) -> str:
+    """`_clean` on each line, keeping the line breaks."""
+    return "\n".join(_clean(line) for line in str(text).split("\n"))
+
+
 def _time_text(value) -> str:
     if value is None:
         return "none (no end)"
@@ -235,7 +240,12 @@ def run_sweep(led: Ledger, now: int):
     """R18: after a command that writes, sweep the published house under `shadow` and `enforce`, and fold receipts
     past their retention. A failure is a warning and never changes the exit code (ledger ruling FS1). Returns the
     sweep's report, or None when the gate is off or the sweep did not run."""
-    report = None
+    return _run_sweep(led, now)[0]
+
+
+def _run_sweep(led: Ledger, now: int) -> tuple:
+    """`run_sweep`'s work: (the sweep's report or None, whether the placement sweep failed)."""
+    report, failed = None, False
     try:
         house = led.root / PUBLISHED_HOUSE
         gate = effective_gate(led.root, [house])
@@ -245,6 +255,7 @@ def run_sweep(led: Ledger, now: int):
                 print(f"Placement sweep: {report.relinked} relinked, {report.removed} removed, "
                       f"{report.would_remove} would be removed, {report.settled} lane notes settled.")
     except Exception as e:
+        failed = True
         print(f"warning: the placement sweep failed: {e}", file=sys.stderr)
     try:
         from permission_uses import Uses, uses_path
@@ -256,7 +267,7 @@ def run_sweep(led: Ledger, now: int):
                 uses.close()
     except Exception as e:
         print(f"warning: the receipt fold failed: {e}", file=sys.stderr)
-    return report
+    return report, failed
 
 
 def _perform(led: Ledger, owner: str, acts: list[Act], notes: list[str], words: str | None = None) -> int:
@@ -269,7 +280,17 @@ def _perform(led: Ledger, owner: str, acts: list[Act], notes: list[str], words: 
         print("That was not the code. Nothing was written.", file=sys.stderr)
         return 3
     now = _now()
-    outcomes = [led.perform(act, actor=owner, channel="terminal", now=now) for act in acts]
+    outcomes = []
+    for act in acts:
+        try:
+            outcomes.append(led.perform(act, actor=owner, channel="terminal", now=now))
+        except BaseException:
+            if outcomes:              # SH-13: say which acts of the one yes were written before this one failed
+                n, seqs = len(outcomes), ", ".join(str(o.seq) for o in outcomes)
+                print(f"{'act 1' if n == 1 else f'acts 1 to {n}'} of {len(acts)} done "
+                      f"({'log' if n == 1 else 'logs'} {seqs}); the rest were not written.", file=sys.stderr)
+                run_sweep(led, now)   # R18: the acts written are a write the house follows
+            raise
     for act, out in zip(acts, outcomes):
         if act.kind in ("sign", "decline"):
             if out.status == "proposal":
@@ -460,8 +481,26 @@ def _collection(adding: bool):
             refs = list(dict.fromkeys(a.refs))
             acts: list[Act] = []
             notes: list[str] = []
+            # SH-13: refs are checked against the State before they are split into acts, so every act is valid
+            # at the yes and a refusal comes before it, never after some acts were written
+            held = ({r.object for r in st.collection_members.get(cid, ()) if r.removed_seq is None}
+                    if cid in st.collections else set())
             if not adding:
-                return [Act("uncollect", {"collection": cid, "objects": refs})], notes
+                if cid not in st.collections:
+                    raise RuleError("7.1 who may set what", f"{_clean(cid)} is not a collection")
+                missing = [r for r in refs if r not in held]
+                if missing:
+                    raise RuleError("7.1 who may set what", f"not in {_clean(cid)}, so nothing was asked or "
+                                    f"written: {', '.join(_clean(r) for r in missing)}")
+                return [Act("uncollect", {"collection": cid, "objects": refs[i:i + MAX_ACT_OBJECTS]})
+                        for i in range(0, len(refs), MAX_ACT_OBJECTS)], notes
+            new = [r for r in refs if r not in held]
+            if not new:
+                raise RuleError("7.1 who may set what", f"every one is already in {_clean(cid)}: nothing to add")
+            if len(new) < len(refs):
+                notes.append(f"note: {len(refs) - len(new):,} of the refs are already in {_clean(cid)} and are "
+                             "left out")
+            refs = new
             if cid not in st.collections:
                 acts.append(Act("make-collection", {"collection": cid}))
             lanes: dict[str, dict] = {}
@@ -479,7 +518,10 @@ def _collection(adding: bool):
                                       "created_at": _seconds(row["created_at"])}
             finally:
                 stores.close()
-            acts.append(Act("collect", {"collection": cid, "objects": refs, "lanes": lanes}))
+            for i in range(0, len(refs), MAX_ACT_OBJECTS):       # one yes, acts of at most 10,000
+                chunk = refs[i:i + MAX_ACT_OBJECTS]
+                acts.append(Act("collect", {"collection": cid, "objects": chunk,
+                                            "lanes": {r: lanes[r] for r in chunk if r in lanes}}))
             return acts, notes
         return _write(make)
     return run
@@ -655,13 +697,22 @@ def _stamp(value) -> str:
 
 
 def _use_line(r: dict) -> list[str]:
+    """A receipt in words. A shadow receipt (an owner's row) is marked so: its outcome is the ledger's, while the
+    legacy path decided what was delivered, and a refusal by the publisher's audience check, which such a receipt
+    cites as an entry of kind `audience` (the final review's M8), is printed too, so a delivery only that check
+    refused does not read as a plain "allowed" (the re-review's Minor 2)."""
     who = r.get("agent") or r.get("requester")
     what = f"{r['action']} {r['object']}" if r.get("object") else f"{r['action']} ({r.get('kind') or r.get('count')})"
-    lines = [f"{_stamp(r['at'])}  {r['outcome']}  {_clean(who)}  {_clean(what)}  at {_clean(r['place'])}  "
+    outcome = f"{r['outcome']} (shadow)" if r.get("shadow") else r["outcome"]
+    lines = [f"{_stamp(r['at'])}  {outcome}  {_clean(who)}  {_clean(what)}  at {_clean(r['place'])}  "
              f"for {_clean(r['purpose'])}  [{r['id']}]"]
     if r.get("refusal"):
         ref = r["refusal"]
         lines.append(f"    refused: {_clean(ref.get('code'))} at {_clean(ref.get('layer'))}")
+    for c in r.get("cited") or ():
+        if isinstance(c, dict) and c.get("kind") == "audience" and c.get("verdict") == "deny":
+            lines.append(f"    refused by the {_clean(c.get('layer'))}'s audience check (LEGACY_DENY at "
+                         f"{_clean(c.get('layer'))}): the legacy path delivered nothing")
     lines += [f"    note: {_clean(n)}" for n in r.get("notes") or ()]
     return lines
 
@@ -737,7 +788,11 @@ def _check(a) -> int:
 def _sweep(a) -> int:
     with _ledger() as led:
         mode = effective_gate(led.root, houses(led.root)).mode
-        report = run_sweep(led, _now())
+        report, failed = _run_sweep(led, _now())
+    if failed:              # the final review's M9: a failed sweep is not "nothing to change"
+        print("The placement sweep failed (the warning above says why); the published house may not follow the "
+              "ledger yet. Run `engram-permissions sweep` again once the cause is fixed.", file=sys.stderr)
+        return 1
     if report is None:
         print(f"The gate is {mode}: nothing to sweep." if mode not in ("shadow", "enforce") else
               "Placement sweep: nothing to change.")
@@ -1074,22 +1129,30 @@ def _migrate(args) -> int:
 
 # ---------------------------------------------------------------- report shadow (P 12.3, 12.1)
 
+def _audience_refusal(cited, refusal) -> dict | None:
+    """The publisher's audience refusal a shadow receipt records, as LEGACY_DENY by the publisher: a `cited` entry of
+    kind `audience` (the final review's M8), or, on a receipt written before it, the receipt's own refusal."""
+    for c in cited if isinstance(cited, list) else ():
+        if isinstance(c, dict) and c.get("kind") == "audience" and c.get("verdict") == "deny":
+            return {"code": "LEGACY_DENY", "layer": c.get("layer"), "action": c.get("action")}
+    if refusal and refusal.get("code") == "LEGACY_DENY" and refusal.get("layer") == "publisher":
+        return refusal
+    return None
+
+
 def _legacy_agreed(row) -> bool:
     """A shadow receipt on which the two paths differ. A ledger refusal the legacy path did not make: no cited legacy
-    layer denies it, the refusal is not the legacy path's own, and for a delivery the publisher did deliver (under
-    shadow the digest is kept only then). Or the converse, a delivery the ledger allowed that the publisher's audience
-    check refused (recorded as LEGACY_DENY by the publisher)."""
+    layer denies it, the publisher's audience check did not refuse it, and the refusal is not the legacy path's own.
+    Or the converse, a delivery the ledger allowed that the publisher's audience check refused (`_audience_refusal`)."""
     try:
         cited = json.loads(row["cited"])
         refusal = json.loads(row["refusal"]) if row["refusal"] else None
     except (TypeError, ValueError):
         return False
     if row["allowed"]:
-        return bool(refusal) and refusal.get("code") == "LEGACY_DENY" and refusal.get("layer") == "publisher"
-    if refusal and refusal.get("code") == "LEGACY_DENY":
+        return _audience_refusal(cited, refusal) is not None
+    if (refusal and refusal.get("code") == "LEGACY_DENY") or _audience_refusal(cited, refusal) is not None:
         return False
-    if row["action"] == "inject_context" and row["content_digest"] is None:
-        return False                    # the publisher's audience check delivered nothing: both paths refused
     return not any(isinstance(c, dict) and c.get("kind") == "legacy" and c.get("verdict") != "allow" for c in cited)
 
 
@@ -1105,6 +1168,8 @@ def _shadow_disagreements() -> tuple[int, list[dict]]:
                 count += 1
                 if len(rows) < REPORT_ROWS:
                     refusal = json.loads(r["refusal"]) if r["refusal"] else None
+                    if r["allowed"]:          # what refused it is the audience check
+                        refusal = _audience_refusal(json.loads(r["cited"]), refusal)
                     rows.append({"id": r["id"], "at": r["at"], "agent": r["agent"], "place": r["place"],
                                  "action": r["action"], "purpose": r["purpose"], "object": r["object"],
                                  "copy": r["copy"], "refusal": refusal})

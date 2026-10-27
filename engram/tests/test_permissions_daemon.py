@@ -188,7 +188,9 @@ def test_shadow_receipt_keeps_the_ledgers_verdict_when_the_audience_path_refuses
     assert item["content"] is None                            # the legacy path still decides delivery
     row = receipt_rows(tmp_path, action="inject_context")[-1]
     assert row["shadow"] == 1 and row["allowed"] == 1         # the ledger's verdict
-    assert json.loads(row["refusal"]) == {"code": "LEGACY_DENY", "layer": "publisher", "action": "inject_context"}
+    assert row["refusal"] is None                             # the ledger's own (final review M8)
+    assert {"layer": "publisher", "kind": "audience", "action": "inject_context", "verdict": "deny",
+            "record": None, "version": None} in json.loads(row["cited"])
 
 
 def test_enforce_receipt_says_not_allowed_when_the_audience_path_refuses(tmp_path):

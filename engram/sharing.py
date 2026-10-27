@@ -318,10 +318,10 @@ def sweep_placements(*, published_storage, ledger, mode: str, now: int, limit: i
         else:
             unshare(published_storage=published_storage, share_id=row["share_id"])
             removed += 1
-    return SweepReport(relinked, removed, would_remove, _settle_lane_notes(ledger, state, now))
+    return SweepReport(relinked, removed, would_remove, _settle_lane_notes(ledger, now))
 
 
-def _settle_lane_notes(ledger, state, now: int) -> int:
+def _settle_lane_notes(ledger, now: int) -> int:
     """A `pending` lane note that nothing settled (the process died between the store's commit and the settling
     note) gets the lane the source store holds now. The store is opened read-only; a store that is not found,
     or a memory it no longer has, stays pending, which only narrows."""
@@ -329,11 +329,10 @@ def _settle_lane_notes(ledger, state, now: int) -> int:
     from permission_ledger import houses
     from store_identity import read as read_identity
     pending: dict[str, list[tuple[str, str]]] = {}
-    for obj, notes in state.lane_notes.items():
-        if notes and notes[-1].lane == "pending":
-            parts = obj[len("mem:"):].split("/") if obj.startswith("mem:") else []
-            if len(parts) == 3 and parts[1] == "episode":
-                pending.setdefault(parts[0], []).append((parts[2], obj))
+    for obj in ledger.pending_lane_notes():
+        parts = obj[len("mem:"):].split("/") if obj.startswith("mem:") else []
+        if len(parts) == 3 and parts[1] == "episode":
+            pending.setdefault(parts[0], []).append((parts[2], obj))
     settled = 0
     if not pending:
         return 0

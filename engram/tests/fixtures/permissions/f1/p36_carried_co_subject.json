@@ -1,0 +1,1215 @@
+{
+ "name": "p36_carried_co_subject",
+ "tables": {
+  "persons": [
+   {
+    "id": "person:andy",
+    "home": "place:home/andy",
+    "is_admin": 1,
+    "created_seq": 1
+   },
+   {
+    "id": "person:jenn",
+    "home": "place:home/jenn",
+    "is_admin": 0,
+    "created_seq": 2
+   },
+   {
+    "id": "person:amy",
+    "home": "place:home/amy",
+    "is_admin": 0,
+    "created_seq": 3
+   }
+  ],
+  "places": [
+   {
+    "id": "place:home/andy",
+    "is_root": 1,
+    "created_seq": 1,
+    "pseudonym_salt": "00000000000000000000000000000000"
+   },
+   {
+    "id": "place:home/jenn",
+    "is_root": 1,
+    "created_seq": 2,
+    "pseudonym_salt": "00000000000000000000000000000000"
+   },
+   {
+    "id": "place:home/amy",
+    "is_root": 1,
+    "created_seq": 3,
+    "pseudonym_salt": "00000000000000000000000000000000"
+   }
+  ],
+  "place_stewards": [
+   {
+    "place": "place:home/andy",
+    "person": "person:andy",
+    "added_seq": 1
+   },
+   {
+    "place": "place:home/jenn",
+    "person": "person:jenn",
+    "added_seq": 2
+   },
+   {
+    "place": "place:home/amy",
+    "person": "person:amy",
+    "added_seq": 3
+   }
+  ],
+  "place_parents": [],
+  "agents": [
+   {
+    "id": "agent:rio-grande",
+    "acts_for": "place:home/andy",
+    "created_seq": 4
+   }
+  ],
+  "agent_places": [
+   {
+    "agent": "agent:rio-grande",
+    "place": "place:home/andy",
+    "added_seq": 4
+   }
+  ],
+  "stores": [
+   {
+    "instance_id": "S",
+    "name": "engram",
+    "owner": "person:andy",
+    "place": "place:home/andy",
+    "imprint_of": null,
+    "created_seq": 5
+   },
+   {
+    "instance_id": "imp1",
+    "name": "imprint",
+    "owner": "person:andy",
+    "place": "place:home/andy",
+    "imprint_of": "collection:andy/imprint-1",
+    "created_seq": 6
+   }
+  ],
+  "collections": [
+   {
+    "id": "collection:andy/imprint-1",
+    "owner": "person:andy",
+    "created_seq": 7
+   }
+  ],
+  "collection_members": [
+   {
+    "collection": "collection:andy/imprint-1",
+    "object": "mem:S/episode/m1",
+    "backing": "person",
+    "added_seq": 7,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/imprint-1",
+    "object": "mem:S/episode/m2",
+    "backing": "person",
+    "added_seq": 7,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/imprint-1",
+    "object": "mem:S/episode/m3",
+    "backing": "person",
+    "added_seq": 7,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/imprint-1",
+    "object": "mem:S/episode/m4",
+    "backing": "person",
+    "added_seq": 7,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/imprint-1",
+    "object": "trail:S/t1",
+    "backing": "person",
+    "added_seq": 7,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/imprint-1",
+    "object": "trail:S/t2",
+    "backing": "person",
+    "added_seq": 7,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/imprint-1",
+    "object": "trail:S/t3",
+    "backing": "person",
+    "added_seq": 7,
+    "added_by": "person:andy"
+   }
+  ],
+  "subjects": [
+   {
+    "object": "mem:S/episode/m2",
+    "subject": "person:lee",
+    "added_seq": 8,
+    "added_by": "person:andy",
+    "self_claimed": 0
+   },
+   {
+    "object": "mem:S/episode/m3",
+    "subject": "person:jenn",
+    "added_seq": 8,
+    "added_by": "person:andy",
+    "self_claimed": 0
+   },
+   {
+    "object": "mem:S/episode/m4",
+    "subject": "person:amy",
+    "added_seq": 8,
+    "added_by": "person:andy",
+    "self_claimed": 0
+   }
+  ],
+  "records": [
+   {
+    "id": "IR",
+    "layer": "place:home/andy",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"recall\",\"read\",\"imprint\",\"route\"],\"audience\":[\"self\"],\"objects\":{\"collections\":[\"collection:andy/imprint-1\"],\"kinds\":[\"memory\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":\"*\",\"requesters\":\"*\"}",
+    "valid_from": 1793491200,
+    "valid_until": null,
+    "anchor": 1793491200,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1793491200,
+    "created_seq": 9
+   },
+   {
+    "id": "IT",
+    "layer": "place:home/andy",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"route\"],\"audience\":[\"self\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"trail\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":\"*\",\"requesters\":\"*\"}",
+    "valid_from": 1793491200,
+    "valid_until": null,
+    "anchor": 1793491200,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1793491200,
+    "created_seq": 10
+   },
+   {
+    "id": "DA",
+    "layer": "place:home/amy",
+    "effect": "deny",
+    "selector": "{\"actions\":[\"recall\",\"read\",\"imprint\",\"route\"],\"audience\":[\"commons\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\",\"trail\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":\"*\",\"requesters\":\"*\"}",
+    "valid_from": 1793491200,
+    "valid_until": null,
+    "anchor": 1793491200,
+    "backing": "person",
+    "set_by": "person:amy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1793491200,
+    "created_seq": 11
+   }
+  ],
+  "copies": [],
+  "lane_notes": [],
+  "permission_grants": [],
+  "group_members": [],
+  "groups": []
+ },
+ "seq": 11,
+ "seq_at": {
+  "1": 1793491200,
+  "2": 1793491200,
+  "3": 1793491200,
+  "4": 1793491200,
+  "5": 1793491200,
+  "6": 1793491200,
+  "7": 1793491200,
+  "8": 1793491200,
+  "9": 1793491200,
+  "10": 1793491200,
+  "11": 1793491200
+ },
+ "meta": {
+  "ledger_id": "ledger-test",
+  "schema_version": "1",
+  "owner": "person:andy",
+  "admins": "person:andy"
+ },
+ "names": {},
+ "cases": [
+  {
+   "note": "trail-evaluation's named read batch of m3: Jenn is registered with an empty layer, so her layer is silent",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m3"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "read",
+    "purpose": "trail-evaluation",
+    "at": 1793577600,
+    "named": true,
+    "names": {}
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": null,
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "the same batch of m2: Lee has no layer at all, so his layer is missing and passes",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m2"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "read",
+    "purpose": "trail-evaluation",
+    "at": 1793577600,
+    "named": true,
+    "names": {}
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/lee",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "missing",
+      "records": [],
+      "version": 0
+     },
+     {
+      "layer": "place:home/lee",
+      "kind": "co-subject",
+      "action": "read",
+      "verdict": "missing",
+      "records": [],
+      "version": 0
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": null,
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "trail-evaluation's counted route over t1, which names m3",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "trail:S/t1"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "route",
+    "purpose": "trail-evaluation",
+    "at": 1793577600,
+    "named": false,
+    "names": {
+     "trail:S/t1": [
+      "mem:S/episode/m3"
+     ]
+    }
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "route",
+      "verdict": "allow",
+      "records": [
+       "IT"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "route",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "route",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": null,
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "the counted route over t2, which names m2",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "trail:S/t2"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "route",
+    "purpose": "trail-evaluation",
+    "at": 1793577600,
+    "named": false,
+    "names": {
+     "trail:S/t2": [
+      "mem:S/episode/m2"
+     ]
+    }
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "route",
+      "verdict": "allow",
+      "records": [
+       "IT"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/lee",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "missing",
+      "records": [],
+      "version": 0
+     },
+     {
+      "layer": "place:home/lee",
+      "kind": "co-subject",
+      "action": "route",
+      "verdict": "missing",
+      "records": [],
+      "version": 0
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "route",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": null,
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "admission's named imprint batch of m3",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m3"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "imprint",
+    "purpose": "imprint-admission",
+    "at": 1793577600,
+    "named": true,
+    "names": {}
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "imprint",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "imprint",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "imprint",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": null,
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "admission's named read batch of m2",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m2"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "read",
+    "purpose": "imprint-admission",
+    "at": 1793577600,
+    "named": true,
+    "names": {}
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/lee",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "missing",
+      "records": [],
+      "version": 0
+     },
+     {
+      "layer": "place:home/lee",
+      "kind": "co-subject",
+      "action": "read",
+      "verdict": "missing",
+      "records": [],
+      "version": 0
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": null,
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "the counted imprint on R(I) of m3",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m3"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "imprint",
+    "purpose": "imprint-keep",
+    "at": 1793577600,
+    "named": false,
+    "names": {}
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "imprint",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "co-subject",
+      "action": "imprint",
+      "verdict": "silent",
+      "records": [],
+      "version": 2
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "imprint",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": null,
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "the counted imprint on R(I) of m2, whose co-subject has no layer: the imprints spec's verdict, allowed",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m2"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "imprint",
+    "purpose": "imprint-keep",
+    "at": 1793577600,
+    "named": false,
+    "names": {}
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "imprint",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/lee",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "missing",
+      "records": [],
+      "version": 0
+     },
+     {
+      "layer": "place:home/lee",
+      "kind": "co-subject",
+      "action": "read",
+      "verdict": "missing",
+      "records": [],
+      "version": 0
+     },
+     {
+      "layer": "place:home/lee",
+      "kind": "co-subject",
+      "action": "imprint",
+      "verdict": "missing",
+      "records": [],
+      "version": 0
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "imprint",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": null,
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "a deny in Amy's layer that matches refuses the named read batch of m4 (subjects go by id, so Amy comes before Andy)",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m4"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "read",
+    "purpose": "trail-evaluation",
+    "at": 1793577600,
+    "named": true,
+    "names": {}
+   },
+   "expected": {
+    "allowed": false,
+    "cited": [
+     {
+      "layer": "place:home/amy",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "deny",
+      "records": [],
+      "version": 11
+     },
+     {
+      "layer": "place:home/amy",
+      "kind": "co-subject",
+      "action": "read",
+      "verdict": "deny",
+      "records": [],
+      "version": 11
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": {
+     "code": "DENIED",
+     "layer": "place:home/amy",
+     "action": "recall"
+    },
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "and the counted route over t3, which names m4: refused at Amy's layer on the trail's own route",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "trail:S/t3"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "route",
+    "purpose": "trail-evaluation",
+    "at": 1793577600,
+    "named": false,
+    "names": {
+     "trail:S/t3": [
+      "mem:S/episode/m4"
+     ]
+    }
+   },
+   "expected": {
+    "allowed": false,
+    "cited": [
+     {
+      "layer": "place:home/amy",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "deny",
+      "records": [],
+      "version": 11
+     },
+     {
+      "layer": "place:home/amy",
+      "kind": "co-subject",
+      "action": "route",
+      "verdict": "deny",
+      "records": [],
+      "version": 11
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "route",
+      "verdict": "allow",
+      "records": [
+       "IT"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "route",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": {
+     "code": "DENIED",
+     "layer": "place:home/amy",
+     "action": "route"
+    },
+    "until": null,
+    "horizon": null
+   }
+  },
+  {
+   "note": "and admission's named imprint batch of m4",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m4"
+    ],
+    "copy": "imprint:peer-1/imp1",
+    "action": "imprint",
+    "purpose": "imprint-admission",
+    "at": 1793577600,
+    "named": true,
+    "names": {}
+   },
+   "expected": {
+    "allowed": false,
+    "cited": [
+     {
+      "layer": "place:home/amy",
+      "kind": "co-subject",
+      "action": "recall",
+      "verdict": "deny",
+      "records": [],
+      "version": 11
+     },
+     {
+      "layer": "place:home/amy",
+      "kind": "co-subject",
+      "action": "read",
+      "verdict": "deny",
+      "records": [],
+      "version": 11
+     },
+     {
+      "layer": "place:home/amy",
+      "kind": "co-subject",
+      "action": "imprint",
+      "verdict": "deny",
+      "records": [],
+      "version": 11
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "imprint",
+      "verdict": "allow",
+      "records": [
+       "IR"
+      ],
+      "version": 10
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "imprint",
+      "verdict": "silent",
+      "records": [],
+      "version": 4
+     }
+    ],
+    "refusal": {
+     "code": "DENIED",
+     "layer": "place:home/amy",
+     "action": "recall"
+    },
+    "until": null,
+    "horizon": null
+   }
+  }
+ ]
+}

@@ -245,6 +245,26 @@ controller, so `LimitDATA` is the cap that holds there (spec 14.1). One imprint 
 loads an embedder. Imprint files are never opened with `Storage(path)`. Spec:
 docs/superpowers/specs/2026-10-25-store-imprint-design.md.
 
+## Permissions
+
+Permissions by place (spec: docs/superpowers/specs/2026-10-25-permissions-by-place-design.md) decide who may use a
+memory, for what, and where. Four modules: `permissions.py` holds the pure rules (grammars, places, layers,
+`decide`, the words of a yes); `permission_ledger.py` is the hash-chained ledger file and the gate;
+`permission_uses.py` is the receipts file and the views over it; `permission_cli.py` is `engram-permissions`, the
+person's side. The ledger lives at `ENGRAM_HOME/.engram/permissions.db` and the receipts at
+`ENGRAM_HOME/.engram/permission-uses.db`, fixed paths. The gate is `off` until the owner raises it (`shadow`, then
+`enforce`), so with no ledger or an `off` gate engram behaves as before apart from two fail-closed changes (the
+daemon never serves `group:outside-home`, and `share` refuses that name) and one requirement on small machines: the
+lighthouse daemon no longer refuses to start without `ENGRAM_EMBEDDER_SOCKET`. Without it, it loads the model in
+process and logs a warning, as before this branch. Small-hardware machines (the Pi) still need `embedder_socket` in
+their `runtime.json` and the `superyak-embedder` unit running, so the model is never loaded twice there (spec 12.2;
+the plan's gate G0).
+
+Agents never run, for the person, any `engram-permissions` command that writes, such as `sign`, `allow`, `grant`, `migrate` or `gate`. Each needs the person's own terminal yes.
+
+An agent asks through the `permit` tool (a proposal the owner signs, unless a grant covers it) and reads through
+`permissions`. Memory: each process peaks under 512 MB on the Pi (spec 15); on the Pi the daemon needs `ENGRAM_EMBEDDER_SOCKET`, or it loads a second model.
+
 ## MCP Tools
 
 | Tool | Purpose |
@@ -270,6 +290,8 @@ docs/superpowers/specs/2026-10-25-store-imprint-design.md.
 | `assessment_report(function_score, ...)` | Complete the active assessment: structured self-report + objective counters. History via `reflect(focus="assessments")`. |
 | `search_code(query)` | Search project source code via embeddings. |
 | `reindex()` | Rebuild code index. |
+| `permit(op, selector?, valid_from?, valid_until?, reason?, record?, collection?, memory?, args?)` | Ask for a permissions-ledger change as this server's agent. Done inside a grant; otherwise a proposal the owner signs in a terminal. `migrate` is never a tool act. |
+| `permissions(focus?, since?, until?, action?, purpose?, obj?)` | Read the permissions ledger: `uses`, `rules`, `proposals`, `grants`. An agent not acting for the owner sees only its own receipts. |
 
 ## Key Files
 
@@ -304,6 +326,10 @@ docs/superpowers/specs/2026-10-25-store-imprint-design.md.
 | `imprint.py` | Store-copy CLI — plan, request, send, verify, import receipts, use; one job at a time, bounded memory |
 | `imprint_filter.py` | What may leave: the lane and memory filter, co-subject rows (`imprint_subjects`) |
 | `imprint_checks.py` | Leak checks and admission checks over a copy's values, FTS vocabularies and vec0 slots |
+| `permissions.py` | Permissions by place: grammars, places, layers, `decide`, the words of a yes |
+| `permission_ledger.py` | Permission ledger file (`.engram/permissions.db`): hash-chained log, rebuild, gate |
+| `permission_uses.py` | Permission receipts file (`.engram/permission-uses.db`) and its views |
+| `permission_cli.py` | `engram-permissions`: the person's terminal side; every write needs their own yes |
 
 ## Testing
 

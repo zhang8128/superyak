@@ -4,7 +4,13 @@ Reads no file, opens no database, reads no clock, draws no randomness.
 """
 from __future__ import annotations
 
+import contextvars
+import heapq
 import json
+from array import array
+from bisect import bisect_left
+from itertools import repeat
+from functools import lru_cache
 import re
 from collections import namedtuple
 from dataclasses import dataclass, field, replace
@@ -14,12 +20,21 @@ from typing import Callable, Iterable, Mapping, NamedTuple, Sequence
 from lighthouse_protocol import canonical_json
 
 MAX_RECORDS_PER_LAYER = 256
+MAX_RECORDS = 16_384            # records in one ledger, revoked and replaced ones included (5.4, 15)
+FOLD_BATCH = 4_096               # receipts one fold batch reads, verifies and anchors (9.1, 15)
+SHARED_DECISIONS = 4096          # distinct readings an eligible set keeps a shared decision for (P 15)
+LANE_TESTS_KEPT = 4096           # lane tests a State keeps, (object, lanes, anchor, t, deny) -> bool
+PREFETCH_CHUNK = 512            # refs a bulk decision or an eligible set prefetches at once
+STATE_ROWS = 65_536             # per-object rows a State keeps at once; the rest are read again on demand (5.6, 15)
+SEQ_TIMES_KEPT = 4_096          # log times a State keeps in front of its own cache (a plain dict, no lock)
+STATE_LOG_TIMES = 65_536        # log times a State keeps at once; the rest are read again on demand (5.6, 15)
 MAX_AUDIENCE = 32
 MAX_LIST = 64
 MAX_MEMORIES = 512
 MAX_PURPOSES = 16
 MAX_SUBJECTS = 8
 MAX_COLLECTION = 100_000
+MAX_ACT_OBJECTS = 10_000        # objects one collect or uncollect act names, so one log row and one State stay small (15)
 MAX_PLACES = 1024
 MAX_PARENTS = 4
 MAX_SEGMENTS = 8
@@ -37,13 +52,22 @@ MAX_GRANT_DEPTH = 2
 MAX_GRANT_HOURS = 720
 MAX_REPLACES = 16
 PROPOSAL_DAYS = 7
+MAX_OPEN_PROPOSALS_PER_AGENT = 64   # pending, unexpired proposals one filer holds (15, P37; final review I1)
+MAX_OPEN_PROPOSALS = 1024           # pending, unexpired proposals in one ledger
+MAX_CHILD_GRANTS = 64               # live (not revoked, not expired) child grants under one parent grant
 BOX_CAP = 4096
+BOX_REFS = 2_000_000       # P 8, 15: the refs held by the sets one gluing check keeps and makes
 JOINTS_PER_CHANGE = 64
 SWEEP_PER_PASS = 256
 CACHE_ENTRIES = 64
+CACHE_BYTES = 96 * 2**20        # the daemon's eligible-set cache, in estimated bytes (12.2, 15)
+FRAMES_AT_ONCE = 2              # frames that build or hold a State at once in the daemon (12.2, 15)
 MAX_PLACEMENTS = 20_000
-REBUILD_BUDGET_S = 2
-BULK_BUDGET_S = 40
+REBUILD_BUDGET_S = 2             # U24's fixture, whose objects read alike (15; revision 8)
+REBUILD_WORST_S = 30            # when no two objects read alike
+REBUILD_LEDGER_S = 6            # from the reference ledger, opening it and its State included
+REBUILD_WAIT_S = 1.0            # how long a frame waits for an eligible set being built (12.2, 15)
+BULK_BUDGET_S = 300
 GUARD_RECEIPTS = 200
 GUARD_SECONDS = 24 * 3600
 GATE_HOUSES = 64
@@ -179,6 +203,22 @@ def parse_object_ref(ref: str) -> ObjectRef:
         if all(_NAME.fullmatch(p) for p in parts):
             return ObjectRef(head, parts[0], None, parts[1])
     raise _bad(rule, "not a mem:, road: or trail: ref", ref)
+
+
+@lru_cache(maxsize=8192)
+def _parsed_or_none(ref: str):
+    """parse_object_ref for a str ref, or None when it raises: a decision parses its object once per record it
+    tests, so the parse is kept for the few refs being decided."""
+    try:
+        return parse_object_ref(ref)
+    except RuleError:
+        return None
+
+
+def _parsed(ref) -> ObjectRef:
+    """parse_object_ref, cached for a well-formed str ref; a malformed one raises as parse_object_ref does."""
+    got = _parsed_or_none(ref) if isinstance(ref, str) else None
+    return got if got is not None else parse_object_ref(ref)
 
 
 def parse_copy_ref(ref: str) -> CopyRef:
@@ -444,7 +484,17 @@ class State:
     member_of: Mapping[str, tuple]       # collection_members by object
     subjects: Mapping[str, tuple]
     lane_notes: Mapping[str, tuple]      # ordered by (at, seq)
+    self_claims: tuple = ()              # the live self-claimed subject rows at seq (7.4), none in step 1
     _cache: dict = field(default_factory=dict, compare=False, repr=False)
+    _loader: object = field(default=None, compare=False, repr=False)   # the ledger's row reader, if lazy
+
+    def prefetch(self, refs: Sequence[str]) -> None:
+        """Load the per-object rows of up to 512 refs in one query each, so a chunk of decisions reads them from
+        the cache. A no-op for a State built whole."""
+        if self._loader is not None:
+            seqs = self._loader.prefetch(refs)
+            if seqs and hasattr(self.seq_at, "prefetch"):
+                self.seq_at.prefetch(seqs)
 
     @classmethod
     def from_tables(cls, tables: Mapping[str, Sequence], *, seq: int, seq_at: Mapping[int, int],
@@ -489,7 +539,10 @@ class State:
         kw["member_of"] = {k: tuple(v) for k, v in by_obj.items()}
         given = dict(names or {})
         kw["names"] = {p: given.get(p, p.rsplit("/", 1)[-1].removeprefix("place:")) for p in kw["places"]}
-        return cls(seq=seq, seq_at=dict(seq_at), meta=dict(meta), **kw)
+        # a dict is copied; any other mapping (the ledger's lazy log times) is kept as given
+        seq_at = dict(seq_at) if isinstance(seq_at, dict) else seq_at
+        claims = tuple(s for g in kw["subjects"].values() for s in g if s.self_claimed and s.removed_seq is None)
+        return cls(seq=seq, seq_at=seq_at, meta=dict(meta), self_claims=claims, **kw)
 
     def to_tables(self) -> dict:
         def dump(table, items):
@@ -806,6 +859,7 @@ class Use:
     at: int
     names: tuple = ()
     shows: frozenset = frozenset()
+    keeps: str = ""     # the copy ref of the store a single `imprint` keeps into (P 6.3, P36); "" never qualifies
 
 
 def acts_for_place(state: State, agent: str) -> str | None:
@@ -814,12 +868,25 @@ def acts_for_place(state: State, agent: str) -> str | None:
     return None if row is None else row.acts_for
 
 
+def _seq_time(state: State, seq: int) -> int:
+    """state.seq_at[seq], kept per State for the last SEQ_TIMES_KEPT seqs read: a State's log times never change,
+    and a lazy State's own cache takes a lock and moves an entry per read."""
+    memo = state._memo(("seq-times",), dict)
+    got = memo.get(seq)
+    if got is None:
+        got = state.seq_at[seq]
+        if len(memo) >= SEQ_TIMES_KEPT:
+            memo.clear()
+        memo[seq] = got
+    return got
+
+
 def _span(state: State, added: int, removed: int | None) -> tuple[int, int | None]:
     """The time interval [lo, hi) a membership row is in force; hi None is open (PF22)."""
-    lo = state.seq_at[added]
+    lo = _seq_time(state, added)
     if removed is None or removed > state.seq:
         return lo, None
-    return lo, state.seq_at[removed]
+    return lo, _seq_time(state, removed)
 
 
 def _in_force(state: State, added: int, removed: int | None, t: int) -> bool:
@@ -919,9 +986,26 @@ def _audience_entry(state: State, v: str, layer: str, use: Use, anchor: int, den
     return False
 
 
+def _lanes_ok(state: State, obj: str, lanes: tuple, anchor: int, t: int, deny: bool) -> bool:
+    """The lanes dimension (P 5.3's table): some lane of `lanes` touched (a deny) or held (an allow). Kept per State
+    for the last LANE_TESTS_KEPT (object, lanes, anchor, t, deny), so the layers of one decision share it."""
+    memo = state._memo(("lane-tests",), dict)
+    key = (obj, lanes, anchor, t, deny)
+    held = memo.get(key)
+    if held is None:
+        if deny:
+            held = any(lane_touched(state, obj, lane, anchor, t) for lane in lanes)
+        else:
+            held = any(lane_held(state, obj, lane, anchor, t) for lane in lanes)
+        if len(memo) >= LANE_TESTS_KEPT:
+            memo.clear()
+        memo[key] = held
+    return held
+
+
 def _object_dims(state: State, sel: Selector, layer: str, anchor: int, use: Use, action: str, deny: bool,
                  assume: frozenset, check_validity: bool) -> bool:
-    ref = parse_object_ref(use.obj)
+    ref = _parsed(use.obj)
     if not _star_or_in(sel.kinds, ref.kind):
         return False
     if not _star_or_in(sel.stores, ref.instance_id):
@@ -931,14 +1015,10 @@ def _object_dims(state: State, sel: Selector, layer: str, anchor: int, use: Use,
     if sel.memories != STAR and use.obj not in sel.memories:
         return False
     t = use.at
-    if sel.lanes != STAR:
-        if deny:
-            if not any(lane_touched(state, use.obj, lane, anchor, t) for lane in sel.lanes):
-                return False
-        elif not any(lane_held(state, use.obj, lane, anchor, t) for lane in sel.lanes):
-            return False
+    if sel.lanes != STAR and not _lanes_ok(state, use.obj, sel.lanes, anchor, t, deny):
+        return False
     if sel.collections != STAR:
-        rows = [r for r in state.member_of.get(use.obj, ()) if r.collection in sel.collections]
+        rows = [r for r in _members(state, use.obj)[0] if r.collection in sel.collections]
         if not any(_membership_counts(state, r, layer, anchor, use, action, deny, assume, check_validity)
                    for r in rows):
             return False
@@ -1035,6 +1115,29 @@ def record_matches(state: State, record: Record, use: Use, action: str) -> bool:
             and _grant_ok(state, record, use, action, deny, True))
 
 
+def _matches_prefiltered(state: State, record: Record, use: Use, action: str) -> bool:
+    """record_matches for a record of `_prefilter(state, layer, use, action)`: rule 2 on the record's own selector
+    (requesters, actions, purposes, audience) is what the pre-filter tested, for this requester, place, purpose,
+    time and action, so only the object dimensions, rule 1, and rules 4 and 5 are tested here."""
+    deny = record.effect == "deny"
+    if _revoked(state, record) or not _in_interval(record, use.at):
+        return False
+    if not _object_dims(state, record.selector, record.layer, record.anchor, use, action, deny, frozenset(), True):
+        return False
+    return (_chain_ok(state, record, use, action, deny, True)
+            and _grant_ok(state, record, use, action, deny, True))
+
+
+def _candidate_prefiltered(state: State, record: Record, use: Use, action: str) -> bool:
+    """record_candidate for a record of `_prefilter(state, layer, use, action)` (see `_matches_prefiltered`)."""
+    if record.effect != "allow" or _revoked(state, record):
+        return False
+    if not _object_dims(state, record.selector, record.layer, record.anchor, use, action, False, frozenset(), False):
+        return False
+    return (_chain_ok(state, record, use, action, False, False)
+            and _grant_ok(state, record, use, action, False, False))
+
+
 def record_candidate(state: State, record: Record, use: Use, action: str) -> bool:
     """P 6.5: an unrevoked allow matching by rules 2 and 3 and the selector parts of 4 and 5; every validity
     interval and every grant's validity is ignored (PF23)."""
@@ -1080,27 +1183,39 @@ def needs(use: Use) -> tuple[Need, ...]:
     return tuple(out)
 
 
-def _own_subjects(state: State, ref: str, at: int | None = None) -> set[str]:
+def _own_subjects(state: State, ref: str, at: int | None = None, later: list | None = None) -> set[str]:
     """The ref's store's owner and its co-subjects: those in force at `at`, or every one not removed when `at` is
-    None. A ref that names no registered store has none of its own."""
+    None. A ref that names no registered store has none of its own. With `later` (and `at`), the times after `at`
+    at which a subject row comes into or goes out of force are added to it (the final review's M2)."""
     out: set[str] = set()
-    try:
-        parsed = parse_object_ref(ref)
-    except RuleError:
+    parsed = _parsed_or_none(ref) if isinstance(ref, str) else None
+    if parsed is None:
         return out
     store = state.stores.get(parsed.instance_id)
     if store is not None and store.imprint_of is None:     # an imprint's owner is never a default subject
         out.add(store.owner)
     for row in state.subjects.get(ref, ()):
-        if (row.removed_seq is None if at is None else _in_force(state, row.added_seq, row.removed_seq, at)):
+        if at is None:
+            if row.removed_seq is None:
+                out.add(row.subject)
+            continue
+        lo, hi = _span(state, row.added_seq, row.removed_seq)
+        if lo <= at and (hi is None or at < hi):
             out.add(row.subject)
+        if later is not None:
+            if lo > at:
+                later.append(lo)
+            if hi is not None and hi > at:
+                later.append(hi)
     return out
 
 
-def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = ()) -> tuple[str, ...]:
+def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = (), *,
+                later: list | None = None) -> tuple[str, ...]:
     """P 6.3 item 1 and 7.4: the object's store's owner and its co-subjects in force at `at`, those of each
     source up the `copies` chain (at most MAX_COPY_CHAIN links), and for a road or trail those of the memories
-    it names. Sorted. An object whose ref names no registered store has none of its own."""
+    it names. Sorted. An object whose ref names no registered store has none of its own. `later`: see
+    `_own_subjects`."""
     out: set[str] = set()
 
     def with_sources(ref: str) -> None:
@@ -1109,7 +1224,7 @@ def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = ()) -> t
             if cur is None or cur in seen:
                 return
             seen.add(cur)
-            out.update(_own_subjects(state, cur, at))
+            out.update(_own_subjects(state, cur, at, later))
             cur = state.copies.get(cur)
 
     with_sources(obj)
@@ -1121,7 +1236,7 @@ def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = ()) -> t
 @dataclass(frozen=True)
 class Layer:
     id: str
-    kind: str       # consent, restriction, legacy or outside
+    kind: str       # consent, restriction, legacy, outside or co-subject (P36, P 6.3)
 
 
 @dataclass(frozen=True)
@@ -1148,13 +1263,65 @@ def _subject_layer(state: State, subject: str) -> str:
     return subject
 
 
+def _owner_of_store(state: State, obj: str) -> str | None:
+    """The owner of the store the object's ref names (P12), or None when it names no registered store."""
+    try:
+        parsed = parse_object_ref(obj)
+    except RuleError:
+        return None
+    store = state.stores.get(parsed.instance_id)
+    return None if store is None else store.owner
+
+
+def qualifies(state: State, use: Use, bulk: bool = False) -> bool:
+    """P36 (P 6.3): does the use, on its own object, read each co-subject's layer as a restriction layer? The
+    owner of the object's store is the requester's principal; `place:home/<owner>` dominates P and the holding
+    place H; and the use is a bulk use (the kept copy is h) or an `imprint` whose kept copy `use.keeps` is held
+    inside his home. A copy or store with no `stores` row has no place, so it never qualifies."""
+    owner = _owner_of_store(state, use.obj)
+    if owner is None:
+        return False
+    home = home_of(owner)
+    if acts_for_place(state, use.requester) != home:
+        return False
+    held = holding_place(state, use.copy)
+    if held is None or home not in dominators(state, use.place) or home not in dominators(state, held):
+        return False
+    if bulk:
+        return True
+    if use.action != "imprint":
+        return False
+    kept = holding_place(state, use.keeps) if use.keeps else None
+    return kept is not None and home in dominators(state, kept)
+
+
 def required_layers(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
-                    outside: Mapping | None = None, subjects: Sequence[str] | None = None) -> tuple[Layer, ...]:
+                    outside: Mapping | None = None, subjects: Sequence[str] | None = None,
+                    bulk: bool = False) -> tuple[Layer, ...]:
     """Req(u) in P 6.5 step 2's order, each layer once: subjects by id, the requester's places by id, the holding
     places by id (a holding place with no `stores` row is a layer that does not exist, named by the copy), the
     legacy layers, the agent's restriction layer. A place id in `outside` is an `outside` layer there. A caller
-    that has the use's subjects already (a bulk decision) passes them."""
+    that has the use's subjects already (a bulk decision) passes them. For a use that qualifies under P36 (`bulk`
+    says it is part of a bulk use) a subject's layer is a `co-subject` layer, unless it is also a layer of
+    anc(P) or anc(H), or an `outside` layer, which stay consent layers (P 6.3)."""
     outside = outside or {}
+    if subjects is not None and isinstance(use.obj, str):
+        ref = _parsed_or_none(use.obj)
+        key = ("req", use.requester, use.place, use.copy, use.action, use.keeps, None if ref is None else
+               ref.instance_id, tuple(subjects), bulk, tuple(layer.name for layer in legacy), tuple(sorted(outside)))
+        memo = state._memo(("required-layers",), dict)
+        got = memo.get(key)
+        if got is None:
+            got = _required_layers(state, use, legacy, outside, subjects, bulk)
+            if len(memo) >= LANE_TESTS_KEPT:
+                memo.clear()
+            memo[key] = got
+        return got
+    return _required_layers(state, use, legacy, outside, subjects, bulk)
+
+
+def _required_layers(state: State, use: Use, legacy: Sequence[LegacyLayer], outside: Mapping,
+                     subjects: Sequence[str] | None, bulk: bool) -> tuple[Layer, ...]:
     out: list[Layer] = []
     seen: set = set()
 
@@ -1164,15 +1331,20 @@ def required_layers(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (
             seen.add(key)
             out.append(Layer(layer_id, "outside" if kind == "consent" and layer_id in outside else kind))
 
-    for s in (subjects_of(state, use.obj, use.at, use.names) if subjects is None else subjects):
-        add(_subject_layer(state, s), "consent")
-    for p in sorted(ancestors(state, use.place), key=_units):
-        add(p, "consent")
     held = holding_place(state, use.copy)
+    places = sorted(ancestors(state, use.place), key=_units)
+    held_places = [] if held is None else sorted(ancestors(state, held), key=_units)
+    carried = qualifies(state, use, bulk)
+    fixed = set(places) | set(held_places) | set(outside)
+    for s in (subjects_of(state, use.obj, use.at, use.names) if subjects is None else subjects):
+        layer_id = _subject_layer(state, s)
+        add(layer_id, "co-subject" if carried and layer_id not in fixed else "consent")
+    for p in places:
+        add(p, "consent")
     if held is None:
         add(use.copy, "consent")
     else:
-        for p in sorted(ancestors(state, held), key=_units):
+        for p in held_places:
             add(p, "consent")
     for layer in legacy:
         add(layer.name, "legacy")
@@ -1263,9 +1435,144 @@ def _prefilter(state: State, layer_id: str, use: Use, action: str) -> list:
     return state._memo(("prefilter", layer_id, use.requester, use.place, use.purpose, use.at, action), compute)
 
 
+def _memory_index(state: State) -> tuple:
+    """(refs, positions, records): every (memory ref, record) pair where the record's own selector lists the ref
+    in `memories`, sorted by ref; refs[i] is listed by records[positions[i]]. Revoked records too: a replaced one is
+    read through its replacement's chain (P 5.3 rule 4). A list of the refs the records already hold and an array
+    of 4-byte positions, merged from each list sorted on its own, so building it holds little more than the
+    result. Made once per State."""
+    def compute():
+        listing = [r for r in state.records.values() if r.selector.memories != STAR]
+        refs, positions = [], array("I")
+        for m, k in heapq.merge(*[zip(sorted(r.selector.memories), repeat(k)) for k, r in enumerate(listing)]):
+            refs.append(m)
+            positions.append(k)
+        return refs, positions, tuple(listing)
+    return state._memo(("memory-index",), compute)
+
+
+def _listing(state: State, obj: str) -> dict:
+    """{layer: ids of its records whose own selector lists obj in `memories`}, for the object being decided: kept
+    for the last object only, which every layer of its decision asks for."""
+    last = state._cache.get(("listing",))           # (obj, its listing), replaced whole: safe to read anywhere
+    if last is not None and last[0] == obj:
+        return last[1]
+    refs, positions, listing = _memory_index(state)
+    hit: dict = {}
+    i = bisect_left(refs, obj)
+    while i < len(refs) and refs[i] == obj:
+        r = listing[positions[i]]
+        hit.setdefault(r.layer, set()).add(r.id)
+        i += 1
+    state._cache[("listing",)] = (obj, hit)
+    return hit
+
+
+def _plan(state: State, layer_id: str, use: Use, action: str) -> tuple:
+    """The pre-filtered records of a layer for this requester, place, purpose, time and action, split by what an
+    object must have for each to match: (records, positions of those whose own selector names no memory and no
+    collection, {collection: positions of those naming it and no memory}, {record id: position}, {static object
+    key: the first group with kind, store and layer tested}). A record whose own selector names memories can
+    match only a listed object (`_listing`); one naming collections, only an object with a membership row in one
+    of them. Made once per pre-filter."""
+    def compute():
+        recs = _prefilter(state, layer_id, use, action)
+        always, by_coll, pos, how = [], {}, {}, []
+        t = use.at
+        for i, r in enumerate(recs):
+            pos[r.id] = i
+            sel = r.selector
+            if _revoked(state, r) or not _in_interval(r, t):
+                how.append(_DEAD)
+            elif r.replaces is not None or not r.backing == "person":
+                how.append(_FULL)
+            elif sel.memories == STAR and sel.collections == STAR:
+                how.append(_STATIC if sel.lanes == STAR else _LANES)
+            else:
+                how.append(_FULL)
+            if sel.memories != STAR:
+                continue
+            if sel.collections != STAR:
+                for c in sel.collections:
+                    by_coll.setdefault(c, []).append(i)
+            else:
+                always.append(i)
+        return recs, tuple(always), by_coll, pos, {}, tuple(how)
+    return state._memo(("plan", layer_id, use.requester, use.place, use.purpose, use.at, action), compute)
+
+
+_FULL, _STATIC, _LANES, _DEAD = 0, 1, 2, 3
+
+
+def _plan_match(state: State, plan: tuple, i: int, use: Use, action: str, first: frozenset) -> bool:
+    """record_matches for record i of a plan whose candidates `first` passed the static object test: a live,
+    person-backed record with no `replaces` and no memory or collection list matches by its lanes alone."""
+    r = plan[0][i]
+    how = plan[5][i]
+    if how == _DEAD:
+        return False
+    if i in first:
+        if how == _STATIC:
+            return True
+        if how == _LANES:
+            return _lanes_ok(state, use.obj, r.selector.lanes, r.anchor, use.at, r.effect == "deny")
+    return _matches_prefiltered(state, r, use, action)
+
+
+def _static_ok(sel: Selector, ref: ObjectRef) -> bool:
+    return (_star_or_in(sel.kinds, ref.kind) and _star_or_in(sel.stores, ref.instance_id)
+            and (sel.layers == STAR or ref.layer in sel.layers))
+
+
+def _candidates(state: State, layer_id: str, use: Use, action: str) -> list:
+    """The records of `_prefilter(state, layer_id, use, action)` that can match use.obj, in pre-filter order: every
+    other one fails an object dimension for it (kind, store, layer, `memories`, or `collections` with no row of
+    the object), so it matches no use on it and is no candidate (P 6.5). A malformed object gets them all, so it
+    is refused or raises as before."""
+    return [_plan(state, layer_id, use, action)[0][i] for i in _candidate_positions(state, layer_id, use, action)[1]]
+
+
+def _candidate_positions(state: State, layer_id: str, use: Use, action: str) -> tuple:
+    """(the plan, the positions of `_candidates` in it, the positions that passed the static test). A malformed
+    object gets every position and none passed."""
+    plan = _plan(state, layer_id, use, action)
+    recs, always, by_coll, pos, static = plan[:5]
+    obj = use.obj
+    ref = _parsed_or_none(obj) if isinstance(obj, str) else None
+    if ref is None:
+        return plan, range(len(recs)), frozenset()
+    skey = (ref.kind, ref.instance_id, ref.layer)
+    first = static.get(skey)
+    if first is None:
+        kept = tuple(i for i in always if _static_ok(recs[i].selector, ref))
+        first = static[skey] = (kept, frozenset(kept))
+    picked = None
+    listed = _listing(state, obj).get(layer_id)
+    if listed:
+        picked = set(first[0])
+        for rid in listed:
+            i = pos.get(rid)
+            if i is not None:
+                picked.add(i)
+    if by_coll:
+        for m in _members(state, obj)[0]:
+            hit = by_coll.get(m.collection)
+            if hit:
+                if picked is None:
+                    picked = set(first[0])
+                picked.update(hit)
+    if picked is None:
+        return plan, first[0], first[1]
+    return plan, sorted(picked), first[1]
+
+
 def layer_version(state: State, layer_id: str) -> int:
     """The highest seq that touches the layer: its records and grants (made, revoked), and the place's own
-    creation, retirement and stewards."""
+    creation, retirement and stewards. It reads nothing of a use, so it is made once per layer for a State."""
+    return state._memo(("layer-version", layer_id), lambda: _layer_version(state, layer_id))
+
+
+def _layer_version(state: State, layer_id: str) -> int:
     best = 0
     records, grants = _layer_index(state)
     for r in records.get(layer_id, ()):
@@ -1315,13 +1622,26 @@ def effective_end(state: State, record: Record, matched_memberships: Sequence) -
     return min(ends) if ends else None
 
 
+def _record_terms(state: State, record: Record, t: int) -> tuple[int | None, bool]:
+    """`_terms` for an object with no grant-backed membership: no membership route, so the record's own end and
+    its own grant chain's validity at t. Made once per (record, t) for a State."""
+    def compute():
+        invalid = False
+        if record.backing.startswith("grant:"):
+            invalid = not _grant_terms(state, record.backing[len("grant:"):], t)[1]
+        return effective_end(state, record, ()), invalid
+    return state._memo(("record-terms", record.id, t), compute)
+
+
 def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool) -> tuple[int | None, bool]:
     """(effective end, grant chain invalid at t) of an allow for this use (P 6.5 step 5 and the codes). For each
     selector with a collections list (the record's, its replaces chain's and its grants' envelopes), the
     membership route is: none when the object is in the collection by a person-backed row, else the best
     grant-backed row, the one whose chain ends latest. With valid_only, only memberships that count with their
-    chains valid are read."""
+    chains valid are read. An object with no grant-backed row has no route (`_record_terms`)."""
     t = use.at
+    if not _grant_rows(state, use.obj):
+        return _record_terms(state, record, t)
     invalid = False
     selectors = [(record.selector, record.layer)]
     cur, n = record.replaces, 0
@@ -1339,7 +1659,7 @@ def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool
     for sel, layer in selectors:
         if sel.collections == STAR:
             continue
-        rows = [m for m in state.member_of.get(use.obj, ())
+        rows = [m for m in _members(state, use.obj)[0]
                 if m.collection in sel.collections
                 and _membership_counts(state, m, layer, record.anchor, use, action, False, frozenset(), valid_only)]
         if not rows or any(not m.backing.startswith("grant:") for m in rows):
@@ -1372,14 +1692,23 @@ def _ledger_verdict(state: State, layer: Layer, use: Use, action: str) -> tuple[
     exists = layer.id in (state.agents if layer.kind == "restriction" else state.places)
     if not exists:
         return "missing", ()
-    candidates = _prefilter(state, layer.id, use, action)
-    if any(r.effect == "deny" and record_matches(state, r, use, action) for r in candidates):
+    got = _program_verdict(state, layer, use, action)
+    if got is not None:
+        return got
+    plan, positions, first = _candidate_positions(state, layer.id, use, action)
+    recs = plan[0]
+    if any(recs[i].effect == "deny" and _plan_match(state, plan, i, use, action, first) for i in positions):
         return "deny", ()
-    if layer.kind == "restriction":
-        return "silent", ()               # a restriction layer is only its denies
-    allows = [r for r in candidates if r.effect == "allow" and record_matches(state, r, use, action)]
+    if layer.kind in ("restriction", "co-subject"):
+        return "silent", ()               # a restriction layer, and a co-subject's (P36), is only its denies
+    allows = [recs[i] for i in positions if recs[i].effect == "allow" and _plan_match(state, plan, i, use, action, first)]
     if not allows:
         return "silent", ()
+    if len(allows) == 1:
+        return "allow", (allows[0].id,)
+    if not _grant_rows(state, use.obj):
+        t = use.at
+        return "allow", (min(allows, key=lambda r: _record_rank(state, r, t)).id,)
 
     def rank(r):
         end = _terms(state, r, use, action, True)[0]
@@ -1387,9 +1716,142 @@ def _ledger_verdict(state: State, layer: Layer, use: Use, action: str) -> tuple[
     return "allow", (min(allows, key=rank).id,)
 
 
+def _program(state: State, layer_id: str, use: Use, action: str, ref: ObjectRef) -> tuple:
+    """For a plan and an object's static key (kind, store, layer), what its records with no memory or collection
+    list decide, grouped so that a layer costs one lane test per distinct (lanes, anchor) and the full test of the
+    rest: (the first position of a live deny with no object dimension past the static ones, or None; ((lanes,
+    anchor), the first position of a live lane-only deny with them); the best-ranked live allow with no object
+    dimension, or None; ((lanes, anchor), the best-ranked live lane-only allow with them); the positions that
+    need the full test). Records not live at t (rule 1) never match and are left out. Kept in the plan."""
+    plan = _plan(state, layer_id, use, action)
+    recs, always, _, _, static, how = plan
+    key = ("prog", ref.kind, ref.instance_id, ref.layer)
+    got = static.get(key)
+    if got is not None:
+        return got
+    t = use.at
+    deny_static, deny_lanes, allow_static, allow_lanes, full = None, {}, None, {}, []
+    for i in always:
+        r = recs[i]
+        if not _static_ok(r.selector, ref):
+            continue
+        h = how[i]
+        if h == _DEAD:
+            continue
+        if h == _FULL:
+            full.append(i)
+            continue
+        if r.effect == "deny":
+            if h == _STATIC:
+                if deny_static is None:
+                    deny_static = i
+            else:
+                deny_lanes.setdefault((r.selector.lanes, r.anchor), i)
+        else:
+            rank = _record_rank(state, r, t)
+            if h == _STATIC:
+                if allow_static is None or rank < _record_rank(state, allow_static, t):
+                    allow_static = r
+            else:
+                k = (r.selector.lanes, r.anchor)
+                best = allow_lanes.get(k)
+                if best is None or rank < _record_rank(state, best, t):
+                    allow_lanes[k] = r
+    got = static[key] = (deny_static, tuple(deny_lanes.items()), allow_static, tuple(allow_lanes.items()),
+                         tuple(full))
+    return got
+
+
+def _program_verdict(state: State, layer: Layer, use: Use, action: str):
+    """`_ledger_verdict` through the layer's program, for a well-formed object with no grant-backed membership (so
+    the citation order reads nothing of it), or None to take the general path. The full-test records, the
+    object's listed records and its collections' records are tested one by one in pre-filter order, as the
+    general path tests them: a deny up to the first deny the program matches, and every allow."""
+    obj = use.obj
+    ref = _parsed_or_none(obj) if isinstance(obj, str) else None
+    if ref is None or _grant_rows(state, obj):
+        return None
+    exists = layer.id in (state.agents if layer.kind == "restriction" else state.places)
+    if not exists:
+        return "missing", ()
+    plan = _plan(state, layer.id, use, action)
+    recs, _, by_coll, pos, _, _ = plan
+    deny_static, deny_lanes, allow_static, allow_lanes, full = _program(state, layer.id, use, action, ref)
+    extra = set(full)
+    listed = _listing(state, obj).get(layer.id)
+    if listed:
+        for rid in listed:
+            i = pos.get(rid)
+            if i is not None:
+                extra.add(i)
+    if by_coll:
+        for m in _members(state, obj)[0]:
+            hit = by_coll.get(m.collection)
+            if hit:
+                extra.update(hit)
+    extra = sorted(extra)
+    t = use.at
+    first_deny = deny_static
+    for (lanes, anchor), i in deny_lanes:
+        if (first_deny is None or i < first_deny) and _lanes_ok(state, obj, lanes, anchor, t, True):
+            first_deny = i
+    for i in extra:
+        if first_deny is not None and i > first_deny:
+            break
+        r = recs[i]
+        if r.effect == "deny" and _matches_prefiltered(state, r, use, action):
+            return "deny", ()
+    if first_deny is not None:
+        return "deny", ()
+    if layer.kind in ("restriction", "co-subject"):
+        return "silent", ()               # a restriction layer, and a co-subject's (P36), is only its denies
+    best = allow_static
+    best_rank = None if best is None else _record_rank(state, best, t)
+    for (lanes, anchor), r in allow_lanes:
+        if _lanes_ok(state, obj, lanes, anchor, t, False):
+            rank = _record_rank(state, r, t)
+            if best is None or rank < best_rank:
+                best, best_rank = r, rank
+    for i in extra:
+        r = recs[i]
+        if r.effect == "allow" and _matches_prefiltered(state, r, use, action):
+            rank = _record_rank(state, r, t)
+            if best is None or rank < best_rank:
+                best, best_rank = r, rank
+    if best is None:
+        return "silent", ()
+    return "allow", (best.id,)
+
+
+def _grant_rows(state: State, obj) -> bool:
+    """Does the object have a grant-backed membership row (so `_terms` reads a route through it)?"""
+    return _members(state, obj)[1]
+
+
+def _members(state: State, obj) -> tuple:
+    """(state.member_of.get(obj, ()), whether one of them is grant-backed), kept for the last object only, which
+    every layer of its decision reads; replaced whole, so safe to read from any thread."""
+    last = state._cache.get(("members",))
+    if last is not None and last[0] == obj:
+        return last[1]
+    rows = state.member_of.get(obj, ())
+    got = (rows, any(m.backing.startswith("grant:") for m in rows))
+    state._cache[("members",)] = (obj, got)
+    return got
+
+
+def _record_rank(state: State, r: Record, t: int) -> tuple:
+    """The citation order of P 6.5 step 5 for an object with no grant-backed membership: latest effective end
+    (none is latest), then smallest id. Made once per (record, t) for a State."""
+    def compute():
+        end = _record_terms(state, r, t)[0]
+        return (end is not None, -(end or 0), _units(r.id))
+    return state._memo(("record-rank", r.id, t), compute)
+
+
 def layer_verdict(state: State, layer: Layer, use: Use, action: str) -> str:
-    """`allow`, `deny`, `silent` or `missing` for a ledger layer (consent or restriction)."""
-    if layer.kind not in ("consent", "restriction"):
+    """`allow`, `deny`, `silent` or `missing` for a ledger layer (consent, restriction or co-subject)."""
+    if layer.kind not in ("consent", "restriction", "co-subject"):
         raise RuleError("6.3 layers", f"{layer.kind} layer {layer.id} is decided by its own callable")
     return _ledger_verdict(state, layer, use, action)[0]
 
@@ -1397,8 +1859,8 @@ def layer_verdict(state: State, layer: Layer, use: Use, action: str) -> str:
 def _silent_code(state: State, layer: Layer, use: Use, action: str) -> str:
     """P 6.5 step 8 for a consent layer with no matching allow: read every candidate (and its chains)."""
     expired = invalid = not_yet = False
-    for r in _prefilter(state, layer.id, use, action):
-        if not record_candidate(state, r, use, action):
+    for r in _candidates(state, layer.id, use, action):
+        if not _candidate_prefiltered(state, r, use, action):
             continue
         end, bad = _terms(state, r, use, action, False)
         expired = expired or (end is not None and end <= use.at)
@@ -1421,16 +1883,18 @@ def _subject_retired(state: State, subject: str) -> bool:
 
 
 def _live_denies(state: State, layer_id: str, t: int):
-    """The layer's denies that are not revoked and start after t."""
-    return [r for r in _layer_index(state)[0].get(layer_id, ())
-            if r.effect == "deny" and r.valid_from > t and not _revoked(state, r)]
+    """The layer's denies that are not revoked and start after t; made once per (layer, t) for a State."""
+    return state._memo(("live-denies", layer_id, t), lambda: tuple(
+        r for r in _layer_index(state)[0].get(layer_id, ())
+        if r.effect == "deny" and r.valid_from > t and not _revoked(state, r)))
 
 
-def _until(state: State, t: int, ends: Sequence[int], layers: Sequence[str], read: Sequence[tuple]) -> int | None:
+def _until(state: State, t: int, end: int | None, layers: Sequence[str], read: Iterable[tuple]) -> int | None:
     """P 6.5 step 6: the earliest effective end of a cited record, and the `valid_from` of every deny in a
     required ledger layer that starts after t and would match some use of `read` (each (use, actions) of need(u))
-    at that time, σ fixed."""
-    out = list(ends)
+    at that time, σ fixed. `end` is the earliest effective end of the cited records so far (a running minimum),
+    and `read` can be iterated again for each deny."""
+    out = [] if end is None else [end]
     for layer_id in layers:
         for r in _live_denies(state, layer_id, t):
             if any(record_matches(state, r, replace(sub, at=r.valid_from), x) for sub, actions in read
@@ -1439,53 +1903,67 @@ def _until(state: State, t: int, ends: Sequence[int], layers: Sequence[str], rea
     return min(out) if out else None
 
 
+def _horizon_layers(state: State, t: int, layers: tuple) -> tuple:
+    """What `_horizon` reads of the required layers alone: (the earliest term after t, or None; the collections
+    some selector of theirs names). It reads no object, so it is made once per (t, layers) for a State. The key is
+    the whole ordered layers tuple: the shared `seen_chain` walk depends on the layer order."""
+    def compute():
+        out: list[int] = []
+        seen_chain: set = set()
+        backings: list[str] = []
+        selectors: list[Selector] = []
+
+        def note_record(r, *, allow_grants: bool) -> None:
+            for v in (r.valid_from, r.valid_until):
+                if v is not None and v > t:
+                    out.append(v)
+            selectors.append(r.selector)
+            if allow_grants:
+                backings.append(r.backing)
+
+        for layer_id in layers:
+            for r in _layer_index(state)[0].get(layer_id, ()):
+                if _revoked(state, r) or (r.valid_until is not None and r.valid_until <= t):
+                    continue
+                note_record(r, allow_grants=True)
+                cur, n = r.replaces, 0
+                while cur is not None and cur not in seen_chain and n < MAX_REPLACES:
+                    seen_chain.add(cur)
+                    link = state.records.get(cur)
+                    if link is None:
+                        break
+                    note_record(link, allow_grants=False)
+                    cur, n = link.replaces, n + 1
+        for b in set(backings):
+            if b.startswith("grant:"):
+                try:
+                    chain = grant_chain(state, b[len("grant:"):])
+                except RuleError:
+                    continue
+                out.extend(g.expires for g in chain if g.expires > t)
+                selectors.extend(g.envelope for g in chain)
+        named = set()
+        for sel in selectors:
+            if sel.collections != STAR:
+                named.update(sel.collections)
+        return (min(out) if out else None, frozenset(named))
+    return state._memo(("horizon-layers", t, layers), compute)
+
+
 def _horizon(state: State, t: int, layers: Sequence[str], objs: Sequence[str]) -> int | None:
     """P 6.5 step 7: the earliest `valid_from` or `valid_until` after t of every record in a required ledger layer
     that is not revoked and has not ended, or is in the `replaces` chain of one; and every `expires` after t of
     a grant behind such a record, behind a grant in its chain, or behind a membership of a needed object in a
-    collection that one of their selectors names. Terms beyond the spec's reading are only ever earlier ones."""
-    out: list[int] = []
-    seen_chain: set = set()
-    backings: list[str] = []
-    selectors: list[Selector] = []
-
-    def note_record(r, *, allow_grants: bool) -> None:
-        for v in (r.valid_from, r.valid_until):
-            if v is not None and v > t:
-                out.append(v)
-        selectors.append(r.selector)
-        if allow_grants:
-            backings.append(r.backing)
-
-    for layer_id in layers:
-        for r in _layer_index(state)[0].get(layer_id, ()):
-            if _revoked(state, r) or (r.valid_until is not None and r.valid_until <= t):
-                continue
-            note_record(r, allow_grants=True)
-            cur, n = r.replaces, 0
-            while cur is not None and cur not in seen_chain and n < MAX_REPLACES:
-                seen_chain.add(cur)
-                link = state.records.get(cur)
-                if link is None:
-                    break
-                note_record(link, allow_grants=False)
-                cur, n = link.replaces, n + 1
-    for b in set(backings):
-        if b.startswith("grant:"):
-            try:
-                chain = grant_chain(state, b[len("grant:"):])
-            except RuleError:
-                continue
-            out.extend(g.expires for g in chain if g.expires > t)
-            selectors.extend(g.envelope for g in chain)
-    named = set()
-    for sel in selectors:
-        if sel.collections != STAR:
-            named.update(sel.collections)
-    for obj in objs:
-        for m in state.member_of.get(obj, ()):
-            if m.collection in named:
-                out.extend(e for e in _chain_expiries(state, m.backing) if e > t)
+    collection that one of their selectors names. Terms beyond the spec's reading are only ever earlier ones.
+    The layers' part is made once per (t, layers) for a State (`_horizon_layers`); only the memberships are read
+    per object."""
+    least, named = _horizon_layers(state, t, tuple(layers))
+    out: list[int] = [] if least is None else [least]
+    if named:
+        for obj in objs:
+            for m in _members(state, obj)[0]:
+                if m.collection in named:
+                    out.extend(e for e in _chain_expiries(state, m.backing) if e > t)
     return min(out) if out else None
 
 
@@ -1517,13 +1995,35 @@ def _listed_memories(state: State) -> frozenset:
     return state._memo(("listed-memories",), compute)
 
 
+_ACTION_BIT = {a: i for i, a in enumerate(ACTIONS)}
+
+
+def _bits(actions: Iterable[str]) -> int:
+    out = 0
+    for a in actions:
+        out |= 1 << _ACTION_BIT[a]
+    return out
+
+
+class _BitsRead:
+    """The (use, actions) of each object a bulk decision read, rebuilt from action bits on every iteration."""
+
+    def __init__(self, proto: Use, bits: Mapping[str, int]):
+        self.proto, self.bits = proto, bits
+
+    def __iter__(self):
+        for obj, b in self.bits.items():
+            yield replace(self.proto, obj=obj), [a for i, a in enumerate(ACTIONS) if b >> i & 1]
+
+
 class _Run:
     """The accumulation of P 6.5 over one or many (object, action) pairs: each pair is decided once, however many
     objects need it (P 6.4: need(U) is a union)."""
 
     def __init__(self, state: State, proto: Use, legacy: Sequence[LegacyLayer], outside: Mapping | None, *,
-                 multi: bool, group: bool = False):
+                 multi: bool, group: bool = False, bulk: bool = False):
         self.state, self.proto, self.legacy, self.multi, self.group = state, proto, tuple(legacy), multi, group
+        self.bulk = bulk
         self.outside = outside or {}
         self.by_name = {layer.name: layer for layer in legacy}
         self.entries: dict = {}
@@ -1532,13 +2032,21 @@ class _Run:
         self.failure: tuple | None = None
         self.cur = 0                             # the index in need(u) being decided (decide only)
         self.failed_need: int | None = None
-        self.ends: list[int] = []                # effective ends of the cited records (step 5)
+        self.end: int | None = None              # the earliest effective end of the cited records (step 5)
         self.ledger_layers: list[str] = []       # the required consent and restriction layers, first seen order
         self._ledger_seen: set = set()
-        self.read: dict = {}                     # obj -> (use, [actions]) for each need(u) decided
+        # decide for one use holds at most 33 objects: obj -> (use, [actions]) for each need(u) decided, and the
+        # (obj, action) pairs already decided. A bulk decision holds the same as action bits per object (SH-3):
+        # each sub-use is `replace(proto, obj=o)`, rebuilt when `_until` needs it.
+        self.read: dict = {}
+        self.done: set = set()
+        self.read_bits: dict[str, int] = {}
+        self.done_bits: dict[str, int] = {}
         self.objs: list[str] = []
-        self.done: set = set()                   # (obj, action) pairs already decided
         self._subjects: dict = {}
+        self._subject_ids: dict = {}             # each distinct subjects tuple, kept once
+        self._by_id: dict = {}                   # id(that tuple) -> it
+        self.recall_done: set = set()            # the memories whose `recall` a bulk run decided
         self._retired: dict = {}
         self._shared: dict = {}                  # group key -> (layers, {(ledger layer id, action): row})
         self._read_groups: set = set()
@@ -1549,12 +2057,44 @@ class _Run:
         if not names:
             got = self._subjects.get(obj)
             if got is None:
-                got = self._subjects[obj] = subjects_of(self.state, obj, t)
+                got = subjects_of(self.state, obj, t)
+                got = self._subjects[obj] = self._subject_ids.setdefault(got, got)
+                self._by_id.setdefault(id(got), got)
             return got
         out = set(self.subjects(obj))
         for name in names:
             out.update(self.subjects(name))
         return tuple(sorted(out, key=_units))
+
+    def subjects_of_names(self, obj: str, names) -> tuple:
+        """`subjects(obj, names)` for many names (a set): each distinct subjects tuple is kept once, so the union
+        reads each name with one lookup and adds each distinct tuple once."""
+        memo = self._subjects
+        for n in names.difference(memo):
+            self.subjects(n)
+        out = set(self.subjects(obj))
+        for k in set(map(id, map(memo.__getitem__, names))):       # each subjects tuple is kept once (interned)
+            out.update(self._by_id[k])
+        return tuple(sorted(out, key=_units))
+
+    def is_done(self, obj: str, action: str) -> bool:
+        if self.bulk:
+            return bool(self.done_bits.get(obj, 0) >> _ACTION_BIT[action] & 1)
+        return (obj, action) in self.done
+
+    def _mark_done(self, obj: str, actions: Sequence[str]) -> None:
+        if self.bulk:
+            self.done_bits[obj] = self.done_bits.get(obj, 0) | _bits(actions)
+            if "recall" in actions and not obj.startswith(("road:", "trail:")):
+                self.recall_done.add(obj)
+        else:
+            self.done.update((obj, x) for x in actions)
+
+    def _mark_read(self, sub: Use, actions: Sequence[str]) -> None:
+        if self.bulk:
+            self.read_bits[sub.obj] = self.read_bits.get(sub.obj, 0) | _bits(actions)
+        else:
+            self.read.setdefault(sub.obj, (sub, []))[1].extend(actions)
 
     def _any_retired(self, subjects: Sequence[str]) -> bool:
         for s in subjects:
@@ -1573,7 +2113,7 @@ class _Run:
             return None
         state = self.state
         return (parsed.kind, parsed.instance_id, parsed.layer, tuple(state.lane_notes.get(ref, ())),
-                tuple(state.member_of.get(ref, ())), ref if ref in _listed_memories(state) else None, subjects)
+                tuple(_members(state, ref)[0]), ref if ref in _listed_memories(state) else None, subjects)
 
     # -- one row: a layer's verdict for one action
     def _row(self, layer: Layer, sub: Use, action: str) -> tuple:
@@ -1591,7 +2131,8 @@ class _Run:
                 end = _terms(self.state, self.state.records[rid], sub, action, True)[0]
                 if end is not None:
                     ends.append(end)
-        passes = verdict == "allow" or (layer.kind == "restriction" and verdict == "silent")
+        passes = (verdict == "allow" or (layer.kind == "restriction" and verdict == "silent") or
+                  (layer.kind == "co-subject" and verdict != "deny"))
         return (layer, action, verdict, passes, recs, ends)
 
     def _merge(self, row: tuple, sub: Use) -> None:
@@ -1602,9 +2143,15 @@ class _Run:
         else:       # the same (layer, action) over several objects: the first failing verdict, all records
             _, _, was, was_passes, held_recs = self.entries[key]
             keep = was_passes and not passes
-            self.entries[key] = (layer, action, verdict if keep else was, was_passes and passes,
+            # a consent reading of the layer by another object outranks a co-subject reading that also passes
+            lift = passes == was_passes and self.entries[key][0].kind == "co-subject" and layer.kind != "co-subject"
+            self.entries[key] = (layer if keep or lift else self.entries[key][0],
+                                 action, verdict if keep or lift else was, was_passes and passes,
                                  held_recs | set(recs))
-        self.ends.extend(ends)
+        if ends:
+            low = min(ends)
+            if self.end is None or low < self.end:
+                self.end = low
         if not passes and self.failure is None:
             code = ("NO_LAYER" if verdict == "missing" else
                     "LEGACY_DENY" if layer.kind == "legacy" else "DENIED" if verdict == "deny" else
@@ -1614,7 +2161,7 @@ class _Run:
     def _register(self, layers: Sequence[Layer]) -> None:
         for layer in layers:
             self.layer_pos.setdefault(layer.id, len(self.layer_pos))
-            if layer.kind in ("consent", "restriction") and layer.id not in self._ledger_seen:
+            if layer.kind in ("consent", "restriction", "co-subject") and layer.id not in self._ledger_seen:
                 self._ledger_seen.add(layer.id)
                 self.ledger_layers.append(layer.id)
                 self.versions[layer.id] = layer_version(self.state, layer.id)
@@ -1623,7 +2170,7 @@ class _Run:
                 gkey=None) -> bool:
         """Decide `actions` on sub.obj, each pair once. False when the object's own tests (a retired subject's
         home, no subject, more than 8 subjects or a name count past the bound) stop the decision (P 6.5 step 1)."""
-        todo = [x for x in actions if (sub.obj, x) not in self.done]
+        todo = [x for x in actions if not self.is_done(sub.obj, x)]
         if not todo:
             return True
         code = ("RETIRED" if self._any_retired(subjects) else "NO_LAYER" if not subjects else
@@ -1632,10 +2179,11 @@ class _Run:
             if self.failure is None:
                 self.failure, self.failed_need = (code, None, None), self.cur
             return False
-        self.done.update((sub.obj, x) for x in todo)
+        self._mark_done(sub.obj, todo)
         shared = self._shared.get(gkey) if gkey is not None else None
         if shared is None:
-            layers = required_layers(self.state, sub, legacy=self.legacy, outside=self.outside, subjects=subjects)
+            layers = required_layers(self.state, sub, legacy=self.legacy, outside=self.outside, subjects=subjects,
+                                     bulk=self.bulk)
             self._register(layers)
             if gkey is not None:
                 shared = self._shared[gkey] = (layers, set())
@@ -1645,9 +2193,9 @@ class _Run:
         fresh = todo if shared is None else [x for x in todo if x not in shared[1]]
         if fresh:
             self.objs.append(sub.obj)
-            self.read.setdefault(sub.obj, (sub, []))[1].extend(fresh)
+            self._mark_read(sub, fresh)
         for layer in layers:
-            ledger = layer.kind in ("consent", "restriction")
+            ledger = layer.kind in ("consent", "restriction", "co-subject")
             for action in todo:
                 if ledger and action not in fresh:
                     continue        # an object of the same group made this decision
@@ -1656,16 +2204,31 @@ class _Run:
             shared[1].update(todo)
         return True
 
-    def result(self) -> Decision:
+    def _read_uses(self) -> Iterable[tuple]:
+        if self.bulk:
+            return _BitsRead(self.proto, self.read_bits)
+        return list(self.read.values())
+
+    def result(self, processed: int | None = None, failed_need: int | None = None, pools=None) -> Decision:
+        """The Decision. With `pools` (an eligible set's), equal Cited, cited tuples, versions and refusals are
+        the pooled objects (frozen, so safe to share)."""
         proto, state = self.proto, self.state
         order = sorted(self.entries.values(), key=lambda e: (self.layer_pos[e[0].id], ACTIONS.index(e[1])))
         cited = tuple(Cited(layer.id, layer.kind, action, verdict, tuple(sorted(recs, key=_units)))
                       for (layer, action, verdict, _, recs) in order)
+        refusal = None if self.failure is None else Refusal(*self.failure)
+        versions = self.versions
+        if pools is not None:
+            pool_cited, pool_tuples, pool_versions, pool_refusal = pools
+            cited = tuple(pool_cited.setdefault(c, c) for c in cited)
+            cited = pool_tuples.setdefault(cited, cited)
+            versions = pool_versions.setdefault(tuple(sorted(versions.items())), versions)
+            refusal = None if refusal is None else pool_refusal.setdefault(refusal, refusal)
         return Decision(allowed=self.failure is None, at=proto.at, ledger_seq=state.seq, action=proto.action,
-                        cited=cited, refusal=None if self.failure is None else Refusal(*self.failure),
-                        until=_until(state, proto.at, self.ends, self.ledger_layers, list(self.read.values())),
+                        cited=cited, refusal=refusal,
+                        until=_until(state, proto.at, self.end, self.ledger_layers, self._read_uses()),
                         horizon=_horizon(state, proto.at, self.ledger_layers, self.objs),
-                        versions=self.versions, multi=self.multi)
+                        versions=versions, multi=self.multi, processed=processed, failed_need=failed_need)
 
     def before_any_object(self) -> bool:
         """P 6.5 step 1, the tests on a, P, anc(P) and anc(H). False, with the failure set, when one fails."""
@@ -1681,7 +2244,7 @@ class _Run:
 
 
 def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
-           outside: Mapping | None = None) -> Decision:
+           outside: Mapping | None = None, _pools=None) -> Decision:
     """P 6.5 steps 1 to 8. Every decision in need(u) is made, the
     object first, then the memories it names in ref order; the refusal is the first failing one. A use on a road
     or trail that names more than MAX_ANSWER_NAMES memories (the ones it shows are named ones) is refused with
@@ -1689,7 +2252,7 @@ def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
     multi = _kind_of(use.obj) in ("road", "trail")
     run = _Run(state, use, legacy, outside, multi=multi)
     if not run.before_any_object():
-        return replace(run.result(), processed=0)
+        return run.result(processed=0, pools=_pools)
     over = multi and len(set(use.names) | set(use.shows)) > MAX_ANSWER_NAMES
     processed = 0
     for run.cur, need in enumerate(needs(use)):
@@ -1697,14 +2260,15 @@ def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
         if not run.process(sub, need.actions, run.subjects(sub.obj, sub.names), bound=over and sub is use):
             break
         processed += 1
-    return replace(run.result(), processed=processed, failed_need=run.failed_need)
+    return run.result(processed=processed, failed_need=run.failed_need, pools=_pools)
 
 
 def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = (),
                 outside: Mapping | None = None, group: bool = True) -> Decision:
     """P 6.4 "Bulk uses" and P 6.5 step 1's bulk order. The tests on a, P, anc(P) and anc(H) run once, then the
     size bounds (the objects, and the distinct memories their roads and trails name, counted up to the bound plus
-    one), before any object. Then each object is decided in ref order by decide's per-object path with the bound
+    one: past it the result is BOUND with nothing decided, whatever an earlier object gave or raised; each road's
+    and trail's names are read once, in the same pass that decides). Each object is decided in ref order by decide's per-object path with the bound
     of 32 waived, each (memory, action) pair once however many objects need it. The refusal is the first failing
     object's, and names no object. With `group`, the ledger layers' verdicts are shared by the objects that agree
     on what the pre-filtered records read (P 6.4, "How it is computed"); legacy and outside layers are still
@@ -1713,40 +2277,57 @@ def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = 
         raise RuleError("6.4 need", f"{bulk.action!r} is not an action")
     proto = Use(requester=bulk.requester, place=bulk.place, obj="", copy=bulk.copy, action=bulk.action,
                 purpose=bulk.purpose, at=bulk.at)
-    run = _Run(state, proto, legacy, outside, multi=True, group=group)
+    run = _Run(state, proto, legacy, outside, multi=True, group=group, bulk=True)
     if not run.before_any_object():
         return run.result()
     objects = sorted(set(bulk.objects), key=_units)
     if len(objects) > (MAX_BULK_NAMED if bulk.named else MAX_BULK_DERIVED):
         run.failure = ("BOUND", None, None)
         return run.result()
+    # One pass: each road's or trail's names are read once, counted toward the bound and decided. The bound still
+    # comes before any object: past it, the result is a run that decided nothing, refused BOUND, as if the count
+    # had come first, and an error a decision raised is dropped as if never reached. After the first refusal (or
+    # error) the names are only counted.
     named: set = set()
-    for obj in objects:
-        if _kind_of(obj) in ("road", "trail"):
-            for m in bulk.names(obj):
-                named.add(m)
-                if len(named) > MAX_BULK_MEMORIES:
-                    run.failure = ("BOUND", None, None)
-                    return run.result()
-    del named
     closure = _CLOSURE[bulk.action]
-    for obj in objects:
-        if _kind_of(obj) in ("road", "trail"):
+    recall_bit, done = 1 << _ACTION_BIT["recall"], run.done_bits
+    ok, raised = True, None
+    for i, obj in enumerate(objects):
+        trail = _kind_of(obj) in ("road", "trail")
+        names = None
+        if trail:
             names = set(bulk.names(obj))
-            ok = run.process(replace(proto, obj=obj), closure, run.subjects(obj, tuple(names)))
-            fresh = sorted((m for m in names if (m, "recall") not in run.done), key=_units) if ok else ()
-            for m in fresh:
-                subjects = run.subjects(m)
-                ok = run.process(replace(proto, obj=m), ("recall",), subjects,
-                                 gkey=run.group_key(m, subjects) if group else None)
-                if not ok:
-                    break
-        else:
-            subjects = run.subjects(obj)
-            ok = run.process(replace(proto, obj=obj), closure, subjects,
-                             gkey=run.group_key(obj, subjects) if group and subjects else None)
+            named |= names
+            if len(named) > MAX_BULK_MEMORIES:
+                over = _Run(state, proto, legacy, outside, multi=True, group=group, bulk=True)
+                over.failure = ("BOUND", None, None)
+                return over.result()
         if not ok:
-            break
+            continue
+        try:
+            if i % PREFETCH_CHUNK == 0:
+                state.prefetch(objects[i:i + PREFETCH_CHUNK])
+            if trail:
+                ok = run.process(replace(proto, obj=obj), closure, run.subjects_of_names(obj, names))
+                if ok:
+                    fresh = sorted([m for m in names - run.recall_done if not done.get(m, 0) & recall_bit],
+                                   key=_units)
+                    for k in range(0, len(fresh), PREFETCH_CHUNK):   # the names' own rows, 512 at a time
+                        state.prefetch(fresh[k:k + PREFETCH_CHUNK])
+                    for m in fresh:
+                        subjects = run.subjects(m)
+                        ok = run.process(replace(proto, obj=m), ("recall",), subjects,
+                                         gkey=run.group_key(m, subjects) if group else None)
+                        if not ok:
+                            break
+            else:
+                subjects = run.subjects(obj)
+                ok = run.process(replace(proto, obj=obj), closure, subjects,
+                                 gkey=run.group_key(obj, subjects) if group and subjects else None)
+        except Exception as e:          # raised once the bound is known not to refuse first
+            ok, raised = False, e
+    if raised is not None:
+        raise raised
     return run.result()
 
 
@@ -1772,26 +2353,169 @@ class EligibleSet:
     horizon: int | None
 
 
+def _times_of_interest(state: State, t: int) -> tuple:
+    """Θ: every time a decision at t compares a lane note's or a membership's time with: t, and every record's
+    anchor and valid_from (anchors bound the lane and membership tests; a dated deny's valid_from is the time
+    `until` decides at). Sorted, made once per (State, t)."""
+    def compute():
+        out = {t}
+        for r in state.records.values():
+            out.add(r.anchor)
+            out.add(r.valid_from)
+        return tuple(sorted(out))
+    return state._memo(("times-of-interest", t), compute)
+
+
+def _envelopes_list_memories(state: State) -> bool:
+    return state._memo(("envelopes-list", ), lambda: any(
+        _grant_of(g).envelope.memories != STAR for g in state.grants.values()))
+
+
+def _share_key(state: State, obj, t: int, later: list | None = None):
+    """Everything a decision at t reads of a memory object, up to the order of times (P 6.5, How it is computed):
+    two objects with equal keys get equal decisions for the same requester, place, copy, action, purpose and t.
+    Its kind, store and layer; its subjects; which records list it in `memories`; its lane notes and its
+    memberships with each time replaced by its place among Θ (`_times_of_interest`) and, for notes, its rank among
+    the object's own times there, so every comparison a lane or membership test makes comes out the same. None
+    (decide it alone) for a malformed ref, a road or trail, an object with a grant-backed membership, or a ledger
+    whose grant envelopes list memories. With `later`, the times `_object_times_after` gives are added to it, read
+    in the same pass (the final review's M2)."""
+    ref = _parsed_or_none(obj) if isinstance(obj, str) else None
+    if ref is None or ref.kind != "memory" or _envelopes_list_memories(state):
+        if later is not None:
+            later.extend(_object_times_after(state, obj, t))
+        return None
+    rows, grant = _members(state, obj)
+    if grant:
+        if later is not None:
+            later.extend(_object_times_after(state, obj, t))
+        return None
+    theta = _times_of_interest(state, t)
+
+    def place(x):
+        i = bisect_left(theta, x)
+        return i, i < len(theta) and theta[i] == x
+    notes = []
+    last, rank = None, -1
+    for n in state.lane_notes.get(obj, ()):
+        here = place(n.at)
+        if later is not None and n.at > t:
+            later.append(n.at)
+        if last is None or here != last[0]:
+            rank = 0
+        elif n.at != last[1]:
+            rank += 1
+        last = (here, n.at)
+        notes.append((n.lane, here, rank))
+    members = []
+    for m in rows:
+        lo, hi = _span(state, m.added_seq, m.removed_seq)
+        members.append((m.collection, m.backing, m.removed_seq is not None and m.removed_seq <= state.seq,
+                        place(lo), None if hi is None else place(hi)))
+        if later is not None:
+            later.extend(x for x in (lo, hi) if x is not None and x > t)
+    listed = tuple(sorted(rid for ids in _listing(state, obj).values() for rid in ids))
+    return (ref.instance_id, ref.layer, subjects_of(state, obj, t, later=later), listed, tuple(notes),
+            tuple(members))
+
+
+def _later_times(state: State, added: int, removed: int | None, t: int, out: list) -> None:
+    lo, hi = _span(state, added, removed)
+    if lo > t:
+        out.append(lo)
+    if hi is not None and hi > t:
+        out.append(hi)
+
+
+def _object_times_after(state: State, obj: str, t: int) -> list[int]:
+    """The times after t at which a row a decision on `obj` reads by its log time comes into or goes out of force:
+    its memberships, its subject rows and those of its sources up the `copies` chain, and its lane notes. A row
+    written by a clock ahead of the decider's (a backward step) is such a row: at t it does not count yet, and
+    nothing else would end a cached decision when it starts to (the final review's M2)."""
+    out: list[int] = []
+    for m in _members(state, obj)[0]:
+        _later_times(state, m.added_seq, m.removed_seq, t, out)
+    subjects_of(state, obj, t, later=out)
+    out.extend(n.at for n in state.lane_notes.get(obj, ()) if n.at > t)
+    return out
+
+
+def _requester_times_after(state: State, agent: str, t: int) -> list[int]:
+    """`_object_times_after` for the requester's rows: its places and its group memberships."""
+    out: list[int] = []
+    for r in state.agent_places.get(agent, ()):
+        _later_times(state, r.added_seq, r.removed_seq, t, out)
+    for rows in state.group_members.values():
+        for r in rows:
+            if r.agent == agent:
+                _later_times(state, r.added_seq, r.removed_seq, t, out)
+    return out
+
+
+def _anchor_after(state: State, t: int) -> int | None:
+    """The earliest anchor after t of an unrevoked record, or None. A record's anchor is its write time: before
+    it, its lane and membership tests read nothing (P 5.3), so a deny written by a clock ahead of the decider's
+    (a backward step) with a valid_from at or before t, such as a `--from` in the past or a deny proposal signed
+    after it was filed, starts to count at its anchor, and nothing else would end a cached decision then (the
+    re-review's M2). Every record, whatever its layer or effect: cheap, and only ever earlier. Made once per
+    (State, t)."""
+    return state._memo(("anchor-after", t), lambda: (min(
+        (r.anchor for r in state.records.values() if r.anchor > t and not _revoked(state, r)), default=None),))[0]
+
+
 def eligible_set(state: State, placements: Sequence[Placement], *, requester: str, place: str, purpose: str,
                  action: str, at: int) -> EligibleSet:
     """Decide `action` for each placement, with no legacy layer: the subjects', places', holding place's and
     restriction layers only. A memory is eligible when each of its placements has an object that can be decided
     and the decision allows it. The pre-filter of P 6.5 is made once per (layer, action) for the requester,
     place, purpose and time (`_prefilter` keeps it on the State), and each object is matched against those
-    records alone."""
+    records alone. Objects that read alike (`_share_key`) are decided once, up to SHARED_DECISIONS readings.
+    The set's horizon is the earliest of its decisions' and of every time after `at` at which a row they read by
+    its log time comes into or goes out of force (`_object_times_after`), and of the earliest anchor after `at` of
+    an unrevoked record (`_anchor_after`): after a backward clock step, the cache ends when such a row or record
+    starts to count, not at the next ledger write (the final review's M2), so it equals a fresh `decide` at every
+    t before the horizon."""
     decisions: dict[str, Decision] = {}
     made: dict[tuple, Decision | None] = {}
-    horizons: list[int] = []
-    for p in placements:
+    horizons: list[int] = _requester_times_after(state, requester, at)
+    anchor = _anchor_after(state, at)
+    if anchor is not None:
+        horizons.append(anchor)
+    pool_cited: dict = {}           # equal Cited, equal `cited` tuples and equal `versions` are shared by every
+    pool_tuples: dict = {}          # decision that holds them (frozen, so safe to share)
+    pool_versions: dict = {}
+    pool_refusal: dict = {}
+    pools = (pool_cited, pool_tuples, pool_versions, pool_refusal)
+    shared: dict = {}               # (what decide reads of an object (`_share_key`), copy) -> its Decision, or None
+    for i, p in enumerate(placements):
+        if i % PREFETCH_CHUNK == 0:
+            state.prefetch([q.obj for q in placements[i:i + PREFETCH_CHUNK] if q.obj is not None])
         if p.obj is None or (p.obj, p.copy) in made:
             continue
+        skey = _share_key(state, p.obj, at, horizons)          # adds the object's row times after `at` (M2)
+        if skey is not None:
+            skey = (skey, p.copy)
+            if skey in shared:
+                d = shared[skey]
+                made[(p.obj, p.copy)] = d
+                if d is None:
+                    continue
+                prior = decisions.get(p.obj)
+                if prior is None or (prior.allowed and not d.allowed):
+                    decisions[p.obj] = d
+                if d.horizon is not None:
+                    horizons.append(d.horizon)
+                continue
         u = Use(requester=requester, place=place, obj=p.obj, copy=p.copy, action=action, purpose=purpose, at=at)
         try:
-            d = decide(state, u)
+            d = decide(state, u, _pools=pools)
         except RuleError:
-            made[(p.obj, p.copy)] = None
-            continue
+            d = None
+        if skey is not None and len(shared) < SHARED_DECISIONS:
+            shared[skey] = d
         made[(p.obj, p.copy)] = d
+        if d is None:
+            continue
         prior = decisions.get(p.obj)
         if prior is None or (prior.allowed and not d.allowed):
             decisions[p.obj] = d
@@ -1875,13 +2599,17 @@ class FSet:
         return not self.co and not self.items
 
     def __and__(self, other: "FSet") -> "FSet":
+        if self.co and not self.items:
+            return other                 # the meet with everything is the other set itself, never a copy
+        if other.co and not other.items:
+            return self
         if not self.co and not other.co:
-            return FSet(self.items & other.items)
+            return _charge(FSet(self.items & other.items))
         if not self.co:
-            return FSet(self.items - other.items)
+            return _charge(FSet(self.items - other.items))
         if not other.co:
-            return FSet(other.items - self.items)
-        return FSet(self.items | other.items, True)
+            return _charge(FSet(other.items - self.items))
+        return _charge(FSet(self.items | other.items, True))
 
     def __invert__(self) -> "FSet":
         return FSet(self.items, not self.co)
@@ -1892,9 +2620,24 @@ class FSet:
 
 FULL = FSet(frozenset(), True)
 
+# Two counts per State, in state._cache under this key: [kept, check]. `kept` is the refs of the sets the layer_boxes
+# memo keeps (they live as long as the State); `check` is the refs of every other set the box code makes, back to 0
+# at the start of each _analyse. _COUNTS is set only while _analyse runs. Nothing here does I/O.
+_REFS_KEY = ("box_refs",)
+_COUNTS: contextvars.ContextVar = contextvars.ContextVar("box_counts", default=None)
+
+
+def _charge(fs: FSet) -> FSet:
+    counts = _COUNTS.get()
+    if counts is not None:
+        counts[1] += len(fs.items)
+        if counts[0] + counts[1] > BOX_REFS:
+            raise TooComplex(f"more than {BOX_REFS:,} refs")
+    return fs
+
 
 def _fset(values) -> FSet:
-    return FSet(frozenset(values))
+    return _charge(FSet(frozenset(values)))
 
 
 def _star(value) -> FSet:
@@ -2053,7 +2796,7 @@ def _by_time(rows: Iterable[tuple[TimeSet, str]]) -> list[tuple[TimeSet, FSet]]:
     grouped: dict = {}
     for ts, value in rows:
         if not ts.empty:
-            grouped.setdefault(ts, set()).add(value)
+            grouped.setdefault(ts, []).append(value)      # a list, so the one frozenset is the only big copy
     return [(ts, _fset(v)) for ts, v in grouped.items()]
 
 
@@ -2123,18 +2866,30 @@ def _member_parts(state: State, colls: tuple, layer: str, anchor: int, deny: boo
     """The memories a collections list names, as (refs, times, extra boxes the use must also lie in). An allow
     counts a membership not removed and in force; a grant-backed one only while its chain is valid and inside
     every envelope of that chain. A deny counts every membership since its anchor (P 5.3)."""
-    simple: list[tuple[TimeSet, str]] = []
+    simple: dict = {}              # times -> the objects that count over exactly those times
+    spans: dict = {}               # (added, removed) -> its TimeSet: rows of one change share one
     parts: list = []
+
+    def times_of(r, anchor_):
+        key = (r.added_seq, r.removed_seq)
+        ts = spans.get(key)
+        if ts is None:
+            ts = spans[key] = _row_times(state, r.added_seq, r.removed_seq, anchor_)
+        return ts
+
     for c in colls:
         for r in state.collection_members.get(c, ()):
             if deny:
-                simple.append((_row_times(state, r.added_seq, r.removed_seq, anchor), r.object))
+                ts = times_of(r, anchor)
+                if not ts.empty:
+                    simple.setdefault(ts, []).append(r.object)
                 continue
             if r.removed_seq is not None:
                 continue                 # a removed membership is never counted for an allow
-            times = _row_times(state, r.added_seq, r.removed_seq, None)
+            times = times_of(r, None)
             if not r.backing.startswith("grant:") or r in assume:
-                simple.append((times, r.object))
+                if not times.empty:
+                    simple.setdefault(times, []).append(r.object)
                 continue
             gid = r.backing[len("grant:"):]
             times = times & _grant_times(state, gid)
@@ -2150,7 +2905,7 @@ def _member_parts(state: State, colls: tuple, layer: str, anchor: int, deny: boo
                                                          at_place))
             if extra:
                 parts.append((_fset([r.object]), times, extra))
-    return [(refs, ts, None) for ts, refs in _by_time(simple)] + parts
+    return [(_fset(objs), ts, None) for ts, objs in simple.items()] + parts
 
 
 def _selector_boxes(state: State, sel: Selector, layer: str, anchor: int, deny: bool, assume: frozenset,
@@ -2216,7 +2971,10 @@ def _record_boxes(state: State, record: Record, at_place: str | None) -> list[Bo
 def layer_boxes(state: State, layer: str, *, at_place: str | None = None) -> list[Box]:
     """What the layer allows, as boxes: its allows minus its denies, at the current state. With at_place, only
     the uses at that place. Raises TooComplex past BOX_CAP."""
+    counts = state._cache.setdefault(_REFS_KEY, [0, 0])
+
     def compute():
+        before = counts[1]
         allows: list[Box] = []
         denies: list[Box] = []
         for rec in state.records.values():
@@ -2227,7 +2985,14 @@ def layer_boxes(state: State, layer: str, *, at_place: str | None = None) -> lis
                 allows = _cap(allows)
             if len(denies) > BOX_CAP:
                 denies = _cap(denies)
-        return tuple(_list_minus(_cap(allows), _cap(denies)))
+        out = tuple(_list_minus(_cap(allows), _cap(denies)))
+        # the temporaries are freed; the sets the result holds live as long as the State, so they are kept
+        held = {id(s.items): len(s.items) for b in out for d in DIMS[:-1] if (s := getattr(b, d)).items}
+        counts[1] = before
+        if counts[0] + sum(held.values()) + before > BOX_REFS and _COUNTS.get() is not None:
+            raise TooComplex(f"more than {BOX_REFS:,} refs")
+        counts[0] += sum(held.values())
+        return out
     return list(state._memo(("lbox", layer, at_place), compute))
 
 
@@ -2272,6 +3037,9 @@ def _sections(state: State, joint: str) -> tuple[list[Box], list[list[Box]]]:
 
 def _analyse(state: State, place: str, want_delta: bool) -> GluingReport:
     parents = _distinct_parents(state, place)
+    counts = state._cache.setdefault(_REFS_KEY, [0, 0])
+    counts[1] = 0
+    token = _COUNTS.set(counts)
     try:
         delta: list[Box] = []
         ineff: list[Box] = []
@@ -2295,6 +3063,8 @@ def _analyse(state: State, place: str, want_delta: bool) -> GluingReport:
             ineff = _list_minus(own, _ever(meet))
     except TooComplex:
         return GluingReport(place, (), (), True, stewards(state, place, *parents))
+    finally:
+        _COUNTS.reset(token)
     notify = frozenset()
     if delta:
         # P 8: the stewards of J and of each parent whose chain refuses part of Δ, not one that allows all of it

@@ -1856,11 +1856,11 @@ def read(pub, memory_id):
     return read_frame(**_daemon_frame_kwargs(pub), turn_id="turn-1", memory_ids=[memory_id])
 
 
-def _daemon_over(root, publishers, busy_timeout_ms=None, clock=None):
+def _daemon_over(root, publishers, clock=None):
+    """A daemon over `publishers`. A test that lowers the ledger's busy timeout sets
+    `lighthouse_daemon.LEDGER_BUSY_MS` with `monkeypatch`, which puts it back after the test."""
     import lighthouse_daemon
     from tests.test_lighthouse_daemon import FakeEmbeddings
-    if busy_timeout_ms is not None:
-        lighthouse_daemon.LEDGER_BUSY_MS = busy_timeout_ms     # conftest restores it after the test
     return lighthouse_daemon.PublisherDaemon(
         {p.name: p for p in publishers}, root / "s.sock", FakeEmbeddings(), engram_home=root,
         clock=clock or at(DAEMON_CLOCK))
@@ -2092,7 +2092,7 @@ def e1_daemon_at(root, t, mode="enforce"):
     return rig, ids
 
 
-def raised_daemon(root, mode="enforce", busy_timeout_ms=None, house=None, placements=None):
+def raised_daemon(root, mode="enforce", house=None, placements=None):
     """A daemon over house `why` (three commons placements, so a recall finds them) under a ledger raised to `mode`,
     with an inside-home allow covering them. `house(root, name)` builds the house instead (one made before 029);
     `placements=n` makes the house hold n placement rows in all. Returns (daemon, "why")."""
@@ -2102,7 +2102,7 @@ def raised_daemon(root, mode="enforce", busy_timeout_ms=None, house=None, placem
         pub = make_placed_house(root, orphans=0 if placements is None else max(placements - 3, 0))
     daemon_ledger(root, mode)
     write_receiver_files(root, DAEMON_RECEIVER)
-    return _daemon_over(root, [pub], busy_timeout_ms), HOUSE_NAME
+    return _daemon_over(root, [pub]), HOUSE_NAME
 
 
 def _plain_house(root, builder):
@@ -2155,14 +2155,14 @@ def _outside_home_house(root, name, audiences):
                           disclosures_path=inst / "lighthouse-disclosures.db"), memory_id
 
 
-def daemon_with_outside_home_placement(root, mode, hand_written_audiences, busy_timeout_ms=None):
+def daemon_with_outside_home_placement(root, mode, hand_written_audiences):
     """A daemon over house `why` holding one outside-home placement. `mode` is `no-ledger`, `off` (a ledger whose gate
     was never raised), `shadow` or `enforce`. Returns (daemon, "why", the memory's id)."""
     pub, memory_id = _outside_home_house(root, "why", hand_written_audiences)
     if mode != "no-ledger":
         daemon_ledger(root, mode)
         write_receiver_files(root, DAEMON_RECEIVER)
-    return _daemon_over(root, [pub], busy_timeout_ms), "why", memory_id
+    return _daemon_over(root, [pub]), "why", memory_id
 
 
 def add_publisher_house(daemon, root, name):
@@ -2662,3 +2662,150 @@ def log_rows(home):
         return [dict(r) for r in con.execute("SELECT * FROM ledger_log ORDER BY seq")]
     finally:
         con.close()
+
+
+# ---------------------------------------------------------------- Task 31: U24's generated world (R23)
+
+from tests.permissions_budget_core import (AGENT, ALL, BULK_BUDGET_S, COLLECTIONS as BUDGET_COLLECTIONS, COPY, HOLDING_CHAIN,
+                                           HOLDING_PLACE, HOMES, JOINT, LEFT, PLACE, REBUILD_BUDGET_S, REBUILD_LEDGER_S,
+                                           REBUILD_WORST_S, REQUESTER_CHAIN, RIGHT, budget_refs, derived_trails, touches)
+
+# The 41 ledger layers of a decision: 8 homes, the two chains of 16 places, and the requester's restriction layer.
+LEDGER_LAYERS = tuple(home_of(h) for h in HOMES) + REQUESTER_CHAIN + HOLDING_CHAIN + (AGENT,)
+
+
+def _legacy_layers():
+    from permissions import LegacyLayer
+    return (LegacyLayer("publisher", lambda use, action: True), LegacyLayer("receiver", lambda use, action: True))
+
+
+LEGACY_LAYERS = _legacy_layers()           # the two legacy layers, callables that allow
+
+
+def _budget_records(w, layer, refs, trails, per_layer):
+    """`per_layer` effective records in one layer: 32 pass the pre-filter (8 allows each naming a collection, 8
+    naming 512 memories, 8 naming the lane `work`, 8 denies naming 64 refs outside the placed memories) and the
+    rest fail on exactly one of audience, requesters, actions and purposes, 56 each at 256 (R23). A selector
+    for a road or trail may name no collection, lane or memory (5.2), so with `trails` the last of the 8 memory
+    lists is one allow of kind `trail`, which is what lets a derived trail be allowed at all."""
+    ok = dict(audience=["commons"], kinds=["memory"])
+    for k in range(8):
+        w.allow(layer, collections=[BUDGET_COLLECTIONS[k]], **ok)
+    for k in range(8 - bool(trails)):
+        w.allow(layer, memories=refs[k * 512:(k + 1) * 512], **ok)
+    if trails:
+        w.allow(layer, audience=["commons"], kinds=["road", "trail"])
+    for k in range(8):
+        w.allow(layer, lanes=["work"], **ok)
+    for k in range(8):
+        w.deny(layer, memories=[f"mem:S/episode/ghost{k}-{j}" for j in range(64)], **ok)
+    fails = ({"audience": ["place:elsewhere"]}, {"requesters": ["agent:someone-else"]},
+             {"actions": ["route"]}, {"purposes": ["unrelated"]})
+    for i in range(per_layer - 32):
+        bad = dict(ok)
+        bad.update(fails[i % 4])
+        w.allow(layer, lanes=["work"] if i % 2 else "*", collections=[BUDGET_COLLECTIONS[i % 8]], **bad)
+
+
+def generated_world_parts(placements, layers=43, records_per_layer=256, universe=None, trails=0):
+    """(the World, the placements). `universe` memories (default: `placements`) of store S, each with Andy and 7
+    co-subjects and 3 lane notes (every other one `work`), in 8 collections; `trails` says the derived trails
+    `derived_trails(trails)` are to be allowed too; the requester's chain, the holding chain, the restriction layer and `records_per_layer`
+    records in each of the 41 ledger layers. Every placement is allowed in every layer."""
+    from permissions import Placement
+    if layers != 43:
+        raise ValueError("the generated world has 43 layers: 41 in the ledger and 2 legacy")
+    universe = placements if universe is None else universe
+    refs = budget_refs(max(universe, 8 * 512))
+    w = World()
+    for h in HOMES[1:]:
+        w.person(h)
+    prev = None
+    for chain in (REQUESTER_CHAIN, HOLDING_CHAIN):
+        prev = None
+        for p in chain:
+            w.place(p, parents=[prev] if prev else [], stewards=["andy"])
+            prev = p
+    w.agent(AGENT[len("agent:"):], REQUESTER_CHAIN[0], at=PLACE)
+    w.store("S", owner=ANDY, place=HOME)
+    w.store(STORE_HOUSE, owner=ANDY, place=HOLDING_PLACE)
+    for cid in BUDGET_COLLECTIONS:
+        w._add("collections", id=cid, owner=ANDY, created_seq=w._bump())
+    per = max(universe // 8, 1)
+    members = {cid: [] for cid in BUDGET_COLLECTIONS}
+    for i in range(universe):
+        members[BUDGET_COLLECTIONS[min(i // per, 7)]].append(refs[i])
+    for cid, objs in members.items():
+        w.collect(cid, objs)
+    for i in range(universe):
+        seq = w._bump()
+        for s in HOMES[1:]:
+            w._add("subjects", object=refs[i], subject=s, added_seq=seq, added_by=w.owner, self_claimed=0)
+        lane = "work" if i % 2 == 0 else "personal"
+        for j in range(3):
+            w._add("lane_notes", object=refs[i], lane=lane, at=w.start + j, seq=seq)
+    for layer in LEDGER_LAYERS:
+        _budget_records(w, layer, refs, trails, records_per_layer)
+    return w, [Placement(f"id{i}", refs[i], COPY) for i in range(placements)]
+
+
+def generated_world(placements, layers=43, records_per_layer=256, universe=None, trails=0):
+    """(the State, the placements) of `generated_world_parts`."""
+    w, placed = generated_world_parts(placements, layers, records_per_layer, universe, trails)
+    return w.state(), placed
+
+
+def step1_world(memories=30_000, placements=20_000):
+    """Step 1 as Andy runs it (the old tests/perf_tools/andy.py): one owner, a ledger of a few dozen records, a station
+    ceiling of one rule for the house copy, a store of `memories` memories, a house of up to `placements` placements.
+    Returns (the World, the receivers, the placed refs); `w.state()` is its State."""
+    import random
+    rng = random.Random(20261027)
+    w = World(start=T("2026-10-20"))
+    w.now = T("2026-10-20")
+    w.person("jenn")
+    home, station = "place:home/andy", "place:station"
+    w.place(station, stewards=["andy"])                     # the station: the house's holding place
+    receivers = [w.agent(f"rcv{k}", home, at=home) for k in range(7)]
+    w.agent("rio-grande", home, at=home)
+    w.store("S", owner="person:andy", place=home)            # Andy's store
+    w.store("HOUSE", owner="person:andy", place=station, name="lighthouse")
+    w.group("group:family", "person:andy", receivers[:2])
+    w.group("group:work", "person:andy", receivers[2:5])
+    refs = [f"mem:S/episode/m{i}" for i in range(memories)]
+    # memories made over a year, each with its first lane note at its own created time; a tenth re-laned since
+    base = T("2025-10-20")
+    for i, r in enumerate(refs):
+        created = base + i * 997
+        lane = "work" if rng.random() < 0.4 else "personal"
+        w.lane(r, lane, created)
+        if rng.random() < 0.1:
+            w.lane(r, "pending", created + 86400)
+            w.lane(r, "personal" if lane == "work" else "work", created + 86400)
+    for r in rng.sample(refs, memories // 20):              # 5% about Jenn too
+        w.subject(r, "person:jenn")
+    placed = refs[:placements]
+    w.collect("collection:andy/legacy-commons", placed[: int(0.8 * len(placed))])
+    w.collect("collection:andy/legacy-group-family", placed[int(0.8 * len(placed)): int(0.9 * len(placed))])
+    w.collect("collection:andy/legacy-group-work", placed[int(0.9 * len(placed)):])
+    w.collect("collection:andy/medical", rng.sample(refs, 300))
+    # the records: a few dozen, the way migrate and Andy write them
+    acts = ["recall", "read", "inject_context"]
+    w.allow(home, audience=[home], collections=["collection:andy/legacy-commons"], actions=acts, reason="legacy share")
+    w.allow(home, audience=["group:family"], collections=["collection:andy/legacy-group-family"], actions=acts)
+    w.allow(home, audience=["group:work"], collections=["collection:andy/legacy-group-work"], actions=acts)
+    w.deny(home, audience=[home], collections=["collection:andy/medical"], requesters=["agent:rcv3", "agent:rcv4"])
+    w.allow(home, audience=["self"], lanes=["work"], actions=["recall"], purposes=["session-recall"])
+    w.deny(home, audience=[home], lanes=["personal"], requesters=["agent:rcv6"])
+    for k in range(12):                                       # notes Andy shared one by one
+        w.allow(home, audience=[home], memories=rng.sample(placed, 20), actions=["recall", "read"])
+    for k in range(4):
+        w.deny(home, audience=[home], memories=rng.sample(refs, 10))
+    for k in range(6):                                        # dated and ended rules
+        w.allow(home, audience=[home], collections=["collection:andy/legacy-commons"], actions=["recall"],
+                valid_from=T("2026-10-01"), valid_until=T("2026-12-01") + k * 86400)
+    w.allow(station, audience=["commons"], actions="*", purposes="*")    # the station's ceiling: one rule for the copy
+    w.allow("place:home/jenn", audience=["commons"], actions=["recall"])  # Jenn's own yes
+    for r in receivers[:3]:
+        w.deny(r, audience=["commons"], collections=["collection:andy/medical"])
+    return w, receivers, placed

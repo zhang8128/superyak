@@ -364,8 +364,8 @@ class _View:
 
     def verdict(self, layer, kind, q, obj, y):
         """allow, deny, silent or missing for a ledger layer (kind consent or restriction), P 6.5 step 3."""
-        restriction = kind == "restriction"
-        if layer not in (self.agents if restriction else self.places):
+        restriction = kind in ("restriction", "co-subject")
+        if layer not in (self.agents if kind == "restriction" else self.places):
             return "missing"
         recs = [r for r in self.records.values() if r["layer"] == layer]
         if any(self.matches(r, q, obj, y) for r in recs if r["effect"] == "deny"):
@@ -469,13 +469,35 @@ class _View:
         table = legacy[i][1]
         return y in (table.get(obj, ()) if isinstance(table, dict) else table)
 
-    def layer_order(self, subs, u, H, legacy):
-        """Req(u) in P 6.5 step 2's order, each layer once: [(id, kind)]."""
+    def qualifies(self, u, obj, H, bulk):
+        """P36 (P 6.3), for the use on its own object: the owner of the object's store is the requester's
+        principal, his home dominates P and H, and the use is bulk (the kept copy is h) or an `imprint` whose kept
+        copy (`keeps`, a copy ref) is held inside his home."""
+        parsed = _parse_ref(obj)
+        store = self.stores.get(parsed[1]) if parsed else None
+        if store is None or H is None:
+            return False
+        home = self.subject_layer(store["owner"])
+        if self.act(u["requester"]) != home or home not in self.dom(u["place"]) or home not in self.dom(H):
+            return False
+        if bulk:
+            return True
+        kept = self.holding_place(u.get("keeps") or "")
+        return u["action"] == "imprint" and kept is not None and home in self.dom(kept)
+
+    def layer_order(self, subs, u, H, legacy, carried=False):
+        """Req(u) in P 6.5 step 2's order, each layer once: [(id, kind)]. For a use that qualifies under P36
+        (`carried`), a subject's layer is read as a restriction layer, kind co-subject, unless it is also in
+        anc(P) or anc(H), where items 2 and 3 require it as a consent layer."""
         out = []
-        for L in [self.subject_layer(s) for s in sorted(subs)] + sorted(self.anc(u["place"])) + (
-                [u["copy"]] if H is None else sorted(self.anc(H))):
-            if (L, "consent") not in out:
-                out.append((L, "consent"))
+        places = sorted(self.anc(u["place"]))
+        held = [u["copy"]] if H is None else sorted(self.anc(H))
+        fixed = set(places) | set(held)
+        subject_layers = [self.subject_layer(s) for s in sorted(subs)]
+        for L in subject_layers + places + held:
+            kind = "co-subject" if carried and L in subject_layers and L not in fixed else "consent"
+            if not any(L == x for x, _ in out):
+                out.append((L, kind))
         out += [(name, "legacy") for name, _ in legacy]
         out.append((u["requester"], "restriction"))
         return out
@@ -490,7 +512,7 @@ class _View:
             return ("RETIRED", None, None), H
         return None, H
 
-    def object_refusal(self, u, obj, actions, names, H, legacy, over=False, skip=frozenset()):
+    def object_refusal(self, u, obj, actions, names, H, legacy, over=False, skip=frozenset(), bulk=False):
         """The first refusal of one object's decision: its own tests, then the layers in order."""
         todo = [y for y in actions if (obj, y) not in skip]
         if not todo:
@@ -503,7 +525,7 @@ class _View:
             return ("NO_LAYER", None, None)
         if len(subs) > MAX_SUBJECTS or over:
             return ("BOUND", None, None)
-        for layer, kind in self.layer_order(subs, u, H, legacy):
+        for layer, kind in self.layer_order(subs, u, H, legacy, self.qualifies(u, obj, H, bulk)):
             for y in todo:
                 if kind == "legacy":
                     i = [n for n, _ in legacy].index(layer)
@@ -511,7 +533,7 @@ class _View:
                         return ("LEGACY_DENY", layer, y)
                     continue
                 v = self.verdict(layer, kind, q, obj, y)
-                if v == "missing":
+                if v == "missing" and kind != "co-subject":
                     return ("NO_LAYER", layer, y)
                 if v == "deny":
                     return ("DENIED", layer, y)
@@ -558,7 +580,7 @@ class _View:
             plan = [(obj, _CLOSURE[proto["action"]], tuple(names))]
             plan += [(m, ("recall",), ()) for m in names]
             for o, actions, nm in plan:
-                got = self.object_refusal(proto, o, actions, nm, H, legacy, skip=done)
+                got = self.object_refusal(proto, o, actions, nm, H, legacy, skip=done, bulk=True)
                 if got:
                     return got
                 done.update((o, y) for y in actions)

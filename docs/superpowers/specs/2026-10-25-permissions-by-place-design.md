@@ -1,7 +1,13 @@
 # Permissions by Place
 
 **Date:** 2026-10-25
-**Status:** Revision 7, for Andy's two decisions of 2026-10-26 (below), with the fixes from its check and its re-check
+**Status:** Revision 8, a performance change that keeps every decision identical. It revises two calibration
+hypotheses, the Pi budgets for an eligible-set rebuild and a bulk decision, by measurement on the station's Raspberry
+Pi 5 (15), and says how the daemon serves while a set is being built (12.2). The new figures are Rio Grande's call
+(below). Its fresh check of station law section 3 approved it with changes
+([revision 8 review](../reviews/2026-10-27-permissions-rev8-review.md)), whose fixes are applied (its "Response"); a
+re-check of M1 to M3 is due. Revision 7 was for Andy's two decisions of 2026-10-26
+(below), with the fixes from its check and its re-check
 ([small-hardware review](../reviews/2026-10-25-small-hardware-permissions-review.md), "Response" and "Re-check
 response"). Revision 6 was
 the fixes after the cross-check of the consolidation pass
@@ -73,10 +79,46 @@ and RCS1 to RCS10, the same file):
   subject's yes. Sections 3 (A6, A7, P36, P37), 6.4, 6.6, 7.4, 14, 16, 17 (U5, U22, U29, F1) and 19 follow. Section
   19 lists P36 as a departure from the words of the vision's principle 1.
 
+Revision 8 (2026-10-27) revises two calibration hypotheses by measurement, as section 15 allows, and is a performance
+change that keeps every decision identical. Rio Grande profiled the step 1 build at `a083a96` on the station's
+Raspberry Pi 5 and measured a prototype of the changes below (branch `perf/design-index`, `a083a96..e0cc5d1`, never
+merged). On everything compared, every verdict, refusal code, cited list, `until` and `horizon` of the prototype is
+byte-identical to `a083a96`'s: a differential dump of 80,483 lines over 100 random worlds, the generated world, every
+F1 case and bulk uses at lowered bounds, and fuzz checks of decisions shared between objects against deciding each
+object alone (134,430, 37,440 and 48,000 checks). The budgets are measured on the station's Pi 5, each about 1.5 times
+its measure, and the figures are Rio Grande's call:
+- **The eligible-set rebuild** at 20,000 placements. Revision 7's 2 s holds for U24's fixture, whose objects read
+  alike (measured 0.9 s), but not when no two objects read alike (17.4 to 20.2 s) or on the reference ledger (3.6 s).
+  It becomes three budgets: 2 s, 30 s and 6 s (12.2, 15, U24).
+- **The bulk decision** at its largest. Revision 7's 40 s does not hold: reading its 51.2 million touches alone takes
+  45 to 55 s in Python on this Pi. Measured 191.4 s, and 210.6 s on the reference ledger, it becomes 300 s (15, U24).
+- **What the evaluator may do** to meet them, none of which changes a result: decide once for objects that read
+  alike, with the attributes a decision reads named exactly and the objects it decides alone (6.4); test only the
+  records that can match an object, and keep per State and t what reads no object (6.5). A decision shared by
+  several objects counts once in the cache's estimate (12.2).
+- **While a set is being built** (12.2). The daemon builds an eligible set in the background and serves nothing from
+  it until it is ready. A recall frame that waits past the rebuild wait, 1.0 s, fails closed: under `enforce` it
+  serves nothing to its agent, as a refused frame does. Deny by default holds, and no verdict changes.
+- **Memory** (15). The measured peaks stand beside the estimates. The bulk decision peaked 11.1 MB over its
+  estimate, so its run's part becomes 58.6 MB, still 336.8 MB under 512 MB at the reference.
+
+Section 15 gains two constants: the rebuild wait, and the shared decisions an eligible set keeps. U24 gains the new
+budgets, U9 the daemon's behaviour while a set is being built, and 16 the parts of both modules that carry them.
+
+Its check's fixes (M1 to M3 and S1 to S9 of the review named above): 6.4 decides alone an object with a
+grant-backed membership, and every object while some grant's envelope lists memories, as the prototype does (M1);
+under `shadow`, a frame past the rebuild wait, or whose build fails, writes no receipt, as for a failed ledger read
+(12.2, U9; M2, S6); U24's daemon run fills its cache from 24 keys and checks that it evicts (M3); 12.2 states the
+known limits of the 2 s and of a burst of writes (S1, S9); PT10 tests shared decisions against deciding alone (S2);
+and 6.5, 15 and U24 are corrected or made exact (S3, S4, S5, S7). The interfaces ledger's row 29 now reads 300 s
+(S8).
+
 Every revision keeps every section number. No pass before revision 7 widened a permission. Revision 7 widens one, on
-Andy's decision: P36. Step 1 is being built on branch `permissions-core`. Tasks 1 to 24 of its plan were done when
+Andy's decision: P36. Revision 8 widens nothing and changes no decision. Step 1 is being built on branch
+`permissions-core`. Tasks 1 to 24 of its plan were done when
 revision 7 was first written, and Tasks 1 to 28 when its check's fixes were applied. Its re-check's fixes cite that
-build at `dc0881e`. Revision 7's memory changes and P36 reach that build as controller tasks of their own.
+build at `dc0881e`. Revision 7's memory changes and P36 reach that build as controller tasks of their own. Revision 8
+was measured against that build at `a083a96`, and its changes reach the build as tasks of their own.
 **Contract:** [the city rail vision](../../city-rail-vision.md). Its principles and its "Permissions by place"
 section bind this spec. Rio Grande wrote them from Andy's words. Where they go past a quote, they are Rio Grande's
 call carried by the contract, and this spec says so.
@@ -89,7 +131,7 @@ warning, 12.3), and migration `029`.
 [memory lanes](../../../engram/docs/superpowers/specs/2026-06-12-memory-lanes-design.md),
 [spec A](2026-10-08-instruction-layers-and-grants-design.md), [grants step 3](2026-10-15-grants-step3-design.md).
 **Depended on by:** the imprints spec revision 7 and the trail spec revision 9. Both cite sections 5, 6 and 11.
-Revisions 2 to 7 keep every section number, but line numbers moved. These changes reach them:
+Revisions 2 to 8 keep every section number, but line numbers moved. These changes reach them:
 
 - `route` also needs `read` and `inject_context` on every memory whose content a route answer shows (6.4). From
   revision 3, every action on a road or trail needs `recall` on each memory it names (6.4).
@@ -118,6 +160,9 @@ Revisions 2 to 7 keep every section number, but line numbers moved. These change
   as 6.3, item 1 reads them, through `copies` too (7.4), and the imprints spec's `cosubjects(m)` must read them the
   same way (19). Every use that shows content to an agent, or whose P or H is outside the owner's home, still needs
   every subject's yes.
+- Revision 8: no rule either spec relies on changes, and no decision. A bulk decision's Pi budget is 300 s, not 40 s
+  (15, U24), and the evaluator may decide once for objects that read alike (6.4), as the imprints spec's finite check
+  already does.
 
 ## 1. Why
 
@@ -815,9 +860,15 @@ and this spec's `explain` would refuse what the imprints spec's check allows. So
     (the trail spec's section 4) could name 51.2 million memories, far past the Pi budget below. The imprints spec's
     uses always fit: every memory a road or trail of its R(I) names is a memory the imprint holds (its section 8).
 - **One receipt** per bulk use (9.1).
-- **How it is computed.** Objects that agree on every attribute the pre-filtered records read (6.5) get the same
-  decision: kind, store, layer, lane history, collection memberships, whether a record lists them in `memories`, and
-  subjects. So the evaluator may decide each such group once. The imprints spec's finite check is this shortcut:
+- **How it is computed.** Objects that agree on every attribute a decision reads get the same decision: kind, store
+  and layer; subjects; which records list them in `memories`; and their lane notes and collection memberships, each
+  time read only by its order against t and every record's anchor and `valid_from`. An object with a grant-backed
+  membership is decided alone, and so is every object while some grant's envelope lists memories: such a membership
+  counts for an allow only inside its chain's envelopes (5.3), and an envelope that lists memories reads the object's
+  own ref, which the list above doesn't name (the check of revision 8, M1). So the evaluator may decide each group of
+  the other objects once, except under the Pi budget's measure of a bulk use, which is made with objects that don't
+  group (U24; revision 8). This grouping, with the same exceptions, holds for any uses that differ only in their
+  object, such as an eligible set's placements of one house (12.2). The imprints spec's finite check is this shortcut:
   every object of one kind in an imprint matches the same records (its section 8, "A finite check").
 - **Its Pi budget.** With or without grouping, one bulk decision at the largest size must fit the time and memory
   budgets in section 15, which U24 measures. It keeps, per object, only the object's subjects and which actions it
@@ -904,8 +955,13 @@ expiry, the same read gets `EXPIRED`, which the table checks first.
 
 **How it is computed.** The evaluator first selects, per layer, the records whose audience, `requesters`, `actions`
 and `purposes` can match the requester, its place, the action and the purpose. Only those are matched against the
-object. The result depends only on u (h included, and k for a single `imprint`), σ and t. A bulk use's result
-depends only on U, σ and t (6.4).
+object. Within a layer, a record whose own selector lists memories can match only an object it lists, and one that
+names collections only an object with a membership row in one of them. So for an object the evaluator may skip the
+records that list memories but not it, or name collections but none it has a row in (an index), and may keep per
+State and t whatever reads no object: each layer's version, its denies that start after t, and, per ordered list of
+required layers, the horizon's terms from those layers' records and grants (revision 8; its check, S3). The result
+depends only on u (h included, and k for a single `imprint`), σ and t. A bulk use's result depends only on U, σ and t
+(6.4).
 Conforming implementations agree on `allowed`, `cited`, `refusal`, `until` and `horizon` for both (test F1).
 
 ### 6.6 Proofs
@@ -1577,16 +1633,59 @@ files a proposal, and says which.
   A row with no `source_instance_id` has no object, so under `enforce` it is refused (`NO_LAYER`). The daemon decides
   `recall` for each placement before ranking.
 - **The cache.** The daemon keeps an eligible-set cache per (agent, place, purpose, action), at most 64 entries and
-  96 MB, whichever it reaches first (revision 7). It sizes each entry by an estimate from its decisions, which U9
-  checks against a measure. An entry larger than 96 MB alone serves its own frame and is not kept. The decisions of
-  one entry share their equal citations. An entry is valid while three things hold: the ledger's `seq`, the
-  placements' change counter, and the clock before the entry's horizon (the earliest horizon among its decisions,
-  6.5). Migration 029 adds the change counter: a one-row table whose count triggers raise on every insert, update and
-  delete of `shared_memories`. A count and highest rowid would miss a delete followed by an insert.
+  96 MB, whichever it reaches first (revision 7). It sizes each entry by an estimate from its decisions, counting a
+  decision shared by objects that read alike once (revision 8), which U9 checks against a measure. An entry larger
+  than 96 MB alone serves its own frame and is not kept. The decisions of one entry share their equal citations. An
+  entry is valid while three things hold: the ledger's `seq`, the placements' change counter, and the clock before
+  the entry's horizon (the earliest horizon among its decisions, 6.5). Migration 029 adds the change counter: a
+  one-row table whose count triggers raise on every insert, update and delete of `shared_memories`. A count and
+  highest rowid would miss a delete followed by an insert.
 - **The rebuild budget.** Rebuilding one eligible set for 20,000 placements against 43 layers of 256 records is about
-  220 million record checks if done naively. With the pre-filter of 6.5, it must take at most 2 seconds on the
-  station's Raspberry Pi 5. That is a calibration hypothesis, and test U24 measures it. The rebuild runs at the first
-  recall after a change, not at every ledger write.
+  220 million record checks if done naively. With the pre-filter and index of 6.5, deciding once for objects that
+  read alike, it must take at most 2 seconds on the station's Raspberry Pi 5 for U24's fixture, 6 seconds from the
+  reference ledger (opening the ledger and its State included, as U24 times it), and 30 seconds when no two objects
+  read alike. These are calibration hypotheses, revised by measurement on that Pi in revision 8 (15; measured 0.9,
+  3.6 and 17.4 to 20.2 seconds), and test U24 measures them.
+  The rebuild starts at the first recall after a change, not at every ledger write, and runs in the background
+  (below).
+- **While a set is being built** (revision 8; Rio Grande's call). Engram's client gives a frame 2 seconds by default
+  (`timeout_s=2.0`, `engram/lighthouse_client.py:89`; at most 10, `:16`), and a rebuild can take longer (above). So:
+  1. **In the background.** The first recall frame that finds no valid entry for its key of the cache starts one
+     build in a worker thread, with the frame's State, and waits for it at most the rebuild wait, 1.0 s (15), so that
+     the frame still answers inside the client's 2 seconds when its own work is small, as in Andy's step 1 (below).
+     A build that finishes in time serves its frame, as an entry does.
+  2. **Nothing until it is ready** (fail closed). A frame still waiting at the deadline serves nothing for its agent:
+     under `enforce` it answers as a refused frame does, with no candidates and no content, and a warning that names
+     the house and "eligible set building". Under `shadow` the legacy path decides alone, as it does in that mode
+     anyway, and, as for a failed ledger read (Memory, below), the daemon warns and writes no receipt to
+     `permission-uses.db` (9.1) for that frame. No frame is served from a stale entry: an entry whose `seq`, change
+     counter or horizon no longer holds serves nothing.
+  3. **One build per key.** At most one build runs for a key at a time, and a later frame for that key waits on it,
+     at most the same 1.0 s. A build holds a State, so it counts as a frame: at most 2 frames and builds hold a State
+     at once (15), and the memory budget is unchanged, since a build is the frame it replaces.
+  4. **A failed build** (a failed ledger read, or any other error) is logged and leaves no entry. A frame still
+     waiting on it is answered as for a failed ledger read (Memory, below): a warning, nothing served under
+     `enforce`, the legacy path alone under `shadow`, and no receipt for that frame. The next frame for the key starts
+     another.
+  5. **A finished set is checked as an entry is** (the cache, above). If the ledger's `seq` or the placements' change
+     counter moved while it was built, it is dropped, and the next frame builds again.
+
+  Deny by default holds, and no verdict changes: a build makes exactly the decisions the frame would have made, and a
+  frame is allowed only what a finished set that still holds allows. For Andy's step 1, measured on the station's Pi
+  (one owner, 33 records, 20,000 of 30,000 memories placed), every rebuild finishes inside the wait (0.30 to 0.83 s),
+  so nothing he sees changes.
+
+  Known limits (the check of revision 8, S1 and S9). Each fails closed: a frame that serves nothing, or that the
+  client gives up on, delivers nothing, and memory stays within the 2 States.
+  - **Recalls after a change.** At the reference size, a recall right after a ledger write or a share returns
+    nothing until its build finishes: a few seconds, and up to the 30-second budget when no two objects read alike.
+    If writes come faster than a build finishes, each build is dropped (item 5), so nothing is served until the
+    writes pause.
+  - **The 2 seconds hold for small houses only.** A frame waits for a slot with no deadline (Memory, below), and a
+    build keeps its slot after its frame has answered. So at the reference size two builds can hold both slots for
+    seconds, or up to 30 seconds, and every other frame waits past the client's 2 seconds, reads and frames whose
+    entry is still valid included. There a frame's own `Ledger.state()` also takes about 1.0 s. The client then
+    gives up. The 2 seconds hold when a frame's own work is small, as in Andy's step 1.
 - **For a read**, each item is decided as `inject_context`. An allowed item gains `permission` (section 11). Engram's
   client checks read items' keys strictly (`engram/lighthouse_client.py:315`), so it accepts `permission` with that
   shape and still rejects any other member. Both ends are engram's own code, so the protocol version stays `0.1`.
@@ -1609,10 +1708,10 @@ files a proposal, and says which.
   75.1 MB and verifying it at 102.4 MB (15, "Memory").
 - **Closed** (12.3). The daemon serves nothing: no candidates, and no content in any read item. It warns with the
   cause.
-- **Memory** (revision 7; Rio Grande's call). At most 2 frames decide at once, and a third waits. Each holds one
-  State (5.6). The daemon embeds through the shared embedder service that `ENGRAM_EMBEDDER_SOCKET` names, and never
-  loads a model of its own. Without the service it refuses to start, and says why. Its peak resident memory is in the
-  budget of section 15.
+- **Memory** (revision 7; Rio Grande's call). At most 2 frames decide at once, and a third waits for a slot, with no
+  deadline. Each holds one State (5.6). A background build counts as a frame (revision 8, above). The daemon embeds
+  through the shared embedder service that `ENGRAM_EMBEDDER_SOCKET` names, and never loads a model of its own.
+  Without the service it refuses to start, and says why. Its peak resident memory is in the budget of section 15.
   - **A failed ledger read** during a decision, which a State's lazy reads make possible (5.6), is handled as a State
     that can't be built is today (`engram/lighthouse_daemon.py:678-689`): the daemon warns, serves nothing for that
     frame under `enforce`, and lets the legacy path decide under `shadow`.
@@ -1956,8 +2055,10 @@ limits.
 | Sweep per pass | 256 placements | bounds startup work |
 | Eligible-set cache | 64 entries and 96 MB, whichever comes first | bounds daemon memory (12.2); the 96 MB is Rio Grande's call, from the daemon's memory budget (below) |
 | Placements per published house | 20,000 | bounds a cache rebuild on a Pi |
-| Eligible-set rebuild | 2 s on the station's Raspberry Pi 5 | the Pi budget (12.2) |
-| Bulk decision | 40 s on the station's Raspberry Pi 5, for a bulk `imprint` of 100,000 derived objects whose `need` names 100,000 memories, the largest that "Objects per bulk use" and "Memories named per bulk use" allow | the Pi budget for one bulk use at its largest (6.4), and so for `explain` on one (U24). It is the rebuild's rate: the rebuild makes 20,000 (object, action) decisions in 2 s, and this use at most 400,000 (three actions on each derived object, and `recall` on each memory) |
+| Eligible-set rebuild | For 20,000 placements, measured on the station's Raspberry Pi 5 (revision 8): 2 s on U24's fixture, whose objects read alike (measured 0.9 s); 30 s when no two objects read alike (measured 17.4 to 20.2 s); 6 s on the reference ledger, in a fresh process, timed from opening the ledger, with its `Ledger.state()` and the module imports, as U24's probe times it (measured 3.6 s) | the Pi budgets (12.2). Rio Grande's call on the figures: each about 1.5 times its measure, and 2 s kept. Revision 7's 2 s for every case does not hold: when no two objects read alike, a rebuild makes 820,000 layer verdicts (20,000 decisions × 41 ledger layers), measured at 21 to 26 µs each, and 2 s would need about 2.4 µs, a dozen dictionary lookups and calls in CPython on one core |
+| Bulk decision | 300 s on the station's Raspberry Pi 5, for a bulk `imprint` of 100,000 derived objects whose `need` names 100,000 memories, the largest that "Objects per bulk use" and "Memories named per bulk use" allow, with objects that don't group; on U24's fixture and on the reference ledger (revision 8; measured 191.4 s and 210.6 s) | the Pi budget for one bulk use at its largest (6.4), and so for `explain` on one (U24). It is the measured rate of 6.5's computation in Python when no two objects read alike: about 66 s for the 100,000 named memories' `recall` (0.66 ms each, over 41 layers), and 1.08 to 1.23 ms for each trail's three actions with its 512 touches, 174 to 189 s in all (revision 8's check, S4). Revision 7's 40 s, the rebuild's rate, does not hold: reading the 51.2 million touches alone takes 45 to 55 s. Rio Grande's call on the figure |
+| Rebuild wait | 1.0 s | how long a recall frame waits for an eligible set being built before it serves nothing for its agent (12.2), so that it still answers inside engram's client's default of 2 s when its own work is small, as in Andy's step 1; at the reference size a frame can pass the client's deadline whatever the build does (12.2, known limits). Rio Grande's call (revision 8) |
+| Shared decisions per eligible set | 4,096 | the groups of objects that read alike (6.4) for which one eligible set keeps a shared decision; an object of a group past them is decided alone. Bounds the set's memory (12.2). Rio Grande's call (revision 8) |
 | `remember` guard | 200 receipts, 24 hours | bounds the check on each `remember`; its known limits are in section 10 |
 | Houses read for the `off` rule | 64 | bounds the effective gate (12.3); with more houses, a reader reads closed |
 | Receipt retention | 400 days, then monthly counts | Open for Andy for the county |
@@ -1971,7 +2072,7 @@ limits.
 | Per-object rows a State holds | 65,536 rows, and 65,536 log times | bounds a State whatever the store's size (5.6). Rio Grande's call |
 | Records per ledger | 16,384, revoked and replaced ones included; a write past it is refused (5.4), and a ledger past it reads as unreadable (5.6) | a State holds the records whole, and the daemon's budget holds only up to about 20,200 records (below). Records grow with acts and places, not with the store. Reading them per layer lifts the bound, and is due before a ledger needs more. Rio Grande's call |
 | Objects per `collect` or `uncollect` act | 10,000; a larger set is several acts (5.4) | bounds one act's body in `perform` and in `rebuild` (below). Rio Grande's call |
-| Frames deciding at once | 2 | bounds the daemon's States (12.2). Rio Grande's call |
+| Frames deciding at once | 2, a background build counted as a frame (revision 8) | bounds the daemon's States (12.2). Rio Grande's call |
 | Candidates per recall | 20, whatever `k` the frame names | bounds a recall's receipt and its `use_subjects` rows (12.2, 9.1). Fixed to match engram's client (`engram/lighthouse_client.py:17`); Rio Grande's call |
 | Receipt fold batch | 4,096 receipts per transaction, read one at a time | bounds the fold's transaction; its memory is one receipt (9.1). Rio Grande's call |
 | Box refs per State | 2,000,000 memory refs in the sets held at once: a State's kept layer boxes, plus the current check's sets; past it, "could not check" | bounds the check's memory, as the box cap bounds its boxes (8, U15). Rio Grande's call |
@@ -2036,7 +2137,7 @@ per recall, and the largest receipt and act this spec writes. The units are:
 |---|---|---|---|---|
 | `Ledger.state()` | 30.3 + the records' table rows while it builds + the records; then its row and time caches fill (+ 25.3 + 6.1) | 30.3 + 28.8 + 41.3 = 100.4; 131.8 with full caches | 30.3 + 45.0 + 64.5 = 139.8; 171.2 | 340.8 |
 | Eligible-set rebuild, 20,000 placements | 30.3 + a State + the set 16.0 + `made` 1.8 + placements 6.0 | 126.8 | 150.0 | 362.0 |
-| Bulk decision at its largest (6.4) | 30.3 + a State + the run 47.5 + the caller's 100,000 trail refs 13.6 | 164.1 | 187.3 | 324.7 |
+| Bulk decision at its largest (6.4) | 30.3 + a State + the run 58.6 (revision 8: 47.5, plus the 11.1 MB measured over) + the caller's 100,000 trail refs 13.6 | 175.2 | 198.4 | 313.6 |
 | The fold (9.1) | 30.3 + one receipt + one connection's page cache 2.0 | a recall of 20 refs with 8 subjects each: 160 (subject, ref) pairs × 671 B = 0.1, so 32.4 | a named bulk receipt of 512 objects with 8 subjects each, 4,096 pairs × 671 B = 2.6, citing 256 records in each of 40 consent layers for 3 actions, 30,720 ids × 37 B = 1.1, held about 3 times = 3.3: 38.2 | 473.8 |
 | The daemon (12.2) | 30.3 + 2 frames × (a State + a set being built 23.8 + met decisions 15.5 + objects 7.2) + the cache 96.0 + page caches 15.6; then one frame's build transient | 30.3 + 2 × 119.2 + 96.0 + 15.6 = 380.3; + 28.8 = 409.1 | 30.3 + 2 × 142.4 + 96.0 + 15.6 = 426.7; + 45.0 = 471.7 | 40.3 |
 | `perform`, one act and its gluing check | 30.3 + one State + box refs 80.0 + the act's insert list, 10,000 × 753 B = 7.2 | 190.2 | 213.4 | 298.6 |
@@ -2078,6 +2179,21 @@ Where the parts come from:
   So the server may reach about 480 MB and 503 MB. It also folds at each start (`engram/server.py:2205`), one receipt
   at a time. 512 MB doesn't bind it, since this work doesn't add it.
 
+**Measured** (revision 8). U24's probes on the reference ledger, each in a fresh process under `MemoryMax=512M` on
+the station's Raspberry Pi 5, against a prototype of revision 8's computation (2026-10-27), peaked at:
+- the eligible-set rebuild, 98.6 MB (estimate 126.8);
+- the bulk decision at its largest, 175.2 MB (estimate 164.1, revision 7's; the table's estimate is now 175.2). That
+  is 11.1 MB over, of which a single pass over the roads' and trails' names holds two sets of about 4 MB each: the
+  memories named so far, and those whose `recall` is decided. So the run's part is 58.6 MB, not 47.5, still 336.8 MB
+  under 512 MB at the reference;
+- the daemon, 312.4 MB (estimate 409.1), and 331.3 MB at the records bound (estimate 471.7), each with the cache at
+  72.0 MB (14 entries), 24 MB below the 96 MB the estimate counts for it. U24's daemon run, with its cache filled past
+  96 MB, is what measures a full cache.
+
+The prototype has no background build (12.2). So 12.2's claim that a build leaves the memory budget unchanged, since
+a build is the frame it replaces, is argued, not measured. U24's daemon run measures it once builds run in the
+background (revision 8's check, S5).
+
 **Margin** (Rio Grande's call). The figures are traced bytes over a measured base, and how far resident memory runs
 above traced bytes was not measured. The daemon at the records bound leaves the least, 40.3 MB (8 %). If a daemon run
 in U24 reads 480 MB or more, the first lever is a cache of 64 MB (32 MB less). The second is one frame at a time (one
@@ -2087,11 +2203,11 @@ frame less: 119.2 MB at the reference, 142.4 MB at the bounds).
 
 | Component | Responsibility |
 |---|---|
-| `engram/permissions.py` | Pure functions: name and copy-ref grammars, selector parsing and checks, dominance and ancestry, matching with history, `need` with named memories, `decide` for single and bulk uses with its codes and a candidate's grant chains, `until` and horizon, boxes with collection expansion, narrowing and envelope checks, the gluing check and ineffective parts, proposal words. P36's reading of a co-subject's layer for a qualifying use (6.3). Shared citations in an eligible set, a bulk decision's small working set per object, and the box refs bound (15, "Memory"). No I/O. |
+| `engram/permissions.py` | Pure functions: name and copy-ref grammars, selector parsing and checks, dominance and ancestry, matching with history, `need` with named memories, `decide` for single and bulk uses with its codes and a candidate's grant chains, `until` and horizon, boxes with collection expansion, narrowing and envelope checks, the gluing check and ineffective parts, proposal words. P36's reading of a co-subject's layer for a qualifying use (6.3). Shared citations in an eligible set, a bulk decision's small working set per object, and the box refs bound (15, "Memory"). One decision for objects that read alike in an eligible set, with the objects decided alone (6.4), the records index and what is kept per State and t (6.5) (revision 8). No I/O. |
 | `engram/permission_ledger.py` | The ledger: schema, log with hash chain, projections, `state(seq)` with its bounded reads of per-object rows (5.6), the records bound and the act bound (5.4), `perform` holding one State at a time (5.6), `rebuild` reading the log row by row, read-only open, the gate and the effective-gate rule over houses, marking every house with the ledger's id at the raise, a copy's subjects through `copies`, `PlaceRules` export, proposals, kept-copy rows, the sweep's queries. |
 | `engram/permission_uses.py` | The receipts file: writes in `BEGIN IMMEDIATE` with the hash chain, single and bulk receipts (named and counted, 9.1), owner view, which marks imported station rows and counts them apart (9.3), place view with pseudonyms, the retention fold in batches, one receipt at a time, each batch with its anchor (9.1). The imported rows themselves are written in 9.1's imported form by the imprints spec's `import-receipts` (its section 15). |
 | `engram/permission_cli.py` | `engram-permissions` (section 14), acting only as the ledger owner, with the terminal yes. A command that adds or removes more than 10,000 collection members splits them into acts under its one yes (5.4). `gate` refuses a raise without a published house (12.3), and `explain` takes single and bulk uses. A `[project.scripts]` entry and a `py-modules` entry in `engram/pyproject.toml`. |
-| `engram/lighthouse_daemon.py` | Decisions before retrieval and read, each placement with its object and copy h (12.2), the cache with the horizon and the change counter, receipts, the `permission` member, the placement audience, stripping `group:outside-home` from every policy's audiences under every gate and with no ledger, and adding it back only under `enforce` (12.1), the effective gate over the houses it serves (12.3), the cache's byte bound, at most 2 frames deciding at once, at most 20 candidates per recall, and the shared embedder only (12.2). |
+| `engram/lighthouse_daemon.py` | Decisions before retrieval and read, each placement with its object and copy h (12.2), the cache with the horizon and the change counter, receipts, the `permission` member, the placement audience, stripping `group:outside-home` from every policy's audiences under every gate and with no ledger, and adding it back only under `enforce` (12.1), the effective gate over the houses it serves (12.3), the cache's byte bound, at most 2 frames deciding at once, at most 20 candidates per recall, and the shared embedder only (12.2). The background build that serves nothing until it is ready (12.2, revision 8). |
 | `engram/lighthouse_client.py`, `engram/neighbors.py`, `engram/context_lighthouse.py` | Accept and pass `permission`, rendered as one line; the receipt extension. |
 | `engram/sharing.py`, `engram/server.py` | `share` through records, refusing `group:outside-home` as an argument; `record_id` and `source_instance_id`; the `permissions` and `permit` tools; the sweep; the `remember` guard reading `permission-uses.db`; kept-copy subjects; the lane listener; the effective gate over the published house (12.3). |
 | `engram/storage.py` | The two-call lane listener hook in `set_episode_lanes`. Migration 029's step in the migration loop: inside 029's transaction, it writes `permissions_ledger_id`, or `unreadable`, into a house created while a raised ledger exists (12.3), as the loop runs `_assign_instance_id` for 028 (`engram/storage.py:228-230`). |
@@ -2136,6 +2252,15 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
 - **PT10 Determinism.** The same decision, cited records, `until` and horizon, whatever the insertion order, and after
   replaying the log to the same `seq`. A State that reads per-object rows when asked (5.6), asked only after later
   ledger writes that add, remove and re-lane those rows, decides as a State read whole at its own `seq` (revision 7).
+  Shared decisions (6.4; revision 8's check, S2): an eligible set's decision for each placement equals `decide` on
+  that placement alone, on random worlds whose lane notes and membership rows sit a second before, at and after every
+  anchor, `valid_from` and t, with and without records that list the placements. Named cases: object A, with notes
+  `personal` and `work` both exactly at an allow's anchor, is refused, and object B, with the same two notes a second
+  before it, is allowed, and the two share no decision; an object with a grant-backed membership, and every object of
+  a ledger where some grant's envelope lists memories, shares no decision (the check's M1: grant G's envelope lists
+  m1, m1 and m2 are collected into C under G, and an allow names C with `memories` `"*"`, so m1 is allowed and m2
+  refused); and an eligible set keeps at most 4,096 shared decisions (15), deciding the objects of later groups
+  alone.
 - **PT11 Gluing.** Δ and ineffective parts from boxes equal those of a brute-force oracle with the same collection
   expansion, at the current state. A fixture covers the collection case: m in C1 and C2, own allows C1, parent A
   allows C2, parent B allows C3. It must report a disagreement.
@@ -2184,7 +2309,14 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   other unknown member; the 20,001st placement is refused; the cache holds at most 96 MB by its estimate, the
   estimate is 1.0 to 1.6 times a measure, and an entry larger than 96 MB is not kept; at most 2 frames decide at once,
   and the others wait; a recall frame with `k` = 21 or more returns at most 20 candidates, and its receipt names at
-  most 20 refs; a ledger read that fails during a decision serves nothing under `enforce` (12.2, revision 7).
+  most 20 refs; a ledger read that fails during a decision serves nothing under `enforce` (12.2, revision 7). While a
+  set is being built (12.2, revision 8), with a build made to take 3 s: under `enforce` a recall frame answers within
+  1.5 s with no candidates and a warning, and a recall after the build is served from it; under `shadow` the legacy
+  path answers, the daemon warns, and no receipt is written to `permission-uses.db` for that frame, as for a failed
+  ledger read; two frames for one key start one build; a build whose `seq` or change counter moved is dropped; a
+  build that raises leaves no entry, a frame waiting on it is answered as for a failed ledger read, and the next
+  frame builds again; builds and frames together never hold more than 2 States; a build that finishes inside the wait
+  serves its own frame; and every decision served after a build equals the one the frame would have made itself.
 - **U10** Receivers: `permission` reaches each delivered item in `response["neighbors"]["delivered"]` as one line of at
   most 240 characters, with long place names cut and `+N`, and the receipt's short form has 8 hex; the context
   runtime's `_evidence` carries it; the RecallReceipt still validates against its schema, with the
@@ -2272,14 +2404,17 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   re-check's RN5); a `group:outside-home` placement is never served under `off` or `shadow`, or with no ledger, even
   when a hand-written policy lists `group:outside-home` for the receiver (the re-check's RS1); `share` refuses the
   name as an argument; `policy_gen.py` refuses a group named `outside-home`.
-- **U24** The Pi budget: on a generated fixture of 20,000 placements and 43 layers of 256 records, one eligible-set
-  rebuild takes at most 2 s on the station's Raspberry Pi 5. On a fixture of 100,000 derived roads and trails that
-  name 100,000 memories, the largest bulk use 6.4 allows, against the same layers, `explain` on one bulk `imprint`
-  takes at most 40 s there, with objects that don't group (the final check's FN3). Its trails have 512 touches each,
-  the trail spec's cap, so the decision reads 51.2 million touches though it makes at most 400,000 decisions (the
-  cross-check's XN3). Marked slow, and run on the Pi.
+- **U24** The Pi budget: five timed budgets on the station's Raspberry Pi 5 (15; revision 8). On a generated fixture
+  of 20,000 placements and 43 layers of 256 records, one eligible-set rebuild takes at most 2 s, and at most 30 s with
+  sharing off (`share=False`: no two objects share a decision), as the bulk has `group=False`. The same rebuild on the
+  reference ledger takes at most 6 s, timed from opening the ledger, its `Ledger.state()` and the module imports
+  included. On a fixture of 100,000 derived roads and trails that name 100,000 memories, the
+  largest bulk use 6.4 allows, against the same layers, `explain` on one bulk `imprint` takes at most 300 s, with
+  objects that don't group (the final check's FN3), and so does the same bulk decision on the reference ledger. Its
+  trails have 512 touches each, the trail spec's cap, so the decision reads 51.2 million touches though it makes at
+  most 400,000 decisions (the cross-check's XN3). Marked slow, and run on the Pi.
   - **Memory** (revision 7). Each of these runs on the reference ledger (15) in a fresh process of its own:
-    - the two timed decisions above;
+    - the eligible-set rebuild and the bulk decision above, timed there as two of the five budgets (revision 8);
     - `Ledger.state()`;
     - `perform` of an `allow` in a parent's layer of a joint place, whose gluing checks meet collections of 100,000
       members, and of a `collect` of 10,000 members into a collection that holds 90,000 (5.4, 5.6);
@@ -2289,8 +2424,13 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
       among them, in the first batch, 64 named bulk receipts at the largest: 512 objects with 8 subjects each,
       citing 256 records in each of 40 consent layers for 3 actions (9.1);
     - a daemon serving recall and read frames from 3 threads, for a house of 20,000 of the ledger's memories, with
-      its cache filled past 96 MB. It runs once on the reference ledger, and once with 5,888 revoked records added,
-      so that the ledger holds 16,384, the records bound.
+      its cache filled past 96 MB. Entries that share decisions are smaller (revision 8: 14 entries of 20,000
+      placements held 72.0 MB by their estimate, about 5.14 MB each), so it fills the cache from at least 19 keys:
+      8 receivers × 3 purposes, 24 keys (revision 8's check, M3). The test asserts that the entries added passed
+      96 MB in all by their estimate and that the cache evicted some, so it ran at its bound. Its eligible sets are
+      built in the background (12.2), so the run also measures builds and frames holding the 2 States together. It
+      runs once on the reference ledger, and once with 5,888 revoked records added, so that the ledger holds 16,384,
+      the records bound.
 
     `migrate` runs the same way on a house of 20,000 shares with no ledger. Each process's peak resident memory,
     `VmHWM` in `/proc/self/status`, stays under 512 MB, which is 524,288 kB, since MB means 2^20 bytes (15). The test

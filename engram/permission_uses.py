@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from lighthouse_protocol import canonical_json
-from permissions import (BulkUse, Decision, GUARD_RECEIPTS, GUARD_SECONDS, RETENTION_DAYS, USE_LIST_ROWS, State,
+from permissions import (BulkUse, Decision, FOLD_BATCH, GUARD_RECEIPTS, GUARD_SECONDS, RETENTION_DAYS, USE_LIST_ROWS, State,
                          Use, dominators, holding_place, person_of_home)
 
 ZERO = "0" * 64
@@ -335,51 +335,61 @@ class Uses:
     # ---------------------------------------------------------------- retention
     def fold(self, *, now: int) -> int:
         """Fold the leading receipts older than RETENTION_DAYS into `uses_monthly`, delete them and their
-        subject rows, and write one anchor holding the last folded seq and digest. Returns how many. A span
-        whose chain does not verify is not folded (it would launder the break): ValueError."""
+        subject rows, and write an anchor holding the last folded seq and digest. Returns how many. The fold
+        works in batches of FOLD_BATCH, each its own transaction and anchor, and holds one receipt at a time.
+        A span whose chain does not verify is not folded (it would launder the break): ValueError, after the
+        batches before the break's batch have committed."""
         cutoff = now - RETENTION_DAYS * 86400
+        total = 0
+        while True:
+            n = self._fold_batch(cutoff)
+            total += n
+            if n < FOLD_BATCH:
+                return total
+
+    def _fold_batch(self, cutoff: int) -> int:
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             through, digest = self._anchor()
-            old = []
-            for row in self.conn.execute("SELECT * FROM uses WHERE seq > ? ORDER BY seq", (through,)):
-                if row["at"] >= cutoff:
-                    break
-                old.append(row)
-            if not old:
-                self.conn.execute("COMMIT")
-                return 0
-            broken = self._check(old, digest, through + 1)
-            if broken is not None:
-                raise ValueError(f"the receipts chain breaks at seq {broken}; nothing was folded")
-            last = old[-1]
-            for row in old:
-                month = datetime.fromtimestamp(row["at"], timezone.utc).strftime("%Y-%m")
-                outcome = "allowed" if row["allowed"] else "refused"
-                subjects = {s[0] for s in self.conn.execute(
-                    "SELECT subject FROM use_subjects WHERE use_seq=?", (row["seq"],))}
-                for subject in sorted(subjects) or ["(none)"]:
-                    self.conn.execute(
-                        "INSERT INTO uses_monthly VALUES(?,?,?,?,?,?,1) ON CONFLICT(month, subject, place, action, "
-                        "purpose, outcome) DO UPDATE SET n = n + 1",
-                        (month, subject, row["place"], row["action"], row["purpose"], outcome))
-            self.conn.execute("DELETE FROM use_subjects WHERE use_seq <= ?", (last["seq"],))
-            self.conn.execute("DELETE FROM uses WHERE seq <= ?", (last["seq"],))
-            self.conn.execute("INSERT INTO uses_anchor VALUES(?,?)", (last["seq"], last["digest"]))
+            expect, count = through + 1, 0
+            cursor = self.conn.execute("SELECT * FROM uses WHERE seq > ? ORDER BY seq", (through,))
+            try:
+                for row in cursor:
+                    if row["at"] >= cutoff or count >= FOLD_BATCH:
+                        break
+                    if self._check((row,), digest, expect) is not None:
+                        raise ValueError(f"the receipts chain breaks at seq {expect}; nothing was folded")
+                    month = datetime.fromtimestamp(row["at"], timezone.utc).strftime("%Y-%m")
+                    outcome = "allowed" if row["allowed"] else "refused"
+                    subjects = {s[0] for s in self.conn.execute(
+                        "SELECT subject FROM use_subjects WHERE use_seq=?", (row["seq"],))}
+                    for subject in sorted(subjects) or ["(none)"]:
+                        self.conn.execute(
+                            "INSERT INTO uses_monthly VALUES(?,?,?,?,?,?,1) ON CONFLICT(month, subject, place, "
+                            "action, purpose, outcome) DO UPDATE SET n = n + 1",
+                            (month, subject, row["place"], row["action"], row["purpose"], outcome))
+                    digest, expect, count = row["digest"], expect + 1, count + 1
+            finally:
+                cursor.close()
+            if count:
+                last = expect - 1
+                self.conn.execute("DELETE FROM use_subjects WHERE use_seq <= ?", (last,))
+                self.conn.execute("DELETE FROM uses WHERE seq <= ?", (last,))
+                self.conn.execute("INSERT INTO uses_anchor VALUES(?,?)", (last, digest))
             self.conn.execute("COMMIT")
         except BaseException:
             if self.conn.in_transaction:
                 self.conn.execute("ROLLBACK")
             raise
-        return len(old)
-
+        return count
 
     # ---------------------------------------------------------------- views (P 9.2, 9.3)
-    def _query(self, where: str, params: Sequence, limit: int | None = USE_LIST_ROWS) -> list:
+    def _query(self, where: str, params: Sequence, limit: int | None = USE_LIST_ROWS):
+        """A cursor over the matching rows, newest first: callers that stop early do not read the rest."""
         sql = f"SELECT * FROM uses WHERE {where} ORDER BY at DESC, seq DESC"
         if limit is not None:
             sql += f" LIMIT {int(limit)}"
-        return self.conn.execute(sql, tuple(params)).fetchall()
+        return self.conn.execute(sql, tuple(params))
 
     def _filters(self, state: State, *, scope=None, since=None, until=None, action=None, purpose=None,
                  collection=None, obj=None, refused=False) -> tuple[list, list]:
@@ -419,11 +429,23 @@ class Uses:
             f"WHERE {where}", (ledger_id, *params)).fetchone()
         return {"total": total, "local": total - imported, "imported": imported, "filtered": filtered}
 
-    def _subjects_of_rows(self, rows) -> dict:
+    def _subjects_of_rows(self, rows, objects=None) -> dict:
+        """Each row's (subject, object) pairs, read only as far as a view shows them. `objects` None: the distinct
+        subjects alone (the steward view shows persons' pseudonyms only; the object is ""). Else only the pairs on
+        those objects (the owner view reads the objects a live self-claim names), and nothing when it is empty."""
         out: dict[int, list] = {r["seq"]: [] for r in rows}
+        if objects is None:
+            for r in rows:
+                out[r["seq"]] = [(s[0], "") for s in self.conn.execute(
+                    "SELECT DISTINCT subject FROM use_subjects WHERE use_seq = ?", (r["seq"],))]
+            return out
+        objects = sorted(objects)
         for r in rows:
-            out[r["seq"]] = [(s["subject"], s["object"]) for s in self.conn.execute(
-                "SELECT subject, object FROM use_subjects WHERE use_seq = ? ORDER BY rowid", (r["seq"],))]
+            for i in range(0, len(objects), 500):
+                chunk = objects[i:i + 500]
+                out[r["seq"]] += [(s["subject"], s["object"]) for s in self.conn.execute(
+                    "SELECT subject, object FROM use_subjects WHERE use_seq = ? AND object IN "
+                    f"({','.join('?' * len(chunk))}) ORDER BY rowid", (r["seq"], *chunk))]
         return out
 
     def owner_list(self, state: State, *, since=None, until=None, place=None, action=None, purpose=None,
@@ -440,9 +462,9 @@ class Uses:
         where = " AND ".join(terms)
         counts = self._count(where, params, ledger_id)
         del counts["filtered"]
-        rows = self._query(where, params)
-        subjects = self._subjects_of_rows(rows)
+        rows = self._query(where, params).fetchall()
         claims = _self_claims(state)
+        subjects = self._subjects_of_rows(rows, {obj for obj, _, _ in claims})
         return UseList(counts, [_owner_row(state, r, subjects[r["seq"]], claims, ledger_id) for r in rows],
                        [dict(c) for c in copies])
 
@@ -460,7 +482,7 @@ class Uses:
         terms.append("shadow = 0")
         where = " AND ".join(terms)
         counts = self._count(where, params, ledger_id)
-        rows = self._query(where, params)
+        rows = self._query(where, params).fetchall()
         subjects = self._subjects_of_rows(rows)
         return UseList(counts, [_steward_row(r, subjects[r["seq"]], row.pseudonym_salt, ledger_id) for r in rows])
 
@@ -469,13 +491,16 @@ class Uses:
         "not allowed". No filtered counts, which would tell it that refused memories exist (P23)."""
         out: list[dict] = []
         for r in self._query("agent = ? AND shadow = 0", (agent,)):
+            if len(out) >= USE_LIST_ROWS:
+                break
             returned = _json(r["returned"])
             outcome = "allowed" if r["allowed"] else "not allowed"
             if r["object"] is not None:
                 out.append({"object": r["object"], "at": r["at"], "outcome": outcome})
                 continue
             if isinstance(returned, list):          # a recall: one allowed item per memory it returned
-                out += [{"object": m, "at": r["at"], "outcome": outcome} for m in returned]
+                out += [{"object": m, "at": r["at"], "outcome": outcome}
+                        for m in returned[:USE_LIST_ROWS - len(out)]]
                 continue
             row = {"at": r["at"], "outcome": outcome}
             if isinstance(returned, dict):
@@ -583,12 +608,11 @@ def _refusal_note(state: State, r, refusal) -> str | None:
 def _self_claims(state: State) -> list:
     """(object, "Jenn claimed m3 on 2026-11-03", the time of the claim) for each live self-claimed co-subject."""
     out = []
-    for obj, rows in state.subjects.items():
-        for s in rows:
-            if s.self_claimed and s.removed_seq is None and s.added_seq in state.seq_at:
-                at = state.seq_at[s.added_seq]
-                day = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%d")
-                out.append((obj, f"{_name(s.subject)} claimed {_short(obj)} on {day}", at))
+    for s in state.self_claims:
+        if s.added_seq in state.seq_at:
+            at, obj = state.seq_at[s.added_seq], s.object
+            day = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%d")
+            out.append((obj, f"{_name(s.subject)} claimed {_short(obj)} on {day}", at))
     return out
 
 

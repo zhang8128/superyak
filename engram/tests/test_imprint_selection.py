@@ -213,7 +213,7 @@ def test_a_copy_carries_what_its_source_gains_after_the_copy(tmp_path):   # I 5.
         led = ledger(tmp_path / owner / "home", owner=owner, store=s)
         copy_of(led, ref_of(s, "copy"), src)                  # Ledger.record_copy: the source has no co-subject yet
         add_subject(led, src, "person:jenn")                  # recorded on the source after the copy
-        assert led.cosubjects(ref_of(s, "copy")) == frozenset()          # the copy's own rows don't name her
+        assert led.cosubjects(ref_of(s, "copy")) == frozenset({"person:jenn"})   # follows copies (permissions final review M6)
         assert cosubjects_of(led, ref_of(s, "copy"), owner=owner) == frozenset(
             subjects_of(led.state(), ref_of(s, "copy"), NOW)) - {f"person:{owner}"} == {"person:jenn"}
         c, counts = ctx(s, ledger=led, owner=owner, home=home), Counter()
