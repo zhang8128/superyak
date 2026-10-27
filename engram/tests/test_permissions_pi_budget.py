@@ -33,3 +33,77 @@ def test_u24_explain_on_the_largest_bulk_imprint_within_40_seconds():
     took = time.perf_counter() - start
     assert d.allowed, d.refusal                 # a refusal at the first trail would time nothing
     assert took <= BULK_BUDGET_S
+
+
+# ---------------------------------------------------------------- memory: each operation in a process of its own
+
+import json
+import shutil
+from pathlib import Path
+
+from permissions import MAX_RECORDS
+from tests.permissions_budget_core import PEAK_LIMIT_KB
+from tests.permissions_budget_ledger import ensure_reference, prepare, run_probe
+
+# Spec 15's budget for each, in MB at the reference ledger and at the bounds (the table's last two columns).
+BUDGET_MB = {"state": (131.8, 171.2), "eligible": (126.8, 150.0), "bulk": (164.1, 187.3), "perform-allow": (190.2, 213.4),
+             "perform-collect": (190.2, 213.4), "rebuild": (69.9, 69.9), "check": (183.0, 206.2),
+             "uses-owner": (118.6, 141.8), "uses-place": (118.6, 141.8), "fold": (38.2, 38.2),
+             "daemon": (409.1, 471.7), "daemon-at-the-bounds": (409.1, 471.7), "migrate": (None, None)}
+
+
+@pytest.fixture(scope="session")
+def reference(tmp_path_factory):
+    """The reference ledger and its files, in ENGRAM_PI_BUDGET_DIR when that is set (kept between runs), else
+    under pytest's base directory."""
+    given = os.environ.get("ENGRAM_PI_BUDGET_DIR")
+    base = Path(given) if given else tmp_path_factory.mktemp("pi-budget")
+    base.mkdir(parents=True, exist_ok=True)
+    return ensure_reference(base)
+
+
+def record_peak(base, name, got):
+    line = {"op": name, "peak_kb": got["peak_kb"], "seconds": got["seconds"], "detail": got["detail"],
+            "spec_mb": BUDGET_MB.get(name)}
+    with open(Path(base) / "peaks.jsonl", "a") as f:
+        f.write(json.dumps(line, sort_keys=True) + "\n")
+    print(f"U24 peak {name}: {got['peak_kb'] / 1024:.1f} MB (spec {BUDGET_MB.get(name)}) in {got['seconds']} s")
+
+
+def measure(reference, op, name=None, **given):
+    home, extra = prepare(reference, op, **given)
+    try:
+        got = run_probe(op, home, extra)
+    finally:
+        if home.parent.name == "work":
+            shutil.rmtree(home, ignore_errors=True)
+    record_peak(reference, name or op, got)
+    assert got["peak_kb"] < PEAK_LIMIT_KB, f"{name or op} peaked at {got['peak_kb']} kB, over {PEAK_LIMIT_KB}"
+    return got
+
+
+@pytest.mark.parametrize("op", ["state", "eligible", "bulk", "perform-allow", "perform-collect", "rebuild", "check",
+                                "uses-owner", "uses-place", "fold", "migrate"])
+def test_u24_peak_memory_stays_under_512_mb(reference, op):
+    got = measure(reference, op)
+    d = got["detail"]
+    if op == "eligible":
+        assert d["eligible"] == d["placements"]
+    if op == "bulk":
+        assert d["allowed"], d["refusal"]
+    if op.startswith("perform"):
+        assert d["status"] == "done"
+    if op == "fold":
+        assert d["folded"] == 100_000
+    if op == "migrate":
+        assert d["exit"] == 0
+
+
+@pytest.mark.parametrize("revoked", [0, MAX_RECORDS - 10_498])
+def test_u24_the_daemon_peaks_under_512_mb(reference, revoked):
+    """Three threads serve recall and read frames for a house of 20,000 of the ledger's memories, with its cache
+    filled past 96 MB; once on the reference ledger, once with revoked records added up to the records bound."""
+    got = measure(reference, "daemon", "daemon-at-the-bounds" if revoked else "daemon", revoked=revoked)
+    d = got["detail"]
+    assert not d["errors"] and d["frames"] == 14
+    assert d["cache_bytes"] > 0.8 * d["cache_limit"], d
