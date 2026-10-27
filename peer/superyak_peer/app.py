@@ -524,8 +524,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return store.confirm_docking(who, key, data.get('code'))
 
     @app.get('/api/dockings/{key}')
-    def docking_status(key: str, secret: str = ''):
-        return store.docking_status(key, secret)
+    def docking_status(key: str, request: Request, secret: str = ''):
+        # public route spec 4: the secret comes in X-Superyak-Secret, out of URLs; ?secret= is accepted for one release
+        return store.docking_status(key, request.headers.get('x-superyak-secret', secret))
 
     @app.get('/api/contacts')
     def contacts(request: Request):

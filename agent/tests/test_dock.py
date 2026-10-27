@@ -44,3 +44,23 @@ def test_the_code_and_instructions_are_printed_before_the_browser_opens(tmp_path
     assert machine.step() == 'waiting-for-confirm'
     assert [kind for kind, _ in events] == ['say', 'say', 'open']
     assert 'ABCD2345' in events[0][1] and events[1][1] == 'STATUS: waiting-for-confirm' and events[2][1] == 'http://station.test/#dock?code=ABCD2345'
+
+
+def test_the_status_poll_sends_its_secret_in_a_header_not_the_url(tmp_path):
+    """Public route spec 4: the docking secret never rides in a URL, where a log could keep it."""
+    sent = []
+
+    def transport(method, url, headers, data):
+        sent.append((method, url, headers))
+        if url.endswith('/api/dockings') and method == 'POST':
+            return 201, json.dumps({'id': 'd1', 'code': 'ABCD2345', 'secret': 'the-secret', 'expires': 5.0,
+                                    'confirm_url': 'http://station.test/#dock?code=ABCD2345'}).encode()
+        if '/api/dockings/d1' in url:
+            return 200, b'{"status": "waiting"}'
+        return 401, b'{"error": "Sign in required"}'
+    machine = Dock('http://station.test', ship='serenity', workspace=str(tmp_path), home=tmp_path / 'home', transport=transport,
+                   out=lambda message: None, open_url=lambda url: None, machine='mac')
+    assert machine.step() == 'waiting-for-confirm' and machine.step() == 'waiting-for-confirm'
+    polls = [(url, headers) for method, url, headers in sent if '/api/dockings/d1' in url]
+    assert polls and all('secret' not in url and headers['x-superyak-secret'] == 'the-secret' for url, headers in polls)
+    assert all('x-superyak-secret' not in headers for method, url, headers in sent if '/api/dockings/d1' not in url)

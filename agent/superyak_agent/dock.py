@@ -120,7 +120,8 @@ class Dock:
         if pending:
             if self.check is not None:
                 self.check()                # raises claims.Refused, which stops dock before this poll
-            status = client.request('GET', f'/api/dockings/{quote(pending["id"])}?secret={quote(pending["secret"])}')
+            # the secret in a header, never the URL (public route spec 4)
+            status = client.request('GET', f'/api/dockings/{quote(pending["id"])}', headers={'x-superyak-secret': pending['secret']})
             if status.get('key'):
                 ship = status['ship']
                 write_private(self.config_path, {'station': self.station, 'origin': None, 'ship': ship['username'], 'ship_id': ship['id'],
