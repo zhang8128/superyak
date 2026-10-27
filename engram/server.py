@@ -1994,6 +1994,7 @@ class _Keep:
     reply: dict | None = None
     would_refuse: bool = False
     source: str | None = None
+    also: tuple = ()          # the other delivered objects the content matched: their subjects are carried too
     shadow: bool = False
 
     def record_copy(self, episode_id: str) -> bool:
@@ -2009,7 +2010,8 @@ class _Keep:
         try:
             led = Ledger.open(ENGRAM_HOME)
             try:
-                led.record_copy(f"mem:{sid}/episode/{episode_id}", self.source, now=_permission_now())
+                led.record_copy(f"mem:{sid}/episode/{episode_id}", self.source, now=_permission_now(),
+                                also=self.also)
             finally:
                 led.close()
         except Exception:
@@ -2132,7 +2134,8 @@ def _decide_keep(deliveries, *, agent: str, now: int, shadow: bool) -> _Keep:
         return _Keep(would_refuse=True) if shadow else _Keep(reply=_keep_reply(state, agent, refused[1].refusal))
     if not written and not shadow:
         return _Keep(reply=_keep_reply(state, agent, cause="the receipt could not be written"))
-    return _Keep(source=decided[0][0].obj, shadow=shadow)
+    # P25: the kept copy carries the union of every matching source's subjects (the final review's M4)
+    return _Keep(source=decided[0][0].obj, also=tuple(u.obj for u, _ in decided[1:]), shadow=shadow)
 
 
 def _keep_check(content: str, *, agent: str, now: int, raw: str | None = None) -> dict | None:

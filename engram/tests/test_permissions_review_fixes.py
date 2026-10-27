@@ -384,3 +384,49 @@ def test_m6_cosubjects_of_a_copy_another_person_keeps_names_the_sources_owner(tm
        place="place:home/jenn")
     led.record_copy("mem:J/episode/c1", "mem:S/episode/m1", now=T("2026-11-03"))
     assert led.cosubjects("mem:J/episode/c1") == frozenset({ANDY})
+
+
+# ---------------------------------------------------------------- M4: a kept copy carries every matching source's subjects
+
+import server
+from permissions import subjects_of
+from tests.permissions_support import (CLINIC_3, COUNTY, KEEP_LATER, KEEP_NOW, M2, PH, _phc_allow, deliver_m1_through,
+                                       keep_world, keep_world_with_imprint_allowed, write_delivery_receipt)  # noqa: F401
+from tests.test_recall_margins import engram_server_env  # noqa: F401
+
+
+def test_m4_record_copy_carries_the_subjects_of_each_source_it_is_told_of(tmp_path):
+    led = e1_ledger_through_andys_side(tmp_path)
+    copy = "mem:K/episode/c9"
+    led.record_copy(copy, "mem:S/episode/m1", also=[M3], now=T("2026-11-03"))
+    s = led.state()
+    assert s.copies[copy] == "mem:S/episode/m1"                       # `copies` keeps one source
+    rows = {r.subject: r.added_by for r in s.subjects[copy]}
+    assert rows == {"person:jenn": f"copy:{M3}"}                      # andy is K's owner, its default subject
+
+
+def test_m4_the_remember_guard_carries_the_union_of_every_matching_sources_subjects(
+        keep_world_with_imprint_allowed):
+    world = keep_world_with_imprint_allowed
+    led = Ledger.open(world.root)
+    try:
+        add_subject(led, M2, "person:amy", actor=ANDY, now="2026-11-02")
+        for steward, layer, audience in ((ANDY, HOME, PH), ("person:county-steward", COUNTY, COUNTY),
+                                         ("person:ph-steward", PH, PH), ("person:ph-steward", CLINIC_3, CLINIC_3),
+                                         ("person:amy", "place:home/amy", PH)):
+            actions = ["imprint"] if steward != "person:amy" else ["recall", "read", "inject_context", "imprint"]
+            _phc_allow(led, steward, layer, audience=[audience], dims={"memories": [M2]}, actions=actions)
+    finally:
+        led.close()
+    from tests.permissions_support import M1_TEXT as TEXT
+    write_delivery_receipt(world.root, content=TEXT, agent="agent:ph-coordinator", obj=M2)  # the same text, m2
+    deliver_m1_through(world, "neighbors")            # the newest delivery, so the guard's first match is m1
+    out = server.remember(content=TEXT)
+    assert "episode_id" in out and "would_refuse" not in out, out
+    kept = f"mem:{world.ids.PHC_STORE}/episode/{out['episode_id']}"
+    led = Ledger.open_read_only(world.root)
+    try:
+        s = led.state()
+    finally:
+        led.close()
+    assert "person:amy" in subjects_of(s, kept, KEEP_NOW) and ANDY in subjects_of(s, kept, KEEP_NOW)

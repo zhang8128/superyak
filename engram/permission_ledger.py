@@ -920,14 +920,22 @@ class Ledger:
         return out
 
     # ---------------------------------------------------------------- kept copies and read accessors (P 7.4)
-    def record_copy(self, copy_ref: str, source_ref: str, *, now: int) -> None:
+    def record_copy(self, copy_ref: str, source_ref: str, *, now: int, also: Sequence[str] = ()) -> None:
         """The `copies` row and the source's subjects as co-subjects of the copy (`added_by` copy:<source>), in one
-        transaction, before the store write. Refused past MAX_COPY_CHAIN links or MAX_SUBJECTS subjects."""
+        transaction, before the store write. Refused past MAX_COPY_CHAIN links or MAX_SUBJECTS subjects. `also`
+        names other objects the kept content matched (the `remember` guard, P25): their subjects at `now` are
+        carried too, each row `added_by` copy:<that object>, while `copies` keeps the one source (the final
+        review's M4)."""
         if self.read_only:
             raise _bad("this ledger is open read-only")
         rule = "7.4 kept copies"
         parse_object_ref(copy_ref)
         parse_object_ref(source_ref)
+        also = [o for o in dict.fromkeys(also) if o != source_ref]
+        for o in also:
+            parse_object_ref(o)
+            if o == copy_ref:
+                raise RuleError(rule, "a memory is not a copy of itself")
         state = self.state()
         if copy_ref == source_ref:
             raise RuleError(rule, "a memory is not a copy of itself")
@@ -943,13 +951,19 @@ class Ledger:
         if links > MAX_COPY_CHAIN:
             raise RuleError(rule, f"a copy chain is at most {MAX_COPY_CHAIN} links")
         own = _own_subjects(state, copy_ref)
-        carried = sorted(set(subjects_of(state, source_ref, now)) - own)
+        came_from: dict[str, str] = {}             # each carried subject and the first object it came from
+        for src in (source_ref, *also):
+            for s in subjects_of(state, src, now):
+                if s not in own:
+                    came_from.setdefault(s, src)
+        carried = sorted(came_from)
         if len(own) + len(carried) > MAX_SUBJECTS:
             raise RuleError(rule, f"a copy has at most {MAX_SUBJECTS} subjects, with its source's")
         by = "copy:" + source_ref
         insert = [{"table": "copies", "row": {"object": copy_ref, "source": source_ref, "added_seq": "@seq"}}]
         insert += [{"table": "subjects", "row": {"object": copy_ref, "subject": s, "added_seq": "@seq",
-                                                 "added_by": by, "self_claimed": 0}} for s in carried]
+                                                 "added_by": "copy:" + came_from[s], "self_claimed": 0}}
+                   for s in carried]
         self._append("record-copy", copy_ref, by, "tool", {"insert": insert}, at=now)
 
     def note_lanes(self, phase: str, rows: Sequence[Mapping], target: str, *, store_id: str, now: int) -> None:
