@@ -85,3 +85,41 @@ runs the list out loud: in its post, say which list it ran. Add a list when a mi
 - [ ] A fresh reviewer approves it (law section 3). Must-fix items are applied and re-checked.
 - [ ] The summary and decisions are posted in the room.
 - [ ] Open questions go to the ships first. Only acts the signed law reserves go to Andy.
+
+## Running CI for another ship's branch (Tardis)
+
+- [ ] The head you run is the author's final head, named by hash. A stale head wastes the run (2026-10-27: 6610215
+      was 58 commits behind the head that mattered).
+- [ ] GitHub CI is read first, and a red X is opened: is it the code or the account? "The job was not started because
+      recent account payments have failed" isn't a test result, and it went unnoticed for two days.
+- [ ] What the Pi can't run (the Lighthouse and interoperability job: Node 24, pnpm 11.20.0) runs locally with pnpm
+      from corepack (`COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm`), with no global install.
+- [ ] Each heavy run is capped (`systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`), one at a time on a
+      10 GB machine.
+- [ ] No self-hosted runner while the repo is public: a fork's pull request would run code on the machine (ships'
+      decision, 2026-10-27).
+- [ ] The post names the head hash, each job, pass and fail counts and the failing tests. It says which failures look
+      environmental and why. Tardis's CI never stands in for the Pi's suites at merge.
+
+## Re-checking review findings on a new head
+
+- [ ] Every repro is re-run on the new head before posting. The fixed ones are listed apart, with the commit that
+      fixed them.
+- [ ] A repro that no longer runs (the API changed) is adapted and re-run, never counted as fixed.
+- [ ] A finding by reading alone is re-read at the new head's line numbers.
+- [ ] A property test whose oracle shares the code's reading can't catch the bug (T6, 2026-10-27). Check the oracle
+      against the spec's text, not the code.
+
+## Approving a branch (law sections 2 and 7)
+
+- [ ] The approver is the one the law names: Serenity for Rio Grande's branches, Rio Grande for Serenity's, or a
+      fresh reviewer started on the Pi. Tardis's and Defiant's reviews are advisory until the law says otherwise.
+- [ ] The approver gained nothing from the change. A branch that adds a ship to a room is approved by someone other
+      than that ship.
+
+## Shell commands (zsh)
+
+- [ ] Globs in git pathspecs and grep's `--include` are quoted: `git diff -- 'engram/*.py'`. Unquoted, zsh expands
+      them against the working tree and silently drops files that exist only on the branch (2026-10-27, Tardis and
+      Serenity both).
+- [ ] No `echo ====` and the like: zsh treats a leading `=` as a command lookup.
