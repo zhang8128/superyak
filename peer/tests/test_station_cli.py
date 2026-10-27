@@ -477,3 +477,59 @@ def test_a_brief_saved_between_the_read_and_the_carry_stops_the_add_with_its_own
     assert stopped.value.code == 1
     assert capsys.readouterr().err == 'The room brief changed while adding the ship; run station-add-ship again\n'
     assert sorted(r['id'] for r in store.list_rooms(f.andy['id'])) == before
+
+
+def station_rows(store):
+    """Everything an add could change: rooms, their members, briefs, board items and claims."""
+    with store.transaction() as db:
+        return {table: [tuple(r) for r in db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+                for table in ('rooms', 'room_members', 'room_briefs', 'board_items', 'claims', 'breakouts')}
+
+
+def refused(capsys, store, prefix, ship, who='andy'):
+    """Runs station-add-ship expecting a refusal: exit 1 and nothing changed. Returns what it said."""
+    before = station_rows(store)
+    with pytest.raises(SystemExit) as caught:
+        add_ship(capsys, store, prefix, ship, who)
+    assert caught.value.code == 1
+    assert station_rows(store) == before
+    return capsys.readouterr().err
+
+
+@pytest.mark.parametrize('room, ship, who, message', [
+    ('city', 'tardis', 'doctor', 'No room you own starts with'),               # APPROVER doesn't own the room
+    ('doctors', 'tardis', 'andy', 'No room you own starts with'),              # a room Andy is only in
+    ('zzzzzz', 'tardis', 'andy', 'No room you own starts with zzzzzz'),
+    ('abc', 'tardis', 'andy', 'Give at least 4 characters of the short id'),
+    ('city', 'tardis', 'nobody', 'No account named nobody'),
+    ('city', 'tardis', 'rio-grande', 'Only people can do this'),
+    ('city', 'nobody', 'andy', 'There is no ship named nobody'),
+    ('city', 'doctor', 'andy', 'doctor is not a ship'),
+    ('city', 'kestrel', 'andy', "kestrel is not one of andy's ships"),        # Jenn's ship
+    ('city', 'odo', 'andy', "odo is not one of andy's ships"),                # a station ship has no owner
+    ('city', 'rio-grande', 'andy', 'rio-grande is already a member of room'),
+    ('city', 'wormhole', 'andy', "Use make station-bridge to add wormhole: it bridges the room to Stanley's aDNA lattice"),
+    ('city', ' ', 'andy', 'Name the ship to add'),
+])
+def test_adding_a_ship_refuses_with_a_plain_reason_and_changes_nothing(fleet, capsys, room, ship, who, message):
+    f, store = fleet, fleet.store
+    doctors = store.create_room(f.doctor['id'], "Doctor's room", [f.andy['id']])
+    prefix = {'city': f.city['id'][:6], 'doctors': doctors['id'][:6]}.get(room, room)
+    said = refused(capsys, store, prefix, ship, who)
+    assert said.startswith(message) and said.endswith('\n') and len(said.splitlines()) == 1
+    if ship == 'rio-grande':
+        assert said == f'rio-grande is already a member of room {f.city["id"][:6]}; nothing changed\n'
+
+
+def test_a_breakout_never_gets_a_ship_this_way(fleet, capsys):
+    """A breakout is opened and owned by a ship, so its short id names no room Andy owns; and were a room he owns ever a
+    breakout, it is refused for being one."""
+    f, store = fleet, fleet.store
+    store.create_room(f.andy['id'], 'Ops', [f.rio['id'], f.tardis['id']])  # a breakout's ships share a room of their owner's
+    side = store.open_breakout(f.rio['id'], 'Side', ['tardis'])
+    docked(store, 'serenity', 'kairos-mac')
+    assert refused(capsys, store, side['id'][:6], 'serenity') == f'No room you own starts with {side["id"][:6]}\n'
+    with store.transaction() as db:
+        db.execute('INSERT INTO breakouts(room_id,creator_id,created) VALUES(?,?,?)', (f.city['id'], f.rio['id'], store.clock()))
+    assert refused(capsys, store, f.city['id'][:6], 'tardis') == (
+        f'Room {f.city["id"][:6]} is a breakout, which its ships keep among themselves; no one is added to it here\n')

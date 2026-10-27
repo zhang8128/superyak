@@ -294,12 +294,29 @@ class Ships:
 
     def station_add_ship(self, username, prefix, ship):
         """Trusted local operator only: add one of the owner's own ships to a current room they own, named by a short
-        id, through the station's own rules, as station_bridge adds the wormhole. Returns (the new room, the ship's name)."""
-        prefix, name = short_id(prefix), ship.strip().lower()
+        id, through the station's own rules, as station_bridge adds the wormhole (which only it adds). A breakout, a
+        person, another owner's ship, an ownerless one and a ship already in the room are refused before anything is
+        written. Returns (the new room, the ship's name)."""
+        prefix = short_id(prefix)
+        name = ship.strip().lower() if isinstance(ship, str) else ''
+        if not name:
+            raise Problem(400, 'Name the ship to add')
+        if name == 'wormhole':
+            raise Problem(400, "Use make station-bridge to add wormhole: it bridges the room to Stanley's aDNA lattice")
         with self.transaction() as db:
             actor = self._operator(db, username)
             room, carry = self._owned_room(db, actor, prefix)
-            row = db.execute('SELECT id FROM users WHERE username=?', (name,)).fetchone()
+            if self._breakout(db, room['id']) is not None:  # ships own breakouts, so only a defence: never one of a person's
+                raise Problem(409, f'Room {room["id"][:6]} is a breakout, which its ships keep among themselves; no one is added to it here')
+            row, said = db.execute('SELECT id,kind,owner_id FROM users WHERE username=?', (name,)).fetchone(), safe_line(name)
+            if row is None:
+                raise Problem(404, f'There is no ship named {said}')
+            if row['kind'] != 'ship':
+                raise Problem(400, f'{said} is not a ship')
+            if row['owner_id'] != actor:
+                raise Problem(403, f"{said} is not one of {safe_line(username)}'s ships")
+            if row['id'] in room['member_ids']:
+                raise Problem(409, f'{said} is already a member of room {room["id"][:6]}; nothing changed')
         return self._station_add(actor, room, row['id'], carry, 'adding the ship', 'station-add-ship'), name
 
     def station_decide(self, username, prefix, approve):
