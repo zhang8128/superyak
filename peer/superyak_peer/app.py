@@ -20,6 +20,26 @@ MAX_REQUEST = 6 * 1024 * 1024
 COOKIE = 'superyak_session'
 DEFAULT_ORIGINS = ('http://127.0.0.1:7435', 'http://localhost:7435')
 STATIC_DIR = Path(__file__).with_name('static')
+# Public route spec 1: loopback and these tailnet ranges are tailnet; every other client is public. `serve` trusts
+# forwarded headers from TRUSTED_PROXY only (tailscale serve), so an internet client can't pass as a tailnet address.
+TAILNET = (ipaddress.ip_network('100.64.0.0/10'), ipaddress.ip_network('fd7a:115c:a1e0::/48'))
+TRUSTED_PROXY = '127.0.0.1'
+
+
+def is_public(scope):
+    """Public route spec 1: a Funnel request (the Tailscale-Funnel-Request header with any value: Tailscale sets it
+    and strips it from what clients send, so a forged one only restricts), a client that isn't an IP address (or no
+    client), or a client neither loopback nor on the tailnet. scope['client'] is what uvicorn's ProxyHeadersMiddleware
+    left there. A request from 127.0.0.1 with no forwarded header is tailnet: a local process, trusted by design."""
+    if any(name.lower() == b'tailscale-funnel-request' for name, _ in scope.get('headers', ())):
+        return True
+    try:
+        address = ipaddress.ip_address(scope['client'][0])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return True
+    if address.version == 6 and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return not (address.is_loopback or any(address in network for network in TAILNET))
 
 class BrowserBoundary:
     """Bound input before JSON parsing; check origins for browser writes."""
