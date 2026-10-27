@@ -136,7 +136,7 @@ def op_uses_place(home, a):
 def op_fold(home, a):
     from permission_uses import Uses
     uses = Uses.open(Path(home))
-    n = uses.fold(now=int(time.time()))
+    n = uses.fold(now=int(time.time()), ledger_id="reference-ledger")     # the receipts' (permissions_budget_ledger)
     uses.close()
     return {"folded": n}
 

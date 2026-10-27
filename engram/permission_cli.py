@@ -262,7 +262,7 @@ def _run_sweep(led: Ledger, now: int) -> tuple:
         if uses_path(led.root).is_file():
             uses = Uses.open(led.root)
             try:
-                uses.fold(now=now)
+                uses.fold(now=now, ledger_id=led.meta()["ledger_id"])
             finally:
                 uses.close()
     except Exception as e:

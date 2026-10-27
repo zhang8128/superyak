@@ -332,21 +332,30 @@ class Uses:
                            digest, through + 1)
 
     # ---------------------------------------------------------------- retention
-    def fold(self, *, now: int) -> int:
+    def fold(self, *, now: int, ledger_id: str) -> int:
         """Fold the leading receipts older than RETENTION_DAYS into `uses_monthly`, delete them and their
         subject rows, and write an anchor holding the last folded seq and digest. Returns how many. The fold
         works in batches of FOLD_BATCH, each its own transaction and anchor, and holds one receipt at a time.
         A span whose chain does not verify is not folded (it would launder the break): ValueError, after the
-        batches before the break's batch have committed."""
+        batches before the break's batch have committed. Only uses count (Tardis's T7): a shadow receipt (the legacy
+        path decided that use), a recall that returned nothing (no use of any memory, 9.1) and a row from another
+        ledger than `ledger_id`, this file's own (an imported station receipt, 9.3), are deleted with their batch
+        and counted nowhere."""
         cutoff = now - RETENTION_DAYS * 86400
         total = 0
         while True:
-            n = self._fold_batch(cutoff)
+            n = self._fold_batch(cutoff, ledger_id)
             total += n
             if n < FOLD_BATCH:
                 return total
 
-    def _fold_batch(self, cutoff: int) -> int:
+    @staticmethod
+    def _counts_as_use(row, ledger_id: str) -> bool:
+        if row["shadow"] or row["ledger_id"] != ledger_id:
+            return False
+        return not (row["object"] is None and (row["returned"] or "") == "[]")
+
+    def _fold_batch(self, cutoff: int, ledger_id: str) -> int:
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             through, digest = self._anchor()
@@ -358,15 +367,16 @@ class Uses:
                         break
                     if self._check((row,), digest, expect) is not None:
                         raise ValueError(f"the receipts chain breaks at seq {expect}; nothing was folded")
-                    month = datetime.fromtimestamp(row["at"], timezone.utc).strftime("%Y-%m")
-                    outcome = "allowed" if row["allowed"] else "refused"
-                    subjects = {s[0] for s in self.conn.execute(
-                        "SELECT subject FROM use_subjects WHERE use_seq=?", (row["seq"],))}
-                    for subject in sorted(subjects) or ["(none)"]:
-                        self.conn.execute(
-                            "INSERT INTO uses_monthly VALUES(?,?,?,?,?,?,1) ON CONFLICT(month, subject, place, "
-                            "action, purpose, outcome) DO UPDATE SET n = n + 1",
-                            (month, subject, row["place"], row["action"], row["purpose"], outcome))
+                    if self._counts_as_use(row, ledger_id):
+                        month = datetime.fromtimestamp(row["at"], timezone.utc).strftime("%Y-%m")
+                        outcome = "allowed" if row["allowed"] else "refused"
+                        subjects = {s[0] for s in self.conn.execute(
+                            "SELECT subject FROM use_subjects WHERE use_seq=?", (row["seq"],))}
+                        for subject in sorted(subjects) or ["(none)"]:
+                            self.conn.execute(
+                                "INSERT INTO uses_monthly VALUES(?,?,?,?,?,?,1) ON CONFLICT(month, subject, place, "
+                                "action, purpose, outcome) DO UPDATE SET n = n + 1",
+                                (month, subject, row["place"], row["action"], row["purpose"], outcome))
                     digest, expect, count = row["digest"], expect + 1, count + 1
             finally:
                 cursor.close()

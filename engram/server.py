@@ -2216,11 +2216,17 @@ def _after_share(*, fold: bool = False) -> None:
         logger.warning("The placement sweep failed", exc_info=True)
     if fold:
         try:
+            from permission_ledger import Ledger
             from permission_uses import Uses, uses_path
             if uses_path(ENGRAM_HOME).is_file():
+                led = Ledger.open_read_only(ENGRAM_HOME)
+                try:
+                    ledger_id = led.meta()["ledger_id"]
+                finally:
+                    led.close()
                 uses = Uses.open(ENGRAM_HOME)
                 try:
-                    uses.fold(now=now)
+                    uses.fold(now=now, ledger_id=ledger_id)
                 finally:
                     uses.close()
         except Exception:

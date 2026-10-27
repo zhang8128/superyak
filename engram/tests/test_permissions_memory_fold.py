@@ -59,7 +59,7 @@ def test_the_fold_holds_one_batch(tmp_path, monkeypatch):
                          "records": [f"rec-{k:04d}"], "version": k} for k in range(43)])
     write_chain(uses, 5000, cited=cited, returned="[]")
     monkeypatch.setattr(permission_uses, "FOLD_BATCH", 500)
-    folded, peak = traced(lambda: uses.fold(now=NOW))
+    folded, peak = traced(lambda: uses.fold(now=NOW, ledger_id="L"))
     assert folded == 5000 and uses.verify() is None
     assert peak < 12 * MB, f"peak {peak / MB:.1f} MB"
 
@@ -69,10 +69,10 @@ def test_the_fold_anchors_each_batch(tmp_path, monkeypatch):
     for u in (a, b):
         write_chain(u, 1050, at=lambda i: OLD + i * 86400 * 3, subjects=2)
     monkeypatch.setattr(permission_uses, "FOLD_BATCH", 100)
-    assert a.fold(now=NOW + 5000 * DAY) == 1050
+    assert a.fold(now=NOW + 5000 * DAY, ledger_id="L") == 1050
     assert len(anchors(a)) == 11 and a.verify() is None
     monkeypatch.undo()
-    assert b.fold(now=NOW + 5000 * DAY) == 1050
+    assert b.fold(now=NOW + 5000 * DAY, ledger_id="L") == 1050
     assert monthly(a) == monthly(b) and monthly(a)
 
 
@@ -82,7 +82,7 @@ def test_a_break_stops_the_fold_at_its_batch(tmp_path, monkeypatch):
     uses.conn.execute("UPDATE uses SET agent='b' WHERE seq=250")
     monkeypatch.setattr(permission_uses, "FOLD_BATCH", 100)
     with pytest.raises(ValueError):
-        uses.fold(now=NOW)
+        uses.fold(now=NOW, ledger_id="L")
     assert anchors(uses) == [100, 200]
     assert uses.conn.execute("SELECT MIN(seq), COUNT(*) FROM uses").fetchone()[:] == (201, 200)
     assert uses.verify() == 250
@@ -91,7 +91,7 @@ def test_a_break_stops_the_fold_at_its_batch(tmp_path, monkeypatch):
 def test_the_fold_keeps_one_receipt_at_a_time(tmp_path):
     uses = Uses.open(tmp_path)
     write_chain(uses, 100, returned=json.dumps(["x" * 1024] * 1024))
-    folded, peak = traced(lambda: uses.fold(now=NOW))
+    folded, peak = traced(lambda: uses.fold(now=NOW, ledger_id="L"))
     assert folded == 100
     assert peak < 8 * MB, f"peak {peak / MB:.1f} MB"
 
@@ -99,7 +99,7 @@ def test_the_fold_keeps_one_receipt_at_a_time(tmp_path):
 def test_a_younger_receipt_stops_the_fold(tmp_path):
     uses = Uses.open(tmp_path)
     write_chain(uses, 10, at=lambda i: NOW if i == 4 else OLD)
-    assert uses.fold(now=NOW) == 3
+    assert uses.fold(now=NOW, ledger_id="L") == 3
     assert anchors(uses) == [3]
     assert [r["seq"] for r in uses.conn.execute("SELECT seq FROM uses ORDER BY seq")] == list(range(4, 11))
     assert uses.verify() is None

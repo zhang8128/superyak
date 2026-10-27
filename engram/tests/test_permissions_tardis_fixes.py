@@ -11,8 +11,9 @@ import federation
 import server
 import sharing
 from permission_ledger import Ledger, effective_gate, ledger_path
-from permissions import (STAR, Act, Placement, Refusal, RuleError, authorize, check_narrower, decide, eligible_set,
-                         parse_selector, placement_still_counts, selector_json, share_cover, subjects_of)
+from permission_uses import Uses, UseRow
+from permissions import (RETENTION_DAYS, STAR, Act, Placement, Refusal, RuleError, authorize, check_narrower, decide,
+                         eligible_set, parse_selector, placement_still_counts, selector_json, share_cover, subjects_of)
 from storage import Storage
 from tests.permissions_support import (  # noqa: F401
     ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, andy_world, deliver_m1_through, fails_the_test, genome_world, home_use,
@@ -326,3 +327,38 @@ def test_t6_a_kept_copy_is_never_recorded_into_an_unregistered_store(tmp_path):
     assert K_COPY not in led.state().copies
     led.record_copy(f"mem:{store}/episode/kept-1", f"mem:{store}/episode/m1", now=T("2026-11-03"))
     assert led.state().copies[f"mem:{store}/episode/kept-1"] == f"mem:{store}/episode/m1"
+
+
+# ---------------------------------------------------------------- T7: what the retention fold counts (P 9.1, 9.3)
+
+LOCAL = "ledger-local"
+DAY = 86400
+
+
+def _receipt(**kw):
+    base = dict(at=T("2025-06-01"), ledger_id=LOCAL, ledger_seq=3, agent="agent:rio-grande", place=HOME,
+                acting_for=HOME, action="read", purpose="care-coordination", allowed=1, cited="[]", object=M1,
+                copy="store:house", shadow=0)
+    base.update(kw)
+    return UseRow(**base)
+
+
+def _monthly(uses):
+    return {(r["subject"], r["action"], r["outcome"]): r["n"] for r in uses.conn.execute("SELECT * FROM uses_monthly")}
+
+
+def test_t7_the_fold_counts_no_shadow_receipt_no_empty_recall_and_no_imported_row(tmp_path):
+    uses = Uses.open(tmp_path)
+    andy = [(ANDY, M1)]
+    uses.append(_receipt(allowed=0), andy)                                    # a refused read: counted
+    uses.append(_receipt(allowed=0, shadow=1), andy)                          # what shadow would refuse: not
+    uses.append(_receipt(allowed=1, shadow=1), andy)                          # nor what it would allow
+    uses.append(_receipt(action="recall", object=None, returned="[]", filtered=20), [])   # a recall of nothing
+    uses.append(_receipt(action="recall", object=None, returned=json.dumps([M1]), filtered=0), andy)   # counted
+    uses.append_imported(UseRow(id="u-" + "cd" * 16, at=T("2025-06-01"), ledger_id="peer-station", ledger_seq=7,
+                                agent="agent:station", place=HOME, acting_for=ANDY, action="route",
+                                purpose="care-coordination", object=None, copy="imprint:peer-station/i1", allowed=1,
+                                cited="[]", returned=json.dumps({"count": 1}), shadow=0), [(ANDY, "imprint:x/i1")])
+    assert uses.fold(now=T("2025-06-01") + (RETENTION_DAYS + 5) * DAY, ledger_id=LOCAL) == 6
+    assert _monthly(uses) == {(ANDY, "read", "refused"): 1, (ANDY, "recall", "allowed"): 1}
+    assert uses.conn.execute("SELECT count(*) FROM uses").fetchone()[0] == 0 and uses.verify() is None

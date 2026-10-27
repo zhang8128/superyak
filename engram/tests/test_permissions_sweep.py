@@ -238,7 +238,7 @@ def receipts_spanning_days(root, *, days, ledger_id):
     for d in range(days):
         row = UseRow(at=start + d * 86400, ledger_id=ledger_id, ledger_seq=1, agent="agent:default", place=HOME,
                      acting_for=HOME, action="recall", purpose="care-coordination", allowed=1, cited="[]",
-                     object=None, copy="store:house", returned="[]", filtered=0)
+                     object=None, copy="store:house", returned='["mem:S/episode/m1"]', filtered=0)   # a use (T7)
         uses.append(row, subjects=[("person:andy", "mem:S/episode/m1")])
     uses.close()
 
