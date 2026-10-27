@@ -1,17 +1,31 @@
-"""Store imprints: copy part of a store, with its owner's permission (store-copy spec I 6, 13).
+"""Store imprints: copy part of a store, with its owner's permission (store-copy spec I 5, 6, 13).
 
-This module holds the package writer (Task 13). It imports no numpy: ``calibrate`` is imported inside the
-functions that need it (P35).
+This module holds the package writer (Task 13) and the ``plan`` command with its dry run (Task 15). It imports no
+numpy: ``calibrate`` is imported inside the functions that need it (P35).
 """
 from __future__ import annotations
 
+import argparse
 import itertools
+import json
+import os
+import shutil
 import sqlite3
+import sys
+import tempfile
+import time
+import uuid
 from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import store_identity
-from imprint_filter import DIGEST_TABLES, IMPRINT_SUBJECTS_DDL, PackageRows, check_package_tables
+import store_reader
+from imprint_filter import (CLOSED_SECONDS, DIGEST_TABLES, IMPRINT_SUBJECTS_DDL, NAMES_SHOWN, OTHERS_AWAY_WORDS,
+                            OTHERS_HOME_WORDS, OTHERS_NO_LEDGER_WORDS, TIMES_WORDS, WITHOUT_ROUTE_WORDS, IdSet,
+                            PackageRows, People, PlanRefused, Scratch, Selection, Terms, check_owner,
+                            check_package_tables, check_source, classify_source, contents_of, open_ledger,
+                            package_rows, parse_selection, parse_terms, people, plan_digest, row_key, scope_of)
 
 BATCH_ROWS = 1000                   # rows per insert batch (D42, I 14)
 BATCH_BYTES = 8 * 2**20             # bytes per insert batch; a row alone over it is a batch of one
@@ -114,3 +128,495 @@ def write_package(rows: PackageRows, dest: Path, *, source_id: str, source_ances
         for suffix in ("", "-wal", "-shm", "-journal"):
             Path(str(dest) + suffix).unlink(missing_ok=True)
         raise
+
+
+# ---- The station's answer (R7) and the store (I 5.1) --------------------------------------------------------
+
+PART_BYTES = 4_194_304              # one part of the package on the wire (I 14)
+DEFAULT_DAYS = 90
+
+
+@dataclass(frozen=True)
+class Context:
+    """What ``agent imprint context`` saved: the station, the requesting ship, its owner and the operator whose home
+    an audience may name."""
+    station: str                    # how the dry run names the station (its address, else its peer id)
+    ship: str
+    owner: str
+    operator: str
+    station_peer_id: str
+
+
+def read_context(home: Path) -> Context:
+    """``home/imprints/context.json`` (R7). ``station`` is the station's peer id and ``url`` its address."""
+    again = "Run make imprint-plan again; it asks the station first."
+    path = Path(home) / "imprints" / "context.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise PlanRefused("No station context. " + again) from None
+    except (OSError, ValueError):
+        raise PlanRefused("The station context can't be read. " + again) from None
+    if not isinstance(data, dict):
+        raise PlanRefused("The station context can't be read. " + again)
+    values = {k: data.get(k) for k in ("ship", "owner", "operator", "station")}
+    if not all(isinstance(v, str) and v for v in values.values()):
+        raise PlanRefused("The station context is incomplete. " + again)
+    url = data.get("url")
+    return Context(station=url if isinstance(url, str) and url else values["station"], ship=values["ship"],
+                   owner=values["owner"], operator=values["operator"], station_peer_id=values["station"])
+
+
+def resolve_store(store: Path | None, *, engram_home: Path, project_root: Path) -> Path:
+    """``--store``, else the store the engram server would open from ``project_root`` (I 5.1)."""
+    if store is not None:
+        return Path(store)
+    from config import resolve_db_path
+
+    return resolve_db_path(Path(engram_home), Path(project_root))
+
+
+# ---- The plan --------------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Plan:
+    id: str
+    created: int
+    store: Path
+    source_id: str
+    source_identity: str            # "present" (stored) or "derived" (what migration would assign)
+    ancestry: tuple[str, ...]
+    ancestry_complete: bool
+    selection: Selection
+    terms: Terms
+    digest: str
+    counts: dict                    # what stays and why, as numbers; no key names a person or a memory
+    contents: dict                  # the digest tables with a row, and their counts (I 7.1)
+    package_bytes: int
+    parts: int
+    others: dict                    # {"memories": n, "people": p}: shipped memories with co-subjects (D27, D43)
+    home: bool                      # the copy stays in the owner's home (I 5.2)
+    people: dict                    # reason -> People: "others", "needs_yes", "said_no", "retired"
+    origin: str | None              # the store's instance_id_origin
+    not_copied: tuple[str, ...]     # source tables no rule names (D4)
+    owner: str
+
+
+PEOPLE_REASONS = ("others", "needs_yes", "said_no", "retired")
+_WORK_FILES = ("snapshot.db", "working.db", "scratch.db", "package.db")
+
+
+def plans_dir(home: Path) -> Path:
+    path = Path(home) / "imprints" / "plans"
+    path.mkdir(parents=True, exist_ok=True)
+    path.chmod(0o700)
+    return path
+
+
+def _new_scratch(home: Path) -> Path:
+    return Path(tempfile.mkdtemp(prefix="scratch-", dir=plans_dir(home)))      # 0700
+
+
+def _remove_work(work: Path, *, whole: bool) -> None:
+    if whole:
+        shutil.rmtree(work, ignore_errors=True)
+        return
+    for name in _WORK_FILES:
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            (work / (name + suffix)).unlink(missing_ok=True)
+
+
+def _default_engram_home() -> Path:
+    return Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent))
+
+
+def _write_private(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def _plan_file(plan: Plan) -> str:
+    """The saved plan: selection, terms and digest with the counts. Memory ids never appear but ``--exclude``'s own."""
+    return json.dumps({
+        "version": 1, "id": plan.id, "created": plan.created, "store": str(plan.store),
+        "source_id": plan.source_id, "owner": plan.owner, "home": plan.home,
+        "scope": scope_of(plan.selection), "exclude": sorted(plan.selection.exclude),
+        "terms": {"audience": plan.terms.audience, "actions": sorted(plan.terms.actions),
+                  "purposes": sorted(plan.terms.purposes), "days": plan.terms.days},
+        "digest": plan.digest, "counts": plan.counts, "contents": plan.contents, "others": plan.others,
+        "package_bytes": plan.package_bytes, "parts": plan.parts}, indent=2, sort_keys=True) + "\n"
+
+
+def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, home: Path, now: int, *,
+              scratch_dir: Path | None = None, engram_home: Path | None = None, list_to: Path | None = None) -> Plan:
+    """Snapshot the source, migrate a working copy, compute M, the digest, the contents and the size, save the plan
+    and return it. The source is read only through ``calibrate.snapshot``. The snapshot, the working copy and the
+    scratch file live in a 0700 directory under ``home/imprints/plans/`` (``scratch_dir``, which the caller removes,
+    or one made here and removed here). ``make_plan`` sets no environment variable (R26)."""
+    import calibrate                                    # numpy: only when a plan runs (P35)
+    from storage import Storage
+
+    store, home = Path(store), Path(home)
+    if ctx.owner != context.owner:
+        raise PlanRefused("The plan's owner is not the owner the station named; nothing was planned.")
+    engram_home = _default_engram_home() if engram_home is None else Path(engram_home)
+    work = _new_scratch(home) if scratch_dir is None else Path(scratch_dir)
+    scratch = conn = None
+    try:
+        snap = work / "snapshot.db"
+        calibrate.snapshot(store, snap)
+        reader = store_reader.connect(snap)
+        try:
+            check_source(store, reader, engram_home=engram_home,
+                         imprint_roots=(Path.home() / ".engram" / "imprints", home / "imprints"))
+            source_id = store_identity.effective_id(reader)
+            if source_id != ctx.source_id:
+                raise PlanRefused("The source store is not the one this plan was set up for; nothing was planned.")
+            check_owner(ctx.ledger, source_id, context.owner)
+            identity = store_identity.describe(reader)
+            ancestry, complete = store_identity.ancestry(reader)
+            not_copied = classify_source(reader).unnamed
+            pending = store_reader._schema(reader, store_reader._tables(reader))["pending"]
+        finally:
+            reader.close()
+        working = work / "working.db"
+        shutil.copyfile(snap, working)
+        working.chmod(0o600)
+        if pending:
+            Storage(str(working)).close()               # imprint_working_copy stays False: an imprint fails closed
+        scratch = Scratch(work / "scratch.db")
+        c = replace(ctx, scratch=scratch, terms=terms, now=now)
+        conn = _connect(working, read_only=True, vec=True)
+        conn.row_factory = sqlite3.Row
+        pr = package_rows(conn, sel, terms, c)
+        digest = plan_digest(scope_of(sel), pr.rows, scratch=scratch)
+        contents = contents_of(pr.rows)
+        sessions = IdSet(scratch)
+        for row in pr.rows["episodes"]:
+            if row["session_id"]:
+                sessions.add(row["session_id"])
+        counts = dict(pr.counts)
+        counts.update(sessions=len(sessions),
+                      source_episodes=conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0],
+                      source_semantics=conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0])
+        who = {reason: people(scratch, reason) for reason in PEOPLE_REASONS}
+        if list_to is not None:
+            _write_list(Path(list_to), pr.rows)
+        package = work / "package.db"
+        write_package(pr, package, source_id=source_id, source_ancestry=ancestry, source_complete=complete,
+                      imprint_id=str(uuid.uuid4()))
+        size = package.stat().st_size
+        plan = Plan(
+            id=uuid.uuid4().hex, created=now, store=store, source_id=source_id,
+            source_identity="present" if identity["status"] == "present" else "derived", ancestry=tuple(ancestry),
+            ancestry_complete=bool(complete), selection=sel, terms=terms, digest=digest, counts=counts,
+            contents=contents, package_bytes=size, parts=max(1, -(-size // PART_BYTES)), others=pr.others,
+            home=bool(ctx.home), people=who, origin=identity.get("instance_id_origin"),
+            not_copied=tuple(not_copied), owner=context.owner)
+        _write_private(plans_dir(home) / f"{plan.id}.json", _plan_file(plan))
+        return plan
+    finally:
+        if conn is not None:
+            conn.close()
+        if scratch is not None:
+            scratch.close()
+        _remove_work(work, whole=scratch_dir is None)
+
+
+def _write_list(path: Path, rows: Mapping[str, Iterable[dict]]) -> None:
+    """``--list``: one JSON line ``{table, key}`` per row that would leave, written as the rows are read."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        for table in DIGEST_TABLES:
+            for row in rows[table]:
+                f.write(json.dumps({"table": table, "key": row_key(table, row)}, sort_keys=True) + "\n")
+
+
+# ---- The dry run in words (I 5.4) ------------------------------------------------------------------------------
+
+def _n(n: int, one: str, many: str) -> str:
+    return f"{n:,} {one if n == 1 else many}"
+
+
+def _name(subject: str) -> str:
+    return subject.removeprefix("person:")
+
+
+def _when(seconds: int) -> str:
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(seconds))
+
+
+def _names(p: People) -> str:
+    text = ", ".join(_name(s) for s, _ in p.named)
+    return text + (f" and {p.more:,} more" if p.more else "")
+
+
+def _reason_lines(p: People, one: str, many: str, rest: str) -> list[str]:
+    """At most ``NAMES_SHOWN`` lines for one reason, then one line for the rest (the re-check's S3)."""
+    lines = [f"  {_n(n, 'memory', 'memories')} {one if n == 1 else many}".replace("{name}", _name(s))
+             for s, n in p.named]
+    if p.more:
+        lines.append("  " + rest.format(more=_n(p.more, "more person", "more people")))
+    return lines
+
+
+def _ancestry_line(plan: Plan) -> str:
+    how = "stored, " + ("made after store identity" if plan.origin == "creation" else
+                        "made before store identity" if plan.origin == "retroactive" else
+                        "a fork of another store" if plan.origin == "fork" else "recorded in the store")
+    if plan.source_identity == "derived":
+        how = "not stored; derived from the store's earliest episode, as its first open would"
+    shown = ", ".join(i[:8] for i in plan.ancestry[:4])
+    if plan.ancestry:
+        more = len(plan.ancestry) - 4
+        copied = "copied from " + shown + (f" and {more} more" if more > 0 else "")
+    else:
+        copied = "copied from no recorded store"
+    return (f"{plan.source_id[:8]} ({how}; {copied}; "
+            f"{'lineage complete' if plan.ancestry_complete else 'lineage incomplete'})")
+
+
+def _others_paragraph(plan: Plan) -> str:
+    n, p = plan.others["memories"], plan.others["people"]
+    if plan.home:
+        if n == 0:
+            return "Other people: " + OTHERS_NO_LEDGER_WORDS
+        return (f"Other people: {_n(n, 'memory has', 'memories have')} other people recorded on them "
+                f"({_n(p, 'person', 'people')}: {_names(plan.people['others'])}). " + OTHERS_HOME_WORDS)
+    stay = plan.counts.get("needs_yes", 0)
+    if stay == 0:
+        return "Other people: " + OTHERS_AWAY_WORDS
+    return (f"Other people: {_n(stay, 'memory has', 'memories have')} another person recorded on them "
+            f"({_n(plan.people['needs_yes'].count, 'person', 'people')}: {_names(plan.people['needs_yes'])}). "
+            "This copy leaves your home, so they stay here: no use of them at the station could be allowed "
+            "without that person's yes. " + OTHERS_AWAY_WORDS)
+
+
+def render_dry_run(plan: Plan, context: Context) -> str:
+    sel, terms, c, k = plan.selection, plan.terms, plan.counts, plan.contents
+    route = terms.route
+    lanes = ", ".join(sorted(sel.lanes)) + (" lane" if len(sel.lanes) == 1 else " lanes")
+    window = f"{'the beginning' if sel.since is None else _when(sel.since)} to {_when(sel.until)}"
+    vectors = k.get("episode_vectors", 0) + k.get("semantic_vectors", 0)
+    links = [(k.get("semantic_sources", 0), "semantic sources"), (k.get("resonances", 0), "resonances"),
+             (k.get("semantic_peers", 0), "semantic peers"), (k.get("subdivision_events", 0), "subdivision events")]
+    def row(label: str, n: int, text: str) -> str:
+        return f"  {label:<15}{n:>7,}   {text}"
+
+    link_text = ", ".join(f"{n:,} {w}" for n, w in links if n) or "none"
+    out = [f"Imprint plan {plan.id[:4]} (nothing has left this machine)", "",
+           f"Store     {plan.store}",
+           f"Store id  {_ancestry_line(plan)}",
+           f"Station   {context.station} as ship {context.ship} (owner {context.owner})", "",
+           "What would leave",
+           row("Episodes", k.get("episodes", 0), f"{lanes}, {window}"),
+           row("Semantics", k.get("semantics", 0), f"{lanes}; every recorded source is also leaving"),
+           row("Vectors", vectors, "copied as stored, never re-embedded")]
+    if route:
+        out += [row("Session ids", c.get("sessions", 0), f"sessions closed by {_when(sel.until - CLOSED_SECONDS)}: "
+                    "which of them wrote each episode, sent only because you chose route"),
+                row("Recall log", k.get("memory_log", 0), "rows from those sessions, sent only because you chose "
+                    "route; instinct results, query text and notes removed"),
+                row("Citing actions", k.get("operation_log", 0), "mark_core, instinct_feedback and dream_react rows "
+                    "from those sessions, sent only because you chose route")]
+    out.append(row("Links", sum(n for n, _ in links), link_text))
+    if plan.home and plan.others["memories"]:
+        out.append(row("Other people", plan.others["memories"], "memories with other people recorded on them "
+                       f"({_n(plan.others['people'], 'person', 'people')}), copied with them as co-subjects"))
+    out += [f"  {TIMES_WORDS}", "", "What stays here"]
+    left_e = max(0, c.get("source_episodes", 0) - k.get("episodes", 0))
+    left_s = max(0, c.get("source_semantics", 0) - k.get("semantics", 0))
+    out.append(f"  {_n(left_e, 'episode', 'episodes')}, {_n(left_s, 'semantic', 'semantics')}, every instinct, dream "
+               "residue, task contexts, anchors, assessments, notes, clipboard, code index, cold storage, category "
+               "stores, knowledge graph, the session registry (harness, model, working directory).")
+    if not route:
+        out.append("  " + WITHOUT_ROUTE_WORDS)
+    if c.get("semantic_source_stays"):
+        out.append(f"  {_n(c['semantic_source_stays'], 'semantic stays', 'semantics stay')} because a recorded source "
+                   "episode stays.")
+    if c.get("semantic_unsourced"):
+        out.append(f"  {_n(c['semantic_unsourced'], 'semantic stays', 'semantics stay')} because no source is "
+                   "recorded (add --include-unsourced-semantics to send them).")
+    if c.get("lane_unsettled"):
+        out.append(f"  {_n(c['lane_unsettled'], 'memory stays', 'memories stay')} because a lane change at home has "
+                   "not settled.")
+    if c.get("unparseable_time"):
+        out.append(f"  {_n(c['unparseable_time'], 'memory stays', 'memories stay')} because its time can't be read.")
+    out += _reason_lines(plan.people["needs_yes"], "stays because it needs {name}'s yes",
+                         "stay because each needs {name}'s yes", "Others stay because they need the yes of {more}.")
+    out += _reason_lines(plan.people["said_no"], "stays because {name} said no", "stay because {name} said no",
+                         "Others stay because {more} said no.")
+    out += _reason_lines(plan.people["retired"], "stays because {name} is retired in your permissions ledger",
+                         "stay because {name} is retired in your permissions ledger",
+                         "Others stay because {more} are retired in your permissions ledger.")
+    if c.get("bound"):
+        out.append(f"  {_n(c['bound'], 'memory stays', 'memories stay')} because more than 8 people or places are "
+                   "recorded on them")
+    if plan.not_copied:
+        out.append("  Tables no rule names, not copied: " + ", ".join(plan.not_copied[:NAMES_SHOWN])
+                   + (f" and {len(plan.not_copied) - NAMES_SHOWN} more" if len(plan.not_copied) > NAMES_SHOWN else ""))
+    out += ["", _others_paragraph(plan), "", "Permission you would give",
+            f"  Audience  {terms.audience} (the station's imprint agent, acting for {context.operator})",
+            "  Allows    recall, read and imprint on these memories"
+            + ("; for the trail evaluation, keeping which session wrote each memory and the recall log, which make "
+               "your trails, and route over their roads and trails" if route else ""),
+            "  Purposes  " + ", ".join(sorted(terms.purposes)),
+            f"  Ends      {terms.days} days after you say yes",
+            f"  Size      {plan.package_bytes / 2**20:.1f} MiB in {_n(plan.parts, 'part', 'parts')}", "",
+            f"Plan digest {plan.digest[:8]}...  (your browser will show the same 8 characters)",
+            f"Read what would leave: make imprint-read PLAN={plan.id[:4]}",
+            f"Send it:               make imprint-send PLAN={plan.id[:4]}"]
+    return "\n".join(out) + "\n"
+
+
+def plan_dict(plan: Plan) -> dict:
+    """``--json``: the whole dry run as numbers and at most ``NAMES_SHOWN`` names a reason."""
+    return {"id": plan.id, "created": plan.created, "store": str(plan.store), "source_id": plan.source_id,
+            "source_identity": plan.source_identity, "ancestry": list(plan.ancestry),
+            "ancestry_complete": plan.ancestry_complete, "scope": scope_of(plan.selection),
+            "terms": {"audience": plan.terms.audience, "actions": sorted(plan.terms.actions),
+                      "purposes": sorted(plan.terms.purposes), "days": plan.terms.days},
+            "digest": plan.digest, "counts": plan.counts, "contents": plan.contents, "others": plan.others,
+            "home": plan.home, "package_bytes": plan.package_bytes, "parts": plan.parts,
+            "people": {r: {"count": p.count, "named": [[_name(s), n] for s, n in p.named], "more": p.more}
+                       for r, p in plan.people.items()},
+            "not_copied": list(plan.not_copied)}
+
+
+# ---- The command ---------------------------------------------------------------------------------------------
+
+def ensure_scratch_env(scratch: Path, *, environ, execve) -> None:
+    """R26: SQLite reads ``SQLITE_TMPDIR`` and ``TMPDIR`` once, when ``sqlite3`` is imported, so the process starts
+    again with the three variables naming ``scratch`` unless they already do. Every subcommand that opens SQLite
+    calls this first."""
+    value = str(scratch)
+    keys = ("SQLITE_TMPDIR", "TMPDIR", "IMPRINT_SCRATCH")
+    if all(environ.get(k) == value for k in keys):
+        return
+    env = dict(environ)
+    env.update({k: value for k in keys})
+    execve(sys.executable, [sys.executable, *sys.orig_argv[1:]], env)
+
+
+def _run_scratch(home: Path) -> Path:
+    """The directory the re-executed process was given (a 0700 directory directly under the plans directory), else
+    a new one."""
+    named = os.environ.get("IMPRINT_SCRATCH")
+    plans = plans_dir(home)
+    if named:
+        path = Path(named)
+        if path.is_dir() and path.resolve().parent == plans.resolve() and path.stat().st_uid == os.getuid():
+            return path
+    return _new_scratch(home)
+
+
+def _project_root(flag: str | None) -> Path:
+    return Path(flag or os.environ.get("ENGRAM_PROJECT_ROOT") or os.getcwd())
+
+
+def _parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="imprint.py", description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("plan", help="choose what would leave and show it; nothing leaves this machine")
+    p.add_argument("--store", type=Path, help="the store to copy; use it when unsure")
+    p.add_argument("--project-root", help="where the engram server would run (default $ENGRAM_PROJECT_ROOT, else here)")
+    p.add_argument("--lanes", help="personal, work or both, comma separated")
+    p.add_argument("--layers", help="episode, semantic or both, comma separated")
+    p.add_argument("--since")
+    p.add_argument("--until")
+    p.add_argument("--shared-with")
+    p.add_argument("--exclude", type=Path, metavar="FILE", help="a file of memory ids, one a line, to leave out")
+    p.add_argument("--include-unsourced-semantics", action="store_true")
+    p.add_argument("--audience", help="place:home/<the operator the station named>")
+    p.add_argument("--actions", default="imprint", help="imprint, or imprint,route")
+    p.add_argument("--purposes", help="calibration, or calibration,trail-evaluation with route")
+    p.add_argument("--days", type=int, default=DEFAULT_DAYS)
+    p.add_argument("--list", type=Path, metavar="FILE", help="write one JSON line per row that would leave")
+    p.add_argument("--json", action="store_true", help="print the dry run as JSON")
+    p.add_argument("--superyak-home", type=Path, default=Path.home() / ".superyak")
+    p.add_argument("--engram-home", type=Path)
+    return ap
+
+
+def _identity_of(store: Path) -> tuple[str, str]:
+    """The source's effective id and instance name, from a read-only look that writes nothing."""
+    if not Path(store).is_file():
+        raise PlanRefused(f"There is no store at {store}; nothing was planned.")
+    try:
+        conn = store_reader.connect(store)
+    except sqlite3.Error:
+        raise PlanRefused(f"{store} can't be opened as a store; nothing was planned.") from None
+    try:
+        source_id = store_identity.effective_id(conn)
+    except sqlite3.Error:
+        raise PlanRefused(f"{store} is not an engram store; nothing was planned.") from None
+    finally:
+        conn.close()
+    if source_id is None:
+        raise PlanRefused("The source store has no identity this code can derive; nothing was planned.")
+    here = Path(store).resolve()
+    return source_id, here.parent.name if here.parent.parent.name == "instances" else "default"
+
+
+def _plan(args, *, clock) -> int:
+    from imprint_filter import SourceContext
+
+    home = Path(args.superyak_home)
+    engram_home = Path(args.engram_home) if args.engram_home else _default_engram_home()
+    now = int(clock())
+    context = read_context(home)
+    purposes = args.purposes or ("calibration,trail-evaluation" if "route" in (args.actions or "") else "calibration")
+    terms = parse_terms(audience=args.audience, actions=args.actions, purposes=purposes, days=args.days,
+                        operator=context.operator)
+    sel = parse_selection(lanes=args.lanes, layers=args.layers, since=args.since, until=args.until,
+                          shared_with=args.shared_with, exclude_file=args.exclude,
+                          unsourced=args.include_unsourced_semantics, now=now)
+    store = resolve_store(args.store, engram_home=engram_home, project_root=_project_root(args.project_root))
+    source_id, instance_name = _identity_of(store)          # nothing is written yet
+    scratch = _run_scratch(home)
+    try:
+        ensure_scratch_env(scratch, environ=os.environ, execve=os.execve)
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
+    ledger = None
+    try:
+        ledger = open_ledger(engram_home)
+        published = published_house_path(engram_home)
+        ctx = SourceContext(
+            source_path=store, source_id=source_id, instance_name=instance_name, owner=context.owner,
+            published=published if published.is_file() else None, ledger=ledger,
+            home=terms.audience == f"place:home/{context.owner}", scratch=None, terms=terms, now=now)
+        plan = make_plan(store, sel, terms, ctx, context, home, now, scratch_dir=scratch, engram_home=engram_home,
+                         list_to=args.list)
+    finally:
+        if ledger is not None:
+            ledger.conn.close()
+        shutil.rmtree(scratch, ignore_errors=True)
+    print(json.dumps(plan_dict(plan), indent=2, sort_keys=True) if args.json else render_dry_run(plan, context),
+          end="\n" if args.json else "")
+    return 0
+
+
+def published_house_path(engram_home: Path) -> Path:
+    from imprint_filter import published_house
+
+    return published_house(engram_home)
+
+
+def main(argv: list[str] | None = None, *, clock=time.time) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        if args.command == "plan":
+            return _plan(args, clock=clock)
+    except PlanRefused as refusal:
+        print(str(refusal), file=sys.stderr)
+        return 2
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1040,3 +1040,73 @@ def shipped_ids(path: Path, layer: str) -> set:
         return {r[0] for r in conn.execute(f"SELECT id FROM {layer}s")}
     finally:
         conn.close()
+
+
+# Task 15: the plan and the dry run. Imports are inside the helpers, as above.
+
+PLAN_NOW = SELECTION_UNTIL                 # the plan's clock: 2026-10-25T18:00:00Z, so every fixture row is older
+_AUTO = object()
+
+
+def plan_context(owner: str = "sam"):
+    """The station's answer for a ship whose owner is ``owner``; its operator (the home an audience may name) is
+    andy, so ``sam`` plans a copy that leaves his home and ``andy`` one that stays in it."""
+    from imprint import Context
+
+    return Context(station="https://smart.tail7db420.ts.net", ship="voyager", owner=owner, operator="andy",
+                   station_peer_id="ab" * 32)
+
+
+def write_context(home: Path, context) -> Path:
+    """The file ``agent imprint context`` writes (R7): ``home/imprints/context.json``."""
+    import json
+    import os
+
+    path = home / "imprints" / "context.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"ship": context.ship, "owner": context.owner, "operator": context.operator,
+                   "station": context.station_peer_id, "url": context.station}, f)
+    return path
+
+
+def live_source(tmp_path: Path) -> Storage:
+    """A store whose connection stays open, so a second write lands in its WAL while a plan runs."""
+    s = new_store(tmp_path, "live")
+    ep(s, "e1", content="Jenn drove the truck to the clinic", at="2026-10-25T10:00:00+00:00")
+    vec(s, "episode", "e1", seed=1)
+    return s
+
+
+def plan_args(tmp_path: Path, *, owner: str = "sam", route: bool = False, episodes: int = 2, cosubjects=None,
+              ledger=_AUTO, denies=None, until="2026-10-25T18:00:00Z"):
+    """``(store path, selection, terms, ctx, context, home, now)``: the arguments of ``make_plan``. Episodes
+    ``e0`` (never given a co-subject) and ``e1`` to ``e<episodes>`` in the work lane hold text naming Jenn; ``s1`` is sourced on ``e1``. A ledger is made
+    when ``cosubjects`` or ``denies`` are given (``ledger=None`` forbids one)."""
+    from imprint_filter import parse_selection, parse_terms
+
+    s = new_store(tmp_path, "src")
+    ep(s, "e0", content="Jenn drove the truck to the clinic, trip 0", session="sx", at="2026-10-25T09:00:00+00:00")
+    vec(s, "episode", "e0", seed=100)           # no one else is recorded on e0, so a plan always has a memory
+    for i in range(1, episodes + 1):
+        ep(s, f"e{i}", content=f"Jenn drove the truck to the clinic, trip {i}", session="sx",
+           at=f"2026-10-25T10:{i % 60:02d}:00+00:00")
+        vec(s, "episode", f"e{i}", seed=i)
+    sem(s, "s1", sources=["e1"], at="2026-10-25T12:00:00+00:00")
+    vec(s, "semantic", "s1", seed=99)
+    if route:
+        recall(s, "l1", targets=["e1"], session="sx", outcome="used", recall_id="rc1")
+    led = None
+    if ledger is _AUTO and (cosubjects is not None or denies):
+        ledger = True
+    if ledger is True:
+        led = globals()["ledger"](tmp_path / "eh", owner=owner, store=s, cosubjects=cosubjects, denies=denies)
+    context = plan_context(owner)
+    sel = parse_selection(lanes="work", layers="episode,semantic", since=None, until=until, shared_with=None,
+                          exclude_file=None, unsourced=False, now=PLAN_NOW)
+    t = parse_terms(audience="place:home/andy", actions="imprint,route" if route else "imprint",
+                    purposes="calibration,trail-evaluation" if route else "calibration", days=90,
+                    operator=context.operator)
+    c = ctx(s, ledger=led, owner=owner, home=owner == context.operator, terms=t, now=PLAN_NOW)
+    return Path(s.db_path), sel, t, c, context, tmp_path / "home", PLAN_NOW

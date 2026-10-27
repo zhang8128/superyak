@@ -382,6 +382,31 @@ _TABLES = {"episode": "episodes", "semantic": "semantics"}
 
 AGENT = "agent:station-imprints"        # the requester of the uses the imprint needs (I 5.2 denied(m))
 NAMES_SHOWN = 10
+
+# The owner's words (I 5.4). TIMES_WORDS is YS1's correction: each recall updates every resonance with one of its
+# results in it, so ``last_seen`` is when either was last recalled. Builder's note: ``last_accessed`` also moves when
+# an episode leaves core (storage.py:987-1012), so "when last it was recalled" is nearly, not exactly, true.
+TIMES_WORDS = ("With them, route or not: when each memory was written; how often and when last each episode was "
+               "recalled; and the resonances, pairs of memories recalls returned together, with when they formed and "
+               "when either was last recalled. These show when memories were recalled together.")
+WITHOUT_ROUTE_WORDS = ("Without route, which session wrote each episode, and the recall log, would stay here too. "
+                       "The times above would still leave.")
+# After the counts, at home: the memories are copied with their people as co-subjects.
+OTHERS_HOME_WORDS = ("They will be copied. Each keeps those people as co-subjects, so no use of it outside your home, "
+                     "and none that shows it to an agent, can happen without their yes. Other memories may mention "
+                     "people Engram has no record of, such as family, colleagues, patients or study participants. "
+                     "They are copied too, on your yes alone, with no one else recorded on them. Your browser asks "
+                     "you to confirm that you know this.")
+# Away from home, the last three sentences of the paragraph: the memories with other people stay.
+OTHERS_AWAY_WORDS = ("Other memories may mention people Engram has no record of. Those would leave on your yes. Before "
+                     "you allow, your browser asks you to confirm that nothing here is about a person who hasn't "
+                     "agreed to share it, and that none of it is patient or participant data. If you can't confirm "
+                     "that, narrow the plan or stop here.")
+# At home with n = 0: no ledger, or a ledger that records no co-subject on what leaves (I 5.4; the check's M2).
+OTHERS_NO_LEDGER_WORDS = ("Engram has no record of the people these memories mention, so it can't count them, and no "
+                          "one but you is recorded on them. Memories that mention family, colleagues, patients or "
+                          "study participants are copied too, on your yes alone. Your browser asks you to confirm "
+                          "that you know this.")
 NEEDED_ACTIONS = ("recall", "read", "imprint")      # Need(admission); with route, Need(trail-evaluation) adds route
 ROAD_NAME = "imprint"                   # the name of the road ref a deny is tested on; its content is never read
 
