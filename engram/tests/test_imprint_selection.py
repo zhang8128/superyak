@@ -196,6 +196,10 @@ def test_a_co_subjects_no_keeps_the_memory_home(tmp_path, monkeypatch):    # I 5
     roads = ledger(tmp_path / "h2", owner="andy", store=s, cosubjects={"about-lee": "person:lee"},
                    denies={"person:lee": [deny(kinds=["road", "trail"], actions=["route"], purposes=["trail-evaluation"])]})
     assert "about-lee" in base_ids(s, roads, route=False) and "about-lee" not in base_ids(s, roads, route=True)
+    for kinds in (["trail"], ["road"]):                          # G18 CD1: a no on trails alone, or roads alone, also holds
+        one = ledger(tmp_path / f"one-{kinds[0]}", owner="andy", store=s, cosubjects={"about-lee": "person:lee"},
+                     denies={"person:lee": [deny(kinds=kinds, actions=["route"], purposes=["trail-evaluation"])]})
+        assert "about-lee" in base_ids(s, one, route=False) and "about-lee" not in base_ids(s, one, route=True), kinds
     calm = ledger(tmp_path / "h3", owner="andy", store=s, cosubjects={"about-lee": "person:lee"})
     forbid_state(monkeypatch)                                  # any Ledger.state() call fails the test (the re-check's S5)
     calm_ctx = ctx(s, ledger=calm, owner="andy", home=True, now=NOW)

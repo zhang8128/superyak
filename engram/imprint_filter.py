@@ -530,8 +530,9 @@ class Refusals:
             return False
         uses = [(ref, x) for x in NEEDED_ACTIONS]
         if self._route:
-            road = f"road:{parse_object_ref(ref).instance_id}/{ROAD_NAME}"
-            uses += [(road, x) for x in (*NEEDED_ACTIONS, "route")]
+            instance = parse_object_ref(ref).instance_id
+            for kind in ("road", "trail"):                  # a no on trails alone refuses too (G18 CD1)
+                uses += [(f"{kind}:{instance}/{ROAD_NAME}", x) for x in (*NEEDED_ACTIONS, "route")]
         for record in self._denies.get(self._layer(subject), ()):
             at = max(self._now, record.valid_from)
             for obj, x in uses:
