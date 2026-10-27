@@ -207,13 +207,14 @@ class Tools:
         if args.get('thread') is not None:  # a thread needs the whole room
             room = self.client.room(room_id)
             return room_header(room) + self._thread(room, room['messages'], [m['id'] for m in room['messages']], args)
-        limit = max(1, min(100, int(args.get('limit') or 30)))
+        limit = self._limit(args)  # None when it will not parse: the whole-room read reports that where it always has
         oldest, at = args.get('oldest') in (True, 'true'), args.get('at')
         modes = sum(x is not None and x is not False and x != '' for x in (args.get('message'), args.get('start'), args.get('after'), oldest or None, at))
         if (any(args.get(k) is not None and not isinstance(args[k], str) for k in ('message', 'start', 'after'))
+                or (limit is None and not args.get('message'))  # a message read never used limit
                 or args.get('oldest') not in (None, False, True, 'true', 'false') or (at is not None and type(at) is not int) or modes > 1):
             # Invalid whichever way: read the whole room, which raises in the order it always has (room first).
-            return self._read_whole(self.client.room(room_id), args, limit)
+            return self._read_whole(self.client.room(room_id), args)
         forward = bool(args.get('start') or args.get('after') or oldest or at is not None)  # pages forward, oldest first
         # Ask for the window shown; a forward read takes one more, which names the call that reads on.
         if args.get('message'):
@@ -234,7 +235,7 @@ class Tools:
                 raise ValueError(exc.message) from None
             raise
         if room.get('paged') is not True:  # an older station or a remote room sent the whole room
-            return self._read_whole(room, args, limit)
+            return self._read_whole(room, args)
         header, messages, offset, total = room_header(room), room['messages'], room['first_position'], room['total']
         if at is not None and not 0 <= at < total:
             raise ValueError(f'at must be between 0 and {total - 1}')
@@ -247,7 +248,14 @@ class Tools:
         top = header + brief_top(room)
         return top + render_newest(room, messages, limit, max_chars(args), len(top), offset, total)
 
-    def _read_whole(self, room, args, limit):
+    @staticmethod
+    def _limit(args):
+        try:
+            return max(1, min(100, int(args.get('limit') or 30)))
+        except (ValueError, TypeError, OverflowError):
+            return None
+
+    def _read_whole(self, room, args):
         """A read of the whole room, sliced here: the checks in the order they have always run."""
         header = room_header(room)
         messages, ids = room['messages'], [m['id'] for m in room['messages']]
@@ -269,6 +277,7 @@ class Tools:
             raise ValueError('Use one of message, start, after, oldest or at')
         if args.get('message'):
             return header + render_one(room, messages, ids.index(args['message']))
+        limit = max(1, min(100, int(args.get('limit') or 30)))  # after every other check, as it always was
         if args.get('start') or args.get('after') or oldest or at is not None:
             if args.get('start'):
                 first = ids.index(args['start'])

@@ -909,3 +909,36 @@ def test_invalid_calls_raise_in_the_order_a_full_read_does(station):
     assert 'at must be between 0 and 4' in read_error(tools, room=room, at=99, start=real)
     assert "No message 'nope'" in read_error(tools, room=room, at='x', start='nope')
     assert "No message 'nope'" in read_error(tools, room=room, message='nope', start=5)
+
+
+def test_a_bad_limit_is_reported_where_a_full_read_reports_it(station):
+    """S1: limit is parsed after every other check, so a call with two faults reports the first one as it always did."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn, f'note {n}') for n in range(5)]
+    tools, real = tools_for(fake), sent[1]['id']
+    cases = [{'limit': 'x', 'start': 'nope'},
+             {'limit': 'x', 'at': 99},
+             {'limit': 'x', 'oldest': 'maybe'},
+             {'limit': 'x', 'start': real, 'after': real},
+             {'limit': 'x', 'message': 'nope'},
+             {'limit': [1], 'start': 'nope'},
+             {'limit': 'x'},                                  # alone: today's own error
+             {'limit': 'x', 'oldest': True}]
+    for case in cases:
+        args = {'room': room, **case}
+        fake.pages = False
+        today = read_error(tools, **args)
+        fake.pages = True
+        assert read_error(tools, **args) == today, case
+    for fake.pages in (True, False):
+        # today's order (main): ids, oldest, at, the one-mode check, and only then limit
+        assert "No message 'nope'" in read_error(tools, room=room, limit='x', start='nope')
+        assert 'at must be between 0 and 4' in read_error(tools, room=room, limit='x', at=99)
+        assert 'oldest is true or false' in read_error(tools, room=room, limit='x', oldest='maybe')
+        assert 'Use one of' in read_error(tools, room=room, limit='x', start=real, after=real)
+        assert 'invalid literal for int()' in read_error(tools, room=room, limit='x')
+    # a message read never parsed limit
+    text = call_text(tools, {'room': room, 'limit': 'x', 'message': real})
+    fake.pages = False
+    assert call_text(tools, {'room': room, 'limit': 'x', 'message': real}) == text
