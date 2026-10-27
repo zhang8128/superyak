@@ -150,18 +150,32 @@ def describe_rooms(person, rooms):
         for room in rooms])
 
 
+def named_room(room):
+    return f'room {room["id"][:6]} {safe_line(room["title"])}'
+
+
+def carried_along(room):
+    """After a member add made a new linked room (station-bridge, station-add-ship): what the room it replaced keeps,
+    whether the brief came along and how many open board items did."""
+    brief = "The room's brief came along." if room.get('brief_carried') else 'The room had no brief to carry.'
+    carried = room.get('board_carried') or 0
+    board = (f'{carried} open board item{"" if carried == 1 else "s"} came along.' if carried
+             else 'The room had no open board items.')
+    return (f'the room it replaces, {room["linked_room_id"][:6]}, keeps its messages and closed board items but is no '
+            f'longer the current room. {brief} {board}')
+
+
 def describe_bridge(room, changed, bridge):
-    where = f'room {room["id"][:6]} {safe_line(room["title"])}'
+    where = named_room(room)
     if not changed:
         return f'The {where} is already bridged. Nothing changed.' if bridge else f'The {where} is not bridged. Nothing changed.'
     if bridge:
-        brief = "The room's brief came along." if room.get('brief_carried') else 'The room had no brief to carry.'
-        carried = room.get('board_carried') or 0
-        board = (f'{carried} open board item{"" if carried == 1 else "s"} came along.' if carried
-                 else 'The room had no open board items.')
-        return (f'Bridged. Wormhole is in a new {where} with the same members; the room it replaces, {room["linked_room_id"][:6]}, '
-                f'keeps its messages and closed board items but is no longer the current room. {brief} {board}')
+        return f'Bridged. Wormhole is in a new {where} with the same members; {carried_along(room)}'
     return f'Unbridged. Wormhole left the {where}.'
+
+
+def describe_add_ship(room, ship):
+    return f'Added {safe_line(ship)} to a new {named_room(room)} with the same members; {carried_along(room)}'
 
 
 def private_json(path, value):
@@ -338,6 +352,11 @@ def main(argv=None):
         bridge.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
         bridge.add_argument('--id', required=True, help='Short id from station-rooms (at least 4 characters)')
         bridge.add_argument('--as', dest='person', required=True, help='The room owner; only they can change the members')
+    add_ship = commands.add_parser('station-add-ship', help="Trusted local: add one of a room owner's own ships to a room they name by short id")
+    add_ship.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    add_ship.add_argument('--id', required=True, help='Short id from station-rooms (at least 4 characters)')
+    add_ship.add_argument('--ship', required=True, help="The ship's username: one of the room owner's own ships, not wormhole")
+    add_ship.add_argument('--as', dest='person', required=True, help='The room owner; only they can change the members')
     backup_cmd = commands.add_parser('station-backup', help='Trusted local: a checked copy of the station database into the rotation')
     backup_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     backup_cmd.add_argument('--backup-dir', type=Path, help='The rotation (default: backups/station beside the data dir)')
@@ -470,6 +489,9 @@ def main(argv=None):
             bridge = args.command == 'station-bridge'
             room, changed = Store(args.data_dir, signing=False).station_bridge(args.person, args.id, bridge)
             print(describe_bridge(room, changed, bridge))
+        elif args.command == 'station-add-ship':
+            room, ship = Store(args.data_dir, signing=False).station_add_ship(args.person, args.id, args.ship)
+            print(describe_add_ship(room, ship))
         elif args.command == 'station-notices':
             import time
             from .alerts import notices_beside
