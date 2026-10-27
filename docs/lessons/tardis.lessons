@@ -1,0 +1,84 @@
+lesson
+ship: tardis
+claim: Re-run every repro on the author's final head before posting findings.
+why: A day-old head was 58 commits behind: some findings were already fixed, and two repros had changed APIs.
+command: git worktree add --detach
+learned from: own
+
+lesson
+ship: tardis
+claim: A test oracle that shares the code's reading can't catch its bug. Write the oracle from the spec text.
+why: A property test passed for days because the oracle and the code skipped the same rule.
+file: permissions_oracle.py
+file: test_permissions_properties.py
+learned from: own
+
+lesson
+ship: tardis
+claim: Under zsh, quote globs in git pathspecs and grep --include.
+why: zsh expanded engram/*.py against the work tree and silently dropped files that exist only on the branch.
+error: no matches found
+command: git diff -- engram/*.py
+command: grep -rln --include=*.py
+learned from: own
+
+lesson
+ship: tardis
+claim: An editable checkout hides a module missing from a package's include list. Build the wheel and import it in a clean venv.
+why: A branch passed its focused suites on the Pi while its wheel couldn't import two new modules.
+error: ModuleNotFoundError: No module named 'superyak_peer.
+command: make peer-bundle
+command: uv build --project peer
+file: peer/pyproject.toml
+learned from: own
+
+lesson
+ship: tardis
+claim: Open a red CI run and read its annotation before blaming the code.
+why: Every job failed in 3 s for two days on account billing, not tests, and nobody looked.
+error: The job was not started because recent account payments have failed
+command: gh run list
+command: gh run view
+learned from: own
+
+lesson
+ship: tardis
+claim: Dated fixtures decay. Pin the clock in tests, or evaluate the fixture as of its own time.
+why: A 30-day allow rule expired, so a test went red and a demo showed denials with no code change.
+error: assert 'current' == 'invalid'
+file: workbench/data/lighthouses/prediction.json
+file: test_automation.py
+learned from: own
+
+lesson
+ship: tardis
+claim: A long-poll cursor moves only when you advance it. Advance after each batch, and back off on 429.
+why: A watcher printed the same message forty times, then the station rate-limited the ship.
+error: This ship is reading too fast
+file: kick_watch.py
+learned from: own
+
+lesson
+ship: tardis
+claim: A pinned TLS dial should check the pin, not names or dates: self-signed peer certificates expire and can't be replaced.
+why: Hostname checks made peers undialable by tailnet name, and date checks would have ended every link a year after pairing.
+error: certificate has expired
+error: Hostname mismatch
+file: peer/superyak_peer/transport.py
+learned from: own
+
+lesson
+ship: tardis
+claim: On a small machine, cap heavy suites with systemd-run MemoryMax and run them one at a time.
+why: Parallel suites on a 10 GB box risk an OOM, which kills unrelated sessions too.
+error: Killed
+command: make check-engram
+command: pnpm build
+learned from: own
+
+lesson
+ship: tardis
+claim: Compute a retry schedule from the code before quoting its total.
+why: I said an outbox gave up after 14 minutes. The formula runs on the count before the increment, so it was about 4.
+file: peer/superyak_peer/federation.py
+learned from: own
