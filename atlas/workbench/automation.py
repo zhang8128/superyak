@@ -86,9 +86,15 @@ def _save(path, value, *, replace=False):
 class ResearchInbox:
     """Own a project's immutable draft journal and derived publication versions."""
 
-    def __init__(self, project):
+    def __init__(self, project, *, clock=None):
+        """`clock`, when given, returns ISO-8601 times and replaces the wall clock for records and policy evaluation:
+        the offline pilot evaluates as of its own publication, so its time-limited rules read as published."""
         self.project = Path(project).resolve(strict=True)
         self.state = self.project / ".atlas"
+        self._clock = clock
+
+    def _time(self):
+        return self._clock() if self._clock is not None else _now()
 
     def _local_file(self, relative):
         if not isinstance(relative, str) or Path(relative).is_absolute():
@@ -309,7 +315,7 @@ class ResearchInbox:
         else:
             temporary = Path(tempfile.mkdtemp(prefix=".generation-", dir=destination.parent))
             try:
-                issued_at = _now()
+                issued_at = self._time()
                 packages = {}
                 for name, config in configurations.items():
                     packages[name] = validate_publication(publish(bundle, config | {"issued_at": issued_at}))
@@ -350,7 +356,7 @@ class ResearchInbox:
         with self._lock():
             path = self.state / "drafts" / f"{identifier}.json"
             entry = {"version": 1, "id": identifier, "session_id": session_id,
-                     "recorded_at": _now(), "request_digest": digest(normalized), "draft": normalized}
+                     "recorded_at": self._time(), "request_digest": digest(normalized), "draft": normalized}
             duplicate = path.exists()
             if duplicate:
                 previous = _read(path)
@@ -405,7 +411,7 @@ class ResearchInbox:
                 research_graph.validate_expected(normalized, snapshot)
                 source_digests, views = research_graph.capture_metadata(normalized, snapshot)
                 entry = {"version": research_graph.GRAPH_VERSION, "id": identifier, "session_id": session_id,
-                         "recorded_at": _now(), "request_digest": research_graph.graph_digest(normalized),
+                         "recorded_at": self._time(), "request_digest": research_graph.graph_digest(normalized),
                          "proposal": normalized, "source_digests": source_digests, "views": views}
                 entry["capture_digest"] = research_graph.graph_digest(entry)
                 if len(_json_bytes(entry)) > research_graph.MAX_GRAPH_DRAFT_BYTES * 2:
@@ -460,7 +466,7 @@ class ResearchInbox:
                     for name in packages
                 }
                 result["bundle"] = str(self.state / "publications" / current["generation"] / "bundle.json")
-                result["policy_evaluated_at"] = _now()
+                result["policy_evaluated_at"] = self._time()
                 for receiver in packages:
                     for offered in packages:
                         if receiver != offered:
