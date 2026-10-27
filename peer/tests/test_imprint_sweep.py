@@ -1,8 +1,12 @@
 """The sweep: ends, windows, retries, restore reconciliation and retention (spec I 12, D32, D42; plan Task 42a)."""
+from contextlib import closing
 import fcntl
 import hashlib
 import json
+import sqlite3
 import uuid
+
+import pytest
 
 from superyak_peer import backups, imprints
 from superyak_peer.__main__ import main as cli
@@ -299,3 +303,47 @@ def test_the_command_runs_the_sweep(tmp_path, capsys):
     st = several(tmp_path, ["requested-11-minutes"])
     cli(["station-imprint-sweep", "--data-dir", str(st.store.data_dir), "--imprints-dir", str(st.root)])
     assert "Imprint sweep" in capsys.readouterr().out
+
+
+def staged_copy(tmp_path, st):
+    aside = tmp_path / "aside"
+    aside.mkdir(mode=0o700)
+    return backups.run_backup(st.store.data_dir, None, output=aside / "restored.sqlite3")
+
+
+def copy_state(copy, name):
+    with closing(sqlite3.connect(copy)) as db:
+        status, = db.execute("SELECT status FROM imprint_requests WHERE id=?", (ids_of(name)[0],)).fetchone()
+        events = [json.loads(r[0])["event"] for r in db.execute(
+            "SELECT record FROM imprint_receipts WHERE request_id=? ORDER BY seq", (ids_of(name)[0],))]
+    return status, events
+
+
+@pytest.mark.parametrize("replaced", [False, True])
+def test_a_restore_does_not_bring_a_deleted_imprint_back(tmp_path, replaced):
+    st = several(tmp_path, ["admitted-live"])
+    copy = staged_copy(tmp_path, st)                     # the backup: the imprint still admitted
+    st.store.station_imprint_delete("andy", ids_of("admitted-live")[1][:8], root=st.root)
+    backups.reconcile(copy, replaced=st.store.db_path if replaced else None)
+    status, events = copy_state(copy, "admitted-live")
+    assert status == "deleted" and events[-1] == "deleted"
+
+
+def test_a_restore_keeps_a_removal_that_was_still_failing(tmp_path, monkeypatch):
+    st = several(tmp_path, ["admitted-live"])
+    copy = staged_copy(tmp_path, st)
+
+    def refuse(path):
+        raise PermissionError("busy")
+    monkeypatch.setattr(imprints, "_unlink", refuse)
+    st.store.station_imprint_delete("andy", ids_of("admitted-live")[1][:8], root=st.root)
+    backups.reconcile(copy, replaced=st.store.db_path)
+    assert copy_state(copy, "admitted-live")[0] == "deleting"
+
+
+def test_a_restore_reports_what_it_held(tmp_path):
+    st = several(tmp_path, ["admitted-live"])
+    copy = staged_copy(tmp_path, st)
+    st.store.station_imprint_delete("andy", ids_of("admitted-live")[1][:8], root=st.root)
+    report = backups.reconcile(copy)
+    assert report["counts"]["imprints kept deleted"] == 1
