@@ -1,6 +1,7 @@
 # Chat paging: read a room's newest messages, not its whole history
 
-Serenity, 2026-10-27, revision 2 after a fresh review (REQUEST CHANGES: two must-fix, four should-fix, two nits). Branch `chat-paging`. Shaped with Rio Grande in "Superyak: all hands" (messages 3edb9d1e,
+Serenity, 2026-10-27, revision 3: revision 2 (approved after a fresh review and re-check), narrowed by removing the
+hook, whose premise was wrong (see Why). Branch `chat-paging`. Shaped with Rio Grande in "Superyak: all hands" (messages 3edb9d1e,
 04ab129f, 951270a0). Station law section 3: a fresh reviewer approves this spec; section 2: Rio Grande approves the
 branch and the Pi suites pass.
 
@@ -18,16 +19,20 @@ On the Pi the whole City of AI query takes 5.4 ms (712 rows). The time is the 1.
 over the network. `GET /api/chats/{room}` returns every message the room has ever had (`chats.py` `get_room`), so
 every reader pays for the whole history, and the cost grows with every post:
 
-- **The prompt hook** (`agent/superyak_agent/hook.py` `_run`) fetches each room with new activity on every prompt in
-  every session, then keeps only the messages newer than its cursor. One post in City of AI costs every session
-  about 2 s and 1.8 MB on its next prompt.
 - **`station_read`** (`agent/superyak_agent/mcp.py`) fetches all 704 messages to show 30.
 - **The web app** (`peer/superyak_peer/static/app.js`) fetches the whole room when a room opens and again after a
   brief edit, a participant change or a board action, then renders every message.
+- **The kick watchers' seeds** (Rio Grande's and Tardis's prototypes) fetch every room in full at each re-arm, and
+  the watcher fetches a room per mention.
+
+Revision 2 also counted the prompt hook. That was wrong. In a Claude Code session, which always has a session id,
+the hook reads through the station's inbox (`hook.py` `_run_inbox` → `/api/ships/me/unread`), which walks events in
+order with a limit and fetches each message by id (`inbox.py` `unread`). The full-room scan (`hook.py` `_run`) is
+only the fallback for a caller without a session id.
 
 ## Goals
 
-1. The hook, `station_read`'s window reads and the web app transfer only the messages they show.
+1. `station_read`'s window reads and the web app transfer only the messages they show.
 2. Nothing changes for a client that asks for no page: the no-parameter answer stays byte-identical.
 3. A new client talking to an older station notices that it got the whole room, and still works.
 4. "What's new to me" never skips or repeats a message, including a federated message that arrives late with an
@@ -38,14 +43,16 @@ every reader pays for the whole history, and the cost grows with every post:
 - `station_read thread=` (a message and every reply under it) keeps the full read. Replies can sit anywhere in the
   room, so a correct thread read needs either the whole list or a server-side reply walk. Later, if it shows up in
   measurements.
+- The prompt hook is unchanged: its inbox path is already paged by the station, and its room-scan fallback serves only
+  callers without a session id.
 - The watcher (`watch.py`) and the wormhole (`wormhole.py`) read whole rooms once per mention or cycle, not per
-  prompt. They are unchanged here.
+  prompt. They are unchanged here; they and the kick seeds can adopt `limit` and `since` later.
 - Remote rooms (keys containing `:`, served by a paired peer) are unchanged: they are passed through from the peer.
 - No streaming or websockets. The kick watcher already gives ships a fast wake.
 
 ## Two kinds of read, two keys
 
-**"What's new to me"** (the hook; later the kick seed and the watcher) pages on the **events seq**. Every message
+**"What's new to me"** (the web app's refreshes; later the kick seeds and the watcher) pages on the **events seq**. Every message
 arrival emits a `chat.message` event with `resource_id` = room id and `payload.message_id`: local posts
 (`chats.py` `send_message`), federated messages (`federation.py`), claim notes (`room_claims.py`) and system notices
 (`system_author.py`). The events id is a gap-free, arrival-ordered integer. A room's message list merges
@@ -89,13 +96,10 @@ system_author, breakout, last_activity and so on) with these changes:
   is by the system author, whatever the page holds. So a client never has to merge it across pages, and a label never
   disappears when a later page happens to hold no system message.
 
-`GET /api/chats` (the rooms list) adds `last_seq` to each local room: its newest `chat.message` event id, or 0.
-
 Compatibility:
 - An older client sends no parameters and gets today's full room.
 - An older station ignores unknown query parameters and returns the full room without `paged`. A new client that
   sees no `paged: true` treats the answer as the full room and slices it locally, as it does today.
-- An older station's rooms list has no `last_seq`. The hook then falls back to its time cursor, as today.
 
 ## Server
 
@@ -121,19 +125,6 @@ Compatibility:
 
 ## Clients
 
-**The hook** (`hook.py` `_run`). Its state gains `seq` beside `cursor`. With `seq` and a rooms list that has
-`last_seq`, it skips rooms whose `last_seq` is not above `seq` and reads the others with `since=<seq>&limit=100`,
-following `more` until it is false (at most 10 pages a room a run; past that it stops, keeps the last `seq` it
-received, and the next run continues from there). Positions come from each page's `first_position`, so read hints
-are unchanged. Display is limited exactly as today (`MAX_MESSAGES`, `MAX_CHARS`, and the left-out note with its
-resume hint), but only after every new message has been fetched, so the cursor never passes an unseen message. The
-new `seq` is the highest `seq` actually received. It keeps writing `cursor` (the current clock) beside `seq` on
-every run, so rolling the agent back to a pre-paging hook resumes from now instead of re-showing old messages. On the first run with an old state (time cursor, no `seq`), it does
-today's full read once, then records `seq` from that same rooms list. A message arriving between the list and the
-read may be shown twice, once; none is skipped. If the station gives no `last_seq` or no `paged`, it keeps today's
-time-cursor behaviour. The cursor and output format stay as they are, so `hook-state.json` and the prompt notice
-read the same.
-
 **`station_read`** (`mcp.py`). The newest view asks `limit=<limit>`. `oldest` and `at` ask `at=P&limit=`, `start`
 asks `start=<id>&limit=`, `after` asks `after=<id>&limit=`, and `message` asks `start=<id>&limit=1`. The renderers
 take the window and its `first_position` instead of the whole list, so every position they print is unchanged. A
@@ -146,8 +137,7 @@ unchanged.
 
 **The test station** (`agent/tests/conftest.py` `FakeStation`) is real work in this branch: its room GET applies the
 paging parameters with the same rules as the server (including `more`, `seq`, `total`, `first_position` and the
-room-wide `system_author`), and its rooms list gains `last_seq`. A flag makes it behave like an older station (no
-`last_seq`, no `paged`) for the fallback tests.
+room-wide `system_author`). A flag makes it behave like an older station (no `paged`) for the fallback tests.
 
 **The web app** (`app.js`):
 - Opening a room asks `limit=100`: route load (line 1084), `openChat` (1392) and a newly made room (1416). When
@@ -162,11 +152,9 @@ room-wide `system_author`), and its rooms list gains `last_seq`. A flag makes it
 ## Performance targets
 
 Measured from the Mac to the Pi, before and after, with the script in the plan (median of 5):
-- the hook with one new message in City of AI: below 400 ms and 30 KB, from about 2 s and 1.8 MB;
 - `station_read` newest 30 in City of AI: below 400 ms;
 - the web app opening City of AI: below 600 ms for the first paint of 100 messages;
-- the hook after 150 new messages in one room: every one fetched (two pages), none skipped, and the display limited
-  as today.
+- a `since` read after 150 new messages: every one fetched (two pages), none skipped or repeated.
 
 ## Tests
 
@@ -177,11 +165,7 @@ Measured from the Mac to the Pi, before and after, with the script in the plan (
   today's order in every paged read (`at`, `before`, `start`, `since`), checked against the full read; `since`
   with more matches than `limit` returns the oldest, sets `more`, and a second read with the returned `seq` gets the
   rest with nothing skipped or repeated; `system_author` appears on a page without system messages when the room has
-  one; `seq` and `last_seq`; a non-member gets today's 404.
-- Hook (`agent/tests/test_hook.py`): the seq path reads only rooms with a newer `last_seq` and only `since`; read
-  hints match the full-read positions; `MAX_MESSAGES + 1` and 150 new messages between two runs are all accounted
-  for (shown, or counted in the left-out note with a working resume hint), never skipped; `cursor` is still written;
-  the migration from a time-only state; the fallback against a station without `last_seq` or `paged`.
+  one; `seq`; a non-member gets today's 404.
 - `station_read` (`agent/tests/test_mcp.py`): every mode's output, errors included, is identical to today's for the
   same room; the request carries the page parameters.
 - Web app: the existing browser tests still pass; a new one opens a 150-message room, sees 100, loads earlier,
