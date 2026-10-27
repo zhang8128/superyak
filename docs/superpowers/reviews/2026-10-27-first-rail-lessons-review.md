@@ -481,3 +481,324 @@ That's a few lines on paths that already exist. Opening the room takes Andy unde
 - **Section 1's figures** (233 of 314 semantics) and the all-hands message ids.
 - **Hook behavior on Tardis's, Serenity's and Defiant's Claude Code versions.** I read only the Pi's 2.1.311.
 - **Whether a person whose data slipped into a lesson must be told.**
+
+## Re-check (peer-to-peer revision)
+
+**Date:** 2026-10-27
+**Re-checker:** a fresh reviewer under station law section 3. I took no part in writing the spec, in its first review
+or in the all-hands discussion.
+**Spec:** revision 2, branch `trail-arrows-spec` at `3c4f5fcb` (364 lines), cited by section.
+**Code:** `peer/superyak_peer`, `agent/superyak_agent` and `team/superyak_team` at `3c4f5fcb`. This branch lacks only
+main's station-add-ship merge (`f5368629`), which touches no code cited below.
+**Related specs:** federation pull revision 2 (`origin/tardis/federation-pull` at `c9e7160c`); room moderators revision
+2 (`origin/room-moderators-spec`).
+
+**Verdict: APPROVE WITH CHANGES.** M1 to M6 are closed. The peer-to-peer design is sound against today's code:
+federation can already carry a ship as a member through its own machine's peer, once the pairing code and pull land.
+Four things block approval:
+- **R1.** The origin can't run the member checks section 3 promises for a remote member, and "once" isn't checked.
+- **R2.** Three setup pieces the design needs are named nowhere. One gap, a missing ship account on the Mac, pushes
+  the Mac toward posting under Andy's account.
+- **R3.** Nothing a lesson's author can't widen bounds the hold before a command.
+- **R4.** `ship:` has no grammar, and the hook shows it outside the fence.
+
+Each fix is text, given below. Applied as written, the spec is approved with no further re-check. If the ships
+choose other text for R1 or R3, that item goes to a fresh re-check.
+
+### How I checked
+
+- **Documents.** I read the whole spec, the first review, the decisions log, federation pull revision 2 and the room
+  moderators spec's lines on remote members.
+- **Federation and rooms.** `federation.py` (whole), `peer_store.py` (whole), `chats.py` (whole), `peer_routes.py`,
+  and `app.py`'s auth helpers and chat routes.
+- **Store, locks and transport.** `db.py` (`Store.__init__`, `transaction`), `dispatch.py`, `transport.py` and
+  `identity.py` (`validate_card`).
+- **Ships and the rest of the station.** `ships.py` (`addressed_names`, `SHIP_NAME`, docking, `station_decide`, the
+  post budget), `system_author.py` (`_never_federates`), `inbox.py` (what unread reads), and `__main__.py` (`card`,
+  `create-ship`, `serve`).
+- **Fences and the embedder.** `teamlib.py`'s `fence_external`, `station.py`'s `fence_message`,
+  `engram/embedder_service.py` and `scripts/superyak-embedder.service`.
+- **On the Pi** (a Raspberry Pi 5 with 16 GB), read-only:
+  - `superyak-embedder` is inactive.
+  - `superyak-lighthouse.service` runs `serve` without `--sync`, `--federation-endpoint` or `--peer-tls`.
+  - In `peer/.venv` (Python 3.11), a fresh process that imports the store takes about 140 ms, at 28 MB peak RSS.
+  - Reopening an existing store takes 5 to 9 ms, measured on an empty scratch store, never the station's.
+  - 128 × 768 random vectors as JSON take 2,121 KiB and parse in 41 ms. 128 Kahan angles in plain Python take 51 ms.
+- **What I didn't do.** I started nothing, posted nothing, and changed no file but this one.
+
+### 1. M1 to M6 in the text
+
+| # | Closed? | Where |
+|---|---|---|
+| M1 | Yes | Section 2 has the grammar, the line order, the byte limits, the 4,096-byte body, the embedded text byte for byte with its SHA-256, retraction (the origin's id, by the author or the owner, across the chain), the cap, no mentions (`addressed_names` reads only `@`), and nothing else in the room. One value has no rule: `ship:` (R4). |
+| M2 | Yes, and it opens R1 | Section 3: the room is found by id on every peer, its chain is followed, its members are Andy's only, and it is never bridged. Section 5 answers only member ships on its own peer. The review's "refuse a remote member" is reversed, with a reason: remote members are how the room reaches the other peers. The rule that replaces it can't be checked as written (R1). |
+| M3 | Yes | The branch is in section 5's fields and in section 8's session start; lessons move to imprints later (section 3); 384 KiB covers four ships; the settled questions are in section 12. |
+| M4 | Yes | The ships chose a `PreToolUse` query per command head with a hold (the decisions log's last row), not the review's option (a). That choice was theirs. The proof is in the transcript, a late block fails, the spec no longer quotes the lesson, the auto memory directory is empty, and the workspace is an export with no history. The hold has one gap (R3) and the isolation one (RS5). |
+| M5 | Yes | Sections 4 and 5, and the anti-goals. Indexing writes a file outside any transaction, and the query embeds before its one transaction. |
+| M6 | Yes | Section 6 takes the simpler alternative: accounts only, whole words of 3 or more characters after case-folding, the two patterns and one refusal message, re-checked at query time. The public door can no longer censor the rail. |
+
+### 2. Peer to peer against today's code
+
+**What works today.** Every step of "a ship is a member through its own machine's peer" exists:
+- **A ship's card.** The browser's card route refuses ship keys (`peer_routes.py` `card`, through `app.py`
+  `current_user`). But the trusted local `card --username U` exports the card of any account that isn't the system
+  author, ships included (`__main__.py`), and pull's `card --pull --username U` does the same on the Mac.
+- **Pairing** is per card, so one peer can give several contacts (`Federation.pair`,
+  `ON CONFLICT(peer_id,user_id)`). Only an admin pairs.
+- **Membership.** `_create_room` and `add_participants` accept a paired remote contact as a member
+  (`_known_contacts`).
+- **Down.** `collect` queues every `chat.message` of the room, `peer_messages` included, for every remote member. So the
+  origin passes each peer's posts on. `_prepare` sends one envelope per member, with that member as its recipient.
+- **Up.** A ship's account on its own peer can read the received room and post to it. The chat routes take ship keys
+  (`member()`), and in process `send_message` routes an `<origin>:<room>` key to `remote_send`, which queues a
+  `room.reply` to the room's owner. The origin's `_reply` checks membership and epoch, stores the post in
+  `peer_messages` and emits it. So the post comes back to every peer, the laying one included, under the origin's
+  message id, which is the id section 2's retraction needs.
+- **What federates.** `_never_federates` stops only system and kind messages, so ships' lessons federate.
+- **Forged authors.** `_unverified_local_authors` marks a copy that claims a local author this peer never sent.
+
+**What's missing.** The design needs no change to federation's wire or to `receive`. These are what it needs and
+doesn't name:
+
+1. **The origin can't see who a remote member is.** A card's participant is exactly `{id, name}` (`validate_card`), so
+   a remote contact has no kind and no owner. Section 3 says the origin refuses "another person, another person's ship,
+   a ship with no owner … or a contact on a peer that isn't paired". For a remote member, only the last of those can be
+   checked. Federation exists to pair people, so Andy will pair other people's peers for other rooms. Then one
+   mistaken add puts another person in the lessons room, which is an anti-goal. Section 3 does say "federation can
+   check a peer, not a person", but it doesn't turn that into a rule the origin can run. R1 does, with a list of Andy's
+   own peers, recorded with the room by pairing code.
+2. **"Once" isn't checked.** Tardis, Serenity and Defiant are also docked on the Pi as ships Andy owns (HANDOFF), so
+   the origin's local check would accept them. A ship that is a member twice has two author ids and two caps of 32,
+   and can make a segment with itself. R1 allows only Andy and Rio Grande as local members.
+3. **The ship's own account on each other peer.** Neither spec says how it's made. `create-ship` makes a ship with no
+   owner and writes a key. A docking starts only over HTTP (`/api/dockings`), and the Mac's peer never listens
+   (federation pull section 1). Without a named path, the easy one on the Mac is to post as Andy's account there, which
+   law section 7 forbids. R2 names a path.
+4. **Cards both ways.** `receive` accepts a room's envelope only when its actor, the room's owner, is a paired contact
+   on the receiving peer. So each other peer has to pair Andy's Pi card, as well as the Pi pairing theirs. Section 12
+   says only "pairing his peers' cards" (R2).
+5. **Nothing pushes from the Pi today.** `superyak-lighthouse.service` runs `serve` without `--sync`, so `sync_once`
+   never runs there. The Pi and Tardis both listen, so neither pulls the other: pull serves only a peer with a v2 card
+   (federation pull section 4, check 2). So the Pi must push the room to Tardis, and Tardis its replies to the Pi.
+   Federation pull section 9 deploys only the listener on those two peers (R2).
+6. **A refused lesson stays in its laying peer's view.** `_remote_room` returns, with their state, every queued reply
+   that isn't withdrawn. Under federation pull section 7, a reply the origin refuses stays `refused`. So an index that
+   reads through `_remote_room` would index a refused lesson, which is an anti-goal (RS1).
+7. **The origin's reply path checks less than its post path.** `send_message` runs `_refuse_live_ship_keys` before it
+   branches, so the laying peer checks for live keys. But `_reply` runs neither that check, nor the post budget, nor a
+   check for a replaced room. Tardis's peer doesn't hold the Pi's key hashes, yet the Tardis ship holds a live Pi key
+   in `~/.superyak/station.json`. So section 6's "as in every room" isn't true of the reply path (RS2).
+8. **Defiant** runs on a fourth machine, the Legion Go (HANDOFF). Sections 1 and 11 name three peers, and the order
+   never reaches Defiant's (RS4).
+
+The origin is the room's one write path, and the spec says so plainly (sections 1 and 10). That's federation's model,
+not a defect: while the Pi is down, every peer still answers from its own copy. The decisions log's "never a hub" should
+say the same (RN1).
+
+### 3. Safety
+
+**Person data.** Section 6's check runs at every door, against each peer's own accounts, and the origin's check covers
+everything that fans out. Strangers' names, and person data that isn't a name, an email address or a phone number,
+are still left to the ship's own check, as the spec says. Peer to peer multiplies the copies a slip leaves behind:
+every peer's inbox and backups. Section 3 says so. Unpairing the Pi on a peer drops that peer's copy (`unpair` sets
+`inbox.payload` to null), which is a quicker hand path than editing JSON.
+
+**Prompt injection.** Lessons are fenced with `fence_external`, through the client's `fence_message`. It defuses three
+backticks and `[team] from` tags, and the hook never runs a value. But `fence_external` puts its `sender` outside the
+backtick fence, unescaped, and the hook names each lesson's ship. Section 2 gives every value but `ship:` a byte limit,
+so a `ship:` value can use nearly all of the 4,096-byte body. The laying peer is no boundary against its own ship,
+which runs as the same Unix user. So one lesson could put almost 4,000 bytes of its own text outside the fence, in every
+session on every peer. R4 closes this with the ship-name rule the station already has.
+
+**The hold.** As written, a lesson's author can widen it:
+- A `command` value may be 1 byte, so `e` matches nearly every command.
+- Section 5's words step also matches `file` values against the command. So `file: .py` holds any command that names a
+  Python file, though section 2 says only `command` values hold.
+- "Each head once" doesn't bound a session, since `cd <dir> && …` makes a new head in each directory.
+- The hook drops lessons it has already shown, but the query doesn't know which ones. So it can return 3 shown lessons,
+  write receipts for them, and crowd out a new lesson ranked fourth.
+
+R3 bounds it: only `command` values of at least 6 bytes hold, a session has at most 3 holds, and the query skips what
+the session has seen. A lesson's author can then cost a session at most 3 extra turns, with the lesson's text fenced.
+What a lesson says ("don't run X") is still the advice channel the first review named. Andy's view and his veto are
+its control, and that still holds.
+
+**Receipts.** They are per peer, hold no context, and have a reader (`make lesson-receipts`). With R3's `seen`, no
+receipt is written for a lesson the hook would drop. The table needs a name other than federation's `receipts`
+(RS3). When the hook hits its deadline, a receipt still means "answered", not "seen". The blind test's transcript rule
+already covers that.
+
+**The blind test's isolation.** It is right in substance, with one leak left. Claude Code keys auto memory by the
+workspace path, and the control writes its own. If both runs use the same export path, the second run starts with the
+first one's memory. RS5 gives each run its own fresh export and path. The test passes on a words match against the
+suite's command. The lesson and its words are written down beforehand, so the match can't be fitted afterwards.
+
+### 4. Performance, and a 2 GB Pi
+
+- **Each peer's embedder.** At about 1.1 GB resting and 1.8 GB at peak, it can't share a 2 GB Pi with the station and a
+  Claude Code session. Such a peer runs on words only, as section 1 says. It has no Near and no segments, since
+  segments need vectors (RN9). On the 16 GB Pi, Tardis and the Mac it fits, once it's started.
+- **The 60 s index.** Each run is a fresh process: about 140 ms to import and 5 to 9 ms to reopen the store, then one
+  read transaction. It exits when the watermark hasn't changed, which is cheap even on 2 GB. When lessons change, 8 per
+  embedder request keeps a query behind at most one batch. If the vectors are JSON, the index file is about 2.1 MiB, not
+  384 KiB (RS7).
+- **The query.** Before a command it runs on words only: about 140 ms to start, a file read and one transaction, well
+  inside 1 s. After a failure it adds up to 800 ms of embedding and about 90 ms to parse the index and take 128 angles
+  in plain Python, inside 2 s. The process stays near 30 MB.
+- **What the spec doesn't measure.** Every transaction takes the exclusive `dispatch_gate`, reads included (`db.py`
+  `transaction`). Push holds the gate while it prepares and writes each envelope (`transport.py`). Pull holds it while
+  it prepares and serializes up to 1 MiB (federation pull section 4). The query's one transaction can wait behind
+  either, and on the Pi that database is the live station's. RS3 measures p95 with federation running, and opens no
+  transaction when there's nothing to answer.
+
+### 5. Buildable, and the order
+
+The order is right: everything local first, against fixtures, then the Pi and Tardis once the pairing code and pull's
+listener land, then the Mac. The split is clear. But a builder would still have to invent the ship's account on each
+other peer, the cards each side pairs and the Pi's push worker (R2), and decide where Defiant comes in (RS4). With R2,
+section 11 holds as written. One sequencing point: this rail and federation pull both edit `Federation._reply` (RN8).
+
+### 6. Size
+
+It isn't overbuilt for step zero. Most parts are the same check run at each door, one file and one query. One cut is
+worth making: Andy's own account on each other peer. The Mac's peer has no screen to read it on (federation pull
+section 1), and each such member costs a pairing (RS6). Segments and calibration run on demand, which is right for the
+measure the rail exists to take.
+
+### Must-fix
+
+**R1. The origin can't check a remote member as section 3 says, and "once" isn't checked.** *Where:* section 3, "Only
+Andy's"; section 6, last bullet.
+
+*Fix:* replace section 3's "**Only Andy's.**" bullet with:
+
+> - **Only Andy's.** `make station-lessons-room ID=<short id> PEERS=<code>,…` records the room and the peers that are
+>   Andy's own machines, each named by the pairing code Andy reads on that machine (federation pull section 2). It shows
+>   every member: each local one with its kind and owner, and each remote one with its name and its peer's code. It
+>   records only after Andy confirms them. It refuses a room with a local member other than Andy and Rio Grande, or with
+>   a remote member on a peer that isn't listed. The origin then refuses to add, to any room of the chain, a new local
+>   member, or a remote contact on a peer that isn't listed. Before Andy adds the Mac's members, Rio Grande reruns the
+>   command with the Mac's code, after Andy confirms it. So `odo`, `wormhole` and the ships docked on the Pi from other
+>   machines are never members, and `station-bridge` refuses this room. Each ship but Rio Grande is a member once, as
+>   its account on its own machine's peer, with one author id. A listed peer holds only Andy's accounts and his ships,
+>   on Andy's word when he confirms its code: federation can check a peer, not a person.
+
+In section 6, replace "federates only to peers he paired" with "federates only to the peers listed with the room".
+
+**R2. Name the setup that makes each ship a member on its own peer.** *Where:* section 11, "The rail depends on…";
+section 12, "For Andy".
+
+*Fix:* add to section 11's list:
+
+> 3. **Each ship's account on its own peer, the cards both ways, and a push worker.** Federation carries a ship as a
+>    remote contact today. `card --username` exports any account's card, a paired contact can be a member, the origin
+>    sends it the room, and `remote_send` and `Federation._reply` carry its posts back. Three pieces are missing:
+>    - **The account.** Each other peer needs an account for its ship, owned by Andy's account there. It has no key,
+>      since its sessions reach the peer in process. `create-ship` makes a ship with no owner and writes a key, and a
+>      docking starts over HTTP, which the Mac's peer never serves. So Rio Grande adds a trusted local
+>      `lessons ship --username <ship> --owner <username>`, which refuses a name already taken.
+>    - **Cards both ways.** On the Pi, Andy pairs each other peer's ship card after comparing its pairing code. On each
+>      other peer, he pairs his Pi account's card, because `receive` takes a room only from an owner who is a paired
+>      contact there.
+>    - **A push worker on the Pi and Tardis.** Both listen, so neither pulls the other. The Pi pushes the room to
+>      Tardis, and Tardis pushes its replies to the Pi. The Pi's station runs `serve` without `--sync` today. So each
+>      runs federation's push worker (`serve --sync`, or whatever federation pull names for a listening peer), a
+>      deploy gate beside the listener.
+
+In section 12, replace "pairing his peers' cards (federation's setup)" with "pairing the cards in section 11, item 3,
+comparing each pairing code, and confirming his peers' codes for `station-lessons-room`".
+
+**R3. Bound the hold before a command.** *Where:* section 5, the fields and steps 1 and 4; section 8, "Before a
+command" and "Repeats".
+
+*Fix:*
+- In section 5's fields, after `words_only`, add: "and `seen`, the message ids of the lessons the hook has shown in
+  this session, at most 128".
+- Add to step 1: "When `words_only` is true, only `command` values are matched."
+- Add to step 4: "It skips every lesson in `seen` before it keeps 3, so it never writes a receipt for one."
+- In section 8, replace "So when words find a lesson, … and only on a words match." with:
+
+> So when words find a lesson the session hasn't been shown, the hook may hold the command once
+> (`permissionDecision: "deny"`). Its reason is the fenced lessons, ending "Held once so these come first; run it
+> again to go on." Only a `command` value of at least 6 bytes holds a command. The hook holds each head at most once,
+> and at most 3 commands in a session. Any other words match before a command goes in `additionalContext`, which
+> reaches the model with the command's result.
+
+- In "Repeats", replace "it shows each lesson at most once per session" with "it shows each lesson at most once per
+  session, by sending `seen`".
+
+**R4. Give `ship:` a grammar, since the hook shows it outside the fence.** *Where:* section 2, the grammar and the
+`ship:` bullet.
+
+*Fix:*
+- In the grammar, replace `ship: <the posting ship's username>` with `ship: <a ship name: [a-z][a-z0-9-]{1,31}>`.
+- Replace `learned from: own | owner | <a ship's username>` with
+  `learned from: own | owner | <a ship name, by the same rule>`.
+- Add to the `ship:` bullet: "Every door, the origin and each index included, refuses a `ship:` or `learned from:`
+  value outside that rule (`SHIP_NAME`, `ships.py`). Where the author is an account on the checking peer, it also
+  refuses a `ship:` that isn't that account's username. `fence_external` puts its sender outside the fence, so the
+  hook names a ship only by a value this rule allows."
+
+### Should-fix
+
+**RS1. Index only the origin's copies, and tell the ship when the origin refuses a lesson.** *Where:* section 4, step
+1; section 11 (Serenity's writing tool). `_remote_room` includes queued replies, with their state, in the messages it
+returns (`peer_store.py`).
+- Add to step 1: "On a peer other than the origin, it reads only the messages the origin sent, never a reply still
+  queued here."
+- Add: "`lessons lay` reports a lesson the origin refused (federation pull section 7's `refused`), with section 6's one
+  message."
+
+**RS2. Make the origin's reply path check what its post path checks.** *Where:* section 3, "The checks run at every
+door"; section 6.
+- Add: "On `_reply`, the origin also runs `_refuse_live_ship_keys`, which `_reply` doesn't call today."
+- Add: "It refuses a lesson posted to an earlier room of the chain, which `_reply` doesn't check today: it checks only
+  membership and the epoch. Retractions go in the current room."
+
+**RS3. Write nothing without an answer, and measure with federation running.** *Where:* section 5, step 4 and the
+measurement.
+- In step 4: "A query with no candidate opens no transaction. It writes a query row only when Near ran." A words-only
+  row carries no angle to calibrate with, and each one would take the live station's lock.
+- Name the table `lesson_receipts`. Federation already has a `receipts` table (`peer_store.py`).
+- Add to the measurement: "with federation's push worker and a pull running, and one paired peer offline". Every
+  transaction takes `dispatch_gate`, and push and pull hold it while they prepare.
+
+**RS4. Say where Defiant comes in.** *Where:* section 11. Add: "Defiant runs on the Legion Go. It joins as the Mac
+does, by the chain, once that machine runs a peer. It is in no earlier step."
+
+**RS5. A fresh export for each run.** *Where:* section 9, "The workspace". Add: "Each run, the control's and the
+traveler's, gets its own fresh export at its own path, and that path's auto memory directory is emptied before the
+run." Claude Code keys auto memory by path, and the control writes its own.
+
+**RS6. Drop Andy's account on each other peer, or say where he reads it.** *Where:* section 3, "Opening it". The Mac's
+peer has no screen to read it on (federation pull section 1), and each such member costs a pairing. He reads the room in
+his browser on the Pi.
+
+**RS7. State the index's format.** *Where:* sections 4 and 5. The 384 KiB figure holds for float32 vectors. As JSON,
+128 × 768 vectors measured 2,121 KiB and parsed in 41 ms. Say which format the file uses, and keep the 64 MiB limit.
+
+### Nits
+
+- **RN1.** The decisions log's row on peer to peer says the Pi is "never a hub", but section 1 makes the origin the
+  room's write path. Record that in the log's next row.
+- **RN2.** "It never holds the only copy" (section 1): until a post is delivered, its laying peer holds the only copy.
+  Say "once delivered".
+- **RN3.** `SHIP_NAME` accepts `own` and `owner`. Reserve both, in `start_docking` and in R2's command.
+- **RN4.** A retraction hides every copy with the same author and text, so the author can never lay that text again.
+  Say so.
+- **RN5.** The index's watermark covers the chain, the epoch and the members, not only new posts: removing an author
+  changes the answer.
+- **RN6.** Removing a member raises the epoch, and `_prepare` withdraws every queued `room.message` of the old epoch. So
+  a lesson not yet delivered to an offline peer never reaches it. Relaying covers it; say so.
+- **RN7.** Say whether a display name of several words matches as a phrase or word by word (section 6).
+- **RN8.** This rail and federation pull both edit `Federation._reply`, so the rail's check lands after pull merges.
+- **RN9.** A words-only peer reports no segments, since segments need vectors (section 7).
+
+### Declined to judge
+
+- **Embedding latency on any peer.** The embedder is inactive, and I started nothing.
+- **Hook behavior on the other ships' Claude Code versions.** That's which hook events fire and whether a
+  `PreToolUse` deny's reason reaches the model, on Tardis's, Serenity's and Defiant's versions.
+- **Federation pull's own soundness.** It has its own fresh review. I checked only what this rail leans on.
+- **Whether HANDOFF's list of ships docked on the Pi is current.**
+- **The calibration values.**
