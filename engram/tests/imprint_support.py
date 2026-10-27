@@ -188,6 +188,56 @@ def vec(store: Storage, layer: str, id: str, seed: int) -> None:
     store.conn.commit()
 
 
+def sem(store: Storage, id: str, *, sources=(), lane: str = "work", at: str = "2026-01-01T00:00:00+00:00",
+        contradicted_by: str | None = None, content: str | None = None) -> str:
+    """Insert a semantic with ``created_at`` as given and one ``semantic_sources`` row per source; returns its id.
+
+    Foreign keys are off for the insert, so ``contradicted_by`` may name a semantic inserted later."""
+    store.conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        store.conn.execute(
+            "INSERT INTO semantics (id, content, kind, confidence, created_at, contradicted_by, lane) "
+            "VALUES (?, ?, 'fact', 0.5, ?, ?, ?)",
+            (id, content if content is not None else f"semantic {id}", at, contradicted_by, lane))
+        store.conn.executemany("INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)",
+                               [(id, e) for e in sources])
+        store.conn.commit()
+    finally:
+        store.conn.execute("PRAGMA foreign_keys=ON")
+    return id
+
+
+def prune(store: Storage, *ids: str) -> None:
+    """Prune episodes the way the store does; their ``semantic_sources`` rows cascade away (I 5.2)."""
+    store.prune_episode_ids(list(ids))
+
+
+def resonance(store: Storage, id: str, a: str, b: str, *, layer_a: str = "episode", layer_b: str = "episode",
+              at: str = "2026-10-01T00:00:00+00:00") -> str:
+    store.conn.execute(
+        "INSERT INTO resonances (id, memory_a, layer_a, memory_b, layer_b, weight, created_at, last_seen) "
+        "VALUES (?, ?, ?, ?, ?, 0.5, ?, ?)", (id, a, layer_a, b, layer_b, at, at))
+    store.conn.commit()
+    return id
+
+
+def peer_edge(store: Storage, peer_id: str, parent_id: str) -> None:
+    store.conn.execute("INSERT INTO semantic_peers (peer_id, parent_id, created_at) VALUES (?, ?, ?)",
+                       (peer_id, parent_id, "2026-10-01T00:00:00+00:00"))
+    store.conn.commit()
+
+
+def subdivision(store: Storage, id: str, parent_id: str, peer_ids) -> str:
+    import json
+
+    store.conn.execute(
+        "INSERT INTO subdivision_events (id, parent_id, peer_ids, energy_before, energy_after, dl_cost, site, "
+        "created_at) VALUES (?, ?, ?, 1.0, 0.5, 0.1, 'sleep', ?)",
+        (id, parent_id, json.dumps(list(peer_ids)), "2026-10-01T00:00:00+00:00"))
+    store.conn.commit()
+    return id
+
+
 MEMORY_PREFIX = "private memory text number"
 
 

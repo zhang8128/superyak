@@ -625,10 +625,154 @@ def _admits(ledger, ctx: SourceContext, layer: str, id: str, lane: str, counts: 
     return True
 
 
+# ---- Down-closure, the memories that ship and the links induced on them (I 5.2, 6.2, 6.4) -------------------
+
+MAX_MEMORIES = 100_000
+BATCH = 500                     # ids per query when rows are read back for the memories that ship
+
+
+class Admissible(NamedTuple):
+    """Ê and Ŝ in scratch tables. Ê need not ship, so it isn't capped (R26). ``counts`` holds base()'s counts
+    and ``semantic_source_stays`` and ``semantic_unsourced``."""
+    episodes: IdSet
+    semantics: IdSet
+    counts: Counter
+
+
+def admissible(conn: sqlite3.Connection, sel: Selection, ctx: SourceContext) -> Admissible:
+    """Ê = base episodes; Ŝ = base semantics whose recorded sources all lie in Ê, and that have one (or
+    ``sel.unsourced``). Layers choose what ships, never what is admissible, so both are always computed.
+
+    Each semantic's sources are read from ``semantic_sources`` as it is now (pruning cascaded, I 5.2) and each
+    is looked up in Ê's scratch table by SQL; no source list is held in memory.
+    """
+    counts: Counter = Counter()
+    episodes = IdSet(ctx.scratch)
+    for id in base(conn, "episode", sel, ctx, counts):
+        episodes.add(id)
+    semantics = IdSet(ctx.scratch)
+    for id in base(conn, "semantic", sel, ctx, counts):
+        sources = [r[0] for r in conn.execute(
+            "SELECT episode_id FROM semantic_sources WHERE semantic_id = ?", (id,))]
+        if not sources:
+            if sel.unsourced:
+                semantics.add(id)
+            else:
+                counts["semantic_unsourced"] += 1
+        elif all(e in episodes for e in sources):
+            semantics.add(id)
+        else:
+            counts["semantic_source_stays"] += 1
+    return Admissible(episodes, semantics, counts)
+
+
 class Shipped(NamedTuple):
-    """The memories that ship: episode ids and semantic ids (Task 9 adds ``members`` and ``refs``)."""
+    """The memories that ship (Λ of the admissible ones): episode ids and semantic ids, in base order."""
     episodes: tuple[str, ...]
     semantics: tuple[str, ...]
+
+    def members(self) -> frozenset[tuple[str, str]]:
+        """``(layer, id)`` of every memory that ships."""
+        return frozenset([("episode", i) for i in self.episodes] + [("semantic", i) for i in self.semantics])
+
+    def refs(self, source_id: str) -> Iterator[str]:
+        """The ``mem:`` ref of every memory that ships, sorted."""
+        yield from sorted(f"mem:{source_id}/{layer}/{i}" for layer, i in self.members())
+
+
+def shipped(adm: Admissible, sel: Selection) -> Shipped:
+    """Λ: ``sel.layers`` chooses what ships from what is admissible. It counts first and refuses none or more
+    than ``MAX_MEMORIES`` before it builds the tuples (R26)."""
+    n = (len(adm.episodes) if "episode" in sel.layers else 0) + (len(adm.semantics) if "semantic" in sel.layers else 0)
+    if n == 0:
+        raise PlanRefused("This selection holds no memories; nothing was planned.")
+    if n > MAX_MEMORIES:
+        raise PlanRefused("This selection holds more than 100,000 memories, the most one imprint can hold. "
+                          "Narrow it.")
+    return Shipped(tuple(adm.episodes) if "episode" in sel.layers else (),
+                   tuple(adm.semantics) if "semantic" in sel.layers else ())
+
+
+def _batches(ids: Sequence[str]) -> Iterator[Sequence[str]]:
+    for i in range(0, len(ids), BATCH):
+        yield ids[i:i + BATCH]
+
+
+def semantic_rows(conn: sqlite3.Connection, sh: Shipped) -> Iterator[dict]:
+    """The shipped semantics as stored, in memory order; ``contradicted_by`` is null when it names a semantic
+    outside S."""
+    stays = frozenset(sh.semantics)
+    for batch in _batches(sh.semantics):
+        marks = ", ".join("?" * len(batch))
+        cur = conn.cursor()
+        cur.row_factory = sqlite3.Row
+        found = {r["id"]: dict(r) for r in cur.execute(f"SELECT * FROM semantics WHERE id IN ({marks})", batch)}
+        for id in batch:
+            if id in found:
+                row = found[id]
+                if row.get("contradicted_by") not in stays:
+                    row["contradicted_by"] = None
+                yield row
+
+
+def vector_rows(conn: sqlite3.Connection, layer: str, ids: Sequence[str]) -> Iterator[dict]:
+    """``{"id", "embedding"}`` (bytes as stored) for ``ids`` in the order given; one batch of ids per query."""
+    table = f"{_TABLES[layer][:-1]}_vectors" if layer in _TABLES else None
+    if table is None:
+        raise ValueError(f"unknown layer {layer!r}")
+    for batch in _batches(ids):
+        marks = ", ".join("?" * len(batch))
+        found = {r[0]: r[1] for r in conn.execute(f"SELECT id, embedding FROM {table} WHERE id IN ({marks})", batch)}
+        for id in batch:
+            if id in found:
+                yield {"id": id, "embedding": bytes(found[id])}
+
+
+def link_rows(conn: sqlite3.Connection, sel: Selection, sh: Shipped) -> dict[str, Iterator[dict]]:
+    """The rows of each link table induced on the memories that ship (I 6.2). Each is a lazy cursor over the
+    table in key order; a row with an endpoint outside M is dropped."""
+    members = sh.members()
+    episodes = frozenset(sh.episodes)
+    semantics = frozenset(sh.semantics)
+
+    def rows(sql: str) -> Iterator[sqlite3.Row]:
+        cur = conn.cursor()
+        cur.row_factory = sqlite3.Row
+        yield from cur.execute(sql)
+
+    def sources() -> Iterator[dict]:
+        for r in rows("SELECT * FROM semantic_sources ORDER BY semantic_id, episode_id"):
+            if r["semantic_id"] in semantics and r["episode_id"] in episodes:
+                yield dict(r)
+
+    def resonances() -> Iterator[dict]:
+        t0 = sel.since
+        for r in rows("SELECT * FROM resonances ORDER BY id"):
+            if (r["layer_a"], r["memory_a"]) not in members or (r["layer_b"], r["memory_b"]) not in members:
+                continue
+            at = parse_instant(r["created_at"])
+            if at is None or (t0 is not None and at.timestamp() < t0) or at.timestamp() >= sel.until:
+                continue
+            yield dict(r)
+
+    def peers() -> Iterator[dict]:
+        for r in rows("SELECT * FROM semantic_peers ORDER BY peer_id, parent_id"):
+            if r["peer_id"] in semantics and r["parent_id"] in semantics:
+                yield dict(r)
+
+    def subdivisions() -> Iterator[dict]:
+        for r in rows("SELECT * FROM subdivision_events ORDER BY id"):
+            if r["parent_id"] not in semantics:
+                continue
+            try:
+                peer_ids = json.loads(r["peer_ids"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(peer_ids, list) and all(isinstance(p, str) and p in semantics for p in peer_ids):
+                yield dict(r)
+
+    return {"semantic_sources": sources(), "resonances": resonances(), "semantic_peers": peers(),
+            "subdivision_events": subdivisions()}
 
 
 def cosubject_rows(sh: Shipped, ctx: SourceContext) -> Iterator[tuple[str, str, str]]:
