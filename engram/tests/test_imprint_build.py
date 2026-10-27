@@ -393,3 +393,32 @@ def test_a_killed_runs_scratch_is_removed_at_the_next_start_and_a_live_ones_kept
     left = {p.name for p in plans.iterdir() if p.is_dir() or p.is_symlink()}
     assert left == {"scratch-live", "scratch-unmarked-new", "kept-dead", "scratch-link"}, left
     assert (made["kept-dead"] / "snapshot.db").is_file()
+
+
+def test_a_bad_owner_file_is_held_a_day_and_never_blocks(tmp_path):
+    import time
+    import imprint
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    cases = {"scratch-empty": "", "scratch-huge": str(2 ** 31), "scratch-junk": "not a pid"}
+    for name, text in cases.items():
+        folder = plans / name
+        folder.mkdir(mode=0o700)
+        (folder / "owner.pid").write_text(text)
+    imprint._remove_stale_scratch(plans)
+    assert {p.name for p in plans.iterdir()} == set(cases)                      # fresh: all kept
+    old = time.time() - 2 * 86400
+    for name in cases:
+        os.utime(plans / name, (old, old))
+    imprint._remove_stale_scratch(plans)
+    assert list(plans.iterdir()) == []
+
+
+def test_the_owner_file_is_written_by_replace(tmp_path, monkeypatch):
+    import imprint
+    seen = []
+    real = os.replace
+    monkeypatch.setattr(os, "replace", lambda a, b: (seen.append(os.path.basename(b)), real(a, b))[1])
+    made = imprint._new_scratch(tmp_path)
+    assert "owner.pid" in seen and (made / "owner.pid").read_text() == str(os.getpid())
+    assert [p.name for p in made.iterdir()] == ["owner.pid"]

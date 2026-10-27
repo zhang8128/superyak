@@ -234,7 +234,8 @@ def _new_scratch(home: Path) -> Path:
     plans = plans_dir(home)
     _remove_stale_scratch(plans)
     making = Path(tempfile.mkdtemp(prefix=".making-", dir=plans))              # 0700; not a scratch-* name yet
-    (making / SCRATCH_OWNER).write_text(str(os.getpid()))
+    (making / (SCRATCH_OWNER + ".tmp")).write_text(str(os.getpid()))           # whole or absent, never half-written
+    os.replace(making / (SCRATCH_OWNER + ".tmp"), making / SCRATCH_OWNER)
     made = plans / ("scratch-" + making.name[len(".making-"):])
     os.rename(making, made)
     return made
@@ -243,7 +244,7 @@ def _new_scratch(home: Path) -> Path:
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError, ValueError):                  # no such process, or no such pid
         return False
     except PermissionError:
         return True
@@ -261,7 +262,11 @@ def _remove_stale_scratch(plans: Path, *, now: Callable[[], float] = time.time) 
             if entry.stat().st_uid != os.getuid():
                 continue
             text = (entry / SCRATCH_OWNER).read_text().strip()
-            stale = not (text.isdigit() and int(text) > 0 and _pid_alive(int(text)))
+            pid = int(text) if text.isascii() and text.isdigit() else 0
+            if 0 < pid <= 2 ** 22:
+                stale = not _pid_alive(pid)
+            else:                                           # empty, unparseable or out of range: as if missing
+                stale = now() - entry.stat().st_mtime > UNMARKED_STALE
         except FileNotFoundError:
             try:
                 stale = now() - entry.stat().st_mtime > UNMARKED_STALE
