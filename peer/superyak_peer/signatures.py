@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS revision_signatures(layer_id TEXT NOT NULL, revision 
 SIGNED_RECORDS = (('revision_signatures', 'SELECT 1 FROM revision_signatures LIMIT 1'),
                   # a grant's row holds an empty signature only inside the transaction that inserts and signs it, which
                   # mustn't count itself: the first grant on a new station creates the identity (G4)
-                  ('grants', "SELECT 1 FROM grants WHERE signature!='' LIMIT 1"))
+                  ('grants', "SELECT 1 FROM grants WHERE signature!='' LIMIT 1"),
+                  # G4b for store-copy imprints: a signed permission or receipt a new key would void
+                  ('imprint_requests', 'SELECT 1 FROM imprint_requests WHERE permission_signature IS NOT NULL LIMIT 1'),
+                  ('imprint_receipts', 'SELECT 1 FROM imprint_receipts WHERE signature IS NOT NULL LIMIT 1'))
 LOST_IDENTITY = ('The station identity {path} is missing, and this station holds signed records that a new identity would '
                  'void. Restore the file; if it is truly gone, run station-new-identity. Nothing was signed.')
 
