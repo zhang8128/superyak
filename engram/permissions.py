@@ -4,6 +4,7 @@ Reads no file, opens no database, reads no clock, draws no randomness.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import re
 from collections import namedtuple
@@ -43,6 +44,7 @@ MAX_GRANT_HOURS = 720
 MAX_REPLACES = 16
 PROPOSAL_DAYS = 7
 BOX_CAP = 4096
+BOX_REFS = 2_000_000       # P 8, 15: the refs held by the sets one gluing check keeps and makes
 JOINTS_PER_CHANGE = 64
 SWEEP_PER_PASS = 256
 CACHE_ENTRIES = 64
@@ -1958,13 +1960,17 @@ class FSet:
         return not self.co and not self.items
 
     def __and__(self, other: "FSet") -> "FSet":
+        if self.co and not self.items:
+            return other                 # the meet with everything is the other set itself, never a copy
+        if other.co and not other.items:
+            return self
         if not self.co and not other.co:
-            return FSet(self.items & other.items)
+            return _charge(FSet(self.items & other.items))
         if not self.co:
-            return FSet(self.items - other.items)
+            return _charge(FSet(self.items - other.items))
         if not other.co:
-            return FSet(other.items - self.items)
-        return FSet(self.items | other.items, True)
+            return _charge(FSet(other.items - self.items))
+        return _charge(FSet(self.items | other.items, True))
 
     def __invert__(self) -> "FSet":
         return FSet(self.items, not self.co)
@@ -1975,9 +1981,24 @@ class FSet:
 
 FULL = FSet(frozenset(), True)
 
+# Two counts per State, in state._cache under this key: [kept, check]. `kept` is the refs of the sets the layer_boxes
+# memo keeps (they live as long as the State); `check` is the refs of every other set the box code makes, back to 0
+# at the start of each _analyse. _COUNTS is set only while _analyse runs. Nothing here does I/O.
+_REFS_KEY = ("box_refs",)
+_COUNTS: contextvars.ContextVar = contextvars.ContextVar("box_counts", default=None)
+
+
+def _charge(fs: FSet) -> FSet:
+    counts = _COUNTS.get()
+    if counts is not None:
+        counts[1] += len(fs.items)
+        if counts[0] + counts[1] > BOX_REFS:
+            raise TooComplex(f"more than {BOX_REFS:,} refs")
+    return fs
+
 
 def _fset(values) -> FSet:
-    return FSet(frozenset(values))
+    return _charge(FSet(frozenset(values)))
 
 
 def _star(value) -> FSet:
@@ -2136,7 +2157,7 @@ def _by_time(rows: Iterable[tuple[TimeSet, str]]) -> list[tuple[TimeSet, FSet]]:
     grouped: dict = {}
     for ts, value in rows:
         if not ts.empty:
-            grouped.setdefault(ts, set()).add(value)
+            grouped.setdefault(ts, []).append(value)      # a list, so the one frozenset is the only big copy
     return [(ts, _fset(v)) for ts, v in grouped.items()]
 
 
@@ -2206,18 +2227,30 @@ def _member_parts(state: State, colls: tuple, layer: str, anchor: int, deny: boo
     """The memories a collections list names, as (refs, times, extra boxes the use must also lie in). An allow
     counts a membership not removed and in force; a grant-backed one only while its chain is valid and inside
     every envelope of that chain. A deny counts every membership since its anchor (P 5.3)."""
-    simple: list[tuple[TimeSet, str]] = []
+    simple: dict = {}              # times -> the objects that count over exactly those times
+    spans: dict = {}               # (added, removed) -> its TimeSet: rows of one change share one
     parts: list = []
+
+    def times_of(r, anchor_):
+        key = (r.added_seq, r.removed_seq)
+        ts = spans.get(key)
+        if ts is None:
+            ts = spans[key] = _row_times(state, r.added_seq, r.removed_seq, anchor_)
+        return ts
+
     for c in colls:
         for r in state.collection_members.get(c, ()):
             if deny:
-                simple.append((_row_times(state, r.added_seq, r.removed_seq, anchor), r.object))
+                ts = times_of(r, anchor)
+                if not ts.empty:
+                    simple.setdefault(ts, []).append(r.object)
                 continue
             if r.removed_seq is not None:
                 continue                 # a removed membership is never counted for an allow
-            times = _row_times(state, r.added_seq, r.removed_seq, None)
+            times = times_of(r, None)
             if not r.backing.startswith("grant:") or r in assume:
-                simple.append((times, r.object))
+                if not times.empty:
+                    simple.setdefault(times, []).append(r.object)
                 continue
             gid = r.backing[len("grant:"):]
             times = times & _grant_times(state, gid)
@@ -2233,7 +2266,7 @@ def _member_parts(state: State, colls: tuple, layer: str, anchor: int, deny: boo
                                                          at_place))
             if extra:
                 parts.append((_fset([r.object]), times, extra))
-    return [(refs, ts, None) for ts, refs in _by_time(simple)] + parts
+    return [(_fset(objs), ts, None) for ts, objs in simple.items()] + parts
 
 
 def _selector_boxes(state: State, sel: Selector, layer: str, anchor: int, deny: bool, assume: frozenset,
@@ -2299,7 +2332,10 @@ def _record_boxes(state: State, record: Record, at_place: str | None) -> list[Bo
 def layer_boxes(state: State, layer: str, *, at_place: str | None = None) -> list[Box]:
     """What the layer allows, as boxes: its allows minus its denies, at the current state. With at_place, only
     the uses at that place. Raises TooComplex past BOX_CAP."""
+    counts = state._cache.setdefault(_REFS_KEY, [0, 0])
+
     def compute():
+        before = counts[1]
         allows: list[Box] = []
         denies: list[Box] = []
         for rec in state.records.values():
@@ -2310,7 +2346,14 @@ def layer_boxes(state: State, layer: str, *, at_place: str | None = None) -> lis
                 allows = _cap(allows)
             if len(denies) > BOX_CAP:
                 denies = _cap(denies)
-        return tuple(_list_minus(_cap(allows), _cap(denies)))
+        out = tuple(_list_minus(_cap(allows), _cap(denies)))
+        # the temporaries are freed; the sets the result holds live as long as the State, so they are kept
+        held = {id(s.items): len(s.items) for b in out for d in DIMS[:-1] if (s := getattr(b, d)).items}
+        counts[1] = before
+        if counts[0] + sum(held.values()) + before > BOX_REFS and _COUNTS.get() is not None:
+            raise TooComplex(f"more than {BOX_REFS:,} refs")
+        counts[0] += sum(held.values())
+        return out
     return list(state._memo(("lbox", layer, at_place), compute))
 
 
@@ -2355,6 +2398,9 @@ def _sections(state: State, joint: str) -> tuple[list[Box], list[list[Box]]]:
 
 def _analyse(state: State, place: str, want_delta: bool) -> GluingReport:
     parents = _distinct_parents(state, place)
+    counts = state._cache.setdefault(_REFS_KEY, [0, 0])
+    counts[1] = 0
+    token = _COUNTS.set(counts)
     try:
         delta: list[Box] = []
         ineff: list[Box] = []
@@ -2378,6 +2424,8 @@ def _analyse(state: State, place: str, want_delta: bool) -> GluingReport:
             ineff = _list_minus(own, _ever(meet))
     except TooComplex:
         return GluingReport(place, (), (), True, stewards(state, place, *parents))
+    finally:
+        _COUNTS.reset(token)
     notify = frozenset()
     if delta:
         # P 8: the stewards of J and of each parent whose chain refuses part of Δ, not one that allows all of it
