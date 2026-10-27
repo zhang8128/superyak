@@ -2069,6 +2069,7 @@ def verify_imprint_dir(dir, *, home):
     out['pin'] = _pin_station_key(home, key, record['station'])
     if out['pin'] == 'changed':
         return done()
+    out['problems'] += _sent_problems(folder, record)
     receipts, bad = _saved_receipts(folder)
     out['problems'] += [f'{name} is not a saved receipt' for name in bad]
     previous, intact = record, True
@@ -2092,6 +2093,29 @@ def verify_imprint_dir(dir, *, home):
     if intact and receipts:
         out['chain'] = 'intact'
     return done()
+
+
+def _sent_problems(folder, record):
+    """Whether the signed permission is for what this machine sent (final review M8): `request_sha256` is the SHA-256
+    of the local `request.json`, `imprint_id` is this folder's name, and each record runs exactly the days asked for.
+    A signature alone shows only that the station signed some permission."""
+    try:
+        raw = (folder / 'request.json').read_bytes()
+        request = json.loads(raw)
+        days = request['terms']['days']
+    except (OSError, ValueError, KeyError, TypeError):
+        return ['request.json is missing or unreadable, so the permission cannot be tied to what was sent']
+    problems = []
+    if record.get('request_sha256') != hashlib.sha256(raw).hexdigest():
+        problems.append('the permission is for another request than the request.json sent from here')
+    if record.get('imprint_id') != folder.resolve().name:
+        problems.append('the permission is for another imprint than this folder')
+    records = record.get('records')
+    if type(days) is not int or not isinstance(records, list) or not records or not all(
+            isinstance(r, dict) and type(r.get('valid_from')) is int and type(r.get('valid_until')) is int
+            and r['valid_until'] - r['valid_from'] == days * 86400 for r in records):
+        problems.append(f'the permission does not run the {days} days asked for')
+    return problems
 
 
 def verify_permission_file(path):

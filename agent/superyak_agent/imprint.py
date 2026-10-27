@@ -180,11 +180,8 @@ class Imprint:
         folder = self.root / imprint_id / 'receipts'
         for receipt in receipts:
             write_private(_receipt_path(folder, receipt['seq'], imprint_id), receipt)
-        permission = found.get('permission')
-        if isinstance(permission, dict) and all(isinstance(permission.get(k), v) for k, v in
-                                                (('record', dict), ('signature', str), ('station_key', str))):
-            write_private(self.root / imprint_id / 'permission.json', permission)    # what `verify-imprint --dir` reads
-        chain = self._chain_of(found, receipts, request_id)
+        kept = self._kept_permission(imprint_id, found.get('permission'))
+        chain = self._chain_of({'permission': kept}, receipts, request_id)
         state = found.get('status')
         self.out(f'Imprint {imprint_id[:4]}: {_shown(state)}. Ends {_date(_end_of(found, receipts))}. '
                  f'Receipts: {len(receipts)}, chain {chain}.')
@@ -207,6 +204,26 @@ class Imprint:
             self._drop_local_copy(imprint_id)
         return {'imprint_id': imprint_id, 'status': state, 'chain': chain, 'receipts': len(receipts),
                 'unsigned': [r['seq'] for r in receipts if not r.get('signature')]}
+
+    def _kept_permission(self, imprint_id, permission):
+        """The permission saved the first time the station sent one, which `verify-imprint --dir` reads. A later one
+        never replaces it; one that differs is named (final review M8). None until a well-formed one arrives."""
+        path = self.root / imprint_id / 'permission.json'
+        try:
+            saved = read_json(path)
+        except (OSError, ValueError):
+            saved = path                                    # there but unreadable: kept as it is, for verify to name
+        well_formed = isinstance(permission, dict) and all(isinstance(permission.get(k), v) for k, v in
+                                                           (('record', dict), ('signature', str), ('station_key', str)))
+        if saved is None:
+            if not well_formed:
+                return None
+            write_private(path, permission)
+            return permission
+        if well_formed and saved != permission:
+            self.out('The station sent a permission other than the one saved first; the saved one is kept, and '
+                     'verify-imprint checks it.')
+        return saved if isinstance(saved, dict) else None
 
     def _list(self):
         rows = []

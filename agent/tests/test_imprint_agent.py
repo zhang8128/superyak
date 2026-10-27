@@ -393,3 +393,18 @@ def test_the_command_prints_station_errors_and_states_without_control_characters
     assert main(['imprint', 'send', '--plan', PLAN, '--home', str(home)]) == 1
     printed = capsys.readouterr().out
     assert 'boom' in printed and no_escapes(printed.splitlines()) and printed.count('\n') == 2
+
+
+# ---- The first saved permission is kept (final review M8) ----
+
+def test_the_first_saved_permission_is_kept_and_a_different_one_is_named(tmp_path):
+    station, home = FakeStation(receipts=chain(2)), sent_home(tmp_path)
+    Imprint(home, station.client()).status(IMPRINT_ID)
+    saved = home / 'imprints' / IMPRINT_ID / 'permission.json'
+    first = saved.read_text()
+    other = {'record': {**PERMISSION, 'records': [{'valid_until': NOW + 365 * 86400}]}, 'signature': 'q', 'station_key': 'k2'}
+    station.extra = {'permission': other}
+    lines = []
+    out = Imprint(home, station.client(), out=lines.append).status(IMPRINT_ID)
+    assert saved.read_text() == first and any('saved first' in line for line in lines)
+    assert out['chain'] == 'intact'                       # checked against the permission saved first

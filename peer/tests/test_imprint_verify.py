@@ -30,8 +30,9 @@ def sign(key, record):
     return base64.b64encode(key.sign(canonical(record))).decode()
 
 
-def inner(n):
-    return {'id': f'r-{n:032x}', 'layer': 'place:home/sam', 'effect': 'allow', 'selector': {}, 'valid_from': 1, 'valid_until': 2,
+def inner(n, days=1):
+    return {'id': f'r-{n:032x}', 'layer': 'place:home/sam', 'effect': 'allow', 'selector': {}, 'valid_from': 1,
+            'valid_until': 1 + days * 86400,
             'anchor': 1, 'backing': 'person', 'set_by': 'person:sam', 'channel': 'browser', 'under_grant': None,
             'proposal_id': None, 'replaces': None, 'reason': 'x', 'created': 1}
 
@@ -54,16 +55,24 @@ def permission_file(tmp_path, ok=True):
     return path
 
 
-def saved_imprint(folder, receipts=3, new_key=False, unsigned_last=False):
-    """What `make imprint-status` leaves: permission.json and receipts/<seq>-<imprint id>.json."""
+IMPRINT = 'c0a8f5e2'
+REQUEST = {'kind': 'engram-imprint-request', 'imprint_id': IMPRINT, 'terms': {'days': 1}}
+
+
+def saved_imprint(parent, receipts=3, new_key=False, unsigned_last=False, request=REQUEST):
+    """What `make imprint-status` leaves in `parent/<imprint id>/`: request.json (what this machine sent),
+    permission.json and receipts/<seq>-<imprint id>.json."""
+    folder = parent / IMPRINT
     folder.mkdir(parents=True, exist_ok=True)
+    (folder / 'request.json').write_bytes(json.dumps(request, sort_keys=True).encode())
     key, public, station = make_key()
     if not new_key:
         # the same station for every imprint of one test home: a fixed seed
         key = ed25519.Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b'station').digest())
         raw = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         public, station = base64.b64encode(raw).decode(), hashlib.sha256(raw).hexdigest()
-    permission = permission_record(station)
+    permission = permission_record(station) | {'request_sha256': hashlib.sha256(
+        json.dumps(request, sort_keys=True).encode()).hexdigest()}
     (folder / 'permission.json').write_text(json.dumps({'record': permission, 'signature': sign(key, permission), 'station_key': public}))
     (folder / 'receipts').mkdir()
     previous = permission
@@ -136,3 +145,41 @@ def test_permission_mode(tmp_path):
     assert run_peer(['verify-imprint', '--permission', str(good)]).returncode == 0
     assert run_peer(['verify-imprint', '--permission', str(bad)]).returncode == 1
     assert run_peer(['verify-imprint', '--permission', str(tmp_path / 'missing.json')]).returncode == 1
+
+
+# ---- The signed permission is for what this machine sent (final review M8) ----
+
+def problems_of(d, tmp_path):
+    out = verify_imprint_dir(d, home=tmp_path / 'h')
+    return out['ok'], out['problems']
+
+
+def test_a_saved_imprint_that_matches_what_was_sent_passes(tmp_path):
+    assert problems_of(saved_imprint(tmp_path / 'i'), tmp_path) == (True, [])
+
+
+def test_a_permission_for_another_request_is_a_problem(tmp_path):
+    d = saved_imprint(tmp_path / 'i')
+    (d / 'request.json').write_bytes(json.dumps(REQUEST | {'terms': {'days': 2}}, sort_keys=True).encode())
+    ok, problems = problems_of(d, tmp_path)
+    assert not ok and any('another request' in p for p in problems)
+
+
+def test_a_missing_request_is_a_problem(tmp_path):
+    d = saved_imprint(tmp_path / 'i')
+    (d / 'request.json').unlink()
+    ok, problems = problems_of(d, tmp_path)
+    assert not ok and any('request.json' in p for p in problems)
+
+
+def test_a_permission_for_another_imprint_is_a_problem(tmp_path):
+    d = saved_imprint(tmp_path / 'i')
+    other = d.rename(d.parent / 'ffff0000')
+    ok, problems = problems_of(other, tmp_path)
+    assert not ok and any('another imprint' in p for p in problems)
+
+
+def test_a_permission_longer_or_shorter_than_the_days_asked_is_a_problem(tmp_path):
+    d = saved_imprint(tmp_path / 'i', request=REQUEST | {'terms': {'days': 2}})     # signed for 1 day, asked for 2
+    ok, problems = problems_of(d, tmp_path)
+    assert not ok and any('2 days' in p for p in problems)
