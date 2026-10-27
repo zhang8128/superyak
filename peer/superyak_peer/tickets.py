@@ -252,9 +252,10 @@ class Tickets:
         if db.execute('SELECT 1 FROM message_sources WHERE ticket_id=?', (ticket_id,)).fetchone():
             raise Problem(409, 'This ticket has already labelled a message')
 
-    def _sources(self, db, room_id):
+    def _sources(self, db, room_id, ids=None):
         """Each local message's source as the station recorded it: a run's ticket, a ship's own post, or none for a
-        person. Never derived from a client's own message ids."""
+        person. Never derived from a client's own message ids. With `ids`, only those messages (a page's)."""
+        only, marks = (' AND messages.id IN (%s)' % ','.join('?' * len(ids)), tuple(ids)) if ids is not None else ('', ())
         runs = {r['message_id']: {'kind': 'run', 'mode': r['mode'], 'basis': r['basis'],
                                   'root_name': safe_line(r['root_name']) if r['root_name'] else None, 'answering': r['answering'],
                                   # G17: a grant run names its grantee too; every other source is exactly as before
@@ -262,9 +263,9 @@ class Tickets:
                 for r in db.execute('SELECT message_sources.message_id, tickets.mode, tickets.basis, tickets.chain, '
                                     'tickets.message_id AS answering, users.name AS root_name FROM message_sources '
                                     'JOIN tickets ON tickets.id=message_sources.ticket_id JOIN messages ON messages.id=message_sources.message_id '
-                                    'LEFT JOIN users ON users.id=tickets.root_id WHERE messages.room_id=?', (room_id,))}
+                                    f'LEFT JOIN users ON users.id=tickets.root_id WHERE messages.room_id=?{only}', (room_id, *marks))}
         ships = {r[0] for r in db.execute("SELECT id FROM users WHERE kind='ship'")}
         kinds = {r[0]: r[1] for r in db.execute('SELECT message_kinds.message_id, message_kinds.kind FROM message_kinds JOIN messages '
-                                               'ON messages.id=message_kinds.message_id WHERE messages.room_id=?', (room_id,))}
+                                               f'ON messages.id=message_kinds.message_id WHERE messages.room_id=?{only}', (room_id, *marks))}
         return {r['id']: {'kind': kinds[r['id']]} if r['id'] in kinds else runs.get(r['id'], {'kind': 'post'}) if r['author_id'] in ships else None
-                for r in db.execute('SELECT id,author_id FROM messages WHERE room_id=?', (room_id,))}
+                for r in db.execute(f'SELECT id,author_id FROM messages WHERE room_id=?{only}', (room_id, *marks))}

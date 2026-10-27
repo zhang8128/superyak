@@ -196,10 +196,11 @@ class Inbox:
         row = db.execute('SELECT reply_to FROM message_replies WHERE message_id=?', (message_id,)).fetchone()
         return row['reply_to'] if row else None
 
-    def _replies(self, db, room_id):
-        """Every reply in a room, keyed by the replying message (local posts only carry the field)."""
+    def _replies(self, db, room_id, ids=None):
+        """Every reply in a room, keyed by the replying message (local posts only carry the field). With `ids`, only those messages'."""
+        only, marks = (' AND messages.id IN (%s)' % ','.join('?' * len(ids)), tuple(ids)) if ids is not None else ('', ())
         return {r['message_id']: r['reply_to'] for r in db.execute(
-            'SELECT message_replies.* FROM message_replies JOIN messages ON messages.id=message_replies.message_id WHERE messages.room_id=?', (room_id,))}
+            f'SELECT message_replies.* FROM message_replies JOIN messages ON messages.id=message_replies.message_id WHERE messages.room_id=?{only}', (room_id, *marks))}
 
     def _check_reply_to(self, db, room_id, reply_to):
         """A reply names a message in the same local room, a local post or a federated member's reply."""

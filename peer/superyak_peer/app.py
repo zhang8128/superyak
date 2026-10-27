@@ -1,6 +1,7 @@
 """Same-origin browser API; additional peer routers attach to this factory."""
 import asyncio
 import hmac
+import re
 import ipaddress
 import time
 from pathlib import Path
@@ -110,6 +111,27 @@ def ship_member(request: Request):
 
 def actor(request):
     return current_user(request)['id']
+
+def paging(query):
+    """The paging query of GET /api/chats/{key}, validated; None when it has none (today's full read)."""
+    page = {}
+    for name in ('limit', 'before', 'at', 'since'):
+        if name in query:
+            if not re.fullmatch(r'[0-9]{1,15}', query[name]):
+                raise Problem(400, f'{name} must be a whole number, 0 or more')
+            page[name] = int(query[name])
+    for name in ('start', 'after'):
+        if name in query:
+            if not 0 < len(query[name]) <= 100:
+                raise Problem(400, f'{name} is the id of a message')
+            page[name] = query[name]
+    if sum(name in page for name in ('before', 'at', 'start', 'after', 'since')) > 1:
+        raise Problem(400, 'Give at most one of before, at, start, after and since')
+    if 'limit' in page and not 1 <= page['limit'] <= 500:
+        raise Problem(400, 'limit must be between 1 and 500')
+    if page and 'limit' not in page:
+        page['limit'] = 100
+    return page or None
 
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
@@ -553,7 +575,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.get('/api/chats/{key}')
     def chat_get(key: str, request: Request):
-        return store.get_room(member(request)['id'], key)
+        return store.get_room(member(request)['id'], key, paging(request.query_params))
 
     @app.post('/api/chats/{key}/messages', status_code=201)
     async def chat_send(key: str, request: Request):

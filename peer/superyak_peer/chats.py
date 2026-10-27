@@ -40,7 +40,7 @@ class Chats:
         rooms = [room for room in rooms if not self._off_the_lists(room)]  # breakouts S12: still readable by id
         return sorted(rooms + self.remote_rooms(actor), key=lambda room: (-room['last_activity'], room['id']))
 
-    def get_room(self, actor, key):
+    def get_room(self, actor, key, page=None):
         if ":" in key:
             room = self.remote_room(actor, key)
             for message in room.get('messages', []):
@@ -50,6 +50,8 @@ class Chats:
             return room
         with self.transaction() as db:
             room = self._room(db, actor, key)
+            if page:
+                return self._page(db, room, key, page)
             room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created, rowid', (key,))]
             sources, replies = self._sources(db, key), self._replies(db, key)
             for message in room['messages']:
@@ -65,6 +67,60 @@ class Chats:
                 room['system_author'] = self.system_author_public(db)
             room['claims'] = self._active_claims(db, key)
             return room
+
+    def _message_order(self, db, key):
+        """(message id, source) for every message in the room, in display order: (created, source, rowid), local
+        messages as source 0 and a paired peer's as 1. That is the stable sort `get_room` makes, without the bodies."""
+        return [(r[0], r[1]) for r in db.execute(
+            'SELECT id, 0 AS source, created, rowid FROM messages WHERE room_id=? UNION ALL '
+            'SELECT id, 1, created, rowid FROM peer_messages WHERE room_id=? ORDER BY created, source, rowid', (key, key))]
+
+    def _room_seq(self, db, key):
+        return db.execute("SELECT COALESCE(MAX(id), 0) FROM events WHERE kind='chat.message' AND resource_id=?", (key,)).fetchone()[0]
+
+    def _page(self, db, room, key, page):
+        """The room with only a window of its messages, picked by position (chat paging). The room's other fields are
+        the full read's, `system_author` included, so a client never merges them across pages."""
+        order = self._message_order(db, key)
+        total, limit = len(order), page.get('limit', 100)
+        where = [name for name in ('before', 'at', 'start', 'after') if name in page]
+        if where == ['before']:
+            if not 0 <= page['before'] <= total:
+                raise Problem(400, f'before must be between 0 and {total}')
+            end = page['before']
+            begin = max(0, end - limit)
+        elif where:
+            if where == ['at']:
+                if not 0 <= page['at'] < total:
+                    raise Problem(400, f'at must be between 0 and {total - 1}')
+                begin = page['at']
+            else:
+                known = [i for i, (message_id, _) in enumerate(order) if message_id == page[where[0]]]
+                if not known:
+                    raise Problem(404, 'No message in this room')
+                begin = known[0] + (where == ['after'])
+            end = min(total, begin + limit)
+        else:  # limit alone: the newest. (`since` is Task 2's.)
+            begin, end = max(0, total - limit), total
+        picked = order[begin:end]
+        local, peer = [m for m, source in picked if source == 0], [m for m, source in picked if source == 1]
+        rows = {}
+        for table, wanted in (('messages', local), ('peer_messages', peer)):
+            rows.update({r['id']: dict(r) for r in db.execute(
+                f'SELECT * FROM {table} WHERE room_id=? AND id IN ({",".join("?" * len(wanted))})', (key, *wanted))})
+        sources, replies = self._sources(db, key, local), self._replies(db, key, local)
+        room['messages'] = [dict(rows[m], source=sources.get(m), reply_to=replies.get(m)) if source == 0 else dict(rows[m], reply_to=None)
+                            for m, source in picked]
+        room.update(paged=True, total=total, first_position=begin, seq=self._room_seq(db, key))
+        room['members'] = [dict(r) for r in db.execute(
+            'SELECT users.id,users.username,users.name,users.kind,users.owner_id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? ORDER BY users.id',
+            (key,))]
+        room['brief'], room['brief_revision'] = self._room_brief(db, key)
+        system = self.system_author_id(db)
+        if db.execute('SELECT 1 FROM messages WHERE room_id=? AND author_id=? LIMIT 1', (key, system)).fetchone():
+            room['system_author'] = self.system_author_public(db)
+        room['claims'] = self._active_claims(db, key)
+        return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):
         self._refuse_live_ship_keys(body)
