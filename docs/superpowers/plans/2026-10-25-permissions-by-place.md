@@ -138,6 +138,9 @@ Choices the spec leaves to the builder (P 18) or does not fix. A reviewer checks
 | R31 | The daemon's eligible-set cache is keyed by (house, agent, place, purpose, action), at most `CACHE_ENTRIES` entries over all houses together. | P 12.2 keys it per (agent, place, purpose, action) for the placements of one house. One daemon serves several publishers, and an entry's validity reads that house's `placement_changes()`, so without the house in the key, an entry built for one house would be checked against another's counter and served for it. |
 | R32 | `effective_gate` leaves out a served path that is not a file. The daemon computes the gate after today's publisher check (`engram/lighthouse_daemon.py:331-337`), so the house a frame reads from is always a file and always in the gate. | P 12.3 defines a house as an engram store at those paths. A configured publisher whose `graph.db` doesn't exist yet serves nothing (`PUBLISHER_UNAVAILABLE`, as today); read as a house with no id it would close every frame for every publisher. |
 | R33 | `Uses.place_view(state, P)` covers uses at P and at every place P dominates, and uses of copies they hold, and gives every pseudonym with P's salt. | P 9.2 gives a place's receipts to its stewards "and the stewards of every place that dominates it", each subject as "the pseudonym this view gives". One salt per view keeps a person's pseudonym stable within a view and different across places (U8), and E1 use 14 has public health's stewards see clinic-3's uses. |
+| R34 | An agent's proposals and child grants are bounded (the final review's I1): at most `MAX_OPEN_PROPOSALS_PER_AGENT = 64` open proposals (pending and not expired) per filer, `MAX_OPEN_PROPOSALS = 1024` per ledger, and `MAX_CHILD_GRANTS = 64` live (not revoked, not expired) child grants per parent grant. Each is counted inside the write's `BEGIN IMMEDIATE`, as the records bound is, and a refusal names the bound. A State reads proposals on demand (`ProposalMap`) and holds none. | Spec 15 bounds records, caches and sets, not proposals, and an agent can file proposals and issue child grants with no yes. 300 proposals of 512 refs added 4.1 MB to every State, so an agent in a retry loop could push the daemon's two States past 512 MB. No decision reads a proposal. The numbers are the controller's; gate G12 has the spec record them. |
+| R35 | An eligible set's horizon also holds every time after its `at` at which a row it reads by its log time comes into or goes out of force: the requester's places and group memberships, and each placed object's memberships, subject rows (up its `copies` chain) and lane notes (the final review's M2). A decision's own horizon is unchanged. | After a backward clock step, a row written by the faster clock does not count at the daemon's t, and the cache would serve that decision until the next ledger write. 6.5 step 7 allows terms beyond its reading that are only ever earlier ones. Every decision stays as 5.3 reads it, so the oracle, the gluing check and F1 are unchanged; the cache ends when the row starts to count. |
+| R36 | Under `shadow`, a read the publisher's audience check refused keeps the ledger's own verdict and refusal on its receipt, and records the audience refusal as a `cited` entry of its own: `{"layer": "publisher", "kind": "audience", "action": "inject_context", "verdict": "deny"}` (the final review's M8). `report shadow` reads it there, and still reads a receipt written before as it did. | One field held two refusals: when both refused, the ledger's code was lost. Gate G12 has the spec's 9.1 name the entry. |
 
 ## Carried items
 
@@ -203,6 +206,26 @@ named.
 | `engram/tests/permissions_support.py` (new) | Test builders: `World`, `T`, `use`, `random_world`. Task 2, grown by later tasks. |
 | `engram/tests/permissions_oracle.py` (new) | The brute-force oracle. Task 5A, boxes added in Task 8. |
 | `engram/tests/test_permissions_*.py` (new), `engram/tests/fixtures/permissions/` (new) | P 17's tests. |
+
+**Note (the final review's I3, 2026-10-27): what else the branch's diff holds.** Verification step 2 reads "File
+Structure" as this table and this note. The build's later tasks added test support files the table does not name:
+
+| File | Task |
+|---|---|
+| `engram/tests/permissions_memory_support.py` (new) | The small-hardware (SH) tasks: the lazy State's helpers (`38ef58f`). |
+| `engram/tests/test_store_digest_chunks.py` (new) | SH: `store_digest` hashes a store in chunks (`0e4ae36`). |
+| `engram/tests/permissions_reference.py` (new) | Perf P0: the frozen copy of `a083a96`'s decision code that every later decision is checked against (`06ba849`). |
+| `engram/tests/permissions_budget_core.py` (new) | U24 (Task 31, revision 8): what the generated world and the probes share (`31dd1c3`). |
+| `engram/tests/permissions_budget_ledger.py`, `engram/tests/pi_budget_probe.py` (new) | U24: the reference ledger and the per-process memory probes (`e34400f`). |
+
+The diff also holds documents that are not the build's. The specs, plans and reviews of the city rail work came with
+the branch's start and with its two merges of `trail-arrows-spec`: `6610215` (revision 7, for the SH tasks) and
+`8e2a075` (revision 8, for the performance tasks, which brought `docs/superpowers/reviews/2026-10-27-permissions-rev8-review.md`
+and revision 8 of the spec). They are: `docs/city-rail-vision.md`; `docs/superpowers/specs/2026-10-25-permissions-by-place-design.md`; this plan;
+`docs/superpowers/reviews/2026-10-25-{city-rail-consolidation,city-rail-interfaces,permissions-by-place-plan-review,permissions-by-place-spec-review,small-hardware-imprints-review,small-hardware-permissions-review,small-hardware-trails-review,store-imprint-plan-review,store-imprint-spec-review,trail-arrows-plan-review,trail-arrows-rev4-spec-review,trail-arrows-spec-review}.md`;
+and `engram/docs/superpowers/{plans,specs}/2026-10-25-{store-imprint,trail-arrows}{,-design}.md` (the imprints and
+trails plans and specs). The final review's fixes added one test file, `engram/tests/test_permissions_review_fixes.py`,
+which the `test_permissions_*.py` row covers.
 
 ## What the other plans use
 
@@ -3865,7 +3888,8 @@ ship.
 
 1. **Up to date with main, by a merge, never a rebase.**
    `git merge-base --is-ancestor main HEAD || git merge --no-ff main -m "Merge main into permissions-core"`
-2. **The diff is what the plan says.** `git diff --stat main...HEAD` lists only the files in "File Structure".
+2. **The diff is what the plan says.** `git diff --stat main...HEAD` lists only the files in "File Structure" and the
+   note under it.
    `git diff --name-only --diff-filter=MDR main...HEAD -- engram/tests/` prints exactly `engram/tests/test_packaging.py`,
    the one exception R29 allows, and no other existing test file. That file's change is one line:
    `git diff -U0 main...HEAD -- engram/tests/test_packaging.py | grep '^[-+][^-+]'` prints exactly
@@ -3876,8 +3900,14 @@ ship.
    Expected: every test passes except any that also fail on `main` at the merge base. Run the same command on a
    checkout of the merge base first, and report both counts and the names of any failures. The interop tests skip on
    the Pi, which lacks the built Lighthouse packages.
-4. **U24 on the station's Pi 5** (this Pi): the command of Task 31, step 2. Expected: 2 passed, each within its
-   budget; report both durations.
+4. **U24 on the station's Pi 5** (this Pi): the command of Task 31, step 2. Revision 8's file holds 16 tests (the
+   final review's I3). Expected: 16 passed. Three are timed: one eligible-set rebuild of 20,000 placements within 2 s,
+   the same with sharing off within 30 s, and the largest bulk `imprint` within 300 s. Eleven measure one operation's
+   peak in a process of its own, each under 512 MiB of `VmHWM` plus `VmSwap` (state, eligible, bulk, perform-allow,
+   perform-collect, rebuild, check, uses-owner, uses-place, fold, migrate); two of them are also timed, the eligible
+   probe within 6 s and the bulk probe within 300 s. Two measure the daemon's peak under 512 MiB, on the reference
+   ledger and at the records bound. So five time budgets (2, 30, 300, 6 and 300 s) and 13 peaks. Report every
+   duration and every peak with its swap (`peaks.jsonl` holds them). Without `ENGRAM_PI_BUDGET=1`: 16 skipped.
 5. **The peer suite** (unchanged by this branch; section 2 names the suites):
    `cd peer && PYTHONDONTWRITEBYTECODE=1 systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 uv run --locked python -m pytest -q -p no:cacheprovider`
    Expected: as on `main`.
@@ -3889,6 +3919,16 @@ ship.
    agent's refusal views against P 9.2, and the `remember` guard's reply against P 10.
 8. **Not a Pi suite.** `make check-integration` needs Node.js 24 and pnpm 11.20.0; the Pi has Node 18.20.4 and no pnpm
    (checked 2026-10-25). It must pass in CI or on the Mac before the merge, and its result is posted with the verdict.
+9. **The shared embedder on every daemon machine (gate G0; spec 12.2; the final review's I4).** With this branch the
+   lighthouse daemon refuses to start, under every gate, `off` included, when `ENGRAM_EMBEDDER_SOCKET` is unset
+   (`engram/lighthouse_daemon.py`, `main`). `superyak-runtime` sets it only from `embedder_socket` in
+   `~/.config/superyak/runtime.json`. So before the merge, on every machine of Andy's that runs the engram lighthouse
+   daemon (the Mac among them), someone on that machine checks both:
+   `python3 -c "import json, pathlib; print(json.load(open(pathlib.Path.home() / '.config/superyak/runtime.json')).get('embedder_socket'))"`
+   prints a socket path, not `None`; and the embedder runs (`systemctl --user is-active superyak-embedder` prints
+   `active`, or, on the Mac, the job that runs `superyak-runtime embedder` is loaded and running). The verdict names
+   each machine and what it showed. A machine that fails either check keeps the code before this branch until it
+   passes; the daemon's refusal is not taken out of the code (12.2 puts it behind this gate).
 
 The merging ship then merges as section 2 says. This branch changes only engram, which no Pi service runs (the Pi's
 user units on 2026-10-25: `superyak-door`, `superyak-lighthouse`, `superyak-odo`, `superyak-ship`,
@@ -3900,8 +3940,9 @@ None of these is run by this plan. Each waits for the person named.
 
 | # | Gate | Why it waits |
 |---|---|---|
+| G0 | Before G1 and G2: every machine that runs the engram lighthouse daemon has `embedder_socket` in its `~/.config/superyak/runtime.json` and runs the embedder unit (`superyak-embedder`), checked on each machine as Verification step 9 says. | Spec 12.2: "before the daemon's refusal ships, every machine that runs the daemon has that key and runs the embedder unit". The daemon refuses to start without `ENGRAM_EMBEDDER_SOCKET` under every gate, so a machine without it stops serving its neighbors at its next start (the final review's I4). Andy's machines, so Andy or an agent on each one checks. |
 | G1 | The merge itself, under section 2 (above). | Station law. |
-| G2 | Engram servers in running Claude Code sessions, and any engram daemon on Andy's machines, load the new code only at their next start. Nothing restarts them. | Nothing live here. With no ledger they behave as today except the two fail-closed changes. |
+| G2 | Engram servers in running Claude Code sessions, and any engram daemon on Andy's machines, load the new code only at their next start. Nothing restarts them. | Nothing live here. With no ledger they behave as today except the two fail-closed changes, and a daemon starts only where G0 holds. |
 | G3 | `engram-permissions migrate` on Andy's machine, the one whose `ENGRAM_HOME` holds the published house the daemon serves, after he checks that the words of the yes name `person:andy` (R24), then `gate shadow`, then reading `report shadow`. Before `gate shadow`, each house that `migrate` and `gate` list as lacking 029 is opened once by its own engram server at its next start (G2), or it serves nothing under `shadow` (R27). | Andy's own terminal yes (P 7.6, 12.3). No agent runs them (Task 32's rule). |
 | G4 | Andy's home grant for his own agents (P 12.3 step 4), and his answer on agent shares at home lasting at most 720 hours. | Section 19, "Agent shares at home under `enforce`". |
 | G5 | `gate enforce`. | Andy's yes, after G3's report and G4; and his answer on whether the terminal yes is enough at home (P 19). |
@@ -3909,6 +3950,7 @@ None of these is run by this plan. Each waits for the person named.
 | G7 | The trails step 1 plan's build: `laid_by` reads `stores.owner`. | Build order: trails after imprints. |
 | G8 | YN6's wording in P 9.1 item 1 ("per action and purpose") in the spec's next revision. | This plan edits no spec; the code already counts per (action, purpose). |
 | G11 | R10's departure in the spec's next revision: P 6.3 item 4 and section 10 say that the `remember` guard decides `imprint` from ledger layers only, ignoring any legacy `imprint` rule, allow or deny, and why (today's generated files and E1's give no `imprint`; both legacy layers already allowed the delivery under `enforce`; every person the memory is about still says yes in the ledger). | This plan edits no spec. The re-check confirmed R10 on this condition. |
+| G12 | The spec's next revision records the final review's changes that its text does not hold: R34's three bounds in section 15; R36's `audience` entry of a shadow receipt's `cited` in 9.1; and, in 15's "Measured", that the probes' `MemoryMax=512M` was not enforced on the station's Pi (no memory controller), that the peaks are `VmHWM` read directly, and that the probe now records `VmSwap` beside it (M10). | This plan edits no spec; spec changes need their own reviewer. |
 | G9 | Step 2's items: the browser yes and station signatures (P 14 step 2), what a subject sees of another subject's home (BS3), which item of `Req` holds a station ceiling (XN6), a copy held away reading lanes from the imprint (P 5.3), and the `remember` guard seeing deliveries decided elsewhere (P 10). | Later specs. Not built here. |
 | G10 | Section 19's open questions: the license, one permission an agent may set alone, what the county sets, pseudonyms, the two departures from principle 5, who decides in the county steps, and memories that mention other people. | Andy's. Each spec keeps its default. |
 

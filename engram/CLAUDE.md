@@ -244,7 +244,11 @@ memory, for what, and where. Four modules: `permissions.py` holds the pure rules
 `permission_uses.py` is the receipts file and the views over it; `permission_cli.py` is `engram-permissions`, the
 person's side. The ledger lives at `ENGRAM_HOME/.engram/permissions.db` and the receipts at
 `ENGRAM_HOME/.engram/permission-uses.db`, fixed paths. The gate is `off` until the owner raises it (`shadow`, then
-`enforce`), so with no ledger or an `off` gate engram behaves as before apart from two fail-closed changes.
+`enforce`), so with no ledger or an `off` gate engram behaves as before apart from two fail-closed changes (the
+daemon never serves `group:outside-home`, and `share` refuses that name) and one requirement: the lighthouse daemon
+refuses to start, under every gate, without `ENGRAM_EMBEDDER_SOCKET`. Every machine that runs it needs
+`embedder_socket` in its `runtime.json` and the `superyak-embedder` unit running before it takes this code (spec
+12.2; the plan's gate G0).
 
 Agents never run, for the person, any `engram-permissions` command that writes, such as `sign`, `allow`, `grant`, `migrate` or `gate`. Each needs the person's own terminal yes.
 
