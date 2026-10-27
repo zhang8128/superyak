@@ -546,11 +546,14 @@ class Ledger:
         return cls(conn, path, False)
 
     @classmethod
-    def create(cls, engram_home: Path, owner_handle: str, *, now: int, channel: str = "terminal") -> "Ledger":
+    def create(cls, engram_home: Path, owner_handle: str, *, now: int, channel: str = "terminal",
+               path: Path | None = None) -> "Ledger":
+        """A new ledger owned by person:<owner_handle>, at `ledger_path(engram_home)` or at `path`, a file beside it
+        that the caller renames into place (`migrate`, Tardis's T8)."""
         owner = check_id("person", "person:" + owner_handle)
         home = "place:home/" + owner_handle
         check_id("place", home)
-        led = cls._blank(engram_home, str(uuid.uuid4()))
+        led = cls._blank(engram_home, str(uuid.uuid4()), path=path)
         led._append("register-person", owner, owner, channel, {
             "meta": {"owner": owner, "admins": owner},
             "insert": [
@@ -1571,9 +1574,22 @@ def _local(rule):
     return authority
 
 
+def check_retire_person(state, person: str) -> None:
+    """Retiring the ledger owner, or its last unretired admin, would leave nobody who can write the ledger again:
+    every later act, a revoke or `gate off` included, would be refused (Tardis's T10). Refused, saying so."""
+    if person == state.meta.get("owner"):
+        raise RuleError(_ACT, f"{person} owns this ledger and is never retired: every act after it, a revoke or "
+                              "`gate off` included, would be refused, and nothing could write the ledger again")
+    admins = [p for p, row in state.persons.items() if row.is_admin and row.retired_seq is None]
+    if admins == [person]:
+        raise RuleError(_ACT, f"{person} is this ledger's last admin and is never retired: nobody could retire "
+                              "anyone after it")
+
+
 def _may_retire_person(state, actor, args):
     if actor.startswith("agent:") or not (actor == args["person"] or state.persons[actor].is_admin):
         raise RuleError(_ACT, "a person is retired by themself or by a ledger admin")
+    check_retire_person(state, args["person"])
 
 
 def _may_retire_place(state, actor, args):

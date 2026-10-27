@@ -2,23 +2,31 @@
 test names its finding."""
 import dataclasses
 import json
+import os
+import signal
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 import federation
+import permission_cli
 import server
 import sharing
-from permission_ledger import Ledger, effective_gate, ledger_path
+from permission_cli import main as cli_main
+from permission_ledger import Ledger, _may_retire_person, effective_gate, ledger_path
 from permission_uses import Uses, UseRow
 from permissions import (RETENTION_DAYS, STAR, Act, Placement, Refusal, RuleError, authorize, check_narrower, decide,
                          eligible_set, parse_selector, placement_still_counts, selector_json, share_cover, subjects_of)
 from storage import Storage
 from tests.permissions_support import (  # noqa: F401
-    ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, andy_world, deliver_m1_through, fails_the_test, genome_world, home_use,
-    e1_ledger_through_andys_side, keep_world, keep_world_with_imprint_allowed, make_ledger_unreadable, use_json)
+    ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, World, andy_world, cli_home, deliver_m1_through, e1_ledger_through_andys_side,
+    fails_the_test, fake_tty, genome_world, home_use, keep_world, keep_world_with_imprint_allowed, make_ledger_unreadable,
+    use_json)
 from tests.permissions_oracle import oracle_decide
+from tests.test_permissions_migrate import NOW as MIGRATE_NOW, legacy_home  # noqa: F401
 from tests.test_permissions_server import enforce_server  # noqa: F401
 from tests.test_recall_margins import engram_server_env  # noqa: F401
 
@@ -362,3 +370,62 @@ def test_t7_the_fold_counts_no_shadow_receipt_no_empty_recall_and_no_imported_ro
     assert uses.fold(now=T("2025-06-01") + (RETENTION_DAYS + 5) * DAY, ledger_id=LOCAL) == 6
     assert _monthly(uses) == {(ANDY, "read", "refused"): 1, (ANDY, "recall", "allowed"): 1}
     assert uses.conn.execute("SELECT count(*) FROM uses").fetchone()[0] == 0 and uses.verify() is None
+
+
+# ---------------------------------------------------------------- T8, T10 and the last admin: the ledger stays writable
+
+def test_t10_the_ledger_owner_is_never_retired_and_the_ledger_stays_writable(tmp_path):
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    with pytest.raises(RuleError, match="person:andy owns this ledger"):
+        led.perform(Act("retire-person", {"person": ANDY}), actor=ANDY, channel="terminal", now=T("2026-11-02"))
+    assert led.state().persons[ANDY].retired_seq is None
+    led.perform(Act("register-person", {"person": "person:jenn"}), actor=ANDY, channel="terminal", now=T("2026-11-02"))
+
+
+def test_t10_person_retire_of_the_owner_is_refused_before_the_yes(cli_home, capsys):
+    before = Ledger.open(cli_home).seq()
+    assert cli_main(["person", "retire", "andy"]) == 1          # a yes asked for would wait, then exit 3
+    err = capsys.readouterr().err
+    assert "person:andy owns this ledger" in err and "code:" not in err
+    assert Ledger.open(cli_home).seq() == before
+
+
+def test_the_last_admin_is_never_retired():
+    w = World()
+    w.person("bob", admin=True)
+    s = w.state()
+    _may_retire_person(s, "person:bob", {"person": "person:bob"})       # Andy, the owner, is an admin still
+    w._find("persons", id=ANDY)["retired_seq"] = w._bump()             # a ledger whose owner was retired before
+    with pytest.raises(RuleError, match="person:bob is this ledger's last admin"):
+        _may_retire_person(w.state(), "person:bob", {"person": "person:bob"})
+
+
+_KILL_AT_THE_SIXTH_ACT = """
+import os, signal, sys
+import permission_cli, permission_ledger
+permission_cli.confirm = lambda words, change: True        # the yes is not what this tests
+permission_cli._owner_login = lambda: "andy"
+permission_cli._now = lambda: {now}
+real, n = permission_ledger.Ledger.perform, [0]
+def perform(self, *a, **k):
+    n[0] += 1
+    if n[0] == 6:
+        os.kill(os.getpid(), signal.SIGKILL)               # the terminal closes: no Python clean-up runs
+    return real(self, *a, **k)
+permission_ledger.Ledger.perform = perform
+sys.exit(permission_cli.main(["migrate"]))
+"""
+
+
+def test_t8_a_migrate_killed_part_way_leaves_no_ledger_and_runs_again(legacy_home, fake_tty):
+    engram = Path(permission_cli.__file__).resolve().parent
+    env = dict(os.environ, ENGRAM_HOME=str(legacy_home), PYTHONPATH=str(engram), PYTHONDONTWRITEBYTECODE="1")
+    done = subprocess.run([sys.executable, "-c", _KILL_AT_THE_SIXTH_ACT.format(now=MIGRATE_NOW)], env=env,
+                          cwd=engram, capture_output=True, timeout=300)
+    assert done.returncode == -signal.SIGKILL, done.stderr
+    path = ledger_path(legacy_home)
+    assert not path.exists()
+    fake_tty.answer_the_printed_code()
+    assert cli_main(["migrate"]) == 0 and path.exists()
+    assert sorted(p.name for p in path.parent.glob("permissions.db*")) == ["permissions.db"]
+    assert Ledger.open(legacy_home).verify() is None

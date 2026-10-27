@@ -20,7 +20,6 @@ import json
 import os
 import re
 import select
-import shlex
 import sqlite3
 import sys
 import time
@@ -28,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
-                               effective_gate, houses, ledger_path)
+                               check_retire_person, effective_gate, houses, ledger_path)
 from permissions import (CODE_CHARS, MAX_ACT_OBJECTS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse,
                          RuleError, Use, affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
                          home_of, parse_copy_ref, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
@@ -415,7 +414,12 @@ def _person_add(a):
 
 
 def _person_retire(a):
-    return _write(lambda led, st, owner: ([Act("retire-person", {"person": _qualify("person", a.handle)})], []))
+    def make(led, st, owner):
+        person = _qualify("person", a.handle)
+        if person in st.persons:
+            check_retire_person(st, person)          # before the yes: the owner and the last admin stay (T10)
+        return [Act("retire-person", {"person": person})], []
+    return _write(make)
 
 
 def _acts_for(value: str) -> str:
@@ -1053,6 +1057,10 @@ def _migrate(args) -> int:
         print("That was not the code. Nothing was written.", file=sys.stderr)
         return 3
     published = Storage(str(house))                 # the full open: migrations up to 029 run on it (R27)
+    # Built beside its final name and renamed into place last, as `rebuild` is (Tardis's T8): a migrate killed at
+    # any point leaves nothing at `path`, so it runs again; a file left from such a run is removed first.
+    building = path.with_name(path.name + ".migrating")
+    _forget_ledger(building)
     try:
         ids: dict[str, str] = {}
         for p in houses(root):
@@ -1061,7 +1069,7 @@ def _migrate(args) -> int:
                 ids.setdefault(iid, "default" if p.parent.name == ".engram" else p.parent.name)
         led = None
         try:
-            led = Ledger.create(root, login, now=at, channel="migration")
+            led = Ledger.create(root, login, now=at, channel="migration", path=building)
 
             def do(kind, **a):
                 out = led.perform(Act(kind, a), actor=owner, channel="migration", now=at)
@@ -1088,25 +1096,29 @@ def _migrate(args) -> int:
                 audience = home if collection == "legacy-commons" else "group:" + collection[len("legacy-group-"):]
                 record_of[collection] = do("allow", layer=home, selector=_legacy_selector(login, audience, collection),
                                            valid_from=at, valid_until=None, reason="legacy share").ref
+            led.close()
+            led = None
+            # The house's links are written before the ledger is in place: a run stopped between the two leaves
+            # links to no ledger, which the gate (off, with no ledger) never reads, and the next run writes them again.
+            try:
+                with published.transaction():
+                    for m in migrated:
+                        published.conn.execute(
+                            "UPDATE shared_memories SET source_instance_id = ?, record_id = ? WHERE share_id = ?",
+                            (m["source_instance_id"], record_of[m["collection"]], m["share_id"]))
+            except sqlite3.Error as e:
+                raise RuleError("12.3 migrate", f"the published house could not be filled ({e}), so no ledger was "
+                                "made and nothing was written. Fix the cause and run `engram-permissions migrate` "
+                                "again") from e
+            if path.exists():
+                raise RuleError("12.3 migrate", f"a ledger appeared at {path} while migrate ran; this one was not "
+                                "kept")
+            os.replace(building, path)
         except BaseException:
             if led is not None:
                 led.close()
-            _forget_ledger(path)
+            _forget_ledger(building)
             raise
-        led.close()
-        try:
-            with published.transaction():
-                for m in migrated:
-                    published.conn.execute(
-                        "UPDATE shared_memories SET source_instance_id = ?, record_id = ? WHERE share_id = ?",
-                        (m["source_instance_id"], record_of[m["collection"]], m["share_id"]))
-        except sqlite3.Error as e:
-            remove = "rm -f " + " ".join(shlex.quote(str(path.with_name(path.name + x)))
-                                         for x in ("", "-journal", "-wal", "-shm"))
-            raise RuleError("12.3 migrate", f"the ledger was made, but the published house could not be filled "
-                            f"({e}). The gate is off and nothing is widened. To run migrate again, remove the "
-                            f"ledger, fix the cause, and rerun `engram-permissions migrate`; to keep the ledger "
-                            f"instead, share each row again with `share`.\n{remove}") from e
     finally:
         published.close()
     print(f"Migrated {len(migrated)} shares into {len(record_of)} collections, each with one allow. The ledger is "
