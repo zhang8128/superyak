@@ -1008,9 +1008,11 @@ function imprintDialog() {
   if (!p) return "";
   const e = escapeHtml, list = (items) => (items || []).map(e).join(", ") || "none";
   const scope = p.scope, counts = p.counts, store = p.store;
-  const countWords = [["episodes", "episodes"], ["semantics", "semantic memories"], ["episode_vectors", "episode vectors"], ["semantic_vectors", "semantic vectors"], ["semantic_sources", "semantic sources"], ["resonances", "resonances"], ["semantic_peers", "semantic peers"], ["memory_log", "recall log entries"]]
-    .filter(([key]) => counts[key] !== undefined).map(([key, label]) => `${e(counts[key])} ${label}`).join(", ");
-  return `<dialog aria-labelledby="imprint-title"><div class="dialog-content imprint-view"><h2 id="imprint-title">Copy of ${e(p.ship)}’s memories (${e(p.imprint_short)})</h2>
+  // Every count the request carries is shown (D26, "Early bytes"); a key with no words here shows by its own name.
+  const countLabels = { episodes: "episodes", semantics: "semantic memories", episode_vectors: "episode vectors", semantic_vectors: "semantic vectors", semantic_sources: "semantic sources", resonances: "resonances", semantic_peers: "semantic peers", subdivision_events: "subdivision events", memory_log: "recall log entries", operation_log: "citing actions", imprint_subjects: "co-subject rows" };
+  const countKeys = [...Object.keys(countLabels).filter(key => key in counts), ...Object.keys(counts).filter(key => !(key in countLabels)).sort()];
+  const countWords = countKeys.map(key => `${e(counts[key])} ${e(countLabels[key] || key.replaceAll("_", " "))}`).join(", ") || "none";
+  return `<dialog aria-labelledby="imprint-title"><div class="dialog-content imprint-view"><h2 id="imprint-title">Copy of ${e(p.ship)}’s memories (imprint ${e(p.imprint_short)}, request ${e(p.request_short)})</h2>
     <p>Asked by <strong>${e(p.ship)}</strong>${p.machine ? ` on <strong>${e(p.machine)}</strong>` : ""}. Allow only if you just asked for this copy there.</p>
     <h3>What leaves</h3>
     <dl class="imprint-facts">

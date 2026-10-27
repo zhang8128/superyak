@@ -124,3 +124,21 @@ def test_a_wrong_password_keeps_the_view_open_and_declining_sends_nothing(imprin
     page.get_by_role('button', name='Decline').click()
     expect(page.get_by_text('Declined')).to_be_visible()
     assert imprint_browser.station.store.list_imprints(imprint_browser.station.ids['sam'])[0]['status'] == 'declined'
+
+
+def test_the_confirm_view_shows_every_count_the_request_carries_and_both_short_ids(imprint_browser):  # D26; review I3
+    from superyak_peer.imprints import _TABLES
+
+    counts = {table: 1001 + n for n, table in enumerate(_TABLES)}       # each count distinct, so each is findable
+    page = signed_in(imprint_browser, 'andy')
+    made = imprint_browser.request(ship='serenity', others={'memories': 37, 'people': 3}, route=True,
+                                   **{f'contents.{table}': n for table, n in counts.items()})
+    counts['imprint_subjects'] = 37 + 3                                  # the fixture ties the rows to the others
+    page.goto(f"{imprint_browser.url}/#imprint?code={made['code']}")
+    contents = page.locator('dt:text-is("Contents") + dd')
+    expect(contents).to_be_visible()
+    shown = contents.inner_text()
+    assert [t for t, n in counts.items() if str(n) not in shown] == []
+    assert 'subdivision events' in shown and 'citing actions' in shown and 'co-subject rows' in shown
+    heading = page.locator('#imprint-title').inner_text()
+    assert made['id'][:4] in heading and 'request' in heading
