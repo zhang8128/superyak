@@ -198,3 +198,15 @@ def test_result_json_skips_name_kinds_and_lanes_never_a_memory_id(tmp_path):
     assert {s["set"] for s in skipped} <= {"core", "hub", "cohesion", "event", "lane:personal", "lane:work"}
     assert all(sorted(s) == ["bound", "n", "set"] and type(s["n"]) is int and type(s["bound"]) is int for s in skipped)
     assert len(skipped) == len(named)
+
+
+def test_a_withdrawal_after_calibration_stops_admission_before_the_count(tmp_path):     # final review M7
+    seen = []
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True), route=True, valid_until=FAR)
+
+    def withdrawn_after_calibration(use):     # the count's own reads are recorded after the calibration gate
+        if use.purpose == "trail-evaluation":
+            (root / "tombstones").mkdir(exist_ok=True)
+            (root / "tombstones" / f"{iid_}.json").write_text("{}")
+    assert admit(iid_, root=root, verify_cmd=OK, derive=recording_stub(seen), record_use=withdrawn_after_calibration) == 4
+    assert seen == [] and not (root / f"{iid_}.state" / "result.json").exists()

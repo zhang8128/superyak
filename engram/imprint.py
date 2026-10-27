@@ -1217,6 +1217,7 @@ def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callab
         try:
             if route:
                 until = datetime.strptime(manifest["scope"]["until"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                _gate(root, imprint_id, now)                    # the count reads the memories (final review M7)
                 try:
                     counted = count_roads_and_trails(conn, lanes=manifest["scope"]["lanes"],
                                                      as_of=int(until.timestamp()), derive=derive)
