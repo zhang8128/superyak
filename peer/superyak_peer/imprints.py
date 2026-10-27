@@ -116,6 +116,9 @@ MAX_REQUEST_BODY = 64 * 1024
 MAX_MANIFEST = 256 * 1024
 PARTS_PER_MINUTE = 120
 REVIEW_WINDOW = 7 * 86400
+SIGN_INTERVAL = 60      # seconds between the lighthouse's passes over receipts a key-less command wrote
+KEEP_DAYS = 400         # D32: a deleted imprint's row, permission, receipts and tombstone
+MAX_REPORT_BYTES = 8 * 2**20
 COPY_BUFFER = 1024 * 1024
 MAX_MEMORIES = 100_000
 MAX_COUNT = 2**53
@@ -1045,15 +1048,54 @@ class Imprints:
                 (folder / f'part-{n}').unlink(missing_ok=True)
             return {'status': 'received', 'expires': now + REVIEW_WINDOW}
 
-    def imprint_status(self, actor, request_id):
-        """`{status, held}` for the owner or the requesting ship; anyone else gets a 404."""
+    def sign_imprint_receipts(self):
+        """Signs every receipt a key-less command left unsigned, in one transaction, by the station's identity (D19).
+        Signing changes no record, so no chain depends on it. Returns how many it signed."""
         with self.transaction() as db:
-            found = db.execute('SELECT status, ship_id, owner_id FROM imprint_requests WHERE id=?',
+            unsigned = db.execute('SELECT id, record FROM imprint_receipts WHERE signature IS NULL ORDER BY seq').fetchall()
+            if not unsigned:
+                return 0
+            identity = self._station_identity(db)
+            for receipt in unsigned:
+                db.execute('UPDATE imprint_receipts SET signature=? WHERE id=? AND signature IS NULL',
+                           (identity.sign_record(json.loads(receipt['record'])), receipt['id']))
+            return len(unsigned)
+
+    def imprint_status(self, actor, request_id):
+        """The owner's or the requesting ship's view (a 404 for anyone else): `status`, `held`, the permission with its
+        signature and the station's key, every receipt (unsigned ones with no signature), the content-free calibration
+        report once admitted, each use's report, and what the station keeps with the date each thing goes (I 12)."""
+        with self.transaction() as db:
+            found = db.execute('SELECT * FROM imprint_requests WHERE id=?',
                                (request_id,)).fetchone() if isinstance(request_id, str) else None
             if found is None or actor not in (found['ship_id'], found['owner_id']):
                 raise Problem(404, 'No such imprint request')
+            rows = db.execute('SELECT seq, record, signature FROM imprint_receipts WHERE request_id=? ORDER BY seq',
+                              (request_id,)).fetchall()
         folder = self.data_dir / 'imprints' / request_id
-        return {'status': found['status'], 'held': _held(folder) if folder.is_dir() else []}
+        out = {'status': found['status'], 'held': _held(folder) if folder.is_dir() else [], 'permission': None,
+               'receipts': [{'seq': r['seq'], 'record': json.loads(r['record']), 'signature': r['signature']}
+                            for r in rows],
+               'calibration_report': None, 'use_reports': [], 'keeps': None}
+        if found['permission'] is None:
+            return out
+        permission = json.loads(found['permission'])
+        out['permission'] = {'record': permission, 'signature': found['permission_signature'],
+                             'station_key': found['station_key']}
+        records = [r['record'] for r in out['receipts']]
+        ends = found['ended_at'] if found['status'] == 'deleted' and found['ended_at'] else effective_end(permission, records)
+        removed = datetime.fromtimestamp(ends + KEEP_DAYS * 86400, timezone.utc).strftime('%Y-%m-%d')
+        out['keeps'] = {'text': KEEPS_WORDS, 'removed_on': dict.fromkeys(('row', 'permission', 'receipts', 'tombstone'), removed)}
+        state = self._imprint_state(found, None)
+        if state is not None and found['status'] != 'deleted':
+            if found['status'] == 'admitted':
+                out['calibration_report'] = _read_json(state / 'calibration' / 'report.json', MAX_REPORT_BYTES)
+            for started in [r for r in records if r['event'] == 'use-started']:
+                use_id = started['detail']['use_id']
+                report = _read_json(state / 'uses' / use_id / 'report.json', MAX_REPORT_BYTES)
+                if report is not None:
+                    out['use_reports'].append({'use_id': use_id, 'report': report})
+        return out
 
     def _decide_imprint(self, username, item, approve, root):
         """Andy's decision on one `received` imprint (I 10): approval, then the hand-off, or a denial."""
@@ -1252,7 +1294,7 @@ class Imprints:
                 return {'id': request_id, 'status': 'deleting'}
             base = self._imprint_folders(found, None)[0] or (Path(root) if root is not None else None)
             self._append_imprint_receipt(db, request_id, 'deleted', actor_id,
-                                         {'reason': reason, 'files': files, 'limits': KNOWN_LIMITS}, sign=False)
+                                         {'reason': reason, 'files': files, 'limits': KNOWN_LIMITS}, sign=withdrawn)
             if base is not None:
                 self._write_tombstone(base, found, db)
             now = int(self.clock())

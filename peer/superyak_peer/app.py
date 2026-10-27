@@ -129,7 +129,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             if not loopback or parsed.scheme not in ('http', 'https'):
                 raise ValueError('Local demo requires loopback origins')
         demo_credentials = validate_demo(Path(data_dir))
-    from .peer_routes import federation_lifespan, install
+    from .peer_routes import federation_lifespan, install, sign_first
     from .federation import Federation
     if federation_endpoint and federation_endpoint not in allowed_origins:
         raise ValueError('Federation endpoint must be an explicitly allowed HTTPS origin')
@@ -636,6 +636,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         @app.get('/api/imprints')
         def imprint_list(request: Request):
             user = member(request)
+            sign_first(store)
             if user['kind'] == 'ship':
                 return store.imprint_context(user['id'])
             return {'imprints': store.list_imprints(user['id'])}
@@ -686,7 +687,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
         @app.get('/api/imprints/{request_id}')
         def imprint_one(request_id: str, request: Request):
-            return store.imprint_status(member(request)['id'], request_id)
+            who = member(request)['id']
+            sign_first(store)
+            return store.imprint_status(who, request_id)
 
     @app.get('/api/mentions')
     def mentions(request: Request, after: int = 0, limit: int = 50):
