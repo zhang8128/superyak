@@ -236,6 +236,21 @@ Spec: docs/superpowers/specs/2026-09-29-inheritance-reading-design.md.
 never submitted content. Migration 026 scrubs historical `operation_log.details`
 payloads down to the same metadata-only representation.
 
+## Permissions
+
+Permissions by place (spec: docs/superpowers/specs/2026-10-25-permissions-by-place-design.md) decide who may use a
+memory, for what, and where. Four modules: `permissions.py` holds the pure rules (grammars, places, layers,
+`decide`, the words of a yes); `permission_ledger.py` is the hash-chained ledger file and the gate;
+`permission_uses.py` is the receipts file and the views over it; `permission_cli.py` is `engram-permissions`, the
+person's side. The ledger lives at `ENGRAM_HOME/.engram/permissions.db` and the receipts at
+`ENGRAM_HOME/.engram/permission-uses.db`, fixed paths. The gate is `off` until the owner raises it (`shadow`, then
+`enforce`), so with no ledger or an `off` gate engram behaves as before apart from two fail-closed changes.
+
+Agents never run, for the person, any `engram-permissions` command that writes, such as `sign`, `allow`, `grant`, `migrate` or `gate`. Each needs the person's own terminal yes.
+
+An agent asks through the `permit` tool (a proposal the owner signs, unless a grant covers it) and reads through
+`permissions`. Memory: each process peaks under 512 MB on the Pi (spec 15); the daemon needs `ENGRAM_EMBEDDER_SOCKET`.
+
 ## MCP Tools
 
 | Tool | Purpose |
@@ -261,6 +276,8 @@ payloads down to the same metadata-only representation.
 | `assessment_report(function_score, ...)` | Complete the active assessment: structured self-report + objective counters. History via `reflect(focus="assessments")`. |
 | `search_code(query)` | Search project source code via embeddings. |
 | `reindex()` | Rebuild code index. |
+| `permit(op, selector?, valid_from?, valid_until?, reason?, record?, collection?, memory?, args?)` | Ask for a permissions-ledger change as this server's agent. Done inside a grant; otherwise a proposal the owner signs in a terminal. `migrate` is never a tool act. |
+| `permissions(focus?, since?, until?, action?, purpose?, obj?)` | Read the permissions ledger: `uses`, `rules`, `proposals`, `grants`. An agent not acting for the owner sees only its own receipts. |
 
 ## Key Files
 
@@ -292,6 +309,10 @@ payloads down to the same metadata-only representation.
 | `store_reader.py` | Read-only survey and chronological reading of a store or reader.db, no migration |
 | `store_identity.py` | Store identity (`meta.instance_id`): creation, retroactive derivation, fork stamping; read-only describe/plan |
 | `calibrate.py` | Snapshot a store read-only, migrate only a working copy, report store identity, first-open decay/prune, cohesion and persistence |
+| `permissions.py` | Permissions by place: grammars, places, layers, `decide`, the words of a yes |
+| `permission_ledger.py` | Permission ledger file (`.engram/permissions.db`): hash-chained log, rebuild, gate |
+| `permission_uses.py` | Permission receipts file (`.engram/permission-uses.db`) and its views |
+| `permission_cli.py` | `engram-permissions`: the person's terminal side; every write needs their own yes |
 
 ## Testing
 
