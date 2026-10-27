@@ -66,3 +66,13 @@ def test_classify_source_splits_the_rules(tmp_path):
     assert "episodes" in got.copied and "episode_fts" not in got.copied and "imprint_subjects" not in got.copied
     assert "instincts" in got.dropped and "context_threads" in got.dropped and "episodes" not in got.dropped
     assert got.unnamed == ("alpha", "zeta")
+
+
+def test_a_dropped_table_is_empty_in_a_fresh_package(tmp_path):
+    """Check 9 (I 6.2): every dropped table is empty. A migration that seeds a table (029's counter row) makes it rebuilt."""
+    store = new_store(tmp_path, "fresh")
+    present = set(table_names(store.conn))
+    for name, rule in TABLE_RULES.items():
+        if rule == "dropped" and name in present:
+            assert store.conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0] == 0, name
+    assert TABLE_RULES["shared_memories_changes"] == "rebuilt"

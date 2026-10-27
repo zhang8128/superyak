@@ -55,7 +55,7 @@ TABLE_RULES: dict[str, str] = {
     "drift_reports": "dropped",             # drift summaries
     "assessments": "dropped",               # self-reports
     "shared_memories": "dropped",           # records copies made for other audiences
-    "shared_memories_changes": "dropped",   # 029's change counter for shared_memories (not in I 6.2's table)
+    "shared_memories_changes": "rebuilt",   # 029 seeds its one counter row (id 1, count 0); not copied, so not empty (check 9 skips it)
     "schema_version": "rebuilt",            # the migrations that create the package
     "meta": "rebuilt",                      # only the imprint's identity keys (section 11)
     "sqlite_sequence": "rebuilt",           # the vec0 inserts fill it; never copied
