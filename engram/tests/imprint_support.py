@@ -161,3 +161,24 @@ def engram_dir_with_imprint_instance(tmp_path: Path, name: str) -> Path:
 
     shutil.copyfile(imprint_file(tmp_path, "inst-imprint.db"), inst / "graph.db")
     return engram_dir
+
+
+def ep(store: Storage, id: str, *, lane: str = "work", at: str = "2026-01-01T00:00:00+00:00",
+       session: str | None = None, content: str | None = None, core: int = 0) -> str:
+    """Insert an episode with ``created_at`` as given; returns its id."""
+    store.conn.execute(
+        "INSERT INTO episodes (id, session_id, content, created_at, lane, core) VALUES (?, ?, ?, ?, ?, ?)",
+        (id, session, content if content is not None else f"episode {id}", at, lane, core))
+    store.conn.commit()
+    return id
+
+
+def vec(store: Storage, layer: str, id: str, seed: int) -> None:
+    """Write a seeded unit 768-dimension vector for ``id`` in ``layer`` ('episode' or 'semantic')."""
+    import numpy as np
+    from storage import _pack_embedding
+
+    v = np.random.default_rng(seed).standard_normal(768)
+    v = (v / np.linalg.norm(v)).tolist()
+    store.conn.execute(f"INSERT INTO {layer}_vectors (id, embedding) VALUES (?, ?)", (id, _pack_embedding(v)))
+    store.conn.commit()

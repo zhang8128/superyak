@@ -1,14 +1,17 @@
 import shutil
 from pathlib import Path
 
+import numpy as np
 import pytest
+
+import lighthouse_sheaf
 
 from cli import fork_instance
 from federation import sync_genome
 from sharing import share
 from storage import Storage
 from store_identity import ImprintRefused
-from tests.imprint_support import engram_dir_with_imprint_instance, imprint_file, new_store
+from tests.imprint_support import engram_dir_with_imprint_instance, ep, fork_of, imprint_file, new_store, vec
 
 
 def test_storage_refuses_an_imprint_before_any_pragma_or_migration(tmp_path):
@@ -46,3 +49,20 @@ def test_resolve_db_path_never_returns_an_imprint(tmp_path, monkeypatch):
     for name in ("../imprints/c0a8", "imprints/c0a8", "c0a8"):
         monkeypatch.setenv("ENGRAM_DEFAULT_INSTANCE", name)
         assert resolve_db_path(home, tmp_path / "project") == home / ".engram" / "graph.db"
+
+
+def test_lighthouse_sheaf_refuses_an_imprint(tmp_path):
+    with pytest.raises(ImprintRefused):
+        lighthouse_sheaf.query_vector(imprint_file(tmp_path), "episode", "e1")
+
+
+def test_sibling_stores_are_flagged_and_unrelated_ones_are_not(tmp_path):
+    g = new_store(tmp_path, "g"); a, b = fork_of(tmp_path, g, "a"), fork_of(tmp_path, g, "b")
+    c = new_store(tmp_path, "c")
+    got = {(p["a"], p["b"]): p for p in lighthouse_sheaf.independence({"a": a.db_path, "b": b.db_path, "c": c.db_path})}
+    assert got[("a", "b")] == {"a": "a", "b": "b", "independent": False, "evidence": "not independent evidence"}
+    assert got[("a", "c")]["independent"] is True and got[("a", "c")]["evidence"] == "independent"
+    for s in (a, b): vec(s, "episode", ep(s, "e1"), seed=1)
+    out = lighthouse_sheaf.compare_stores({"a": a.db_path, "b": b.db_path}, query=np.ones(768), k=1)
+    assert out["independence"][0]["evidence"] == "not independent evidence"
+    assert "not independent evidence" in lighthouse_sheaf._format(out)
