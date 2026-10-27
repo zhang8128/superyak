@@ -98,7 +98,8 @@ def chain(n, drop=None, unsigned=()):
         return hashlib.sha256(json.dumps(record, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
     out, previous = [], PERMISSION
     for seq in range(1, n + 1):
-        record = {'kind': 'imprint-receipt', 'id': f'r{seq}', 'event': 'shortened' if seq == 3 else 'admitted',
+        record = {'kind': 'imprint-receipt', 'id': f'r{seq}', 'permission': REQUEST_ID,
+                  'event': 'shortened' if seq == 3 else 'admitted',
                   'at': NOW + seq, 'detail': {'valid_until': NOW + 30 * 86400} if seq == 3 else {}, 'previous': digest(previous)}
         out.append({'seq': seq, 'record': record, 'signature': None if seq in unsigned else 'sig'})
         previous = record
@@ -294,3 +295,101 @@ def test_the_command_refuses_days_that_are_not_a_number(tmp_path):
     home = sent_home(tmp_path)
     bad = run_agent(['imprint', 'shorten', '--id', IMPRINT_ID[:4], '--days', 'x'], home=home)
     assert bad.returncode == 2
+
+
+# ---- Station data is untrusted on the owner's machine (final review I2) ----
+
+ESCAPES = '\x1b[2J\x1b]0;owned\x07\r\n\x00\x9b'
+
+
+@pytest.mark.parametrize('seq', ['{tmp}/escaped/x', '../../../../escaped', -1, 1.5, True, 2**63, None, '1', [1]])
+def test_a_receipt_seq_that_is_not_a_bounded_int_is_refused_and_writes_nothing(tmp_path, seq):
+    from superyak_agent.imprint import ImprintRefused
+    if isinstance(seq, str):
+        seq = seq.format(tmp=tmp_path)
+    receipts = chain(2)
+    receipts[1]['seq'] = seq
+    station, home = FakeStation(receipts=receipts), sent_home(tmp_path)
+    with pytest.raises(ImprintRefused):
+        Imprint(home, station.client()).status(IMPRINT_ID)
+    assert not (home / 'imprints' / IMPRINT_ID / 'receipts').exists()
+    assert not [p for p in tmp_path.rglob(f'*-{IMPRINT_ID}.json')]
+
+
+def test_a_repeated_seq_is_refused(tmp_path):
+    from superyak_agent.imprint import ImprintRefused
+    receipts = chain(2)
+    receipts[1]['seq'] = 1
+    station, home = FakeStation(receipts=receipts), sent_home(tmp_path)
+    with pytest.raises(ImprintRefused):
+        Imprint(home, station.client()).status(IMPRINT_ID)
+
+
+def test_the_list_names_a_malformed_seq_and_carries_on(tmp_path):
+    receipts = chain(2)
+    receipts[1]['seq'] = '../x'
+    station, home = FakeStation(status='admitted', receipts=receipts), sent_home(tmp_path)
+    lines = []
+    out = Imprint(home, station.client(), out=lines.append).status()
+    assert out['imprints'] == [] and len(lines) == 1 and 'not read' in lines[0]
+
+
+def test_the_chain_is_unchecked_without_the_permission(tmp_path):
+    station, home = FakeStation(receipts=chain(3), extra={'permission': None}), sent_home(tmp_path)
+    lines = []
+    out = Imprint(home, station.client(), out=lines.append).status(IMPRINT_ID)
+    assert out['chain'] == 'unchecked' and 'intact' not in '\n'.join(lines)
+
+
+def test_a_receipt_of_another_permission_breaks_the_chain(tmp_path):
+    receipts = chain(3)
+    receipts[1]['record']['permission'] = 'b1b2c3d4-0000-4000-8000-000000000002'
+    station, home = FakeStation(receipts=receipts), sent_home(tmp_path)
+    assert Imprint(home, station.client()).status(IMPRINT_ID)['chain'] == 'broken at receipt 2'
+
+
+def no_escapes(lines):
+    return all(not any(c in line for c in '\x1b\x07\r\n\x00\x9b') for line in lines)
+
+
+def test_station_text_is_printed_without_control_characters(tmp_path):
+    receipts = chain(2)
+    receipts[0]['record']['event'] = 'admitted' + ESCAPES
+    extra = {'status': 'admitted' + ESCAPES, 'use_reports': [{'use_id': 'u1' + ESCAPES, 'report': {'rows': 3}}],
+             'keeps': {'text': 'The station keeps a row.' + ESCAPES, 'removed_on': {'row' + ESCAPES: '2027-01-01' + ESCAPES}}}
+    station, home = FakeStation(receipts=receipts, extra=extra), sent_home(tmp_path)
+    lines = []
+    Imprint(home, station.client(), out=lines.append).status(IMPRINT_ID)
+    Imprint(home, station.client(), out=lines.append).status()
+    assert len(lines) > 6 and no_escapes(lines) and 'The station keeps a row.' in '\n'.join(lines)
+
+
+def test_send_prints_the_code_the_link_and_a_deletion_reason_without_control_characters(tmp_path):
+    class Hostile(FakeStation):
+        def transport(self, method, url, headers, data):
+            status, body = super().transport(method, url, headers, data)
+            if method == 'POST' and url.endswith('/api/imprints'):
+                body = json.dumps(json.loads(body) | {'code': 'AB12' + ESCAPES, 'confirm_url': 'http://station/#x' + ESCAPES}).encode()
+            return status, body
+    station, home = Hostile(status='deleted', reason='denied' + ESCAPES), built_home(tmp_path)
+    lines = []
+    Imprint(home, station.client(), out=lines.append).send(PLAN)
+    assert len(lines) == 3 and no_escapes(lines) and 'AB12' in lines[0]
+
+
+def test_the_command_prints_station_errors_and_states_without_control_characters(tmp_path, monkeypatch, capsys):
+    from superyak_agent import station as station_module
+    from superyak_agent.__main__ import main
+
+    class Erring(FakeStation):
+        def transport(self, method, url, headers, data):
+            if method == 'POST':
+                return 500, json.dumps({'error': 'boom' + ESCAPES}).encode()
+            return 200, json.dumps({'status': 'odd' + ESCAPES, 'held': [], 'receipts': []}).encode()
+    monkeypatch.setattr(station_module, 'client_for', lambda config, timeout=30: Erring().client())
+    home = sent_home(tmp_path)
+    assert main(['imprint', 'withdraw', '--id', IMPRINT_ID[:4], '--home', str(home)]) == 1
+    (home / 'imprints' / IMPRINT_ID / 'send.json').unlink()
+    assert main(['imprint', 'send', '--plan', PLAN, '--home', str(home)]) == 1
+    printed = capsys.readouterr().out
+    assert 'boom' in printed and no_escapes(printed.splitlines()) and printed.count('\n') == 2

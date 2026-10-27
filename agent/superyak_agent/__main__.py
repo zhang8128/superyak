@@ -135,28 +135,28 @@ def _dock_project(args, fields):
 def _imprint(args):
     """`imprint context|send|status|withdraw|shorten`: prints `STATUS: <value>` last; a send still waiting for the owner exits 3, as dock does."""
     from .imprint import Imprint, ImprintRefused
-    from .station import StationError, client_for, load_config
+    from .station import StationError, client_for, label, load_config
     imprint = Imprint(args.home, client_for(load_config(args.home / 'station.json'), timeout=120))
     try:
         if args.imprint_command == 'context':
             found = imprint.context()
-            print(f'{len(found.get("imprints") or [])} imprint(s) for {found.get("ship")}; saved in {args.home}/imprints/context.json.')
+            print(f'{len(found.get("imprints") or [])} imprint(s) for {label(found.get("ship"))}; saved in {args.home}/imprints/context.json.')
             return 0
         if args.imprint_command == 'status':
             imprint.status(args.id)
             return 0
         if args.imprint_command in ('withdraw', 'shorten'):
             done = imprint.withdraw(args.id) if args.imprint_command == 'withdraw' else imprint.shorten(args.id, args.days)
-            print(f'STATUS: {done.get("status", "shortened")}')
+            print(f'STATUS: {label(done.get("status", "shortened"))}')
             return 0
         status = imprint.send(args.plan, wait=args.wait)
     except ImprintRefused as error:
         print(error)
         return error.code
     except (StationError, OSError) as error:
-        print(f'imprint: {error}')
+        print(f'imprint: {label(str(error), 300)}')     # a station's message is data: one printable line (review I2)
         return 1
-    print(f'STATUS: {status}')
+    print(f'STATUS: {label(status)}')
     return 3 if status == 'waiting-for-you' else 0
 
 

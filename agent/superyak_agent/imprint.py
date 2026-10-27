@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .station import StationError, read_json, write_private
+from .station import StationError, label, read_json, write_private
 
 PART_BYTES = 4_194_304            # one part on the wire; the agent holds at most one (I 9, D42)
 POLL_SECONDS = 15
@@ -21,6 +21,8 @@ PART_RETRIES = 3                  # a 429 from the station's part limiter waits 
 FINAL = ('admitted', 'declined', 'denied', 'failed', 'deleted')   # after these the local imprint.db goes (D24)
 BUSY = 'Another make imprint-send of this plan is running.'
 HEX = frozenset('0123456789abcdef')
+MAX_SEQ = 2**53                   # a receipt's seq is a bounded non-negative int before it names a file (review I2)
+MALFORMED = 'The station sent receipts this agent cannot read; nothing was saved. Run make imprint-status again later.'
 
 
 class ImprintRefused(Exception):
@@ -76,9 +78,9 @@ class Imprint:
             saved = {'imprint_id': imprint_id, 'request_id': made['id'], 'code': made['code'],
                      'expires': made['expires'], 'confirm_url': made['confirm_url']}
             write_private(folder / 'send.json', saved)
-            self.out(f'Imprint {imprint_id[:4]}, request {made["id"][:4]}. Code {made["code"]}.')
-            self.out(f'Open {made["confirm_url"]} in your browser, check the code matches, choose your station password '
-                     f'and tick the box. Nothing leaves this machine until you say yes.')
+            self.out(f'Imprint {imprint_id[:4]}, request {_shown(made["id"])[:4]}. Code {_shown(made["code"])}.')
+            self.out(f'Open {_shown(made["confirm_url"], 400)} in your browser, check the code matches, choose your '
+                     f'station password and tick the box. Nothing leaves this machine until you say yes.')
         deadline = time.time() + wait
         while True:
             status = self.client.request('GET', f'/api/imprints/{saved["request_id"]}')
@@ -99,12 +101,13 @@ class Imprint:
     def _deleted_as(self, status):
         """The station's `deleted` carries its reason in the last `deleted` receipt; `denied` and `failed` are reasons."""
         reason = None
-        for receipt in status.get('receipts') or []:
-            record = receipt.get('record') or {}
-            if record.get('event') == 'deleted':
-                reason = (record.get('detail') or {}).get('reason')
+        receipts = status.get('receipts')
+        for receipt in receipts if isinstance(receipts, list) else []:
+            record = receipt.get('record') if isinstance(receipt, dict) else None
+            if isinstance(record, dict) and record.get('event') == 'deleted' and isinstance(record.get('detail'), dict):
+                reason = record['detail'].get('reason')
         if reason:
-            self.out(f'Deleted: {reason}.')
+            self.out(f'Deleted: {_shown(reason)}.')
         return reason if reason in ('denied', 'failed') else 'deleted'
 
     def _upload(self, folder, saved, status):
@@ -171,30 +174,35 @@ class Imprint:
         if imprint_id is None:
             return self._list()
         imprint_id = self._resolve(imprint_id)
-        found = self.client.request('GET', f'/api/imprints/{self._request_id(imprint_id)}')
-        receipts = sorted(found.get('receipts') or [], key=lambda r: r['seq'])
+        request_id = self._request_id(imprint_id)
+        found = self.client.request('GET', f'/api/imprints/{request_id}')
+        receipts = _receipts_of(found)
         folder = self.root / imprint_id / 'receipts'
         for receipt in receipts:
-            write_private(folder / f'{receipt["seq"]}-{imprint_id}.json', receipt)
+            write_private(_receipt_path(folder, receipt['seq'], imprint_id), receipt)
         permission = found.get('permission')
         if isinstance(permission, dict) and all(isinstance(permission.get(k), v) for k, v in
                                                 (('record', dict), ('signature', str), ('station_key', str))):
             write_private(self.root / imprint_id / 'permission.json', permission)    # what `verify-imprint --dir` reads
-        chain = self._chain_of(found, receipts)
+        chain = self._chain_of(found, receipts, request_id)
         state = found.get('status')
-        self.out(f'Imprint {imprint_id[:4]}: {state}. Ends {_date(_end_of(found, receipts))}. Receipts: {len(receipts)}, chain {chain}.')
+        self.out(f'Imprint {imprint_id[:4]}: {_shown(state)}. Ends {_date(_end_of(found, receipts))}. '
+                 f'Receipts: {len(receipts)}, chain {chain}.')
         for receipt in receipts:
-            line = f'  {receipt["seq"]}. {receipt["record"].get("event")} at {_date(receipt["record"].get("at"))}'
+            line = f'  {receipt["seq"]}. {_shown(receipt["record"].get("event"))} at {_date(receipt["record"].get("at"))}'
             self.out(line + ('' if receipt.get('signature') else ' (not yet signed)'))
-        if found.get('calibration_report') is not None:
+        if found.get('calibration_report') is not None:      # JSON text: every control character comes out escaped
             self.out('Calibration report: ' + json.dumps(found['calibration_report'], sort_keys=True))
-        for use in found.get('use_reports') or []:
-            self.out(f'Use {use.get("use_id")}: ' + json.dumps(use.get('report'), sort_keys=True))
+        uses = found.get('use_reports')
+        for use in uses if isinstance(uses, list) else []:
+            if isinstance(use, dict):
+                self.out(f'Use {_shown(use.get("use_id"))}: ' + json.dumps(use.get('report'), sort_keys=True))
         keeps = found.get('keeps')
-        if keeps:
-            self.out(keeps.get('text', ''))
-            for what, day in (keeps.get('removed_on') or {}).items():
-                self.out(f'  {what}: removed on {day}')
+        if isinstance(keeps, dict) and keeps:
+            self.out(_shown(keeps.get('text', ''), 2000))
+            removed = keeps.get('removed_on')
+            for what, day in (removed.items() if isinstance(removed, dict) else ()):
+                self.out(f'  {_shown(what)}: removed on {_shown(day)}')
         if state in FINAL:
             self._drop_local_copy(imprint_id)
         return {'imprint_id': imprint_id, 'status': state, 'chain': chain, 'receipts': len(receipts),
@@ -206,29 +214,39 @@ class Imprint:
             imprint_id = path.parent.name
             try:
                 found = self.client.request('GET', f'/api/imprints/{self._request_id(imprint_id)}')
+                receipts = _receipts_of(found)
             except (StationError, ImprintRefused) as error:
-                self.out(f'{imprint_id[:4]}  (not read: {error})')
+                self.out(f'{imprint_id[:4]}  (not read: {_shown(error, 300)})')
                 continue
-            receipts = sorted(found.get('receipts') or [], key=lambda r: r['seq'])
             last = receipts[-1]['record'].get('event') if receipts else 'none'
             row = {'imprint_id': imprint_id, 'status': found.get('status'), 'ends': _date(_end_of(found, receipts)), 'last_event': last}
-            self.out(f'{imprint_id[:4]}  {row["status"]}  ends {row["ends"]}  last event {last}')
+            self.out(f'{imprint_id[:4]}  {_shown(row["status"])}  ends {row["ends"]}  last event {_shown(last)}')
             rows.append(row)
             if row['status'] in FINAL:
                 self._drop_local_copy(imprint_id)
         return {'imprints': rows}
 
     @staticmethod
-    def _chain_of(found, receipts):
-        """Each receipt's `previous` is the SHA-256 of the one before it (the first, of the permission record)."""
+    def _chain_of(found, receipts, request_id):
+        """Each receipt names this permission, and its `previous` is the SHA-256 of the one before it (the first, of
+        the permission record). Without the permission record the chain is `unchecked`, never `intact` (review I2)."""
         if not receipts:
             return 'empty'
-        permission = (found.get('permission') or {}).get('record')
-        previous = permission
+        permission = found.get('permission')
+        previous = permission.get('record') if isinstance(permission, dict) else None
+        if not isinstance(previous, dict):
+            return 'unchecked'
         for n, receipt in enumerate(receipts):
-            if previous is not None and receipt['record'].get('previous') != hashlib.sha256(_canonical(previous)).hexdigest():
+            record = receipt['record']
+            if record.get('permission') != request_id:
+                return f'broken at receipt {receipt["seq"]}'
+            try:
+                digest = hashlib.sha256(_canonical(previous)).hexdigest()
+            except (TypeError, ValueError):
+                digest = None
+            if digest is None or record.get('previous') != digest:
                 return f'broken after receipt {receipts[n - 1]["seq"]}' if n else 'broken at the first receipt'
-            previous = receipt['record']
+            previous = record
         return 'intact'
 
     def withdraw(self, imprint_id):
@@ -253,13 +271,49 @@ def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()
 
 
+def _shown(value, limit=80):
+    """Station text as one printable line: no control or escape characters, no newline, at most `limit` long."""
+    return label(value, limit)
+
+
+def _receipts_of(found):
+    """The station's receipts in seq order. Each is an object whose `seq` is an int from 0 to 2**53, none repeated,
+    and whose `record` is an object; anything else is refused before a file name is made from it (review I2)."""
+    receipts = found.get('receipts') if isinstance(found, dict) else None
+    receipts = [] if receipts is None else receipts
+    if not isinstance(receipts, list) or not all(
+            isinstance(r, dict) and type(r.get('seq')) is int and 0 <= r['seq'] <= MAX_SEQ
+            and isinstance(r.get('record'), dict) for r in receipts):
+        raise ImprintRefused(MALFORMED, 1)
+    if len({r['seq'] for r in receipts}) != len(receipts):
+        raise ImprintRefused(MALFORMED, 1)
+    return sorted(receipts, key=lambda r: r['seq'])
+
+
+def _receipt_path(folder, seq, imprint_id):
+    """`<seq>-<imprint id>.json` inside `folder`, made from the integer; a name that would leave it is refused."""
+    path = folder / f'{int(seq):d}-{imprint_id}.json'
+    if path.parent != folder or path.name != f'{int(seq):d}-{imprint_id}.json':
+        raise ImprintRefused(MALFORMED, 1)
+    return path
+
+
 def _date(seconds):
-    return datetime.fromtimestamp(seconds, timezone.utc).strftime('%Y-%m-%d') if isinstance(seconds, (int, float)) else 'unknown'
+    if type(seconds) not in (int, float):
+        return 'unknown'
+    try:
+        return datetime.fromtimestamp(seconds, timezone.utc).strftime('%Y-%m-%d')
+    except (OverflowError, OSError, ValueError):
+        return 'unknown'
 
 
 def _end_of(found, receipts):
     """The earliest of the permission's records' ends and every shortening's (I 8 item 4)."""
-    ends = [r.get('valid_until') for r in ((found.get('permission') or {}).get('record') or {}).get('records') or []]
-    ends += [r['record']['detail'].get('valid_until') for r in receipts if r['record'].get('event') == 'shortened']
-    ends = [e for e in ends if isinstance(e, int)]
+    permission = found.get('permission') if isinstance(found, dict) else None
+    record = permission.get('record') if isinstance(permission, dict) else None
+    records = record.get('records') if isinstance(record, dict) else None
+    ends = [r.get('valid_until') for r in records if isinstance(r, dict)] if isinstance(records, list) else []
+    ends += [r['record']['detail'].get('valid_until') for r in receipts
+             if r['record'].get('event') == 'shortened' and isinstance(r['record'].get('detail'), dict)]
+    ends = [e for e in ends if type(e) is int]
     return min(ends) if ends else None
