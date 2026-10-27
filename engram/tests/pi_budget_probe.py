@@ -7,6 +7,7 @@ Prints one JSON line: the operation, its seconds and the process's peak resident
 The operations: state, eligible, bulk, perform-allow, perform-collect, rebuild, check, uses-owner, uses-place,
 fold, daemon, migrate."""
 import argparse
+import collections
 import contextlib
 import io
 import json
@@ -23,7 +24,7 @@ NOW = 1_793_577_600            # 2026-11-02, the day the budget decisions are ma
 OPS = ("state", "eligible", "bulk", "perform-allow", "perform-collect", "rebuild", "check", "uses-owner",
        "uses-place", "fold", "daemon", "migrate")
 CONTEXT = {"id": "memory/technical", "path": ["memory", "technical"]}
-PURPOSES = ("session-recall", "care-coordination")
+PURPOSES = ("session-recall", "care-coordination", "trail-evaluation")
 
 
 def peak_kb() -> int:
@@ -139,6 +140,20 @@ class _PerThreadStorage:
         return getattr(self._local.s, name)
 
 
+class _WatchedCache(collections.OrderedDict):
+    """The daemon's cache, counting the estimate of every entry put in it and every entry it drops."""
+    added_bytes = 0
+    evicted = 0
+
+    def __setitem__(self, key, entry):
+        self.added_bytes += entry.estimate()
+        super().__setitem__(key, entry)
+
+    def popitem(self, last=True):
+        self.evicted += 1
+        return super().popitem(last)
+
+
 class _Embeddings:
     def embed(self, texts, prefix=None):
         out = []
@@ -162,6 +177,7 @@ def op_daemon(home, a):
     daemon = PublisherDaemon({"why": pub}, root / "s.sock", _Embeddings(), engram_home=root,
                              clock=lambda: datetime.fromtimestamp(NOW, tz=timezone.utc))
     assert pub.open()
+    daemon._cache = _WatchedCache()
     pub.storage = _PerThreadStorage(pub.db_path)
     keys = [(f"rcv{k}", p) for k in range(a.receivers) for p in PURPOSES]
     turns = iter(keys)
@@ -194,7 +210,7 @@ def op_daemon(home, a):
     [t.join() for t in threads]
     held = sum(e.estimate() for e in daemon._cache.values())
     return {"frames": served[0], "rebuilds": daemon.rebuilds, "cached_entries": len(daemon._cache),
-            "cache_bytes": held, "cache_limit": lighthouse_daemon.CACHE_BYTES, "errors": errors[:3]}
+            "cache_bytes": held, "added_bytes": daemon._cache.added_bytes, "evicted": daemon._cache.evicted, "cache_limit": lighthouse_daemon.CACHE_BYTES, "errors": errors[:3]}
 
 
 def op_migrate(home, a):
@@ -218,7 +234,7 @@ def main(argv=None) -> int:
     p.add_argument("--touches", type=int, default=512)
     p.add_argument("--universe", type=int, default=100_000)
     p.add_argument("--tail", type=int, default=10_000)
-    p.add_argument("--receivers", type=int, default=7)
+    p.add_argument("--receivers", type=int, default=8)
     a = p.parse_args(argv)
     os.environ["ENGRAM_HOME"] = a.home
     start = time.perf_counter()

@@ -2667,8 +2667,8 @@ def log_rows(home):
 # ---------------------------------------------------------------- Task 31: U24's generated world (R23)
 
 from tests.permissions_budget_core import (AGENT, ALL, BULK_BUDGET_S, COLLECTIONS as BUDGET_COLLECTIONS, COPY, HOLDING_CHAIN,
-                                           HOLDING_PLACE, HOMES, JOINT, LEFT, PLACE, REBUILD_BUDGET_S, REQUESTER_CHAIN,
-                                           RIGHT, budget_refs, derived_trails, touches)
+                                           HOLDING_PLACE, HOMES, JOINT, LEFT, PLACE, REBUILD_BUDGET_S, REBUILD_LEDGER_S,
+                                           REBUILD_WORST_S, REQUESTER_CHAIN, RIGHT, budget_refs, derived_trails, touches)
 
 # The 41 ledger layers of a decision: 8 homes, the two chains of 16 places, and the requester's restriction layer.
 LEDGER_LAYERS = tuple(home_of(h) for h in HOMES) + REQUESTER_CHAIN + HOLDING_CHAIN + (AGENT,)

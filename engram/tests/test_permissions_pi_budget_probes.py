@@ -45,7 +45,7 @@ EXPECT = {
     "uses-owner": lambda d: d["exit"] == 0 and d["lines"] >= 1,
     "uses-place": lambda d: d["exit"] == 0,
     "fold": lambda d: d["folded"] == 40,
-    "daemon": lambda d: d["frames"] == 4 and not d["errors"] and d["rebuilds"] >= 4,
+    "daemon": lambda d: d["frames"] == 6 and not d["errors"] and d["rebuilds"] >= 6 and d["added_bytes"] > 0,
     "migrate": lambda d: d["exit"] == 0,
 }
 
@@ -56,3 +56,20 @@ def test_each_probe_runs_and_reports_its_peak(base, op):
     got = run_probe(op, home, extra, scope=False)
     assert got["op"] == op and got["peak_kb"] > 10_000, got
     assert EXPECT[op](got["detail"]), got
+
+
+def test_the_budgets_are_those_of_revision_8():
+    """Section 15's figures, in the module and in the tests' shared core: 2 s, 30 s, 6 s and 300 s."""
+    import permissions
+    from tests import permissions_budget_core as core
+    for mod in (permissions, core):
+        assert (mod.REBUILD_BUDGET_S, mod.REBUILD_WORST_S, mod.REBUILD_LEDGER_S, mod.BULK_BUDGET_S) == (2, 30, 6, 300)
+
+
+def test_the_daemon_probe_serves_eight_receivers_by_three_purposes():
+    import inspect
+    from tests.permissions_budget_ledger import RECEIVERS, ensure_reference
+    from tests.pi_budget_probe import PURPOSES
+    assert len(RECEIVERS) == 8 and len(PURPOSES) == 3          # 24 keys, at least the 19 that pass 96 MB (12.2)
+    for fn in (ensure_reference, prepare):
+        assert inspect.signature(fn).parameters["receivers"].default == 8

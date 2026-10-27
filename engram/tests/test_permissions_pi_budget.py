@@ -1,13 +1,13 @@
-"""U24, the Pi budget (Task 31; P 6.4, 12.2, 15): the two timed decisions, and each operation's peak resident memory
-in a fresh process of its own. Runs only on the station's Raspberry Pi 5, with ENGRAM_PI_BUDGET=1."""
+"""U24, the Pi budget (Task 31, revision 8; P 6.4, 12.2, 15): the five timed budgets, and each operation's peak
+resident memory in a fresh process of its own. Runs only on the station's Raspberry Pi 5, with ENGRAM_PI_BUDGET=1."""
 import os
 import time
 
 import pytest
 
 from permissions import BulkUse, decide_bulk, eligible_set
-from tests.permissions_support import (AGENT, BULK_BUDGET_S, COPY, PLACE, REBUILD_BUDGET_S, T, derived_trails,
-                                       generated_world, touches)
+from tests.permissions_support import (AGENT, BULK_BUDGET_S, COPY, PLACE, REBUILD_BUDGET_S, REBUILD_LEDGER_S,
+                                       REBUILD_WORST_S, T, derived_trails, generated_world, touches)
 
 pytestmark = pytest.mark.skipif(os.environ.get("ENGRAM_PI_BUDGET") != "1",
                                 reason="U24 runs on the station's Raspberry Pi 5 with ENGRAM_PI_BUDGET=1")
@@ -23,7 +23,20 @@ def test_u24_one_eligible_set_rebuild_within_2_seconds():
     assert took <= REBUILD_BUDGET_S, f"{took:.1f} s for 20,000 placements"
 
 
-def test_u24_explain_on_the_largest_bulk_imprint_within_40_seconds():
+def test_u24_one_eligible_set_rebuild_with_sharing_off_within_30_seconds(monkeypatch):
+    """No two objects read alike (`SHARED_DECISIONS = 0`, 6.4): 820,000 layer verdicts."""
+    import permissions
+    monkeypatch.setattr(permissions, "SHARED_DECISIONS", 0)
+    s, placements = generated_world(placements=20_000, layers=43, records_per_layer=256)
+    start = time.perf_counter()
+    got = eligible_set(s, placements, requester=AGENT, place=PLACE, purpose="care-coordination", action="recall",
+                       at=T("2026-11-02"))
+    took = time.perf_counter() - start
+    assert len(got.memory_ids) == 20_000
+    assert took <= REBUILD_WORST_S, f"{took:.1f} s for 20,000 placements with no sharing"
+
+
+def test_u24_explain_on_the_largest_bulk_imprint_within_300_seconds():
     s = generated_world(placements=0, layers=43, records_per_layer=256, universe=100_000, trails=100_000)[0]
     bulk = BulkUse(requester=AGENT, place=PLACE, objects=derived_trails(100_000), copy=COPY, action="imprint",
                    purpose="trail-evaluation", at=T("2026-11-02"), named=False,
@@ -87,10 +100,12 @@ def measure(reference, op, name=None, **given):
 def test_u24_peak_memory_stays_under_512_mb(reference, op):
     got = measure(reference, op)
     d = got["detail"]
-    if op == "eligible":
+    if op == "eligible":       # timed from opening the ledger, its State and the imports included (15)
         assert d["eligible"] == d["placements"]
+        assert got["seconds"] <= REBUILD_LEDGER_S, f"{got['seconds']} s on the reference ledger"
     if op == "bulk":
         assert d["allowed"], d["refusal"]
+        assert got["seconds"] <= BULK_BUDGET_S, f"{got['seconds']} s on the reference ledger"
     if op.startswith("perform"):
         assert d["status"] == "done"
     if op == "fold":
@@ -101,9 +116,11 @@ def test_u24_peak_memory_stays_under_512_mb(reference, op):
 
 @pytest.mark.parametrize("revoked", [0, MAX_RECORDS - 10_498])
 def test_u24_the_daemon_peaks_under_512_mb(reference, revoked):
-    """Three threads serve recall and read frames for a house of 20,000 of the ledger's memories, with its cache
-    filled past 96 MB; once on the reference ledger, once with revoked records added up to the records bound."""
+    """Three threads serve recall and read frames for a house of 20,000 of the ledger's memories from 24 keys
+    (8 receivers x 3 purposes), builds in the background; the entries added pass 96 MB in all and the cache evicts,
+    so it ran at its bound. Once on the reference ledger, once with revoked records up to the records bound."""
     got = measure(reference, "daemon", "daemon-at-the-bounds" if revoked else "daemon", revoked=revoked)
     d = got["detail"]
-    assert not d["errors"] and d["frames"] == 14
+    assert not d["errors"] and d["frames"] == 24
     assert d["cache_bytes"] > 0.8 * d["cache_limit"], d
+    assert d["added_bytes"] > d["cache_limit"] and d["evicted"] > 0, d

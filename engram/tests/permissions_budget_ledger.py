@@ -14,7 +14,8 @@ from tests.permissions_budget_core import (ALL, COLLECTIONS, JOINT, LEFT, OWNER,
 
 LEDGER_ID = "reference-ledger"
 LOG_ROWS = 811_000              # spec 15: "about 811,000" rows wrote the reference ledger
-RECEIVERS = tuple(f"rcv{k}" for k in range(7))
+RECEIVERS = tuple(f"rcv{k}" for k in range(8))     # 8 receivers x 3 purposes = 24 keys (12.2)
+DAEMON_PURPOSES = ("session-recall", "care-coordination", "trail-evaluation")
 OLD_RECEIPT = 1_700_000_000     # 2023-11-14, far older than the fold's 400 days
 
 
@@ -176,13 +177,13 @@ def build_daemon_house(home, placements, receivers):
     policy that lets every receiver recall and read; the receivers' own settings; and the ledger's gate raised to
     `enforce`. The ledger is under `home` already."""
     from permission_ledger import Ledger
-    from tests.permissions_support import (ANDY, HOUSE_NAME, PURPOSES, T, connection_policy, do, make_house,
+    from tests.permissions_support import (ANDY, HOUSE_NAME, T, connection_policy, do, make_house,
                                            make_placed_house, raise_gate, write_receiver_files)
-    make_placed_house(home, receiver=RECEIVERS[0], ns=range(placements))
+    make_placed_house(home, receiver=RECEIVERS[0], ns=range(placements), purposes=DAEMON_PURPOSES)
     urns = [f"urn:engram:{r}" for r in RECEIVERS[:receivers]]
     inst = home / ".engram" / "instances" / HOUSE_NAME
     (inst / "lighthouse-policy.json").write_text(json.dumps(connection_policy(
-        HOUSE_NAME, urns, actions=("recall", "read"), purposes=PURPOSES, audience_map={u: ["commons"] for u in urns})))
+        HOUSE_NAME, urns, actions=("recall", "read"), purposes=DAEMON_PURPOSES, audience_map={u: ["commons"] for u in urns})))
     for r in RECEIVERS[:receivers]:
         write_receiver_files(home, r)
     make_house(home, "lighthouse")
@@ -221,7 +222,7 @@ def build_migrate_home(home, shares):
 
 # ---------------------------------------------------------------- the reference, and a copy of it per operation
 
-def ensure_reference(base, *, universe=100_000, log_rows=LOG_ROWS, tail=10_000, placements=20_000, receivers=7,
+def ensure_reference(base, *, universe=100_000, log_rows=LOG_ROWS, tail=10_000, placements=20_000, receivers=8,
                      receipts=100_000, bulk=64, shares=20_000, stages=("ref", "house", "receipts")):
     """`base/ref` (ledger, then house and receivers) and `base/receipts` (the receipts file, with a link to the
     ledger), each stage built once: a file `READY-<stage>` says it is, so a build that was cut short resumes at
@@ -259,7 +260,7 @@ def ensure_reference(base, *, universe=100_000, log_rows=LOG_ROWS, tail=10_000, 
     return base
 
 
-def prepare(base, op, *, universe=100_000, tail=10_000, placements=20_000, receivers=7, trails=100_000,
+def prepare(base, op, *, universe=100_000, tail=10_000, placements=20_000, receivers=8, trails=100_000,
             touches=512, shares=20_000, revoked=0, **_ignored):
     """(the home `op` runs on, its extra arguments). An operation that writes runs on a copy made now."""
     import os
