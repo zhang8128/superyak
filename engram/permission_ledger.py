@@ -703,9 +703,10 @@ class Ledger:
 
     def _max_seq(self, table: str, column: str, loaded: Mapping | None):
         """The highest value of a seq column. A table the State read whole is read from `loaded`. Otherwise, with
-        `loaded` given (a State, which must stay cheap), a column an update sets is read through its partial index,
-        and one set only at insert from the table's newest row: rows are only ever inserted, in seq order, and
-        never deleted, so the newest carries the highest. With `loaded` None (`integrity`), every row is read."""
+        `loaded` given (a State, or `_append` with {}, which must stay cheap), a column an update sets is read
+        through its partial index, or whole in a table a State reads whole (they are small), and one set only at
+        insert from the table's newest row: rows are only ever inserted, in seq order, and never deleted, so the
+        newest carries the highest. With `loaded` None (`integrity`), every row is read."""
         if loaded is not None and table in loaded:
             return max((r[column] for r in loaded[table] if r[column] is not None), default=None)
         if loaded is None or column in _SET_LATER:
@@ -783,10 +784,12 @@ class Ledger:
             last = self.conn.execute("SELECT seq, digest FROM ledger_log ORDER BY seq DESC LIMIT 1").fetchone()
             seq, prev = (last["seq"] + 1, last["digest"]) if last else (1, ZERO)
             head = self.conn.execute("SELECT value FROM meta WHERE key = 'head'").fetchone()
-            if head is not None and (last is None or head[0] != f"{last['seq']}:{last['digest']}"):
-                # a cut tail (P 5.6): a row written now would take the seq of the one the log lost
-                raise LedgerUnreadable(f"{self.path}: meta.head is {head[0]}, but the log's last row is "
-                                       f"{'none' if last is None else str(last['seq']) + ':' + last['digest']}. {_CUT}")
+            # a cut tail (P 5.6), checked here for every writer, a State read first or not: a row written now would
+            # take the seq of the one the log lost, or, written over a last row whose change was lost, hide the tear.
+            # The cheap reads a State makes, with no table loaded.
+            cut = self._tail_problems(seq - 1, {} if head is None else {"head": head[0]}, loaded={})
+            if cut:
+                raise LedgerUnreadable(f"{self.path}: a row written now would take seq {seq}, but {cut[0]}. {_CUT}")
             entry = {"seq": seq, "at": at, "kind": kind, "ref": ref, "actor": actor, "channel": channel,
                      "under_grant": under_grant, "proposal_id": proposal_id, "body": text}
             digest = _digest(prev, entry)

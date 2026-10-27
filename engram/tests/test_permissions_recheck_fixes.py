@@ -162,3 +162,61 @@ def test_must_fix_2_a_whole_ledger_after_each_kind_of_last_row_reads_and_verifie
             assert led.state().seq == led.seq() and led.integrity() == (led.seq(), [])
     finally:
         led.close()
+
+
+# ---------------------------------------------------------------- should-fix 3: a writer never takes a lost row's seq
+
+def _cut_last_row_and_head(home, seq):
+    """The re-check's probe: the last log row (seq `seq`) lost and the meta page old too, so the head names seq - 1;
+    the row's projection (R1's revocation) is kept."""
+    led = Ledger.open_read_only(home)
+    try:
+        digest = led.conn.execute("SELECT digest FROM ledger_log WHERE seq = ?", (seq - 1,)).fetchone()[0]
+    finally:
+        led.close()
+    _sql(home, f"DELETE FROM ledger_log WHERE seq = {seq}", f"UPDATE meta SET value = '{seq - 1}:{digest}' "
+                                                            "WHERE key = 'head'")
+
+
+def _log(home) -> list:
+    con = sqlite3.connect(ledger_path(home))
+    try:
+        return con.execute("SELECT seq, kind, digest FROM ledger_log ORDER BY seq").fetchall()
+    finally:
+        con.close()
+
+
+def test_should_fix_3_a_writer_with_no_state_refuses_the_seq_a_table_already_names(tmp_path):
+    use, seq = _revoked_r1(tmp_path)
+    _cut_last_row_and_head(tmp_path, seq)
+    before = _log(tmp_path)
+    led = Ledger.open(tmp_path)
+    try:
+        with pytest.raises(LedgerUnreadable, match=f"records.revoked_seq names seq {seq}, past the log's last row"):
+            led.note_first_lane("mem:S/episode/m9", "personal", "2026-10-01T00:00:00+00:00", store_id="S",
+                                now=T("2026-11-04"))
+        with pytest.raises(LedgerUnreadable, match="The log's tail was cut"):
+            led._append("lane-note-first", "mem:S/episode/m9", "tool:engram", "tool",
+                        {"insert": [{"table": "lane_notes", "row": {"object": "mem:S/episode/m9", "lane": "personal",
+                                                                    "at": T("2026-10-01"), "seq": "@seq"}}]},
+                        at=T("2026-11-04"))
+    finally:
+        led.close()
+    assert _log(tmp_path) == before and before[-1][0] == seq - 1        # nothing written at the lost seq
+    with pytest.raises(LedgerUnreadable):
+        decide(_state(tmp_path), use)
+
+
+def test_should_fix_3_a_writer_with_no_state_never_covers_a_last_row_whose_change_was_lost(tmp_path):
+    """Written over, the torn row would no longer be the last, and the tear would read as whole."""
+    use, seq, _ = _last_row_kept_its_change_lost(tmp_path, "revoked")
+    led = Ledger.open(tmp_path)
+    try:
+        with pytest.raises(LedgerUnreadable, match=f"the log's last row, seq {seq}, sets records.revoked_seq"):
+            led.note_first_lane("mem:S/episode/m9", "personal", "2026-10-01T00:00:00+00:00", store_id="S",
+                                now=T("2026-11-04"))
+    finally:
+        led.close()
+    assert _log(tmp_path)[-1][0] == seq
+    with pytest.raises(LedgerUnreadable):
+        decide(_state(tmp_path), use)
