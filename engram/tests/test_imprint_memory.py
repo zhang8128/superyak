@@ -123,9 +123,15 @@ def test_the_cap_guard_reads_the_controllers():
 
 
 def test_a_runaway_child_fails_on_its_own_hard_limit():
-    code = "x = bytearray(1536 * 2**20); x[::4096] = b'x' * len(x[::4096])"      # 1.5 GiB, over the 1 GiB data limit
+    code = "x = bytearray(1536 * 2**20); x[::4096] = b'x' * len(x[::4096])"      # 1.5 GiB, over the 512 MiB data limit
     with pytest.raises(AssertionError) as raised:
         child_peak_rss(cmd=[sys.executable, "-c", code])
+    assert "MemoryError" in str(raised.value)
+
+
+def test_a_child_over_the_512_mib_cap_fails_on_its_data_limit():        # the units' LimitDATA=512M (review I4)
+    with pytest.raises(AssertionError) as raised:
+        child_peak_rss(cmd=[sys.executable, "-c", "x = bytearray(640 * 2**20)"])
     assert "MemoryError" in str(raised.value)
 
 

@@ -44,7 +44,8 @@ EXPECTED = {
         'Unit': {'After': 'superyak-lighthouse.service', 'OnFailure': 'superyak-alert@%n.service'},
         'Service': {'Type': 'oneshot', 'WorkingDirectory': '%h/superyak/peer',
                     'ExecStart': f'{PYTHON} station-imprint-sweep --data-dir {DATA} --imprints-dir %h/.engram/imprints',
-                    'Nice': '10', 'IOSchedulingClass': 'idle', 'TimeoutStartSec': '15min', 'MemoryMax': '512M', 'MemorySwapMax': '0'},
+                    'Nice': '10', 'IOSchedulingClass': 'idle', 'TimeoutStartSec': '15min', 'MemoryMax': '512M', 'MemorySwapMax': '0',
+                    'LimitDATA': '512M'},   # the cap that holds where the user manager has no memory controller (review I4)
     },
     'superyak-imprint-sweep.timer': {
         'Unit': {},

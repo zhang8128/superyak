@@ -34,6 +34,7 @@ class Unit:
     name: str
     memory_max: str | None
     memory_swap_max: str | None
+    limit_data: str | None = None
 
 
 def units_in_make(text):
@@ -43,7 +44,7 @@ def units_in_make(text):
         found = UNIT_NAME.search(line)
         if 'systemd-run' in line and found:
             props = dict(p.split('=', 1) for p in re.findall(r'-p ([A-Za-z]+=\S+)', line))
-            units.append(Unit(found.group(1), props.get('MemoryMax'), props.get('MemorySwapMax')))
+            units.append(Unit(found.group(1), props.get('MemoryMax'), props.get('MemorySwapMax'), props.get('LimitDATA')))
     return units
 
 
@@ -51,7 +52,7 @@ def unit_in_service(name, text):
     """A `.service` file's [Service] section as a Unit."""
     service = text.split('[Service]', 1)[1] if '[Service]' in text else ''
     props = dict(re.findall(r'^([A-Za-z]+)=(.*)$', service, re.M))
-    return Unit(name, props.get('MemoryMax'), props.get('MemorySwapMax'))
+    return Unit(name, props.get('MemoryMax'), props.get('MemorySwapMax'), props.get('LimitDATA'))
 
 
 def imprint_units_from_the_makefile_and_systemd(repo):
@@ -64,7 +65,9 @@ def imprint_units_from_the_makefile_and_systemd(repo):
 def test_the_unit_readers_see_a_missing_cap():
     assert units_in_make('x:\n\tsystemd-run --user --unit=superyak-imprint-use-$$id -p TimeoutStopSec=60 flock\n') == [
         Unit('superyak-imprint-use', None, None)]
-    assert unit_in_service('a', '[Unit]\nMemoryMax=1\n[Service]\nMemoryMax=512M\n') == Unit('a', '512M', None)
+    assert unit_in_service('a', '[Unit]\nMemoryMax=1\n[Service]\nMemoryMax=512M\n') == Unit('a', '512M', None, None)
+    assert units_in_make('x:\n\tsystemd-run --user --unit=superyak-imprint-use-$$id -p MemoryMax=512M -p LimitDATA=512M flock\n') == [
+        Unit('superyak-imprint-use', '512M', None, '512M')]
 
 
 @pytest.mark.skipif(not (REPO / 'Makefile').is_file(), reason='needs the parent repository Makefile')
@@ -73,6 +76,7 @@ def test_every_imprint_unit_is_capped_at_512m():
     assert {u.name for u in units} >= {'superyak-imprint-admit', 'superyak-imprint-use', 'superyak-imprint-sweep'}
     for unit in units:                                          # admit, use, sweep
         assert unit.memory_max == '512M' and unit.memory_swap_max == '0', unit.name
+        assert unit.limit_data == '512M', unit.name     # what holds where there is no memory controller (review I4)
 
 
 # ---- The Pi measurement -------------------------------------------------------------------------------------------
@@ -89,7 +93,7 @@ _LAUNCHER = ('import os, resource, signal, subprocess, sys\n'
              'print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, code)\n')
 
 CAP_BYTES = 512 * 2**20
-HARD_DATA_LIMIT = 2 * CAP_BYTES      # the backstop where MemoryMax is silently ignored (no memory controller)
+HARD_DATA_LIMIT = CAP_BYTES          # the units' LimitDATA=512M: what holds where MemoryMax is ignored (review I4)
 
 
 def memory_cap_enforced(controllers=None):
@@ -221,6 +225,12 @@ def test_pi_the_lighthouse_and_the_station_commands(tmp_path):
 def test_the_cap_guard_reads_the_controllers():
     assert not memory_cap_enforced('cpu pids\n')                   # this Pi: the property is accepted and ignored
     assert memory_cap_enforced('cpu memory pids\n')
+
+
+def test_a_child_over_the_512_mib_cap_fails_on_its_data_limit():        # the units' LimitDATA=512M (review I4)
+    with pytest.raises(AssertionError) as raised:
+        child_peak_rss(cmd=[sys.executable, '-c', 'x = bytearray(640 * 2**20)'])
+    assert 'MemoryError' in str(raised.value)
 
 
 def test_a_runaway_child_fails_on_its_own_hard_limit():

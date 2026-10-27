@@ -465,10 +465,11 @@ _PREAMBLE = ("import sys; sys.path.insert(0, {engram!r}); SRC = {src!r}\n"
              "import calibrate, persistence, sheaf\nfrom storage import Storage\n")
 _RUN_ONE = "from tests.imprint_support import run_one\n"   # only when used: the support module is heavy
 # The backstop of R27's cap: where the user manager has no memory controller, ``MemoryMax=512M`` is silently not
-# applied, so the child also gets a hard ``RLIMIT_DATA`` (private writable memory, twice the cap) and a wall-clock
-# kill, and a runaway ends in the child's own MemoryError or timeout, never in someone killing it by hand.
+# applied, so the child also gets a hard ``RLIMIT_DATA`` (private writable memory) equal to the cap, as the units'
+# ``LimitDATA=512M`` gives them (review I4), and a wall-clock kill, and a runaway ends in the child's own MemoryError
+# or timeout, never in someone killing it by hand.
 CAP_BYTES = 512 * 2**20
-HARD_DATA_LIMIT = 2 * CAP_BYTES
+HARD_DATA_LIMIT = CAP_BYTES
 _LAUNCHER = ("import os, resource, signal, subprocess, sys, time\n"
              "lim = int(os.environ.pop('IMPRINT_DATA_LIMIT')); wall = float(os.environ.pop('IMPRINT_WALL'))\n"
              "t = time.monotonic()\n"
@@ -498,7 +499,7 @@ def child_peak_rss(code: str | None = None, *, src=None, timed: bool = False, cm
     """Peak resident bytes (``VmHWM``, read as ``ru_maxrss``) of ``code`` run in a child, or of the whole command
     ``cmd`` (a list) when it is given (``timed``: and its wall seconds). The child runs under
     ``systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0`` where that exists (R27), and always under a
-    hard ``RLIMIT_DATA`` of 1 GiB and a ``wall`` seconds kill, so a runaway fails the test on its own where the
+    hard ``RLIMIT_DATA`` of 512 MiB (the units' ``LimitDATA``) and a ``wall`` seconds kill, so a runaway fails the test on its own where the
     cap is not applied (``memory_cap_enforced``; a warning says so). A launcher process reads ``RUSAGE_CHILDREN``,
     so the figure is this child's alone, whatever it re-executes or forks."""
     if cmd is not None:

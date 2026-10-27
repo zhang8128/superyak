@@ -175,7 +175,7 @@ def test_the_use_unit_gets_the_socket_exactly_when_runtime_json_names_one(tmp_pa
     unit = started_unit(tmp_path, home, env={'SUPERYAK_RUNTIME_CONFIG': str(other_runtime(tmp_path))}, make_vars={'RUNTIME_CONFIG': '/elsewhere'})
     assert unit.env_options == expected
     assert not ('--setenv=ENGRAM_EMBEDDER_SOCKET' in ' '.join(unit.argv) and 'UnsetEnvironment=ENGRAM_EMBEDDER_SOCKET' in unit.argv)
-    assert {'-p', 'TimeoutStopSec=60', 'MemoryMax=512M', 'MemorySwapMax=0', 'RuntimeMaxSec=1800'} <= set(unit.argv)
+    assert {'-p', 'TimeoutStopSec=60', 'MemoryMax=512M', 'MemorySwapMax=0', 'LimitDATA=512M', 'RuntimeMaxSec=1800'} <= set(unit.argv)
     assert unit.argv[unit.argv.index('flock'):unit.argv.index('flock') + 3] == ['flock', '-n', f'{IMPRINTS_OF(tmp_path)}/.jobs.lock']
     assert unit.name == f'superyak-imprint-use-{FULL_ID}' and not [a for a in unit.argv if a.startswith('LANE=')]
 
@@ -209,7 +209,7 @@ def test_approve_starts_only_the_approved_imprints_unit(tmp_path):
     calls = make_approve(tmp_path, admit_line=ID2, awaiting=[ID1, ID2], loaded=[f'superyak-imprint-admit-{ID1}'])
     units = [c for c in calls if c[0] == 'systemd-run']
     assert [u[u.index('--user') + 1] for u in units] == [f'--unit=superyak-imprint-admit-{ID2}']
-    assert {'TimeoutStopSec=60', 'MemoryMax=512M', 'MemorySwapMax=0', 'RuntimeMaxSec=3600'} <= set(units[0])   # I 10, "Time"
+    assert {'TimeoutStopSec=60', 'MemoryMax=512M', 'MemorySwapMax=0', 'LimitDATA=512M', 'RuntimeMaxSec=3600'} <= set(units[0])   # I 10, "Time"
     dock = make_approve(tmp_path / 'dock', admit_line=None, awaiting=[ID1])                   # a docking's approval
     assert not [c for c in dock if c[0] == 'systemd-run' or 'imprint.py' in ' '.join(c) or '--awaiting-admission' in c]
     assert 'ADMIT:' not in calls.stdout and 'Approved c0a8.' in calls.stdout

@@ -275,7 +275,7 @@ JOBS_LOCK_CHECK = flock -n "$(IMPRINTS)/.jobs.lock" true; lock=$$?
 
 # The admission unit, written once; $(1) is the full imprint id (a shell expression).
 define ADMISSION_UNIT
-systemd-run --user --unit=superyak-imprint-admit-$(1) --collect -p MemoryMax=512M -p MemorySwapMax=0 -p RuntimeMaxSec=3600 -p TimeoutStopSec=60 flock -n "$(IMPRINTS)/.jobs.lock" make -C "$(CURDIR)" $(UNIT_VARS) station-imprint-admit ID=$(1)
+systemd-run --user --unit=superyak-imprint-admit-$(1) --collect -p MemoryMax=512M -p MemorySwapMax=0 -p LimitDATA=512M -p RuntimeMaxSec=3600 -p TimeoutStopSec=60 flock -n "$(IMPRINTS)/.jobs.lock" make -C "$(CURDIR)" $(UNIT_VARS) station-imprint-admit ID=$(1)
 endef
 
 station-approve:
@@ -329,7 +329,7 @@ station-imprint-use:
 	if [ $$lock -eq 1 ]; then echo "Another imprint job is running on the station; try again when it ends."; exit 3; \
 	elif [ $$lock -ne 0 ]; then echo "the imprint job lock can't be taken: $$lock"; exit 1; fi; \
 	eval "set -- $$env"; \
-	if systemd-run --user --unit=superyak-imprint-use-$$id --collect -p MemoryMax=512M -p MemorySwapMax=0 -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 "$$@" flock -n "$(IMPRINTS)/.jobs.lock" make -C "$(CURDIR)" $(UNIT_VARS) station-imprint-use-run ID=$$id USE="$(USE)"$(if $(LANE), LANE="$(LANE)"); then \
+	if systemd-run --user --unit=superyak-imprint-use-$$id --collect -p MemoryMax=512M -p MemorySwapMax=0 -p LimitDATA=512M -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 "$$@" flock -n "$(IMPRINTS)/.jobs.lock" make -C "$(CURDIR)" $(UNIT_VARS) station-imprint-use-run ID=$$id USE="$(USE)"$(if $(LANE), LANE="$(LANE)"); then \
 	  echo "Started a use of $$short in the background; see make station-imprints."; \
 	elif [ "$$(systemctl --user show -p LoadState --value superyak-imprint-use-$$id)" = loaded ]; then \
 	  echo "A use of $$short is already running; see make station-imprints."; exit 3; \

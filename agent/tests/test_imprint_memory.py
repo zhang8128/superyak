@@ -36,7 +36,7 @@ _LAUNCHER = ('import os, resource, signal, subprocess, sys\n'
              'print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, code)\n')
 
 CAP_BYTES = 512 * 2**20
-HARD_DATA_LIMIT = 2 * CAP_BYTES      # the backstop where MemoryMax is silently ignored (no memory controller)
+HARD_DATA_LIMIT = CAP_BYTES          # the units' LimitDATA=512M: what holds where MemoryMax is ignored (review I4)
 
 
 def memory_cap_enforced(controllers=None):
@@ -189,6 +189,12 @@ def test_pi_send_holds_one_part_at_a_time(tmp_path):
 def test_the_cap_guard_reads_the_controllers():
     assert not memory_cap_enforced('cpu pids\n')
     assert memory_cap_enforced('cpu memory pids\n')
+
+
+def test_a_child_over_the_512_mib_cap_fails_on_its_data_limit():        # the units' LimitDATA=512M (review I4)
+    with pytest.raises(AssertionError) as raised:
+        child_peak_rss(cmd=[sys.executable, '-c', 'x = bytearray(640 * 2**20)'])
+    assert 'MemoryError' in str(raised.value)
 
 
 def test_a_runaway_child_fails_on_its_own_hard_limit():
