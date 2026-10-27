@@ -2,11 +2,15 @@
 import asyncio
 import hmac
 import ipaddress
+import logging
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
+from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
+from starlette.routing import Match, Mount
+from starlette.websockets import WebSocketClose
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +28,20 @@ STATIC_DIR = Path(__file__).with_name('static')
 # forwarded headers from TRUSTED_PROXY only (tailscale serve), so an internet client can't pass as a tailnet address.
 TAILNET = (ipaddress.ip_network('100.64.0.0/10'), ipaddress.ip_network('fd7a:115c:a1e0::/48'))
 TRUSTED_PROXY = '127.0.0.1'
+SECURITY_HEADERS = [
+    (b'x-content-type-options', b'nosniff'),
+    (b'cache-control', b'no-store'),
+    (b'content-security-policy', b"default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
+    (b'referrer-policy', b'no-referrer'),
+]
+# Public route spec 2: what a public request reaches with no valid session or ship key, named by the template of the
+# route object the router dispatches it to, never by path prefix: the app shell and its assets, health, the login,
+# an invitation link and the layers their owners published. A route added later starts closed.
+PUBLIC_ROUTES = {
+    '/': {'GET', 'HEAD'}, '/public/': {'GET', 'HEAD'}, '/assets': {'GET', 'HEAD'}, '/api/health': {'GET'},
+    '/api/login': {'POST'}, '/api/invitations/redeem': {'POST'},
+    '/public/layers/{key}': {'GET'}, '/public/layers/{layer_id}/files/{key}': {'GET'},
+}
 
 
 def is_public(scope):
@@ -80,14 +98,68 @@ class BrowserBoundary:
             return await receive()
         async def secure_send(message):
             if message['type'] == 'http.response.start':
-                message.setdefault('headers', []).extend([
-                    (b'x-content-type-options', b'nosniff'),
-                    (b'cache-control', b'no-store'),
-                    (b'content-security-policy', b"default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
-                    (b'referrer-policy', b'no-referrer'),
-                ])
+                message.setdefault('headers', []).extend(SECURITY_HEADERS)
             await send(message)
         await self.app(scope, bounded_receive, secure_send)
+
+class PublicRoute:
+    """Public route spec 2: default deny for public (Funnel) requests. Outermost, so it runs before the body is read.
+    A public request passes to an allow-listed route, or with a valid session or ship key (checked, not just present;
+    the route's own check still decides). Anything else gets 401 under /api/, which app.js acts on, and 404 elsewhere.
+    Tailnet requests pass untouched."""
+    def __init__(self, app, *, store, router):
+        self.app, self.store, self.router = app, store, router
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] not in ('http', 'websocket'):
+            return await self.app(scope, receive, send)
+        try:  # only the classification and the lookup: 401 would tell the dock client its key was revoked
+            refusal = await self.refusal(scope)
+        except Exception as error:  # noqa: BLE001
+            logging.getLogger(__name__).warning('Public route check failed: %s', type(error).__name__)
+            refusal = (503, 'Try again shortly')
+        if refusal is None:
+            return await self.app(scope, receive, send)  # outside the guard: route errors reach the 500 handler
+        if scope['type'] == 'websocket':
+            return await WebSocketClose()(scope, receive, send)
+        response = JSONResponse({'error': refusal[1]}, refusal[0])
+        response.raw_headers.extend(SECURITY_HEADERS)
+        await response(scope, receive, send)
+
+    async def refusal(self, scope):
+        """None lets the request through; otherwise the (status, message) that refuses it."""
+        if not is_public(scope):
+            return None
+        if scope['type'] == 'websocket':
+            return (403, 'No route takes a public websocket')  # none exists; __call__ closes the socket
+        if self.allowed(scope):  # before any lookup: a browser sends its session cookie with every asset
+            return None
+        request = Request(scope)  # Starlette's cookie parser and bearer_key, so this sees what the route will
+        key, token = bearer_key(request), request.cookies.get(COOKIE)
+        if (key is not None or token is not None) and await run_in_threadpool(self.valid, key, token):
+            return None
+        return (401, 'Sign in required') if scope['path'].startswith('/api/') else (404, 'Not found')
+
+    def valid(self, key, token):
+        """In a worker, as the inbox wait's store calls are: the store gate is a blocking flock."""
+        return bool(key is not None and self.store.ship_key_is_valid(key)
+                    or token is not None and self.store.session_is_valid(token))
+
+    def allowed(self, scope):
+        """Whether the route the router dispatches this request to is on the allow-list, for this method. The router
+        (FastAPI's APIRouter.app) takes the first full match, else the first partial one (a 405)."""
+        probe, partial = dict(scope), None  # a router's matches() may note itself in the scope it is given
+        for route in self.router.routes:
+            match, _ = route.matches(probe)
+            if match == Match.FULL:
+                return self.listed(route, scope['method'])
+            if match == Match.PARTIAL and partial is None:
+                partial = route
+        return partial is not None and self.listed(partial, scope['method'])
+
+    @staticmethod
+    def listed(route, method):
+        return isinstance(route, (APIRoute, Mount)) and method in PUBLIC_ROUTES.get(route.path, ())
 
 async def body(request):
     try:
@@ -166,6 +238,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     install_sources(app)
     app.mount('/assets', StaticFiles(directory=STATIC_DIR), name='assets')
     app.add_middleware(BrowserBoundary, allowed_origins=allowed_origins)
+    app.add_middleware(PublicRoute, store=store, router=app.router)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)
     async def problem(request, exc):

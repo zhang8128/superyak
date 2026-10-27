@@ -199,9 +199,12 @@ def test_local_demo_uses_normal_sessions_without_exposing_credentials(tmp_path):
         app.state.store.session(previous_token)
     assert expired.value.status == 401
     assert (target / 'demo-credentials.json').read_bytes() == credentials
-    remote = TestClient(app, base_url='http://127.0.0.1:7435', client=('192.0.2.5', 1234), headers={'origin': 'http://127.0.0.1:7435'})
+    remote = TestClient(app, base_url='http://127.0.0.1:7435', client=('100.70.1.2', 1234), headers={'origin': 'http://127.0.0.1:7435'})
     assert remote.get('/api/local-demo').status_code == 403
     assert remote.post('/api/local-demo/login', json={'username': 'organizer'}).status_code == 403
+    public = TestClient(app, base_url='http://127.0.0.1:7435', client=('192.0.2.5', 1234), headers={'origin': 'http://127.0.0.1:7435'})
+    assert public.get('/api/local-demo').status_code == 401  # public route spec 2: refused before the route
+    assert public.post('/api/local-demo/login', json={'username': 'organizer'}).status_code == 401
 
 def test_local_demo_is_explicit_and_rejects_ordinary_state_or_remote_origins(tmp_path):
     from superyak_peer.__main__ import seed_demo
