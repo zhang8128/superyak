@@ -93,6 +93,8 @@ DETAIL_KEYS: dict[str, tuple[frozenset[str], ...]] = {
 }
 EVENTS = tuple(DETAIL_KEYS)
 
+KNOWN_LIMITS = 'Files removed. The station does not overwrite disk blocks, and cannot reach copies anyone made by hand.'
+
 PART_SIZE = 4_194_304
 LARGEST_PACKAGE = 2 * 2**30
 LIVE_BYTES = 16 * 2**30
@@ -549,6 +551,23 @@ def decide_use(permission, receipts, owner_records, *, status, kind, t, operator
     return UseDecision(True, None, None, end, tuple(r['id'] for r in own if r['id'] in used))
 
 
+def _removed_files(folder):
+    """The files under `folder`, each as {path, bytes, sha256}, for a `deleted` receipt (hashed 1 MiB at a time)."""
+    out = []
+    if not folder.is_dir():
+        return out
+    for path in sorted(folder.rglob('*')):
+        if path.is_symlink() or not path.is_file():
+            continue
+        digest, size = hashlib.sha256(), 0
+        with open(path, 'rb') as stream:
+            while block := stream.read(COPY_BUFFER):
+                digest.update(block)
+                size += len(block)
+        out.append({'path': str(path), 'bytes': size, 'sha256': digest.hexdigest()})
+    return out
+
+
 class Imprints:
     def _append_imprint_receipt(self, db, request_id, event, actor_id, detail, *, sign):
         """Appends one receipt to the permission's chain inside the caller's transaction (BEGIN IMMEDIATE, so two
@@ -911,3 +930,97 @@ class Imprints:
                 raise Problem(404, 'No such imprint request')
         folder = self.data_dir / 'imprints' / request_id
         return {'status': found['status'], 'held': _held(folder) if folder.is_dir() else []}
+
+    def _decide_imprint(self, username, item, approve, root):
+        """Andy's decision on one `received` imprint (I 10): approval, then the hand-off, or a denial."""
+        if root is None:
+            raise Problem(409, 'Give --imprints-dir: the imprints root this station was started with')
+        if not approve:
+            with self.transaction() as db:
+                actor = self._operator(db, username)
+                found = self._received_row(db, item['id'])
+                self._deny_imprint(db, found, actor, {}, 'denied')
+            return item, {'status': 'deleted', 'imprint_id': found['imprint_id'], 'term': None}
+        return item, self._approve_imprint(username, item['id'], Path(root))
+
+    def _received_row(self, db, request_id):
+        found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+        if found is None or found['status'] != 'received':
+            raise Problem(404, 'This imprint is no longer waiting')
+        if found['expires'] <= self.clock():
+            raise Problem(409, 'The review window for this imprint has ended')
+        return found
+
+    def _deny_imprint(self, db, found, actor, detail, reason):
+        """Deletes the staged bytes and writes `denied` and `deleted`; the status becomes `deleted` at once."""
+        staged = self.data_dir / 'imprints' / found['id']
+        files = _removed_files(staged)
+        self._append_imprint_receipt(db, found['id'], 'denied', actor, detail, sign=False)
+        self._append_imprint_receipt(db, found['id'], 'deleted', actor,
+                                     {'reason': reason, 'files': files, 'limits': KNOWN_LIMITS}, sign=False)
+        now = int(self.clock())
+        db.execute("UPDATE imprint_requests SET status='deleted', decided_at=?, decided_by=?, ended_at=?, "
+                   "delete_reason=? WHERE id=?", (now, actor, now, reason, found['id']))
+        if staged.exists():
+            shutil.rmtree(staged)
+
+    def _owner_layer_of(self, db, owner_id):
+        pairs = []
+        marks = ','.join('?' * len(LIVE_STATUSES))
+        for row in db.execute(f'SELECT id, permission FROM imprint_requests WHERE owner_id=? AND permission IS NOT NULL '
+                              f'AND status IN ({marks})', (owner_id, *LIVE_STATUSES)).fetchall():
+            records = [json.loads(r['record']) for r in db.execute(
+                'SELECT record FROM imprint_receipts WHERE request_id=? ORDER BY seq', (row['id'],))]
+            pairs.append((json.loads(row['permission']), records))
+        return owner_layer(pairs, owner_id=owner_id)
+
+    def _approve_imprint(self, username, request_id, root):
+        """Step 1 (one transaction): the use decision, then `approved` and the unsigned receipt, or a denial naming
+        the term. Step 2, after the commit: the hand-off. A hand-off that fails leaves the row `approved` for the
+        sweep to mark `missing`."""
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root = root.resolve()
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            found = self._received_row(db, request_id)
+            permission = json.loads(found['permission'])
+            if permission['records'][0]['selector']['audience'] != [f'place:home/{username}']:
+                raise Problem(409, f'This imprint is not for place:home/{username}, so no use of it could be '
+                                   'allowed; only that person can approve it')
+            imprint_id = found['imprint_id']
+            if any(p.exists() or p.is_symlink() for p in (root / imprint_id, root / f'{imprint_id}.state',
+                                                          root / 'tombstones' / f'{imprint_id}.json')):
+                raise Problem(409, 'The imprints root already holds this imprint id (a directory or a tombstone)')
+            receipts = [json.loads(r['record']) for r in db.execute(
+                'SELECT record FROM imprint_receipts WHERE request_id=? ORDER BY seq', (request_id,))]
+            decision = decide_use(permission, receipts, self._owner_layer_of(db, found['owner_id']),
+                                  status='approved', kind='admission', t=int(self.clock()), operator=username)
+            if not decision.allowed:
+                self._deny_imprint(db, found, actor, {'term': decision.term}, 'denied')
+                return {'status': 'deleted', 'imprint_id': imprint_id, 'term': decision.term}
+            now = int(self.clock())
+            db.execute("UPDATE imprint_requests SET status='approved', decided_at=?, decided_by=?, imprints_root=? "
+                       "WHERE id=?", (now, actor, str(root), request_id))
+            self._append_imprint_receipt(db, request_id, 'approved', actor, {}, sign=False)
+        self._hand_off(found, root, now, actor)
+        return {'status': 'approved', 'imprint_id': imprint_id, 'term': None}
+
+    def _hand_off(self, found, root, now, actor):
+        """Creates the two directories (0700, exclusive), moves the staged `imprint.db` and `manifest.json`, writes
+        `permission.json` and `approved.json`, and removes staging (I 10, steps 2 and 3)."""
+        imprint_id, staged = found['imprint_id'], self.data_dir / 'imprints' / found['id']
+        folder, state = root / imprint_id, root / f'{imprint_id}.state'
+        for path in (folder, state):
+            try:
+                path.mkdir(mode=0o700)
+            except FileExistsError:
+                raise Problem(409, 'The imprints root gained this imprint id during the hand-off') from None
+            os.chmod(path, 0o700)
+        for name in ('imprint.db', 'manifest.json'):
+            shutil.move(str(staged / name), str(folder / name))
+        _write_file(folder / 'permission.json', canonical({
+            'record': json.loads(found['permission']), 'signature': found['permission_signature'],
+            'station_key': found['station_key']}))
+        _write_file(folder / 'approved.json', canonical({
+            'imprint_id': imprint_id, 'request_id': found['id'], 'approved_at': now, 'approved_by': actor}))
+        shutil.rmtree(staged)

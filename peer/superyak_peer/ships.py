@@ -301,7 +301,7 @@ class Ships:
             room = self.remove_participant(actor, room['id'], wormhole)
         return room, True
 
-    def station_decide(self, username, prefix, approve):
+    def station_decide(self, username, prefix, approve, *, imprints_root=None):
         """Trusted local operator only: approve or refuse one pending item by a short id,
         acting as the named person. Returns (item, result); never returns keys or tokens."""
         if not isinstance(prefix, str) or len(prefix.strip()) < 4:
@@ -314,7 +314,7 @@ class Ships:
             raise Problem(409, f'{prefix} matches more than one waiting item; give more characters')
         item = matches[0]
         if item['kind'] == 'imprint':
-            raise Problem(409, 'Approving or refusing an imprint is not built yet')
+            return self._decide_imprint(username, item, approve, imprints_root)
         with self.transaction() as db:
             actor = self._operator(db, username)
         if item['kind'] == 'access':

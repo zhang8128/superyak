@@ -178,3 +178,11 @@ def request_doc(**changes):
 def post(st, doc, ship='voyager'):
     """POST a request document, canonically encoded, from a docked ship ('voyager' is Sam's, 'serenity' Andy's)."""
     return getattr(st, ship).post('/api/imprints', content=canonical(doc))
+
+
+def ship_shortens(st, *, to):
+    """The requesting ship shortens the permission's end, as a signed `shortened` receipt appended directly (Task 31
+    builds the route later). `st` carries `request_id` and `ship_id`, or the request is the only one on the station."""
+    with st.store.transaction() as db:
+        st.store._append_imprint_receipt(db, st.request_id, 'shortened', st.ids['voyager'], {'valid_until': int(to)},
+                                         sign=True)

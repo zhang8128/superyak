@@ -93,7 +93,13 @@ def describe_pending(items, now, approver=None):
     return '\n'.join(lines)
 
 
-def describe_decision(item, result, person, approve):
+def describe_decision(item, result, person=None, approve=True):
+    if item['kind'] == 'imprint':
+        short = item['id'][:4]
+        if result['status'] == 'approved':
+            return f'Approved {short}. Admitting in the background; see make station-imprints.\nADMIT: {result["imprint_id"]}'
+        refused = f' The permission no longer allowed it ({result["term"]}).' if result.get('term') else ''
+        return f'Denied the imprint {short}; its bytes are deleted.{refused}'
     if item['kind'] == 'docking':
         existing = item.get('existing') or {}
         if approve and existing.get('kind') == 'ship':
@@ -269,6 +275,7 @@ def main(argv=None):
         decide.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
         decide.add_argument('--id', required=True, help='Short id from station-pending (at least 4 characters)')
         decide.add_argument('--as', dest='person', required=True, help='The person deciding; an approved ship becomes theirs')
+        decide.add_argument('--imprints-dir', type=Path, help='The imprints root (needed to decide an imprint)')
     rooms = commands.add_parser('station-rooms', help='Trusted local: list the rooms a person owns by short id, and which are bridged to the wormhole')
     rooms.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     rooms.add_argument('--as', dest='person', required=True, help='The room owner')
@@ -353,7 +360,7 @@ def main(argv=None):
             print(describe_pending(Store(args.data_dir, signing=False).station_pending(), time.time(), args.person))
         elif args.command in ('station-approve', 'station-deny'):
             approve = args.command == 'station-approve'
-            item, result = Store(args.data_dir, signing=False).station_decide(args.person, args.id, approve)
+            item, result = Store(args.data_dir, signing=False).station_decide(args.person, args.id, approve, imprints_root=args.imprints_dir)
             print(describe_decision(item, result, args.person, approve))
         elif args.command == 'station-rooms':
             print(describe_rooms(args.person, Store(args.data_dir, signing=False).station_rooms(args.person)))
