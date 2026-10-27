@@ -44,7 +44,7 @@ from lighthouse_protocol import (
     recall_result_frame,
     validate_frame,
 )
-from permissions import CACHE_ENTRIES
+from permissions import CACHE_BYTES, CACHE_ENTRIES, FRAMES_AT_ONCE
 from sharing import validate_audience
 from storage import Storage, vec0_distance_to_similarity
 
@@ -352,6 +352,19 @@ class _CacheEntry:
     copy: str
     eligible: object        # permissions.EligibleSet
 
+    def estimate(self) -> int:
+        """The bytes this entry holds, by the unit sizes measured for P 15: a decision 169 B, its dict entry 29 B
+        and its object key 134 B; each distinct ``cited`` tuple 56 B and 8 B an entry; each memory id 80 B and
+        26 B of its frozenset's slots. Worked out once."""
+        est = self.__dict__.get("_est")
+        if est is None:
+            decisions = self.eligible.decisions
+            tuples = {id(d.cited): len(d.cited) for d in decisions.values()}
+            est = (len(decisions) * (169 + 29 + 134) + sum(56 + 8 * n for n in tuples.values())
+                   + len(self.eligible.memory_ids) * (80 + 26))
+            object.__setattr__(self, "_est", est)
+        return est
+
     def serves(self, seq: int, ledger_id: str, changes: int, copy: str, t: int) -> bool:
         return ((self.seq, self.ledger_id, self.changes, self.copy) == (seq, ledger_id, changes, copy)
                 and self.eligible.at <= t and (self.eligible.horizon is None or t < self.eligible.horizon))
@@ -372,9 +385,10 @@ class _LedgerSide:
     them afresh at every frame and never cached (P 6.3 item 4)."""
 
     def __init__(self, daemon: "PublisherDaemon", publisher: "PublisherStore", frame: dict, mode: str,
-                 frame_decision, state, ledger_id: str, now: datetime):
+                 frame_decision, state, ledger_id: str, now: datetime, release=None):
         from permission_uses import Uses  # noqa: F401  (opened lazily by ``_uses``)
         from permissions import LegacyLayer, acts_for_place, agent_place_at
+        self._release = release
         self.daemon, self.publisher, self.frame, self.mode = daemon, publisher, frame, mode
         self.state, self.ledger_id, self.now = state, ledger_id, now
         self.t = int(now.timestamp())
@@ -472,12 +486,17 @@ class _LedgerSide:
             return None
 
     def close(self) -> None:
+        """Close the receipts, drop the State and give the frame's turn back (once)."""
         if self._uses is not None:
             try:
                 self._uses.close()
             except Exception:
                 pass
             self._uses = None
+        self.state = None
+        release, self._release = self._release, None
+        if release is not None:
+            release()
 
     def receipt_recall(self, candidates: list[dict], placed: _Placed) -> bool:
         """One receipt for a recall: the object refs it returned and how many copies were filtered. False when it
@@ -561,6 +580,8 @@ class PublisherDaemon:
         self._cache: collections.OrderedDict = collections.OrderedDict()
         self._cache_lock = threading.Lock()
         self.rebuilds = 0
+        # At most FRAMES_AT_ONCE frames build or hold a State at once; a frame waits for its turn (P 12.2, 15).
+        self._frames = threading.BoundedSemaphore(FRAMES_AT_ONCE)
 
     def _eligible(self, side: "_LedgerSide"):
         """This frame's eligible set of ``recall`` decisions for the house, from the cache while it is valid,
@@ -584,12 +605,16 @@ class PublisherDaemon:
                            purpose=side.frame["purpose"], action=action, at=side.t)
         for obj in sorted({p.obj for p in placements if p.obj and p.obj not in got.decisions}):
             logger.warning("permission: %s is not a decidable object in %s", obj, publisher.name)
+        entry = _CacheEntry(side.state.seq, side.ledger_id, changes, side.copy, got)
         with self._cache_lock:
             self.rebuilds += 1
-            self._cache[key] = _CacheEntry(side.state.seq, side.ledger_id, changes, side.copy, got)
-            self._cache.move_to_end(key)
-            while len(self._cache) > CACHE_ENTRIES:
-                self._cache.popitem(last=False)
+            self._cache.pop(key, None)
+            if entry.estimate() <= CACHE_BYTES:          # an entry over the bound alone serves this frame only
+                self._cache[key] = entry
+                total = sum(e.estimate() for e in self._cache.values())
+                while len(self._cache) > CACHE_ENTRIES or total > CACHE_BYTES:
+                    _, dropped = self._cache.popitem(last=False)
+                    total -= dropped.estimate()
         return got
 
     def _request(self, frame: dict, action: str) -> PolicyRequest:
@@ -675,6 +700,7 @@ class PublisherDaemon:
                 "serving nothing" if enforce else "deciding by the legacy path alone")
             return None, enforce
         from permission_ledger import Ledger
+        self._frames.acquire()          # held until the side closes: a frame waits, it is never refused
         try:
             ledger = Ledger.open_read_only(self.engram_home, LEDGER_BUSY_MS)
             try:
@@ -683,8 +709,10 @@ class PublisherDaemon:
                 ledger.close()
             now = self.clock()
             return _LedgerSide(self, publisher, frame, gate.mode, frame_decision, state, ledger_id,
-                               now if now.tzinfo else now.replace(tzinfo=timezone.utc)), False
+                               now if now.tzinfo else now.replace(tzinfo=timezone.utc),
+                               release=self._frames.release), False
         except Exception as error:
+            self._frames.release()
             logger.warning("permission ledger unreadable while serving %s: %s", publisher.name, error)
             return None, enforce
 

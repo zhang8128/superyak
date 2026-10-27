@@ -45,6 +45,8 @@ BOX_CAP = 4096
 JOINTS_PER_CHANGE = 64
 SWEEP_PER_PASS = 256
 CACHE_ENTRIES = 64
+CACHE_BYTES = 96 * 2**20        # the daemon's eligible-set cache, in estimated bytes (12.2, 15)
+FRAMES_AT_ONCE = 2              # frames that build or hold a State at once in the daemon (12.2, 15)
 MAX_PLACEMENTS = 20_000
 REBUILD_BUDGET_S = 2
 BULK_BUDGET_S = 40
@@ -1852,6 +1854,10 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
     decisions: dict[str, Decision] = {}
     made: dict[tuple, Decision | None] = {}
     horizons: list[int] = []
+    pool_cited: dict = {}           # equal Cited, equal `cited` tuples and equal `versions` are shared by every
+    pool_tuples: dict = {}          # decision that holds them (frozen, so safe to share)
+    pool_versions: dict = {}
+    pool_refusal: dict = {}
     for i, p in enumerate(placements):
         if i % PREFETCH_CHUNK == 0:
             state.prefetch([q.obj for q in placements[i:i + PREFETCH_CHUNK] if q.obj is not None])
@@ -1863,6 +1869,10 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
         except RuleError:
             made[(p.obj, p.copy)] = None
             continue
+        cited = tuple(pool_cited.setdefault(c, c) for c in d.cited)
+        d = replace(d, cited=pool_tuples.setdefault(cited, cited),
+                    versions=pool_versions.setdefault(tuple(sorted(d.versions.items())), d.versions),
+                    refusal=None if d.refusal is None else pool_refusal.setdefault(d.refusal, d.refusal))
         made[(p.obj, p.copy)] = d
         prior = decisions.get(p.obj)
         if prior is None or (prior.allowed and not d.allowed):
