@@ -629,10 +629,15 @@ def _revoke_grant(a):
     return _write(make)
 
 
-def gate_plan_lines(plan: dict) -> list[str]:
-    """What a `gate` act would use if applied now (R26, R27), for `sign` here and `gate` in Task 27."""
+def gate_plan_lines(plan: dict, *, marking: bool) -> list[str]:
+    """What a `gate` act would use if applied now (R26, R27), for `sign` here and `gate` in Task 27. `marking` is
+    whether the act marks an unmarked house: under `shadow` and `enforce`, and under `off` once the gate was raised;
+    under `off` on a ledger never raised it marks only a house marked `unreadable` or with another ledger's id
+    (R50)."""
+    which = ("each that does not carry this ledger's id" if marking else
+             "only each that carries `unreadable` or another ledger's id, since the gate was never raised")
     lines = [f"gate plan, read now (the yes reads the houses again):",
-             f"  published house: {plan['published_house']}", "  every house it will mark:"]
+             f"  published house: {plan['published_house']}", f"  the houses on disk; the yes marks {which}:"]
     lines += [f"    - {h}" for h in plan["houses"]] or ["    (none)"]
     if plan["lacking_029"]:
         lines.append("  houses that lack migration 029: each serves nothing under `shadow` or `enforce` until an "
@@ -666,7 +671,7 @@ def _on_proposal(kind: str):
             if body.get("needs") is not None:
                 notes.append(f"needs: {json.dumps(body['needs'], sort_keys=True)}")
             if kind == "sign" and inner.kind == "gate":
-                notes += gate_plan_lines(led.gate_plan())
+                notes += gate_plan_lines(led.gate_plan(), marking=_marks_unmarked(inner.args.get("mode"), st.meta))
             return _perform(led, owner, [Act(kind, {"proposal": p.id})], notes, words=words)
     return run
 
@@ -691,11 +696,16 @@ def _proposals(a) -> int:
 
 # ---------------------------------------------------------------- the gate, and the commands that only read (P 14)
 
+def _marks_unmarked(mode, meta) -> bool:
+    """Whether a gate act to `mode` marks an unmarked house, as `_make_gate` decides it."""
+    return mode != "off" or bool(meta.get("gate_raised"))
+
+
 def _gate(a) -> int:
     with _ledger() as led:
-        owner = led.meta()["owner"]
-        notes = gate_plan_lines(led.gate_plan())
-        return _perform(led, owner, [Act("gate", {"mode": a.mode})], notes)
+        meta = led.meta()
+        notes = gate_plan_lines(led.gate_plan(), marking=_marks_unmarked(a.mode, meta))
+        return _perform(led, meta["owner"], [Act("gate", {"mode": a.mode})], notes)
 
 
 def _rebuild(a) -> int:

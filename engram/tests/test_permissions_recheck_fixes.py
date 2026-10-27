@@ -7,8 +7,8 @@ from permission_cli import main as cli_main
 from permission_ledger import Gate, Ledger, LedgerUnreadable, effective_gate, houses, ledger_path
 from permissions import decide
 from tests.permissions_support import (  # noqa: F401
-    ANDY, M1, M1_TEXT, M3, T, add_subject, deliver_m1_through, do, keep_world, keep_world_with_imprint_allowed,
-    raise_gate, raised_ledger, receipt_rows, remove_subject)
+    ANDY, M1, M1_TEXT, M3, T, add_subject, cli_home, cli_home_with_house, deliver_m1_through, do, fake_tty,
+    keep_world, keep_world_with_imprint_allowed, raise_gate, raised_ledger, receipt_rows, remove_subject)
 from tests.test_permissions_serenity_fixes import _revoked_r1
 from tests.test_recall_margins import engram_server_env  # noqa: F401
 
@@ -246,3 +246,18 @@ def test_should_fix_4_an_unrecordable_kept_copy_under_enforce_leaves_no_imprint_
     assert "episode_id" in out
     assert [(r["action"], r["allowed"]) for r in receipt_rows(world.root, "imprint")] == [("imprint", 1)]
     assert f"mem:{world.ids.PHC_STORE}/episode/{out['episode_id']}" in _state(world.root).copies
+
+
+# ---------------------------------------------------------------- nits
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_nit_the_gate_plan_says_which_houses_the_yes_marks(cli_home_with_house, fake_tty, capsys, mode):
+    """Under `off` on a ledger never raised, only a house marked `unreadable` or with another ledger's id is marked
+    (R50), so the plan does not say every house is."""
+    fake_tty.answer("wrong1"); assert cli_main(["gate", mode]) == 3
+    out = capsys.readouterr().out
+    assert "every house it will mark" not in out and out.index("instances/lighthouse/graph.db") < out.index("code:")
+    if mode == "off":
+        assert "the yes marks only each that carries `unreadable` or another ledger's id" in out
+    else:
+        assert "the yes marks each that does not carry this ledger's id" in out

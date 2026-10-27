@@ -3398,8 +3398,9 @@ git commit -m "engram-permissions: the terminal yes, init and the registry comma
     `revoke-grant <id>`, `sign <id>`, `decline <id>`. `allow` prints `allow_words`; every command prints the full
     change (selector in canonical JSON, `valid_from`, `valid_until`, the layer, the replaced record). `sign` prints
     the proposal's words and the full change it will make, for every proposal kind of R26. For a gate proposal that
-    change is `Ledger.gate_plan()` at the time of the yes (Task 13): the published house, every house it will mark,
-    and each house that lacks migration 029, saying it serves nothing under `shadow` or `enforce` until an engram
+    change is `Ledger.gate_plan()` at the time of the yes (Task 13): the published house, the houses on disk and
+    which of them the yes marks (under `off` on a ledger never raised, only those marked `unreadable` or with
+    another ledger's id, R50), and each house that lacks migration 029, saying it serves nothing under `shadow` or `enforce` until an engram
     server opens it once (R26, R27), as Task 27's `gate` prints;
   - a reading subcommand, no yes: `proposals`.
 
