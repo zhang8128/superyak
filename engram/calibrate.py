@@ -206,6 +206,31 @@ def strip_content(value):
     return value
 
 
+ID_KEYS = frozenset({"semantic_id", "event_id", "parent_id", "id", "worst_edges"})
+
+
+def strip_ids(value):
+    """A copy of ``value`` with no memory id: every id key removed at any depth, a list of ids (``would_prune_ids``)
+    becomes its length, ``worst_edges`` (pairs of episode ids) goes too, and a skipped dense set's name cut to its kind (``hub:<id>`` is ``hub``) (I 10)."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if k in ID_KEYS:
+                continue
+            if k == "would_prune_ids" and isinstance(v, list):
+                out[k] = len(v)
+            elif k == "set" and isinstance(v, str):
+                out[k] = v if v.startswith("lane:") else v.split(":", 1)[0]
+            else:
+                out[k] = strip_ids(v)
+        return out
+    if isinstance(value, list):
+        return [strip_ids(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(strip_ids(v) for v in value)
+    return value
+
+
 def cohesion_report(store, *, max_episodes: int | None = None, skips: list | None = None) -> dict:
     """The cohesion summary, one semantic at a time: a five-bin histogram, the 15 hottest and the 5 coolest.
 
@@ -324,7 +349,7 @@ def _run(report: dict, name: str, fn, *args, no_content: bool = False) -> None:
 
 def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
               now: datetime | None = None, *, no_content: bool = False,
-              no_paths: bool = False, notes: Mapping[str, str] | None = None,
+              no_paths: bool = False, no_ids: bool = False, notes: Mapping[str, str] | None = None,
               create_parents: bool = True, max_lane_episodes: int | None = None,
               max_semantic_episodes: int | None = None) -> dict:
     from storage import Storage
@@ -405,6 +430,8 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
         report["notes"] = dict(notes)
     if no_content:
         report = strip_content(report)
+    if no_ids:
+        report = strip_ids(report)
     (out / "report.json").write_text(json.dumps(report, indent=2, default=str))
     (out / "report.md").write_text(render_markdown(report))
     return report

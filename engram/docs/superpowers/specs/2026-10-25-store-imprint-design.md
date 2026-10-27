@@ -284,7 +284,7 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 | D13 | A store's lineage is its id plus its stored ancestry. Two stores are independent only when their lineages don't meet and both ancestries are complete. Siblings are never independent. A store older than store identity (origin `retroactive`) is never complete, since nothing recorded the copies made of it then. | Rio Grande's call |
 | D14 | Transport is the station's HTTPS over the tailnet with the ship key, in 4 MiB parts hashed in the manifest. | Rio Grande's call |
 | D15 | Staged and admitted bytes, and a request's contents, live outside `peer.sqlite3`, so station backups never hold them. Tombstones survive a restore. | Rio Grande's call |
-| D16 | Admission is 17 checks plus calibration with a content-free report, and, with `route`, a count of the roads and trails (section 10). Calibration runs without its paths analysis, since the trails are kept only for the trail evaluation (section 10). Any failure deletes the package. | Rio Grande's call (the paths part: option (a) of the final check's FS1; the count: the cross-check's XS2) |
+| D16 | Admission is 17 checks plus calibration with a content-free report, and, with `route`, a count of the roads and trails (section 10). Calibration runs without its paths analysis, since the trails are kept only for the trail evaluation (section 10). When other people are carried, the report holds no memory id (section 10, `no_ids`). Any failure deletes the package. | Rio Grande's call (the paths part: option (a) of the final check's FS1; the count: the cross-check's XS2) |
 | D17 | The owner can withdraw at any time in the browser, which revokes the records. The owner's ship can ask the station to refuse at any time, which deletes the copy the same way and edits none of the owner's records, since an agent edits a person's layer only under a grant (permissions spec P10, 7.1). The ship's withdrawal and shortening are receipts, which the station's ceiling reads (D38). Deletion is immediate, never waits for Andy, and wins over a running admission. The station may also delete. | Rio Grande's call |
 | D18 | An end date is required, at most 365 days out. It can be shortened, never lengthened. | Rio Grande's call (the permissions spec's P13 allows 366) |
 | D19 | Receipts are hash-chained and hold no content. Station commands that hold no key write them unsigned, and the running lighthouse signs them within 60 seconds. | Rio Grande's call |
@@ -1722,6 +1722,17 @@ Those rest on the source build, its L1 and L4, and its tests.
   create_parents=False)`, inside the unit's limits (`MemoryMax=512M`).
 - `no_content` removes every `content` key at any depth before the report is written. Today the cohesion and
   persistence sections carry content excerpts (`calibrate.py:172`; `persistence.py:392`, `:415`).
+- **No memory ids when other people are carried** (gate "Other people inside the home"; Rio Grande's call). When
+  `manifest.others.memories` is above 0, admission also passes `no_ids`. Before either file is written and hashed,
+  calibration removes every memory id from the report at any depth, and a list of ids becomes its length: today
+  `first_open.would_prune_ids`, the `semantic_id` of `cohesion.hottest` and `coolest` and of `persistence.hubs`, the
+  `event_id` and `parent_id` of `persistence.conjunct_audit`, and the `id` of `persistence.redundant_cores`. (The
+  built code also drops the `worst_edges` pairs of episode ids and cuts a skipped set's name to its kind, since
+  `hub:<id>` and `event:<id>` carry an id.) The
+  report is shown to the owner through the station (section 12) and is readable on the Pi. A memory named to an
+  agent is a `recall` answer use, which the permissions spec's P36 doesn't cover (its 6.3, "What it never covers",
+  and 6.4, "Which uses may be bulk"), so for a memory of objects°(I) it would need every carried co-subject's yes.
+  With `no_ids`, admission names no object, and section 8's bulk uses are exact.
 - **No n × n matrix that grows with the store** (D31, D42). Revision 6 bounded every dense set at 7,500 episodes. Its
   reason: `build_filtration` holds `D`, the diagonal and `off` at once (`persistence.py:63-64`), and `_mst_edges` adds
   `floored` and a dense-to-sparse copy (`persistence.py:41-46`), a measured peak of 7.16 to 7.54 times n² × 8 bytes
@@ -1782,7 +1793,7 @@ Those rest on the source build, its L1 and L4, and its tests.
   most 3,300 s), with its peak (section 16). An admission killed at the limit still fails closed (D16). The use's
   unit keeps `RuntimeMaxSec=1800` (section 12).
 - **The rest of calibration streams** (D42). `first_open_preview` iterates its cursor instead of `fetchall`
-  (`calibrate.py:90-93`) and keeps two float arrays, a count, the first 50 ids and the latest touch. `generativity_scores` iterates the
+  (`calibrate.py:90-93`) and keeps two float arrays, a count, the first 50 ids (their count alone under `no_ids`) and the latest touch. `generativity_scores` iterates the
   resonances (`persistence.py:172-174`). `evaluate_prune` iterates its candidates (`:274-277`) and, for calibration,
   keeps only the two counts the report prints (`calibrate.py:207-208`). `cohesion_report` measures one semantic at a
   time and keeps only the five-bin histogram, the 15 hottest and the 5 coolest (`calibrate.py:165-180`), never the
@@ -2695,6 +2706,8 @@ embedder" while the route gate still runs (section 12).
   invalid vec0 slot, an `imprint_subjects` row naming a memory the package lacks or the owner (10), such a row in a
   copy that leaves its owner's home (12), and `others` that disagree with the rows (13).
 - **vec0 reading.** The verifier opens the package immutable with sqlite-vec loaded, and creates no side file.
+- **Calibration under `no_ids`.** No shipped memory's id occurs in `report.json` or `report.md`, as a substring, on a
+  fixture whose prune, cohesion, hub and redundant-core sections are not empty.
 - **Calibration.** No `content` key and no text value from the imprint in `report.json`. `source_unchanged`. No side
   files. Copies deleted. A lane and a core set over 16,000, and a cohesion set, a hub and a subdivision event over
   1,024, each record a skip, and no larger matrix is built. On random vectors with no ties, at sizes where today's

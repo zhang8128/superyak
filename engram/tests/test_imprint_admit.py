@@ -1,5 +1,6 @@
 """``imprint.py admit``: decided again, checked before each write, calibrated content-free (store-copy spec I 10, D39)."""
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -228,3 +229,36 @@ def test_an_unknown_skip_kind_fails_before_anything_is_marked_admitted(tmp_path)
     assert not path.exists() or json.loads(path.read_text()).get("status") != "admitted"
     assert not (root / f"{iid_}.state" / "result.json").exists() or \
         json.loads((root / f"{iid_}.state" / "result.json").read_text()).get("status") != "admitted"
+
+
+# ---- G18 RC1: when other people are carried, the calibration report names no memory id ----
+
+def _ids_of(db_path):
+    import sqlite3
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        return [r[0] for t in ("episodes", "semantics") for r in conn.execute(f"SELECT id FROM {t}")]
+    finally:
+        conn.close()
+
+
+def test_a_carried_co_subject_gives_a_report_with_no_memory_id(tmp_path):
+    built = built_package(tmp_path, store=small_dense_store, owner="andy", cosubjects={"w1": "person:jenn"})
+    root, iid_ = handed_off(tmp_path, built, route=False, valid_until=FAR)
+    ids = [i for i in _ids_of(root / iid_ / "imprint.db") if i not in ("hub", "core", "event", "cohesion")]  # kind words stay
+    assert admit(iid_, root=root, verify_cmd=OK, calibrate_fn=every_set_over_its_bound, calibration_now=CAL_NOW) == 0
+    cal = root / f"{iid_}.state" / "calibration"
+    assert ids and json.loads((root / iid_ / "imprint.json").read_text())["others"]["memories"] > 0
+    for name in ("report.json", "report.md"):
+        text = (cal / name).read_text()
+        assert not re.search(r"(hub|cohesion|event):[\w-]", text)           # a skipped set's name carries its id
+        for i in ids + ["ev1"]:
+            assert not re.search(rf"(?<![\w-]){re.escape(i)}(?![\w-])", text), (name, i)   # whole tokens: ids can be short
+
+
+def test_with_no_carried_co_subject_the_report_keeps_its_ids(tmp_path):
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path), route=False, valid_until=FAR)
+    assert admit(iid_, root=root, verify_cmd=OK, calibration_now=CAL_NOW) == 0
+    assert "would_prune_ids" in (root / f"{iid_}.state" / "calibration" / "report.json").read_text()
+    assert isinstance(json.loads((root / f"{iid_}.state" / "calibration" / "report.json").read_text())
+                      ["analyses"]["first_open"]["would_prune_ids"], list)

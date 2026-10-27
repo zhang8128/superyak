@@ -203,3 +203,29 @@ def test_the_unchecked_event_audit_says_what_it_reads_and_skips():              
     doc = " ".join(persistence.audit_unchecked_events.__doc__.split())
     assert "uses the peers' CURRENT provenance; events whose peers lack >=1 vectored episode on both sides are " \
            "skipped with a reason." in doc
+
+
+# --- G18 RC1: with no_ids the report names no memory id --------------------------------------------------
+
+def _all_ids(path):
+    import sqlite3
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return [r[0] for t in ("episodes", "semantics") for r in conn.execute(f"SELECT id FROM {t}")]
+    finally:
+        conn.close()
+
+
+def test_no_ids_leaves_no_memory_id_anywhere_in_either_report(tmp_path):
+    src = calibration_source(tmp_path, decayed=3)
+    ids = _all_ids(src)
+    kept = calibrate(src, tmp_path / "with", no_content=True, now=NOW)
+    with_text = (tmp_path / "with" / "report.json").read_text() + (tmp_path / "with" / "report.md").read_text()
+    assert any(i in with_text for i in ids)                          # the fixture does carry ids by default
+    report = calibrate(src, tmp_path / "out", no_content=True, no_ids=True, now=NOW)
+    files = [(tmp_path / "out" / n).read_text() for n in ("report.json", "report.md")]
+    for i in ids:
+        assert all(i not in f for f in files) and i not in str(report)
+    assert isinstance(report["analyses"]["first_open"]["would_prune_ids"], int)
+    assert report["analyses"]["first_open"]["would_prune_ids"] == len(kept["analyses"]["first_open"]["would_prune_ids"])
+    assert report["analyses"]["cohesion"]["measured"] == kept["analyses"]["cohesion"]["measured"]

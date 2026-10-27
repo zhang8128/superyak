@@ -1247,7 +1247,8 @@ def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callab
         notes = None if route else {"snapshot": WITHOUT_ROUTE_NOTE}
         report = {}
         try:
-            report = calibrate_fn(folder / "imprint.db", out, migrate=True, no_content=True, no_paths=True, notes=notes,
+            report = calibrate_fn(folder / "imprint.db", out, migrate=True, no_content=True, no_paths=True,
+                                  no_ids=bool((manifest.get("others") or {}).get("memories")), notes=notes,
                                   max_lane_episodes=MAX_LANE_EPISODES, max_semantic_episodes=MAX_SEMANTIC_EPISODES,
                                   create_parents=False, now=calibration_now)
             done = bool(report.get("source_unchanged"))
@@ -1305,7 +1306,8 @@ SKIP_KINDS = frozenset({"core", "cohesion", "hub", "event", "lane:personal", "la
 def receipt_skips(skips: list) -> list[dict]:
     """The report's skipped dense sets as the `admitted` receipt may hold them: the kind, or the lane the owner
     chose, with its size and bound, never a memory's or an event's id (section 12, "Telling receipts"). The
-    receipt outlives the copy by 400 days (D32); the ids stay in the calibration report, which goes with it."""
+    receipt outlives the copy by 400 days (D32); the ids stay in the calibration report, which goes with it
+    unless other people are carried, when admission passes ``no_ids`` and the report holds none (I 10)."""
     out = []
     for skip in skips:
         name = str(skip["set"])
