@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lighthouse_client import MAX_CANDIDATES
 from lighthouse_policy import Policy, PolicyRequest
 from lighthouse_validation import load_owned_policy
 from lighthouse_protocol import (
@@ -785,7 +786,7 @@ class PublisherDaemon:
             publisher.storage,
             self.embeddings,
             frame["query"],
-            int(frame["k"]),
+            min(int(frame["k"]), MAX_CANDIDATES),
             _allowed_audiences(policy, f"urn:engram:{frame['receiver']}", mode=gate.mode),
             eligible=placed.eligible if placed is not None and enforce else None,
         )
