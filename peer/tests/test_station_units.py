@@ -14,7 +14,8 @@ PYTHON = '%h/superyak/peer/.venv/bin/python -I -m superyak_peer'
 DATA = '%h/.local/share/superyak/lighthouse'
 ROTATION = '%h/.local/share/superyak/backups/station'
 INSTALLED = ['superyak-backup.service', 'superyak-backup.timer', 'superyak-restore-test.service',
-             'superyak-restore-test.timer', 'superyak-alert@.service']
+             'superyak-restore-test.timer', 'superyak-imprint-sweep.service', 'superyak-imprint-sweep.timer',
+             'superyak-alert@.service']
 EXPECTED = {
     'superyak-backup.service': {
         'Unit': {'After': 'superyak-lighthouse.service', 'OnFailure': 'superyak-alert@%n.service'},
@@ -37,6 +38,17 @@ EXPECTED = {
     'superyak-restore-test.timer': {
         'Unit': {},
         'Timer': {'OnCalendar': '*-*-01 04:30:00', 'RandomizedDelaySec': '30min', 'Persistent': 'true'},
+        'Install': {'WantedBy': 'timers.target'},
+    },
+    'superyak-imprint-sweep.service': {
+        'Unit': {'After': 'superyak-lighthouse.service', 'OnFailure': 'superyak-alert@%n.service'},
+        'Service': {'Type': 'oneshot', 'WorkingDirectory': '%h/superyak/peer',
+                    'ExecStart': f'{PYTHON} station-imprint-sweep --data-dir {DATA} --imprints-dir %h/.engram/imprints',
+                    'Nice': '10', 'IOSchedulingClass': 'idle', 'TimeoutStartSec': '15min', 'MemoryMax': '512M', 'MemorySwapMax': '0'},
+    },
+    'superyak-imprint-sweep.timer': {
+        'Unit': {},
+        'Timer': {'OnCalendar': 'hourly', 'Persistent': 'true'},
         'Install': {'WantedBy': 'timers.target'},
     },
     'superyak-alert@.service': {
@@ -128,7 +140,7 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     assert stat.S_IMODE(andys.parent.stat().st_mode) == 0o700
     assert {path: path.read_bytes() for path in contents} == contents      # R16: no existing unit or drop-in is edited
     assert calls.read_text().splitlines() == ['--user daemon-reload',
-                                              '--user enable --now superyak-backup.timer superyak-restore-test.timer']
+                                              '--user enable --now superyak-backup.timer superyak-restore-test.timer superyak-imprint-sweep.timer']
     calls.unlink()
     removed = make('station-units-remove')
     assert removed.returncode == 0, removed.stderr
@@ -137,14 +149,14 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     assert andys.read_text() == '[Service]\nNice=5\n'
     assert stray.read_text() == '[Service]\nNice=7\n'
     assert calls.read_text().splitlines() == [
-        '--user disable --now superyak-backup.timer superyak-restore-test.timer',
-        '--user stop superyak-backup.service superyak-restore-test.service',
-        '--user reset-failed superyak-backup.service superyak-restore-test.service superyak-alert@*',
+        '--user disable --now superyak-backup.timer superyak-restore-test.timer superyak-imprint-sweep.timer',
+        '--user stop superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service',
+        '--user reset-failed superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service superyak-alert@*',
         '--user daemon-reload']
     assert not (home / '.config').exists()
 
 
-@pytest.mark.parametrize('name', ['superyak-backup.service', 'superyak-restore-test.service'])
+@pytest.mark.parametrize('name', ['superyak-backup.service', 'superyak-restore-test.service', 'superyak-imprint-sweep.service'])
 def test_no_exit_code_is_masked(name):
     """Any non-zero exit is a failure: the backup exits 10-13, the restore test 20-24 and 1 for the unexpected. The units
     declare no SuccessExitStatus= (or Restart=), and ExecStart= has no '-', '@', ':', '+' or '!' prefix, so systemd's SERVICE_RESULT is non-success and station-alert fires for every non-zero exit."""

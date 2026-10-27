@@ -1,0 +1,14 @@
+[Unit]
+Description=Superyak imprint sweep: ends, windows, retries, restore reconciliation and retention (store-imprint I 12)
+After=superyak-lighthouse.service
+OnFailure=superyak-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/superyak/peer
+ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer station-imprint-sweep --data-dir %h/.local/share/superyak/lighthouse --imprints-dir %h/.engram/imprints
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=15min
+MemoryMax=512M
+MemorySwapMax=0

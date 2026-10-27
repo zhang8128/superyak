@@ -41,7 +41,7 @@ REPLACED ?=
 UNPAIR ?=
 # Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
 # and any project ship's watcher on this machine (a later one gets it when make station-units runs again).
-STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-alert@.service
+STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-imprint-sweep.service superyak-imprint-sweep.timer superyak-alert@.service
 ALERTED_SERVICES = superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(patsubst %.service,%,$(notdir $(wildcard $(SYSTEMD_USER)/superyak-ship-*.service)))
 HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
 HOME_PORT ?= 7435
@@ -319,12 +319,12 @@ station-units:
 	for unit in $(STATION_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
 	for service in $(ALERTED_SERVICES); do d="$(SYSTEMD_USER)/$$service.service.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && install -m 644 peer/systemd/50-alerts.conf "$$d/50-alerts.conf" || exit 1; done
 	systemctl --user daemon-reload
-	systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer
+	systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer superyak-imprint-sweep.timer
 
 station-units-remove:
-	-systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer
-	-systemctl --user stop superyak-backup.service superyak-restore-test.service
-	-systemctl --user reset-failed superyak-backup.service superyak-restore-test.service 'superyak-alert@*'
+	-systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer superyak-imprint-sweep.timer
+	-systemctl --user stop superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service
+	-systemctl --user reset-failed superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service 'superyak-alert@*'
 	for unit in $(STATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
 	for service in $(ALERTED_SERVICES); do dir="$(SYSTEMD_USER)/$$service.service.d"; if [ -d "$$dir" ]; then rm -f "$$dir/50-alerts.conf"; rmdir "$$dir" 2>/dev/null || true; fi; done
 	systemctl --user daemon-reload
