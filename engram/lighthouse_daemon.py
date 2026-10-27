@@ -44,6 +44,7 @@ from lighthouse_protocol import (
     recall_result_frame,
     validate_frame,
 )
+from permission_ledger import LedgerUnreadable
 from permissions import CACHE_BYTES, CACHE_ENTRIES, FRAMES_AT_ONCE
 from sharing import validate_audience
 from storage import Storage, vec0_distance_to_similarity
@@ -772,18 +773,36 @@ class PublisherDaemon:
         placement first: under ``enforce`` the refused are left out before ranking, under ``shadow`` they are only
         counted. The receipt is written before the reply, so a reply never names a candidate whose receipt failed
         (under ``enforce``, a recall with no receipt returns nothing)."""
-        placed = None if side is None else side.recall_set()
+        enforce = gate.mode == "enforce"
+        placed = None
+        try:
+            placed = None if side is None else side.recall_set()
+        except LedgerUnreadable as error:       # a lazy read failed: the gate's closed answer, or the legacy one
+            self._unreadable(publisher, error)
+            if enforce:
+                return []
+            side = None
         candidates = retrieve(
             publisher.storage,
             self.embeddings,
             frame["query"],
             int(frame["k"]),
             _allowed_audiences(policy, f"urn:engram:{frame['receiver']}", mode=gate.mode),
-            eligible=placed.eligible if placed is not None and gate.mode == "enforce" else None,
+            eligible=placed.eligible if placed is not None and enforce else None,
         )
-        if side is not None and not side.receipt_recall(candidates, placed) and gate.mode == "enforce":
-            return []
+        if side is not None:
+            try:
+                written = side.receipt_recall(candidates, placed)
+            except LedgerUnreadable as error:
+                self._unreadable(publisher, error)
+                return [] if enforce else candidates
+            if not written and enforce:
+                return []
         return candidates
+
+    @staticmethod
+    def _unreadable(publisher: PublisherStore, error: Exception) -> None:
+        logger.warning("permission ledger unreadable while serving %s: %s", publisher.name, error)
 
     def _read(
         self, publisher: PublisherStore, frame: dict, policy: Policy, gate
@@ -809,7 +828,11 @@ class PublisherDaemon:
                     content, audiences = self._legacy_item(publisher, memory_id, allowed_audiences)
                 item_permission = None
                 if side is not None and not serve_nothing:
-                    deliver, item_permission = side.read_item(memory_id, content)
+                    try:
+                        deliver, item_permission = side.read_item(memory_id, content)
+                    except LedgerUnreadable as error:       # enforce serves nothing, shadow the legacy content
+                        self._unreadable(publisher, error)
+                        deliver, item_permission = gate.mode == "shadow" and content is not None, None
                     if not deliver:
                         content, audiences, item_permission = None, [], None
                 if content is not None:
