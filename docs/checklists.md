@@ -114,8 +114,6 @@ runs the list out loud: in its post, say which list it ran. Add a list when a mi
 
 - [ ] The approver is the one the law names: Serenity for Rio Grande's branches, Rio Grande for Serenity's, or a
       fresh reviewer started on the Pi. Tardis's and Defiant's reviews are advisory until the law says otherwise.
-- [ ] The approver gained nothing from the change. A branch that adds a ship to a room is approved by someone other
-      than that ship.
 
 ## Shell commands (zsh)
 
