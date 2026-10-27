@@ -2124,7 +2124,7 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
 |---|---|
 | `received` | bytes, SHA-256 and parts of `imprint.db`; `manifest_sha256` |
 | `approved`, `denied` | none; `actor_id` is the operator |
-| `admitted` | checks passed (17), the report's SHA-256, skipped analyses, `roads_and_trails`: N, admission's count of R(I), and `sessions_too_large`: K, the sessions that count left out, both 0 without `route` (section 10) |
+| `admitted` | checks passed (17), the report's SHA-256, skipped analyses (each its kind, `core`, `hub`, `cohesion` or `event`, or `lane:<lane>`, with its size and bound, never an id; the final review's I1), `roads_and_trails`: N, admission's count of R(I), and `sessions_too_large`: K, the sessions that count left out, both 0 without `route` (section 10) |
 | `failed` | check number and fixed message |
 | `use-started`, `use-finished` | use, its `use_id`, actions, purpose, objects as `{"imprint": <imprint id>, "count": n, "roads_and_trails": N}`, with N copied from the `admitted` receipt; when finished, the run's `end` (`report`, `withdrawn`, `ended`, `deleted`, `allow changed`, `not evaluable: limit` or `failed`), with the report's SHA-256 for `report`, the reason for `deleted` and the exit status, or the error class, for `failed` (D41) |
 | `refused` | use, actions, purpose, the failing term, and `roads_and_trails` from the `admitted` receipt when there is one |
