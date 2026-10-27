@@ -669,6 +669,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         def imprint_complete(request_id: str, request: Request):
             return store.complete_imprint(ship_member(request)['id'], request_id)
 
+        @app.post('/api/imprints/{request_id}/withdraw')
+        def imprint_withdraw(request_id: str, request: Request):
+            return store.withdraw_imprint(member(request), request_id, root=imprints_dir)  # the owner or the ship; else 404
+
         @app.get('/api/imprints/{request_id}')
         def imprint_one(request_id: str, request: Request):
             return store.imprint_status(member(request)['id'], request_id)

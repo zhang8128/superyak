@@ -276,6 +276,11 @@ def main(argv=None):
         decide.add_argument('--id', required=True, help='Short id from station-pending (at least 4 characters)')
         decide.add_argument('--as', dest='person', required=True, help='The person deciding; an approved ship becomes theirs')
         decide.add_argument('--imprints-dir', type=Path, help='The imprints root (needed to decide an imprint)')
+    delete = commands.add_parser('station-imprint-delete', help='Trusted local: delete one imprint at once by the short id of its imprint id (reason station)')
+    delete.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    delete.add_argument('--id', required=True, help='Short imprint id (at least 4 characters)')
+    delete.add_argument('--as', dest='person', required=True, help='The operator deleting')
+    delete.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
     rooms = commands.add_parser('station-rooms', help='Trusted local: list the rooms a person owns by short id, and which are bridged to the wormhole')
     rooms.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     rooms.add_argument('--as', dest='person', required=True, help='The room owner')
@@ -362,6 +367,9 @@ def main(argv=None):
             approve = args.command == 'station-approve'
             item, result = Store(args.data_dir, signing=False).station_decide(args.person, args.id, approve, imprints_root=args.imprints_dir)
             print(describe_decision(item, result, args.person, approve))
+        elif args.command == 'station-imprint-delete':
+            result = Store(args.data_dir, signing=False).station_imprint_delete(args.person, args.id, root=args.imprints_dir)
+            print(f'Imprint {args.id}: {result["status"]}.' + (' A file would not go; the sweep retries.' if result['status'] == 'deleting' else ''))
         elif args.command == 'station-rooms':
             print(describe_rooms(args.person, Store(args.data_dir, signing=False).station_rooms(args.person)))
         elif args.command in ('station-bridge', 'station-unbridge'):

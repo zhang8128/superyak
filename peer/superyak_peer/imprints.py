@@ -7,6 +7,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -20,6 +21,8 @@ from .auth import token_hash
 from .common import Problem, uid
 from .identity import canonical, parse
 from .ships import CODE_ALPHABET
+
+log = logging.getLogger(__name__)
 
 IMPRINT_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS imprint_requests(id TEXT PRIMARY KEY, imprint_id TEXT UNIQUE NOT NULL,
@@ -551,13 +554,26 @@ def decide_use(permission, receipts, owner_records, *, status, kind, t, operator
     return UseDecision(True, None, None, end, tuple(r['id'] for r in own if r['id'] in used))
 
 
-def _removed_files(folder):
-    """The files under `folder`, each as {path, bytes, sha256}, for a `deleted` receipt (hashed 1 MiB at a time)."""
+def _manifest_sha256(folder):
+    """The package hash the folder's manifest names, or None when there is no readable manifest."""
+    try:
+        return json.loads((folder / 'manifest.json').read_bytes())['package']['sha256']
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _removed_files(folder, *, by_manifest=False):
+    """The files under `folder`, each as {path, bytes, sha256}, for a `deleted` receipt (hashed 1 MiB at a time).
+    With `by_manifest`, `imprint.db` takes the hash of its manifest, which admission verified (I 12, step 2)."""
     out = []
     if not folder.is_dir():
         return out
     for path in sorted(folder.rglob('*')):
         if path.is_symlink() or not path.is_file():
+            continue
+        known = _manifest_sha256(path.parent) if by_manifest and path.name == 'imprint.db' else None
+        if known is not None:
+            out.append({'path': str(path), 'bytes': path.stat().st_size, 'sha256': known})
             continue
         digest, size = hashlib.sha256(), 0
         with open(path, 'rb') as stream:
@@ -566,6 +582,23 @@ def _removed_files(folder):
                 size += len(block)
         out.append({'path': str(path), 'bytes': size, 'sha256': digest.hexdigest()})
     return out
+
+
+def _unlink(path):
+    os.unlink(path)
+
+
+def _restore_write(folder):
+    """Gives the owner back write permission on a read-only tree, so its files can be removed."""
+    for here, names, files in os.walk(folder):
+        for name in (*names, *files):
+            if not os.path.islink(os.path.join(here, name)):
+                os.chmod(os.path.join(here, name), 0o700)
+        os.chmod(here, 0o700)
+
+
+class _RemovalFailed(Exception):
+    pass
 
 
 class Imprints:
@@ -1024,3 +1057,139 @@ class Imprints:
         _write_file(folder / 'approved.json', canonical({
             'imprint_id': imprint_id, 'request_id': found['id'], 'approved_at': now, 'approved_by': actor}))
         shutil.rmtree(staged)
+
+    # Withdrawal, the station's delete and the removal they share (I 12, D17)
+
+    def _imprint_folders(self, found, root_flag):
+        """The staging, imprint and state directories of a request, the last two under the root the row records (the
+        flag's when the row records none, before approval). Logs a flag that differs from the record."""
+        recorded = found['imprints_root']
+        if recorded and root_flag is not None and Path(recorded).resolve() != Path(root_flag).resolve():
+            log.warning('imprints root mismatch: recorded %s, flag %s', recorded, root_flag)
+        base = Path(recorded) if recorded else (Path(root_flag) if root_flag is not None else None)
+        folders = [self.data_dir / 'imprints' / found['id']]
+        if base is not None:
+            folders += [base / found['imprint_id'], base / f'{found["imprint_id"]}.state']
+        return base, folders
+
+    def _remove_imprint(self, db, found, *, reason, actor_id, root_flag):
+        """Hashes, then removes, the staging, imprint and state directories. Returns each removed file's path, bytes
+        and SHA-256. A removal that fails writes `delete-failed` (path, error class) through `db`, then raises
+        _RemovalFailed, which the caller catches inside its transaction so the receipt is kept."""
+        _, folders = self._imprint_folders(found, root_flag)
+        for folder in folders:
+            if folder.is_dir() and not folder.is_symlink():
+                _restore_write(folder)
+        files = [entry for folder in folders for entry in _removed_files(folder, by_manifest=True)]
+        path = None
+        try:
+            for folder in folders:
+                if folder.is_symlink():
+                    path = folder
+                    _unlink(folder)
+                    continue
+                for here, names, names_files in os.walk(folder, topdown=False):
+                    for name in names_files + [n for n in names if os.path.islink(os.path.join(here, n))]:
+                        path = Path(here) / name
+                        _unlink(path)
+                    path = Path(here)
+                    os.rmdir(here)
+        except OSError as error:
+            self._append_imprint_receipt(db, found['id'], 'delete-failed', actor_id,
+                                         {'path': str(path), 'error': type(error).__name__}, sign=False)
+            log.warning('removing the %s copy %s failed at %s: %s', reason, found['id'][:4], path,
+                        type(error).__name__)
+            raise _RemovalFailed from error
+        return files
+
+    def _write_tombstone(self, base, found, db):
+        """`<root>/tombstones/<imprint id>.json`, 0600 and exclusive, holding the `withdrawn` and `deleted` receipts."""
+        folder = base / 'tombstones'
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        held = [{'record': json.loads(r['record']), 'signature': r['signature']} for r in db.execute(
+            "SELECT record, signature FROM imprint_receipts WHERE request_id=? ORDER BY seq", (found['id'],))]
+        held = [r for r in held if r['record']['event'] in ('withdrawn', 'deleted')]
+        try:
+            fd = os.open(folder / f'{found["imprint_id"]}.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return      # an earlier try wrote it; its existence is what stops a restore and a use
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(canonical({'imprint_id': found['imprint_id'], 'request_id': found['id'], 'receipts': held}))
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def _end_imprint(self, request_id, *, reason, actor_id, root, withdrawn):
+        """I 12's four steps. 1: `deleting` and, for a withdrawal, the signed `withdrawn` receipt (one transaction).
+        2 to 4, in a second: the removal, the tombstone, `deleted` and status `deleted`. A failed removal stays
+        `deleting` with a `delete-failed` receipt. Calling it again on a `deleting` row retries from step 2, on a
+        `deleted` one changes nothing."""
+        with self.transaction() as db:
+            found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+            if found['status'] in ('deleted', 'declined', 'expired'):
+                return {'id': request_id, 'status': found['status']}
+            if found['status'] == 'requested':      # R22: no yes yet, so a decline and no receipt
+                now = int(self.clock())
+                db.execute("UPDATE imprint_requests SET status='declined', code_hash=NULL, decided_at=?, decided_by=?, "
+                           "ended_at=? WHERE id=?", (now, actor_id, now, request_id))
+                shutil.rmtree(self.data_dir / 'imprints' / request_id, ignore_errors=True)
+                return {'id': request_id, 'status': 'declined'}
+            if found['status'] != 'deleting':
+                db.execute("UPDATE imprint_requests SET status='deleting' WHERE id=?", (request_id,))
+                if withdrawn:
+                    self._append_imprint_receipt(db, request_id, 'withdrawn', actor_id, {}, sign=True)
+        with self.transaction() as db:
+            found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+            if found['status'] != 'deleting':
+                return {'id': request_id, 'status': found['status']}
+            try:
+                files = self._remove_imprint(db, found, reason=reason, actor_id=actor_id, root_flag=root)
+            except _RemovalFailed:
+                return {'id': request_id, 'status': 'deleting'}
+            base = self._imprint_folders(found, None)[0] or (Path(root) if root is not None else None)
+            self._append_imprint_receipt(db, request_id, 'deleted', actor_id,
+                                         {'reason': reason, 'files': files, 'limits': KNOWN_LIMITS}, sign=False)
+            if base is not None:
+                self._write_tombstone(base, found, db)
+            now = int(self.clock())
+            db.execute("UPDATE imprint_requests SET status='deleted', ended_at=?, delete_reason=? WHERE id=?",
+                       (now, reason, request_id))
+            return {'id': request_id, 'status': 'deleted'}
+
+    def withdraw_imprint(self, principal, request_id, *, root):
+        """The owner or the requesting ship withdraws at once, in any status before `deleted` (I 12). Anyone else,
+        and an id nobody has, gets a 404. It never waits for Andy."""
+        with self.transaction() as db:
+            found = db.execute('SELECT ship_id, owner_id FROM imprint_requests WHERE id=?',
+                               (request_id,)).fetchone() if isinstance(request_id, str) else None
+            if found is None or principal['id'] not in (found['ship_id'], found['owner_id']):
+                raise Problem(404, 'No such imprint request')
+        return self._end_imprint(request_id, reason='withdrawn', actor_id=principal['id'], root=root, withdrawn=True)
+
+    def station_imprint_delete(self, username, prefix, *, root):
+        """Trusted local operator only: deletes one imprint by a short id of its imprint id (reason `station`)."""
+        if not isinstance(prefix, str) or len(prefix.strip()) < 4:
+            raise Problem(400, 'Give at least 4 characters of the short id')
+        prefix = prefix.strip().lower()
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            marks = ','.join('?' * len(LIVE_STATUSES))
+            matches = [r['id'] for r in db.execute(
+                f"SELECT id, imprint_id FROM imprint_requests WHERE status IN ({marks}) ORDER BY created, rowid",
+                LIVE_STATUSES) if r['imprint_id'].startswith(prefix)]
+        if not matches:
+            raise Problem(404, f'No live imprint starts with {prefix}')
+        if len(matches) > 1:
+            raise Problem(409, f'{prefix} matches more than one imprint; give more characters')
+        return self._end_imprint(matches[0], reason='station', actor_id=actor, root=root, withdrawn=False)
+
+    def station_imprint_use_decision(self, imprint_id, kind):
+        """The use decision for one copy at the store's clock, changing nothing."""
+        with self.transaction() as db:
+            found = db.execute('SELECT * FROM imprint_requests WHERE imprint_id=?', (imprint_id,)).fetchone()
+            if found is None or found['permission'] is None:
+                raise Problem(404, 'No such imprint')
+            records = [json.loads(r['record']) for r in db.execute(
+                'SELECT record FROM imprint_receipts WHERE request_id=? ORDER BY seq', (found['id'],))]
+            return decide_use(json.loads(found['permission']), records, self._owner_layer_of(db, found['owner_id']),
+                              status=found['status'], kind=kind, t=int(self.clock()),
+                              operator=self._imprint_operator(db))
