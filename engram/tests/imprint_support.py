@@ -2587,15 +2587,24 @@ def _run(cmd, env, cwd=None) -> str:
 
 
 def _staged(world: CapWorld, name: str, *, route: bool, built: bool) -> Path:
-    """A home holding a plan (and its built package) made once, unmeasured, beside the fixture; copied to the test."""
+    """A home holding a plan (and its built package) made once, unmeasured, beside the fixture; copied to the test.
+    The built package of a plan with ``route`` is the planned stage built, so one plan serves both."""
     stage = CAP_ROOT / world.kind / f"stage-{name}"
     if not (stage / ".ready").is_file():
-        shutil.rmtree(stage, ignore_errors=True)
-        _context_home(world, stage)
-        plan = json.loads(_run(_plan_command(world, stage, route=route), world.env))
-        (stage / "plan.id").write_text(plan["id"])
+        if built and route and name != "built-bounds-route":
+            _staged(world, "planned-route", route=True, built=False)
+            shutil.rmtree(stage, ignore_errors=True)
+            shutil.copytree(world.home, stage, symlinks=True)
+            shutil.rmtree(world.home)
+            plan_id = (stage / "plan.id").read_text()
+        else:
+            shutil.rmtree(stage, ignore_errors=True)
+            _context_home(world, stage)
+            plan = json.loads(_run(_plan_command(world, stage, route=route), world.env))
+            plan_id = plan["id"]
+            (stage / "plan.id").write_text(plan_id)
         if built:
-            _run([sys.executable, IMPRINT_PY, "build", "--plan", plan["id"], "--superyak-home", stage,
+            _run([sys.executable, IMPRINT_PY, "build", "--plan", plan_id, "--superyak-home", stage,
                   "--engram-home", world.engram_home], world.env)
         (stage / ".ready").write_text("ok")
     shutil.copytree(stage, world.home, symlinks=True)

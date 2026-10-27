@@ -42,6 +42,13 @@ def bounds_store(tmp_path):
 def test_pi_every_process_at_the_cap(cap_store, step):
     peak = child_peak_rss(cmd=cap_command(cap_store, step), env=cap_store.env)
     assert peak < PEAK_BUDGET, (step, mib(peak))
+    if step == "import-receipts":                               # it did the work: the use list holds the rows
+        from permission_uses import Uses
+        uses = Uses.open_read_only(cap_store.work / "engram")
+        try:
+            assert uses.conn.execute("SELECT count(*) FROM uses").fetchone()[0] > 0
+        finally:
+            uses.close()
     print(step, mib(peak), "MiB, base", mib(base_peak(step)), "MiB")
 
 
