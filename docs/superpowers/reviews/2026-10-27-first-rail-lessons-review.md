@@ -802,3 +802,208 @@ his browser on the Pi.
 - **Federation pull's own soundness.** It has its own fresh review. I checked only what this rail leans on.
 - **Whether HANDOFF's list of ships docked on the Pi is current.**
 - **The calibration values.**
+
+## Re-check 3 (revision 3)
+
+**Date:** 2026-10-27
+**Re-checker:** a fresh reviewer under station law section 3. I took no part in writing the spec, its review, its first
+re-check or the all-hands decisions.
+**Spec:** revision 3, branch `trail-arrows-spec` at `699a7388` (513 lines), cited by section, compared with revision 2
+at `3c4f5fcb`.
+**Scope:** narrow, as asked. Are R1 to R4 closed? Is R3 closed in substance with the four changes the ships' decisions
+forced? Is each change sound and safe? Is anything in section 12's new calls unsafe? Nothing else was re-reviewed.
+
+**Verdict: APPROVE WITH CHANGES.** R1, R2 and R4 are closed as written. R3 is closed in substance: its three bounds
+stand, and the four changes are sound in design. Four gaps in the text around them block approval:
+- **R5.** Every event now reads the transcript, which holds the person's prompts word for word. Nothing stops the hook
+  writing what it reads there, or says what it does when the read fails.
+- **R6.** The prompt path trusts the index's last run however old it is, so a stopped index keeps a retracted lesson
+  showing at prompts.
+- **R7.** The backfill is a new door at the origin, and it runs none of the checks.
+- **R8.** The session's record keeps command heads as text, which section 10 forbids.
+
+Each fix is text, given below. Applied as written, the spec is approved with no further re-check. Other text for R5 or
+R6 goes to a fresh re-check.
+
+### How I checked
+
+- **Documents.** The whole spec at `699a7388` and its diff from `3c4f5fcb`, the decisions log, the re-check above, and
+  federation pull revision 4 (`05c9ea7`) sections 1, 2 and 9.
+- **Code.** `federation.py` (`collect`, `_room_snapshot`, `_prepare`, `receive`'s message checks, `_reply`),
+  `peer_store.py` (`_remote_room`, `_unverified_local_authors`, `remote_send`), `chats.py` (`add_participants`),
+  `ships.py` (`SHIP_NAME`), `station.py` (`session_key`), `teamlib.py` (`fence_external`), and
+  `engram/embedder_service.py` with `engram/embeddings.py`.
+- **What I didn't do.** I ran nothing, posted nothing, and changed no file but this one.
+
+### 1. R1 to R4
+
+| # | Closed? | Where |
+|---|---|---|
+| R1 | Yes, as written | Section 3's "Only Andy's" is R1's text word for word. Section 6's last bullet says "federates only to the peers listed with the room", and "Found by id" names the same command. |
+| R2 | Yes, as written | Section 11, item 3 is R2's text. Its open parenthetical is filled with federation pull revision 4's own names (its sections 1 and 9): `federate` is the one sync process, and `serve --sync` takes the same `federation.lock`. The Mac's paragraph matches that spec's sections 2 and 9: `card --pull`, the 32-hex pairing code in groups of four, typed in full, and `federate` as a LaunchAgent Andy loads. `lessons ship` also reserves `own` and `owner` (RN3). Section 12's "For Andy" has R2's text. |
+| R3 | In substance (part 2) | `seen` (now lesson ids, at most 128), step 1's `command`-only rule before a command, step 4's skip of `seen` before it keeps 3, and "Repeats … by sending `seen`" are R3's text. All three bounds stand: a `command` value of at least 6 bytes (sections 2 and 8), each head at most once, and at most 3 holds a session. |
+| R4 | Yes, as written | Section 2's grammar and `ship:` bullet are R4's text. `SHIP_NAME` in `ships.py` is the same rule, `[a-z][a-z0-9-]{1,31}`. |
+
+### 2. The four changes to R3
+
+**1. The hold's wording.** Sound. Decision 8's words replace R3's last sentence, and a hold still needs a `command`
+value of at least 6 bytes, a new head, and one of the session's 3 holds left. Outside the fence stand only the hook's
+own words, a short id (17 characters, hex and a dash) and a ship name under R4's rule, so a lesson can't widen them.
+The record per (session, command head, lesson) sits inside the bounds: a re-run of the same head is never queried
+again. The one flaw is in the record, which keeps heads as text (R8).
+
+**2. No receipt at a prompt.** Sound, and it is decision 7 itself. The blind test passes on the transcript, not on a
+receipt (section 9), and `r_prompt` is calibrated on the ships' own prompts (section 7). Section 5 says that receipts
+and query rows now leave out what a prompt showed.
+
+**3. The transcript read-back.** Sound in design, but its text falls short (R5).
+- **The dependency is bounded, and its fallback is safe.** On a Claude Code version where the prompt hook's context
+  isn't in the transcript before the next event, the prompt hook stays off. The rail then runs on its other events,
+  with the hold as the decisions' fallback. If a later Claude Code update changes that behavior, the cost is still
+  bounded. Each lesson shown at a prompt can show once more, and then the record holds it. Holds stay at 3 a session.
+  So following updates is a should-fix (RS8).
+- **The read itself is not bounded.** The text says what the hook looks for in the transcript. It doesn't say the hook
+  keeps nothing else, or that the ids it reads are never written. Writing them would be a receipt for the prompt path
+  under another name, which decision 7 forbids. Nor does it say what happens when the read fails or runs out of time.
+  A partial `seen` would let a lesson shown at a prompt hold later, against decision 7. And the no-writes test covers
+  only the prompt event. R5 closes all three.
+- **"Text inside a fence can at most hide a lesson"** is true, and so can a prompt, a file the agent read, or command
+  output that holds such a line. Hiding is the safe direction. RS9 narrows the read.
+
+**4. Backfill by copy.** It can't make one lesson count twice toward a segment.
+- **One id everywhere.** The lesson id comes from the peer in the author id and from the embedded text (sections 2 and
+  7), and every peer sees the same author id. On every peer but the origin, federation writes each author as
+  `<peer>:<user>`: `_prepare` prefixes the origin's own authors, and `_reply` stores a replying peer's author as
+  `origin:actor`. So an original and its copy have one id on every peer, and every index collapses them.
+- **On the author's own peer,** the copy is marked unverified and skipped, as section 3 says.
+  `_unverified_local_authors` checks only the replies sent to the room being read, and the original went to an
+  earlier room.
+- **A segment also needs** two peers and two different embedded texts, which a copy and its original never have.
+
+What the backfill lacks is checks. It writes posts at the origin outside both of the origin's paths, so none of section
+3's doors runs on it.
+- **Person data.** A lesson can pass the origin's person check when it is laid and fail it at the add, if a person
+  whose name it holds has an account on the Pi by then. Its copy then goes to a peer whose own check can't see that
+  name, since each peer checks only its own accounts.
+- **Authors who left.** `receive` refuses a post whose author isn't on the roster, so every receiver would refuse a
+  copy whose author has left the room.
+
+R7 carries only what the origin would accept today, from members of the new room. That matches `_carry_board`, which
+carries only claims whose holder is in the new room.
+
+**Can the prompt hook write or leak the prompt?** Not at its own event, as written.
+- The prompt reaches the query on stdin, never in argv. The query reads only the index file and opens no database.
+- The embedder's socket is open to its own user only (umask `0o177`). It logs and caches no text: its only log lines
+  are its start and a client that went away, a bad request's error goes back to the client, and `embeddings.py`
+  caches only the model.
+- The test pins written files, opened databases and the marker.
+
+Two paths remain: the later events' transcript read (R5), and the hook's stderr, which Claude Code may show or keep in
+its debug log (RS11).
+
+### 3. Section 12's new calls
+
+- **High confidence at a prompt.** Safe: a literal value of at least 6 bytes, or a match within `r_prompt`. It shows
+  at most 2 lessons, fenced, and only reads.
+- **The prompt path trusts the index's last run.** Unsafe as written (R6). "About 60 s" holds only while the index
+  runs, and on the Pi and Tardis it runs from its own timer, apart from the sync that brings retractions in. If it
+  stops or fails (a crash on a new post, a disabled timer), the paths that re-check in a transaction hide a newly
+  retracted lesson, but the prompt path keeps serving the old file. Retraction is Andy's veto, and it is the stopgap
+  if a person's data slips in. Section 10's "(at a prompt, after the next index run)" can't be broken by a next run
+  that never comes.
+- **The session's record.** R5 and R8.
+- **The lesson id's parts.** Safe. A ship could grind texts until its short id matches another's, but the peer half
+  differs between peers, so it can only match its own lessons (RN11).
+- **Retraction by lesson id, for good.** Safe. A retraction counts only from the author or the owner, and only for a
+  lesson already in the chain, so no ship can block another's text in advance.
+- **The backfill.** Sound for segments, but unchecked (R7).
+- **Andy runs `lessons ship`.** Safe today, but nothing makes it his act: a ship's Bash can run a trusted local command
+  too. Membership still needs his pairing and his add, so it widens nothing yet (RS10).
+- **A hold names one lesson first.** Safe: each id and ship outside the fence is bounded (section 2).
+
+### Must-fix
+
+**R5. Bound the transcript read.** *Where:* section 8, "The session's record."
+
+*Fix:* after "`seen` is the union of the two.", add:
+
+> From the transcript the hook takes only ids of the short form's exact shape, `[0-9a-f]{8}-[0-9a-f]{8}`, on lines of
+> the exact shape `Lesson <id> from <ship name>`. It holds them in memory for that one event and sends them only in
+> `seen`. It writes nothing it read from the transcript: its record holds only the ids it showed at its own events, so
+> a lesson shown at a prompt leaves no trace outside the transcript. If the transcript exists and the hook can't read
+> it to its end within the event's time limit, it adds nothing and holds nothing at that event. The no-writes test
+> also runs each other event after its marker prompt, against a transcript that holds the marker and a prompt-shown id
+> line, and fails on the marker or that id anywhere in the hook's state.
+
+**R6. Give the prompt path's index an age limit.** *Where:* section 4, step 1; section 5, the prompt path's second
+bullet; section 10.
+
+*Fix:*
+- Add to section 4's step 1: "Each run that completes, whether it exits here or after step 4, then sets the index
+  file's modification time to when this step read the chain."
+- In section 5's prompt path, after "about 60 s later.", add: "It answers nothing when the index file's modification
+  time is more than 180 s old, so a stopped or failing index run can't keep a retracted lesson showing."
+- In section 10, replace "(at a prompt, after the next index run)" with "(at a prompt, more than 180 s after the
+  retraction reaches that peer)".
+
+**R7. Check what the backfill carries.** *Where:* section 3, "Its chain", first sub-bullet.
+
+*Fix:* after "Retracted lessons aren't carried.", add:
+
+> Nor is a lesson whose author isn't a member of the new room, since every receiver refuses a post whose author isn't
+> on its roster (`receive`), as the board carries only claims whose holder is in the new room (`_carry_board`). Nor is
+> one that fails the origin's checks of sections 2 and 6, live ship keys included, as they stand at the add. The
+> backfill is one more door: it checks what the origin's post path checks, except the post budget.
+
+**R8. Keep no command head as text.** *Where:* section 8, "Before a command" and "The session's record."
+
+*Fix:*
+- Replace "Each hold is recorded as (session, command head, lesson)" with "Each hold is recorded as (session, the
+  head's digest, lesson)".
+- Replace "the heads and the digests of the commands and errors sent" with "the SHA-256 digests of the heads, commands
+  and errors sent, never their text".
+
+*Why:* a head is a command's first two words. It can be a path that names a person, or `export TOKEN=…`, since that
+second word doesn't start with `-`. Section 10 calls context text stored a failure, and a digest serves "the first
+time each command head appears" just as well.
+
+### Should-fix
+
+**RS8. Follow Claude Code's own updates.** *Where:* section 8, "The session's record." Claude Code updates itself, so a
+check made once per version at build time can lapse without anyone noticing. Add, for example: "The installer records
+the Claude Code versions the ships confirmed, and the prompt hook adds nothing on any other." Part 2 shows the cost of
+a lapse is bounded, so this is not a must-fix.
+
+**RS9. Read only the hooks' own context, and measure with a long transcript.** *Where:* section 8; section 5's
+measurement.
+- Match id lines only in the transcript entries that hold hook-added context. Then a prompt, a file the agent read or
+  command output can't hide a lesson, or push `seen` past 128.
+- Every event now reads the whole transcript, and a missed deadline shows nothing. So measure each event against its
+  limit (150 ms at a prompt) with a long transcript, say 50 MB, as well as a short one.
+
+**RS10. Make `lessons ship` Andy's act.** *Where:* section 11, item 3. It reads Andy's confirmation from `/dev/tty` and
+refuses without a terminal, as federation pull's `pair` does (its section 2). The law reserves admitting a ship to a
+person.
+
+**RS11. Nothing on stderr at a prompt.** *Where:* section 8, "At a prompt". Add: "It prints nothing on stderr, and the
+no-writes test also fails on the marker in its stderr." Claude Code may show a hook's stderr or keep it in its debug
+log.
+
+### Nits
+
+- **RN10.** Say that `seen` carries the short form, since that is all the transcript holds.
+- **RN11.** A lesson id belongs to a peer, not an author. Two ships on one peer laying the same text would share an
+  id, and a retraction by one would hide both. R1 leaves one laying ship per peer, so say so beside the id.
+- **RN12.** A lesson laid to the old room can reach the origin after the add. It still lands there, because `_reply`
+  checks only the old room's epoch, which an add doesn't change. The backfill has already run, so the new peer never
+  gets it. RS2's refusal of a post to an earlier room would make it `refused` instead, so its ship sees that and lays it
+  again.
+
+### Declined to judge
+
+- **Claude Code's transcript.** Whether it holds a `UserPromptSubmit` hook's context before the next event, on any
+  version. The spec leaves that to the builder.
+- **The prompt path's timing on any peer.** I ran nothing.
+- **The earlier re-check's open items.** RS1 to RS7 and its nits, which revision 3 left open, except where a finding
+  above touches them.
+- **Decisions 7 to 9 themselves.** They are the ships'. I checked only that the text carries them out safely.
