@@ -430,3 +430,56 @@ def test_m4_the_remember_guard_carries_the_union_of_every_matching_sources_subje
     finally:
         led.close()
     assert "person:amy" in subjects_of(s, kept, KEEP_NOW) and ANDY in subjects_of(s, kept, KEEP_NOW)
+
+
+# ---------------------------------------------------------------- M2: a backward clock step and the cache's horizon
+
+from tests.permissions_support import M1_ID, M1 as M1_REF, cached_daemon, parse_selector, _doc_of
+
+STEPPED = T("2026-11-03")          # the ledger writer's clock; the daemon's reads 2026-11-02, a day behind
+
+
+def _write(root, *acts):
+    led = Ledger.open(root)
+    try:
+        for actor, kind, now, args in acts:
+            do(led, actor, kind, now=now, **args)
+    finally:
+        led.close()
+
+
+def _deny_collection(root, cid):
+    sel = parse_selector(_doc_of(["self"], kinds=["memory"], collections=[cid]))
+    _write(root, (ANDY, "make-collection", "2026-11-01", {"collection": cid}),
+           (ANDY, "deny", "2026-11-01", {"layer": HOME, "selector": sel, "valid_from": T("2026-11-01"),
+                                         "valid_until": None, "reason": "stop"}))
+
+
+def test_m2_a_deny_membership_written_past_the_daemons_clock_ends_the_cached_allow_at_its_time(tmp_path):
+    d, root, _house = cached_daemon(tmp_path)
+    _deny_collection(root, "collection:andy/stop")
+    _write(root, (ANDY, "collect", "2026-11-03", {"collection": "collection:andy/stop", "refs": [M1_REF]}))
+    d.clock_to(T("2026-11-02"))
+    assert M1_ID in d.recall_ids()                # at 11-02 the membership is not yet in force (P 5.3)
+    assert d.cache_horizon() == STEPPED            # so the entry ends when it comes into force
+    d.clock_to(STEPPED + 60)
+    assert M1_ID not in d.recall_ids()             # no ledger write since: the horizon re-decides it
+
+
+def test_m2_a_co_subject_written_past_the_daemons_clock_ends_the_cached_allow_at_its_time(tmp_path):
+    d, root, _house = cached_daemon(tmp_path)
+    _write(root, (ANDY, "register-person", "2026-11-01", {"person": "person:jenn"}),
+           (ANDY, "add-subject", "2026-11-03", {"object": M1_REF, "subject": "person:jenn"}))
+    d.clock_to(T("2026-11-02"))
+    assert M1_ID in d.recall_ids() and d.cache_horizon() == STEPPED
+    d.clock_to(STEPPED + 60)
+    assert M1_ID not in d.recall_ids()             # Jenn's home allows nothing
+
+
+def test_m2_a_requester_moved_out_past_the_daemons_clock_ends_the_cached_allow_at_its_time(tmp_path):
+    d, root, _house = cached_daemon(tmp_path)
+    _write(root, (ANDY, "remove-agent", "2026-11-03", {"agent": "agent:engram", "place": HOME}))
+    d.clock_to(T("2026-11-02"))
+    assert M1_ID in d.recall_ids() and d.cache_horizon() == STEPPED
+    d.clock_to(STEPPED + 60)
+    assert M1_ID not in d.recall_ids()

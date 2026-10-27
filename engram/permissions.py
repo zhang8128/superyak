@@ -2396,16 +2396,60 @@ def _share_key(state: State, obj, t: int):
     return (ref.instance_id, ref.layer, subjects_of(state, obj, t), listed, tuple(notes), tuple(members))
 
 
+def _later_times(state: State, added: int, removed: int | None, t: int, out: list) -> None:
+    lo, hi = _span(state, added, removed)
+    if lo > t:
+        out.append(lo)
+    if hi is not None and hi > t:
+        out.append(hi)
+
+
+def _object_times_after(state: State, obj: str, t: int) -> list[int]:
+    """The times after t at which a row a decision on `obj` reads by its log time comes into or goes out of force:
+    its memberships, its subject rows and those of its sources up the `copies` chain, and its lane notes. A row
+    written by a clock ahead of the decider's (a backward step) is such a row: at t it does not count yet, and
+    nothing else would end a cached decision when it starts to (the final review's M2)."""
+    out: list[int] = []
+    for m in _members(state, obj)[0]:
+        _later_times(state, m.added_seq, m.removed_seq, t, out)
+    seen, cur = set(), obj
+    for _ in range(MAX_COPY_CHAIN + 1):
+        if cur is None or cur in seen:
+            break
+        seen.add(cur)
+        for r in state.subjects.get(cur, ()):
+            _later_times(state, r.added_seq, r.removed_seq, t, out)
+        cur = state.copies.get(cur)
+    out.extend(n.at for n in state.lane_notes.get(obj, ()) if n.at > t)
+    return out
+
+
+def _requester_times_after(state: State, agent: str, t: int) -> list[int]:
+    """`_object_times_after` for the requester's rows: its places and its group memberships."""
+    out: list[int] = []
+    for r in state.agent_places.get(agent, ()):
+        _later_times(state, r.added_seq, r.removed_seq, t, out)
+    for rows in state.group_members.values():
+        for r in rows:
+            if r.agent == agent:
+                _later_times(state, r.added_seq, r.removed_seq, t, out)
+    return out
+
+
 def eligible_set(state: State, placements: Sequence[Placement], *, requester: str, place: str, purpose: str,
                  action: str, at: int) -> EligibleSet:
     """Decide `action` for each placement, with no legacy layer: the subjects', places', holding place's and
     restriction layers only. A memory is eligible when each of its placements has an object that can be decided
     and the decision allows it. The pre-filter of P 6.5 is made once per (layer, action) for the requester,
     place, purpose and time (`_prefilter` keeps it on the State), and each object is matched against those
-    records alone. Objects that read alike (`_share_key`) are decided once, up to SHARED_DECISIONS readings."""
+    records alone. Objects that read alike (`_share_key`) are decided once, up to SHARED_DECISIONS readings.
+    The set's horizon is the earliest of its decisions' and of every time after `at` at which a row they read by
+    its log time comes into or goes out of force (`_object_times_after`): after a backward clock step, the cache
+    ends when such a row starts to count, not at the next ledger write (the final review's M2)."""
     decisions: dict[str, Decision] = {}
     made: dict[tuple, Decision | None] = {}
-    horizons: list[int] = []
+    horizons: list[int] = _requester_times_after(state, requester, at)
+    timed: set = set()              # the objects whose row times are in `horizons`
     pool_cited: dict = {}           # equal Cited, equal `cited` tuples and equal `versions` are shared by every
     pool_tuples: dict = {}          # decision that holds them (frozen, so safe to share)
     pool_versions: dict = {}
@@ -2417,6 +2461,9 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
             state.prefetch([q.obj for q in placements[i:i + PREFETCH_CHUNK] if q.obj is not None])
         if p.obj is None or (p.obj, p.copy) in made:
             continue
+        if p.obj not in timed:
+            timed.add(p.obj)
+            horizons.extend(_object_times_after(state, p.obj, at))
         skey = _share_key(state, p.obj, at)
         if skey is not None:
             skey = (skey, p.copy)

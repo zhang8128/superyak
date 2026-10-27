@@ -50,11 +50,46 @@ def same(label, live, old):
     assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True), label
 
 
-def same_set(label, live, old):
+M2_CHANGED = []          # the eligible sets whose horizon the final review's M2 moved earlier, by label
+
+
+def m2_terms(s, placements, requester, t):
+    """The final review's M2, read from the State apart from the code under test: every time after t at which a
+    row an eligible set reads by its log time comes into or goes out of force. The requester's places and group
+    memberships; each placed object's memberships, subject rows (up its `copies` chain) and lane notes."""
+    def later(added, removed):
+        lo = s.seq_at[added]
+        hi = None if removed is None or removed > s.seq else s.seq_at[removed]
+        return [x for x in (lo, hi) if x is not None and x > t]
+    out = []
+    for r in s.agent_places.get(requester, ()):
+        out += later(r.added_seq, r.removed_seq)
+    for rows in s.group_members.values():
+        out += [x for r in rows if r.agent == requester for x in later(r.added_seq, r.removed_seq)]
+    for o in {p.obj for p in placements if p.obj is not None}:
+        out += [x for m in s.member_of.get(o, ()) for x in later(m.added_seq, m.removed_seq)]
+        cur, seen = o, set()
+        for _ in range(permissions.MAX_COPY_CHAIN + 1):
+            if cur is None or cur in seen:
+                break
+            seen.add(cur)
+            out += [x for r in s.subjects.get(cur, ()) for x in later(r.added_seq, r.removed_seq)]
+            cur = s.copies.get(cur)
+        out += [n.at for n in s.lane_notes.get(o, ()) if n.at > t]
+    return out
+
+
+def same_set(label, live, old, m2=()):
+    """Equal eligible sets, except that M2 (the final review) may move the horizon earlier: to the earliest of the
+    reference's horizon and `m2`, the times `m2_terms` reads."""
     if isinstance(live, Exception) or isinstance(old, Exception):
         assert fields(live) == fields(old), label
         return
-    assert (sorted(live.memory_ids), live.horizon) == (sorted(old.memory_ids), old.horizon), label
+    terms = list(m2) + ([] if old.horizon is None else [old.horizon])
+    expected = min(terms) if terms else None
+    if expected != old.horizon:
+        M2_CHANGED.append(label)
+    assert (sorted(live.memory_ids), live.horizon) == (sorted(old.memory_ids), expected), label
     assert sorted(live.decisions) == sorted(old.decisions), label
     for k in sorted(live.decisions):
         same(f"{label}/{k}", live.decisions[k], old.decisions[k])
@@ -122,7 +157,8 @@ def check_world(tag, w, s, rng, n_uses):
         placements += [Placement(f"dup{k}", o, u.copy) for k, o in enumerate(objs[:3])]
         kw = dict(requester=u.requester, place=u.place, purpose=u.purpose, action=u.action, at=u.at)
         same_set(f"{tag}/{i}/es", guard(lambda: eligible_set(s, placements, **kw)),
-                 guard(lambda: ref.eligible_set(s, placements, **kw)))
+                 guard(lambda: ref.eligible_set(s, placements, **kw)),
+                 m2=m2_terms(s, placements, u.requester, u.at))
         for k, o in enumerate(objs[:-1]):
             x = dataclasses.replace(u, obj=o, names=roads.get(o, ()), shows=frozenset())
             same(f"{tag}/{i}/each/{k}", guard(lambda: decide(s, x)), guard(lambda: ref.decide(s, x)))

@@ -8,6 +8,8 @@ from tests.permissions_support import (
     random_world, sample_uses, write_any_ledger_row, write_publisher_policy, write_receiver_policy,
 )
 
+from tests.test_permissions_reference import m2_terms
+
 M5 = "00000000-0000-0000-0000-000000000005"
 
 
@@ -100,6 +102,7 @@ def test_eligible_set_holds_each_placements_ledger_decision_and_the_earliest_hor
         assert {o: d.to_json() for o, d in got.decisions.items()} == {o: d.to_json() for o, d in want.items()}
         assert got.memory_ids == {p.memory_id for p in placements if p.obj and want[p.obj].allowed}, (SEED, case)
         horizons = [d.horizon for d in want.values() if d.horizon is not None]
+        horizons += m2_terms(s, placements, first.requester, first.at)      # rows read past t (final review M2)
         assert got.at == first.at and got.horizon == (min(horizons) if horizons else None), (SEED, case)
 
 
