@@ -15,6 +15,7 @@ from lighthouse_protocol import canonical_json
 
 MAX_RECORDS_PER_LAYER = 256
 MAX_RECORDS = 16_384            # records in one ledger, revoked and replaced ones included (5.4, 15)
+FOLD_BATCH = 4_096               # receipts one fold batch reads, verifies and anchors (9.1, 15)
 PREFETCH_CHUNK = 512            # refs a bulk decision or an eligible set prefetches at once
 STATE_ROWS = 65_536             # per-object rows a State keeps at once; the rest are read again on demand (5.6, 15)
 STATE_LOG_TIMES = 65_536        # log times a State keeps at once; the rest are read again on demand (5.6, 15)
