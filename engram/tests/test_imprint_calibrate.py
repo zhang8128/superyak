@@ -113,6 +113,7 @@ def test_pi_budget_a_16000_episode_lane_in_blocks(tmp_path):
     peak, seconds = child_peak_rss("calibrate.persistence_scores(Storage.open_read_only(SRC).conn, "
                                    "max_episodes=16_000)", src=src, timed=True)
     assert peak < PEAK_BUDGET and seconds < 600
+    print(f"16,000-episode lane: {peak / 2**20:.1f} MiB, {seconds:.0f} s (I 10: under 384 MiB and 600 s)")
 
 
 RATIO_BOUND = {"cohesion_energy": 16, "classify_hubs": 20, "split_band": 16}   # I 10; classify_hubs revised (Task 50)
@@ -127,3 +128,50 @@ def test_pi_budget_a_1024_source_semantic(tmp_path, analysis):
     ratio = (peak - base_peak()) / (1_024**2 * 8)
     print(f"{analysis}: ratio {ratio:.2f} (I 10: at most {RATIO_BOUND[analysis]})")
     assert ratio <= RATIO_BOUND[analysis], (analysis, ratio)
+
+
+# --- Task 50: one admission at its bounds runs inside its time (I 10, "Time"; the review's finding 1) -----------
+
+from config import PersistenceConfig  # noqa: E402
+
+
+class _RowsRead(np.ndarray):
+    """Unit rows that record how many of their rows each matrix product reads."""
+    reads: list = []
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kw):
+        if ufunc is np.matmul and isinstance(inputs[0], _RowsRead):
+            _RowsRead.reads.append(inputs[0].shape[0])
+        plain = tuple(np.asarray(x) if isinstance(x, _RowsRead) else x for x in inputs)
+        if "out" in kw:
+            kw["out"] = tuple(np.asarray(o) if isinstance(o, _RowsRead) else o for o in kw["out"])
+        return getattr(ufunc, method)(*plain, **kw)
+
+
+def test_the_tree_reads_a_row_only_while_its_point_is_outside_the_tree():
+    X = random_unit_vectors(300, 768, seed=7)
+    U = unit_rows(X)
+    want = persistence._mst_edges(persistence.distance_matrix(X))         # today's tree, from scipy
+    rows = U.copy().view(_RowsRead)
+    _RowsRead.reads = []
+    got = persistence._prim_edges(rows)
+    assert [(i, j) for _, i, j in got] == [(i, j) for _, i, j in want]
+    assert np.allclose([h for h, _, _ in got], [h for h, _, _ in want], atol=1e-9)
+    n = len(X)
+    assert sum(_RowsRead.reads) <= n + n * (n - 1) // 2      # half the n x n rows that a full row per point reads
+    X0 = X.copy()
+    persistence.build_filtration_blocked(X, block_rows=7)
+    assert np.array_equal(X, X0)                              # without unit=True the caller's rows stay as they were
+
+
+def test_the_core_set_at_its_bound_reads_nearest_neighbours_and_builds_no_tree(tmp_path, monkeypatch):
+    src = dense_source(tmp_path, lane_n=60, cores=50)
+    cfg = PersistenceConfig(enabled=True, redundancy_floor=0.0)          # every core flagged: every redundancy compared
+    store = Storage.open_read_only(src)
+    try:
+        want = persistence.flag_redundant_cores(store, cfg)              # today's dense filtration
+        monkeypatch.setattr(persistence, "_prim_edges", refuse_over(0))  # redundancy needs no tree
+        got = persistence.flag_redundant_cores(store, cfg, max_episodes=MAX_LANE_EPISODES)
+    finally:
+        store.close()
+    assert len(want) == 50 and got == want

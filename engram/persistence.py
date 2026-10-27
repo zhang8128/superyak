@@ -97,38 +97,72 @@ def build_filtration(X) -> Filtration:
 
 
 def _prim_edges(U: np.ndarray) -> list[tuple[float, int, int]]:
-    """The minimum spanning tree of unit rows ``U`` by dense Prim's algorithm, one row of n distances per
-    added point and no n x n matrix. Each edge is (h, min(u, v), max(u, v)) with h floored at _MST_FLOOR, and
-    the list is sorted by that triple, as ``_mst_edges`` returns scipy's (every scipy edge has i < j)."""
+    """The minimum spanning tree of unit rows ``U`` by dense Prim's algorithm, with no n x n matrix. Each edge is
+    (h, min(u, v), max(u, v)) with h floored at _MST_FLOOR, and the list is sorted by that triple, as
+    ``_mst_edges`` returns scipy's (every scipy edge has i < j).
+
+    The points outside the tree are kept in ``U``'s first r rows, so each added point reads one row of r
+    distances, n^2 / 2 rows in all where a row of n per point read n^2 (I 10, "Time"). ``U`` is the tree's
+    scratch: its rows are left reordered."""
     n = len(U)
     if n < 2:
         return []
+    point = np.arange(n)                     # the point whose row sits at each position
     best = np.maximum(1.0 - U @ U[0], _MST_FLOOR)
     near = np.zeros(n, dtype=np.int64)       # the tree point each point is closest to
-    in_tree = np.zeros(n, dtype=bool)
-    in_tree[0] = True
-    best[0] = np.inf
+    row = np.empty(n)
     edges = []
-    for _ in range(n - 1):
-        v = int(np.argmin(best))
-        u = int(near[v])
-        edges.append((float(best[v]), min(u, v), max(u, v)))
-        in_tree[v] = True
-        best[v] = np.inf
-        d = np.maximum(1.0 - U @ U[v], _MST_FLOOR)
-        closer = (d < best) & ~in_tree
-        best[closer] = d[closer]
-        near[closer] = v
+    r = n
+
+    def join(p: int) -> None:                # position p joins the tree: swap it to the end of the outside rows
+        nonlocal r
+        r -= 1
+        if p != r:
+            for a in (U, point, best, near):
+                a[[p, r]] = a[[r, p]]
+
+    join(0)
+    while r:
+        p = int(np.argmin(best[:r]))
+        v, u = int(point[p]), int(near[p])
+        edges.append((float(best[p]), min(u, v), max(u, v)))
+        join(p)
+        if not r:
+            break
+        d = np.matmul(U[:r], U[r], out=row[:r])
+        np.subtract(1.0, d, out=d)
+        np.maximum(d, _MST_FLOOR, out=d)
+        closer = d < best[:r]
+        best[:r][closer] = d[closer]
+        near[:r][closer] = v
     edges.sort()
     return edges
+
+
+def _nearest_blocked(U: np.ndarray, block_rows: int = BLOCK_ROWS) -> np.ndarray:
+    """Each unit row's nearest-neighbour distance, from one reused ``block_rows`` x n buffer turned into
+    ``1 - U_block . U^T`` in place and clipped at 0 as ``distance_matrix`` clips (R28)."""
+    n = len(U)
+    nn = np.empty(n)
+    buf = np.empty((min(block_rows, n), n))
+    for lo in range(0, n, block_rows):
+        m = min(block_rows, n - lo)
+        d = buf[:m]
+        np.matmul(U[lo:lo + m], U.T, out=d)
+        np.subtract(1.0, d, out=d)
+        np.maximum(d, 0.0, out=d)
+        d[np.arange(m), lo + np.arange(m)] = np.inf
+        nn[lo:lo + m] = d.min(axis=1)
+    return nn
 
 
 def build_filtration_blocked(X, *, block_rows: int = BLOCK_ROWS, unit: bool = False) -> Filtration:
     """``build_filtration`` without an n x n matrix (R28), with the same outputs when no two rows are equal.
 
     The rows are float64 and L2-normalized in one n x d array, allocated once and normalized in place
-    (``unit=True``: ``X`` already is that array and is used as it is). The nearest neighbours come from
-    one ``block_rows`` x n buffer; the tree comes from ``_prim_edges``.
+    (``unit=True``: ``X`` already is that array and is used as it is, as the tree's scratch, so its rows are
+    left reordered). The nearest neighbours come from one ``block_rows`` x n buffer (``_nearest_blocked``); the
+    tree comes from ``_prim_edges``.
     """
     n = len(X)
     if n == 0:
@@ -143,16 +177,7 @@ def build_filtration_blocked(X, *, block_rows: int = BLOCK_ROWS, unit: bool = Fa
             blk = U[lo:lo + block_rows]
             blk[:] = X[lo:lo + block_rows]
             blk /= np.linalg.norm(blk, axis=1, keepdims=True) + _EPS
-    nn = np.empty(n)
-    buf = np.empty((min(block_rows, n), n))
-    for lo in range(0, n, block_rows):
-        m = min(block_rows, n - lo)
-        d = buf[:m]
-        np.matmul(U[lo:lo + m], U.T, out=d)
-        np.subtract(1.0, d, out=d)
-        np.maximum(d, 0.0, out=d)
-        d[np.arange(m), lo + np.arange(m)] = np.inf
-        nn[lo:lo + m] = d.min(axis=1)
+    nn = _nearest_blocked(U, block_rows)
     edges = _prim_edges(U)
     death, max_height = _merge(n, edges)
     return Filtration(n, nn, death, max_height, np.array([e[0] for e in edges]))
@@ -548,7 +573,8 @@ def flag_redundant_cores(storage, cfg, *, max_episodes: int | None = None,
     """Cores redundant within the core set — demotion candidates, review only.
     With ``max_episodes`` the core set is counted first; over the bound it is
     not measured (never sampled) and is named in ``skips`` as ``core``;
-    within it the blocked filtration is used."""
+    within it the blocked filtration's nearest neighbours are used: redundancy
+    reads no tree, so none is built (I 10, "Time")."""
     conn = storage.conn
     n = conn.execute("SELECT COUNT(*)" + _CORE_SET).fetchone()[0]
     if n < 2:
@@ -556,14 +582,13 @@ def flag_redundant_cores(storage, cfg, *, max_episodes: int | None = None,
     if max_episodes is None:
         rows = conn.execute("SELECT e.id, ev.embedding" + _CORE_SET).fetchall()
         ids = [r["id"] for r in rows]
-        f = build_filtration(np.stack([_unpack_embedding(r["embedding"]) for r in rows]))
+        red = redundancy(build_filtration(np.stack([_unpack_embedding(r["embedding"]) for r in rows])))
     elif n > max_episodes:
         _skip(skips, "core", n, max_episodes)
         return []
     else:
         ids, U = _unit_rows(conn, "SELECT e.id, ev.embedding" + _CORE_SET, (), n)
-        f = build_filtration_blocked(U, unit=True)
-    red = redundancy(f)
+        red = np.clip(1.0 - _nearest_blocked(U), 0.0, 1.0)    # redundancy() reads only nn_dist: no tree is built
     flagged = []
     for i, eid in enumerate(ids):
         if red[i] >= cfg.redundancy_floor:
