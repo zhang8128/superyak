@@ -336,6 +336,7 @@ def audit_unchecked_events(storage, cfg, *, max_episodes: int | None = None,
                            skips: list | None = None) -> list[dict]:
     """Re-run the band check on subdivision events recorded before the
     conjunct existed (persistence_checked=0). Best-effort: uses the peers'
+    CURRENT provenance; events whose peers lack >=1 vectored episode on
     both sides are skipped with a reason. With ``max_episodes``, an event whose
     two peers hold more vectored sources than that together is not measured
     (never sampled) and is named in ``skips`` as ``event:<id>``."""

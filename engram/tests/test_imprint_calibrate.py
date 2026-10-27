@@ -195,3 +195,11 @@ def test_no_content_keeps_only_an_errors_class_name(tmp_path, monkeypatch):
     assert all(e == {"error": "ValueError"} for e in errors), errors
     kept = calibrate(src, tmp_path / "with-content", now=NOW)               # without no_content the message stays
     assert "secret" in kept["analyses"]["first_open"]["error"]
+
+
+def test_the_unchecked_event_audit_says_what_it_reads_and_skips():                       # final review M11
+    import persistence
+
+    doc = " ".join(persistence.audit_unchecked_events.__doc__.split())
+    assert "uses the peers' CURRENT provenance; events whose peers lack >=1 vectored episode on both sides are " \
+           "skipped with a reason." in doc
