@@ -1,4 +1,4 @@
-"""Tasks P1 to P3's timed budgets (perf-design.md section 8): runs only on the station's Raspberry Pi 5, with
+"""Tasks P1 to P4's timed budgets (perf-design.md section 8): runs only on the station's Raspberry Pi 5, with
 ENGRAM_PI_BUDGET=1. Each later perf task adds its own."""
 import os
 import time
@@ -18,6 +18,8 @@ P2_BULK_300X8_S = 4.5              # the prototype's 2.9 s, 1.5x (base: 21.3 s)
 
 P3_ELIGIBLE_1000_S = 2.0           # 1.5x the prototype's 1.34 s with programs
 P3_BULK_1000X8_S = 7.5             # the prototype's 5.0 s, 1.5x (base: 6.6 s after B)
+
+P4_BULK_1000X512_S = 8.0           # bulk 1,000 trails x 512 touches, universe 4,096 (the full U24 bulk: 300 s)
 
 
 def test_p1_eligible_set_of_1000_within_15_seconds():
@@ -72,3 +74,15 @@ def test_p3_bulk_1000_trails_of_8_touches_within_7_5_seconds():
     took = time.perf_counter() - start
     assert d.allowed, d.refusal
     assert took <= P3_BULK_1000X8_S, f"{took:.1f} s for 1,000 trails"
+
+
+def test_p4_bulk_1000_trails_of_512_touches_within_8_seconds():
+    s = generated_world(placements=0, layers=43, records_per_layer=256, universe=4_096, trails=1_000)[0]
+    bulk = BulkUse(requester=AGENT, place=PLACE, objects=derived_trails(1_000), copy=COPY, action="imprint",
+                   purpose="trail-evaluation", at=T("2026-11-02"), named=False,
+                   names=lambda trail: touches(trail, 512, universe=4_096))
+    start = time.perf_counter()
+    d = decide_bulk(s, bulk, group=False)
+    took = time.perf_counter() - start
+    assert d.allowed, d.refusal
+    assert took <= P4_BULK_1000X512_S, f"{took:.1f} s for 1,000 trails of 512 touches"

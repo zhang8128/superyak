@@ -306,3 +306,73 @@ def test_a_bulk_use_is_decided_on_a_ledger_that_holds_grants():
     from tests.permissions_support import one_grant_backed_record
     s, u = one_grant_backed_record()
     assert decide_bulk(s, bulk_use([u(T("2026-11-02")).obj], action="recall", named=True)).allowed
+
+
+# ---------------------------------------------------------------- Task P4: one pass over a bulk use's names
+
+def test_p4_each_road_and_trail_has_its_names_read_once():
+    s = trail_world()
+    trails, names = trails_of(5, 20)
+    reads = collections.Counter()
+
+    def counting(o):
+        reads[o] += 1
+        return names(o)
+    assert decide_bulk(s, bulk_use(trails, names=counting)).allowed
+    assert {reads[t] for t in trails} == {1}
+    reads.clear()
+    road = "road:S/r1"
+    assert decide_bulk(s, bulk_use([road, *trails[:2]], names=lambda o: (reads.update([o]) or names(trails[0])))).allowed
+    assert {reads[road], reads[trails[0]], reads[trails[1]]} == {1}
+
+
+def test_p4_a_trails_subjects_are_the_union_over_its_names():
+    from permissions import _Run, subjects_of
+    w = andy_world()
+    w.allow(HOME, audience=["self"], kinds=["memory", "road", "trail"], actions=["recall", "route"])
+    for i in range(3):
+        w.person(f"p{i}")
+    for i, m in enumerate(memories(6)):
+        w.subject(m, f"person:p{i % 3}")
+        if i == 5:
+            w.subject(m, "person:p0")
+    s = w.state()
+    names = set(memories(6)) | {"mem:Z/episode/m5"}
+    at = T("2026-11-02")
+    from permissions import Use
+    run = _Run(s, Use(requester=bulk_use([]).requester, place=HOME, obj="", copy="store:house", action="route",
+                      purpose="care-coordination", at=at), (), None, multi=True, group=True, bulk=True)
+    for obj in ("trail:S/t1", "road:S/r1"):
+        assert run.subjects_of_names(obj, names) == subjects_of(s, obj, at, tuple(names))
+    assert run.subjects_of_names("trail:S/t1", set()) == subjects_of(s, "trail:S/t1", at)
+
+
+def test_p4_past_the_bound_at_the_third_trail_the_result_is_bound_and_empty(monkeypatch):
+    import permissions
+    monkeypatch.setattr(permissions, "MAX_BULK_MEMORIES", 100)
+    trails, names = trails_of(3, 40)
+    for world, legacy in ((trail_world(), ()),
+                          (trail_world(blocked=memories(1)[0]), ()),            # the first trail's decision is refused
+                          (trail_world(), [LegacyLayer("boom", lambda u, x: 1 / 0)])):   # or raises
+        d = decide_bulk(world, bulk_use(trails, names=names), legacy=legacy)
+        assert d.refusal == Refusal("BOUND") and not d.allowed and d.cited == () and d.versions == {}
+    # at the bound exactly, the refusal or error of the first trail is what comes back
+    d = decide_bulk(trail_world(blocked=memories(1)[0]), bulk_use(trails[:2], names=names))
+    assert d.refusal.code == "DENIED"
+    try:
+        decide_bulk(trail_world(), bulk_use(trails[:2], names=names), legacy=[LegacyLayer("boom", lambda u, x: 1 / 0)])
+    except ZeroDivisionError:
+        pass
+    else:
+        raise AssertionError("an error raised before the bound is known not to refuse comes back")
+
+
+def test_p4_a_name_that_is_itself_a_trail_is_decided_as_before():
+    s, calls = trail_world(), collections.Counter()
+    counting = [LegacyLayer("count", lambda u, x: calls.update([(u.obj, x)]) is None)]
+    m0 = memories(1)[0]
+    inner = "trail:S/inner"
+    bulk = bulk_use(["trail:S/t1", inner], names=lambda o: (m0, inner) if o == "trail:S/t1" else (m0,))
+    d = decide_bulk(s, bulk, legacy=counting)
+    assert d.allowed
+    assert calls[(m0, "recall")] == 1 and calls[(inner, "recall")] == 1 and calls[(inner, "route")] == 1

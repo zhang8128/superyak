@@ -1980,6 +1980,9 @@ class _Run:
         self.done_bits: dict[str, int] = {}
         self.objs: list[str] = []
         self._subjects: dict = {}
+        self._subject_ids: dict = {}             # each distinct subjects tuple, kept once
+        self._by_id: dict = {}                   # id(that tuple) -> it
+        self.recall_done: set = set()            # the memories whose `recall` a bulk run decided
         self._retired: dict = {}
         self._shared: dict = {}                  # group key -> (layers, {(ledger layer id, action): row})
         self._read_groups: set = set()
@@ -1990,11 +1993,24 @@ class _Run:
         if not names:
             got = self._subjects.get(obj)
             if got is None:
-                got = self._subjects[obj] = subjects_of(self.state, obj, t)
+                got = subjects_of(self.state, obj, t)
+                got = self._subjects[obj] = self._subject_ids.setdefault(got, got)
+                self._by_id.setdefault(id(got), got)
             return got
         out = set(self.subjects(obj))
         for name in names:
             out.update(self.subjects(name))
+        return tuple(sorted(out, key=_units))
+
+    def subjects_of_names(self, obj: str, names) -> tuple:
+        """`subjects(obj, names)` for many names (a set): each distinct subjects tuple is kept once, so the union
+        reads each name with one lookup and adds each distinct tuple once."""
+        memo = self._subjects
+        for n in names.difference(memo):
+            self.subjects(n)
+        out = set(self.subjects(obj))
+        for k in set(map(id, map(memo.__getitem__, names))):       # each subjects tuple is kept once (interned)
+            out.update(self._by_id[k])
         return tuple(sorted(out, key=_units))
 
     def is_done(self, obj: str, action: str) -> bool:
@@ -2005,6 +2021,8 @@ class _Run:
     def _mark_done(self, obj: str, actions: Sequence[str]) -> None:
         if self.bulk:
             self.done_bits[obj] = self.done_bits.get(obj, 0) | _bits(actions)
+            if "recall" in actions and not obj.startswith(("road:", "trail:")):
+                self.recall_done.add(obj)
         else:
             self.done.update((obj, x) for x in actions)
 
@@ -2175,7 +2193,8 @@ def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = 
                 outside: Mapping | None = None, group: bool = True) -> Decision:
     """P 6.4 "Bulk uses" and P 6.5 step 1's bulk order. The tests on a, P, anc(P) and anc(H) run once, then the
     size bounds (the objects, and the distinct memories their roads and trails name, counted up to the bound plus
-    one), before any object. Then each object is decided in ref order by decide's per-object path with the bound
+    one: past it the result is BOUND with nothing decided, whatever an earlier object gave or raised; each road's
+    and trail's names are read once, in the same pass that decides). Each object is decided in ref order by decide's per-object path with the bound
     of 32 waived, each (memory, action) pair once however many objects need it. The refusal is the first failing
     object's, and names no object. With `group`, the ledger layers' verdicts are shared by the objects that agree
     on what the pre-filtered records read (P 6.4, "How it is computed"); legacy and outside layers are still
@@ -2191,35 +2210,48 @@ def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = 
     if len(objects) > (MAX_BULK_NAMED if bulk.named else MAX_BULK_DERIVED):
         run.failure = ("BOUND", None, None)
         return run.result()
+    # One pass: each road's or trail's names are read once, counted toward the bound and decided. The bound still
+    # comes before any object: past it, the result is a run that decided nothing, refused BOUND, as if the count
+    # had come first, and an error a decision raised is dropped as if never reached. After the first refusal (or
+    # error) the names are only counted.
     named: set = set()
-    for obj in objects:
-        if _kind_of(obj) in ("road", "trail"):
-            for m in bulk.names(obj):
-                named.add(m)
-                if len(named) > MAX_BULK_MEMORIES:
-                    run.failure = ("BOUND", None, None)
-                    return run.result()
-    del named
     closure = _CLOSURE[bulk.action]
+    recall_bit, done = 1 << _ACTION_BIT["recall"], run.done_bits
+    ok, raised = True, None
     for i, obj in enumerate(objects):
-        if i % PREFETCH_CHUNK == 0:
-            state.prefetch(objects[i:i + PREFETCH_CHUNK])
-        if _kind_of(obj) in ("road", "trail"):
+        trail = _kind_of(obj) in ("road", "trail")
+        names = None
+        if trail:
             names = set(bulk.names(obj))
-            ok = run.process(replace(proto, obj=obj), closure, run.subjects(obj, tuple(names)))
-            fresh = sorted((m for m in names if not run.is_done(m, "recall")), key=_units) if ok else ()
-            for m in fresh:
-                subjects = run.subjects(m)
-                ok = run.process(replace(proto, obj=m), ("recall",), subjects,
-                                 gkey=run.group_key(m, subjects) if group else None)
-                if not ok:
-                    break
-        else:
-            subjects = run.subjects(obj)
-            ok = run.process(replace(proto, obj=obj), closure, subjects,
-                             gkey=run.group_key(obj, subjects) if group and subjects else None)
+            named |= names
+            if len(named) > MAX_BULK_MEMORIES:
+                over = _Run(state, proto, legacy, outside, multi=True, group=group, bulk=True)
+                over.failure = ("BOUND", None, None)
+                return over.result()
         if not ok:
-            break
+            continue
+        try:
+            if i % PREFETCH_CHUNK == 0:
+                state.prefetch(objects[i:i + PREFETCH_CHUNK])
+            if trail:
+                ok = run.process(replace(proto, obj=obj), closure, run.subjects_of_names(obj, names))
+                if ok:
+                    fresh = sorted([m for m in names - run.recall_done if not done.get(m, 0) & recall_bit],
+                                   key=_units)
+                    for m in fresh:
+                        subjects = run.subjects(m)
+                        ok = run.process(replace(proto, obj=m), ("recall",), subjects,
+                                         gkey=run.group_key(m, subjects) if group else None)
+                        if not ok:
+                            break
+            else:
+                subjects = run.subjects(obj)
+                ok = run.process(replace(proto, obj=obj), closure, subjects,
+                                 gkey=run.group_key(obj, subjects) if group and subjects else None)
+        except Exception as e:          # raised once the bound is known not to refuse first
+            ok, raised = False, e
+    if raised is not None:
+        raise raised
     return run.result()
 
 
