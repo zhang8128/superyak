@@ -16,8 +16,11 @@ def token_hash(token):
 def password_hash(password, salt):
     return hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
 
-# Public route spec 3, the holds: (limit, window in seconds). A pair is a username from one source.
-PAIR_HOLD, SOURCE_HOLD, USER_HOLD = (8, 300), (40, 300), (30, 3600)
+# Public route spec 3, the holds: (limit, window in seconds). A pair is a username from one source; a device is a
+# browser's known-device token, whose failures count against it instead of holds 1-3.
+PAIR_HOLD, SOURCE_HOLD, USER_HOLD, DEVICE_HOLD = (8, 300), (40, 300), (30, 3600), (8, 300)
+DEVICE_LIFETIME = 180 * 86400
+DEVICES_PER_USER = 20
 
 
 def login_source(host, public):
@@ -97,13 +100,37 @@ class Auth:
                 (actor,),
             )]
 
-    def login(self, username, password, source, *, public=True):
+    def _known_device(self, db, device, username, now):
+        """The device row for a superyak_device token that is unexpired and belongs to username, or None: a cookie for
+        another user, an expired one or a made-up one exempts nothing."""
+        if not isinstance(device, str) or not 0 < len(device) <= 128 or not isinstance(username, str):
+            return None
+        return db.execute('SELECT login_devices.* FROM login_devices JOIN users ON users.id=login_devices.user_id '
+                          'WHERE token_hash=? AND expires>? AND users.username=?', (token_hash(device), now, username)).fetchone()
+
+    def _device_signed_in(self, db, user_id, device, now):
+        """After a success: the presented token's row, kept and extended (its failures reset), or a new token's row.
+        Expired rows go, and a user keeps at most DEVICES_PER_USER, the oldest going first. Returns the token."""
+        if device is not None and db.execute('UPDATE login_devices SET expires=?, failures=0, failure_reset=0 WHERE token_hash=?',
+                                             (now + DEVICE_LIFETIME, token_hash(device))).rowcount:
+            return device
+        device = secrets.token_urlsafe(32)
+        db.execute('DELETE FROM login_devices WHERE expires<=?', (now,))
+        db.execute('INSERT INTO login_devices(token_hash,user_id,expires) VALUES(?,?,?)', (token_hash(device), user_id, now + DEVICE_LIFETIME))
+        db.execute('DELETE FROM login_devices WHERE user_id=? AND token_hash NOT IN '
+                   '(SELECT token_hash FROM login_devices WHERE user_id=? ORDER BY expires DESC LIMIT ?)', (user_id, user_id, DEVICES_PER_USER))
+        return device
+
+    def login(self, username, password, source, *, public=True, device=None):
         """Public route spec 3, reserve first. Step 1 deletes expired counters, then refuses a held attempt (429,
         without hashing) or counts it in every applicable counter, which reserves it. Step 2 hashes outside any
         transaction, the dummy hash for an unknown name, so a 401 takes as long either way. Step 3 re-reads the user,
         since an activation can change the hash in between: a failure keeps the reservation as the counted failure,
         a success deletes the pair's counter and gives the others back. The answers are today's: 401 for a wrong name
-        or password, 429 when held, the same for unknown and known names."""
+        or password, 429 when held, the same for unknown and known names.
+        `device` is the browser's superyak_device cookie. One valid for username exempts it from holds 1-3: its
+        failures count against its own token instead. A success returns the token to set, the same one extended or a
+        new one."""
         text(username, 'username', 254)
         text(password, 'password', 1024)
         bucket = login_source(source, public)
@@ -114,8 +141,15 @@ class Auth:
         with self.transaction() as db:
             now = self.clock()
             db.execute('DELETE FROM login_attempts WHERE reset<=?', (now,))
+            known = self._known_device(db, device, username, now)
+            if known is not None:
+                failures = known['failures'] if known['failure_reset'] > now else 0
+                held = failures >= DEVICE_HOLD[0]
+                if not held:
+                    holds, reset = {}, known['failure_reset'] if known['failure_reset'] > now else now + DEVICE_HOLD[1]
+                    db.execute('UPDATE login_devices SET failures=?, failure_reset=? WHERE token_hash=?', (failures + 1, reset, known['token_hash']))
             rows = {key: db.execute('SELECT count,reset FROM login_attempts WHERE key=?', (key,)).fetchone() for key in holds}
-            if any(rows[key] and rows[key]['count'] >= limit for key, (limit, _) in holds.items()):
+            if held or any(rows[key] and rows[key]['count'] >= limit for key, (limit, _) in holds.items()):
                 held = True
             else:
                 for key, (_, window) in holds.items():
@@ -131,15 +165,17 @@ class Auth:
             current = db.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone() if user else None
             if (matches and current and current['salt'] == salt and current['password_hash'] == stored
                     and not current['activation_pending'] and current['kind'] == 'person'):
-                pair, *others = reserved
-                db.execute('DELETE FROM login_attempts WHERE key=?', (pair,))
-                for key in others:  # only within the window it was reserved in, and never below zero
+                keys = list(reserved)  # the pair's first; none for a known browser, which reserved on its token only
+                if keys:
+                    db.execute('DELETE FROM login_attempts WHERE key=?', (keys[0],))
+                for key in keys[1:]:  # given back only within the window it was reserved in, and never below zero
                     db.execute('UPDATE login_attempts SET count=max(count-1,0) WHERE key=? AND reset=?', (key, reserved[key]))
                 if not public:  # recovery: a tailnet sign-in clears the username's public hold
                     db.execute('DELETE FROM login_attempts WHERE key=?', (attempts_key('user', username),))
-                token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-                db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), current['id'], csrf, self.clock() + 86400))
-                result = {'user': public_user(current), 'csrf_token': csrf, 'token': token}
+                now, token, csrf = self.clock(), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+                db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), current['id'], csrf, now + 86400))
+                result = {'user': public_user(current), 'csrf_token': csrf, 'token': token,
+                          'device': self._device_signed_in(db, current['id'], device if known is not None else None, now)}
         if result is None:
             raise Problem(401, 'Invalid username or password')
         return result

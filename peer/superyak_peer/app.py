@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from .agent_version import agent_update
+from .auth import DEVICE_LIFETIME
 from .common import Problem, valid_utf8
 from .db import Store
 from .inbox import breakout_filter, wait_seconds, with_earlier_noise
@@ -22,6 +23,7 @@ from .presence import parse_presence
 
 MAX_REQUEST = 6 * 1024 * 1024
 COOKIE = 'superyak_session'
+DEVICE_COOKIE = 'superyak_device'  # public route spec 3: the known-device cookie, kept at logout
 DEFAULT_ORIGINS = ('http://127.0.0.1:7435', 'http://localhost:7435')
 STATIC_DIR = Path(__file__).with_name('static')
 # Public route spec 1: loopback and these tailnet ranges are tailnet; every other client is public. `serve` trusts
@@ -270,10 +272,12 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return {'ok': True}
 
     def login_response(request, username, password):
-        result = store.login(username, password, request.client.host if request.client else 'unknown', public=is_public(request.scope))
-        token = result.pop('token')
+        result = store.login(username, password, request.client.host if request.client else 'unknown', public=is_public(request.scope),
+                             device=request.cookies.get(DEVICE_COOKIE))
+        token, device = result.pop('token'), result.pop('device')
         response = JSONResponse(result)
         response.set_cookie(COOKIE, token, httponly=True, samesite='strict', secure=secure_cookies or request.url.scheme == 'https', max_age=86400)
+        response.set_cookie(DEVICE_COOKIE, device, httponly=True, samesite='strict', secure=True, max_age=DEVICE_LIFETIME)
         return response
 
     @app.post('/api/login')

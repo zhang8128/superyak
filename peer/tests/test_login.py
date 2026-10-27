@@ -228,3 +228,115 @@ def test_unknown_and_known_names_answer_the_same_and_both_hash_once(station, mon
     for _ in range(7):
         assert sign_in(station, 'nobody', WRONG, '203.0.113.5') == INVALID
     assert sign_in(station, 'nobody', WRONG, '203.0.113.5') == HELD  # unknown names are held alike
+
+
+DEVICE = 'superyak_device'
+DEVICE_LIFETIME = 180 * 86400
+
+
+def devices(station, username='patient'):
+    """username's device rows, oldest expiry first."""
+    with station.store.transaction() as db:
+        return [dict(r) for r in db.execute('SELECT login_devices.* FROM login_devices JOIN users ON users.id=login_devices.user_id '
+                                            'WHERE users.username=? ORDER BY expires', (username,))]
+
+
+def known_browser(station, username='patient', source='203.0.113.5'):
+    client = browser(station)
+    assert sign_in(station, username, source=source, client=client)[0] == 200
+    assert client.cookies.get(DEVICE)
+    return client
+
+
+def test_a_sign_in_sets_a_random_device_cookie_stored_hashed_as_one_row(station):
+    """The OWASP device cookie: 256 random bits, HttpOnly, Secure, SameSite=Strict, 180 days; stored hashed."""
+    client = browser(station)
+    response = client.post('/api/login', json={'username': 'patient', 'password': 'long-password-patient'}, headers={'x-forwarded-for': '203.0.113.5'})
+    cookie = next(value for value in response.headers.get_list('set-cookie') if value.startswith(DEVICE + '='))
+    attributes = {part.strip().split('=')[0].lower() for part in cookie.split(';')[1:]}
+    assert {'httponly', 'secure', 'samesite', 'max-age'} <= attributes
+    assert 'samesite=strict' in cookie.lower() and f'max-age={DEVICE_LIFETIME}' in cookie.lower()
+    token = client.cookies.get(DEVICE)
+    assert len(token) >= 43
+    assert devices(station) == [{'token_hash': auth.token_hash(token), 'user_id': devices(station)[0]['user_id'],
+                                 'expires': station.clock[0] + DEVICE_LIFETIME, 'failures': 0, 'failure_reset': 0}]
+    assert sign_in(station, 'patient', WRONG, '203.0.113.5') == INVALID and len(devices(station)) == 1  # failures add none
+
+
+def test_a_known_browser_is_exempt_from_holds_1_to_3_and_its_failures_hold_only_its_token(station):
+    known, other = known_browser(station), known_browser(station, source='203.0.113.7')
+    for n in range(1, 31):  # hold 3
+        assert sign_in(station, 'patient', WRONG, f'198.51.100.{n}') == INVALID
+    for name in ('patient', 'a2', 'a3', 'a4', 'a5'):  # holds 1 and 2 on the known browser's own source
+        for _ in range(8):
+            sign_in(station, name, WRONG, '203.0.113.5')
+    assert sign_in(station, 'patient', source='203.0.113.5') == HELD  # a new browser there is held
+    assert sign_in(station, 'patient', source='198.51.100.99') == HELD  # and anywhere public, by hold 3
+    before = counters(station)
+    assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
+    for _ in range(8):  # its failures count against its own token, never toward holds 1-3
+        assert sign_in(station, 'patient', WRONG, '203.0.113.5', client=known) == INVALID
+    assert counters(station) == before
+    assert sign_in(station, 'patient', source='203.0.113.5', client=known) == HELD
+    assert sign_in(station, 'patient', source='203.0.113.7', client=other)[0] == 200  # only that token is held
+    station.clock[0] += 301
+    assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
+
+
+def test_a_known_browsers_success_resets_its_tokens_failures(station):
+    known = known_browser(station)
+    for _ in range(7):
+        assert sign_in(station, 'patient', WRONG, '203.0.113.5', client=known) == INVALID
+    assert devices(station)[0]['failures'] == 7
+    assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
+    assert devices(station)[0]['failures'] == 0
+
+
+def test_a_cookie_for_another_user_an_expired_one_or_a_made_up_one_exempts_nothing(station):
+    doctors = known_browser(station, 'doctor')
+    expired = known_browser(station)
+    with station.store.transaction() as db:
+        db.execute('UPDATE login_devices SET expires=? WHERE token_hash=?', (station.clock[0] - 1, auth.token_hash(expired.cookies.get(DEVICE))))
+    made_up = browser(station)
+    made_up.cookies.set(DEVICE, 'made-up-device-token')
+    for _ in range(8):
+        assert sign_in(station, 'patient', WRONG, '203.0.113.5') == INVALID
+    for client in (doctors, expired, made_up):
+        assert sign_in(station, 'patient', source='203.0.113.5', client=client) == HELD
+        assert sign_in(station, 'patient', WRONG, '203.0.113.6', client=client) == INVALID  # counted as anyone's
+    assert counters(station)[('user-source', '203.0.113.6', 'patient')] == 3
+
+
+def test_a_sign_in_with_a_valid_cookie_keeps_its_row_and_extends_it(station):
+    known = known_browser(station)
+    token, first = known.cookies.get(DEVICE), devices(station)
+    station.clock[0] += 1000
+    assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
+    assert known.cookies.get(DEVICE) == token
+    assert devices(station) == [first[0] | {'expires': station.clock[0] + DEVICE_LIFETIME}]
+    known_browser(station, source='203.0.113.8')
+    assert len(devices(station)) == 2  # another browser, another row
+
+
+def test_logout_keeps_the_device_cookie(station):
+    known = known_browser(station)
+    token = known.cookies.get(DEVICE)
+    response = known.post('/api/logout', headers={'x-csrf-token': known.get('/api/me', headers={'x-forwarded-for': '203.0.113.5'}).json()['csrf_token'],
+                                                  'x-forwarded-for': '203.0.113.5'})
+    assert response.status_code == 200
+    assert not [value for value in response.headers.get_list('set-cookie') if value.startswith(DEVICE + '=')]
+    assert known.cookies.get(DEVICE) == token and len(devices(station)) == 1
+    assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200 and len(devices(station)) == 1
+
+
+def test_at_most_20_device_rows_per_user_and_expired_rows_go(station):
+    first = known_browser(station, source=None)
+    with station.store.transaction() as db:
+        doctor = db.execute("SELECT id FROM users WHERE username='doctor'").fetchone()[0]
+        db.execute('INSERT INTO login_devices VALUES(?,?,?,0,0)', ('stale', doctor, station.clock[0] - 1))
+    for _ in range(20):
+        station.clock[0] += 1
+        known_browser(station, source=None)
+    rows = devices(station)
+    assert len(rows) == 20 and auth.token_hash(first.cookies.get(DEVICE)) not in {r['token_hash'] for r in rows}  # the oldest went
+    assert devices(station, 'doctor') == []
