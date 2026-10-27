@@ -1,11 +1,14 @@
 """Same-origin browser API; additional peer routers attach to this factory."""
 import asyncio
+import functools
 import hmac
 import ipaddress
 import logging
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
@@ -163,6 +166,23 @@ class PublicRoute:
     def listed(route, method):
         return isinstance(route, (APIRoute, Mount)) and method in PUBLIC_ROUTES.get(route.path, ())
 
+class SignInLane:
+    """Public route spec 3: all of Store.login runs in a worker under its lane's own limiter, so sign-ins never compete
+    with sync routes for anyio's shared threads. `size` sign-ins at a time with `queue` waiting; a full lane answers
+    429 without hashing or counting."""
+    def __init__(self, size, queue):
+        self.size, self.queue, self.inside = size, queue, 0
+        self.limiter = anyio.CapacityLimiter(size)
+
+    async def run(self, call, *args, **kwargs):
+        if self.inside >= self.size + self.queue:
+            raise Problem(429, 'Too many sign-ins at once; try again shortly')
+        self.inside += 1  # only the event loop changes it
+        try:
+            return await anyio.to_thread.run_sync(functools.partial(call, *args, **kwargs), limiter=self.limiter)
+        finally:
+            self.inside -= 1
+
 async def body(request):
     try:
         value = await request.json()
@@ -233,6 +253,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.federation = Federation(store, endpoint=federation_endpoint)
     app.state.agent_history = agent_history  # version check V1: read once by `serve`; None means off
     app.state.sync_enabled = sync_enabled
+    # public route spec 3: public sign-ins, tailnet ones (public requests never enter) and known browsers' public ones
+    lanes = app.state.sign_in_lanes = SimpleNamespace(public=SignInLane(2, 8), tailnet=SignInLane(1, 4), known=SignInLane(1, 4))
     install(app)
     from .models import LocalGemma
     from .source_routes import install as install_sources
@@ -271,9 +293,13 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             db.execute('SELECT 1 FROM system_meta').fetchone()
         return {'ok': True}
 
-    def login_response(request, username, password):
-        result = store.login(username, password, request.client.host if request.client else 'unknown', public=is_public(request.scope),
-                             device=request.cookies.get(DEVICE_COOKIE))
+    async def login_response(request, username, password):
+        public, device = is_public(request.scope), request.cookies.get(DEVICE_COOKIE)
+        lane = lanes.public if public else lanes.tailnet
+        if public and device is not None and await run_in_threadpool(store.device_is_valid, device, username):
+            lane = lanes.known  # the read writes nothing and runs before queueing; Store.login checks again
+        result = await lane.run(store.login, username, password, request.client.host if request.client else 'unknown',
+                                public=public, device=device)
         token, device = result.pop('token'), result.pop('device')
         response = JSONResponse(result)
         response.set_cookie(COOKIE, token, httponly=True, samesite='strict', secure=secure_cookies or request.url.scheme == 'https', max_age=86400)
@@ -283,7 +309,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/login')
     async def login(request: Request):
         data = await body(request)
-        return login_response(request, data.get('username'), data.get('password'))
+        return await login_response(request, data.get('username'), data.get('password'))
 
     if local_demo:
         def require_local_client(request):
@@ -308,7 +334,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             credential = next((c for c in demo_credentials if c['username'] == data.get('username')), None)
             if credential is None:
                 raise Problem(400, 'Choose one of the demo accounts')
-            response = login_response(request, credential['username'], credential['password'])
+            response = await login_response(request, credential['username'], credential['password'])
             store.logout(request.cookies.get(COOKIE))
             return response
 

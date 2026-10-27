@@ -108,6 +108,12 @@ class Auth:
         return db.execute('SELECT login_devices.* FROM login_devices JOIN users ON users.id=login_devices.user_id '
                           'WHERE token_hash=? AND expires>? AND users.username=?', (token_hash(device), now, username)).fetchone()
 
+    def device_is_valid(self, device, username):
+        """Public route spec 3: whether a superyak_device token is valid for username, read without writing. It picks
+        the known browsers' sign-in lane; Store.login checks again in its own transaction."""
+        with self.transaction() as db:
+            return self._known_device(db, device, username, self.clock()) is not None
+
     def _device_signed_in(self, db, user_id, device, now):
         """After a success: the presented token's row, kept and extended (its failures reset), or a new token's row.
         Expired rows go, and a user keeps at most DEVICES_PER_USER, the oldest going first. Returns the token."""

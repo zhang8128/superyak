@@ -340,3 +340,53 @@ def test_at_most_20_device_rows_per_user_and_expired_rows_go(station):
     rows = devices(station)
     assert len(rows) == 20 and auth.token_hash(first.cookies.get(DEVICE)) not in {r['token_hash'] for r in rows}  # the oldest went
     assert devices(station, 'doctor') == []
+
+
+def test_a_full_public_lane_refuses_without_hashing_or_counting_and_other_lanes_still_sign_in(station, monkeypatch):
+    """Sign-in lanes (re-check must-fix 1): public sign-ins 2 at a time with 8 waiting; tailnet sign-ins and known
+    browsers have lanes of their own, so a flood that fills the public lane locks neither out. Every request shares
+    one event loop (one `with TestClient`)."""
+    known = known_browser(station).cookies.get(DEVICE)
+    real, entered, release, hashed = auth.password_hash, threading.Semaphore(0), threading.Event(), []
+
+    def held_open(password, salt):
+        hashed.append(password)
+        if password == 'hold-the-lane':
+            entered.release()
+            assert release.wait(20)
+        return real(password, salt)
+    monkeypatch.setattr(auth, 'password_hash', held_open)
+    lane = station.app.state.sign_in_lanes.public
+    with browser(station) as client:
+        answers = []
+
+        def flood(n):
+            answers.append(sign_in(station, 'patient', 'hold-the-lane', f'203.0.113.{n}', client))
+        threads = [threading.Thread(target=flood, args=(n,)) for n in range(1, 11)]
+        try:
+            for thread in threads:
+                thread.start()
+            assert entered.acquire(timeout=10) and entered.acquire(timeout=10)  # 2 hashing
+            for _ in range(200):
+                if lane.inside == 10:
+                    break
+                threading.Event().wait(0.05)
+            assert lane.inside == 10  # and 8 waiting: the lane is full
+            before, hashes = counters(station), len(hashed)
+            refused = client.post('/api/login', json={'username': 'doctor', 'password': 'long-password-doctor'},
+                                  headers={'x-forwarded-for': '203.0.113.99'})
+            assert (refused.status_code, refused.json()) == (429, {'error': 'Too many sign-ins at once; try again shortly'})
+            assert len(hashed) == hashes and counters(station) == before  # neither hashed nor counted
+            assert client.post('/api/login', json={'username': 'patient', 'password': 'long-password-patient'},
+                               headers={'x-forwarded-for': '203.0.113.98', 'cookie': f'{DEVICE}={known}'}).status_code == 200
+            assert client.post('/api/login', json={'username': 'doctor', 'password': 'long-password-doctor'}).status_code == 200  # tailnet
+        finally:
+            release.set()
+            for thread in threads:
+                thread.join(20)
+    assert answers == [INVALID] * 10 and lane.inside == 0
+
+
+def test_the_lanes_sizes(station):
+    lanes = station.app.state.sign_in_lanes
+    assert [(lane.size, lane.queue) for lane in (lanes.public, lanes.tailnet, lanes.known)] == [(2, 8), (1, 4), (1, 4)]
