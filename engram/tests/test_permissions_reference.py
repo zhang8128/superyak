@@ -3,7 +3,9 @@
 tests/permissions_reference.py is a copy of a083a96's decision code, never edited again. For random worlds, the F1
 fixtures and bulk uses under small bounds, `decide`, `decide_bulk` (named and counted, grouped and not) and
 `eligible_set` must give the reference's `to_json()`, versions, `processed` and `failed_need`, or the same refusal
-error, on a whole State and on a lazy State written to a ledger by SQL."""
+error, on a whole State and on a lazy State written to a ledger by SQL. The worlds are a083a96's (`nested=False`).
+One change is on purpose: Tardis's T1 reads the expiry of the grant behind every grant-backed membership of a
+needed object, so a horizon may move earlier, to one of those expiries (`t1_terms`)."""
 import dataclasses
 import hashlib
 import json
@@ -45,8 +47,32 @@ def guard(fn):
         return e
 
 
-def same(label, live, old):
+T1_CHANGED = []          # the decisions whose horizon Tardis's T1 moved earlier, by label
+
+
+def t1_terms(s, objs, t):
+    """Tardis's T1, read from the State apart from the code under test: the expiry after t of every grant in the
+    chain behind every grant-backed membership of the objects (and of the memories a road or trail names)."""
+    out = []
+    for o in objs:
+        for m in s.member_of.get(o, ()):
+            gid = m.backing[len("grant:"):] if m.backing.startswith("grant:") else None
+            while gid is not None and gid in s.grants:
+                g = s.grants[gid]
+                if g.expires > t:
+                    out.append(g.expires)
+                gid = g.parent_id
+    return out
+
+
+def same(label, live, old, t1=()):
+    """Equal decisions, except that T1 may move the horizon earlier, to one of `t1`, the times `t1_terms` reads."""
     a, b = fields(live), fields(old)
+    if "d" in a and "d" in b and a["d"]["horizon"] != b["d"]["horizon"]:
+        h, before = a["d"]["horizon"], b["d"]["horizon"]
+        assert h in t1 and (before is None or h < before), label
+        T1_CHANGED.append(label)
+        a = dict(a, d=dict(a["d"], horizon=before))
     assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True), label
 
 
@@ -84,21 +110,27 @@ def m2_terms(s, placements, requester, t):
     return out
 
 
-def same_set(label, live, old, m2=()):
+def same_set(label, live, old, m2=(), t1=None):
     """Equal eligible sets, except that M2 (the final review) may move the horizon earlier: to the earliest of the
-    reference's horizon and `m2`, the times `m2_terms` reads."""
+    reference's horizon and `m2`, the times `m2_terms` reads; and T1 may move it earlier still, to one of the
+    times `t1_terms` reads of a placed object (`t1`, by object)."""
     M2_COMPARED.append(label)
     if isinstance(live, Exception) or isinstance(old, Exception):
         assert fields(live) == fields(old), label
         return
+    t1 = t1 or {}
     terms = list(m2) + ([] if old.horizon is None else [old.horizon])
     expected = min(terms) if terms else None
     if expected != old.horizon:
         M2_CHANGED.append(label)
-    assert (sorted(live.memory_ids), live.horizon) == (sorted(old.memory_ids), expected), label
+    horizon = live.horizon
+    if horizon != expected and any(horizon in v for v in t1.values()) and (expected is None or horizon < expected):
+        T1_CHANGED.append(label)
+        horizon = expected
+    assert (sorted(live.memory_ids), horizon) == (sorted(old.memory_ids), expected), label
     assert sorted(live.decisions) == sorted(old.decisions), label
     for k in sorted(live.decisions):
-        same(f"{label}/{k}", live.decisions[k], old.decisions[k])
+        same(f"{label}/{k}", live.decisions[k], old.decisions[k], t1.get(k, ()))
 
 
 def lazy_state(w, home):
@@ -153,32 +185,38 @@ def check_world(tag, w, s, rng, n_uses, when=None):
                 b = BulkUse(requester=first.requester, place=first.place, objects=objs, copy=first.copy,
                             action=first.action, purpose=first.purpose, at=first.at, named=named,
                             names=lambda o: roads.get(o, ()))
+                t1 = t1_terms(s, list(objs) + [m for o in objs for m in roads.get(o, ())], first.at)
                 for group in (True, False):
                     same(f"{tag}/{i}/bulk/{named}/{group}", guard(lambda: decide_bulk(s, b, group=group)),
-                         guard(lambda: ref.decide_bulk(s, b, group=group)))
+                         guard(lambda: ref.decide_bulk(s, b, group=group)), t1)
                 same(f"{tag}/{i}/bulk-legacy/{named}", guard(lambda: decide_bulk(s, b, legacy=leg)),
-                     guard(lambda: ref.decide_bulk(s, b, legacy=leg)))
+                     guard(lambda: ref.decide_bulk(s, b, legacy=leg)), t1)
             for j, x in enumerate(u.uses):
-                same(f"{tag}/{i}/sub/{j}", guard(lambda: decide(s, x)), guard(lambda: ref.decide(s, x)))
+                same(f"{tag}/{i}/sub/{j}", guard(lambda: decide(s, x)), guard(lambda: ref.decide(s, x)),
+                     t1_terms(s, (x.obj, *x.names), x.at))
             continue
-        same(f"{tag}/{i}", guard(lambda: decide(s, u)), guard(lambda: ref.decide(s, u)))
-        same(f"{tag}/{i}/legacy", guard(lambda: decide(s, u, legacy=leg)), guard(lambda: ref.decide(s, u, legacy=leg)))
+        t1 = t1_terms(s, (u.obj, *u.names), u.at)
+        same(f"{tag}/{i}", guard(lambda: decide(s, u)), guard(lambda: ref.decide(s, u)), t1)
+        same(f"{tag}/{i}/legacy", guard(lambda: decide(s, u, legacy=leg)), guard(lambda: ref.decide(s, u, legacy=leg)),
+             t1)
         objs = list(getattr(w.cfg, "objects", [])) + [None]
         placements = [Placement(f"id{k}", o, u.copy) for k, o in enumerate(objs)]
         placements += [Placement(f"dup{k}", o, u.copy) for k, o in enumerate(objs[:3])]
         kw = dict(requester=u.requester, place=u.place, purpose=u.purpose, action=u.action, at=u.at)
         same_set(f"{tag}/{i}/es", guard(lambda: eligible_set(s, placements, **kw)),
                  guard(lambda: ref.eligible_set(s, placements, **kw)),
-                 m2=m2_terms(s, placements, u.requester, u.at))
+                 m2=m2_terms(s, placements, u.requester, u.at),
+                 t1={o: t1_terms(s, (o,), u.at) for o in objs if o is not None})
         for k, o in enumerate(objs[:-1]):
             x = dataclasses.replace(u, obj=o, names=roads.get(o, ()), shows=frozenset())
-            same(f"{tag}/{i}/each/{k}", guard(lambda: decide(s, x)), guard(lambda: ref.decide(s, x)))
+            same(f"{tag}/{i}/each/{k}", guard(lambda: decide(s, x)), guard(lambda: ref.decide(s, x)),
+                 t1_terms(s, (o, *x.names), u.at))
 
 
 @pytest.mark.parametrize("case", range(CASES))
 def test_random_world_decisions_equal_the_reference(case, tmp_path):
     WORLDS_RUN.add(("from-t0", case))
-    w = random_world(random.Random(f"perf-diff-{case}"))
+    w = random_world(random.Random(f"perf-diff-{case}"), nested=False)
     check_world(f"rw{case}", w, w.state(), random.Random(f"perf-diff-uses-{case}"), USES)
     if case % 6 == 0:
         check_world(f"rw{case}-lazy", w, lazy_state(w, tmp_path / "ledger"),
@@ -192,7 +230,7 @@ def test_uses_drawn_before_a_records_anchor_equal_the_reference(case, tmp_path):
     side of an anchor: every decision must still equal the reference, and an eligible set's horizon may move only
     to `m2_terms`, whose last term is then the earliest anchor after t."""
     WORLDS_RUN.add(("before-t0", case))
-    w = random_world(random.Random(f"perf-diff-{case}"))
+    w = random_world(random.Random(f"perf-diff-{case}"), nested=False)
     s = w.state()
     anchors = sorted({r.anchor for r in s.records.values()})
     rng = random.Random(f"perf-diff-before-{case}")
@@ -235,7 +273,7 @@ def test_bulk_bound_equals_the_reference(cap, trails_world, monkeypatch):
         same(f"gen/{cap}/{group}", guard(lambda: decide_bulk(trails_world, b, group=group)),
              guard(lambda: ref.decide_bulk(trails_world, b, group=group)))
     for case in range(0, CASES, 3):
-        w = random_world(random.Random(f"perf-diff-{case}"))
+        w = random_world(random.Random(f"perf-diff-{case}"), nested=False)
         st, roads = w.state(), getattr(w.cfg, "roads", {})
         for i, u in enumerate(sample_uses(random.Random(f"tight-{case}"), w, 25)):
             if not isinstance(u, Bulk):
@@ -280,5 +318,6 @@ def test_the_random_worlds_keep_exercising_m2(tmp_path, capsys):
     before = [x for x in M2_CHANGED if "-before" in x]
     with capsys.disabled():
         print(f"\nM2 moved {len(M2_CHANGED)} of {len(M2_COMPARED)} eligible-set horizons, {len(before)} of them in "
-              f"uses drawn before t0")
+              f"uses drawn before t0; Tardis's T1 moved {len(T1_CHANGED)} horizons")
     assert len(M2_CHANGED) - len(before) > 0 and len(before) > 0
+    assert T1_CHANGED            # T1's allowance in `same` and `same_set` is exercised too

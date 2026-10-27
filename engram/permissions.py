@@ -1633,11 +1633,43 @@ def _record_terms(state: State, record: Record, t: int) -> tuple[int | None, boo
     return state._memo(("record-terms", record.id, t), compute)
 
 
+def _route(state: State, colls: tuple, layer: str, anchor: int, use: Use, action: str, valid_only: bool,
+           assume: frozenset) -> tuple[tuple, bool]:
+    """(the membership rows of the route, whether every route is invalid at t) by which the object is in one of
+    `colls`. None when it is there by a person-backed row, or by a row `assume` already holds. Else each
+    grant-backed row that counts is a route, with, for each envelope of its grant chain that names collections,
+    the route there (assuming the row: Tardis's T1), and the best is the one that ends latest. With valid_only,
+    only memberships that count with their chains valid are read."""
+    t = use.at
+    rows = [m for m in _members(state, use.obj)[0]
+            if m.collection in colls
+            and _membership_counts(state, m, layer, anchor, use, action, False, assume, valid_only)]
+    if not rows or any(m in assume or not m.backing.startswith("grant:") for m in rows):
+        return (), False
+    best, best_end, all_invalid = None, None, True
+    for m in rows:
+        chain, ok = _grant_terms(state, m.backing[len("grant:"):], t)
+        route, bad = [m], not ok
+        for g in chain:
+            if g.envelope.collections != STAR:
+                inner, inner_bad = _route(state, g.envelope.collections, g.layer, anchor, use, action, valid_only,
+                                          assume | {m})
+                route.extend(inner)
+                bad = bad or inner_bad
+        if chain:
+            end = min(e for r in route for e in _chain_expiries(state, r.backing))
+            if best_end is None or end > best_end:
+                best, best_end = route, end
+        all_invalid = all_invalid and bad
+    return (tuple(best) if best is not None else ()), all_invalid
+
+
 def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool) -> tuple[int | None, bool]:
     """(effective end, grant chain invalid at t) of an allow for this use (P 6.5 step 5 and the codes). For each
     selector with a collections list (the record's, its replaces chain's and its grants' envelopes), the
-    membership route is: none when the object is in the collection by a person-backed row, else the best
-    grant-backed row, the one whose chain ends latest. With valid_only, only memberships that count with their
+    membership route is `_route`'s: none when the object is in the collection by a person-backed row, else the
+    best grant-backed row with the routes its grants' envelopes rely on, the one that ends latest. Every row on a
+    route is a membership the use matched through. With valid_only, only memberships that count with their
     chains valid are read. An object with no grant-backed row has no route (`_record_terms`)."""
     t = use.at
     if not _grant_rows(state, use.obj):
@@ -1659,21 +1691,9 @@ def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool
     for sel, layer in selectors:
         if sel.collections == STAR:
             continue
-        rows = [m for m in _members(state, use.obj)[0]
-                if m.collection in sel.collections
-                and _membership_counts(state, m, layer, record.anchor, use, action, False, frozenset(), valid_only)]
-        if not rows or any(not m.backing.startswith("grant:") for m in rows):
-            continue
-        best, best_end, all_invalid = None, None, True
-        for m in rows:
-            chain, ok = _grant_terms(state, m.backing[len("grant:"):], t)
-            if chain:
-                end = min(g.expires for g in chain)
-                if best_end is None or end > best_end:
-                    best, best_end = m, end
-            all_invalid = all_invalid and not ok
-        if best is not None:
-            routes.append(best)
+        route, all_invalid = _route(state, sel.collections, layer, record.anchor, use, action, valid_only,
+                                    frozenset())
+        routes.extend(route)
         invalid = invalid or all_invalid
     return effective_end(state, record, routes), invalid
 
@@ -1903,21 +1923,19 @@ def _until(state: State, t: int, end: int | None, layers: Sequence[str], read: I
     return min(out) if out else None
 
 
-def _horizon_layers(state: State, t: int, layers: tuple) -> tuple:
-    """What `_horizon` reads of the required layers alone: (the earliest term after t, or None; the collections
-    some selector of theirs names). It reads no object, so it is made once per (t, layers) for a State. The key is
-    the whole ordered layers tuple: the shared `seen_chain` walk depends on the layer order."""
+def _horizon_layers(state: State, t: int, layers: tuple) -> int | None:
+    """What `_horizon` reads of the required layers alone: the earliest term after t, or None. It reads no object,
+    so it is made once per (t, layers) for a State. The key is the whole ordered layers tuple: the shared
+    `seen_chain` walk depends on the layer order."""
     def compute():
         out: list[int] = []
         seen_chain: set = set()
         backings: list[str] = []
-        selectors: list[Selector] = []
 
         def note_record(r, *, allow_grants: bool) -> None:
             for v in (r.valid_from, r.valid_until):
                 if v is not None and v > t:
                     out.append(v)
-            selectors.append(r.selector)
             if allow_grants:
                 backings.append(r.backing)
 
@@ -1935,35 +1953,26 @@ def _horizon_layers(state: State, t: int, layers: tuple) -> tuple:
                     note_record(link, allow_grants=False)
                     cur, n = link.replaces, n + 1
         for b in set(backings):
-            if b.startswith("grant:"):
-                try:
-                    chain = grant_chain(state, b[len("grant:"):])
-                except RuleError:
-                    continue
-                out.extend(g.expires for g in chain if g.expires > t)
-                selectors.extend(g.envelope for g in chain)
-        named = set()
-        for sel in selectors:
-            if sel.collections != STAR:
-                named.update(sel.collections)
-        return (min(out) if out else None, frozenset(named))
+            out.extend(e for e in _chain_expiries(state, b) if e > t)
+        return min(out) if out else None
     return state._memo(("horizon-layers", t, layers), compute)
 
 
 def _horizon(state: State, t: int, layers: Sequence[str], objs: Sequence[str]) -> int | None:
     """P 6.5 step 7: the earliest `valid_from` or `valid_until` after t of every record in a required ledger layer
-    that is not revoked and has not ended, or is in the `replaces` chain of one; and every `expires` after t of
-    a grant behind such a record, behind a grant in its chain, or behind a membership of a needed object in a
-    collection that one of their selectors names. Terms beyond the spec's reading are only ever earlier ones.
-    The layers' part is made once per (t, layers) for a State (`_horizon_layers`); only the memberships are read
-    per object."""
-    least, named = _horizon_layers(state, t, tuple(layers))
+    that is not revoked and has not ended, or is in the `replaces` chain of one; every `expires` after t of a
+    grant behind such a record or behind a grant in its chain; and every `expires` after t of a grant in the
+    chain behind every grant-backed membership of a needed object, whichever collection it is in, so a grant
+    that a grant's envelope relies on is read too (Tardis's T1). Terms beyond the spec's reading are only ever
+    earlier ones. The layers' part is made once per (t, layers) for a State (`_horizon_layers`); only the
+    memberships are read per object."""
+    least = _horizon_layers(state, t, tuple(layers))
     out: list[int] = [] if least is None else [least]
-    if named:
-        for obj in objs:
-            for m in _members(state, obj)[0]:
-                if m.collection in named:
-                    out.extend(e for e in _chain_expiries(state, m.backing) if e > t)
+    for obj in objs:
+        rows, grant = _members(state, obj)
+        if grant:
+            for m in rows:
+                out.extend(e for e in _chain_expiries(state, m.backing) if e > t)
     return min(out) if out else None
 
 

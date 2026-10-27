@@ -723,7 +723,7 @@ def legacy_json(legacy, u: Use) -> list:
 REQUIRED_FEATURES = frozenset({
     "op:share", "op:deny", "op:withdraw", "op:shorten", "op:narrow", "op:collect", "op:uncollect",
     "member:lane", "member:collection", "member:group", "member:agent_place", "member:place_parent",
-    "joint", "root", "pending", "copy-chain-4", "bulk"})
+    "joint", "root", "pending", "copy-chain-4", "bulk", "member:nested-grant"})
 
 
 def features(w: World) -> set:
@@ -746,10 +746,17 @@ def features(w: World) -> set:
             elif r["valid_until"] is not None and (old["valid_until"] is None
                                                    or r["valid_until"] < old["valid_until"]):
                 out.add("op:shorten")
+    envelopes = {g["id"]: g["envelope"] for g in rows.get("permission_grants", [])}
+    by_grant = {(m["object"], m["collection"]) for m in rows.get("collection_members", [])
+                if str(m["backing"]).startswith("grant:")}
     for m in rows.get("collection_members", []):
         out.add("member:collection")
         if str(m["backing"]).startswith("grant:"):
             out.add("op:collect")
+            env = envelopes.get(m["backing"][len("grant:"):])
+            named = parse_selector(env).collections if isinstance(env, str) and env != "{}" else "*"
+            if named != "*" and any((m["object"], c) in by_grant for c in named):
+                out.add("member:nested-grant")      # its grant's envelope relies on another grant (Tardis T1)
         if m.get("removed_seq") is not None and str(m.get("removed_by") or "").startswith("agent:"):
             out.add("op:uncollect")
     notes = rows.get("lane_notes", [])
@@ -875,10 +882,12 @@ def _grant_chain(w, rng, c, issuer, layer, holders):
     return ids, docs, opss
 
 
-def random_world(rng, *, places=12) -> World:
+def random_world(rng, *, places=12, nested=True) -> World:
     """A World at a random point of its life. It reaches every grant op, every membership kind, joint places and
-    roots, pending lane notes, kept copies with chains of 4 links, and bulk sets (P 18); its records are written
-    without checks, as World writes everything. The shape of the draws is in `w.cfg`."""
+    roots, pending lane notes, kept copies with chains of 4 links, bulk sets (P 18), and with `nested` a
+    grant-backed membership whose grant's envelope relies on another (Tardis's T1); its records are written
+    without checks, as World writes everything. The shape of the draws is in `w.cfg`. `nested=False` draws the
+    worlds of a083a96, before the nesting was added."""
     w = World()
     c = SimpleNamespace()
     w.cfg = c
@@ -1049,6 +1058,25 @@ def random_world(rng, *, places=12) -> World:
                     w.tick(rng.randint(1, 3600))
                     w.revoke(victim)
                     w._find("records", id=victim)["revoked_by"] = holder
+    # a membership whose grant's envelope relies on a second grant-backed membership (Tardis's T1): an object is
+    # in medical-history under an outer grant whose envelope names `other`, and in `other` under an inner grant
+    # that ends first, while the uses are drawn; an allow in Andy's home names medical-history
+    if nested and rng.random() < 0.7:
+        person_backed = {(m["object"], m["collection"]) for m in w.rows["collection_members"]
+                         if m["backing"] == "person"}
+        free = [m for m in mems[:5] if not any((m, cid) in person_backed for cid in _COLLECTIONS[:2])]
+        ref = rng.choice(free or mems[:5])
+        inner_ends = T("2026-11-10") + rng.randint(0, 50) * DAY + rng.randint(0, DAY - 1)
+        outer = w.grant("person:andy", "agent:a0", andy, ops=["collect"], expires=inner_ends + rng.randint(1, 60) * DAY,
+                        envelope=selector_json(parse_selector(_doc_of(["commons"], kinds=["memory"],
+                                                                      collections=[_COLLECTIONS[1]]))))
+        inner = w.grant("person:andy", "agent:a0", andy, ops=["collect"], expires=inner_ends,
+                        envelope=selector_json(parse_selector(_doc_of(["commons"]))))
+        w.tick(rng.randint(1, 3600))
+        w.collect(_COLLECTIONS[0], [ref], backing=f"grant:{outer}")
+        w.collect(_COLLECTIONS[1], [ref], backing=f"grant:{inner}")
+        put(andy, _doc_of(["commons"], kinds=["memory"], collections=[_COLLECTIONS[0]]), valid_from=T("2026-10-01"),
+            valid_until=None)
     # November and later: the changes nobody checked
     w.now = max(w.now, T("2026-10-24"))
     c.t0 = max(r["anchor"] for r in w.rows["records"])      # no use is drawn before every record exists
