@@ -1237,7 +1237,7 @@ def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callab
         folder.chmod(0o555)
         _write_state(root, imprint_id, "result.json",
                      {"status": "admitted", "checks": 17, "report_sha256": report_sha,
-                      "skipped": report.get("analyses", {}).get("skipped_dense_sets", []),
+                      "skipped": receipt_skips(report.get("analyses", {}).get("skipped_dense_sets", [])),
                       "roads_and_trails": n, "sessions_too_large": k, "ended_at": int(now())}, now=now)
         return 0
     except _Stopped as stop:
@@ -1245,6 +1245,23 @@ def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callab
     finally:
         if own_scratch:
             shutil.rmtree(scratch, ignore_errors=True)
+
+
+SKIP_KINDS = frozenset({"core", "cohesion", "hub", "event", "lane:personal", "lane:work"})
+
+
+def receipt_skips(skips: list) -> list[dict]:
+    """The report's skipped dense sets as the `admitted` receipt may hold them: the kind, or the lane the owner
+    chose, with its size and bound, never a memory's or an event's id (section 12, "Telling receipts"). The
+    receipt outlives the copy by 400 days (D32); the ids stay in the calibration report, which goes with it."""
+    out = []
+    for skip in skips:
+        name = str(skip["set"])
+        kind = name if name.startswith("lane:") else name.split(":", 1)[0]
+        if kind not in SKIP_KINDS:
+            raise ValueError("a skipped set of no known kind")
+        out.append({"set": kind, "n": int(skip["n"]), "bound": int(skip["bound"])})
+    return out
 
 
 USE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")

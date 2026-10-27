@@ -227,3 +227,33 @@ def test_the_commands(tmp_path, capsys):
     cli(["station-imprint-sync", *base])
     cli(["station-imprints", *base])
     assert st.imprint_id[:4] in capsys.readouterr().out
+
+
+# ---- `skipped` names kinds, never a memory (final review I1; spec section 12) ----
+
+SKIPS_OK = [{"set": "lane:work", "n": 16_001, "bound": 16_000}, {"set": "core", "n": 16_001, "bound": 16_000},
+            {"set": "hub", "n": 1_025, "bound": 1_024}, {"set": "cohesion", "n": 1_025, "bound": 1_024},
+            {"set": "event", "n": 1_025, "bound": 1_024}]
+
+
+def test_an_admitted_receipt_carries_content_free_skips(tmp_path):
+    st = approved(tmp_path); begin(st); write_result(st, status="admitted", skipped=SKIPS_OK)
+    st.store.station_imprint_sync(root=st.root)
+    assert receipts(st)[-1]["record"]["detail"]["skipped"] == SKIPS_OK and row(st)["status"] == "admitted"
+
+
+@pytest.mark.parametrize("skip", [
+    {"set": "hub:0b7c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d", "n": 1_025, "bound": 1_024},
+    {"set": "cohesion:0b7c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d", "n": 1_025, "bound": 1_024},
+    {"set": "event:ev1", "n": 1_025, "bound": 1_024},
+    {"set": "lane:jenn", "n": 1, "bound": 0},
+    {"set": "hub", "n": 1_025, "bound": 1_024, "id": "s1"},
+    {"set": "hub", "n": "1025", "bound": 1_024},
+    {"set": "hub", "n": True, "bound": 1_024},
+    "hub",
+])
+def test_a_result_whose_skips_could_name_a_memory_is_not_a_result(tmp_path, skip):
+    st = approved(tmp_path); begin(st); write_result(st, status="admitted", skipped=[skip])
+    assert imprints._read_result(state_of(st) / "result.json") is None
+    st.store.station_imprint_sync(root=st.root)
+    assert "admitted" not in events(st) and row(st)["status"] == "approved"

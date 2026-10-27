@@ -659,6 +659,16 @@ def _is_count(value):
     return type(value) is int and 0 <= value <= MAX_COUNT
 
 
+SKIP_KINDS = frozenset({'core', 'cohesion', 'hub', 'event', 'lane:personal', 'lane:work'})
+
+
+def _is_skip(skip):
+    """One skipped dense set as the `admitted` receipt may hold it: a kind or a chosen lane, its size and its bound,
+    and nothing that could name a memory or an event (section 12)."""
+    return (isinstance(skip, dict) and set(skip) == {'set', 'n', 'bound'} and isinstance(skip['set'], str)
+            and skip['set'] in SKIP_KINDS and _is_count(skip['n']) and _is_count(skip['bound']))
+
+
 def _read_result(path):
     """`result.json` from engram's admission, checked to the shapes the `admitted` and `failed` receipts take, or
     None: a malformed result is not a result, and the bound fails the admission if nothing better arrives."""
@@ -669,7 +679,7 @@ def _read_result(path):
         skipped = doc.get('skipped')
         if (doc.get('checks') == 17 and type(doc['checks']) is int and isinstance(doc.get('report_sha256'), str)
                 and _DIGEST.fullmatch(doc['report_sha256']) and isinstance(skipped, list) and len(skipped) <= 1000
-                and _is_count(doc.get('roads_and_trails')) and _is_count(doc.get('sessions_too_large'))):
+                and all(_is_skip(skip) for skip in skipped) and _is_count(doc.get('roads_and_trails')) and _is_count(doc.get('sessions_too_large'))):
             return doc
         return None
     if doc.get('status') == 'failed':

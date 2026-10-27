@@ -10,7 +10,7 @@ import calibrate
 from calibrate import PATHS_NOT_MEASURED
 from imprint import CALIBRATION_FAILED, NEED_ADMISSION, RERUN_REFUSED, _still_allowed, admit, list_imprints
 from permissions import decide_bulk
-from tests.imprint_support import (FAR, ENGRAM_DIR, T, admitted_report, as_bulk, built_package, built_texts,
+from tests.imprint_support import (FAR, ENGRAM_DIR, T, admitted_report, as_bulk, built_package, built_texts, dense_source,
                                    ceiling_world, counting_stub, fixture_for, handed_off, has_key, hooked_calibrate,
                                    hooked_verify, mentions_any, must_not_be_called, no_memory_text, per_lane_stub,
                                    raise_, recording_stub, remove_like_withdrawal, roads_and_trails_by_hand,
@@ -165,3 +165,36 @@ def test_count_matches_the_trail_functions(tmp_path):
     n = json.loads((root / f"{iid_}.state" / "result.json").read_text())["roads_and_trails"]
     assert n == roads_and_trails_by_hand(trails, root / iid_ / "imprint.db", as_of=T1) == roads_and_trails_by_hand(
         trails, root / iid_ / "imprint.db", as_of=T1 + 86_400)
+
+
+# ---- The `admitted` receipt names no memory (final review I1; spec section 12) ----
+
+def every_set_over_its_bound(*args, **kwargs):
+    """A ``calibrate_fn`` whose bounds are 1, so every lane, the core set, each hub, cohesion set and event is skipped."""
+    return calibrate.calibrate(*args, **(kwargs | {"max_lane_episodes": 1, "max_semantic_episodes": 1}))
+
+
+def small_dense_store(tmp_path):
+    """A work lane of 24 episodes, 4 of them cores, a hub on 12 sources and a subdivision event on 4."""
+    from storage import Storage
+
+    store = Storage(str(dense_source(tmp_path, 24, cores=4, hub_sources=12, event_sources=4)))
+    store.add_semantic("parent", "semantic parent", "fact", 0.8, [0.03] * 768, ["w0", "w1"], lane="work")  # the event's parent
+    store.conn.execute("UPDATE semantics SET created_at='2026-01-02T00:00:00+00:00'")   # inside the plan's window
+    store.conn.commit()
+    return store
+
+
+def test_result_json_skips_name_kinds_and_lanes_never_a_memory_id(tmp_path):
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, store=small_dense_store), route=False, valid_until=FAR)
+    assert admit(iid_, root=root, verify_cmd=OK, calibrate_fn=every_set_over_its_bound, calibration_now=CAL_NOW) == 0
+    report = json.loads((root / f"{iid_}.state" / "calibration" / "report.json").read_text())
+    named = [s["set"] for s in report["analyses"]["skipped_dense_sets"]]
+    with_ids = [s for s in named if s.split(":", 1)[0] in ("hub", "cohesion", "event")]
+    assert {s.split(":")[0] for s in with_ids} == {"hub", "cohesion", "event"}   # the report keeps the ids; it goes with the copy
+    text = (root / f"{iid_}.state" / "result.json").read_text()
+    skipped = json.loads(text)["skipped"]
+    assert not [i for i in with_ids if i in text]
+    assert {s["set"] for s in skipped} <= {"core", "hub", "cohesion", "event", "lane:personal", "lane:work"}
+    assert all(sorted(s) == ["bound", "n", "set"] and type(s["n"]) is int and type(s["bound"]) is int for s in skipped)
+    assert len(skipped) == len(named)
