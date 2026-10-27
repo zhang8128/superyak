@@ -3242,11 +3242,22 @@ def _record_region(state: State, rec: Record) -> list[Box]:
                                  None), time=_interval(rec))
 
 
+def _stated_within(state: State, new: Record, old: Record) -> bool:
+    """Does the replacement state nothing wider than the record: each selector field within the old one's as
+    `selector_within` reads them, and its interval within the old one's (Tardis's T3)? Read from the fields alone,
+    so a record whose region is empty now (no agent in its audience yet, an empty collection) bounds it too."""
+    return (selector_within(state, new.selector, old.selector) and new.valid_from >= old.valid_from
+            and (old.valid_until is None or (new.valid_until is not None and new.valid_until <= old.valid_until)))
+
+
 def check_narrower(state: State, new: Record, old: Record) -> None:
-    """P 7.1: a replacement lies inside the record it replaces, in selector and in interval (box subset)."""
+    """P 7.1: a replacement lies inside the record it replaces, in selector and in interval: in its stated fields
+    (Tardis's T3) and in its region (box subset)."""
     rule = "7.1 narrowing"
     if new.layer != old.layer or new.effect != old.effect:
         raise RuleError(rule, "a replacement keeps its layer and its effect")
+    if not _stated_within(state, new, old):
+        raise RuleError(rule, "a replacement lies within the record it replaces, in selector and interval")
     try:
         outside = _list_minus(_record_region(state, new), _record_region(state, old))
     except TooComplex:
@@ -3303,17 +3314,42 @@ def _cover_probe(owner: str, obj: str, at: int) -> Use:
                purpose="share-cover", at=at)
 
 
+def _with_chain(state: State, r: Record) -> list | None:
+    """The record and every record in its `replaces` chain, as `decide` reads them (P 5.3 rule 4, P8); None when a
+    link is missing or the chain is longer than MAX_REPLACES."""
+    out, cur = [r], r.replaces
+    while cur is not None:
+        link = state.records.get(cur)
+        if link is None or len(out) > MAX_REPLACES:
+            return None
+        out.append(link)
+        cur = link.replaces
+    return out
+
+
+def _covers_audience(state: State, r: Record, audience: str, layer: str) -> bool:
+    """Does every record of r's chain reach `audience` (Tardis's T3)?"""
+    chain = _with_chain(state, r)
+    return chain is not None and all(any(_entry_covers(state, e, audience, layer) for e in x.selector.audience)
+                                     for x in chain)
+
+
 def _counts_for_share(state: State, r: Record, layer: str, at: int, probe: Use) -> bool:
     """Is `r` an effective allow in `layer` that covers the probe's object for `recall`, `read` and
-    `inject_context`? Everything `share_cover` asks of a record except its audience."""
-    sel = r.selector
-    if (r.layer != layer or r.effect != "allow" or _revoked(state, r) or not _in_interval(r, at)
-            or not all(_star_or_in(sel.actions, a) for a in ("recall", "read", "inject_context"))):
+    `inject_context`? Everything `share_cover` asks of a record except its audience. The record is read with its
+    `replaces` chain, as `decide` reads it (Tardis's T3): each link's interval, actions and object dimensions."""
+    if r.layer != layer or r.effect != "allow" or _revoked(state, r):
+        return False
+    chain = _with_chain(state, r)
+    if chain is None:
         return False
     try:
         if r.backing.startswith("grant:") and not grant_validity(state, r.backing[len("grant:"):], at)[0]:
             return False
-        return bool(_object_dims(state, sel, layer, r.anchor, probe, "recall", False, frozenset(), True))
+        return all(_in_interval(x, at) and all(_star_or_in(x.selector.actions, a)
+                                               for a in ("recall", "read", "inject_context"))
+                   and _object_dims(state, x.selector, x.layer, r.anchor, probe, "recall", False, frozenset(), True)
+                   for x in chain)
     except RuleError:
         return False
 
@@ -3342,7 +3378,7 @@ def relink_cover(state: State, *, old_id: str, owner: str, obj: str, audience: s
     found = [r for r in state.records.values()
              if r.id != old_id and _counts_for_share(state, r, layer, at, probe)
              and placement_audience(state, r) == audience
-             and all(any(_entry_covers(state, e, w, layer) for e in r.selector.audience) for w in wanted)]
+             and all(_covers_audience(state, r, w, layer) for w in wanted)]
     return min(found, key=lambda r: _share_rank(state, r)).id if found else None
 
 
@@ -3354,8 +3390,7 @@ def share_cover(state: State, *, owner: str, obj: str, audience: str, at: int) -
     layer = home_of(owner)
     probe = _cover_probe(owner, obj, at)
     found = [r for r in state.records.values()
-             if any(_entry_covers(state, e, audience, layer) for e in r.selector.audience)
-             and _counts_for_share(state, r, layer, at, probe)]
+             if _covers_audience(state, r, audience, layer) and _counts_for_share(state, r, layer, at, probe)]
     if not found:
         return None
     return min(found, key=lambda r: _share_rank(state, r)).id
@@ -3462,10 +3497,24 @@ def _object_meets(state: State, ref: str, sel: Selector) -> bool:
 
 
 def _meets_envelope(state: State, rec: Record, env: Selector) -> bool:
-    """P 7.2: the record's selector and the envelope intersect."""
+    """P 7.2: the record's selector and the envelope intersect. The record is read with its `replaces` chain, as
+    `decide` reads it (Tardis's T3): a replacement that states more than the records it replaces meets an
+    envelope only where they do too. Intervals aside."""
+    deny = rec.effect == "deny"
     try:
-        return bool(_list_and(_record_region(state, rec._replace(valid_until=None, valid_from=0)),
-                              _only(_selector_boxes(state, env, rec.layer, rec.anchor, False, frozenset(), None))))
+        region = _only(_selector_boxes(state, rec.selector, rec.layer, rec.anchor, deny, frozenset(), None),
+                       time=TimeSet.of([(0, None)]))
+        link, n = rec.replaces, 0
+        while link is not None and region:
+            n += 1
+            r = state.records.get(link)
+            if r is None or n > MAX_REPLACES:
+                return False
+            region = _list_and(region, _only(_selector_boxes(state, r.selector, r.layer, rec.anchor, deny,
+                                                             frozenset(), None)))
+            link = r.replaces
+        return bool(_list_and(region, _only(_selector_boxes(state, env, rec.layer, rec.anchor, False, frozenset(),
+                                                            None))))
     except TooComplex:
         return False
 

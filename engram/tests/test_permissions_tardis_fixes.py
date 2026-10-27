@@ -1,13 +1,18 @@
 """Tardis's advisory review of permissions-core (reviews/2026-10-27-tardis-permissions-core-advisory.md): each
 test names its finding."""
+import dataclasses
 from dataclasses import replace
+
+import pytest
 
 import server
 from permission_ledger import Ledger
-from permissions import Act, Placement, Refusal, decide, eligible_set, parse_selector, selector_json
+from permissions import (STAR, Act, Placement, Refusal, RuleError, authorize, check_narrower, decide, eligible_set,
+                         parse_selector, placement_still_counts, selector_json, share_cover)
 from storage import Storage
 from tests.permissions_support import (  # noqa: F401
-    ANDY, HOME, M1, M1_TEXT, T, andy_world, deliver_m1_through, home_use, keep_world, keep_world_with_imprint_allowed)
+    ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, andy_world, deliver_m1_through, home_use, keep_world,
+    keep_world_with_imprint_allowed)
 from tests.test_recall_margins import engram_server_env  # noqa: F401
 
 
@@ -122,3 +127,65 @@ def test_t2_remember_into_the_genome_of_content_never_delivered_is_unchanged(kee
     _genome_store()
     out = server.remember(content="a genome note nobody delivered to this agent", genome=True)
     assert "episode_id" in out and "would_refuse" not in out and _genome_writes() == 1
+
+
+# ---------------------------------------------------------------- T3: a replacement never states a wider record (P 7.1, P8)
+
+JENN_HOME = "place:home/jenn"             # no agent works there, so a record whose audience is it has an empty region
+
+
+def _medical_allow(w):
+    """An allow at Andy's home for Jenn's home on the medical-history collection, until 2027-01-31."""
+    return w.allow(HOME, audience=[JENN_HOME], collections=[MEDICAL], actions=["recall", "read", "inject_context"],
+                   valid_until=T("2027-01-31"))
+
+
+def test_t3_a_narrowing_may_not_state_wider_fields_when_the_old_records_region_is_empty():
+    w = andy_world()
+    rid = _medical_allow(w)
+    s = w.state()
+    old = s.records[rid]
+    for wider in (old._replace(selector=dataclasses.replace(old.selector, collections=STAR)),
+                  old._replace(selector=dataclasses.replace(old.selector, audience=("commons",))),
+                  old._replace(valid_until=T("2027-12-31")), old._replace(valid_until=None)):
+        with pytest.raises(RuleError, match="lies within the record it replaces"):
+            check_narrower(s, wider, old)
+    check_narrower(s, old._replace(valid_until=T("2027-01-01")), old)                 # a real shortening
+    check_narrower(s, old._replace(selector=dataclasses.replace(old.selector, actions=("recall",))), old)
+
+
+def _stated_wider_replacement():
+    """A ledger written before T3's fix: R names medical-history (m1 to m3) until 2027-01-31, and R', which
+    replaces it and is live, states every collection until 2027-12-31. R is revoked."""
+    w = andy_world()
+    rid = w.allow(HOME, audience=["self"], collections=[MEDICAL], actions=["recall", "read", "inject_context"],
+                  valid_until=T("2027-01-31"))
+    r = w.record(rid)
+    wide = w.allow(HOME, audience=["self"], collections="*", actions=["recall", "read", "inject_context"],
+                   valid_until=T("2027-12-31"), replaces=rid, anchor=r.anchor)
+    w.revoke(rid)
+    return w, rid, wide
+
+
+def test_t3_share_cover_reads_a_record_through_its_replaces_chain():
+    w, _, wide = _stated_wider_replacement()
+    s = w.state()
+    cover = lambda obj, at: share_cover(s, owner=ANDY, obj=obj, audience=HOME, at=at)       # noqa: E731
+    assert cover(M1, T("2026-12-01")) == wide                  # m1 is in medical-history, inside R's interval
+    assert decide(s, home_use(M4, T("2026-12-01"))).allowed is False
+    assert cover(M4, T("2026-12-01")) is None                  # m4 never was: R' states it, R does not
+    assert cover(M1, T("2027-06-01")) is None                  # past R's end, which bounds R'
+    assert not placement_still_counts(s, wide, owner=ANDY, obj=M4, at=T("2026-12-01"))
+
+
+def test_t3_an_agents_narrowing_grant_covers_a_record_only_where_its_chain_meets_the_envelope():
+    w, _, wide = _stated_wider_replacement()
+    w.collect("collection:andy/other", [M4])
+    env = _envelope(["collection:andy/other"])
+    gid = w.grant(ANDY, "agent:rio-grande", HOME, ops=("narrow", "shorten"), envelope=env, expires=T("2027-06-01"))
+    s = w.state()
+    act = Act("shorten", {"record": wide, "valid_until": T("2027-01-01"), "reason": "test"})
+    assert authorize(s, "agent:rio-grande", act, channel="tool", at=T("2026-11-02")).outcome == "proposal"
+    w.collect(MEDICAL, [M4])                                   # now R itself meets the envelope through m4
+    got = authorize(w.state(), "agent:rio-grande", act, channel="tool", at=T("2026-11-02"))
+    assert (got.outcome, got.under_grant) == ("do", gid)
