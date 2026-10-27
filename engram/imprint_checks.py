@@ -1,4 +1,5 @@
-"""The leak checks L1 to L4 on a finished package (store-copy spec I 6.4, D34, D42).
+"""The leak checks L1 to L4 on a finished package (store-copy spec I 6.4, D34, D42), and the station's admission
+checks 1 to 9 (I 10; ``verify``).
 
 Each check returns a list of failure lines; an empty list is a pass. A line names the table, the column or the slot
 and never a value. Every check streams: L1 reads one row at a time, L2 compares two cursors, L3 reads one chunk at
@@ -7,10 +8,19 @@ a time and L4 reads 1 MiB at a time, so no store is held in memory.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
+import shutil
 import sqlite3
-from collections.abc import Container, Mapping
+import stat
+import subprocess
+from collections.abc import Container, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+
+import store_identity
+import store_reader
 
 UUID_TOKEN = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", re.IGNORECASE)
 _UUID_BYTES = re.compile(UUID_TOKEN.pattern.encode(), re.IGNORECASE)
@@ -255,3 +265,196 @@ def l4_raw(path: Path, x_star: Container[str]) -> list[str]:
             tail = buf[-RAW_OVERLAP:]
             offset += len(chunk)
     return sorted(set(failures))
+
+
+# ---- Admission checks (I 10) ---------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CheckFailure:
+    """The first check that failed: its number (R11) and a fixed sentence that names no value."""
+    step: int | str
+    message: str
+
+
+CHECK_MESSAGES: dict[int, str] = {
+    1: "The imprint folder does not hold exactly the four files, or one of them is not a plain file.",
+    2: "The package's size or SHA-256 differs from the manifest's.",
+    3: "The permission does not verify, or it does not agree with the manifest.",
+    4: "The package file is not a SQLite database in rollback-journal mode.",
+    5: "The package fails SQLite's integrity check.",
+    6: "The package's applied migrations are not the manifest's, or include one this engram does not know.",
+    7: "The package's schema differs from the one this engram builds. Put the engram code and sqlite-vec on the two "
+       "machines on one commit.",
+    8: "The package's identity is not the one the manifest describes.",
+    9: "A table that never leaves the source holds rows.",
+}
+
+PACKAGE_FILES = ("approved.json", "imprint.db", "manifest.json", "permission.json")
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+VERIFY_SECONDS = 120
+
+
+def _fail(step: int) -> CheckFailure:
+    return CheckFailure(step, CHECK_MESSAGES[step])
+
+
+def _load_json(path: Path):
+    with open(path, "rb") as f:
+        return json.loads(f.read().decode("utf-8"))
+
+
+def _check_1(folder: Path) -> bool:
+    try:
+        names = sorted(os.listdir(folder))
+        return names == list(PACKAGE_FILES) and all(stat.S_ISREG(os.lstat(folder / n).st_mode) for n in names)
+    except OSError:
+        return False
+
+
+def _check_2(folder: Path, manifest: dict) -> bool:
+    package = manifest["package"]
+    path = folder / "imprint.db"
+    return path.stat().st_size == package["bytes"] and store_reader.sha256_file(path) == package["sha256"]
+
+
+def _check_3(folder: Path, manifest: dict, verify_cmd: Sequence[str]) -> bool:
+    permission = folder / "permission.json"
+    try:
+        done = subprocess.run([*verify_cmd, "--permission", str(permission)], capture_output=True,
+                              timeout=VERIFY_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if done.returncode != 0:
+        return False
+    record = _load_json(permission)["record"]
+    return (record["request_sha256"] == manifest["request_sha256"] and record["plan_digest"] == manifest["plan_digest"]
+            and record["imprint_id"] == manifest["imprint_id"]
+            and record["source_instance_id"] == manifest["source"]["instance_id"])
+
+
+def _check_4(path: Path) -> bool:
+    with open(path, "rb") as f:
+        head = f.read(100)
+    return len(head) == 100 and head[:16] == _SQLITE_MAGIC and head[18] == 1 and head[19] == 1
+
+
+def _check_5(conn: sqlite3.Connection) -> bool:
+    rows = conn.execute("PRAGMA integrity_check(1)")
+    first = next(rows, None)
+    return first is not None and first[0] == "ok" and next(rows, None) is None
+
+
+def _check_6(conn: sqlite3.Connection, manifest: dict) -> bool:
+    schema = store_reader._schema(conn, store_reader._tables(conn))
+    return schema["applied"] == sorted(manifest["schema"]["applied"]) and not schema["unknown"]
+
+
+def _master(conn: sqlite3.Connection):
+    return conn.execute("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name, tbl_name")
+
+
+def _reference(scratch: Path, migrations_dir: Path, applied: Sequence[int]) -> Path:
+    """The file ``Storage`` builds from an empty one with exactly the applied migrations, plus ``imprint_subjects``."""
+    from imprint_filter import IMPRINT_SUBJECTS_DDL
+    from storage import Storage
+
+    mine = scratch / "reference-migrations"
+    shutil.rmtree(mine, ignore_errors=True)
+    mine.mkdir()
+    for f in sorted(Path(migrations_dir).iterdir()):
+        m = store_reader._MIGRATION.match(f.name)
+        if m and int(m.group(1)) in set(applied):
+            shutil.copyfile(f, mine / f.name)
+    path = scratch / "reference.db"
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        Path(str(path) + suffix).unlink(missing_ok=True)
+    store = Storage(str(path), migrations_dir=str(mine))
+    try:
+        store.conn.execute(IMPRINT_SUBJECTS_DDL)
+        store.conn.commit()
+    finally:
+        store.close()
+    return path
+
+
+def _check_7(conn: sqlite3.Connection, manifest: dict, migrations_dir: Path, scratch: Path) -> bool:
+    scratch = Path(scratch)
+    scratch.mkdir(parents=True, exist_ok=True, mode=0o700)
+    ref_path = _reference(scratch, migrations_dir, manifest["schema"]["applied"])
+    ref = store_reader.connect(ref_path, vec=True)
+    try:
+        if any(x != y for x, y in _lockstep(_master(conn), _master(ref))):
+            return False
+        for table, _ in _vec0_tables(ref):
+            info = f"SELECT key, value FROM {_q(table + '_info')} ORDER BY key"
+            if any(x != y for x, y in _lockstep(conn.execute(info), ref.execute(info))):
+                return False
+        return True
+    finally:
+        ref.close()
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            Path(str(ref_path) + suffix).unlink(missing_ok=True)
+        shutil.rmtree(scratch / "reference-migrations", ignore_errors=True)
+
+
+def _check_8(conn: sqlite3.Connection, manifest: dict) -> bool:
+    """The identity ``stamp_imprint`` derives from ``manifest.source``, stamped into an empty database, equals the
+    package's ``meta`` row for row."""
+    source = manifest["source"]
+    want = sqlite3.connect(":memory:")
+    try:
+        store_identity.stamp_imprint(want, source["instance_id"], list(source["ancestry"]),
+                                     bool(source["ancestry_complete"]), manifest["imprint_id"])
+        expected = {k: v for k, v in want.execute("SELECT key, value FROM meta")}
+    finally:
+        want.close()
+    got = {k: v for k, v in conn.execute("SELECT key, value FROM meta")}
+    return got == expected
+
+
+def _check_9(conn: sqlite3.Connection) -> bool:
+    from imprint_filter import TABLE_RULES
+
+    present = {name for name, _ in _tables(conn)}
+    return all(conn.execute(f"SELECT 1 FROM {_q(t)} LIMIT 1").fetchone() is None
+               for t, rule in TABLE_RULES.items() if rule == "dropped" and t in present)
+
+
+def verify(imprint_dir: Path, *, verify_cmd: Sequence[str], migrations_dir: Path, scratch: Path) -> CheckFailure | None:
+    """I 10's checks in order, stopping at the first failure; this is 1 to 9. ``imprint.db`` is opened
+    ``mode=ro&immutable=1`` with sqlite-vec loaded, and every check reads rows from cursors. ``scratch`` is
+    ``<id>.state/scratch/`` in admission. A file that cannot be read as the check expects counts as that check's
+    failure."""
+    folder = Path(imprint_dir)
+    db = folder / "imprint.db"
+    if not _check_1(folder):
+        return _fail(1)
+    try:
+        manifest = _load_json(folder / "manifest.json")
+        if not _check_2(folder, manifest):
+            return _fail(2)
+    except (OSError, ValueError, KeyError, TypeError):
+        return _fail(2)
+    try:
+        if not _check_3(folder, manifest, verify_cmd):
+            return _fail(3)
+    except (OSError, ValueError, KeyError, TypeError):
+        return _fail(3)
+    try:
+        if not _check_4(db):
+            return _fail(4)
+    except OSError:
+        return _fail(4)
+    conn = store_reader.connect(db, immutable=True, vec=True)
+    try:
+        for step, run in ((5, lambda: _check_5(conn)), (6, lambda: _check_6(conn, manifest)),
+                          (7, lambda: _check_7(conn, manifest, migrations_dir, scratch)),
+                          (8, lambda: _check_8(conn, manifest)), (9, lambda: _check_9(conn))):
+            try:
+                if not run():
+                    return _fail(step)
+            except (sqlite3.DatabaseError, KeyError, TypeError, ValueError):
+                return _fail(step)
+        return None
+    finally:
+        conn.close()

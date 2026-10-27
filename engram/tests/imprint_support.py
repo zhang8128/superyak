@@ -1693,3 +1693,130 @@ def evaluation_route_bulk(fixture: dict, name: str, *, touches: int, at: int | N
     trail = next(ref for ref in derived if ref.startswith("trail:") and len(derived[ref]) == touches)
     return _bulk(fixture, name, (trail,), "route", _TRAILEV, fixture["now"] if at is None else at, named=False,
                  names=derived.__getitem__)
+
+
+# ---- Admission (Tasks 32 and 33) -----------------------------------------------------------------------------------
+
+FAR = 4_102_444_800                 # 2100-01-01: a valid_until no test reaches
+MIGRATIONS = store_reader.MIGRATIONS_DIR
+
+
+def built_package(tmp_path: Path, **plan_kw):
+    """The ``Built`` of a plan made by ``plan_args(tmp_path, **plan_kw)`` and built at once."""
+    from imprint import build, make_plan
+
+    plan = make_plan(*plan_args(tmp_path, **plan_kw))
+    return build(plan.id, home=HOME(tmp_path), now=1_761_415_451, engram_home=EH(tmp_path))
+
+
+def stub_verify(*, ok: bool) -> list[str]:
+    """A ``verify_cmd`` that exits 0 or 1 whatever file it is given (the peer's ``verify-imprint`` stands behind R9)."""
+    import sys
+
+    return [sys.executable, "-c", f"import sys; sys.exit({0 if ok else 1})"]
+
+
+def handed_off(tmp_path: Path, built, *, route: bool, valid_until: int) -> tuple[Path, str]:
+    """``(root, imprint id)``: a root laid out as the station's hand-off leaves it (I 10): ``<id>/`` holding
+    ``imprint.db``, ``manifest.json``, ``permission.json`` and ``approved.json``, and ``<id>.state/`` holding
+    ``admission.json``. The permission's signature is a stub; ``stub_verify`` stands in for the peer."""
+    import json
+
+    root = tmp_path / "root"
+    imprint_id = built.imprint_id
+    folder, state = root / imprint_id, root / f"{imprint_id}.state"
+    folder.mkdir(parents=True, mode=0o700)
+    state.mkdir(mode=0o700)
+    for name in ("imprint.db", "manifest.json"):
+        shutil.copyfile(built.dir / name, folder / name)
+    manifest = built.manifest
+    record = {"kind": "imprint-permission", "station": "ab" * 32, "id": str(uuid.uuid4()), "owner": "andy",
+              "owner_id": "u1", "ship_id": "s1", "imprint_id": imprint_id,
+              "source_instance_id": manifest["source"]["instance_id"],
+              "request_sha256": manifest["request_sha256"], "plan_digest": manifest["plan_digest"],
+              "attestation": {"route": route}, "created": 1_761_415_451, "records": []}
+    (folder / "permission.json").write_text(json.dumps({"record": record, "signature": "", "station_key": ""}))
+    (folder / "approved.json").write_text(json.dumps({"imprint_id": imprint_id, "request_id": "r1",
+                                                      "approved_at": 1_761_415_500, "approved_by": "andy"}))
+    (state / "admission.json").write_text(json.dumps({"kind": "imprint-admission-allow", "instance_id": imprint_id,
+                                                      "decided_at": 1_761_415_500, "valid_until": valid_until}))
+    return root, imprint_id
+
+
+def _refix_package(folder: Path) -> None:
+    """Set ``manifest.package`` to the facts of the file as it now is, so checks 1 and 2 pass."""
+    import json
+
+    from imprint import _package_facts
+
+    manifest = json.loads((folder / "manifest.json").read_text())
+    parts = manifest["package"]["part_bytes"]
+    size = (folder / "imprint.db").stat().st_size
+    sha, hashes, size = _package_facts(folder / "imprint.db", max(1, -(-size // parts)))
+    manifest["package"].update(bytes=size, sha256=sha, parts=hashes)
+    (folder / "manifest.json").write_text(json.dumps(manifest))
+
+
+def _edit_db(path: Path, *statements: str) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        load_vec(conn)
+        for sql in statements:
+            conn.execute(sql)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_DB_CHANGES = {
+    "unknown_migration": ("INSERT INTO schema_version (version, applied_at) VALUES (9999, 'x')",),
+    "planted_trigger": ("CREATE TRIGGER planted AFTER INSERT ON episodes BEGIN SELECT 1; END",),
+    "extra_table": ("CREATE TABLE rides_along (x TEXT)",),
+    "other_vec_info": ("UPDATE episode_vectors_info SET value = 'v0.0.0' WHERE key = 'CREATE_VERSION'",),
+    "changed_meta": ("UPDATE meta SET value = 'not-the-id' WHERE key = 'forked_from_instance_id'",),
+    "non_empty_dropped_table": ("INSERT INTO session_registry (session_id, harness, model, repo, started_at) "
+                                "VALUES ('x', 'h', 'm', 'r', '2026-01-01')",),
+}
+
+
+def tampered(tmp_path: Path, change: str) -> tuple[Path, str]:
+    """``(root, imprint id)`` of a handed-off package with one defect. For a defect inside ``imprint.db``,
+    ``manifest.package`` is then set to the file's facts, so every check before the target passes."""
+    import json
+
+    root, imprint_id = handed_off(tmp_path, built_package(tmp_path), route=False, valid_until=FAR)
+    folder = root / imprint_id
+    db = folder / "imprint.db"
+    if change == "extra_file":
+        (folder / "extra.txt").write_text("x")
+    elif change == "symlinked_manifest":
+        real = tmp_path / "elsewhere.json"
+        (folder / "manifest.json").rename(real)
+        (folder / "manifest.json").symlink_to(real)
+    elif change == "changed_byte":
+        data = bytearray(db.read_bytes())
+        data[-1] ^= 0xFF
+        db.write_bytes(bytes(data))
+    elif change == "permission_fails_verify":
+        pass
+    elif change == "request_sha256_differs":
+        manifest = json.loads((folder / "manifest.json").read_text())
+        manifest["request_sha256"] = "0" * 64
+        (folder / "manifest.json").write_text(json.dumps(manifest))
+    elif change == "wal_header":
+        data = bytearray(db.read_bytes())
+        data[18] = data[19] = 2
+        db.write_bytes(bytes(data))
+        _refix_package(folder)
+    elif change == "corrupt_page":
+        size = int.from_bytes(db.read_bytes()[16:18], "big")
+        with open(db, "r+b") as f:
+            f.seek(size)                                    # page 2
+            f.write(b"\xff" * size)
+        _refix_package(folder)
+    elif change in _DB_CHANGES:
+        _edit_db(db, *_DB_CHANGES[change])
+        _refix_package(folder)
+    else:
+        raise ValueError(change)
+    return root, imprint_id
