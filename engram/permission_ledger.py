@@ -95,6 +95,8 @@ CREATE INDEX group_members_group ON group_members(group_id);
 
 # the tables a State reads per object, through StateRows, and not whole
 _PER_OBJECT = frozenset({"subjects", "lane_notes", "collection_members", "copies"})
+# the tables a State reads a row of when asked, and never holds: no decision reads them (ProposalMap)
+_ON_DEMAND = frozenset({"proposals"})
 # table order for tables(): the order of the schema
 _TABLES = tuple(_COLUMNS)
 _LOG_COLUMNS = ("seq", "at", "kind", "ref", "actor", "channel", "under_grant", "proposal_id", "body",
@@ -382,6 +384,67 @@ class RowMap(Mapping):
             yield v
 
 
+class ProposalMap(Mapping):
+    """The State's `proposals`, read from the ledger when asked and never held (P 15, P37; the final review's I1):
+    no decision reads a proposal, and an agent can file up to `MAX_OPEN_PROPOSALS` of them, each holding a whole
+    act, besides every decided and expired one. A row reads as `State.from_tables` reads it at the State's seq:
+    one decided past the seq is pending. Iteration and `values()` stream in batches of 512 rows, by rowid."""
+    _COLS = ", ".join(permissions._COLUMNS["proposals"])
+
+    def __init__(self, reader: StateRows):
+        self._reader = reader
+
+    def _row(self, vals: tuple):
+        r = permissions._ROW["proposals"](*vals)
+        if r.decided_seq is not None and r.decided_seq > self._reader.seq:
+            r = r._replace(status="pending", decided_seq=None)
+        return r
+
+    def __getitem__(self, pid):
+        rows = self._reader._query(f"SELECT {self._COLS} FROM proposals WHERE id = ?", (pid,)) \
+            if isinstance(pid, str) else []
+        if not rows:
+            raise KeyError(pid)
+        return self._row(rows[0])
+
+    def __contains__(self, pid) -> bool:
+        return isinstance(pid, str) and bool(
+            self._reader._query("SELECT 1 FROM proposals WHERE id = ?", (pid,)))
+
+    def __len__(self) -> int:
+        return self._reader._query("SELECT COUNT(*) FROM proposals", ())[0][0]
+
+    def _batches(self, cols: str) -> Iterator[list]:
+        last = 0
+        while True:
+            rows = self._reader._query(f"SELECT rowid, {cols} FROM proposals WHERE rowid > ? ORDER BY rowid "
+                                       f"LIMIT {StateRows.BATCH}", (last,))
+            if not rows:
+                return
+            yield [r[1:] for r in rows]
+            last = rows[-1][0]
+
+    def __iter__(self) -> Iterator[str]:
+        for batch in self._batches("id"):
+            for (pid,) in batch:
+                yield pid
+
+    def items(self):
+        for batch in self._batches(self._COLS):
+            for vals in batch:
+                yield vals[0], self._row(vals)
+
+    def values(self):
+        for _pid, row in self.items():
+            yield row
+
+    def open_ids(self, now: int) -> list[str]:
+        """The ids of the open proposals (pending at the State's seq, not expired at `now`), oldest first."""
+        return [pid for (pid,) in self._reader._query(
+            "SELECT id FROM proposals WHERE (status = 'pending' OR decided_seq > ?) AND expires > ? "
+            "ORDER BY created, id", (self._reader.seq, now))]
+
+
 @dataclass(frozen=True)
 class Outcome:
     """What `Ledger.perform` did: `done`, or `proposal` (a proposal was filed, or one signature was added).
@@ -532,7 +595,7 @@ class Ledger:
                     f"per layer")
             tables = {t: [dict(r) for r in self.conn.execute(
                 f"SELECT {', '.join(_COLUMNS[t])} FROM {t} ORDER BY rowid")] for t in _TABLES
-                if t not in _PER_OBJECT}
+                if t not in _PER_OBJECT and t not in _ON_DEMAND}
             meta = self.meta()
             # the only log bodies a State reads: place names. Log times are read when a decision asks.
             names = {}
@@ -555,7 +618,8 @@ class Ledger:
             state, subjects=RowMap(reader, "subjects"), lane_notes=RowMap(reader, "lane_notes"),
             member_of=RowMap(reader, "member_of"), collection_members=RowMap(reader, "collection_members"),
             copies=RowMap(reader, "copies", lambda r: r.source),
-            copy_seqs=RowMap(reader, "copies", lambda r: r.added_seq), self_claims=claims, _loader=reader)
+            copy_seqs=RowMap(reader, "copies", lambda r: r.added_seq), proposals=ProposalMap(reader),
+            self_claims=claims, _loader=reader)
 
     def _self_claims(self, seq: int) -> Iterator:
         """The live self-claimed subject rows at `seq`, objects in the order of their first row (7.4)."""
@@ -599,6 +663,7 @@ class Ledger:
                     raise RuleError("5.4 validity rules",
                                     f"a ledger holds at most {permissions.MAX_RECORDS:,} records, revoked and "
                                     f"replaced ones included: it holds {held:,}, and this change adds {added:,}")
+            self._check_open_bounds(body, at)
             last = self.conn.execute("SELECT seq, digest FROM ledger_log ORDER BY seq DESC LIMIT 1").fetchone()
             seq, prev = (last["seq"] + 1, last["digest"]) if last else (1, ZERO)
             entry = {"seq": seq, "at": at, "kind": kind, "ref": ref, "actor": actor, "channel": channel,
@@ -615,6 +680,36 @@ class Ledger:
                 raise _bad(f"the change collides with an existing row ({e})") from e
             raise
         return seq
+
+    def _check_open_bounds(self, body: Mapping, at: int) -> None:
+        """Proposals and child grants an agent can add without a yes, bounded inside the write's BEGIN IMMEDIATE as
+        the records are (P 15, P37; the final review's I1): open (pending, unexpired) proposals per filer and per
+        ledger, and live (not revoked, not expired) child grants per parent grant."""
+        for item in body.get("insert", ()):
+            row = item["row"]
+            if item["table"] == "proposals":
+                by = row["by_agent"]
+                mine, held = self.conn.execute(
+                    "SELECT COALESCE(SUM(by_agent = ?), 0), COUNT(*) FROM proposals "
+                    "WHERE status = 'pending' AND expires > ?", (by, at)).fetchone()
+                if mine >= permissions.MAX_OPEN_PROPOSALS_PER_AGENT:
+                    raise RuleError("7.7 proposals",
+                                    f"{by} holds at most {permissions.MAX_OPEN_PROPOSALS_PER_AGENT} open proposals, "
+                                    f"and holds {mine}: the owner signs or declines them, or each expires "
+                                    f"{PROPOSAL_DAYS} days after it was filed")
+                if held >= permissions.MAX_OPEN_PROPOSALS:
+                    raise RuleError("7.7 proposals",
+                                    f"a ledger holds at most {permissions.MAX_OPEN_PROPOSALS:,} open proposals, "
+                                    f"and holds {held:,}: the owner signs or declines them, or each expires "
+                                    f"{PROPOSAL_DAYS} days after it was filed")
+            elif item["table"] == "permission_grants" and row.get("parent_id") is not None:
+                live = self.conn.execute(
+                    "SELECT COUNT(*) FROM permission_grants WHERE parent_id = ? AND revoked_seq IS NULL "
+                    "AND expires > ?", (row["parent_id"], at)).fetchone()[0]
+                if live >= permissions.MAX_CHILD_GRANTS:
+                    raise RuleError("7.2 grants",
+                                    f"a grant has at most {permissions.MAX_CHILD_GRANTS} live child grants, and "
+                                    f"{row['parent_id']} has {live}: end one, or wait for one to expire")
 
     def _project(self, body: dict, seq: int, at: int) -> None:
         def fill(v):
@@ -810,9 +905,8 @@ class Ledger:
         template per kind (P 7.7); the agent's `reason` is kept apart and is never in them."""
         state = self.state()
         out = []
-        for p in sorted(state.proposals.values(), key=lambda r: (r.created, r.id)):
-            if p.status != "pending" or p.expires <= now:
-                continue
+        for pid in state.proposals.open_ids(now):         # at most MAX_OPEN_PROPOSALS, each read when listed
+            p = state.proposals[pid]
             body = json.loads(p.body)
             act = body["act"]
             kind = "register-place" if p.kind == "joint-place" else p.kind
