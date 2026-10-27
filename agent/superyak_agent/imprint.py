@@ -176,6 +176,10 @@ class Imprint:
         folder = self.root / imprint_id / 'receipts'
         for receipt in receipts:
             write_private(folder / f'{receipt["seq"]}-{imprint_id}.json', receipt)
+        permission = found.get('permission')
+        if isinstance(permission, dict) and all(isinstance(permission.get(k), v) for k, v in
+                                                (('record', dict), ('signature', str), ('station_key', str))):
+            write_private(self.root / imprint_id / 'permission.json', permission)    # what `verify-imprint --dir` reads
         chain = self._chain_of(found, receipts)
         state = found.get('status')
         self.out(f'Imprint {imprint_id[:4]}: {state}. Ends {_date(_end_of(found, receipts))}. Receipts: {len(receipts)}, chain {chain}.')

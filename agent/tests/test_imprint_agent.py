@@ -230,6 +230,20 @@ def test_status_saves_receipts_and_finds_a_broken_chain(tmp_path):
     assert out["chain"] == "broken after receipt 1" and len(list((home / "imprints" / IMPRINT_ID / "receipts").iterdir())) == 3
 
 
+def test_status_saves_the_signed_permission_for_verify_imprint(tmp_path):
+    station, home = FakeStation(receipts=chain(2)), sent_home(tmp_path)
+    Imprint(home, station.client()).status(IMPRINT_ID)
+    saved = home / 'imprints' / IMPRINT_ID / 'permission.json'
+    assert json.loads(saved.read_text()) == {'record': PERMISSION, 'signature': 'p', 'station_key': 'k'}
+    assert saved.stat().st_mode & 0o777 == 0o600
+
+
+def test_status_saves_no_permission_when_the_station_sends_none(tmp_path):
+    station, home = FakeStation(status='received'), sent_home(tmp_path)
+    Imprint(home, station.client()).status(IMPRINT_ID)
+    assert not (home / 'imprints' / IMPRINT_ID / 'permission.json').exists()
+
+
 def test_withdraw_and_shorten_call_the_station(tmp_path):
     station, home = FakeStation(), sent_home(tmp_path)
     Imprint(home, station.client()).withdraw(IMPRINT_ID); Imprint(home, station.client()).shorten(IMPRINT_ID, 30)
