@@ -284,7 +284,7 @@ def test_p8_frames_and_builds_together_never_hold_more_than_frames_at_once_state
         t.join(30)
     _finish(d.daemon)
     assert peak[0] <= FRAMES_AT_ONCE and len(calls) == 1
-    assert all(M1 in {c["memoryId"] for c in r["candidates"]} for r in replies)
+    assert len(replies) == FRAMES_AT_ONCE + 2 and M1 in d.recall_ids()
 
 
 def test_p8_a_build_that_finishes_inside_the_wait_serves_its_own_frame(tmp_path, monkeypatch):

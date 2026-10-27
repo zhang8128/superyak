@@ -688,7 +688,11 @@ class PublisherDaemon:
             for obj in sorted({p.obj for p in placements if p.obj and p.obj not in got.decisions}):
                 logger.warning("permission: %s is not a decidable object in %s", obj, publisher.name)
             entry = _CacheEntry(state.seq, ledger_id, changes, copy, got)
-            moved = publisher.storage.placement_changes() != changes
+            counter = Storage.open_read_only(publisher.db_path)    # its own connection: not the frames' shared one
+            try:
+                moved = counter.placement_changes() != changes
+            finally:
+                counter.close()
             if not moved:
                 ledger = Ledger.open_read_only(self.engram_home, LEDGER_BUSY_MS)
                 try:
