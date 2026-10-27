@@ -1640,6 +1640,9 @@ def _ledger_verdict(state: State, layer: Layer, use: Use, action: str) -> tuple[
     exists = layer.id in (state.agents if layer.kind == "restriction" else state.places)
     if not exists:
         return "missing", ()
+    got = _program_verdict(state, layer, use, action)
+    if got is not None:
+        return got
     plan, positions, first = _candidate_positions(state, layer.id, use, action)
     recs = plan[0]
     if any(recs[i].effect == "deny" and _plan_match(state, plan, i, use, action, first) for i in positions):
@@ -1659,6 +1662,113 @@ def _ledger_verdict(state: State, layer: Layer, use: Use, action: str) -> tuple[
         end = _terms(state, r, use, action, True)[0]
         return (end is not None, -(end or 0), _units(r.id))
     return "allow", (min(allows, key=rank).id,)
+
+
+def _program(state: State, layer_id: str, use: Use, action: str, ref: ObjectRef) -> tuple:
+    """For a plan and an object's static key (kind, store, layer), what its records with no memory or collection
+    list decide, grouped so that a layer costs one lane test per distinct (lanes, anchor) and the full test of the
+    rest: (the first position of a live deny with no object dimension past the static ones, or None; ((lanes,
+    anchor), the first position of a live lane-only deny with them); the best-ranked live allow with no object
+    dimension, or None; ((lanes, anchor), the best-ranked live lane-only allow with them); the positions that
+    need the full test). Records not live at t (rule 1) never match and are left out. Kept in the plan."""
+    plan = _plan(state, layer_id, use, action)
+    recs, always, _, _, static, how = plan
+    key = ("prog", ref.kind, ref.instance_id, ref.layer)
+    got = static.get(key)
+    if got is not None:
+        return got
+    t = use.at
+    deny_static, deny_lanes, allow_static, allow_lanes, full = None, {}, None, {}, []
+    for i in always:
+        r = recs[i]
+        if not _static_ok(r.selector, ref):
+            continue
+        h = how[i]
+        if h == _DEAD:
+            continue
+        if h == _FULL:
+            full.append(i)
+            continue
+        if r.effect == "deny":
+            if h == _STATIC:
+                if deny_static is None:
+                    deny_static = i
+            else:
+                deny_lanes.setdefault((r.selector.lanes, r.anchor), i)
+        else:
+            rank = _record_rank(state, r, t)
+            if h == _STATIC:
+                if allow_static is None or rank < _record_rank(state, allow_static, t):
+                    allow_static = r
+            else:
+                k = (r.selector.lanes, r.anchor)
+                best = allow_lanes.get(k)
+                if best is None or rank < _record_rank(state, best, t):
+                    allow_lanes[k] = r
+    got = static[key] = (deny_static, tuple(deny_lanes.items()), allow_static, tuple(allow_lanes.items()),
+                         tuple(full))
+    return got
+
+
+def _program_verdict(state: State, layer: Layer, use: Use, action: str):
+    """`_ledger_verdict` through the layer's program, for a well-formed object with no grant-backed membership (so
+    the citation order reads nothing of it), or None to take the general path. The full-test records, the
+    object's listed records and its collections' records are tested one by one in pre-filter order, as the
+    general path tests them: a deny up to the first deny the program matches, and every allow."""
+    obj = use.obj
+    ref = _parsed_or_none(obj) if isinstance(obj, str) else None
+    if ref is None or _grant_rows(state, obj):
+        return None
+    exists = layer.id in (state.agents if layer.kind == "restriction" else state.places)
+    if not exists:
+        return "missing", ()
+    plan = _plan(state, layer.id, use, action)
+    recs, _, by_coll, pos, _, _ = plan
+    deny_static, deny_lanes, allow_static, allow_lanes, full = _program(state, layer.id, use, action, ref)
+    extra = set(full)
+    listed = _listing(state, obj).get(layer.id)
+    if listed:
+        for rid in listed:
+            i = pos.get(rid)
+            if i is not None:
+                extra.add(i)
+    if by_coll:
+        for m in state.member_of.get(obj, ()):
+            hit = by_coll.get(m.collection)
+            if hit:
+                extra.update(hit)
+    extra = sorted(extra)
+    t = use.at
+    first_deny = deny_static
+    for (lanes, anchor), i in deny_lanes:
+        if (first_deny is None or i < first_deny) and _lanes_ok(state, obj, lanes, anchor, t, True):
+            first_deny = i
+    for i in extra:
+        if first_deny is not None and i > first_deny:
+            break
+        r = recs[i]
+        if r.effect == "deny" and _matches_prefiltered(state, r, use, action):
+            return "deny", ()
+    if first_deny is not None:
+        return "deny", ()
+    if layer.kind in ("restriction", "co-subject"):
+        return "silent", ()               # a restriction layer, and a co-subject's (P36), is only its denies
+    best = allow_static
+    best_rank = None if best is None else _record_rank(state, best, t)
+    for (lanes, anchor), r in allow_lanes:
+        if _lanes_ok(state, obj, lanes, anchor, t, False):
+            rank = _record_rank(state, r, t)
+            if best is None or rank < best_rank:
+                best, best_rank = r, rank
+    for i in extra:
+        r = recs[i]
+        if r.effect == "allow" and _matches_prefiltered(state, r, use, action):
+            rank = _record_rank(state, r, t)
+            if best is None or rank < best_rank:
+                best, best_rank = r, rank
+    if best is None:
+        return "silent", ()
+    return "allow", (best.id,)
 
 
 def _grant_rows(state: State, obj) -> bool:

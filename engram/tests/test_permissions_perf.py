@@ -9,7 +9,7 @@ import pytest
 import permissions
 import tests.permissions_reference as ref
 from permissions import Use, decide, eligible_set
-from tests.permissions_support import (AGENT, COPY, LEGACY_LAYERS, M1, PLACE, T, World, andy_world, generated_world,
+from tests.permissions_support import (AGENT, COPY, HOME, LEGACY_LAYERS, M1, MEDICAL, PLACE, T, World, andy_world, generated_world,
                                        home_use, _self_allow)
 
 LEDGER_LAYERS = 41
@@ -161,3 +161,62 @@ def test_the_listing_is_kept_for_the_last_object_only():
     permissions._listing(s, "mem:S/episode/b")
     assert [k for k in s._cache if k[0] == "listing"] == [("listing",)]
     assert s._cache[("listing",)][0] == "mem:S/episode/b"
+
+
+# -- Task P3 (perf-design.md 2.C): a layer's static and lane-only records run as a program per object kind
+
+
+def _verdict(fn, s, layer, u):
+    try:
+        return fn(s, layer, u, "recall")
+    except Exception as e:
+        return (type(e).__name__, str(e))
+
+
+def _home_layer(s):
+    return permissions.Layer(HOME, "consent")
+
+
+@pytest.mark.parametrize("raising_made_first", [True, False])
+def test_a_deny_that_raises_raises_only_if_it_comes_before_the_first_static_deny(raising_made_first):
+    w = andy_world()
+    _self_allow(w)
+    order = [lambda: w.deny(HOME, audience=["self"], actions=["recall"], backing="grant:g-missing"),
+             lambda: w.deny(HOME, audience=["self"], actions=["recall"])]
+    ids = [make() for make in (order if raising_made_first else reversed(order))]
+    raising_id = ids[0] if raising_made_first else ids[1]
+    s = w.state()
+    u = home_use(M1, T("2026-11-02"))
+    positions = [r.id for r in permissions._plan(s, HOME, u, "recall")[0]]
+    got = _verdict(permissions._ledger_verdict, s, _home_layer(s), u)
+    assert got == _verdict(ref._ledger_verdict, s, _home_layer(s), u)
+    if positions.index(raising_id) < positions.index(next(i for i in ids if i != raising_id)):
+        assert got[0] == "RuleError", got
+    else:
+        assert got == ("deny", ())
+
+
+def test_a_grant_backed_membership_takes_the_general_path_and_any_other_the_program(monkeypatch):
+    calls = {"program": 0, "general": 0}
+    for name, key in (("_program", "program"), ("_candidate_positions", "general")):
+        real = getattr(permissions, name)
+        monkeypatch.setattr(permissions, name, lambda *a, _r=real, _k=key, **k: calls.__setitem__(_k, calls[_k] + 1)
+                            or _r(*a, **k))
+    w = andy_world()
+    _self_allow(w)
+    s = w.state()
+    u = home_use(M1, T("2026-11-02"))
+    assert permissions._ledger_verdict(s, _home_layer(s), u, "recall") == ref._ledger_verdict(s, _home_layer(s), u, "recall")
+    assert calls == {"program": 1, "general": 0}
+    w = andy_world()
+    _self_allow(w)
+    g = w.put_grant(w.grant_draft(issuer="person:andy", grantee="agent:rio-grande", layer=HOME, ops={"share"},
+                                  envelope=permissions.parse_selector({"audience": ["self"], "requesters": "*",
+                                      "objects": {k: "*" for k in ("kinds", "stores", "layers", "memories", "collections", "lanes")},
+                                      "actions": "*", "purposes": "*"}), max_days=30, depth=0, hours=720))
+    w.collect(MEDICAL, [M1], backing=f"grant:{g.id}")
+    s = w.state()
+    calls.update(program=0, general=0)
+    assert permissions._ledger_verdict(s, _home_layer(s), home_use(M1, T("2026-11-02")), "recall") == \
+        ref._ledger_verdict(s, _home_layer(s), home_use(M1, T("2026-11-02")), "recall")
+    assert calls == {"program": 0, "general": 1}
