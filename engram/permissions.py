@@ -26,6 +26,7 @@ MAX_MEMORIES = 512
 MAX_PURPOSES = 16
 MAX_SUBJECTS = 8
 MAX_COLLECTION = 100_000
+MAX_ACT_OBJECTS = 10_000        # objects one collect or uncollect act names, so one log row and one State stay small (15)
 MAX_PLACES = 1024
 MAX_PARENTS = 4
 MAX_SEGMENTS = 8

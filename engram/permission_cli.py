@@ -29,8 +29,8 @@ from pathlib import Path
 
 from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
                                effective_gate, houses, ledger_path)
-from permissions import (CODE_CHARS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse, RuleError, Use,
-                         affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
+from permissions import (CODE_CHARS, MAX_ACT_OBJECTS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse,
+                         RuleError, Use, affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
                          home_of, parse_copy_ref, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
                          resolve_prefix, selector_json, share_cover, stewards)
 
@@ -461,7 +461,8 @@ def _collection(adding: bool):
             acts: list[Act] = []
             notes: list[str] = []
             if not adding:
-                return [Act("uncollect", {"collection": cid, "objects": refs})], notes
+                return [Act("uncollect", {"collection": cid, "objects": refs[i:i + MAX_ACT_OBJECTS]})
+                        for i in range(0, len(refs), MAX_ACT_OBJECTS)], notes
             if cid not in st.collections:
                 acts.append(Act("make-collection", {"collection": cid}))
             lanes: dict[str, dict] = {}
@@ -479,7 +480,10 @@ def _collection(adding: bool):
                                       "created_at": _seconds(row["created_at"])}
             finally:
                 stores.close()
-            acts.append(Act("collect", {"collection": cid, "objects": refs, "lanes": lanes}))
+            for i in range(0, len(refs), MAX_ACT_OBJECTS):       # one yes, acts of at most 10,000
+                chunk = refs[i:i + MAX_ACT_OBJECTS]
+                acts.append(Act("collect", {"collection": cid, "objects": chunk,
+                                            "lanes": {r: lanes[r] for r in chunk if r in lanes}}))
             return acts, notes
         return _write(make)
     return run

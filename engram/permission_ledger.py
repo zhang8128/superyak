@@ -566,6 +566,13 @@ class Ledger:
         text = canonical_json(dict(body))
         self.conn.execute("BEGIN IMMEDIATE")
         try:
+            added = sum(1 for item in body.get("insert", ()) if item["table"] == "records")
+            if added:             # P 5.4, 15: counted here, under the write lock, so two writers can't both pass
+                held = self.conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+                if held + added > permissions.MAX_RECORDS:
+                    raise RuleError("5.4 validity rules",
+                                    f"a ledger holds at most {permissions.MAX_RECORDS:,} records, revoked and "
+                                    f"replaced ones included: it holds {held:,}, and this change adds {added:,}")
             last = self.conn.execute("SELECT seq, digest FROM ledger_log ORDER BY seq DESC LIMIT 1").fetchone()
             seq, prev = (last["seq"] + 1, last["digest"]) if last else (1, ZERO)
             entry = {"seq": seq, "at": at, "kind": kind, "ref": ref, "actor": actor, "channel": channel,
@@ -650,6 +657,7 @@ class Ledger:
         ref, body = self._make(spec, state, actor, args, auth, now)
         body = _stamp(body, channel, None)
         seq = self._append(act.kind, ref, actor, channel, body, under_grant=auth.under_grant, at=now)
+        del state                 # P 5.6: no frame holds a State while the check builds the next
         return self._outcome("done", ref, seq, act.kind, args)
 
     def _make(self, spec: "_Act", state: State, actor: str, args: Mapping, auth: Authority, now: int):
@@ -671,9 +679,11 @@ class Ledger:
         if kind in _GLUED:
             changed = {REGISTRY}
         elif kind in _RECORD_ACTS:
-            state = self.state()
-            rec = state.records.get(args.get("record")) if "record" in args else None
-            changed = {rec.layer if rec is not None else args.get("layer")}
+            layer = None
+            if "record" in args:
+                row = self.conn.execute("SELECT layer FROM records WHERE id = ?", (args["record"],)).fetchone()
+                layer = row["layer"] if row is not None else None
+            changed = {layer if layer is not None else args.get("layer")}
         else:
             return Outcome(status, ref, seq)
         state = self.state()
@@ -731,7 +741,9 @@ class Ledger:
         if channel == "tool":
             raise RuleError("7.6 the person's yes", "a signature needs the terminal; the tools can give no yes")
         if needs is None:
-            return self._sign_alone(state, p, body, actor, channel, now)
+            done = self._sign_alone(state, p, body, actor, channel, now)
+            del state
+            return self._outcome("done", *done)
         spec_act = body["act"]
         now_covered = _covers(state, needs, had | {actor})
         if now_covered == _covers(state, needs, had):
@@ -744,9 +756,10 @@ class Ledger:
         ref, mbody = self._make(spec, state, p.by_agent, args, Authority("do", "person", None), now)
         mbody = _signed(_stamp(mbody, channel, pid), pid)
         seq = self._append(spec_act["kind"], ref, actor, channel, mbody, proposal_id=pid, at=now)
+        del state
         return self._outcome("done", ref, seq, spec_act["kind"], args)
 
-    def _sign_alone(self, state: State, p, body: Mapping, actor: str, channel: str, now: int) -> Outcome:
+    def _sign_alone(self, state: State, p, body: Mapping, actor: str, channel: str, now: int) -> tuple:
         """The owner's yes to an agent's proposal: run its Act as the owner on the terminal (R26). Everything the
         act checks, it checks again against the ledger as it is now; a refusal leaves the proposal open."""
         if actor != p.for_person:
@@ -764,7 +777,7 @@ class Ledger:
         ref, mbody = self._make(spec, state, actor, args, auth, now)
         mbody = _signed(_stamp(mbody, "terminal", p.id), p.id)
         seq = self._append(kind, ref, actor, channel, mbody, under_grant=auth.under_grant, proposal_id=p.id, at=now)
-        return self._outcome("done", ref, seq, kind, args)
+        return ref, seq, kind, args       # the caller drops its State, then `_outcome` builds the next
 
     def proposals(self, *, now: int) -> list[dict]:
         """The open proposals (pending and not yet expired), oldest first. `words` come from the body by one
@@ -1263,11 +1276,18 @@ def _members(state, cid):
     return {r.object for r in state.collection_members.get(cid, ()) if r.removed_seq is None}
 
 
+def _bound_objects(objects: list) -> None:
+    if len(objects) > permissions.MAX_ACT_OBJECTS:
+        raise RuleError(_ACT, f"one act names at most {permissions.MAX_ACT_OBJECTS:,} objects, not "
+                              f"{len(objects):,} (P 15); the command line splits a larger set into acts")
+
+
 def _prep_collect(state, actor, args):
     cid = _text(args, "collection")
     if cid not in state.collections:
         raise RuleError(_ACT, f"{cid} is not a collection")
     objects = _texts(args, "refs" if "refs" in args else "objects", at_least=1)
+    _bound_objects(objects)
     for o in objects:
         parse_object_ref(o)
     new = [o for o in objects if o not in _members(state, cid)]
@@ -1314,6 +1334,7 @@ def _prep_uncollect(state, actor, args):
     if cid not in state.collections:
         raise RuleError(_ACT, f"{cid} is not a collection")
     objects = _texts(args, "refs" if "refs" in args else "objects", at_least=1)
+    _bound_objects(objects)
     for o in objects:
         if o not in _members(state, cid):
             raise RuleError(_ACT, f"{o} is not in {cid}")
