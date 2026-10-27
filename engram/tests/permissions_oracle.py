@@ -199,10 +199,19 @@ class _View:
             cur = self.copies.get(cur)
         return out
 
+    def registered(self, ref):
+        parsed = _parse_ref(ref)
+        return parsed is not None and parsed[1] in self.stores
+
     def subjects_of(self, obj, names, t):
+        """P 6.3 item 1: an object whose store has no `stores` row has no subject (P32, Tardis's T6), nor does it
+        give any to a road or trail that names it; through `copies` its rows still count."""
+        if not self.registered(obj):
+            return set()
         out = self.chain_subjects(obj, t)
         for m in names:
-            out |= self.chain_subjects(m, t)
+            if self.registered(m):
+                out |= self.chain_subjects(m, t)
         return out
 
     # -- lanes
@@ -413,21 +422,38 @@ class _View:
             colls = sel["objects"]["collections"]
             if colls == _STAR:
                 continue
-            rows = self.counting_rows(obj, colls, layer, r["anchor"], q, y, frozenset(), False)
-            if not rows or any(not m["backing"].startswith("grant:") for m in rows):
-                continue
-            best = None
-            for m in rows:
-                gid = m["backing"][len("grant:"):]
-                gchain = self.grant_chain(gid)
-                if gchain:
-                    end = min(g["expires"] for g in gchain)
-                    best = end if best is None else max(best, end)
-            if best is not None:
-                ends.append(best)
-            invalid = invalid or all(not self.grant_valid(m["backing"][len("grant:"):], t) for m in rows)
+            end, bad = self.route_terms(obj, colls, layer, r["anchor"], q, y, frozenset())
+            if end is not None:
+                ends.append(end)
+            invalid = invalid or bad
         not_yet = any(link["valid_from"] > t for link in chain)
         return (min(ends) if ends else None), invalid, not_yet
+
+    def route_terms(self, obj, colls, layer, anchor, q, y, assume):
+        """(the end of the latest-ending route by which obj is in one of `colls`, or None for no term; whether every
+        route is invalid at t). No term when a person-backed row, or a row already on the route (in `assume`),
+        counts there. A grant-backed row's route ends at the earliest expiry of its chain and of the route of
+        each envelope in it that names collections (Tardis's T1)."""
+        t = q[3]
+        counted = self.counting_rows(obj, colls, layer, anchor, q, y, assume, False)
+        rows = [(i, m) for i, m in enumerate(self.members) if any(m is c for c in counted)]
+        if not rows or any(i in assume or not m["backing"].startswith("grant:") for i, m in rows):
+            return None, False
+        best, every_bad = None, True
+        for i, m in rows:
+            gid = m["backing"][len("grant:"):]
+            gchain = self.grant_chain(gid)
+            ends, bad = [g["expires"] for g in gchain], not self.grant_valid(gid, t)
+            for g in gchain:
+                inner = g["env"]["objects"]["collections"]
+                if inner != _STAR:
+                    end, inner_bad = self.route_terms(obj, inner, layer, anchor, q, y, assume | {i})
+                    ends += [] if end is None else [end]
+                    bad = bad or inner_bad
+            if gchain:
+                best = min(ends) if best is None else max(best, min(ends))
+            every_bad = every_bad and bad
+        return best, every_bad
 
     def silent_code(self, layer, q, obj, y):
         expired = invalid = not_yet = False

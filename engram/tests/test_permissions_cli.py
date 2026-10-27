@@ -1,6 +1,5 @@
 """Task 26: engram-permissions, the terminal yes, `init` and the registry commands (P 4.4, 7.6, 14; R12, R24)."""
 import argparse
-import getpass
 
 import pytest
 
@@ -118,21 +117,21 @@ def test_confirm_reads_one_line_and_leaves_the_next(fake_tty):
 
 def test_r24_init_names_the_login_as_owner_and_refuses_a_second_ledger(tmp_path, fake_tty, monkeypatch, capsys):
     monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
-    monkeypatch.setattr(getpass, "getuser", lambda: "andy")
+    monkeypatch.setattr(permission_cli, "_login_name", lambda: "andy")
     fake_tty.answer_the_printed_code()
     assert main(["init"]) == 0
     assert "Create a ledger owned by person:andy" in capsys.readouterr().out
     assert Ledger.open(tmp_path).meta()["owner"] == "person:andy"
     fake_tty.answer_the_printed_code()
     assert main(["init"]) == 1                                      # a ledger exists
-    monkeypatch.setattr(getpass, "getuser", lambda: "Andy Z")
+    monkeypatch.setattr(permission_cli, "_login_name", lambda: "Andy Z")
     assert main_in(tmp_path / "other", ["init"], monkeypatch) == 1  # a login that is not a handle
     assert not (tmp_path / "other" / ".engram" / "permissions.db").exists()
 
 
 def test_init_without_the_yes_makes_no_ledger(tmp_path, fake_tty, monkeypatch):
     monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
-    monkeypatch.setattr(getpass, "getuser", lambda: "andy")
+    monkeypatch.setattr(permission_cli, "_login_name", lambda: "andy")
     fake_tty.answer("wrong1")
     assert main(["init"]) == 3
     assert not (tmp_path / ".engram" / "permissions.db").exists()

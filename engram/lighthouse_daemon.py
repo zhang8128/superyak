@@ -74,14 +74,23 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+HOUSE_CONNECTIONS_KEPT = 4      # idle read connections a publisher keeps for the frames that come next (M7)
+
+
 @dataclass
 class PublisherStore:
+    """A published house. Each frame reads it through a read-only connection of its own (``checkout``): frames run
+    in threads of their own, and one sqlite3 connection shared between them misread under load (the final
+    review's M7, Serenity's section 2 item 4). ``storage`` is the first connection ``open`` made; frames one after
+    another reuse it, and frames at once open more, of which HOUSE_CONNECTIONS_KEPT stay open when given back."""
     name: str
     db_path: Path
     policy_path: Path
     disclosures_path: Path
     storage: Storage | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _idle: list = field(default_factory=list)
+    _generation: int = 0          # raised by ``reset``: a connection of an earlier one is closed when given back
 
     @property
     def publisher_id(self) -> str:
@@ -118,16 +127,52 @@ class PublisherStore:
                         pass
                 self.storage = None
                 return False
+            self.storage._house_generation = self._generation
+            self._idle = [self.storage]
             return True
 
-    def reset(self) -> None:
+    def checkout(self) -> Storage | None:
+        """A read-only connection to the house for one frame alone: an idle one, else a new one. None when the
+        house is not open or cannot be opened. The frame gives it back with ``checkin``."""
         with self._lock:
-            if self.storage is not None:
-                try:
-                    self.storage.close()
-                except Exception:
-                    pass
+            if self.storage is None:
+                return None
+            if self._idle:
+                return self._idle.pop()
+            generation = self._generation
+        try:
+            storage = Storage.open_read_only(self.db_path)
+        except (FileNotFoundError, sqlite3.Error) as error:
+            logger.warning("publisher %s unavailable: %s", self.name, error)
+            return None
+        storage._house_generation = generation
+        return storage
+
+    def checkin(self, storage: Storage) -> None:
+        """Give a frame's connection back: kept idle for the next frame, or closed when the house was reset since,
+        or when HOUSE_CONNECTIONS_KEPT are idle already."""
+        with self._lock:
+            keep = (self.storage is not None and getattr(storage, "_house_generation", None) == self._generation
+                    and len(self._idle) < HOUSE_CONNECTIONS_KEPT)
+            if keep:
+                self._idle.append(storage)
+                return
+        try:
+            storage.close()
+        except Exception:
+            pass
+
+    def reset(self) -> None:
+        """Close the idle connections; one a frame holds is closed when the frame gives it back."""
+        with self._lock:
+            idle, self._idle = self._idle, []
             self.storage = None
+            self._generation += 1
+        for storage in idle:
+            try:
+                storage.close()
+            except Exception:
+                pass
 
     def store_digest(self) -> dict:
         with self.db_path.open("rb") as handle:
@@ -409,6 +454,17 @@ class _Placed:
     objects: dict          # memory id -> its distinct objects (None for a row without a source)
     decisions: dict        # object -> Decision (None when the object could not be decided)
     filtered: int
+
+
+class _FrameHouse:
+    """A publisher as one frame sees it: the house read through the frame's own connection (``storage``), and
+    everything else the publisher's (M7)."""
+
+    def __init__(self, publisher: PublisherStore, storage: Storage):
+        self._publisher, self.storage = publisher, storage
+
+    def __getattr__(self, name):
+        return getattr(self._publisher, name)
 
 
 class _LedgerSide:
@@ -777,12 +833,16 @@ class PublisherDaemon:
                     "publisher %s policy unavailable: %s", publisher.name, error
                 )
                 return error_frame("PUBLISHER_UNAVAILABLE", "policy unavailable")
-            if not publisher.open():
+            storage = publisher.checkout() if publisher.open() else None
+            if storage is None:
                 return error_frame("PUBLISHER_UNAVAILABLE", "store unavailable")
-            if frame["kind"] == "recall":
-                return self._recall(publisher, frame, policy, gate)
-            if frame["kind"] == "read":
-                return self._read(publisher, frame, policy, gate)
+            try:
+                house = _FrameHouse(publisher, storage)
+                if frame["kind"] == "recall":
+                    return self._recall(house, frame, policy, gate)
+                return self._read(house, frame, policy, gate)
+            finally:
+                publisher.checkin(storage)
         except FrameError as error:
             return error_frame(error.code, "")
         except Exception:

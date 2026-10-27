@@ -14,13 +14,12 @@ from __future__ import annotations
 import argparse
 import calendar
 import contextlib
-import getpass
 import hmac
 import json
 import os
+import pwd
 import re
 import select
-import shlex
 import sqlite3
 import sys
 import time
@@ -28,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
-                               effective_gate, houses, ledger_path)
+                               check_retire_person, effective_gate, houses, ledger_path, make_private)
 from permissions import (CODE_CHARS, MAX_ACT_OBJECTS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse,
                          RuleError, Use, affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
                          home_of, parse_copy_ref, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
@@ -79,20 +78,27 @@ def _read_line(fd: int) -> str:
     return buf.decode("utf-8", "replace").strip()
 
 
+def _show(fd: int, text: str) -> None:
+    """Write all of `text` to the terminal."""
+    data = text.encode("utf-8", "replace")
+    while data:
+        data = data[os.write(fd, data):]
+
+
 def confirm(words: str, change: str) -> bool:
-    """Print the words, the full change and a code; read the code from TTY. Raises NoTerminal when TTY cannot be
-    opened, before anything is printed."""
+    """Show the words, the full change and a code on TTY, and read the code from it. Nothing of it goes to stdout,
+    which an agent that started the command may be reading (Tardis's T9). Raises NoTerminal when TTY cannot be
+    opened for reading and writing, before anything is shown."""
     try:
-        fd = os.open(TTY, os.O_RDONLY | os.O_NOCTTY)
+        fd = os.open(TTY, os.O_RDWR | os.O_NOCTTY)
     except OSError as e:
         raise NoTerminal(f"{TTY} cannot be opened ({e.strerror or e})") from e
     try:
         code = _code()
-        print(_clean_lines(words))       # names in the words come from the ledger (final review M5)
-        print()
-        print(_clean_lines(change))
-        print()
-        print(f"To say yes, type this code and press enter.\ncode: {code}", flush=True)
+        sys.stdout.flush()               # what the command printed before comes first on a shared terminal
+        # names in the words come from the ledger (final review M5)
+        _show(fd, f"{_clean_lines(words)}\n\n{_clean_lines(change)}\n\n"
+                  f"To say yes, type this code and press enter.\ncode: {code}\n")
         answer = _read_line(fd)
     finally:
         os.close(fd)
@@ -262,7 +268,7 @@ def _run_sweep(led: Ledger, now: int) -> tuple:
         if uses_path(led.root).is_file():
             uses = Uses.open(led.root)
             try:
-                uses.fold(now=now)
+                uses.fold(now=now, ledger_id=led.meta()["ledger_id"])
             finally:
                 uses.close()
     except Exception as e:
@@ -378,10 +384,16 @@ class _Stores:
 
 # ---------------------------------------------------------------- the commands
 
+def _login_name() -> str:
+    """The login name of the process's own uid. Not `getpass.getuser()`, which reads LOGNAME, USER, LNAME and
+    USERNAME first, so a variable could name another owner (Tardis's T13)."""
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
 def _owner_login() -> str:
     """R24: the owner's handle is the Unix login."""
     try:
-        login = getpass.getuser()
+        login = _login_name()
         check_id("person", "person:" + login)
     except (RuleError, OSError, KeyError) as e:
         raise RuleError("24 the owner is the login", f"the Unix login name is not a person handle ({e}); "
@@ -415,7 +427,12 @@ def _person_add(a):
 
 
 def _person_retire(a):
-    return _write(lambda led, st, owner: ([Act("retire-person", {"person": _qualify("person", a.handle)})], []))
+    def make(led, st, owner):
+        person = _qualify("person", a.handle)
+        if person in st.persons:
+            check_retire_person(st, person)          # before the yes: the owner and the last admin stay (T10)
+        return [Act("retire-person", {"person": person})], []
+    return _write(make)
 
 
 def _acts_for(value: str) -> str:
@@ -690,6 +707,23 @@ def _rebuild(a) -> int:
                 from e
     print(f"Rebuilt the ledger at {ledger_path(dest)}. Its tables are the log's replay.")
     return 0
+
+
+def _verify(a) -> int:
+    """P 5.6: the log's hash chain, `meta.head` and every table's seqs against the log's last row. It writes
+    nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does not."""
+    with _ledger(read_only=True) as led:
+        top, problems = led.integrity()
+    if not problems:
+        print(f"The ledger verifies: {top} log rows, the hash chain is whole, and no table names a seq past the "
+              f"log's last row.")
+        return 0
+    print(f"The ledger does not verify ({top} log rows):")
+    print("\n".join(f"  - {p}" for p in problems))
+    print("Every reader refuses a ledger whose tables name a seq past its log, or whose head is not its last row, so "
+          "under `enforce` nothing is served. Restore the file together with its journal, or replay the log that "
+          "is left with `engram-permissions rebuild --out <dir>` and make the lost acts again.")
+    return 1
 
 
 def _stamp(value) -> str:
@@ -1035,6 +1069,7 @@ def _migrate(args) -> int:
     lacking = [str(p) for p in houses(root) if p.resolve() != house.resolve() and _lacks_029(p)]
     at = _now()
     plan_path = root / ".engram" / f"permissions-migrate-{datetime.fromtimestamp(at, timezone.utc):%Y%m%dT%H%M%SZ}.json"
+    make_private(plan_path)
     plan_path.write_text(json.dumps({"at": at, "owner": owner, "rows": migrated, "unmatched": unmatched},
                                     indent=1, sort_keys=True), encoding="utf-8")
     shown = unmatched[:REPORT_ROWS]
@@ -1065,6 +1100,10 @@ def _migrate(args) -> int:
         print("That was not the code. Nothing was written.", file=sys.stderr)
         return 3
     published = Storage(str(house))                 # the full open: migrations up to 029 run on it (R27)
+    # Built beside its final name and renamed into place last, as `rebuild` is (Tardis's T8): a migrate killed at
+    # any point leaves nothing at `path`, so it runs again; a file left from such a run is removed first.
+    building = path.with_name(path.name + ".migrating")
+    _forget_ledger(building)
     try:
         ids: dict[str, str] = {}
         for p in houses(root):
@@ -1073,7 +1112,7 @@ def _migrate(args) -> int:
                 ids.setdefault(iid, "default" if p.parent.name == ".engram" else p.parent.name)
         led = None
         try:
-            led = Ledger.create(root, login, now=at, channel="migration")
+            led = Ledger.create(root, login, now=at, channel="migration", path=building)
 
             def do(kind, **a):
                 out = led.perform(Act(kind, a), actor=owner, channel="migration", now=at)
@@ -1100,25 +1139,29 @@ def _migrate(args) -> int:
                 audience = home if collection == "legacy-commons" else "group:" + collection[len("legacy-group-"):]
                 record_of[collection] = do("allow", layer=home, selector=_legacy_selector(login, audience, collection),
                                            valid_from=at, valid_until=None, reason="legacy share").ref
+            led.close()
+            led = None
+            # The house's links are written before the ledger is in place: a run stopped between the two leaves
+            # links to no ledger, which the gate (off, with no ledger) never reads, and the next run writes them again.
+            try:
+                with published.transaction():
+                    for m in migrated:
+                        published.conn.execute(
+                            "UPDATE shared_memories SET source_instance_id = ?, record_id = ? WHERE share_id = ?",
+                            (m["source_instance_id"], record_of[m["collection"]], m["share_id"]))
+            except sqlite3.Error as e:
+                raise RuleError("12.3 migrate", f"the published house could not be filled ({e}), so no ledger was "
+                                "made and nothing was written. Fix the cause and run `engram-permissions migrate` "
+                                "again") from e
+            if path.exists():
+                raise RuleError("12.3 migrate", f"a ledger appeared at {path} while migrate ran; this one was not "
+                                "kept")
+            os.replace(building, path)
         except BaseException:
             if led is not None:
                 led.close()
-            _forget_ledger(path)
+            _forget_ledger(building)
             raise
-        led.close()
-        try:
-            with published.transaction():
-                for m in migrated:
-                    published.conn.execute(
-                        "UPDATE shared_memories SET source_instance_id = ?, record_id = ? WHERE share_id = ?",
-                        (m["source_instance_id"], record_of[m["collection"]], m["share_id"]))
-        except sqlite3.Error as e:
-            remove = "rm -f " + " ".join(shlex.quote(str(path.with_name(path.name + x)))
-                                         for x in ("", "-journal", "-wal", "-shm"))
-            raise RuleError("12.3 migrate", f"the ledger was made, but the published house could not be filled "
-                            f"({e}). The gate is off and nothing is widened. To run migrate again, remove the "
-                            f"ledger, fix the cause, and rerun `engram-permissions migrate`; to keep the ledger "
-                            f"instead, share each row again with `share`.\n{remove}") from e
     finally:
         published.close()
     print(f"Migrated {len(migrated)} shares into {len(record_of)} collections, each with one allow. The ledger is "
@@ -1436,6 +1479,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("mode", choices=["off", "shadow", "enforce"])
     leaf(top, "rebuild", _rebuild, "replay the log into a fresh ledger (no yes needed)").add_argument(
         "--out", required=True, help="a directory that holds no ledger yet; the file lands in .engram/ under it")
+    leaf(top, "verify", _verify, "check the log's chain and that no table runs past it (no yes needed; writes "
+                                 "nothing)")
     p = leaf(top, "uses", _uses, "list the uses (no yes needed)")
     p.add_argument("--since", type=_when)
     p.add_argument("--until", type=_when)

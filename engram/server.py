@@ -1312,9 +1312,14 @@ def _lane_notes(phase: str, rows: list[dict], target: str) -> None:
 
 
 def _sync_genome_kept(sync_genome) -> int:
-    """Genome sync; under `shadow` and `enforce` it records each synced episode as a kept copy (P25)."""
+    """Genome sync; under `shadow` and `enforce` it records each synced episode as a kept copy (P25). Under a
+    closed gate it syncs nothing: a copy written then would carry none of its source's subjects, and a later sync
+    skips an episode already present (Tardis's T4). Under `off` it is main's sync."""
     from permission_ledger import Ledger
     gate = _permission_gate_for_store()
+    if gate.mode == "closed":
+        logger.warning("Genome sync skipped: the permissions gate is closed (%s)", gate.cause)
+        return 0
     if gate.mode not in ("shadow", "enforce"):
         return sync_genome(str(_genome_db_path), _storage)
     led = Ledger.open(ENGRAM_HOME)
@@ -1899,9 +1904,16 @@ def remember(
 
     logger.info("Tool called: remember(content_len=%d, core=%s, source=%s, work=%s)", len(content), core, source, work)
 
-    keep = _keep_decision(content, agent=_agent_ref(), now=_permission_now(), raw=raw_content)
+    keep = _keep_decision(content, agent=_agent_ref(), now=_permission_now(), raw=raw_content, genome=genome)
     if keep.reply is not None:
         return keep.reply
+    if genome and keep.source is not None:
+        # Delivered content is kept only here, as a copy of its source (P25): a genome copy would carry none of
+        # the source's subjects, and genome sync would spread it (Tardis's T2). Under `enforce` the guard refused
+        # it before deciding, so no receipt names a keep that never happened; under `shadow` it goes on.
+        if not keep.shadow:
+            return dict(_GENOME_REFUSED)
+        keep.would_refuse = True
 
     lane = _derive_lane(
         work,
@@ -1985,6 +1997,8 @@ def remember(
 
 
 _KEEP_REFUSED = {"error": "keeping this content is not allowed", "layer": "rejected"}
+_GENOME_REFUSED = {"error": "delivered content cannot be written to the genome: remember it without genome=True to "
+                            "keep it in this store", "layer": "rejected"}
 
 
 @dataclass
@@ -2038,10 +2052,11 @@ def _keep_reply(state, agent: str, refusal=None, cause: str | None = None) -> di
     return out
 
 
-def _keep_decision(content: str, *, agent: str, now: int, raw: str | None = None) -> _Keep:
+def _keep_decision(content: str, *, agent: str, now: int, raw: str | None = None, genome: bool = False) -> _Keep:
     """The `remember` guard (P 10; R10, R11). It acts only when the digest of the stripped or the raw content is
     that of a delivery receipt of `agent` in the last 24 hours (the newest 200), and it asks the ledger layers
-    alone whether `imprint` of that item is allowed."""
+    alone whether `imprint` of that item is allowed. A `genome` keep of delivered content is refused under
+    `enforce` before anything is decided (Tardis's T2), so it writes no `imprint` receipt (Serenity's item 3)."""
     try:
         gate = _permission_gate()
     except Exception as exc:
@@ -2074,6 +2089,8 @@ def _keep_decision(content: str, *, agent: str, now: int, raw: str | None = None
         return _Keep()
     if gate.mode == "closed":
         return _Keep(reply=_keep_reply(None, agent))
+    if genome and not shadow and any(d.object is not None for d in deliveries):
+        return _Keep(reply=dict(_GENOME_REFUSED))
     return _decide_keep(deliveries, agent=agent, now=now, shadow=shadow)
 
 
@@ -2203,11 +2220,17 @@ def _after_share(*, fold: bool = False) -> None:
         logger.warning("The placement sweep failed", exc_info=True)
     if fold:
         try:
+            from permission_ledger import Ledger
             from permission_uses import Uses, uses_path
             if uses_path(ENGRAM_HOME).is_file():
+                led = Ledger.open_read_only(ENGRAM_HOME)
+                try:
+                    ledger_id = led.meta()["ledger_id"]
+                finally:
+                    led.close()
                 uses = Uses.open(ENGRAM_HOME)
                 try:
-                    uses.fold(now=now)
+                    uses.fold(now=now, ledger_id=ledger_id)
                 finally:
                     uses.close()
         except Exception:
@@ -2346,12 +2369,38 @@ def share(
         return asdict(record)
 
 
+def _acts_for_owner() -> bool | None:
+    """Does this server's agent act for the ledger owner (as `permissions` asks)? None when there is no ledger
+    (main's behaviour), or when the ledger cannot be read or names no owner, so it cannot be told."""
+    from permission_ledger import Ledger, ledger_path
+    from permissions import _principals
+    if not ledger_path(ENGRAM_HOME).is_file():
+        return None
+    try:
+        led = Ledger.open_read_only(ENGRAM_HOME)
+    except Exception:
+        return None
+    try:
+        state = led.state()
+        return state.meta["owner"] in _principals(state, _agent_ref())
+    except Exception:
+        return None
+    finally:
+        led.close()
+
+
+_OWNER_ONLY_UNSHARE = {"error": "only agents acting for the ledger owner can remove a placement"}
+
+
 @_server_tool()
 @_mutation_logged
 def unshare(share_id: str) -> dict:
-    """Withdraw one share from the published house."""
+    """Withdraw one share from the published house. With a ledger, only an agent acting for its owner may (Tardis's
+    T5); when the ledger cannot be read it still works, since removing a placement only narrows (U11)."""
     _init()
     logger.info("Tool called: unshare(share_id=%s)", share_id)
+    if _acts_for_owner() is False:
+        return dict(_OWNER_ONLY_UNSHARE)
     with _published_house_storage() as (path, published_storage):
         if published_storage is None:
             return {"error": f"no published house at {path}"}
@@ -2541,9 +2590,21 @@ def permissions(
 
 @_server_tool()
 def shares(audience: str | None = None) -> dict:
-    """List valid shares, optionally restricted to one audience."""
+    """List valid shares, optionally restricted to one audience. With a ledger, only to an agent acting for its
+    owner, as `permissions(focus="rules")` (Tardis's T5): a placement's reason and digest can name a person and
+    what is shared about them (P23). With none, as before; a closed gate with no ledger lists nothing."""
     _init()
     logger.info("Tool called: shares(audience=%s)", audience)
+    owner = _acts_for_owner()
+    if owner is False:
+        return dict(_OWNER_ONLY)
+    if owner is None:
+        from permission_ledger import ledger_path
+        if ledger_path(ENGRAM_HOME).is_file():
+            return {"error": "the permissions ledger cannot be read, so no placement is listed"}
+        gate = _permission_gate()
+        if gate.mode == "closed":
+            return {"error": f"the permissions gate is closed, so no placement is listed: {gate.cause}"}
     with _published_house_storage() as (path, published_storage):
         if published_storage is None:
             return {"error": f"no published house at {path}"}

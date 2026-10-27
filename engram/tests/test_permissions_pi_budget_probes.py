@@ -55,7 +55,10 @@ def test_each_probe_runs_and_reports_its_peak(base, op):
     home, extra = prepare(base, op, **SMALL, trails=20, touches=16)
     got = run_probe(op, home, extra, scope=False)
     assert got["op"] == op and got["peak_kb"] > 10_000, got
-    assert isinstance(got["swap_kb"], int) and got["swap_kb"] >= 0, got      # beside VmHWM (final review M10)
+    if sys.platform.startswith("linux"):
+        assert isinstance(got["swap_kb"], int) and got["swap_kb"] >= 0, got  # beside VmHWM (final review M10)
+    else:
+        assert got["swap_kb"] is None, got                                    # no per-process figure off Linux
     assert EXPECT[op](got["detail"]), got
 
 

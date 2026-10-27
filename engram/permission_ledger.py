@@ -91,7 +91,18 @@ CREATE INDEX collection_members_collection ON collection_members(collection);
 CREATE INDEX subjects_object ON subjects(object);
 CREATE INDEX lane_notes_object ON lane_notes(object);
 CREATE INDEX group_members_group ON group_members(group_id);
+CREATE INDEX subjects_removed ON subjects(removed_seq) WHERE removed_seq IS NOT NULL;
+CREATE INDEX collection_members_removed ON collection_members(removed_seq) WHERE removed_seq IS NOT NULL;
+CREATE INDEX proposals_decided ON proposals(decided_seq) WHERE decided_seq IS NOT NULL;
 """
+# the indexes a writing open adds to a ledger made before they were in the schema
+_LATER_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS collection_members_collection ON collection_members(collection)",
+    "CREATE INDEX IF NOT EXISTS subjects_removed ON subjects(removed_seq) WHERE removed_seq IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS collection_members_removed ON collection_members(removed_seq) "
+    "WHERE removed_seq IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS proposals_decided ON proposals(decided_seq) WHERE decided_seq IS NOT NULL",
+)
 
 # the tables a State reads per object, through StateRows, and not whole
 _PER_OBJECT = frozenset({"subjects", "lane_notes", "collection_members", "copies"})
@@ -104,6 +115,17 @@ _LOG_COLUMNS = ("seq", "at", "kind", "ref", "actor", "channel", "under_grant", "
 _HOT = ("This ledger has a hot journal from a writer that stopped mid-commit, which a read-only reader cannot "
         "roll back. Every reader reads `closed` until a writing open clears it: run any writing command, "
         "such as `engram-permissions sweep`.")
+# Every column that holds the seq of the log row that wrote it (P 5.6). A file copy taken mid-commit without its
+# journal (a torn restore) can keep a log row's projection and lose the row: that seq is then past the log's last.
+_SEQ_COLUMNS = {t: cs for t, cs in ((t, tuple(c for c in cols if c == "seq" or c.endswith("_seq")))
+                                    for t, cols in _COLUMNS.items()) if cs}
+# the seq columns an update sets on an older row; every other one is set only when its row is inserted
+_SET_LATER = frozenset({"retired_seq", "removed_seq", "revoked_seq", "decided_seq"})
+_CUT = ("The log's tail was cut, as by a copy or restore of the file taken mid-write without its journal, so the "
+        "tables may hold a change, such as a revocation, that the log has lost. Every reader refuses the ledger "
+        "until it verifies (P 5.6): `engram-permissions verify` reports it. Restore the file together with its "
+        "journal, or replay the log that is left with `engram-permissions rebuild --out <dir>` and make the lost "
+        "acts again.")
 
 
 class LedgerUnreadable(Exception):
@@ -463,6 +485,16 @@ def ledger_path(engram_home: Path) -> Path:
     return Path(engram_home) / ".engram" / "permissions.db"
 
 
+def make_private(path: Path) -> None:
+    """Create `path` empty with mode 0600 unless it exists: the ledger, the receipts file and the migrate plan name
+    people and their uses (Serenity's section 2, nits). SQLite fills an empty file as a new database, and makes
+    its journal with the database's mode."""
+    try:
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except FileExistsError:
+        pass
+
+
 def new_id(prefix: str) -> str:
     return prefix + os.urandom(16).hex()
 
@@ -517,9 +549,9 @@ class Ledger:
             hot = path.with_name(path.name + "-journal").exists()
             raise LedgerUnreadable(f"{path}: {e}. {_HOT if hot else ''}".strip()) from e
         if not read_only:
-            try:            # a ledger made before this index was in the schema reads a collection by it
-                conn.execute("CREATE INDEX IF NOT EXISTS collection_members_collection "
-                             "ON collection_members(collection)")
+            try:            # a ledger made before these indexes were in the schema reads by them
+                for sql in _LATER_INDEXES:
+                    conn.execute(sql)
             except sqlite3.Error as e:
                 conn.close()
                 raise LedgerUnreadable(f"{path}: {e}") from e
@@ -539,6 +571,7 @@ class Ledger:
         if path.exists():
             raise FileExistsError(str(path))
         path.parent.mkdir(parents=True, exist_ok=True)
+        make_private(path)
         conn = cls._connect(path, read_only=False)
         conn.executescript(_SCHEMA)
         conn.executemany("INSERT INTO meta VALUES(?,?)",
@@ -546,11 +579,14 @@ class Ledger:
         return cls(conn, path, False)
 
     @classmethod
-    def create(cls, engram_home: Path, owner_handle: str, *, now: int, channel: str = "terminal") -> "Ledger":
+    def create(cls, engram_home: Path, owner_handle: str, *, now: int, channel: str = "terminal",
+               path: Path | None = None) -> "Ledger":
+        """A new ledger owned by person:<owner_handle>, at `ledger_path(engram_home)` or at `path`, a file beside it
+        that the caller renames into place (`migrate`, Tardis's T8)."""
         owner = check_id("person", "person:" + owner_handle)
         home = "place:home/" + owner_handle
         check_id("place", home)
-        led = cls._blank(engram_home, str(uuid.uuid4()))
+        led = cls._blank(engram_home, str(uuid.uuid4()), path=path)
         led._append("register-person", owner, owner, channel, {
             "meta": {"owner": owner, "admins": owner},
             "insert": [
@@ -597,6 +633,9 @@ class Ledger:
                 f"SELECT {', '.join(_COLUMNS[t])} FROM {t} ORDER BY rowid")] for t in _TABLES
                 if t not in _PER_OBJECT and t not in _ON_DEMAND}
             meta = self.meta()
+            cut = self._tail_problems(top, meta, tables)
+            if cut:
+                raise LedgerUnreadable(f"{self.path}: {cut[0]}. {_CUT}")
             # the only log bodies a State reads: place names. Log times are read when a decision asks.
             names = {}
             for r in self.conn.execute(
@@ -649,6 +688,54 @@ class Ledger:
             prev, expect = row["digest"], expect + 1
         return None
 
+    def _head(self, top: int) -> str | None:
+        """`<seq>:<digest>` of the log's last row, the value `meta.head` holds; None for an empty log."""
+        row = self.conn.execute("SELECT seq, digest FROM ledger_log WHERE seq = ?", (top,)).fetchone()
+        return None if row is None else f"{row[0]}:{row[1]}"
+
+    def _max_seq(self, table: str, column: str, loaded: Mapping | None):
+        """The highest value of a seq column. A table the State read whole is read from `loaded`. Otherwise, with
+        `loaded` given (a State, which must stay cheap), a column an update sets is read through its partial index,
+        and one set only at insert from the table's newest row: rows are only ever inserted, in seq order, and
+        never deleted, so the newest carries the highest. With `loaded` None (`integrity`), every row is read."""
+        if loaded is not None and table in loaded:
+            return max((r[column] for r in loaded[table] if r[column] is not None), default=None)
+        if loaded is None or column in _SET_LATER:
+            sql = f"SELECT MAX({column}) FROM {table} WHERE {column} IS NOT NULL"
+        else:
+            sql = f"SELECT {column} FROM {table} ORDER BY rowid DESC LIMIT 1"
+        row = self.conn.execute(sql).fetchone()
+        return None if row is None else row[0]
+
+    def _tail_problems(self, top: int, meta: Mapping, loaded: Mapping | None = None) -> list[str]:
+        """P 5.6: the tables are the log's projection, so no seq column names a seq past the log's last row, and
+        `meta.head`, when the ledger keeps one, is that row. Each way this fails, in words; none for a whole
+        tail. Read inside the caller's read transaction."""
+        out = []
+        head = meta.get("head")
+        if head is not None and head != self._head(top):
+            out.append(f"meta.head names seq {head.split(':', 1)[0]} ({head}), but the log's last row is "
+                       f"{self._head(top) or 'none'}")
+        for table, columns in _SEQ_COLUMNS.items():
+            for column in columns:
+                v = self._max_seq(table, column, loaded)
+                if v is not None and v > top:
+                    out.append(f"{table}.{column} names seq {v}, past the log's last row {top}")
+        return out
+
+    def integrity(self) -> tuple[int, list[str]]:
+        """What `engram-permissions verify` reports, read in one transaction: (the log's last seq, each problem
+        in words). The hash chain from the first row, `meta.head`, and every seq column of every row."""
+        self.conn.execute("BEGIN")
+        try:
+            top = self.seq()
+            broken = self.verify()
+            problems = [] if broken is None else [f"the log's hash chain breaks at seq {broken}"]
+            problems += self._tail_problems(top, self.meta())
+        finally:
+            self.conn.execute("COMMIT")
+        return top, problems
+
     # ---------------------------------------------------------------- writing
     def _append(self, kind: str, ref: str, actor: str, channel: str, body: Mapping, *,
                 under_grant: str | None = None, proposal_id: str | None = None, at: int) -> int:
@@ -666,12 +753,20 @@ class Ledger:
             self._check_open_bounds(body, at)
             last = self.conn.execute("SELECT seq, digest FROM ledger_log ORDER BY seq DESC LIMIT 1").fetchone()
             seq, prev = (last["seq"] + 1, last["digest"]) if last else (1, ZERO)
+            head = self.conn.execute("SELECT value FROM meta WHERE key = 'head'").fetchone()
+            if head is not None and (last is None or head[0] != f"{last['seq']}:{last['digest']}"):
+                # a cut tail (P 5.6): a row written now would take the seq of the one the log lost
+                raise LedgerUnreadable(f"{self.path}: meta.head is {head[0]}, but the log's last row is "
+                                       f"{'none' if last is None else str(last['seq']) + ':' + last['digest']}. {_CUT}")
             entry = {"seq": seq, "at": at, "kind": kind, "ref": ref, "actor": actor, "channel": channel,
                      "under_grant": under_grant, "proposal_id": proposal_id, "body": text}
+            digest = _digest(prev, entry)
             self.conn.execute(
                 "INSERT INTO ledger_log VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (seq, at, kind, ref, actor, channel, under_grant, proposal_id, text, prev, _digest(prev, entry)))
+                (seq, at, kind, ref, actor, channel, under_grant, proposal_id, text, prev, digest))
             self._project(json.loads(text), seq, at)
+            self.conn.execute("INSERT INTO meta VALUES('head', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                              (f"{seq}:{digest}",))
             self.conn.execute("COMMIT")
         except BaseException as e:
             if self.conn.in_transaction:
@@ -746,6 +841,8 @@ class Ledger:
         for key in body:
             if key not in ("insert", "update", "meta", "name", "houses"):
                 raise _bad(f"unknown part of a log body: {key}")
+        if "head" in body.get("meta", {}):
+            raise _bad("meta.head follows the log and is never set by a log body")
         for item in body.get("insert", ()):
             table, row = item["table"], dict(item["row"])
             self._check_table(table)
@@ -962,6 +1059,10 @@ class Ledger:
         state = self.state()
         if copy_ref == source_ref:
             raise RuleError(rule, "a memory is not a copy of itself")
+        if parse_object_ref(copy_ref).instance_id not in state.stores:
+            # it would have no subject (P32), so its source's would never be read (Tardis's T6)
+            raise RuleError(rule, f"{copy_ref} names no registered store; the person registers it first "
+                                  "(engram-permissions store add)")
         if copy_ref in state.copies:
             raise RuleError(rule, f"{copy_ref} is already recorded as a copy")
         links, cur, seen = 1, source_ref, {copy_ref}
@@ -1064,7 +1165,9 @@ class Ledger:
                 "lacking_029": [h for h in found if _lacks_029(h)]}
 
     def place_rules(self, place: str, *, now: int) -> dict:
-        """P 9.4: the `PlaceRules` artifact for a place at the ledger's present seq. A home is not published."""
+        """P 9.4: the `PlaceRules` artifact for a place at the ledger's present seq. A home is not published. Its
+        records are those in force at `now`: not revoked and not past their `valid_until` (Tardis's T14); one that
+        starts later is published, so a reader sees a dated deny before it starts."""
         check_id("place", place)
         if place == "place:home" or place.startswith("place:home/"):
             raise RuleError("9.4 how a place publishes its rules",
@@ -1077,7 +1180,7 @@ class Ledger:
         last = self.conn.execute("SELECT digest FROM ledger_log WHERE seq=?", (seq,)).fetchone()
         records = []
         for r in sorted(state.records.values(), key=lambda r: (r.created_seq, r.id)):
-            if r.layer == place and r.revoked_seq is None:
+            if r.layer == place and r.revoked_seq is None and (r.valid_until is None or now < r.valid_until):
                 row = r._asdict()
                 row["selector"] = json.loads(selector_json(r.selector))
                 records.append(row)
@@ -1567,9 +1670,22 @@ def _local(rule):
     return authority
 
 
+def check_retire_person(state, person: str) -> None:
+    """Retiring the ledger owner, or its last unretired admin, would leave nobody who can write the ledger again:
+    every later act, a revoke or `gate off` included, would be refused (Tardis's T10). Refused, saying so."""
+    if person == state.meta.get("owner"):
+        raise RuleError(_ACT, f"{person} owns this ledger and is never retired: every act after it, a revoke or "
+                              "`gate off` included, would be refused, and nothing could write the ledger again")
+    admins = [p for p, row in state.persons.items() if row.is_admin and row.retired_seq is None]
+    if admins == [person]:
+        raise RuleError(_ACT, f"{person} is this ledger's last admin and is never retired: nobody could retire "
+                              "anyone after it")
+
+
 def _may_retire_person(state, actor, args):
     if actor.startswith("agent:") or not (actor == args["person"] or state.persons[actor].is_admin):
         raise RuleError(_ACT, "a person is retired by themself or by a ledger admin")
+    check_retire_person(state, args["person"])
 
 
 def _may_retire_place(state, actor, args):
@@ -2007,17 +2123,22 @@ def _make_gate(state, actor, args, auth, now, *, root: Path):
         raise RuleError(_GATE, f"the published house {root / PUBLISHED_HOUSE} does not exist, so there is nothing "
                                "to serve or share from")
     body: dict = {"meta": {"gate": mode}, "houses": []}
-    if mode != "off" or raised:
+    marking = mode != "off" or raised
+    if marking:
         body["meta"]["gate_raised"] = "1"
-        ledger_id = state.meta["ledger_id"]
-        for house in houses(root):
-            try:
-                carries = _house_id(house) == ledger_id
-            except sqlite3.Error:
-                carries = False
-            if not carries:
-                _mark_house(house, ledger_id)
-                body["houses"].append(house.relative_to(root).as_posix())
+    ledger_id = state.meta["ledger_id"]
+    for house in houses(root):
+        try:
+            mark = _house_id(house)
+        except sqlite3.Error:
+            if not marking:
+                continue        # never raised: a house whose mark cannot be read is left as it is
+            mark = None
+        # Under every mode a house marked `unreadable`, or with an earlier ledger's id, is marked with this one's,
+        # so `gate off` opens it (Serenity's section 2, item 6); an unmarked house is marked once the gate is raised.
+        if mark != ledger_id and (marking or mark is not None):
+            _mark_house(house, ledger_id)
+            body["houses"].append(house.relative_to(root).as_posix())
     return "gate:" + mode, body
 
 

@@ -49,6 +49,7 @@ MAX_COPY_CHAIN = 4
 OUTSIDE_HOME_DAYS = 366
 MAX_GRANT_LINKS = 3
 MAX_GRANT_DEPTH = 2
+ROUTE_STEPS = 1024              # membership routes one allow's terms make for one use; past it the use is refused
 MAX_GRANT_HOURS = 720
 MAX_REPLACES = 16
 PROPOSAL_DAYS = 7
@@ -728,7 +729,10 @@ def grant_chain(state: State, grant_id: str) -> tuple[Grant, ...]:
         if gid in seen:
             raise RuleError("7.2 grants", f"grant {gid} is its own ancestor")
         seen.add(gid)
-        out.append(_grant_of(row))
+        parsed = state._cache.get(("grant", gid))      # parsed once per State: the envelope's JSON is the cost
+        if parsed is None or parsed[0] is not row:
+            parsed = state._cache[("grant", gid)] = (row, _grant_of(row))
+        out.append(parsed[1])
         gid = row.parent_id
     return tuple(reversed(out))
 
@@ -1233,6 +1237,19 @@ def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = (), *,
     return tuple(sorted(out, key=_units))
 
 
+def _store_registered(state: State, ref) -> bool:
+    """Does the ref name a store with a `stores` row?"""
+    parsed = _parsed_or_none(ref) if isinstance(ref, str) else None
+    return parsed is not None and parsed.instance_id in state.stores
+
+
+def _decision_subjects(state: State, obj: str, at: int, names: Sequence[str] = ()) -> tuple[str, ...]:
+    """The subjects a decision reads of an object (P 6.3 item 1): `subjects_of`, except that an object whose store
+    has no `stores` row has none, whatever co-subject or `copies` rows name it, so it is refused with `NO_LAYER`
+    (P32; Tardis's T6). Its rows still count where it is the source of another copy."""
+    return subjects_of(state, obj, at, names) if _store_registered(state, obj) else ()
+
+
 @dataclass(frozen=True)
 class Layer:
     id: str
@@ -1336,7 +1353,7 @@ def _required_layers(state: State, use: Use, legacy: Sequence[LegacyLayer], outs
     held_places = [] if held is None else sorted(ancestors(state, held), key=_units)
     carried = qualifies(state, use, bulk)
     fixed = set(places) | set(held_places) | set(outside)
-    for s in (subjects_of(state, use.obj, use.at, use.names) if subjects is None else subjects):
+    for s in (_decision_subjects(state, use.obj, use.at, use.names) if subjects is None else subjects):
         layer_id = _subject_layer(state, s)
         add(layer_id, "co-subject" if carried and layer_id not in fixed else "consent")
     for p in places:
@@ -1633,11 +1650,104 @@ def _record_terms(state: State, record: Record, t: int) -> tuple[int | None, boo
     return state._memo(("record-terms", record.id, t), compute)
 
 
+class _Routes:
+    """One `_terms` call's membership routes (Serenity's section 2, item 2): every `_route` it makes reads the same
+    object, anchor, use, action, `valid_only` and t, so a route is kept by what else it reads, each grant's
+    `_grant_terms` is read once, and `steps` counts the routes made, at most ROUTE_STEPS."""
+    __slots__ = ("memo", "reach", "terms", "steps")
+
+    def __init__(self):
+        self.memo: dict = {}
+        self.reach: dict = {}
+        self.terms: dict = {}
+        self.steps = 0
+
+    def grant_terms(self, state: State, backing: str, t: int):
+        """`_grant_terms` of a `grant:<id>` backing at t, read once."""
+        hit = self.terms.get(backing)
+        if hit is None:
+            hit = self.terms[backing] = _grant_terms(state, backing[len("grant:"):], t)
+        return hit
+
+
+def _reach(state: State, obj: str, use_at: int, colls: tuple, routes: _Routes) -> frozenset:
+    """The membership rows of obj whose place in `assume` a `_route` over `colls` can read: those in `colls` and,
+    through each grant-backed one's chain, those in every collection its envelopes name, and so on. A route's
+    answer depends on `assume` only through these rows, so it is kept by `assume` met with them."""
+    hit = routes.reach.get(colls)
+    if hit is not None:
+        return hit
+    by_coll: dict = {}
+    for m in _members(state, obj)[0]:
+        by_coll.setdefault(m.collection, []).append(m)
+    seen, todo, out = set(colls), list(colls), set()
+    while todo:
+        for m in by_coll.get(todo.pop(), ()):
+            out.add(m)
+            if not m.backing.startswith("grant:"):
+                continue
+            for g in routes.grant_terms(state, m.backing, use_at)[0]:
+                if g.envelope.collections != STAR:
+                    for c in g.envelope.collections:
+                        if c not in seen:
+                            seen.add(c)
+                            todo.append(c)
+    got = routes.reach[colls] = frozenset(out)
+    return got
+
+
+def _route(state: State, colls: tuple, layer: str, anchor: int, use: Use, action: str, valid_only: bool,
+           assume: frozenset, routes: _Routes) -> tuple[tuple, bool, int | None]:
+    """(the membership rows of the route, whether every route is invalid at t, the route's end: the earliest
+    `expires` of a grant behind a row on it, None for no route) by which the object is in one of
+    `colls`. None when it is there by a person-backed row, or by a row `assume` already holds. Else each
+    grant-backed row that counts is a route, with, for each envelope of its grant chain that names collections,
+    the route there (assuming the row: Tardis's T1), and the best is the one that ends latest. With valid_only,
+    only memberships that count with their chains valid are read. Each route is made once per `_terms` call,
+    keyed by `colls`, `layer` and the rows of `assume` it can read (`_reach`); past ROUTE_STEPS routes the use is
+    refused (RuleError), never decided on a part of them."""
+    key = (colls, layer, assume & _reach(state, use.obj, use.at, colls, routes))
+    hit = routes.memo.get(key)
+    if hit is not None:
+        return hit
+    routes.steps += 1
+    if routes.steps > ROUTE_STEPS:
+        raise RuleError("6.5 decide", f"{use.obj} has more than {ROUTE_STEPS:,} membership routes for one allow "
+                                      "to read; the use is refused")
+    rows = [m for m in _members(state, use.obj)[0]
+            if m.collection in colls
+            and _membership_counts(state, m, layer, anchor, use, action, False, assume, valid_only)]
+    if not rows or any(m in assume or not m.backing.startswith("grant:") for m in rows):
+        routes.memo[key] = got = ((), False, None)
+        return got
+    best, best_end, all_invalid = None, None, True
+    for m in rows:
+        chain, ok = routes.grant_terms(state, m.backing, use.at)
+        route, bad = [m], not ok
+        ends = [g.expires for g in chain]          # the route's end: the earliest expiry of any grant on it
+        for g in chain:
+            if g.envelope.collections != STAR:
+                inner, inner_bad, inner_end = _route(state, g.envelope.collections, g.layer, anchor, use, action,
+                                                     valid_only, assume | {m}, routes)
+                route.extend(inner)
+                bad = bad or inner_bad
+                if inner_end is not None:
+                    ends.append(inner_end)
+        if chain:
+            end = min(ends)
+            if best_end is None or end > best_end:
+                best, best_end = route, end
+        all_invalid = all_invalid and bad
+    routes.memo[key] = got = ((tuple(best) if best is not None else ()), all_invalid, best_end)
+    return got
+
+
 def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool) -> tuple[int | None, bool]:
     """(effective end, grant chain invalid at t) of an allow for this use (P 6.5 step 5 and the codes). For each
     selector with a collections list (the record's, its replaces chain's and its grants' envelopes), the
-    membership route is: none when the object is in the collection by a person-backed row, else the best
-    grant-backed row, the one whose chain ends latest. With valid_only, only memberships that count with their
+    membership route is `_route`'s: none when the object is in the collection by a person-backed row, else the
+    best grant-backed row with the routes its grants' envelopes rely on, the one that ends latest. Every row on a
+    route is a membership the use matched through. With valid_only, only memberships that count with their
     chains valid are read. An object with no grant-backed row has no route (`_record_terms`)."""
     t = use.at
     if not _grant_rows(state, use.obj):
@@ -1655,25 +1765,13 @@ def _terms(state: State, record: Record, use: Use, action: str, valid_only: bool
         chain, ok = _grant_terms(state, record.backing[len("grant:"):], t)
         invalid = invalid or not ok
         selectors.extend((g.envelope, record.layer) for g in chain)
-    routes = []
+    routes, made = [], _Routes()
     for sel, layer in selectors:
         if sel.collections == STAR:
             continue
-        rows = [m for m in _members(state, use.obj)[0]
-                if m.collection in sel.collections
-                and _membership_counts(state, m, layer, record.anchor, use, action, False, frozenset(), valid_only)]
-        if not rows or any(not m.backing.startswith("grant:") for m in rows):
-            continue
-        best, best_end, all_invalid = None, None, True
-        for m in rows:
-            chain, ok = _grant_terms(state, m.backing[len("grant:"):], t)
-            if chain:
-                end = min(g.expires for g in chain)
-                if best_end is None or end > best_end:
-                    best, best_end = m, end
-            all_invalid = all_invalid and not ok
-        if best is not None:
-            routes.append(best)
+        route, all_invalid, _ = _route(state, sel.collections, layer, record.anchor, use, action, valid_only,
+                                       frozenset(), made)
+        routes.extend(route)
         invalid = invalid or all_invalid
     return effective_end(state, record, routes), invalid
 
@@ -1903,21 +2001,19 @@ def _until(state: State, t: int, end: int | None, layers: Sequence[str], read: I
     return min(out) if out else None
 
 
-def _horizon_layers(state: State, t: int, layers: tuple) -> tuple:
-    """What `_horizon` reads of the required layers alone: (the earliest term after t, or None; the collections
-    some selector of theirs names). It reads no object, so it is made once per (t, layers) for a State. The key is
-    the whole ordered layers tuple: the shared `seen_chain` walk depends on the layer order."""
+def _horizon_layers(state: State, t: int, layers: tuple) -> int | None:
+    """What `_horizon` reads of the required layers alone: the earliest term after t, or None. It reads no object,
+    so it is made once per (t, layers) for a State. The key is the whole ordered layers tuple: the shared
+    `seen_chain` walk depends on the layer order."""
     def compute():
         out: list[int] = []
         seen_chain: set = set()
         backings: list[str] = []
-        selectors: list[Selector] = []
 
         def note_record(r, *, allow_grants: bool) -> None:
             for v in (r.valid_from, r.valid_until):
                 if v is not None and v > t:
                     out.append(v)
-            selectors.append(r.selector)
             if allow_grants:
                 backings.append(r.backing)
 
@@ -1935,35 +2031,26 @@ def _horizon_layers(state: State, t: int, layers: tuple) -> tuple:
                     note_record(link, allow_grants=False)
                     cur, n = link.replaces, n + 1
         for b in set(backings):
-            if b.startswith("grant:"):
-                try:
-                    chain = grant_chain(state, b[len("grant:"):])
-                except RuleError:
-                    continue
-                out.extend(g.expires for g in chain if g.expires > t)
-                selectors.extend(g.envelope for g in chain)
-        named = set()
-        for sel in selectors:
-            if sel.collections != STAR:
-                named.update(sel.collections)
-        return (min(out) if out else None, frozenset(named))
-    return state._memo(("horizon-layers", t, layers), compute)
+            out.extend(e for e in _chain_expiries(state, b) if e > t)
+        return (min(out) if out else None,)              # a tuple, so a None result is kept too
+    return state._memo(("horizon-layers", t, layers), compute)[0]
 
 
 def _horizon(state: State, t: int, layers: Sequence[str], objs: Sequence[str]) -> int | None:
     """P 6.5 step 7: the earliest `valid_from` or `valid_until` after t of every record in a required ledger layer
-    that is not revoked and has not ended, or is in the `replaces` chain of one; and every `expires` after t of
-    a grant behind such a record, behind a grant in its chain, or behind a membership of a needed object in a
-    collection that one of their selectors names. Terms beyond the spec's reading are only ever earlier ones.
-    The layers' part is made once per (t, layers) for a State (`_horizon_layers`); only the memberships are read
-    per object."""
-    least, named = _horizon_layers(state, t, tuple(layers))
+    that is not revoked and has not ended, or is in the `replaces` chain of one; every `expires` after t of a
+    grant behind such a record or behind a grant in its chain; and every `expires` after t of a grant in the
+    chain behind every grant-backed membership of a needed object, whichever collection it is in, so a grant
+    that a grant's envelope relies on is read too (Tardis's T1). Terms beyond the spec's reading are only ever
+    earlier ones. The layers' part is made once per (t, layers) for a State (`_horizon_layers`); only the
+    memberships are read per object."""
+    least = _horizon_layers(state, t, tuple(layers))
     out: list[int] = [] if least is None else [least]
-    if named:
-        for obj in objs:
-            for m in _members(state, obj)[0]:
-                if m.collection in named:
-                    out.extend(e for e in _chain_expiries(state, m.backing) if e > t)
+    for obj in objs:
+        rows, grant = _members(state, obj)
+        if grant:
+            for m in rows:
+                out.extend(e for e in _chain_expiries(state, m.backing) if e > t)
     return min(out) if out else None
 
 
@@ -2053,14 +2140,17 @@ class _Run:
 
     # -- subjects, with one memo per ref
     def subjects(self, obj: str, names: Sequence[str] = ()) -> tuple:
+        """`_decision_subjects(state, obj, t, names)`, each object's read once."""
         t = self.proto.at
         if not names:
             got = self._subjects.get(obj)
             if got is None:
-                got = subjects_of(self.state, obj, t)
+                got = _decision_subjects(self.state, obj, t)
                 got = self._subjects[obj] = self._subject_ids.setdefault(got, got)
                 self._by_id.setdefault(id(got), got)
             return got
+        if not _store_registered(self.state, obj):
+            return ()
         out = set(self.subjects(obj))
         for name in names:
             out.update(self.subjects(name))
@@ -2069,6 +2159,8 @@ class _Run:
     def subjects_of_names(self, obj: str, names) -> tuple:
         """`subjects(obj, names)` for many names (a set): each distinct subjects tuple is kept once, so the union
         reads each name with one lookup and adds each distinct tuple once."""
+        if not _store_registered(self.state, obj):
+            return ()
         memo = self._subjects
         for n in names.difference(memo):
             self.subjects(n)
@@ -3233,11 +3325,22 @@ def _record_region(state: State, rec: Record) -> list[Box]:
                                  None), time=_interval(rec))
 
 
+def _stated_within(state: State, new: Record, old: Record) -> bool:
+    """Does the replacement state nothing wider than the record: each selector field within the old one's as
+    `selector_within` reads them, and its interval within the old one's (Tardis's T3)? Read from the fields alone,
+    so a record whose region is empty now (no agent in its audience yet, an empty collection) bounds it too."""
+    return (selector_within(state, new.selector, old.selector) and new.valid_from >= old.valid_from
+            and (old.valid_until is None or (new.valid_until is not None and new.valid_until <= old.valid_until)))
+
+
 def check_narrower(state: State, new: Record, old: Record) -> None:
-    """P 7.1: a replacement lies inside the record it replaces, in selector and in interval (box subset)."""
+    """P 7.1: a replacement lies inside the record it replaces, in selector and in interval: in its stated fields
+    (Tardis's T3) and in its region (box subset)."""
     rule = "7.1 narrowing"
     if new.layer != old.layer or new.effect != old.effect:
         raise RuleError(rule, "a replacement keeps its layer and its effect")
+    if not _stated_within(state, new, old):
+        raise RuleError(rule, "a replacement lies within the record it replaces, in selector and interval")
     try:
         outside = _list_minus(_record_region(state, new), _record_region(state, old))
     except TooComplex:
@@ -3294,17 +3397,42 @@ def _cover_probe(owner: str, obj: str, at: int) -> Use:
                purpose="share-cover", at=at)
 
 
+def _with_chain(state: State, r: Record) -> list | None:
+    """The record and every record in its `replaces` chain, as `decide` reads them (P 5.3 rule 4, P8); None when a
+    link is missing or the chain is longer than MAX_REPLACES."""
+    out, cur = [r], r.replaces
+    while cur is not None:
+        link = state.records.get(cur)
+        if link is None or len(out) > MAX_REPLACES:
+            return None
+        out.append(link)
+        cur = link.replaces
+    return out
+
+
+def _covers_audience(state: State, r: Record, audience: str, layer: str) -> bool:
+    """Does every record of r's chain reach `audience` (Tardis's T3)?"""
+    chain = _with_chain(state, r)
+    return chain is not None and all(any(_entry_covers(state, e, audience, layer) for e in x.selector.audience)
+                                     for x in chain)
+
+
 def _counts_for_share(state: State, r: Record, layer: str, at: int, probe: Use) -> bool:
     """Is `r` an effective allow in `layer` that covers the probe's object for `recall`, `read` and
-    `inject_context`? Everything `share_cover` asks of a record except its audience."""
-    sel = r.selector
-    if (r.layer != layer or r.effect != "allow" or _revoked(state, r) or not _in_interval(r, at)
-            or not all(_star_or_in(sel.actions, a) for a in ("recall", "read", "inject_context"))):
+    `inject_context`? Everything `share_cover` asks of a record except its audience. The record is read with its
+    `replaces` chain, as `decide` reads it (Tardis's T3): each link's interval, actions and object dimensions."""
+    if r.layer != layer or r.effect != "allow" or _revoked(state, r):
+        return False
+    chain = _with_chain(state, r)
+    if chain is None:
         return False
     try:
         if r.backing.startswith("grant:") and not grant_validity(state, r.backing[len("grant:"):], at)[0]:
             return False
-        return bool(_object_dims(state, sel, layer, r.anchor, probe, "recall", False, frozenset(), True))
+        return all(_in_interval(x, at) and all(_star_or_in(x.selector.actions, a)
+                                               for a in ("recall", "read", "inject_context"))
+                   and _object_dims(state, x.selector, x.layer, r.anchor, probe, "recall", False, frozenset(), True)
+                   for x in chain)
     except RuleError:
         return False
 
@@ -3333,7 +3461,7 @@ def relink_cover(state: State, *, old_id: str, owner: str, obj: str, audience: s
     found = [r for r in state.records.values()
              if r.id != old_id and _counts_for_share(state, r, layer, at, probe)
              and placement_audience(state, r) == audience
-             and all(any(_entry_covers(state, e, w, layer) for e in r.selector.audience) for w in wanted)]
+             and all(_covers_audience(state, r, w, layer) for w in wanted)]
     return min(found, key=lambda r: _share_rank(state, r)).id if found else None
 
 
@@ -3345,8 +3473,7 @@ def share_cover(state: State, *, owner: str, obj: str, audience: str, at: int) -
     layer = home_of(owner)
     probe = _cover_probe(owner, obj, at)
     found = [r for r in state.records.values()
-             if any(_entry_covers(state, e, audience, layer) for e in r.selector.audience)
-             and _counts_for_share(state, r, layer, at, probe)]
+             if _covers_audience(state, r, audience, layer) and _counts_for_share(state, r, layer, at, probe)]
     if not found:
         return None
     return min(found, key=lambda r: _share_rank(state, r)).id
@@ -3453,10 +3580,24 @@ def _object_meets(state: State, ref: str, sel: Selector) -> bool:
 
 
 def _meets_envelope(state: State, rec: Record, env: Selector) -> bool:
-    """P 7.2: the record's selector and the envelope intersect."""
+    """P 7.2: the record's selector and the envelope intersect. The record is read with its `replaces` chain, as
+    `decide` reads it (Tardis's T3): a replacement that states more than the records it replaces meets an
+    envelope only where they do too. Intervals aside."""
+    deny = rec.effect == "deny"
     try:
-        return bool(_list_and(_record_region(state, rec._replace(valid_until=None, valid_from=0)),
-                              _only(_selector_boxes(state, env, rec.layer, rec.anchor, False, frozenset(), None))))
+        region = _only(_selector_boxes(state, rec.selector, rec.layer, rec.anchor, deny, frozenset(), None),
+                       time=TimeSet.of([(0, None)]))
+        link, n = rec.replaces, 0
+        while link is not None and region:
+            n += 1
+            r = state.records.get(link)
+            if r is None or n > MAX_REPLACES:
+                return False
+            region = _list_and(region, _only(_selector_boxes(state, r.selector, r.layer, rec.anchor, deny,
+                                                             frozenset(), None)))
+            link = r.replaces
+        return bool(_list_and(region, _only(_selector_boxes(state, env, rec.layer, rec.anchor, False, frozenset(),
+                                                            None))))
     except TooComplex:
         return False
 

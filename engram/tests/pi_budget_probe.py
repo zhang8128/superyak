@@ -3,7 +3,7 @@
     python -m tests.pi_budget_probe OP HOME [--placements N] [--trails N] [--universe N] [--tail N] ...
 
 Prints one JSON line: the operation, its seconds and the process's peak resident memory, `VmHWM` in
-/proc/self/status, in kB, with `VmSwap` beside it: VmHWM counts only resident pages, so a run whose pages went to
+/proc/self/status, in kB (off Linux, getrusage's `ru_maxrss`), with `VmSwap` beside it (None off Linux): VmHWM counts only resident pages, so a run whose pages went to
 swap could understate its peak (the final review's M10). It imports nothing from pytest, so the peak is the code
 under test and its data.
 The operations: state, eligible, bulk, perform-allow, perform-collect, rebuild, check, uses-owner, uses-place,
@@ -37,14 +37,23 @@ def _status_kb(key: str) -> int:
 
 
 def peak_kb() -> int:
-    return _status_kb("VmHWM")
+    """The process's peak resident memory in kB: `VmHWM` on Linux. Elsewhere, where there is no /proc, the
+    `ru_maxrss` of getrusage, which macOS gives in bytes and others in kB, so the probes run in the default suite
+    on the Mac too (Serenity's section 2, item 8). U24's budgets run only on the Pi."""
+    if sys.platform.startswith("linux"):
+        return _status_kb("VmHWM")
+    import resource
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return rss // 1024 if sys.platform == "darwin" else rss
 
 
-def swap_kb() -> int:
+def swap_kb() -> int | None:
     """The process's memory in swap, in kB, read at exit, once the operation is done, not at the moment of the
     peak: what was in swap then may have come back in or gone further out since. So `peak_kb + swap_kb`, which
     the gated peak check counts, is a proxy for the most the run held, not a measure of it (the re-review's
-    Minor 5)."""
+    Minor 5). None off Linux, which gives no per-process figure."""
+    if not sys.platform.startswith("linux"):
+        return None
     return _status_kb("VmSwap")
 
 
@@ -136,7 +145,7 @@ def op_uses_place(home, a):
 def op_fold(home, a):
     from permission_uses import Uses
     uses = Uses.open(Path(home))
-    n = uses.fold(now=int(time.time()))
+    n = uses.fold(now=int(time.time()), ledger_id="reference-ledger")     # the receipts' (permissions_budget_ledger)
     uses.close()
     return {"folded": n}
 
@@ -228,10 +237,9 @@ def op_daemon(home, a):
 
 
 def op_migrate(home, a):
-    import getpass
     import permission_cli
     os.environ["ENGRAM_HOME"] = str(home)
-    getpass.getuser = lambda: "andy"
+    permission_cli._login_name = lambda: "andy"
     permission_cli.confirm = lambda words, change: True
     out = io.StringIO()
     with contextlib.redirect_stdout(out):

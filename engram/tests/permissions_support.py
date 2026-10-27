@@ -723,7 +723,7 @@ def legacy_json(legacy, u: Use) -> list:
 REQUIRED_FEATURES = frozenset({
     "op:share", "op:deny", "op:withdraw", "op:shorten", "op:narrow", "op:collect", "op:uncollect",
     "member:lane", "member:collection", "member:group", "member:agent_place", "member:place_parent",
-    "joint", "root", "pending", "copy-chain-4", "bulk"})
+    "joint", "root", "pending", "copy-chain-4", "bulk", "member:nested-grant"})
 
 
 def features(w: World) -> set:
@@ -746,10 +746,17 @@ def features(w: World) -> set:
             elif r["valid_until"] is not None and (old["valid_until"] is None
                                                    or r["valid_until"] < old["valid_until"]):
                 out.add("op:shorten")
+    envelopes = {g["id"]: g["envelope"] for g in rows.get("permission_grants", [])}
+    by_grant = {(m["object"], m["collection"]) for m in rows.get("collection_members", [])
+                if str(m["backing"]).startswith("grant:")}
     for m in rows.get("collection_members", []):
         out.add("member:collection")
         if str(m["backing"]).startswith("grant:"):
             out.add("op:collect")
+            env = envelopes.get(m["backing"][len("grant:"):])
+            named = parse_selector(env).collections if isinstance(env, str) and env != "{}" else "*"
+            if named != "*" and any((m["object"], c) in by_grant for c in named):
+                out.add("member:nested-grant")      # its grant's envelope relies on another grant (Tardis T1)
         if m.get("removed_seq") is not None and str(m.get("removed_by") or "").startswith("agent:"):
             out.add("op:uncollect")
     notes = rows.get("lane_notes", [])
@@ -875,10 +882,12 @@ def _grant_chain(w, rng, c, issuer, layer, holders):
     return ids, docs, opss
 
 
-def random_world(rng, *, places=12) -> World:
+def random_world(rng, *, places=12, nested=True) -> World:
     """A World at a random point of its life. It reaches every grant op, every membership kind, joint places and
-    roots, pending lane notes, kept copies with chains of 4 links, and bulk sets (P 18); its records are written
-    without checks, as World writes everything. The shape of the draws is in `w.cfg`."""
+    roots, pending lane notes, kept copies with chains of 4 links, bulk sets (P 18), and with `nested` a
+    grant-backed membership whose grant's envelope relies on another (Tardis's T1); its records are written
+    without checks, as World writes everything. The shape of the draws is in `w.cfg`. `nested=False` draws the
+    worlds of a083a96, before the nesting was added."""
     w = World()
     c = SimpleNamespace()
     w.cfg = c
@@ -1049,6 +1058,25 @@ def random_world(rng, *, places=12) -> World:
                     w.tick(rng.randint(1, 3600))
                     w.revoke(victim)
                     w._find("records", id=victim)["revoked_by"] = holder
+    # a membership whose grant's envelope relies on a second grant-backed membership (Tardis's T1): an object is
+    # in medical-history under an outer grant whose envelope names `other`, and in `other` under an inner grant
+    # that ends first, while the uses are drawn; an allow in Andy's home names medical-history
+    if nested and rng.random() < 0.7:
+        person_backed = {(m["object"], m["collection"]) for m in w.rows["collection_members"]
+                         if m["backing"] == "person"}
+        free = [m for m in mems[:5] if not any((m, cid) in person_backed for cid in _COLLECTIONS[:2])]
+        ref = rng.choice(free or mems[:5])
+        inner_ends = T("2026-11-10") + rng.randint(0, 50) * DAY + rng.randint(0, DAY - 1)
+        outer = w.grant("person:andy", "agent:a0", andy, ops=["collect"], expires=inner_ends + rng.randint(1, 60) * DAY,
+                        envelope=selector_json(parse_selector(_doc_of(["commons"], kinds=["memory"],
+                                                                      collections=[_COLLECTIONS[1]]))))
+        inner = w.grant("person:andy", "agent:a0", andy, ops=["collect"], expires=inner_ends,
+                        envelope=selector_json(parse_selector(_doc_of(["commons"]))))
+        w.tick(rng.randint(1, 3600))
+        w.collect(_COLLECTIONS[0], [ref], backing=f"grant:{outer}")
+        w.collect(_COLLECTIONS[1], [ref], backing=f"grant:{inner}")
+        put(andy, _doc_of(["commons"], kinds=["memory"], collections=[_COLLECTIONS[0]]), valid_from=T("2026-10-01"),
+            valid_until=None)
     # November and later: the changes nobody checked
     w.now = max(w.now, T("2026-10-24"))
     c.t0 = max(r["anchor"] for r in w.rows["records"])      # no use is drawn before every record exists
@@ -1610,8 +1638,10 @@ def e1_through_use_9(tmp_path):
 
 
 def only_proposal_rows_changed(before: dict, after: dict) -> bool:
-    """Of two `Ledger.tables()`, only the log and the proposals differ."""
-    return all(before[t] == after[t] for t in before if t not in ("ledger_log", "proposals"))
+    """Of two `Ledger.tables()`, only the log, the head that follows it in `meta`, and the proposals differ."""
+    def kept(t, rows):
+        return [r for r in rows if r.get("key") != "head"] if t == "meta" else rows
+    return all(kept(t, before[t]) == kept(t, after[t]) for t in before if t not in ("ledger_log", "proposals"))
 
 
 R26_SAMPLE_ACTS = [
@@ -2578,36 +2608,99 @@ CLI_M1_CREATED_AT = T("2026-10-01")
 
 
 class FakeTty:
-    """A FIFO standing in for /dev/tty. The fixture holds it open both ways, so a line written here waits in the
-    pipe until `confirm` reads it, one byte at a time, and a confirm with no answer waits TTY_WAIT seconds, not
-    forever. `_code` is fixed so a test can answer the printed code."""
+    """A pseudo-terminal standing in for /dev/tty: `path` is its slave end, which the fixture holds open, so a line
+    written here waits in its input until `confirm` reads it, one byte at a time, and a confirm with no answer waits
+    TTY_WAIT seconds, not forever. What `confirm` shows there is read from the master end as it comes (`shown`).
+    With `mirror` (the default) it is also written to the test's stdout when `confirm` starts to read, so a
+    command's whole transcript reads in order through capsys; a test of where the words go sets `mirror` False.
+    Echo and output processing are off. `_code` is fixed so a test can answer the printed code."""
     code = "abc234"
 
-    def __init__(self, path):
+    def __init__(self, path=None):
         import os
-        os.mkfifo(path)
-        self.path = path
-        self.fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+        import termios
+        import threading
+        self.master, self.slave = os.openpty()
+        attrs = termios.tcgetattr(self.slave)
+        attrs[1] &= ~termios.OPOST
+        attrs[3] &= ~termios.ECHO
+        termios.tcsetattr(self.slave, termios.TCSANOW, attrs)
+        self.path = os.ttyname(self.slave)
+        self.mirror = True
+        self._shown, self._mirrored, self._lock = bytearray(), 0, threading.Lock()
+        self._last = 0.0
+        self._reader = threading.Thread(target=self._drain, daemon=True)
+        self._reader.start()
+
+    def _drain(self):
+        import os
+        import time
+        while True:
+            try:
+                chunk = os.read(self.master, 65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            with self._lock:
+                self._shown += chunk
+                self._last = time.monotonic()
+
+    def settle(self, quiet=0.05):
+        """Wait until nothing new has come for `quiet` seconds; then, with `mirror`, write what came since the last
+        mirror to sys.stdout."""
+        import sys
+        import time
+        while True:
+            with self._lock:
+                idle = time.monotonic() - self._last
+            if idle >= quiet:
+                break
+            time.sleep(quiet)
+        time.sleep(quiet)
+        with self._lock:
+            new = bytes(self._shown[self._mirrored:])
+            self._mirrored = len(self._shown)
+        if self.mirror and new:
+            sys.stdout.write(new.decode("utf-8", "replace"))
+            sys.stdout.flush()
+
+    def shown(self) -> str:
+        """Everything `confirm` has shown on this terminal so far."""
+        self.settle()
+        with self._lock:
+            return self._shown.decode("utf-8", "replace")
 
     def answer(self, text):
         import os
-        os.write(self.fd, (text + "\n").encode())
+        os.write(self.master, (text + "\n").encode())
 
     def answer_the_printed_code(self):
         self.answer(self.code)
 
     def close(self):
         import os
-        os.close(self.fd)
+        for fd in (self.slave, self.master):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self._reader.join(timeout=5)
 
 
 @_pytest.fixture
-def fake_tty(tmp_path_factory, monkeypatch):
+def fake_tty(monkeypatch):
     import permission_cli
-    tty = FakeTty(tmp_path_factory.mktemp("tty") / "tty")
+    tty = FakeTty()
+    real_read = permission_cli._read_line
+
+    def read_line(fd):
+        tty.settle()             # what confirm showed reaches the transcript before the CLI goes on
+        return real_read(fd)
     monkeypatch.setattr(permission_cli, "TTY", str(tty.path))
     monkeypatch.setattr(permission_cli, "TTY_WAIT", 5)
     monkeypatch.setattr(permission_cli, "_code", lambda: tty.code)
+    monkeypatch.setattr(permission_cli, "_read_line", read_line)
     yield tty
     tty.close()
 
@@ -2615,10 +2708,9 @@ def fake_tty(tmp_path_factory, monkeypatch):
 @_pytest.fixture
 def cli_home(tmp_path, monkeypatch, fake_tty):
     """ENGRAM_HOME at tmp_path, the Unix login `andy`, and a ledger made by `init`. Returns the home."""
-    import getpass
     import permission_cli
     monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
-    monkeypatch.setattr(getpass, "getuser", lambda: "andy")
+    monkeypatch.setattr(permission_cli, "_login_name", lambda: "andy")
     fake_tty.answer_the_printed_code()
     assert permission_cli.main(["init"]) == 0
     return tmp_path

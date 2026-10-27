@@ -219,7 +219,7 @@ def test_u27_the_daemon_and_a_server_writing_at_once_keep_one_chain(tmp_path):
 
 def test_u27_after_the_400_day_fold_the_chain_verifies_from_its_anchor(tmp_path):
     uses = rows_spanning_days(tmp_path, days=420)
-    folded = uses.fold(now=T("2026-11-01") + 420 * DAY)
+    folded = uses.fold(now=T("2026-11-01") + 420 * DAY, ledger_id=LEDGER)
     assert folded > 0 and uses.verify() is None and monthly_counts(uses)
     left = rows(uses)
     assert len(left) + folded == 420 and left[0]["seq"] == folded + 1
@@ -238,7 +238,7 @@ def test_fold_refuses_a_span_whose_chain_does_not_verify(tmp_path):
     uses = rows_spanning_days(tmp_path, days=420)
     flip_one_byte(uses_path(tmp_path), table="uses", seq=5, column="cited")
     with pytest.raises(ValueError, match="5"):
-        uses.fold(now=T("2026-11-01") + 420 * DAY)
+        uses.fold(now=T("2026-11-01") + 420 * DAY, ledger_id=LEDGER)
     assert len(rows(uses)) == 420
 
 
@@ -323,7 +323,7 @@ def test_16b_fold_counts_a_receipt_with_no_subject_rows_under_none(tmp_path):
     for d in range(420):
         subjects = [] if d % 3 == 0 else [("person:andy", M1)]
         uses.append(recall_row(returned=[M1], filtered=0, at=start + d * DAY), subjects=subjects)
-    folded = uses.fold(now=start + 420 * DAY)
+    folded = uses.fold(now=start + 420 * DAY, ledger_id=LEDGER)
     assert folded > 0
     assert sum(m["n"] for m in monthly_counts(uses)) == folded
     none_rows = [m for m in monthly_counts(uses) if m["subject"] == "(none)"]
@@ -333,7 +333,7 @@ def test_16b_fold_counts_a_receipt_with_no_subject_rows_under_none(tmp_path):
 
 def test_16b_the_chain_with_subjects_verifies_from_the_anchor_after_a_fold(tmp_path):
     uses = rows_spanning_days(tmp_path, days=420)
-    folded = uses.fold(now=T("2026-11-01") + 420 * DAY)
+    folded = uses.fold(now=T("2026-11-01") + 420 * DAY, ledger_id=LEDGER)
     assert uses.verify() is None
     uses.append(recall_row(returned=[M1], filtered=0, at=T("2027-12-30")), subjects=[("person:andy", M1)])
     assert uses.verify() is None
