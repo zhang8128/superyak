@@ -97,3 +97,17 @@ def test_a_refusal_at_approval_is_a_denial_naming_the_term(tmp_path):
     denied = [r["record"] for r in receipts(st) if r["record"]["event"] == "denied"][0]
     assert denied["detail"] == {"term": "end"} and row(st, st.request_id)["status"] == "deleted"
     assert not staging(st).exists() and not (st.root / st.imprint_id).exists()
+
+
+@pytest.mark.parametrize("damage", ["changed", "missing"])
+def test_a_request_that_cannot_be_read_back_is_not_approved(tmp_path, damage):    # final review M3
+    st = received(tmp_path)
+    staged = staging(st) / "request.json"
+    if damage == "changed":
+        staged.write_bytes(staged.read_bytes().replace(b'"days":90', b'"days":91'))
+    else:
+        staged.unlink()
+    with pytest.raises(Problem, match="cannot be read back"):
+        st.store.station_decide("andy", st.request_id[:4], True, imprints_root=st.root)
+    assert row(st, st.request_id)["status"] == "received" and not (st.root / st.imprint_id).exists()
+    assert "approved" not in [r["record"]["event"] for r in receipts(st)]

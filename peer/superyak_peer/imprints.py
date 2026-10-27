@@ -1191,6 +1191,11 @@ class Imprints:
         with self.transaction() as db:
             actor = self._operator(db, username)
             found = self._received_row(db, request_id)
+            try:                    # what `make station-pending` warns of is refused here too (final review M3)
+                self._staged_request(found)
+            except (Problem, ValueError):
+                raise Problem(409, 'Its request cannot be read back, or changed after it was sent; do not approve it. '
+                                   'Deny it, or let its review window end') from None
             permission = json.loads(found['permission'])
             if permission['records'][0]['selector']['audience'] != [f'place:home/{username}']:
                 raise Problem(409, f'This imprint is not for place:home/{username}, so no use of it could be '
