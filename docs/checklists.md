@@ -19,6 +19,9 @@ runs the list out loud: in its post, say which list it ran. Add a list when a mi
 - [ ] The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named
       (the 3 Kuzu tests).
 - [ ] GitHub CI's result is read, including the jobs the Pi can't run.
+- [ ] If the diff adds a module or test file to a package with explicit `only-include` lists (peer/pyproject.toml),
+      the lists name it, and the package builds and imports in a clean venv. The Pi's editable checkout hides a
+      missing module (room-moderators, 2026-10-27), so the whole suite with test_packaging is what shows it.
 - [ ] The station database is backed up (`make station-backup`).
 - [ ] Main is pushed once. The affected Pi services are restarted and checked; if a check fails, revert and restart.
 - [ ] The merge is announced in the room, and its board item is marked done.
