@@ -231,3 +231,55 @@ def test_item3_a_refused_genome_keep_writes_no_receipt_and_the_list_shows_no_kee
     assert receipt_rows(world.root, "imprint") == [] and _genome_writes() == 0     # no keep, so no receipt of one
     assert "episode_id" in server.remember(content=M1_TEXT)                        # the keep that happens has one
     assert [(r["action"], r["allowed"]) for r in receipt_rows(world.root, "imprint")] == [("imprint", 1)]
+
+
+# ---------------------------------------------------------------- item 4 (M7): each frame reads the house alone
+
+def _watch_house_reads(monkeypatch, barrier=None):
+    """The Storage each frame reads the house through, as `_house_lacks_029` is handed it."""
+    import lighthouse_daemon
+    seen, real = [], lighthouse_daemon._house_lacks_029
+
+    def watched(storage):
+        seen.append(storage)
+        if barrier is not None:
+            barrier.wait()
+        return real(storage)
+    monkeypatch.setattr(lighthouse_daemon, "_house_lacks_029", watched)
+    return seen
+
+
+def test_item4_two_frames_at_once_read_the_house_through_connections_of_their_own(tmp_path, monkeypatch):
+    import threading
+    from tests.permissions_support import cached_daemon
+    rig, _, house = cached_daemon(tmp_path)
+    seen = _watch_house_reads(monkeypatch, threading.Barrier(2, timeout=10))
+    replies = []
+    threads = [threading.Thread(target=lambda: replies.append(rig.recall())) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert len(seen) == 2 and seen[0] is not seen[1] and seen[0].conn is not seen[1].conn
+    assert len(replies) == 2 and all("candidates" in r for r in replies)
+
+
+def test_item4_frames_one_after_another_reuse_the_publishers_connection(tmp_path, monkeypatch):
+    from tests.permissions_support import M1_ID, cached_daemon
+    rig, _, house = cached_daemon(tmp_path)
+    seen = _watch_house_reads(monkeypatch)
+    assert M1_ID in rig.recall_ids() and M1_ID in rig.recall_ids()
+    assert len(seen) == 2 and seen[0] is seen[1] is house.storage
+
+
+def test_item4_a_connection_given_back_after_a_reset_is_closed(tmp_path):
+    from tests.permissions_support import make_placed_house
+    house = make_placed_house(tmp_path)
+    assert house.open()
+    first, second = house.checkout(), house.checkout()
+    assert first is house.storage and second is not first
+    house.checkin(second)
+    house.reset()
+    assert house.storage is None and second._conn_closed and not first._conn_closed
+    house.checkin(first)
+    assert first._conn_closed and house.checkout() is None
