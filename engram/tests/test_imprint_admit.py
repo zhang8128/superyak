@@ -210,3 +210,21 @@ def test_a_withdrawal_after_calibration_stops_admission_before_the_count(tmp_pat
             (root / "tombstones" / f"{iid_}.json").write_text("{}")
     assert admit(iid_, root=root, verify_cmd=OK, derive=recording_stub(seen), record_use=withdrawn_after_calibration) == 4
     assert seen == [] and not (root / f"{iid_}.state" / "result.json").exists()
+
+
+def test_an_unknown_skip_kind_fails_before_anything_is_marked_admitted(tmp_path):
+    def odd_kind(*args, **kwargs):
+        report = every_set_over_its_bound(*args, **kwargs)
+        report["analyses"]["skipped_dense_sets"].append({"set": "mystery:abc", "n": 5, "bound": 1})
+        return report
+
+    root, iid_ = handed_off(tmp_path, built_package(tmp_path, store=small_dense_store), route=False, valid_until=FAR)
+    try:
+        code = admit(iid_, root=root, verify_cmd=OK, calibrate_fn=odd_kind, calibration_now=CAL_NOW)
+    except ValueError:
+        code = None
+    assert code != 0
+    path = root / iid_ / "imprint.json"
+    assert not path.exists() or json.loads(path.read_text()).get("status") != "admitted"
+    assert not (root / f"{iid_}.state" / "result.json").exists() or \
+        json.loads((root / f"{iid_}.state" / "result.json").read_text()).get("status") != "admitted"

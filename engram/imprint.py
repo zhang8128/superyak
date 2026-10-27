@@ -1279,6 +1279,7 @@ def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callab
             subjects = conn.execute("SELECT count(*) FROM imprint_subjects").fetchone()[0]
         finally:
             conn.close()
+        skipped = receipt_skips(report.get("analyses", {}).get("skipped_dense_sets", []))   # before anything says admitted
         _write_state(root, imprint_id, "imprint.json",
                      {"status": "admitted", "manifest": manifest, "permission": permission,
                       "admitted_at": int(now()), "report_sha256": report_sha, "engram_commit": engram_commit_of(),
@@ -1288,7 +1289,7 @@ def admit(imprint_id: str, *, root: Path, verify_cmd: Sequence[str], now: Callab
         folder.chmod(0o555)
         _write_state(root, imprint_id, "result.json",
                      {"status": "admitted", "checks": 17, "report_sha256": report_sha,
-                      "skipped": receipt_skips(report.get("analyses", {}).get("skipped_dense_sets", [])),
+                      "skipped": skipped,
                       "roads_and_trails": n, "sessions_too_large": k, "ended_at": int(now())}, now=now)
         return 0
     except _Stopped as stop:
