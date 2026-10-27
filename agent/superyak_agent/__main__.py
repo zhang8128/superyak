@@ -52,6 +52,13 @@ def build_parser():
         if name == 'send':
             sub.add_argument('--plan', required=True, help='The first characters of a built plan')
             sub.add_argument('--wait', type=int, default=540)
+    for name, help_ in (('status', 'What the station says of your imprints'), ('withdraw', 'Ask the station to delete an imprint now'),
+                        ('shorten', 'Ask the station to end an imprint sooner')):
+        sub = imprint_commands.add_parser(name, help=help_)
+        sub.add_argument('--home', type=Path, default=HOME, help="The ship's home (default ~/.superyak)")
+        sub.add_argument('--id', required=name != 'status', help='The first 4 or more characters of the imprint id')
+        if name == 'shorten':
+            sub.add_argument('--days', type=int, required=True, help='Days from now')
     worm = commands.add_parser('wormhole', help='Relay bridged rooms and the Station.aDNA vault (runs as a service)')
     worm.add_argument('--config', type=Path, required=True)
     worm.add_argument('--state', type=Path, required=True)
@@ -126,7 +133,7 @@ def _dock_project(args, fields):
 
 
 def _imprint(args):
-    """`imprint context|send`: prints `STATUS: <value>` last; a send still waiting for the owner exits 3, as dock does."""
+    """`imprint context|send|status|withdraw|shorten`: prints `STATUS: <value>` last; a send still waiting for the owner exits 3, as dock does."""
     from .imprint import Imprint, ImprintRefused
     from .station import StationError, client_for, load_config
     imprint = Imprint(args.home, client_for(load_config(args.home / 'station.json'), timeout=120))
@@ -134,6 +141,13 @@ def _imprint(args):
         if args.imprint_command == 'context':
             found = imprint.context()
             print(f'{len(found.get("imprints") or [])} imprint(s) for {found.get("ship")}; saved in {args.home}/imprints/context.json.')
+            return 0
+        if args.imprint_command == 'status':
+            imprint.status(args.id)
+            return 0
+        if args.imprint_command in ('withdraw', 'shorten'):
+            done = imprint.withdraw(args.id) if args.imprint_command == 'withdraw' else imprint.shorten(args.id, args.days)
+            print(f'STATUS: {done.get("status", "shortened")}')
             return 0
         status = imprint.send(args.plan, wait=args.wait)
     except ImprintRefused as error:

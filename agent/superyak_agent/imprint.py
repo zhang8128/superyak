@@ -2,10 +2,15 @@
 
 Nothing of the package leaves before the owner's yes: `send` posts only `request.json`, then waits for the owner to
 confirm in the browser (the agent never types the password or ticks the check). After the yes it sends the manifest,
-then each part the station does not hold, one at a time, then `complete`. Standard library only."""
+then each part the station does not hold, one at a time, then `complete`. Standard library only.
+
+`status`, `withdraw` and `shorten` (I 12, 13) follow: the receipts are saved and their chain checked here; a signature
+is the station's, checked by the peer's `verify-imprint` (Task 44), not by this agent."""
 import fcntl
+import hashlib
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .station import StationError, read_json, write_private
@@ -141,3 +146,116 @@ class Imprint:
     def _drop_local_copy(self, imprint_id):
         """The package goes once the imprint is over; the manifest, plan, owner lists and receipts stay (D24)."""
         (self.root / imprint_id / 'imprint.db').unlink(missing_ok=True)
+
+    # status, withdraw and shorten (I 12, 13)
+
+    def _resolve(self, wanted):
+        """The imprint id for a full id or its first 4 or more characters, among the imprints this machine has sent."""
+        prefix = (wanted or '').strip().lower()
+        sent = sorted(p.parent.name for p in self.root.glob('*/send.json'))
+        found = [i for i in sent if len(prefix) >= 4 and i.startswith(prefix)]
+        if len(found) != 1:
+            raise ImprintRefused(f'There is no sent imprint {prefix or "(none named)"}.' if not found else
+                                 f'More than one imprint starts with {prefix}; give more of its characters.')
+        return found[0]
+
+    def _request_id(self, imprint_id):
+        saved = read_json(self.root / imprint_id / 'send.json') or {}
+        if not isinstance(saved.get('request_id'), str):
+            raise ImprintRefused(f'Imprint {imprint_id[:4]} has not been sent.')
+        return saved['request_id']
+
+    def status(self, imprint_id=None):
+        """With no id, one line per imprint: short id, status, end date and last event. With one, its receipts are saved
+        under `imprints/<id>/receipts/`, the chain is checked, and the reports and what the station keeps are printed."""
+        if imprint_id is None:
+            return self._list()
+        imprint_id = self._resolve(imprint_id)
+        found = self.client.request('GET', f'/api/imprints/{self._request_id(imprint_id)}')
+        receipts = sorted(found.get('receipts') or [], key=lambda r: r['seq'])
+        folder = self.root / imprint_id / 'receipts'
+        for receipt in receipts:
+            write_private(folder / f'{receipt["seq"]}-{imprint_id}.json', receipt)
+        chain = self._chain_of(found, receipts)
+        state = found.get('status')
+        self.out(f'Imprint {imprint_id[:4]}: {state}. Ends {_date(_end_of(found, receipts))}. Receipts: {len(receipts)}, chain {chain}.')
+        for receipt in receipts:
+            line = f'  {receipt["seq"]}. {receipt["record"].get("event")} at {_date(receipt["record"].get("at"))}'
+            self.out(line + ('' if receipt.get('signature') else ' (not yet signed)'))
+        if found.get('calibration_report') is not None:
+            self.out('Calibration report: ' + json.dumps(found['calibration_report'], sort_keys=True))
+        for use in found.get('use_reports') or []:
+            self.out(f'Use {use.get("use_id")}: ' + json.dumps(use.get('report'), sort_keys=True))
+        keeps = found.get('keeps')
+        if keeps:
+            self.out(keeps.get('text', ''))
+            for what, day in (keeps.get('removed_on') or {}).items():
+                self.out(f'  {what}: removed on {day}')
+        if state in FINAL:
+            self._drop_local_copy(imprint_id)
+        return {'imprint_id': imprint_id, 'status': state, 'chain': chain, 'receipts': len(receipts),
+                'unsigned': [r['seq'] for r in receipts if not r.get('signature')]}
+
+    def _list(self):
+        rows = []
+        for path in sorted(self.root.glob('*/send.json')):
+            imprint_id = path.parent.name
+            try:
+                found = self.client.request('GET', f'/api/imprints/{self._request_id(imprint_id)}')
+            except (StationError, ImprintRefused) as error:
+                self.out(f'{imprint_id[:4]}  (not read: {error})')
+                continue
+            receipts = sorted(found.get('receipts') or [], key=lambda r: r['seq'])
+            last = receipts[-1]['record'].get('event') if receipts else 'none'
+            row = {'imprint_id': imprint_id, 'status': found.get('status'), 'ends': _date(_end_of(found, receipts)), 'last_event': last}
+            self.out(f'{imprint_id[:4]}  {row["status"]}  ends {row["ends"]}  last event {last}')
+            rows.append(row)
+            if row['status'] in FINAL:
+                self._drop_local_copy(imprint_id)
+        return {'imprints': rows}
+
+    @staticmethod
+    def _chain_of(found, receipts):
+        """Each receipt's `previous` is the SHA-256 of the one before it (the first, of the permission record)."""
+        if not receipts:
+            return 'empty'
+        permission = (found.get('permission') or {}).get('record')
+        previous = permission
+        for n, receipt in enumerate(receipts):
+            if previous is not None and receipt['record'].get('previous') != hashlib.sha256(_canonical(previous)).hexdigest():
+                return f'broken after receipt {receipts[n - 1]["seq"]}' if n else 'broken at the first receipt'
+            previous = receipt['record']
+        return 'intact'
+
+    def withdraw(self, imprint_id):
+        imprint_id = self._resolve(imprint_id)
+        return self._act(imprint_id, 'withdraw', {})
+
+    def shorten(self, imprint_id, days):
+        imprint_id = self._resolve(imprint_id)
+        if type(days) is not int or not 0 < days <= 365:
+            raise ImprintRefused('Give a number of days from 1 to 365.')
+        return self._act(imprint_id, 'shorten', {'valid_until': int(time.time()) + days * 86400})
+
+    def _act(self, imprint_id, verb, body):
+        done = self.client.request('POST', f'/api/imprints/{self._request_id(imprint_id)}/{verb}', body=body)
+        if isinstance(done, dict) and done.get('status') in FINAL:
+            self._drop_local_copy(imprint_id)
+        return done
+
+
+def _canonical(value):
+    """The peer's canonical JSON: sorted keys, no spaces, UTF-8 as it is."""
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()
+
+
+def _date(seconds):
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime('%Y-%m-%d') if isinstance(seconds, (int, float)) else 'unknown'
+
+
+def _end_of(found, receipts):
+    """The earliest of the permission's records' ends and every shortening's (I 8 item 4)."""
+    ends = [r.get('valid_until') for r in ((found.get('permission') or {}).get('record') or {}).get('records') or []]
+    ends += [r['record']['detail'].get('valid_until') for r in receipts if r['record'].get('event') == 'shortened']
+    ends = [e for e in ends if isinstance(e, int)]
+    return min(ends) if ends else None

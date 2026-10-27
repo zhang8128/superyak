@@ -20,6 +20,8 @@ PLAN = '7c41'
 PLAN_FILE = '7c41aa00bb11cc22'
 PART = 4
 Call = namedtuple('Call', 'method path body')
+NOW = 1000          # the fake clock's start (fast_waits)
+PERMISSION = {'kind': 'imprint-permission', 'records': [{'valid_until': NOW + 90 * 86400}]}
 
 
 @pytest.fixture(autouse=True)
@@ -31,12 +33,19 @@ def fast_waits(monkeypatch):
 
 
 class FakeStation:
-    def __init__(self, status='requested', holds=(), reason=None):
+    def __init__(self, status='requested', holds=(), reason=None, receipts=None, extra=None):
         self.status, self.holds, self.reason = status, list(holds), reason
+        self.receipts, self.extra = receipts, extra or {}
         self.calls, self.part_bodies, self.labels = [], {}, []
 
     def allow(self):
         self.status = 'allowed'
+
+    def paths(self):
+        return [c.path for c in self.calls]
+
+    def last_body(self):
+        return json.loads(self.calls[-1].body)
 
     def order(self):
         return self.labels
@@ -56,7 +65,16 @@ class FakeStation:
             receipts = []
             if self.reason:
                 receipts = [{'seq': 3, 'record': {'event': 'deleted', 'detail': {'reason': self.reason}}, 'signature': None}]
-            return 200, json.dumps({'status': self.status, 'held': self.holds, 'receipts': receipts}).encode()
+            doc = {'status': self.status, 'held': self.holds, 'receipts': receipts}
+            if self.receipts is not None:
+                doc.update({'receipts': self.receipts, 'permission': {'record': PERMISSION, 'signature': 'p', 'station_key': 'k'},
+                            'calibration_report': None, 'use_reports': [], 'keeps': None, **self.extra})
+            return 200, json.dumps(doc).encode()
+        if method == 'POST' and path == f'/api/imprints/{REQUEST_ID}/withdraw':
+            self.status = 'deleted'
+            return 200, json.dumps({'id': REQUEST_ID, 'status': 'deleted'}).encode()
+        if method == 'POST' and path == f'/api/imprints/{REQUEST_ID}/shorten':
+            return 200, json.dumps({'id': REQUEST_ID, 'valid_until': json.loads(data)['valid_until']}).encode()
         if method == 'PUT' and path.endswith('/manifest'):
             self.labels.append('manifest')
             return 200, b'{"parts": 3}'
@@ -71,6 +89,20 @@ class FakeStation:
             self.status = 'received'
             return 200, b'{"status": "received"}'
         return 404, b'{"error": "No such route"}'
+
+
+def chain(n, drop=None, unsigned=()):
+    """n receipts, seq 1..n, each `previous` the SHA-256 of the last one's canonical record (the first, the permission's);
+    `drop` leaves one seq out, as a lost row would."""
+    def digest(record):
+        return hashlib.sha256(json.dumps(record, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+    out, previous = [], PERMISSION
+    for seq in range(1, n + 1):
+        record = {'kind': 'imprint-receipt', 'id': f'r{seq}', 'event': 'shortened' if seq == 3 else 'admitted',
+                  'at': NOW + seq, 'detail': {'valid_until': NOW + 30 * 86400} if seq == 3 else {}, 'previous': digest(previous)}
+        out.append({'seq': seq, 'record': record, 'signature': None if seq in unsigned else 'sig'})
+        previous = record
+    return [r for r in out if r['seq'] != drop]
 
 
 def built_home(tmp_path, parts=1):
@@ -190,3 +222,61 @@ def test_an_unbuilt_plan_is_refused(tmp_path):
     (home / 'imprints' / 'plans' / f'{PLAN_FILE}.json').write_text(json.dumps({'id': PLAN_FILE}))
     done = run_agent(['imprint', 'send', '--plan', PLAN], home=home)
     assert done.returncode == 2 and 'not built' in done.stdout + done.stderr
+
+
+def test_status_saves_receipts_and_finds_a_broken_chain(tmp_path):
+    station, home = FakeStation(receipts=chain(4, drop=2)), sent_home(tmp_path)
+    out = Imprint(home, station.client()).status(IMPRINT_ID)
+    assert out["chain"] == "broken after receipt 1" and len(list((home / "imprints" / IMPRINT_ID / "receipts").iterdir())) == 3
+
+
+def test_withdraw_and_shorten_call_the_station(tmp_path):
+    station, home = FakeStation(), sent_home(tmp_path)
+    Imprint(home, station.client()).withdraw(IMPRINT_ID); Imprint(home, station.client()).shorten(IMPRINT_ID, 30)
+    assert station.paths()[-2:] == [f"/api/imprints/{REQUEST_ID}/withdraw", f"/api/imprints/{REQUEST_ID}/shorten"]
+    assert station.last_body() == {"valid_until": NOW + 30 * 86400}
+
+
+def test_an_intact_chain_is_named_and_unsigned_receipts_say_so(tmp_path):
+    station, home = FakeStation(receipts=chain(3, unsigned=(3,))), sent_home(tmp_path)
+    lines = []
+    out = Imprint(home, station.client(), out=lines.append).status(IMPRINT_ID)
+    folder = home / 'imprints' / IMPRINT_ID / 'receipts'
+    assert out['chain'] == 'intact' and sorted(p.name for p in folder.iterdir()) == [f'{n}-{IMPRINT_ID}.json' for n in (1, 2, 3)]
+    assert any('not yet signed' in line and '3' in line for line in lines)
+    assert 'not yet signed' not in json.loads((folder / f'1-{IMPRINT_ID}.json').read_text()).get('note', '')
+
+
+def test_status_prints_the_reports_and_what_the_station_keeps(tmp_path):
+    extra = {'calibration_report': {'score': 0.5}, 'use_reports': [{'use_id': 'u1', 'report': {'rows': 3}}],
+             'keeps': {'text': 'The station keeps a row.', 'removed_on': {'row': '2027-01-01'}}}
+    station, home = FakeStation(status='admitted', receipts=chain(2), extra=extra), sent_home(tmp_path)
+    lines = []
+    Imprint(home, station.client(), out=lines.append).status(IMPRINT_ID)
+    text = '\n'.join(lines)
+    assert '0.5' in text and 'u1' in text and 'The station keeps a row.' in text and '2027-01-01' in text
+
+
+def test_status_with_no_id_is_one_line_per_imprint(tmp_path):
+    station, home = FakeStation(status='admitted', receipts=chain(3)), sent_home(tmp_path)
+    lines = []
+    out = Imprint(home, station.client(), out=lines.append).status()
+    assert len(lines) == 1 and lines[0].startswith(IMPRINT_ID[:4]) and 'admitted' in lines[0]
+    assert 'shortened' in lines[0] and '1970-01-31' in lines[0] and out['imprints'][0]['status'] == 'admitted'
+
+
+def test_a_final_status_drops_the_local_copy_and_an_unknown_imprint_is_refused(tmp_path):
+    station, home = FakeStation(status='received'), sent_home(tmp_path)
+    Imprint(home, station.client()).withdraw(IMPRINT_ID)
+    assert not (home / 'imprints' / IMPRINT_ID / 'imprint.db').exists()
+    from superyak_agent.imprint import ImprintRefused
+    with pytest.raises(ImprintRefused):
+        Imprint(home, station.client()).status('ffff')
+    with pytest.raises(ImprintRefused):
+        Imprint(home, station.client()).shorten(IMPRINT_ID, 0)
+
+
+def test_the_command_refuses_days_that_are_not_a_number(tmp_path):
+    home = sent_home(tmp_path)
+    bad = run_agent(['imprint', 'shorten', '--id', IMPRINT_ID[:4], '--days', 'x'], home=home)
+    assert bad.returncode == 2
