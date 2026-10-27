@@ -121,6 +121,7 @@ only-include = [
     "tests/test_imprint_requests.py",
     "tests/test_imprint_sweep.py",
     "tests/test_imprint_upload.py",
+    "tests/test_imprint_verify.py",
     "tests/test_imprint_withdrawal.py",
     "tests/test_inbox.py",
     "tests/test_inbox_wait.py",

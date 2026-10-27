@@ -351,6 +351,10 @@ def main(argv=None):
     restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
     restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
     restore_cmd.add_argument('--backup', type=Path, help='Test this copy instead of the newest one')
+    verify_cmd = commands.add_parser('verify-imprint', help='Check a saved imprint\'s station key, signatures and receipt chain (--dir), or one permission file (--permission); reads local files only')
+    verify_cmd.add_argument('--dir', type=Path, help='A saved imprint folder: permission.json and receipts/; writes verified.json')
+    verify_cmd.add_argument('--home', type=Path, default=Path.home() / '.superyak', help='Where imprints/station-key.json is pinned')
+    verify_cmd.add_argument('--permission', type=Path, help='A {record, signature, station_key} file; exits 0 only when the station signed it')
     alert_cmd = commands.add_parser('station-alert', help='Run by systemd only: queue one alert line for Odo to post in Ops')
     alert_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     alert_cmd.add_argument('--unit', required=True)
@@ -521,6 +525,21 @@ def main(argv=None):
             users, rooms, messages = tested['counts']
             print(f'Restore test passed: {tested["backup"].name} booted on 127.0.0.1:{tested["port"]}; '
                   f'users {users}, rooms {rooms}, messages {messages}.')
+        elif args.command == 'verify-imprint':
+            from .imprints import verify_imprint_dir, verify_permission_file
+            if (args.dir is None) == (args.permission is None):
+                parser.exit(2, 'verify-imprint: give --dir or --permission\n')
+            if args.permission is not None:
+                parser.exit(0 if verify_permission_file(args.permission) else 1)
+            result = verify_imprint_dir(args.dir, home=args.home)
+            if result['pin'] == 'changed':
+                print('WARNING: the station key changed since your first imprint. This is not a pass. Nothing was verified; '
+                      'ask Andy whether the station was rebuilt (peer/API.md, station key changes).')
+            for problem in result['problems']:
+                print(f'Problem: {safe_line(problem, 200)}')
+            print(f'Chain {result["chain"]}; {len(result["verified"])} receipts verified, {len(result["unsigned"])} not yet signed; key {result["pin"]}.')
+            if not result['ok']:
+                parser.exit(1)
         elif args.command == 'station-alert':
             from .alerts import Refused, station_alert
             try:

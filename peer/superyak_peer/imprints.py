@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from .auth import token_hash
 from .common import Problem, uid
-from .identity import canonical, parse
+from .identity import canonical, parse, verify_station_record
 from .ships import CODE_ALPHABET
 
 log = logging.getLogger(__name__)
@@ -1861,3 +1861,112 @@ class Imprints:
                           f'No live imprint starts with {prefix}' if not matches else
                           f'{prefix} matches more than one imprint; give more characters')
         return matches[0]
+
+
+PIN_NAME = 'station-key.json'
+
+
+def _atomic_json(path, doc):
+    temporary = path.with_name(f'.{path.name}.{secrets.token_hex(4)}.tmp')
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(json.dumps(doc, sort_keys=True, indent=2) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _pin_station_key(home, public_key, station):
+    """The station key pinned at the owner's first imprint (peer/API.md, "station key changes"): written once with
+    O_EXCL, never replaced. Returns 'pinned' (just now), 'matches', or 'changed' (also for a pin that cannot be read)."""
+    folder = Path(home) / 'imprints'
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / PIN_NAME
+    body = (json.dumps({'station_key': public_key, 'station': station}, sort_keys=True, indent=2) + '\n').encode()
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        pinned = _read_json(path)
+        return 'matches' if pinned is not None and pinned.get('station_key') == public_key else 'changed'
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(body)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return 'pinned'
+
+
+def _saved_receipts(folder):
+    """The receipts the agent saved, in seq order; an unreadable file or a repeated seq is a problem, not skipped."""
+    found, problems = {}, []
+    for path in sorted((folder / 'receipts').glob('*.json')):
+        doc = _read_json(path, 1 << 20)
+        record = doc.get('record') if doc else None
+        if not isinstance(record, dict) or type(doc.get('seq')) is not int or doc['seq'] in found:
+            problems.append(path.name)
+            continue
+        found[doc['seq']] = doc
+    return [found[seq] for seq in sorted(found)], problems
+
+
+def verify_imprint_dir(dir, *, home):
+    """I 12, R21: checks a saved imprint (`permission.json` and `receipts/`) from local files alone. The station key's
+    SHA-256 must be every record's `station`, every signature must verify, the chain must run unbroken from the
+    permission, and the key must be the one pinned in `home/imprints/station-key.json` (written at the first imprint).
+    A receipt is verified when the chain is unbroken up to it and its own signature verifies; an unsigned one is not.
+    Writes `dir/verified.json` and returns {chain, pin, verified, unsigned, problems, ok}. Reads no secret."""
+    folder = Path(dir)
+    out = {'chain': 'empty', 'pin': 'none', 'verified': [], 'unsigned': [], 'problems': [], 'ok': False}
+    shown = {'station_key': None, 'verified': []}
+
+    def done():
+        out['ok'] = (out['pin'] in ('pinned', 'matches') and out['chain'] in ('intact', 'empty') and not out['problems'])
+        shown['verified'] = list(out['verified'])
+        _atomic_json(folder / 'verified.json', {**shown, 'chain': out['chain'], 'pin': out['pin']})
+        return out
+
+    permission = _read_json(folder / 'permission.json', 1 << 20)
+    if permission is None or not all(isinstance(permission.get(k), v) for k, v in
+                                     (('record', dict), ('signature', str), ('station_key', str))):
+        out['problems'].append('permission.json is missing or unreadable')
+        return done()
+    record, key = permission['record'], permission['station_key']
+    shown['station_key'] = key
+    if not verify_station_record(key, record, permission['signature']):
+        out['problems'].append('the permission does not verify against its station key')
+        return done()
+    out['pin'] = _pin_station_key(home, key, record['station'])
+    if out['pin'] == 'changed':
+        return done()
+    receipts, bad = _saved_receipts(folder)
+    out['problems'] += [f'{name} is not a saved receipt' for name in bad]
+    previous, intact = record, True
+    for n, receipt in enumerate(receipts):
+        body = receipt['record']
+        if intact and (body.get('previous') != hashlib.sha256(canonical(previous)).hexdigest()
+                       or body.get('permission') != record.get('id')):
+            intact = False
+            out['chain'] = 'broken'
+            out['problems'].append(f'the chain breaks after receipt {receipts[n - 1]["seq"]}' if n
+                                   else 'the chain does not start at the permission')
+        previous = body
+        if not intact:
+            continue
+        if not isinstance(receipt.get('signature'), str):
+            out['unsigned'].append(receipt['seq'])
+        elif verify_station_record(key, body, receipt['signature']):
+            out['verified'].append(body['id'])
+        else:
+            out['problems'].append(f'receipt {receipt["seq"]} does not verify')
+    if intact and receipts:
+        out['chain'] = 'intact'
+    return done()
+
+
+def verify_permission_file(path):
+    """R9: True exactly when `verify_station_record` accepts the file's {record, signature, station_key}."""
+    doc = _read_json(Path(path), 1 << 20)
+    return bool(doc) and verify_station_record(doc.get('station_key'), doc.get('record'), doc.get('signature'))
