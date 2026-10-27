@@ -78,20 +78,27 @@ def _read_line(fd: int) -> str:
     return buf.decode("utf-8", "replace").strip()
 
 
+def _show(fd: int, text: str) -> None:
+    """Write all of `text` to the terminal."""
+    data = text.encode("utf-8", "replace")
+    while data:
+        data = data[os.write(fd, data):]
+
+
 def confirm(words: str, change: str) -> bool:
-    """Print the words, the full change and a code; read the code from TTY. Raises NoTerminal when TTY cannot be
-    opened, before anything is printed."""
+    """Show the words, the full change and a code on TTY, and read the code from it. Nothing of it goes to stdout,
+    which an agent that started the command may be reading (Tardis's T9). Raises NoTerminal when TTY cannot be
+    opened for reading and writing, before anything is shown."""
     try:
-        fd = os.open(TTY, os.O_RDONLY | os.O_NOCTTY)
+        fd = os.open(TTY, os.O_RDWR | os.O_NOCTTY)
     except OSError as e:
         raise NoTerminal(f"{TTY} cannot be opened ({e.strerror or e})") from e
     try:
         code = _code()
-        print(_clean_lines(words))       # names in the words come from the ledger (final review M5)
-        print()
-        print(_clean_lines(change))
-        print()
-        print(f"To say yes, type this code and press enter.\ncode: {code}", flush=True)
+        sys.stdout.flush()               # what the command printed before comes first on a shared terminal
+        # names in the words come from the ledger (final review M5)
+        _show(fd, f"{_clean_lines(words)}\n\n{_clean_lines(change)}\n\n"
+                  f"To say yes, type this code and press enter.\ncode: {code}\n")
         answer = _read_line(fd)
     finally:
         os.close(fd)

@@ -2606,36 +2606,99 @@ CLI_M1_CREATED_AT = T("2026-10-01")
 
 
 class FakeTty:
-    """A FIFO standing in for /dev/tty. The fixture holds it open both ways, so a line written here waits in the
-    pipe until `confirm` reads it, one byte at a time, and a confirm with no answer waits TTY_WAIT seconds, not
-    forever. `_code` is fixed so a test can answer the printed code."""
+    """A pseudo-terminal standing in for /dev/tty: `path` is its slave end, which the fixture holds open, so a line
+    written here waits in its input until `confirm` reads it, one byte at a time, and a confirm with no answer waits
+    TTY_WAIT seconds, not forever. What `confirm` shows there is read from the master end as it comes (`shown`).
+    With `mirror` (the default) it is also written to the test's stdout when `confirm` starts to read, so a
+    command's whole transcript reads in order through capsys; a test of where the words go sets `mirror` False.
+    Echo and output processing are off. `_code` is fixed so a test can answer the printed code."""
     code = "abc234"
 
-    def __init__(self, path):
+    def __init__(self, path=None):
         import os
-        os.mkfifo(path)
-        self.path = path
-        self.fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+        import termios
+        import threading
+        self.master, self.slave = os.openpty()
+        attrs = termios.tcgetattr(self.slave)
+        attrs[1] &= ~termios.OPOST
+        attrs[3] &= ~termios.ECHO
+        termios.tcsetattr(self.slave, termios.TCSANOW, attrs)
+        self.path = os.ttyname(self.slave)
+        self.mirror = True
+        self._shown, self._mirrored, self._lock = bytearray(), 0, threading.Lock()
+        self._last = 0.0
+        self._reader = threading.Thread(target=self._drain, daemon=True)
+        self._reader.start()
+
+    def _drain(self):
+        import os
+        import time
+        while True:
+            try:
+                chunk = os.read(self.master, 65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            with self._lock:
+                self._shown += chunk
+                self._last = time.monotonic()
+
+    def settle(self, quiet=0.05):
+        """Wait until nothing new has come for `quiet` seconds; then, with `mirror`, write what came since the last
+        mirror to sys.stdout."""
+        import sys
+        import time
+        while True:
+            with self._lock:
+                idle = time.monotonic() - self._last
+            if idle >= quiet:
+                break
+            time.sleep(quiet)
+        time.sleep(quiet)
+        with self._lock:
+            new = bytes(self._shown[self._mirrored:])
+            self._mirrored = len(self._shown)
+        if self.mirror and new:
+            sys.stdout.write(new.decode("utf-8", "replace"))
+            sys.stdout.flush()
+
+    def shown(self) -> str:
+        """Everything `confirm` has shown on this terminal so far."""
+        self.settle()
+        with self._lock:
+            return self._shown.decode("utf-8", "replace")
 
     def answer(self, text):
         import os
-        os.write(self.fd, (text + "\n").encode())
+        os.write(self.master, (text + "\n").encode())
 
     def answer_the_printed_code(self):
         self.answer(self.code)
 
     def close(self):
         import os
-        os.close(self.fd)
+        for fd in (self.slave, self.master):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self._reader.join(timeout=5)
 
 
 @_pytest.fixture
-def fake_tty(tmp_path_factory, monkeypatch):
+def fake_tty(monkeypatch):
     import permission_cli
-    tty = FakeTty(tmp_path_factory.mktemp("tty") / "tty")
+    tty = FakeTty()
+    real_read = permission_cli._read_line
+
+    def read_line(fd):
+        tty.settle()             # what confirm showed reaches the transcript before the CLI goes on
+        return real_read(fd)
     monkeypatch.setattr(permission_cli, "TTY", str(tty.path))
     monkeypatch.setattr(permission_cli, "TTY_WAIT", 5)
     monkeypatch.setattr(permission_cli, "_code", lambda: tty.code)
+    monkeypatch.setattr(permission_cli, "_read_line", read_line)
     yield tty
     tty.close()
 

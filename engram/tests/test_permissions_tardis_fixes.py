@@ -429,3 +429,23 @@ def test_t8_a_migrate_killed_part_way_leaves_no_ledger_and_runs_again(legacy_hom
     assert cli_main(["migrate"]) == 0 and path.exists()
     assert sorted(p.name for p in path.parent.glob("permissions.db*")) == ["permissions.db"]
     assert Ledger.open(legacy_home).verify() is None
+
+
+# ---------------------------------------------------------------- T9: the yes is the terminal's alone (P 7.6, R12)
+
+def test_t9_the_words_and_the_code_are_shown_on_the_terminal_and_never_on_stdout(fake_tty, capsys):
+    fake_tty.mirror = False
+    fake_tty.answer_the_printed_code()
+    assert permission_cli.confirm("THE WORDS", "THE CHANGE") is True
+    out = capsys.readouterr()
+    assert "THE WORDS" not in out.out + out.err and fake_tty.code not in out.out + out.err
+    shown = fake_tty.shown()
+    assert shown.index("THE WORDS") < shown.index("THE CHANGE") < shown.index("code: " + fake_tty.code)
+
+
+def test_t9_with_no_terminal_nothing_is_shown_and_the_yes_is_refused(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(permission_cli, "TTY", str(tmp_path / "no-such-tty"))
+    with pytest.raises(permission_cli.NoTerminal):
+        permission_cli.confirm("THE WORDS", "THE CHANGE")
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == ""
