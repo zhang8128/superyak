@@ -26,7 +26,9 @@ D1–D43). Revision 7 changed this plan where its rulings A3, A4 and R26 to R30 
 32 to 35, 38, 40, 42a, 42b, 43a, 45, 47, 48 and the new 50, the Review Focus, the verification, the gates and the
 self-review. The fixes after revision 7's check (`docs/superpowers/reviews/2026-10-25-small-hardware-imprints-review.md`,
 "Response") changed A3, R10, R24, R26, R28 and R29, the constants, the carried items, Tasks 8, 12, 15, 25, 34 to
-36, 40, 46 and 50, the verification, gates G15 and G18 to G20, and the self-review. Also read: the contract `docs/city-rail-vision.md` ("Imprints:
+36, 40, 46 and 50, the verification, gates G15 and G18 to G20, and the self-review. The fixes after its re-check (the
+same file, "Re-check response") changed A3, R10, "What this plan uses", the carried items, Tasks 8, 15, 23, 24, 34
+to 36, 45, 47 and 50, the verification, gates G18 and G19, and the self-review. Also read: the contract `docs/city-rail-vision.md` ("Imprints:
 porting a store here"); the interface table `docs/superpowers/reviews/2026-10-25-city-rail-interfaces.md` (rows cited
 as "row N"); the consolidation log `docs/superpowers/reviews/2026-10-25-city-rail-consolidation.md`; the permissions
 spec `docs/superpowers/specs/2026-10-25-permissions-by-place-design.md` ("P"), the source of truth for what a
@@ -123,7 +125,7 @@ are not rulings: they are Andy's decisions of 2026-10-26, listed first so every 
 
 | # | Ruling | Why |
 |---|---|---|
-| A3 | Andy: "yes you can copy the full store." In a copy kept in the owner's home (audience `place:home/<owner>`, the owner being the operator), memories with recorded co-subjects ship and carry them in `imprint_subjects`, except one whose co-subject's layer on the source ledger refuses a use the imprint needs, which stays home as "<name> said no" (`denied`, I 5.2); their uses stay inside that home and show nothing to any agent; the dry run and the confirm view say so with counts, and the owner acknowledges it (`others-copied-at-home-v1`), in words that at n = 0 promise no co-subject (I 8). Another owner's copy keeps revision 6's filter and confirmation (`no-unconsented-others-v1`). Tasks 8, 12, 13, 15, 18, 24, 25, 33, 45, 47. | Andy's decision, as I 4 (A3, D27, D43) applies it. The line between inside and outside the home is Rio Grande's call (I D27). The permissions spec's revision 7 applies A3 as its P36: inside the owner's home, his `imprint` and every bulk use that shows nothing to an agent read a co-subject's layer as a restriction layer, so silence passes and a deny refuses. I follows P36 (I 8, "Carried co-subjects in the meet"). Gate G18 still holds every imprint with a carried co-subject until both specs are re-checked side by side. |
+| A3 | Andy: "yes you can copy the full store." In a copy kept in the owner's home (audience `place:home/<owner>`, the owner being the operator), memories with recorded co-subjects ship and carry them in `imprint_subjects`, read up the `copies` chain as P 6.3 item 1 and 7.4 count them (I 5.2; the re-check's RM1), except one whose co-subject's layer on the source ledger refuses a use the imprint needs, which stays home as "<name> said no" (`denied`, I 5.2), and one P refuses whole: a retired co-subject (`retired`, "<name> is retired") or more than 8 subjects (`bound`; the re-check's RM1 and S1); their uses stay inside that home and show nothing to any agent; the dry run and the confirm view say so with counts, and the owner acknowledges it (`others-copied-at-home-v1`), in words that at n = 0 promise no co-subject (I 8). Another owner's copy keeps revision 6's filter and confirmation (`no-unconsented-others-v1`). Tasks 8, 12, 13, 15, 18, 24, 25, 33, 45, 47. | Andy's decision, as I 4 (A3, D27, D43) applies it. The line between inside and outside the home is Rio Grande's call (I D27). The permissions spec's revision 7 applies A3 as its P36: inside the owner's home, his `imprint` and every bulk use that shows nothing to an agent read a co-subject's layer as a restriction layer, so silence passes and a deny refuses. I follows P36 (I 8, "Carried co-subjects in the meet"). Gate G18 still holds every imprint with a carried co-subject until both specs are re-checked side by side. |
 | A4 | Andy: "remember the ram limitations of this machine, build this so that it can run easily with small amounts of hardware." Rio Grande's call on what that means is I D42 and 14.1, applied by R26 to R30 and Task 50. | Andy's decision. |
 | R1 | `imprint.py` is split by responsibility: `engram/imprint_filter.py` (5.2, 5.4, 6.2: selection, rows, digest), `engram/imprint_checks.py` (6.4's L1–L4 and section 10's 17 checks), `engram/imprint.py` (the command and its steps), and `engram/imprint_copies.py` (`copies_held`, standard library only, so the owner's `uses` command loads no numpy; Task 45). The peer side stays one module, `imprints.py`, as I 15 names it. The agent's is `agent/superyak_agent/imprint.py`. | I 19: "how `imprint.py` is split into modules" is the builder's. Each file then has one job. |
 | R2 | Two peer tables, `imprint_requests` and `imprint_receipts`, DDL in Task 23. Every time column is integer UTC seconds. | I 19 leaves the DDL; I 15 lists the fields. |
@@ -134,7 +136,7 @@ are not rulings: they are Andy's decisions of 2026-10-26, listed first so every 
 | R7 | With a ship key, `GET /api/imprints` also returns `{"ship", "owner", "operator", "station"}`: `operator` is the super admin's username, which `check_request` reads for the audience (Task 24), and `station` is the station's peer id. `agent imprint context` writes it to `~/.superyak/imprints/context.json` (0600), and `imprint.py plan` reads it for D37, the dry run's "Station" line, the plan's owner, and `parse_terms`' `operator`, so a plan naming another home is refused on the owner's machine. | The plan must know the requesting ship's owner (D37) and the operator whose home the audience names (I 5.3) before anything is sent. This sends only the ship key. |
 | R8 | `superyak-peer serve` registers the imprint routes only when `--imprints-dir` is given; without it they answer 404, as on the door. Station commands keep the default `$HOME/.engram/imprints` (I 10). | Off by default. The deploy gate that adds the flag to the lighthouse's unit is the switch. |
 | R9 | Check 3's signature part runs the peer's `verify-imprint --permission FILE` in the peer environment. `imprint.py admit` takes that command as `verify_cmd`; the Makefile passes it. | `verify_station_record` lives in the peer (I 15). Engram gains no dependency. |
-| R10 | Two seams to the trails plan. `imprint.count_roads_and_trails(conn, *, lanes, as_of, derive=None)` sums `derive(conn, lane=lane, as_of=as_of)` over the scope's lanes, where `derive` reaches T's `roads_and_trails` (the trails plan's TR20 and Task 4). T derives one session at a time and counts roads with SQL in a scratch file under `TMPDIR` (T R21, T 11's I7 (c); the trails plan's TR28), which R26's re-exec points at `<id>.state/scratch/`. This plan keeps only the sum (I 10). T owns the aggregation and the support rule, so each has one implementation (the check's S8, settled toward the trail spec; it also drops the `scratch` parameter Task 35 had, which R10 lacked). When `trails` can't be imported, admission with `route` fails with check `count` and the message "roads and trails can't be counted: trails.py is not installed". `imprint.use(..., trails_cmd=None)` runs `[sys.executable, <engram>/trails.py, ...]` by default. Tests pass stubs. | Build order puts trails after imprints. Failing closed narrows; no imprint with `route` is admitted until trails step 1 is on the Pi (gate G13). |
+| R10 | Two seams to the trails plan. `imprint.count_roads_and_trails(conn, *, lanes, as_of, derive=None) -> RoadCount(n, sessions_too_large)` sums `derive(conn, lane=lane, as_of=as_of, counts=counts)` over the scope's lanes, with a fresh `counts` for each lane, where `derive` reaches T's `roads_and_trails` (the trails plan's TR20 and Task 4), which counts the sessions over T 4's bound into `counts["sessions_too_large"]`; `sessions_too_large` is the largest lane's count, so no session counts twice (the trails plan's Task 4; T I7's third ask, which I 10 now takes: the re-check's S4; T's re-check RS3). T derives one session at a time and counts roads with SQL in a scratch file under `TMPDIR` (T R21, T 11's I7 (c); the trails plan's TR28), which R26's re-exec points at `<id>.state/scratch/`. This plan keeps only the sum (I 10). T owns the aggregation and the support rule, so each has one implementation (the check's S8, settled toward the trail spec; it also drops the `scratch` parameter Task 35 had, which R10 lacked). When `trails` can't be imported, admission with `route` fails with check `count` and the message "roads and trails can't be counted: trails.py is not installed". `imprint.use(..., trails_cmd=None)` runs `[sys.executable, <engram>/trails.py, ...]` by default. Tests pass stubs. | Build order puts trails after imprints. Failing closed narrows; no imprint with `route` is admitted until trails step 1 is on the Pi (gate G13). |
 | R11 | An admission failure names its step: a check number 1–17, `calibration` or `count`. `imprint.py admit` exits 0 admitted, 1 failed (with `result.json`), 4 withdrawn during admission, 5 ended during admission. | YN4: the count and calibration had no name. Exit codes let the sync and the unit tell the cases apart. |
 | R12 | The evaluation's `--seed` is `int(use_id[:8], 16)`. | I 12 says `--seed N` without fixing N; this makes a run repeatable from its receipt. |
 | R13 | An imported row's id is `u-` + the first 32 hex of SHA-256 of `receipt id + action + purpose + batch number` (batch from 0). | YN6 makes rows per action **and** purpose; I 12's formula without the purpose would give two rows one id. |
@@ -178,6 +180,7 @@ Items from the consolidation log, and the checks it records, that belong to this
 | Not this spec's | XN3, XN4, XN5, BS1–BS3, BN1–BN4, T's FS1 and FN1–FN3. | The permissions and trails plans. Listed so none is dropped. |
 | I 17's asks of revision 7 | The permissions spec and I agree on carried co-subjects inside the owner's home (ask (a)); the trail spec fits the use's 512 MiB unit, loads no model there, and gives one session at a time (asks (a) to (d)). | Ask (a) of the permissions spec is answered by its P36, which I now follows (Task 8's `denied`); what is left, the two texts side by side, the bound of 8 subjects per road or trail and the roads-and-trails rows' subjects (the check's S4), is gate G18's. The trail spec's revision 9 answers (a) to (d) on paper (its I7); its build is gate G19's. Task 35 calls its `roads_and_trails`. |
 | Revision 7's check (`docs/superpowers/reviews/2026-10-25-small-hardware-imprints-review.md`) | M1, M2, S1–S8, nits 1–6. | M1: A3, Task 8, G18. M2: Tasks 15 and 25. S1: R26, Tasks 15, 34, 50. S2: R28, Task 5. S3: the constants, R24, Tasks 36, 40, 50, G15. S4: G18 (not built; I 12 says why). S5: R28 and I 14.1. S6: G20. S7: Tasks 46 and 50. S8: R10, "What this plan uses", Task 35, G19. Nits: I 10 (1, 3, 4), R29 (2, 3), Task 8 (5), Task 12 (6). |
+| Its re-check (the same file, "Re-check (2026-10-26)") | RM1, S1–S5, nits 1 and 2. | RM1: A3, "What this plan uses", Task 8 (`cosubjects_of` up the `copies` chain, `bound`, two tests), Task 50 (the cap fixture), G18. S1: Task 8 (`retired`), G18. S2: G18 (the permissions spec's to fix; I 17's ask (c)). S3: Tasks 8 and 15 (`plan_people`, `people`, `NAMES_SHOWN`), Task 50, I 14.1. S4: R10, Tasks 23, 34 to 36 (`sessions_too_large`), G19, I 14.1 and 17. S5: Tasks 8, 24, 45, 47, 50. Nits: I 14.1. |
 
 ## Review Focus
 
@@ -253,10 +256,16 @@ named.
 **From the permissions plan** (merged first; its "What the other plans use"):
 
 - `permission_ledger.Ledger.open_read_only(engram_home)`, raising `FileNotFoundError` or `LedgerUnreadable` (its
-  Task 10); `Ledger.store_row(instance_id) -> dict | None` and `Ledger.cosubjects(ref) -> frozenset[str]` (its Task
-  11); `Ledger.latest_lane_note(ref) -> str | None` (its Task 17); for `denied` (I 5.2), the ledger's `records`
+  Task 10); `Ledger.store_row(instance_id) -> dict | None` (its Task 11); `Ledger.latest_lane_note(ref) -> str | None` (its Task 17); for `denied` (I 5.2), the ledger's `records`
   table (`permission_ledger.py:68-72` on `permissions-core`), `Ledger.state()` (`:229`), `permissions.Use`
-  (`permissions.py:797-808`) and `permissions.record_matches(state, record, use, action)` (`:1026-1036`). Task 8 here.
+  (`permissions.py:797-808`) and `permissions.record_matches(state, record, use, action)` (`:1026-1036`). For
+  co-subjects up the `copies` chain (I 5.2; the re-check's RM1), the ledger's `stores`, `subjects` and `copies` tables
+  (`permission_ledger.py:56`, `:63`, `:65`), read by one recursive query on its connection, `MAX_COPY_CHAIN` and
+  `MAX_SUBJECTS` (`permissions.py:33`, `:21`), and, in Task 8's test only, `permissions.subjects_of` (`:1100-1117`) and
+  `Ledger.record_copy` (`permission_ledger.py:488-519`). `Ledger.cosubjects` (`:574-577`) reads a ref's own rows only,
+  so this plan's code no longer calls it; Task 8's test calls it once, to show what it misses. For `retired` (the re-check's S1), the State's `persons` and
+  `permissions.place_retired(state, place)` (`permissions.py:547-553`), the test `_subject_retired` makes
+  (`:1418-1420`). All read on branch `permissions-core` at `dc0881e`. Task 8 here.
 - `permission_uses.Uses.open(engram_home)`, `UseRow`, `Uses.append_imported(row, subjects)` (its Task 14) and
   `Uses.owner_list(state, ...)` (its Task 15), which Task 45 here extends with a `copies` keyword; the `uses` command
   of `permission_cli.py` (its Task 27). Task 45 here.
@@ -879,31 +888,43 @@ git commit -m "Imprints: the selection, its half-open window, shared-with and th
 
 **Files:**
 - Modify: `engram/imprint_filter.py`
-- Modify: `engram/tests/imprint_support.py` (`ledger`, which takes one person or a list per memory, and `denies`, a deny record per person written straight into the fixture's `records` table, since no step-1 command writes another person's layer (P 7.6); `remove_cosubject`; `ctx`'s `owner`, `home`, `terms` and `now`)
+- Modify: `engram/tests/imprint_support.py` (`ledger`, which takes one person or a list per memory, and `denies`, a deny record per person written straight into the fixture's `records` table, since no step-1 command writes another person's layer (P 7.6); `remove_cosubject`; `copy_of(led, copy_ref, source_ref)`, through the real `Ledger.record_copy`; `add_subject(led, ref, subject)`, a `subjects` row written straight into the fixture with its own log row, as on a source after its copy; `link_copies(led, refs)`, `copies` rows written straight in, for a chain longer than `record_copy` allows; `retire(led, person)`, a person row with `retired_seq`, as `person retire` writes it (`permission_cli.py:396-397`); `retire_place(led, place)`, a `places` row with `retired_seq`, and for `place:home/<p>` also p's `persons` row, not retired; `forbid_state(monkeypatch)`, a spy that fails on any `Ledger.state` call; `ctx`'s `owner`, `home`, `terms` and `now`)
 - Test: `engram/tests/test_imprint_selection.py`
 
 **Interfaces:**
-- Consumes: the permissions plan's `Ledger.open_read_only`, `store_row`, `cosubjects`, `latest_lane_note`, `state`,
-  and `permissions.Use` and `record_matches` (see "What this plan uses").
+- Consumes: the permissions plan's `Ledger.open_read_only`, `store_row`, `latest_lane_note`, `state`, `record_copy`
+  (the tests), the ledger's `copies`, `subjects` and `stores` tables, and `permissions.Use`, `record_matches`,
+  `place_retired`, `subjects_of` (the tests), `MAX_COPY_CHAIN` and `MAX_SUBJECTS` (see "What this plan uses").
 - Produces:
   - `open_ledger(engram_home: Path) -> Ledger | None` (no file: `None`; unreadable: `PlanRefused("The permissions ledger can't be read; nothing was planned.")`);
   - `check_owner(ledger, source_id: str, owner: str) -> None` (D37);
+  - `cosubjects_of(ledger, ref: str, *, owner: str) -> frozenset[str]`: I 5.2's cosubjects(m), P's subjects of the
+    ref less `person:<owner>`, read up the `copies` chain by `COSUBJECTS_SQL` (step 3), at most `MAX_SUBJECTS` = 8 of
+    them, which is enough to tell `bound`; `frozenset()` with no ledger (the re-check's RM1);
   - `base` now also drops `pending(m)` (counted under `lane_unsettled`), and, when `ctx.home` is false, drops
-    `cosubjects(m) ≠ ∅` (counted under `needs_yes:<person>`). When `ctx.home` is true it keeps them (A3, I 5.2) and
-    counts them under `others_memories`, with each person once under `others_people:<person>`, except that it drops
-    `denied(m)` (I 5.2; the check's M1), counted under `said_no:<person>`;
-  - `Refusals(ledger, ctx)`: built once per plan; `.any` is false when one query on the ledger's `records` finds no
-    deny with `revoked` null and `valid_until` null or after `ctx.now` in the layer of any effective co-subject of a
-    memory of the source (`place:home/<p>` for `person:<p>`, the place itself for a `place:` subject, P 6.3 item 1),
-    and then it builds no State; else it holds `ledger.state()` and those denies; `.refuses(ref, subject) -> bool` is
-    true when one of that subject's denies `record_matches` a
+    `cosubjects(m) ≠ ∅` (counted under `needs_yes`). When `ctx.home` is true it keeps them (A3, I 5.2) and counts them
+    under `others_memories`, except that it drops, in this order, `retired(m)` (`retired`; the re-check's S1),
+    `bound(m)`, 8 co-subjects or more (`bound`; RM1), and `denied(m)` (`said_no`; the check's M1). Each memory is
+    counted once, under a fixed key of `counts`, and its people go into the scratch table `plan_people(reason TEXT
+    NOT NULL, subject TEXT NOT NULL, memory_id TEXT NOT NULL, layer TEXT NOT NULL)`, one row per person, with reason
+    `others`, `needs_yes`, `retired` or `said_no` (none for `bound`, which names no one). No key of `counts` names a
+    person (the re-check's S3);
+  - `People(count: int, named: tuple[tuple[str, int], ...], more: int)`, `NAMES_SHOWN = 10`, and `people(scratch,
+    reason, *, names=NAMES_SHOWN) -> People`: by SQL on `plan_people`, the distinct people for that reason, at most
+    `names` of them with their distinct memories, most first, ties by id, and `more` = `count - len(named)`;
+  - `Refusals(ledger, ctx)`: built once per plan; `.any` is false when one query on the ledger finds no deny in
+    `records` with `revoked` null and `valid_until` null or after `ctx.now` in any layer but `place:home/<owner>`,
+    and no row of `persons` or `places` with a `retired_seq` (I 5.2: a co-subject read through `copies` may belong to
+    another store, so it asks about every layer), and then it builds no State; else it holds `ledger.state()` and
+    those denies; `.retired(subject) -> bool` is true for a person whose row has a `retired_seq` or whose home, or a
+    place above it, is retired (`place_retired`), as `_subject_retired` tests it, and false for a place;
+    `.refuses(ref, subject) -> bool` is true when one of that subject's denies `record_matches` a
     `Use(requester="agent:station-imprints", place=f"place:home/{owner}", obj=ref, copy=…, action=x,
     purpose=p, at=max(ctx.now, deny.valid_from))` for x in {`recall`, `read`, `imprint`} and p in the terms'
     purposes, or, with `route`, the same on a road ref `road:<source id>/…` of the store with `route` added to x;
   - `cosubject_rows(sh: Shipped, ctx) -> Iterator[tuple[str, str, str]]`: `(memory_id, layer, subject)` for each
-    shipped memory and each effective co-subject in the ledger other than the owner, sorted by those three, read
-    one batch of refs at a time; empty when `ctx.home` is false or there is no ledger (I 6.2's `imprint_subjects`,
-    D43);
+    shipped memory and each s ∈ `cosubjects_of(ledger, ref, owner=owner)`, sorted by those three, read one memory at
+    a time; empty when `ctx.home` is false or there is no ledger (I 6.2's `imprint_subjects`, D43);
   - `published_house(engram_home: Path) -> Path` (`.engram/instances/lighthouse/graph.db`);
   - `check_source(path: Path, conn, *, engram_home: Path, imprint_roots: Sequence[Path] = ()) -> None`: refuses the
     published house and anything under an imprints root by resolved path, an imprint by origin, unknown migrations
@@ -917,10 +938,11 @@ def test_co_subjects_and_unsettled_lanes_stay_home_and_are_counted(tmp_path):
     for i in ("plain", "about-jenn", "pending", "other-lane", "no-note"): ep(s, i)
     led = ledger(home, owner="sam", store=s, cosubjects={"about-jenn": "person:jenn"},
                  lane_notes={"pending": "pending", "other-lane": "personal", "plain": "work"})
-    counts = Counter()
-    got = list(base(s.conn, "episode", selection(), ctx(s, ledger=led, home=False), counts))
+    c, counts = ctx(s, ledger=led, home=False), Counter()
+    got = list(base(s.conn, "episode", selection(), c, counts))
     assert got == ["no-note", "plain"]                   # one created_at, so id order
-    assert counts["needs_yes:person:jenn"] == 1 and counts["lane_unsettled"] == 2
+    assert counts["needs_yes"] == 1 and people(c.scratch, "needs_yes") == People(1, (("person:jenn", 1),), 0)
+    assert counts["lane_unsettled"] == 2 and not [k for k in counts if "person:" in k]   # no key per person (S3)
     assert sorted(base(s.conn, "episode", selection(), ctx(s, ledger=None), Counter())) == sorted(
         ["plain", "about-jenn", "pending", "other-lane", "no-note"])
 
@@ -931,8 +953,8 @@ def test_in_the_owners_home_co_subjects_ship_and_are_carried(tmp_path):
                                                           "about-two": ["person:jenn", "person:lee"]})
     c, counts = ctx(s, ledger=led, owner="andy", home=True), Counter()
     assert sorted(base(s.conn, "episode", selection(), c, counts)) == ["about-jenn", "about-two", "plain"]
-    assert counts["others_memories"] == 2 and {k for k in counts if k.startswith("others_people:")} == {
-        "others_people:person:jenn", "others_people:person:lee"}
+    assert counts["others_memories"] == 2 and people(c.scratch, "others") == People(
+        2, (("person:jenn", 2), ("person:lee", 1)), 0)
     rows = list(cosubject_rows(Shipped(("about-jenn", "about-two", "plain"), ()), c))
     assert rows == [("about-jenn", "episode", "person:jenn"), ("about-two", "episode", "person:jenn"),
                     ("about-two", "episode", "person:lee")]
@@ -946,7 +968,7 @@ def test_only_effective_co_subjects_are_carried(tmp_path):
     c = ctx(s, ledger=led, owner="andy", home=True)
     assert list(cosubject_rows(Shipped(("m3", "m4"), ()), c)) == [("m4", "episode", "person:lee")]   # never the owner (nit 5)
 
-def test_a_co_subjects_no_keeps_the_memory_home(tmp_path):                 # I 5.2 denied(m); the check's M1
+def test_a_co_subjects_no_keeps_the_memory_home(tmp_path, monkeypatch):    # I 5.2 denied(m); the check's M1
     s = new_store(tmp_path, "s")
     for i in ("about-jenn", "about-lee", "plain"): ep(s, i)
     read_cal = dict(actions=["read"], purposes=["calibration"])
@@ -957,13 +979,56 @@ def test_a_co_subjects_no_keeps_the_memory_home(tmp_path):                 # I 5
                                          deny(**read_cal, audience=["place:la-county/parks"])]})   # none refuses
     c, counts = ctx(s, ledger=led, owner="andy", home=True, now=NOW), Counter()
     assert sorted(base(s.conn, "episode", selection(), c, counts)) == ["about-jenn", "plain"]
-    assert counts["said_no:person:lee"] == 1 and counts["others_memories"] == 1
+    assert people(c.scratch, "said_no").named == (("person:lee", 1),) and counts["others_memories"] == 1
     assert list(cosubject_rows(Shipped(("about-jenn", "plain"), ()), c)) == [("about-jenn", "episode", "person:jenn")]
     roads = ledger(tmp_path / "h2", owner="andy", store=s, cosubjects={"about-lee": "person:lee"},
                    denies={"person:lee": [deny(kinds=["road", "trail"], actions=["route"], purposes=["trail-evaluation"])]})
     assert "about-lee" in base_ids(s, roads, route=False) and "about-lee" not in base_ids(s, roads, route=True)
     calm = ledger(tmp_path / "h3", owner="andy", store=s, cosubjects={"about-lee": "person:lee"})
-    assert not Refusals(calm, ctx(s, ledger=calm, owner="andy", home=True, now=NOW)).any         # no State is built
+    forbid_state(monkeypatch)                                  # any Ledger.state() call fails the test (the re-check's S5)
+    calm_ctx = ctx(s, ledger=calm, owner="andy", home=True, now=NOW)
+    assert not Refusals(calm, calm_ctx).any
+    assert sorted(base(s.conn, "episode", selection(), calm_ctx, Counter())) == ["about-jenn", "about-lee", "plain"]
+
+def test_a_copy_carries_what_its_source_gains_after_the_copy(tmp_path):   # I 5.2; the re-check's RM1 (P 6.3 item 1, 7.4)
+    src = f"mem:{GENOME_ID}/episode/g1"                    # genome sync's source (federation.py:207-213)
+    for owner, home in (("andy", True), ("sam", False)):
+        s = new_store(tmp_path / owner, "s"); ep(s, "copy"); ep(s, "plain")
+        led = ledger(tmp_path / owner / "home", owner=owner, store=s)
+        copy_of(led, ref_of(s, "copy"), src)                  # Ledger.record_copy: the source has no co-subject yet
+        add_subject(led, src, "person:jenn")                  # recorded on the source after the copy
+        assert led.cosubjects(ref_of(s, "copy")) == frozenset()          # the copy's own rows don't name her
+        assert cosubjects_of(led, ref_of(s, "copy"), owner=owner) == frozenset(
+            subjects_of(led.state(), ref_of(s, "copy"), NOW)) - {f"person:{owner}"} == {"person:jenn"}
+        c, counts = ctx(s, ledger=led, owner=owner, home=home), Counter()
+        got = sorted(base(s.conn, "episode", selection(), c, counts))
+        if home:
+            assert got == ["copy", "plain"] and counts["others_memories"] == 1
+            assert list(cosubject_rows(Shipped(("copy", "plain"), ()), c)) == [("copy", "episode", "person:jenn")]
+        else:
+            assert got == ["plain"] and people(c.scratch, "needs_yes").named == (("person:jenn", 1),)
+    s = new_store(tmp_path / "far", "s"); ep(s, "far")
+    led = ledger(tmp_path / "far" / "home", owner="andy", store=s)
+    chain = [ref_of(s, "far")] + [f"mem:{GENOME_ID}/episode/c{k}" for k in range(1, 6)]
+    link_copies(led, chain); add_subject(led, chain[5], "person:kim")    # 5 links up: past MAX_COPY_CHAIN
+    assert cosubjects_of(led, chain[0], owner="andy") == frozenset()
+
+def test_what_the_permissions_spec_refuses_whole_stays_home(tmp_path):   # I 5.2 bound, retired; RM1, S1
+    s = new_store(tmp_path, "s")
+    for i in ("nine", "eight", "about-ava", "about-ava-home", "about-parks", "plain"): ep(s, i)
+    led = ledger(tmp_path / "home", owner="andy", store=s,
+                 cosubjects={"nine": "person:kim", "about-ava": "person:ava", "about-parks": "place:la-county/parks"})
+    src = f"mem:{GENOME_ID}/episode/g1"
+    copy_of(led, ref_of(s, "nine"), src); copy_of(led, ref_of(s, "eight"), src)
+    for p in range(7): add_subject(led, src, f"person:p{p}")   # after both copies; never refused for them (P 7.4)
+    retire(led, "person:ava")                                  # the owner is an admin (permission_ledger.py:204, :1076-1078)
+    add_subject(led, ref_of(s, "about-ava-home"), "person:bo"); retire_place(led, "place:home/bo")
+    retire_place(led, "place:la-county/parks")                 # a retired place co-subject keeps nothing home
+    c, counts = ctx(s, ledger=led, owner="andy", home=True, now=NOW), Counter()
+    assert sorted(base(s.conn, "episode", selection(), c, counts)) == ["about-parks", "eight", "plain"]
+    assert counts["bound"] == 1 and counts["retired"] == 2      # nine: andy, kim and the source's 7 are 9 subjects
+    assert people(c.scratch, "retired") == People(2, (("person:ava", 1), ("person:bo", 1)), 0)
+    assert len(list(cosubject_rows(Shipped(("eight",), ()), c))) == 7
 
 def test_source_owner_d37(tmp_path):
     s = new_store(tmp_path, "s"); home = tmp_path / "home"
@@ -998,21 +1063,51 @@ Expected: FAIL, `ImportError: cannot import name 'check_owner' from 'imprint_fil
 
 - [ ] **Step 3: Implement the reads and refusals**
 
-Refs are `mem:<source id>/<layer>/<id>`. `cosubjects(m)` is `ledger.cosubjects(ref) - {f"person:{owner}"}`, the
-effective rows only (P 7.4's removals applied). `ctx.home` is `terms.audience == f"place:home/{owner}"`, set once by
+Refs are `mem:<source id>/<layer>/<id>`. `cosubjects(m)` is `cosubjects_of(ledger, ref, owner=owner)`, which runs
+`COSUBJECTS_SQL` on the ledger's read-only connection with `ref`, `max_links` = `MAX_COPY_CHAIN` (4), `owner` =
+`person:<owner>` and `limit` = `MAX_SUBJECTS` (8), the effective rows only (P 7.4's removals applied):
+
+```sql
+WITH RECURSIVE chain(ref, links) AS (
+  SELECT :ref, 0
+  UNION
+  SELECT copies.source, chain.links + 1 FROM chain JOIN copies ON copies.object = chain.ref
+   WHERE chain.links < :max_links)
+SELECT subjects.subject FROM chain JOIN subjects
+    ON subjects.object = chain.ref AND subjects.removed_seq IS NULL
+UNION
+SELECT stores.owner FROM chain JOIN stores
+    ON chain.ref LIKE 'mem:%'
+   AND stores.instance_id = substr(chain.ref, 5, instr(substr(chain.ref, 5), '/') - 1)
+   AND stores.imprint_of IS NULL
+EXCEPT SELECT :owner
+ORDER BY 1 LIMIT :limit
+```
+
+It is `subjects_of` (`permissions.py:1100-1117`) at the plan's clock, less the owner: the ref and up to 4 sources,
+each with its rows not removed and its store's owner when the store is registered and no imprint. Checked on this
+Pi on 2026-10-26 (SQLite 3.40.1) against `subjects_of` on a fixture State with a copy of a copy whose sources carry a
+removed row, a place and another owner's registered store, a source in an unregistered store, and a chain of 6
+links: the same sets every time, the chain cut after 4 sources. 100,000 queries took 2.9 s and 3.0 s in two runs
+there, on a ledger of 100,000 subject rows. `bound(m)` is `len(cosubjects(m)) >= MAX_SUBJECTS`: with the owner that is more than 8
+subjects. `retired(m)` is `any(refusals.retired(s) for s in cosubjects(m))`, asked, like `denied`, only when
+`ctx.home` is true and `refusals.any`. `ctx.home` is `terms.audience == f"place:home/{owner}"`, set once by
 the plan from the station's context (R7), never from a flag.
 `pending(m)` is true when `ledger.latest_lane_note(ref)` is `pending` or names a lane other than the row's `lane`; no
 ledger or no note gives false (D40). `denied(m)` is `any(refusals.refuses(ref, s) for s in cosubjects(m))`, asked
 only when `ctx.home` is true and `refusals.any`; with no ledger it is false. The State is built at most once per plan,
-and only when a deny exists, which in step 1 only a place co-subject the owner stewards can hold (P 7.6); its memory
-is I 14.1's. `record_matches` reads the
+and only when a deny outside the owner's home or a retirement exists; in step 1 only the owner writes either (P 7.6,
+4.2); its memory is I 14.1's. `people` runs three queries on `plan_people` for one reason: `COUNT(DISTINCT
+subject)`; `COUNT(DISTINCT memory_id || '/' || layer)`; and `SELECT subject, COUNT(DISTINCT memory_id || '/' ||
+layer) AS n ... GROUP BY subject ORDER BY n DESC, subject LIMIT ?`. Their sorts spill under `SQLITE_TMPDIR` (R26);
+I 14.1 has their measured cost. `record_matches` reads the
 deny as P 5.3 reads a deny, so a deny naming another place, or revoked, or ended, refuses nothing. `check_source`
 compares `Path.resolve()` of the given path with the published house and each root. Messages are fixed sentences that
 name the reason, never a memory.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 11 passed (Task 7's 4 and these 7).
+Run: the command of step 2. Expected: PASS, 13 passed (Task 7's 4 and these 9).
 
 - [ ] **Step 5: Commit**
 
@@ -1550,8 +1645,12 @@ git commit -m "Imprints: leak checks L1 to L4 on values, FTS vocabularies, vec0 
     and the confirmation), or, at n = 0, with no ledger or a ledger that records no co-subject on what leaves, the
     "can't count them, and no one but you is recorded on them" words with no "Other people" line and no "0
     memories" (`OTHERS_HOME_WORDS`, `OTHERS_AWAY_WORDS`, `OTHERS_NO_LEDGER_WORDS` in `imprint_filter.py`; I 5.4, the
-    check's M2); each `said_no:<person>` count as "N memories stay because <name> said no" under "What stays here";
-    and the permission in words;
+    check's M2); under "What stays here", each person `people(scratch, "said_no")` names as "N memories stay because
+    <name> said no", each of `people(scratch, "retired")` as "N memories stay because <name> is retired in your
+    permissions ledger", and `counts["bound"]` as one line with no name, "N memories stay because more than 8 people or
+    places are recorded on them" (I 5.4; the re-check's RM1 and S1); every list of names, and every reason's lines, at
+    most `NAMES_SHOWN`, then "and N more" or one line for the rest, from `People.more` (I 5.4; the re-check's S3), so
+    the text and `--json` never grow with the number of people; and the permission in words;
   - `ensure_scratch_env(scratch: Path, *, environ, execve) -> None` (R26): returns when `SQLITE_TMPDIR`, `TMPDIR` and
     `IMPRINT_SCRATCH` all name `scratch`; else calls `execve(sys.executable, [sys.executable, *sys.orig_argv[1:]],
     env)` with the three set, once. Every subcommand of `main` that opens SQLite calls it first (Tasks 15, 16, 19, 34);
@@ -1602,6 +1701,9 @@ def test_the_dry_run_says_plainly_how_many_memories_name_other_people(tmp_path):
     said_no = render_dry_run(make_plan(*plan_args(tmp_path / "no", owner="andy", cosubjects=cos,
                                                   denies={"person:lee": [deny(actions=["read"], purposes=["calibration"])]})), ANDY_CONTEXT)
     assert "1 memory stays because lee said no" in said_no
+    many = {f"e{i}": f"person:p{i:02d}" for i in range(12)}                # the re-check's S3
+    capped = render_dry_run(make_plan(*plan_args(tmp_path / "many", owner="andy", episodes=12, cosubjects=many)), ANDY_CONTEXT)
+    assert "(12 people: " + ", ".join(f"p{i:02d}" for i in range(10)) + " and 2 more)" in capped and "p10" not in capped
 
 def test_the_scratch_directory_is_set_before_python_starts(tmp_path):           # R26; the check's S1
     calls, scratch = [], tmp_path / "s"; scratch.mkdir()
@@ -2152,7 +2254,8 @@ git commit -m "Peer: imprint-permission and imprint-receipt records, and verify_
     - `received`: {`bytes`, `sha256`, `parts`, `manifest_sha256`};
     - `approved`, `withdrawn`, `ended`: {};
     - `denied`: {} (Andy's denial) or {`term`} (the decision refused at approval, Task 29);
-    - `admitted`: {`checks`, `report_sha256`, `skipped`, `roads_and_trails`};
+    - `admitted`: {`checks`, `report_sha256`, `skipped`, `roads_and_trails`, `sessions_too_large`} (I 10; the
+      re-check's S4);
     - `failed`: {`step`, `message`} (admission ran and failed: a check number 1 to 17, `calibration` or `count`, R11)
       or {`term`} (the decision refused at a run's start, or the run ended during admission, Task 36);
     - `use-started`: U = {`use`, `use_id`, `actions`, `purpose`, `objects`};
@@ -2315,6 +2418,13 @@ def test_the_operators_own_copy_may_carry_others(tmp_path):
     st = station(tmp_path)                                   # andy's own ship, serenity, sends to place:home/andy
     doc = request_doc(owner_ship="serenity", **{"others.memories": 2, "others.people": 2, "contents.imprint_subjects": 3})
     assert st.serenity.post("/api/imprints", content=canonical(doc)).status_code == 201
+
+@pytest.mark.parametrize("change", [                       # the counts rule alone, on Andy's own request (the re-check's S5)
+    {"others.memories": 0, "others.people": 0, "contents.imprint_subjects": 3},   # the reverse: rows with no count
+    {"others.memories": 4, "others.people": 1, "contents.imprint_subjects": 3}])  # more memories than rows
+def test_the_counts_rule_on_the_operators_own_request(tmp_path, change):
+    st = station(tmp_path)
+    assert st.serenity.post("/api/imprints", content=canonical(request_doc(owner_ship="serenity", **change))).status_code == 400
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2331,7 +2441,8 @@ handle must be the super admin's username (`users.is_super_admin`), and the ship
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 23 passed (18 bad values among them).
+Run: the command of step 2. Expected: PASS, 25 passed (18 bad values from Sam's ship and 2 on Andy's own request
+among them).
 
 - [ ] **Step 5: Commit**
 
@@ -3181,7 +3292,8 @@ git commit -m "Imprints: admission checks 10 to 17, the digest recomputed from t
   - registration: `<id>/imprint.json` (status, manifest, permission, admission time, the report's SHA-256, the engram
     commit, and `others` with the number of `imprint_subjects` rows, which registers the carried co-subjects, D43);
     files 0444, the directory 0555; `<id>.state/result.json` `{"status": "admitted", "checks": 17,
-    "report_sha256", "skipped", "roads_and_trails": N, "ended_at"}`. A failure writes `{"status": "failed", "step",
+    "report_sha256", "skipped", "roads_and_trails": N, "sessions_too_large": K, "ended_at"}` (K from Task 35's
+    count, 0 without `route`). A failure writes `{"status": "failed", "step",
     "message", "ended_at"}` and exits 1;
   - `list_imprints(root: Path) -> list[dict]` and `imprint.py list --imprints-dir`.
 
@@ -3283,9 +3395,14 @@ git commit -m "Imprints: imprint.py admit, decided again, checked before each wr
 - Consumes: Task 34; the trails plan's `roads_and_trails` through `derive` (R10); Task 28's `ceiling_world`.
 - Produces:
   - `class CountUnavailable(RuntimeError)`;
-  - `count_roads_and_trails(conn, *, lanes: Sequence[str], as_of: int, derive: Callable | None = None) -> int`: N,
-    the sum over the scope's lanes of `derive(conn, lane=lane, as_of=as_of)`, T's count of one lane's roads and
-    trails (I 10, D42). T's `roads_and_trails` derives one session at a time, writes each session's steps to a
+  - `RoadCount(n: int, sessions_too_large: int)`;
+  - `count_roads_and_trails(conn, *, lanes: Sequence[str], as_of: int, derive: Callable | None = None) -> RoadCount`:
+    N, the sum over the scope's lanes of `derive(conn, lane=lane, as_of=as_of, counts=counts)`, T's count of one
+    lane's roads and trails (I 10, D42), and K, the largest of what each lane's call counted into its own
+    `counts["sessions_too_large"]`, the sessions over T 4's bound that N leaves out (T I7's third ask; I 10; the
+    re-check's S4). The largest, not the sum, since T's re-check asks whether one session counts once per lane (its
+    RS3): the largest counts none twice, and is 0 only when every lane's is. When the trails plan settles RS3, Task 35
+    follows it (gate G19). T's `roads_and_trails` derives one session at a time, writes each session's steps to a
     scratch file under `TMPDIR` and counts the roads there by SQL with T 5's support rule (the trails plan's TR20,
     TR28; T R21 and I7 (c)); this plan holds only the integers. Revision 7's first draft aggregated the steps here
     with a per-session `derive` and a `scratch` parameter, which R10 lacked and the trail spec did itself; the check's
@@ -3324,8 +3441,10 @@ def test_counting_reads_the_package_at_t1(tmp_path):
 
 def test_the_count_is_the_sum_of_the_trail_specs_lane_counts(tmp_path):     # R10; the check's S8
     root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, until=T1, lanes=("personal", "work")), route=True, valid_until=FAR)
-    assert admit(iid_, root=root, verify_cmd=OK, derive=per_lane_stub({"personal": 2, "work": 3})) == 0
-    assert json.loads((root / f"{iid_}.state" / "result.json").read_text())["roads_and_trails"] == 5
+    stub = per_lane_stub({"personal": 2, "work": 3}, too_large={"personal": 1, "work": 1})   # one session, seen in both lanes
+    assert admit(iid_, root=root, verify_cmd=OK, derive=stub) == 0
+    result = json.loads((root / f"{iid_}.state" / "result.json").read_text())
+    assert (result["roads_and_trails"], result["sessions_too_large"]) == (5, 1)    # K beside N, counted once (the re-check's S4)
     assert not (root / f"{iid_}.state" / "scratch").exists()
 
 def test_admission_stays_inside_its_need(tmp_path):
@@ -3353,12 +3472,13 @@ Expected: FAIL, `TypeError: admit() got an unexpected keyword argument 'derive'`
 
 - [ ] **Step 3: Implement the count**
 
-The count opens the package with `store_reader.connect(..., immutable=True)`. It keeps only the number. The real
-`derive` is a thin adapter over the trails plan's `trails.roads_and_trails(conn, *, lane, as_of)` (its TR20 and Task
-4), in one place (`_trail_derive`), so the trails plan changes one function when it fixes its name. T holds one
+The count opens the package with `store_reader.connect(..., immutable=True)`. It keeps only the two numbers. The real
+`derive` is a thin adapter over the trails plan's `trails.roads_and_trails(conn, *, lane, as_of, counts)` (its TR20
+and Task 4, whose `counts` takes `sessions_too_large`), in one place (`_trail_derive`), so the trails plan changes one function when it fixes its name. T holds one
 session at a time and puts its scratch file under `TMPDIR` (gate G19; T I7 (c)); until it exists, the stubs stand
 in, and `test_count_matches_the_trail_functions` stays skipped (G13). The test stubs `counting_stub(n)`,
-`per_lane_stub(counts)` and `recording_stub(seen)` take the `lane` and `as_of` keywords and return an integer. T's
+`per_lane_stub(counts, too_large={})` and `recording_stub(seen)` take the `lane`, `as_of` and `counts` keywords, add
+their lane's `too_large` to that call's `counts["sessions_too_large"]`, and return an integer. T's
 function takes `as_of` in integer microseconds (the trails plan's TR22), so `_trail_derive` passes `as_of * 10**6`;
 every time this plan holds stays in seconds.
 
@@ -3395,7 +3515,7 @@ git commit -m "Imprints: admission counts R(I) at t1 with route, inside its Need
   - `station_imprint_sync(*, root: Path) -> dict` (admission part): for each `approved` row, the first rule that
     holds:
     1. `result.json` says `admitted`: the `admitted` receipt (`{"checks": 17, "report_sha256", "skipped",
-       "roads_and_trails"}`) and status `admitted`;
+       "roads_and_trails", "sessions_too_large"}`) and status `admitted`;
     2. `result.json` says `failed`: `failed` `{"step", "message"}` from it, then the deletion, reason `failed`;
     3. a `failed` receipt naming a term exists (refused at a run's start): the deletion, reason `ended` when the term
        is `end`, else `failed`;
@@ -3407,8 +3527,10 @@ git commit -m "Imprints: admission counts R(I) at t1 with route, inside its Need
     6. else nothing: the admission waits or runs.
     Rows in `deleting` or `deleted` never move. A killed unit runs no sync of its own, so rule 5 is applied by the
     first sync after the bound, which the hourly sweep runs (as Task 39 finishes a stopped use);
-  - `station_imprints(*, root: Path, awaiting: bool = False) -> list[dict]` and its lines (I 10's example, with
-    "receipts signed" or "receipts not yet signed"); `--awaiting-admission` prints the full ids of `approved` rows
+  - `station_imprints(*, root: Path, awaiting: bool = False) -> list[dict]`, each row with `roads_and_trails` and
+    `sessions_too_large` from the `admitted` receipt once there is one, and its lines (I 10's example, with
+    "receipts signed" or "receipts not yet signed", and with `route` "N roads and trails counted", plus "(K sessions
+    too large to count)" when K is above 0; the re-check's S4); `--awaiting-admission` prints the full ids of `approved` rows
     with neither `admission.json` nor `result.json`, never begun (R24); `--resolve PREFIX` prints one full imprint id
     or exits 2.
 
@@ -3428,10 +3550,14 @@ def test_the_same_when_the_ship_shortened_to_a_time_that_passed(tmp_path):
     assert st.store.station_imprint_admit_begin(st.imprint_id, root=st.root, operator="andy")["term"] == "end"
 
 def test_sync_records_an_admitted_result_with_its_count(tmp_path):
-    st = approved(tmp_path, route=True); begin(st); write_result(st, status="admitted", roads_and_trails=150_000)
+    st = approved(tmp_path, route=True); begin(st)
+    write_result(st, status="admitted", roads_and_trails=150_000, sessions_too_large=2)
     st.store.station_imprint_sync(root=st.root)
     admitted = receipts(st)[-1]["record"]
     assert admitted["event"] == "admitted" and admitted["detail"]["roads_and_trails"] == 150_000 and row(st)["status"] == "admitted"
+    assert admitted["detail"]["sessions_too_large"] == 2                                   # the re-check's S4
+    shown, = [r for r in st.store.station_imprints(root=st.root) if r["imprint_id"] == st.imprint_id]
+    assert (shown["roads_and_trails"], shown["sessions_too_large"]) == (150_000, 2)
 
 def test_sync_never_moves_a_withdrawn_imprint_to_admitted(tmp_path):
     st = approved(tmp_path); begin(st); write_result(st, status="admitted", roads_and_trails=0)
@@ -4329,11 +4455,11 @@ def test_memory_rows_are_per_action_purpose_and_batch(tmp_path):
     assert subject_rows(led_home, action="read") == 1300
 
 def test_carried_co_subjects_get_their_own_use_subjects_rows(tmp_path):
-    led_home = ledger_home(tmp_path)
-    home = imported_home(tmp_path, memories=3, receipts=["admitted"], subjects={0: ["person:jenn", "person:lee"]})
+    led_home = ledger_home(tmp_path, owner="andy")           # only the operator's own copy carries any (I 5.2; the re-check's S5)
+    home = imported_home(tmp_path, owner="andy", memories=3, receipts=["admitted"], subjects={0: ["person:jenn", "person:lee"]})
     import_receipts(IMPRINT_ID, home=home, engram_home=led_home)
     assert subject_rows(led_home, action="read") == 5                      # 3 owners' rows, and jenn's and lee's
-    assert {s for s, ref in subject_pairs(led_home, action="read") if s != "person:sam"} == {"person:jenn", "person:lee"}
+    assert {s for s, ref in subject_pairs(led_home, action="read") if s != "person:andy"} == {"person:jenn", "person:lee"}
 
 def test_roads_and_trails_rows_split_at_100000_and_are_null_without_a_count(tmp_path):
     led_home, home = ledger_home(tmp_path), imported_home(tmp_path, route=True, receipts=[("admitted", 150_000)])
@@ -4451,7 +4577,8 @@ git commit -m "Make: the owner's imprint targets, plan to verify (I 13)"
 - Consumes: Tasks 25, 30, 31.
 - Produces: the route `/#imprint?code=<code>` (as `/#dock?code=`) renders `imprint_preview`'s fields in words, the
   other-people words it carries, a box with the check text it carries (`CHECK_TEXT_AT_HOME` with its counts for a
-  copy in the owner's home, else `CHECK_TEXT`; I 8, D27) that must be ticked, a password field and "Allow" and
+  copy in the owner's home with n above 0, `CHECK_TEXT_AT_HOME_NONE` there at n = 0, else `CHECK_TEXT`; I 8, D27;
+  the re-check's S5) that must be ticked, a password field and "Allow" and
   "Decline" buttons; Accounts → Imprints lists
   the person's imprints (short id, status, end date, last event) with Withdraw and Shorten. When `GET /api/imprints`
   answers 404 (R8), the Accounts section is not shown.
@@ -4478,6 +4605,13 @@ def test_the_operators_own_copy_shows_the_counts_and_the_acknowledgment(imprint_
     page.get_by_label("Password").fill(ANDY_PASSWORD); page.get_by_role("button", name="Allow").click()
     expect(page.get_by_text("Allowed")).to_be_visible()
 
+def test_the_operators_own_copy_at_n_0_promises_no_co_subject(imprint_browser):   # I 8, M2; the re-check's S5
+    page = signed_in(imprint_browser, "andy")
+    made = imprint_browser.request(ship="serenity", others={"memories": 0, "people": 0})
+    page.goto(f"{imprint_browser.url}/#imprint?code={made['code']}")
+    expect(page.get_by_label(CHECK_TEXT_AT_HOME_NONE)).to_be_visible()
+    expect(page.get_by_text("co-subjects")).to_have_count(0)
+
 def test_accounts_imprints_withdraw(imprint_browser):
     page = signed_in(imprint_browser, "sam"); imprint_browser.admitted()
     page.goto(f"{imprint_browser.url}/#accounts"); page.get_by_role("button", name="Withdraw").click()
@@ -4497,7 +4631,7 @@ Follow the docking view's code paths in `app.js`. Every requester-supplied strin
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: the command of step 2. Expected: PASS, 3 passed.
+Run: the command of step 2. Expected: PASS, 4 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4509,7 +4643,7 @@ git commit -m "Peer web: the imprint confirm view and Accounts, Imprints (I 9, 1
 ### Task 48: The docs
 
 **Files:**
-- Modify: `peer/API.md` (the routes of I 9; the two record kinds; that receipts from key-less commands are signed by the lighthouse, beside `:300-302`; `roads_and_trails` as R(I) at t₁ over the scope's lanes, YN1)
+- Modify: `peer/API.md` (the routes of I 9; the two record kinds; that receipts from key-less commands are signed by the lighthouse, beside `:300-302`; `roads_and_trails` as R(I) at t₁ over the scope's lanes, YN1, and `sessions_too_large` beside it on the `admitted` receipt, I 10)
 - Modify: `engram/CLAUDE.md` (an "Imprints" paragraph under Architecture, which says each imprint process stays under 512 MiB and each unit carries `MemoryMax=512M`, one job at a time; Key Files rows for `imprint.py`, `imprint_filter.py`, `imprint_checks.py`)
 - Modify: `CLAUDE.md` (the approving section: an `IMPRINT` item is a person's memories, and may hold memories about other people, whose count it shows; Andy approves no item with that count above 0 until gate G18 is passed; Andy confirms its short id against the owner's machine; `station-approve` returns while admission runs, or says the admission waits while another imprint job runs; agents never read `~/.engram/imprints/` except through `imprint.py use`, and never sign or write imprint records by hand)
 - Test: `peer/tests/test_imprint_docs.py`
@@ -4520,7 +4654,7 @@ git commit -m "Peer web: the imprint confirm view and Accounts, Imprints (I 9, 1
 def test_the_docs_name_what_the_spec_requires():
     api, engram_md, claude_md = (REPO / "peer" / "API.md").read_text(), (REPO / "engram" / "CLAUDE.md").read_text(), (REPO / "CLAUDE.md").read_text()
     for route in ("POST /api/imprints", "/api/imprints/{id}/confirm", "/api/imprints/{id}/parts/{n}", "/api/imprints/{id}/withdraw",
-                  "imprint-permission", "imprint-receipt", "roads_and_trails"):
+                  "imprint-permission", "imprint-receipt", "roads_and_trails", "sessions_too_large"):
         assert route in api, route
     assert "**Imprints:**" in engram_md and "| `imprint.py` |" in engram_md
     approving = claude_md.split("# Approving on the station")[1]
@@ -4614,14 +4748,17 @@ git commit -m "Imprints: one imprint end to end, from the plan to the tombstone"
   fixture of I 16's "Every process at its bounds": 100,000 memories (90,000 episodes in two lanes of 45,000, so both
   lanes are over 16,000 and are skipped; 10,000 semantics, one of them a hub of 1,025 sources), random 768-dimension
   unit vectors, 1 KiB of text each, 200,000 `memory_log` rows over 2,000 closed sessions, a `cold.db` of 100,000 keys,
-  and a fixture ledger with co-subjects on 1,000 memories, 7 each at most; the owner is the operator, so they ship.
+  and a fixture ledger with 7 co-subjects on every memory, 700,000 distinct people in all, so the people counts, the
+  `imprint_subjects` rows and `import-receipts`' 4,096 pairs a batch are at their bounds (the re-check's S3 and nit
+  1); the owner is the operator, so they ship.
   Its lanes are over 16,000, so every calibration set there is skipped (the check's S3). `bounds_store(tmp_path)`,
   built the same way, keeps every set at its bound: two lanes and a core set of 16,000 episodes each, a semantic with
   1,024 sources, and a resonance on every episode, with `route`. Each Pi test runs its command in a child under
   `systemd-run --user --scope --quiet -p MemoryMax=512M -p MemorySwapMax=0` and asserts the child's peak under
   `PEAK_BUDGET` (R27), and prints it with the base the child reaches after its imports alone, beside I 14.1's
-  allowance. `strace_temp_files(cmd, env) -> list[str]` runs a command as a child under `strace -f -e
-  trace=open,openat` and returns every SQLite temporary file (`etilqs_…`) it opened.
+  allowance. `strace_temp_files(cmd, env) -> tuple[list[str], list[dict[str, str]]]` runs a command as a child under
+  `strace -f -v -s 65536 -e trace=execve,open,openat` and returns every SQLite temporary file (`etilqs_…`) it opened
+  and the environment of every `execve`, the re-exec's included (R26).
 
 - [ ] **Step 1: Write the tests**
 
@@ -4661,13 +4798,15 @@ def test_scratch_stays_on_disk_where_it_belongs(tmp_path):                  # I 
     watched = tmp_path / "watched"; watched.mkdir()
     env = {**os.environ, "TMPDIR": str(watched), "SQLITE_TMPDIR": str(watched)}   # set before each child starts
     plan_id = make_plan(*plan_args(tmp_path)).id
-    opened = strace_temp_files([sys.executable, IMPRINT_PY, "build", "--plan", plan_id, "--superyak-home", str(HOME(tmp_path))], env)
+    opened, _ = strace_temp_files([sys.executable, IMPRINT_PY, "build", "--plan", plan_id, "--superyak-home", str(HOME(tmp_path))], env)
     assert opened and all(Path(p).parent.parent == HOME(tmp_path) / "imprints" / "plans" for p in opened)
     root, iid_ = handed_off(tmp_path, built_of(tmp_path, plan_id), route=False, valid_until=FAR)
-    opened = strace_temp_files([sys.executable, IMPRINT_PY, "admit", "--id", iid_, "--imprints-dir", str(root),
-                                "--verify-cmd", OK_CMD], env)
-    assert all(Path(p).parent == root / f"{iid_}.state" / "scratch" for p in opened)
-    assert not [p for p in opened if Path(p).is_relative_to(watched)] and not (root / f"{iid_}.state" / "scratch").exists()
+    scratch = str(root / f"{iid_}.state" / "scratch")
+    opened, envs = strace_temp_files([sys.executable, IMPRINT_PY, "admit", "--id", iid_, "--imprints-dir", str(root),
+                                      "--verify-cmd", OK_CMD], env)
+    assert any(e.get("SQLITE_TMPDIR") == e.get("TMPDIR") == e.get("IMPRINT_SCRATCH") == scratch for e in envs)   # the re-exec ran
+    assert all(Path(p).parent == Path(scratch) for p in opened)        # admission may need no temporary file (the re-check's S5)
+    assert not [p for p in opened if Path(p).is_relative_to(watched)] and not Path(scratch).exists()
 ```
 
 ```python
@@ -4763,8 +4902,9 @@ the room that replaced it), with the branch head and every result below. It neve
    5.4; `closed_sessions` and the two log scrubs against I 5.2 and 6.2; L1 to L4 against I 6.4; the 17 checks against I
    10; `decide_use`'s terms, order and codes against I 8; withdrawal's four steps and the sync's rules 1 to 7 against I
    12; `station-imprint-unit-env` against D29 and R15; the confirm, its three texts (away, at home with n above 0,
-   at home with n = 0) and its attestation against D1, D27 and I 8; `cosubject_rows`, `Refusals` and `denied`,
-   `imprint_subjects` and the `others` rule against I 5.2, 6.2, 14 and D43; `ensure_scratch_env` against R26 and
+   at home with n = 0) and its attestation against D1, D27 and I 8; `COSUBJECTS_SQL` against P 6.3 item 1, 7.4 and
+   `subjects_of`; `cosubject_rows`, `Refusals`, `retired`, `bound` and `denied`, `plan_people` and `people`,
+   `imprint_subjects` and the `others` rule against I 5.2, 5.4, 6.2, 14 and D43; `ensure_scratch_env` against R26 and
    I 6.1, step 7; the streamed digest against I 5.4's definition; `build_filtration_blocked` against R28, the edge
    order (h, min, max) above all; every unit's `MemoryMax` and the job
    lock against D42 and R29; each receipt's `detail` keys
@@ -4799,8 +4939,8 @@ None of these is run by this plan. Each waits for the person or the plan named.
 | G15 | The spec's next revision takes YS1's words (5.4, 9), YN1 (what N means), YN2 ("every imported receipt with no N"), YN3 (`until` required, R14), YN4 (failure names, R11), YN6 (per action and purpose, R13), XN2 (R15) and R8; and, from the plan's review, R24 (a begun admission runs once; a run killed at its limit fails 3,660 s after `decided_at`, the unit's 3,600 s that I 10's "Time" now gives plus 60, and I 10's "after a crash … resumes" covers only an admission that never began), R25 (receipt `detail` keys: `step`, never `check`; `term` on `denied` and `failed`), R7's `operator`, and the two dense sets I 10's list of three missed (`sheaf.measure_all`'s per-semantic matrices, `audit_unchecked_events`' per-event distance matrix; Task 5). Revision 7 of I took that last item (I 10 now names both); the rest still wait. | This plan edits no spec. |
 | G16 | CN8: a withdrawal or station delete also stopping `superyak-imprint-use-<imprint id>`. | Not built in step 1; it only narrows, and the run's end checks and rules 2 to 4 already record it. |
 | G17 | I 17's later steps, XN6 (which item of P's `Req` holds the ceiling in a step-2 ledger), owner-held keys, encrypted imprints. | Later specs. |
-| G18 | **Other people inside the home** (I 18, D27). Before any imprint whose `others.memories` is above 0 is approved: I and the permissions spec, both revised for P36, are re-checked side by side by a fresh reviewer. P's revision 7 applies A3 as P36: inside the owner's home, his `imprint` and every bulk use that shows nothing to any agent read a co-subject's layer as a restriction layer, so silence passes and a deny refuses; I now follows it, and a co-subject's no keeps a memory home at the source (Task 8's `denied`; I 8, "Carried co-subjects in the meet"; I 17's ask (a)). The re-check confirms the two texts agree and settles two things: the bound of 8 subjects per road or trail, which P applies to a counted bulk use and I's check doesn't yet test (I 8, "The bound of 8 subjects on roads and trails"), and whether the roads-and-trails rows list the carried co-subjects (I 12; the check's S4). Until then Andy approves no such item, which `station-pending` marks. | Two specs must say the same before other people's memories are used (vision, principle 6); the check's M1 asked to keep this gate until then. |
-| G19 | **The trail spec fits the small Pi** (I 17's asks of it). T's revision 9 answers them on paper (its I7, R19 to R21; reviewed in `docs/superpowers/reviews/2026-10-25-small-hardware-trails-review.md`, which asked for a revision): its evaluation has a 320 MiB design peak in the use's 512 MiB unit, it loads no model in process there, and its `roads_and_trails` holds one session at a time for Task 35's count. Still waiting: that review's fixes, the trails plan's build, and its Pi tests. Until then a use may end `not evaluable: limit`, and admission with `route` fails closed (G13). | The trails plan. |
+| G18 | **Other people inside the home** (I 18, D27). Before any imprint whose `others.memories` is above 0 is approved: I and the permissions spec, both revised for P36, are re-checked side by side by a fresh reviewer. P's revision 7 applies A3 as P36: inside the owner's home, his `imprint` and every bulk use that shows nothing to any agent read a co-subject's layer as a restriction layer, so silence passes and a deny refuses; I now follows it, and a co-subject's no keeps a memory home at the source (Task 8's `denied`; I 8, "Carried co-subjects in the meet"; I 17's ask (a)). The re-check confirms the two texts agree and settles two things: the bound of 8 subjects per road or trail, which P applies to a counted bulk use and I's check doesn't yet test (I 8, "The bound of 8 subjects on roads and trails"), and whether the roads-and-trails rows list the carried co-subjects (I 12; the check's S4), taking the re-check's fact that P 9.1 already gives a counted bulk use one `use_subjects` row per distinct subject, so the safe form is `others.people` rows per counted row and a cap on distinct carried people would bound it. It also confirms that a retired place co-subject refuses nothing (Task 8's `retired`; I 5.2). It also confirms that P's section 19 and P36's "Why this form" tell I's rules as they stand: at `c795c59` both said a co-subject's deny can't exist in step 1, and the former that I leaves a carried co-subject's layer out; P's revision after its own re-check, uncommitted beside this one, corrects both (I 17's ask (c); the re-check's S2). Co-subjects are now read up the `copies` chain, and a memory with more than 8 subjects or a retired co-subject stays home (Task 8; the re-check's RM1 and S1), so neither waits here. Until then Andy approves no such item, which `station-pending` marks. | Two specs must say the same before other people's memories are used (vision, principle 6); the check's M1 asked to keep this gate until then. |
+| G19 | **The trail spec fits the small Pi** (I 17's asks of it). T's revision 9 answers them on paper (its I7, R19 to R21; reviewed in `docs/superpowers/reviews/2026-10-25-small-hardware-trails-review.md`, which asked for a revision, now made: T's header and that file's "Response" list the fixes): its evaluation has a 320 MiB design peak in the use's 512 MiB unit, it loads no model in process there, its `roads_and_trails` holds one session at a time for Task 35's count, and it counts `sessions_too_large`, which Tasks 34 to 36 now carry beside N (T I7's third ask; the re-check's S4). That file's "Re-check (a fresh reviewer, 2026-10-26)" approves the fixes with one change to the trails plan (its RM1). Still waiting: that change; its RS3, whether a session over the bound counts once per lane, which Task 35's K follows (the largest lane's count until then); the trails plan's build; and its Pi tests. Until then a use may end `not evaluable: limit`, and admission with `route` fails closed (G13). | The trails plan. |
 | G20 | **The whole Pi** (I 18, 14.1). With one imprint job at its bounds, and the lighthouse and the shared embedder up if the station runs them, the sum of their measured peaks and the system's is under the 2 GB Pi's `MemTotal` less 256 MiB. `MemTotal` is measured on a 2 GB Pi; until one is, it is taken as 2,048 − 165 = 1,883 MiB (this Pi's `MemTotal` is 16,608,224 kB against 16 GiB = 16,777,216 kB, so 168,992 kB, 165 MiB, is held back), and the sum must be under 1,883 − 256 = 1,627 MiB (the check's S6). If not, the station runs without the embedder, and W is "not evaluable: no embedder". | A deploy check, after Task 50's measurements. |
 
 ## Self-review: every component and test to its task
@@ -4828,7 +4968,10 @@ None of these is run by this plan. Each waits for the person or the plan named.
 | Every table classified | 6 |
 | Selection | 7, 8 |
 | Co-subjects carried (A3, D27, D43) | 8 (rows), 12 (digest), 13 (table), 15 (dry run, the n = 0 words), 18 (request, `subjects.json`), 24 (the `others` rule), 25 and 47 (the two checks; 25 tests both home texts), 26 (the pending line), 33 (checks 10, 12, 13), 34 (registered), 45 (`use_subjects`) |
-| A co-subject's no (I 5.2 `denied`, D27; the check's M1) | 8 (kept home, counted, no State without a deny), 15 (dry run), 19 (a deny between plan and build) |
+| A co-subject's no (I 5.2 `denied`, D27; the check's M1) | 8 (kept home, counted, no State without a deny: a spy on `Ledger.state`), 15 (dry run), 19 (a deny between plan and build) |
+| Co-subjects through copies; a retired co-subject; more than 8 subjects (I 5.2; the re-check's RM1 and S1) | 8 (`cosubjects_of` against `subjects_of`, a source's co-subject added after the copy, the chain's bound, `bound`, `retired`), 50 (the cap fixture's 700,000 people) |
+| The people counted on disk (I 5.4, 14.1; the re-check's S3) | 8 (`plan_people`, `people`, no key per person), 15 (10 names and "and 2 more"), 50 (the plan and build at 700,000 people) |
+| `sessions_too_large` beside N (I 10, 12; T I7; the re-check's S4) | 23 (`DETAIL_KEYS`), 34 (`result.json`), 35 (the largest lane's count, so one session counts once), 36 (the receipt and `station-imprints`) |
 | Down-closure; Induced links | 9 |
 | Log rows | 10, 11 (rows), 19 (digest after the plan), 34 (calibration with and without `route`) |
 | No footpath without `route` | 10, 17, 19, 33 |

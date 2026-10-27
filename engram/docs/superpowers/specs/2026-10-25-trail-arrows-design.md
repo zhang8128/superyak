@@ -31,6 +31,13 @@ closed session over the bound makes both gates "not evaluable: too large", and t
 stand (S1), and section 12 gains the tests the check asked for and a peak measured from a reset (S2–S5, S12). Two small
 rules change with M1: the embedder check takes episodes of at most 64 KiB, and a summary reads at most the first 1 MiB
 of its content. Nothing more leaves a machine.
+Those fixes were then re-checked (the same file, "Re-check": approve with one change to the plan, RM1, RS1–RS6 and
+RN1–RN4). Its fixes are applied here and in the plan, and that file's "Re-check response" lists each. RM1 was the
+plan's: the evaluation decides on section 4's bound only once it has read every closed session, since a session's
+`operation_log` rows and its episodes' mentions are counted only as it is read (section 7, step 3). Here: a session
+over the bound counts once in R(I), not once per lane (section 4; Rio Grande's call, RS3); 10.1 gives the imprint
+spec's whole-Pi figure (RS4) and says that the permissions spec's `perform` adds to the same server (RS5), and the
+mention search is linear in the text (section 4; RN2). No other rule changes, and nothing more leaves a machine.
 Revision 8 was the fixes after the cross-check of the consolidation pass
 (`docs/superpowers/reviews/2026-10-25-city-rail-consolidation.md`, "Cross-check" and "Cross-check fixes"). I6's test
 needs one more condition: the fixture's source holds no row at or after t₁, or the test takes `as_of` = t₁ with no
@@ -84,7 +91,7 @@ written in parallel with this revision 9 and uncommitted when it was written. Wh
 | 6 | `53c132a` | Applied the re-check. `at_goal` means the popped goal has no predecessor (RMF1). Without `route`, an imprint ships no session ids, so it holds no trail of any kind (R18, I5; RMF2). The evaluation stays offline, and its unit gets the shared embedder's socket from the station's `runtime.json` (R19, I3; RS2). One use id gives one run, and a finished use retires its allow file (R13, I2; RS3). A changed allow file ends the run as `allow changed`, and only a tombstone is recorded as a withdrawal (I2; RS4). The imprint spec's recall-row test is asked to change (I6; RS1). Nits RN1–RN11. Approved on its final check. |
 | 7 | `ade420c` | The consolidation pass. I2, I3 and I6 are provided by the imprint spec's revision 4, each checked against it (section 11); I6's one `as_of` must be at or after t₁, now in the imprint spec's revision 5. Admission's calibration on an imprint reads no session path, so section 7's "Calibration reads exactly that" now says it of a plain copy only (the imprint spec's `no_paths`). The known limit cites the permissions spec's 7.6. Step 10 names the use's `TimeoutStopSec=60`. No rule changes. |
 | 8 | `e737e02` | The cross-check's fixes. I6's test also needs a source with no row at or after t₁, or `as_of` = t₁ with no row at exactly t₁, since a shipped session can write again after t₁ (section 11; XS1). Section 7's known limit names access counts, last-access times and resonances beside write times, and the imprint spec now tells the owner (XS3). No rule changes. |
-| 9 | this file | Andy's decisions of 2026-10-26 (A7, A8). The full store: section 14's question is answered, and section 7 says what a full-store imprint changes for the evaluation. Small hardware: a 2 GB Pi, every process under 512 MiB (R20); a store read one session at a time, with a scratch file on disk for what grows with it (R21; sections 4 and 5); the tool graph in arrays, at most 128 MiB added to a server (R22; 6.6); the evaluation's graphs one at a time, B in tiles, the bootstrap in chunks, a 320 MiB design peak (R23; section 7); no model in process (R19). The budget and its arithmetic (sections 10 and 10.1), a peak-memory test per pass on the Pi (section 12), and I7 with the imprint spec (section 11). One diagnostic changes: `reflect(focus="trails")` counts suggested touches in the tool graph's trails only (6.6). After its fresh check (the review file's "Response"): a session bounded by its ids as well as its rows, and no text value over 1 MiB read whole (R21, R25; section 4); the evaluation's touches bounded, a session over the bound making both gates "not evaluable: too large", and detours found one at a time (R23, R26; sections 5 and 7); the budget completed (10.1); the co-subject account brought up to date (section 7). |
+| 9 | this file | Andy's decisions of 2026-10-26 (A7, A8). The full store: section 14's question is answered, and section 7 says what a full-store imprint changes for the evaluation. Small hardware: a 2 GB Pi, every process under 512 MiB (R20); a store read one session at a time, with a scratch file on disk for what grows with it (R21; sections 4 and 5); the tool graph in arrays, at most 128 MiB added to a server (R22; 6.6); the evaluation's graphs one at a time, B in tiles, the bootstrap in chunks, a 320 MiB design peak (R23; section 7); no model in process (R19). The budget and its arithmetic (sections 10 and 10.1), a peak-memory test per pass on the Pi (section 12), and I7 with the imprint spec (section 11). One diagnostic changes: `reflect(focus="trails")` counts suggested touches in the tool graph's trails only (6.6). After its fresh check (the review file's "Response"): a session bounded by its ids as well as its rows, and no text value over 1 MiB read whole (R21, R25; section 4); the evaluation's touches bounded, a session over the bound making both gates "not evaluable: too large", and detours found one at a time (R23, R26; sections 5 and 7); the budget completed (10.1); the co-subject account brought up to date (section 7). After its re-check (the review file's "Re-check response"): the evaluation decides on the session bound after reading every closed session (section 7, step 3); a session over the bound counts once in R(I) (section 4, R26); the whole Pi told as the imprint spec's deploy gate tells it, and the permissions spec's addition to the same server (10.1); a linear mention search (section 4). |
 
 ## Decisions in revisions 4 and 5
 
@@ -145,7 +152,7 @@ Andy's two decisions of 2026-10-26, quoted as the vision records them, and Rio G
 | R23 | **The evaluation in bounded memory.** Its trails live in the scratch file. T and each S have at most 20,000 nodes, 262,144 steps and 262,144 touches of full trails, and the run has at most 40,000 held-out sessions; past any of them it answers "not evaluable: too large". It builds one S at a time and routes every qualifying session in it before the next. B's neighbours come from tiles of 256 nodes against 1,024, and the bootstrap draws 64 resamples at a time. Training detours come one at a time and wait in the scratch file (section 7, steps 3, 5 and 6; 10.1). | Rio Grande's call, from A7; the touch bound and the detours from the fresh check's M2 |
 | R24 | **The evaluation on a full-store imprint.** It may run there. It reads memory text only inside the run, reads no co-subject row, shows nothing to any agent, and lets only counts and rates leave. Whether such a use is allowed is decided by the imprint check and the permissions spec's meet, not here (section 7, "On a full-store imprint"). | Rio Grande's call, from A8 |
 | R25 | **One value.** Engram caps no text, so no text value over 1 MiB is ever read whole, by Python or by SQLite. A value's length comes from SQLite's incremental blob reader, which reads nothing for it. An episode's text is searched in pieces of 1 MiB, a log row with `target_ids` over 1 MiB makes its session too large, a summary reads at most the first 1 MiB of its content, W at most the first 16,000 bytes of each text, and the embedder check takes episodes of at most 64 KiB (sections 4, 6.5 and 7). | Rio Grande's call, from the fresh check's M1 and S9 |
-| R26 | **No silent sample.** A closed session over section 4's bound makes both gates "not evaluable: too large", and the report carries `sessions_too_large` (section 7, step 3). R(I) is counted under the same bound, so the imprint spec's N leaves such sessions out (section 4). | Rio Grande's call, from the fresh check's M3 |
+| R26 | **No silent sample.** A closed session over section 4's bound makes both gates "not evaluable: too large", and the report carries `sessions_too_large` (section 7, step 3). The run decides once it has read every closed session, by every row and id section 4 counts. R(I) is counted under the same bound, so the imprint spec's N leaves such sessions out, and each counts once, not once per lane (section 4). | Rio Grande's call, from the fresh check's M3; the decision's timing from the re-check's RM1, the count once from its RS3 |
 
 ## 1. Why
 
@@ -292,7 +299,13 @@ batch, or one row when that row alone is larger, and derives one session at a ti
    before any is read.
 3. It reads the session's recall rows first. Then its episodes stream past one at a time: each one's content and
    context are searched for the session's recalled ids, in pieces ("One value", below), and the text is dropped. So a
-   cited touch's evidence is found without holding any episode's text.
+   cited touch's evidence is found without holding any episode's text. The search is linear in the text (Rio
+   Grande's call, from the re-check's RN2): each piece is scanned once for ids in the uuid form engram writes
+   (`engram/server.py:1866`), and each one found is looked up among the session's recalled ids, held as one sorted
+   tuple; an id of another form is searched for directly. It finds exactly what a search of the whole text for each
+   id finds. Testing each id against each text instead would cost, at the bounds, 327,680 ids × 8,192 episodes =
+   2,684,354,560 searches, and on this Pi one 1 MiB piece against 327,680 ids took 107.3 s, against 0.033 s for the
+   scan.
 4. It derives that session's trails and drops its rows before the next session.
 
 **The session bound** (R21; Rio Grande's call, the id bound from the fresh check's M1). A session gets no trail, and is
@@ -316,7 +329,10 @@ in the evaluation, where it makes both gates "not evaluable: too large" (section
 R(I), the count of roads and trails that the imprint spec's admission takes from `roads_and_trails` (its section 10),
 is counted under this bound too: a session over it adds no trail and no step. So the N in that spec's `admitted` and
 use receipts leaves such sessions out, though their rows ship in the imprint. `roads_and_trails` counts them as
-`sessions_too_large` beside N, and I7 asks the imprint spec to show that count with N (section 11).
+`sessions_too_large` beside N, and I7 asks the imprint spec to show that count with N (section 11). Each such session
+counts once, not once per lane (Rio Grande's call, from the re-check's RS3). Its lane can't be known without reading
+it, so every lane's count reads every closed session and finds the same ones; a sum over the scope's lanes would count
+one session twice with two lanes. So the count beside N is one lane's number, the same for every lane, never the sum.
 
 **One value** (R25; Rio Grande's call, from the fresh check's M1 and S9). Engram caps no text: `remember` checks a
 10-character minimum and no maximum (`engram/server.py:1851`), and `target_ids` and `context` are unbounded text
@@ -1054,7 +1070,7 @@ needs those people's yes (permissions spec P12, P25). This run makes no such use
 
 Whether the use itself is allowed on a copy that carries co-subjects is for the imprint check and the permissions
 spec's meet to decide, not this spec. The two specs' revisions 7, as revised after their checks, now read it the same
-way. The permissions spec's P36 lets the owner's `imprint`, and every bulk use inside his home that shows nothing to
+way. The permissions spec's P36 lets the owner's `imprint`, and his bulk uses inside his home that show nothing to
 any agent, read each co-subject's layer as a restriction layer: silence and a missing layer pass, and a deny refuses
 (its section 3, P36, and section 6.3, "The owner's own copies", which names this run's `read` batches and its counted
 bulk `route`). So a co-subject's no holds inside the home too, as Rio Grande ruled on that spec's check
@@ -1246,8 +1262,13 @@ built over T's nodes, so no graph learns from the tools' own advice.
   a session of more than 16,384 rows or 327,680 ids. Left out quietly, such a session would leave T, every S and the
   held-out set, and that is a sample too: it can move either gate either way. So when any closed session up to
   `as_of` is over that bound, both gates are "not evaluable: too large". The run can't tell such a session's lane
-  without reading it, which is what the bound prevents, so a session in any lane counts. The report carries
-  `sessions_too_large` in every run, 0 included (step 7).
+  without reading it, which is what the bound prevents, so a session in any lane counts. The run decides once it has
+  read every closed session, not from the session index alone (Rio Grande's call, from the re-check's RM1): a
+  session's `operation_log` rows and their ids, and its episodes' mentions, are counted only as the session is read
+  (section 4, steps 2 and 3). A session of 10,000 recall rows and 7,000 `operation_log` rows is over the row bound,
+  though the index shows 10,000; one of 8,192 recall rows of 39 ids and 8,192 episodes that each mention 2 of them
+  holds 8,192 × 39 + 8,192 × 2 = 319,488 + 16,384 = 335,872 ids, over 327,680, though the index shows 319,488. The
+  report carries `sessions_too_large` in every run, 0 included (step 7).
 
 **Seeds.** Every random stream derives from the recorded seed: the stream for purpose p uses
 `int.from_bytes(sha256(f"{seed}:{p}".encode()).digest()[:8], "big")` as a `numpy.random.default_rng` seed. The
@@ -1621,8 +1642,9 @@ evaluation runs in the imprint spec's use unit, with `MemoryMax=512M` and `Memor
 7).
 
 **Units** (Rio Grande's call, from the fresh check's S8). The vision says "512 MB". Every peak here also holds if MB
-means 10⁶ bytes: 512 × 10⁶ bytes is 488.3 MiB, and the largest figure, a server with the tools on, is 433.2 MiB, or
-454.2 × 10⁶ bytes. Only the cap `512M`, 536,870,912 bytes, reads MB as MiB.
+means 10⁶ bytes: 512 × 10⁶ bytes is 488.3 MiB, and the largest figure of this spec's own, a server with the tools
+on, is 433.2 MiB, or 454.2 × 10⁶ bytes. Only the cap `512M`, 536,870,912 bytes, reads MB as MiB. A server that also
+runs the permissions spec's `permit` holds more, past 512 MiB either way ("One server, two specs", below).
 
 **What a process starts with.** For `trails.py` this spec allows the imprint spec's base for an engram process that
 imports numpy, scipy, sqlite-vec and engram's modules, 128 MiB (its 14.1, revision 7, which measured the Pi's system
@@ -1680,8 +1702,13 @@ measure the real processes.
 
 The fresh check measured the plan's frozen dataclass for a recall row at 2,248 bytes with 20 ids, and the response at
 2,199, against 2,098 above. At the larger, one session can hold 16,384 × 2,248 = 36,831,232 bytes, 35.1 MiB, 2.3 MiB
-more than the figures below use. Every design peak below keeps more room than that, and the Pi tests measure the real
-processes.
+more than the figures below use. The mention search (section 4, step 3) also holds the session's distinct recalled
+ids as one sorted tuple that shares the recall rows' strings: 40 + 8 × 327,680 = 2,621,480 bytes, 2.5 MiB, and
+5,761,832 bytes, 5.5 MiB, while it is sorted (measured on this Pi, 2026-10-26, with the same Python). So one session
+can run 2.3 + 5.5 = 7.8 MiB over the figures below. Every design peak below keeps more room than that: the pass
+80.5 + 7.8 = 88.3 under 128, the build's deriving 66.6 + 7.8 = 74.4 under 128, counting R(I) 47.0 + 7.8 = 54.8, so
+admission 193.8 + 7.8 = 201.6 under 384, and the evaluation's deriving 176.9 + 7.8 = 184.7 under 320. The Pi tests
+measure the real processes.
 
 **Revision 8, before.**
 
@@ -1737,12 +1764,26 @@ holds at most 64 + 296.9 = 360.9 MiB by arithmetic. Each design peak is checked 
 the builder makes the structures smaller within the same counts, or the next revision lowers the counts (plan gate
 G11).
 
+**One server, two specs** (the re-check's RS5). The permissions spec adds to the same engram server, one `permit` call
+at a time, at most what one `perform` holds above its imports: 183.1 MiB at its bounds (its section 15, "The engram
+server" under "Memory"). Tool calls run one at a time, under one lock (`engram/server.py:196`, `:653-683`), so a `permit` call and a
+trail call never overlap. But the held tool graph stays resident between calls, and the pass reads `graph.db` outside
+that lock and lets calls run between its batches (section 5). So a server with both on can hold 305.2 + 73.2 + 183.1
+= 561.5 MiB, or 305.2 + 80.5 + 183.1 = 568.8 while a pass is under way during a `permit` call; with 320 MB read as
+MiB, 320 + 73.2 + 183.1 = 576.3 and 320 + 80.5 + 183.1 = 583.6. Each is over 512 MiB. No rule of either spec breaks,
+since the server is not a process this work adds and neither spec bounds it, but 433.2 MiB is the largest figure for
+trails alone, not for the server. One figure for the server across both specs is Rio Grande's to set, if he wants
+one; this revision sets none.
+
 **The whole Pi.** One imprint job, an admission or a use, takes at most its 512 MiB, and the imprint spec runs one at
 a time (its section 10, revision 7). The shared embedder is not this work's: it rests near 1.1 GB, 1,049 MiB, and
 peaked at 1.8 GB on a full re-embed (`scripts/superyak-embedder.service:13`). Beside one job that leaves 2,048 − 1,049
-− 512 = 487 MiB for the system and the lighthouse. The imprint spec's deploy gate measures what is left on a 2 GB Pi
-(its section 18). Where the embedder doesn't fit, it doesn't run, and W is "not evaluable: no embedder" while the
-route gate still runs.
+− 512 = 487 MiB of the 2,048 for the system and the lighthouse. That is not room to spare (the re-check's RS4). The
+imprint spec's deploy gate is the one that decides (its section 18, "Memory on the Pi"), and it counts what a 2 GB Pi
+can use: until one is measured, its `MemTotal` is taken as 2,048 − 165 = 1,883 MiB, with 256 MiB kept available, so
+everything must fit in 1,883 − 256 = 1,627 MiB. One job and the embedder take 1,049 + 512 = 1,561, which leaves
+1,627 − 1,561 = 66 MiB for the system and the lighthouse, "unlikely to be enough" (its section 14.1). Where the
+embedder doesn't fit, it doesn't run, and W is "not evaluable: no embedder" while the route gate still runs.
 
 ## 11. Components
 
@@ -1902,7 +1943,11 @@ for Andy's decisions of 2026-10-26, and changes I3's in-process option.
     scratch file goes there. *Asked in revision 9.* Third, that admission show beside N how many sessions it couldn't
     count: R(I) is counted under section 4's session bound, so N leaves out a session over it though its rows ship, and
     `roads_and_trails` gives that number as `sessions_too_large` (section 4). Rio Grande's call. *Asked after the fresh
-    check of revision 9.*
+    check of revision 9.* Shown once, not summed over the scope's lanes: every lane's call reads every closed session
+    and gives the same number, so a sum would count one session once per lane (section 4; Rio Grande's call, from the
+    re-check's RS3). *Added after the re-check.* The imprint spec's revision 7, as revised in parallel on 2026-10-26,
+    takes the third ask and, until this spec said, keeps K as the largest of the lanes' counts (its section 10,
+    "Counting R(I)", and section 16). Since every lane's count is the same, that is this number, so the two agree.
 
 ## 12. Tests the builder must include
 
@@ -2054,7 +2099,10 @@ for Andy's decisions of 2026-10-26, and changes I3's in-process option.
     gates "not evaluable: too large" (each bound patched small in the test). `--evaluate` runs on the connection whose
     cursors refuse `fetchall` and large `fetchmany`, and gives the same report.
   - A closed session over section 4's bound, by rows or by ids, makes both gates "not evaluable: too large", and the
-    report carries `sessions_too_large` as 1; a store with none carries it as 0 (R26).
+    report carries `sessions_too_large` as 1; a store with none carries it as 0 (R26). That holds for a session over
+    the bound only through its `operation_log` rows, and for one over it only through its episodes' mentions, neither
+    of which the session index shows (the re-check's RM1). `roads_and_trails` leaves such a session out of N and
+    counts it once, whichever lane it is called for, and the sum over lanes counts it once too (section 4).
 - **Goal gate (W).**
   - A synthetic store whose sessions walk planted routes and end by writing a summary near their last memory passes.
   - A store where the goal words sit next to every piece the session used (so nearest to the goal finds them) fails

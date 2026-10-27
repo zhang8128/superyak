@@ -27,7 +27,10 @@ embedder over its socket (T R19). Built and tested on the station's Raspberry Pi
 carries Andy's two decisions of 2026-10-26: the full store (T A8, R24, section 14) and small hardware (T A7, R19–R23,
 section 10.1), with the fixes from its fresh check (`docs/superpowers/reviews/2026-10-25-small-hardware-trails-review.md`,
 "Response"): the session's id bound and one value (T 4, R25), the evaluation's touch bound and its rule for sessions
-over the bound (T 7, R26), and detours one at a time (T 5). Also read: the contract `docs/city-rail-vision.md`; the interface table
+over the bound (T 7, R26), and detours one at a time (T 5); and with the fixes from its re-check (the same file,
+"Re-check response"): the evaluation decides on that rule only once its load has read every closed session (TR31),
+such a session counts once in R(I), not once per lane (TR20), the mention search is linear in the text (TR24), and
+Task 28's long value is built under the parent's cap. Also read: the contract `docs/city-rail-vision.md`; the interface table
 `docs/superpowers/reviews/2026-10-25-city-rail-interfaces.md` ("row N"); the consolidation log
 `docs/superpowers/reviews/2026-10-25-city-rail-consolidation.md`; the permissions plan
 `docs/superpowers/plans/2026-10-25-permissions-by-place.md` ("P plan", its tasks by number); the imprints spec
@@ -171,18 +174,18 @@ Choices T leaves to the builder (its section 13) or does not fix. A reviewer che
 | TR17 | Answer keys beyond T's example: `trail_locate` gives `stations` of `{id, layer, summary, why, angle, through, src}`; `trail_next` gives `stations` of `{id, layer, summary, why, angle, src, next, ends, ended_here, ends_unknown}`, with next items `{id, layer, summary, kind, sessions, last, src}` plus `flag` (`co-cited`, `suggested` or `co-cited, suggested`) when sessions is 0, and ends `{id, layer, summary, sessions, median_hops, src}`; `trail_route` adds `nearest` for `no_goal` and `nearest_goal` for `no_route`. Optional keys: `cut` (`["context"]`, `["goal"]` or both), `ignored`, `degraded`. Dates are `YYYY-MM-DD`; `as_of` is `YYYY-MM-DDTHH:MM:SSZ`. | T 6.5 fixes `trail_route`'s shape by example only. |
 | TR18 | A summary's "compact JSON form" is the JSON string literal, quotes included. Control characters are Unicode category `Cc`, removed after whitespace is collapsed with `str.split`. Lines split with `str.splitlines`. | T 6.5. |
 | TR19 | The held-out share is the last `ceil(0.20 · n)` closed sessions by first touch in the lane, ties by session id. A session's own hops from `s` to `g` is the index of its last `g` minus the index of its first `s` in its lane trail. The bootstrap interval is `numpy.quantile(means, [0.025, 0.975])`, default method. | T 7 steps 1, 5 and 6 leave these open. |
-| TR20 | `roads_and_trails(conn, *, lane, as_of)` is, for one lane, the number of current full trails, one per session with at least two touches in that lane, plus the number of distinct steps of that lane that are roads under T 5's eligibility in `graph.db` mode. `count_roads_and_trails(conn, as_of, *, lanes=LANES)` sums it over `lanes`. Detours are not counted, since the permissions spec's kinds are memory, road and trail. | XS2 needs one number N for the imprints plan (I 10), whose seam sums `derive(conn, lane=lane, as_of=as_of)` over the scope's lanes (its R10). T is the source of truth for trails. |
+| TR20 | `roads_and_trails(conn, *, lane, as_of, scratch=None, counts=None)` is, for one lane, the number of current full trails, one per session with at least two touches in that lane, plus the number of distinct steps of that lane that are roads under T 5's eligibility in `graph.db` mode. `count_roads_and_trails(conn, as_of, *, lanes=LANES, counts=None)` sums it over `lanes`. Detours are not counted, since the permissions spec's kinds are memory, road and trail. A closed session over T 4's bound is counted in `counts` as `sessions_too_large` once, never once per lane: every lane's call reads every closed session and counts the same ones, so `count_roads_and_trails` gives each lane's call its own `Counter` and adds that number from the first lane only (T 4, R26; the re-check's RS3). | XS2 needs one number N for the imprints plan (I 10), whose seam sums `derive(conn, lane=lane, as_of=as_of)` over the scope's lanes (its R10). T is the source of truth for trails. |
 | TR21 | The token ratio of T 6.5 is measured with `anthropic.Anthropic().messages.count_tokens(model="claude-opus-5-5", messages=[{"role": "user", "content": answer}]).input_tokens`, minus the same call's count for a one-character message. It runs only where a credential exists (`ant auth status`). | T 6.5 and 12 ask for "the tokenizer of the model the agents use". This session's agents run Claude Opus 5.5. |
 | TR22 | Units. Every reader of a store takes `as_of` as an integer in microseconds: `Reader`, and through it `iter_trails`, `derive_trails`, `roads_and_trails`, `count_roads_and_trails`, `build_tool_graph` and `evaluate`. `check_as_of(as_of)` raises `ValueError("as_of must be integer microseconds since the epoch, UTC")` for a `bool`, a non-`int`, or a value below `MIN_AS_OF_US = 10**14` (1973-03-03). A seconds value (about 1.8·10⁹ today) fails. `TrailGraph.build` takes `as_of` as a label and checks nothing. Every time handed to or from the imprints and permissions code is integer UTC seconds: the imprints plan's `_trail_derive` passes `as_of * 10**6`; Task 16's ledger `now`, Task 22's `now` and `valid_until`, Task 26's `until`, and Task 27's `now` and shortened `valid_until` are seconds. | The plan review's MF4. Bound directly, a seconds `as_of` reads as 1970. Every row is then newer than it, N is 0 for every imprint, and the imprints plan's cross-plan test passes as 0 = 0 = 0. |
 | TR23 | `lane_filtered` counts, for each lane's trail, the touches removed from inside it: a touch of another lane, or of a memory with no current lane, that has touches of this lane both before and after it in the session. Removing it joins its neighbours into one step. A touch outside every kept run is not counted, so deriving both lanes doesn't count every touch once per other lane. | T 5's "lane filtering" names a count without a rule. This one counts what the filter changed. Per (touch, lane), MF8's test would read 3, which says nothing. |
-| TR24 | **Reader and Scratch** (T 4, R21). `Scratch(directory=None)` is a SQLite file in a new 0700 directory under `directory`, or under `tempfile.gettempdir()` (so `TMPDIR`), with `temp_store = FILE` and `journal_mode = OFF` set on its own connection and the default page cache. A context manager; the directory is removed on exit. It holds ids, times and counts, never memory text. `Reader(conn, as_of, ...)` streams `(session, t, table, row id, rowid, makes_session, ids)` for every episode with a session id and every `recall` and `route_shown` row up to `as_of` into a scratch table, in batches of `READ_BATCH_ROWS` rows or `READ_BATCH_BYTES`, `ids` being a log row's `json_array_length(target_ids)`, read only after TR30's length check; one SQL query then gives each session's newest row, row count and id count, ordered as TR12 orders them. `rows(info)` first counts the session's `operation_log` rows and their ids through `idx_operation_log_session`, and returns `None`, counting `sessions_too_large`, when the rows pass `SESSION_ROWS_MAX` or the ids `SESSION_IDS_MAX`. Otherwise it reads one session's rows by primary key, 500 ids a query and at most `READ_BATCH_BYTES` of known lengths a query, and its `operation_log` rows by `session_id`; it reads the recall rows first, then streams the episodes through the blob reader (TR30) and keeps, per episode, only the session's recalled ids its content or context contains (`EpisodeRow.mentions`, a sorted tuple of the recall rows' own id strings). The mentions count toward `SESSION_IDS_MAX` as they are found; a session that passes it there is dropped and counted the same way. It uses only `conn.execute`, cursor iteration, `fetchmany` and `conn.blobopen(..., readonly=True)`, sets no pragma on `conn`, changes no row factory and needs no sqlite-vec. | T 4 "Reading in bounded memory" and "The session bound"; the fresh check's M1: rows alone don't bound a session, since `recall` logs `max_results` ids, the caller's (`engram/server.py:2068`, `:2367`, `:2384`), and `operation_log.target_ids` is unbounded (`engram/migrations/025_operation_log.sql:9`). Rows are read by primary key, and the blob reader takes the rowid the index keeps: `episodes.id` and `memory_log.id` are primary keys (`engram/migrations/001_initial.sql:46-52`, `engram/migrations/002_v3_layers.sql:51-59`), `episodes.session_id` has no index, and `operation_log` has `idx_operation_log_session` (`engram/migrations/025_operation_log.sql:13`). |
+| TR24 | **Reader and Scratch** (T 4, R21). `Scratch(directory=None)` is a SQLite file in a new 0700 directory under `directory`, or under `tempfile.gettempdir()` (so `TMPDIR`), with `temp_store = FILE` and `journal_mode = OFF` set on its own connection and the default page cache. A context manager; the directory is removed on exit. It holds ids, times and counts, never memory text. `Reader(conn, as_of, ...)` streams `(session, t, table, row id, rowid, makes_session, ids)` for every episode with a session id and every `recall` and `route_shown` row up to `as_of` into a scratch table, in batches of `READ_BATCH_ROWS` rows or `READ_BATCH_BYTES`, `ids` being a log row's `json_array_length(target_ids)`, read only after TR30's length check; one SQL query then gives each session's newest row, row count and id count, ordered as TR12 orders them. `rows(info)` first counts the session's `operation_log` rows and their ids through `idx_operation_log_session`, and returns `None`, counting `sessions_too_large`, when the rows pass `SESSION_ROWS_MAX` or the ids `SESSION_IDS_MAX`. Otherwise it reads one session's rows by primary key, 500 ids a query and at most `READ_BATCH_BYTES` of known lengths a query, and its `operation_log` rows by `session_id`; it reads the recall rows first, then streams the episodes through the blob reader (TR30) and keeps, per episode, only the session's recalled ids its content or context contains (`EpisodeRow.mentions`, a sorted tuple of the recall rows' own id strings). The search is linear in the text: before the episodes stream, the session's distinct recalled ids go in one sorted tuple that shares the recall rows' strings; each piece is scanned once with a regular expression for the 36-character lowercase uuid form engram writes (`str(uuid.uuid4())`, `engram/server.py:1866`, `engram/compress.py:538`), as a lookahead so overlapping matches are found too, and each match is looked up in the tuple by bisection; a recalled id of any other form is searched for in the piece directly, one at a time (the re-check's RN2). So it finds exactly the ids a substring search of the whole text finds. The mentions count toward `SESSION_IDS_MAX` as they are found; a session that passes it there is dropped and counted the same way. It uses only `conn.execute`, cursor iteration, `fetchmany` and `conn.blobopen(..., readonly=True)`, sets no pragma on `conn`, changes no row factory and needs no sqlite-vec. | T 4 "Reading in bounded memory" and "The session bound"; the fresh check's M1: rows alone don't bound a session, since `recall` logs `max_results` ids, the caller's (`engram/server.py:2068`, `:2367`, `:2384`), and `operation_log.target_ids` is unbounded (`engram/migrations/025_operation_log.sql:9`). Rows are read by primary key, and the blob reader takes the rowid the index keeps: `episodes.id` and `memory_log.id` are primary keys (`engram/migrations/001_initial.sql:46-52`, `engram/migrations/002_v3_layers.sql:51-59`), `episodes.session_id` has no index, and `operation_log` has `idx_operation_log_session` (`engram/migrations/025_operation_log.sql:13`). |
 | TR25 | **Graphs as arrays** (T R22, R23). `TrailGraph` keeps `nodes` sorted by id, so a node's index orders as its id and the open list's `(f, h, memory id)` can compare indices. Edges are compressed rows: `offsets` int32, `dst` int32, `cost` float64, `support` int32, `latest` int64 (−1 for none), `flags` uint8 (road 1, co-cited 2, suggested 4). Touches likewise: `node` int32, `t` int64, `bits` uint8 (wrote 1, co-cited 2, suggested 4), with per-session `start` int32, `newest` int64 and `truncated` bool; postings `through` as compressed rows of int32 session indices. `out[u]` is a read-only view that builds `Edge` tuples on access, so existing callers and tests read edges as before; nothing stores an `Edge`. `remove(ids)` clears an `alive` bool per node, and every reader skips dead nodes and their edges. In the evaluation's T and S, a session is its index in the scratch file, with no id string, and the full trails hold at most `EVAL_MAX_TOUCHES` touches, 5.95 MiB a graph (T 10.1). | T 6.6 "Held as arrays" and 10.1's arithmetic (73.2 MiB at the bounds). The evaluation's part: the fresh check's M2, since the next hit reads T's and each S's trails and postings (Task 14). |
 | TR26 | **B's tiles** (T 7 step 3, R23). For each block of `B_BLOCK` rows of T's nodes with vectors, in node order, and each chunk of `B_COLUMNS` columns, compute dot products in float64. Keep for each row the `B_CANDIDATES` other nodes with the largest dot product, ties by id. Then compute the Kahan angle to each and keep the 8 smallest, ties by id. B is the undirected union, edge cost the angle. | T 7 step 3 defines B by this procedure. |
 | TR27 | **Bootstrap chunks** (T 7 "Seeds", R23). `paired_bootstrap` draws `rng.integers(0, n, size=(BOOTSTRAP_CHUNK, n))` 156 times and `size=(16, n)` once, keeps each row's mean of `diffs[idx]`, and takes `numpy.quantile` of the 10,000 means as TR19 says. | T fixes the chunking because another chunking can draw another stream. |
 | TR28 | **Where scratch files live** (T 10.1). The server's pass and build use `Path(DB_PATH).parent / "trails-scratch"`, made 0700 and emptied at each start and end. `trails.py` uses `tempfile.gettempdir()`, which the imprints plan's use sets to `<imprint id>.state/scratch/` through `TMPDIR` (I 12, revision 7); an owner's own run on a machine whose `/tmp` is tmpfs sets `TMPDIR` to a disk directory. On Linux `Scratch` reads its directory's filesystem type from `/proc/self/mountinfo` (the longest mount point that holds the resolved path) and refuses `tmpfs` and `ramfs` with `ScratchOnRam`, whose message names `TMPDIR`; where that file doesn't exist, as on macOS, it checks nothing. | A scratch file on tmpfs would take RAM. The fresh check's S12: nothing checked it, and `engram/CLAUDE.md:302` says `/tmp` is tmpfs on a machine engram runs on. |
 | TR29 | **Peak-memory tests** (T 12, R20). Task 28 runs each pass in a fresh child process under `systemd-run --user --scope --quiet -p MemoryMax=512M -p MemorySwapMax=0`. After the child's imports and setup it reads `VmHWM` and `VmRSS` from `/proc/self/status`, then writes `5` to `/proc/self/clear_refs`, which resets `VmHWM` to the current resident size, and reads `VmHWM` again at its end. For the pass, the build and a call, the test checks the end `VmHWM` less the setup `VmRSS` against `SERVER_ADDED_MIB`; for any other process, the larger `VmHWM` against its design peak. Fixtures are built once per session under `/var/tmp/trails-pi`. | As the imprints plan's R27 does for its processes. The fresh check's S3: a difference of `ru_maxrss` misses memory that setup used and freed. Checked on this Pi (kernel 6.12): a 200 MiB block freed before the reset left `VmHWM` at 208 MiB, the reset brought it to 9 MiB, and a 50 MiB block after it read 59 MiB. |
 | TR30 | **One value** (T 4 "One value", R25). `text_length(conn, table, column, rowid)`, an `int` or `None`, opens `conn.blobopen(table, column, rowid, readonly=True)` and returns its length, reading nothing; it is `None` for a NULL or a number, which `blobopen` refuses with `sqlite3.OperationalError` ("cannot open value of type null"). No SQL names these columns, not even `typeof`, since an authorizer sees that as a read; `blobopen` passes no authorizer (both checked on this Pi with Python 3.11.2). `text_pieces(conn, table, column, rowid)` yields `TEXT_PIECE_BYTES` at a time, each piece starting `ID_OVERLAP_BYTES` before the last ended. `text_head(conn, table, column, rowid, limit) -> str` reads at most `limit` bytes and decodes them, dropping a character cut at the end. Every reader uses these for `episodes.content` and `episodes.context`, and for `semantics.content` in a summary; no statement this plan runs names those columns. A log row's `target_ids` and `context` are read in SQL only after `text_length` finds each at most `TEXT_PIECE_BYTES`: past it, `target_ids` makes the session too large, and `context` makes the row `rows_unparsed`. A summary reads `text_head(..., TEXT_PIECE_BYTES)`, W `text_head(..., W_TEXT_BYTES)`, and the embedder check takes only episodes whose `text_length` is at most `CHECK_TEXT_BYTES`, counting the rest as `check_skipped_long`. | The fresh check's M1 and S9: engram caps no text (`engram/server.py:1851` checks only a minimum), and SQLite reads a value whole for any function on it. On this Pi, `length()` and `substr()` on a 200,000,011-byte episode each peaked at 202.8 MiB, and `blobopen` in 1 MiB pieces at 15.4 MiB. Two lengths a row cost 1.34 s over 200,000 rows. Every table read this way is a rowid table (no `WITHOUT ROWID` in `engram/migrations/`). |
-| TR31 | **The evaluation and the session bound** (T 7 step 3, R26). `evaluate` counts closed sessions over `SESSION_ROWS_MAX` or `SESSION_IDS_MAX` from the `Reader`'s index, in every lane, and when there is one it answers "not evaluable: too large" for both gates, with `sessions_too_large` and `rows_unparsed` in `counts` as in every report. `Split` holds the cutoff and two counts; which sessions are held out is a mark in `ScratchTrails`, never a list. | The fresh check's M3: dropping such sessions from T, S and the held-out set is a sample, which T 7 step 3 forbids. A session's lane can't be known without reading it. `Split`'s two lists could reach 200,000 ids, 17.7 MiB (T 10.1). |
+| TR31 | **The evaluation and the session bound** (T 7 step 3, R26). `evaluate` decides after `ScratchTrails.load` returns, on `counts["sessions_too_large"]`. The load reads `iter_trails`, which asks the `Reader` for the rows of every closed session in every lane, so by then the `Reader` has counted each closed session over `SESSION_ROWS_MAX` rows or `SESSION_IDS_MAX` ids once, by everything T 4 counts: the index's episodes, `recall` and `route_shown` rows and their ids, then, in `rows`, its `operation_log` rows and their ids and its episodes' mentions (TR24). The load is the run's only `Reader`. When the count is above 0, both gates are "not evaluable: too large" and nothing more is built, with `sessions_too_large` and `rows_unparsed` in `counts` as in every report. Nothing is decided from the index alone, not even as a shortcut: it sees no operation row and no mention, and a shortcut would report the index's count, not the one the pass and `roads_and_trails` give for the same store. A run whose deadline passes during the load reports `limit` for both gates (Task 25). `Split` holds the cutoff and two counts; which sessions are held out is a mark in `ScratchTrails`, never a list. | The fresh check's M3: dropping such sessions from T, S and the held-out set is a sample, which T 7 step 3 forbids. A session's lane can't be known without reading it. The re-check's RM1: deciding from the index let a session over the bound only through its `operation_log` rows or its episodes' mentions drop out of T, S and the held-out set while both gates still decided (10,000 recall and 7,000 `operation_log` rows: the index shows 10,000; 8,192 recall rows of 39 ids and 8,192 episodes that each mention 2: the index shows 319,488 ids of 335,872). `Split`'s two lists could reach 200,000 ids, 17.7 MiB (T 10.1). |
 
 ## Carried items
 
@@ -473,7 +476,8 @@ is `newest < as_of − CLOSED_IDLE_US` and `session_id != own_session_id`. `sess
 the scratch file through a cursor. `rows(info)` counts the session's `operation_log` rows and their ids by its index,
 after the same length check, returns `None` past `SESSION_ROWS_MAX` rows or `SESSION_IDS_MAX` ids, and otherwise
 reads the recall, `route_shown` and operation rows, then streams the episodes, searching each one's content and context
-piece by piece with `text_pieces` for the session's recalled ids, keeping its `mentions` and dropping its text. Each
+piece by piece with `text_pieces` for the session's recalled ids, by TR24's linear search (uuid-form matches looked up
+in a sorted tuple, any other id searched for directly), keeping its `mentions` and dropping its text. Each
 mention counts toward `SESSION_IDS_MAX`; past it, `rows` drops what it read and returns `None`, counted the same way.
 `Scratch` calls `_filesystem_type(path) -> str | None`, which reads `/proc/self/mountinfo` (TR28). `Store.raw_log`
 (below) joins `trails_support.py` here. Add `"trails"` to `py-modules`.
@@ -709,10 +713,12 @@ walk's lane; a memory that exists is reused.
 
 `varied(tmp_path)` is a small store with every case of T 4: wrote and cited touches, a co-cited recall, a suggested
 touch, a personal touch between work touches, an ambiguous used recall, a pruned target, an instinct target, a citing
-operation and a non-citing one, a repeat and a return, and a session still open. `reference_trails(path, as_of) ->
-{"full": {(session, (session, lane)): digest}, "revisit": {...}}` is written for the tests from T 4 alone, with plain
-`sqlite3` and whole-table reads (`fetchall`, every row in memory, every text searched whole), and imports nothing from
-`trails` but `canonical`. It is the independent reference that T 12 asks for; both join `trails_support.py`.
+operation and a non-citing one, a repeat and a return, a session still open, and a cited memory whose id is not in
+the uuid form, so TR24's direct search is compared too. `reference_trails(path, as_of) -> {"full": {(session, lane):
+digest}, "revisit": {(session, lane): digest}}`, keyed as the test keys `iter_trails`' results, since
+`SessionTrails.full` and `.revisit` are keyed by lane (the re-check's RS2). It is written for the tests from T 4
+alone, with plain `sqlite3` and whole-table reads (`fetchall`, every row in memory, every text searched whole), and
+imports nothing from `trails` but `canonical`. It is the independent reference that T 12 asks for; both join `trails_support.py`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -754,9 +760,10 @@ git -C /home/andy/superyak/.worktrees/trail-derivation commit --trailer "Co-Auth
   - `roads_and_trails(conn, *, lane: str, as_of: int, scratch: Scratch | None = None, counts: Counter | None =
     None) -> int` (TR20), the imprints plan's `derive` seam, and `count_roads_and_trails(conn, as_of: int, *, lanes:
     Sequence[str] = LANES, counts: Counter | None = None) -> int`, their sum. Both take `as_of` in microseconds; the
-    imprints plan's `_trail_derive` converts its seconds (TR22). Both count into `counts`, when given, the sessions
-    over T 4's bound as `sessions_too_large`: N leaves them out, and T I7 asks the imprints side to show that count
-    beside N (the fresh check's M3);
+    imprints plan's `_trail_derive` converts its seconds (TR22). Both count into `counts`, when given, the closed
+    sessions over T 4's bound as `sessions_too_large`: N leaves them out, and T I7 asks the imprints side to show that
+    count beside N (the fresh check's M3). Each such session counts once, not once per lane: every lane's call counts
+    the same sessions, so `count_roads_and_trails` adds the first lane's number only (TR20; the re-check's RS3);
     `roads_and_trails` holds one session at a time (I 17's ask (c); T I7): it reads `iter_trails`, counts each
     session's full trail in the lane, and writes the session's steps that are neither co-cited nor suggested, as
     `(src, dst, session, t)` rows, to its scratch file. One SQL query there then counts the roads: per
@@ -829,6 +836,20 @@ def test_roads_and_trails_streams_through_its_scratch_file(tmp_path, monkeypatch
     conn = batch_only(s.ro(), max_rows=trails.READ_BATCH_ROWS)
     assert trails.roads_and_trails(conn, lane="work", as_of=as_of) == want
     assert list((tmp_path / "tmp").iterdir()) == []                 # the scratch file is gone
+
+def test_r26_n_leaves_out_a_session_over_the_bound_and_counts_it_once(tmp_path, monkeypatch):   # the re-check's RS3
+    s = Store(tmp_path); two_walks(s, [(2, 10), (2, 11), (3, 11)])   # S0-S2: 2 rows each; 3 trails and 1 road
+    s.walk("WIDE", [f"w{i}" for i in range(12)], at(4, 10), create=True)   # 12 rows: a work trail, no road
+    as_of = T(at(9, 0))
+    assert trails.roads_and_trails(s.ro(), lane="work", as_of=as_of) == 3 + 1 + 1
+    assert trails.SESSION_ROWS_MAX == 16_384
+    monkeypatch.setattr(trails, "SESSION_ROWS_MAX", 10)                    # TR13: WIDE is over, S0-S2 are not
+    work, personal, both = collections.Counter(), collections.Counter(), collections.Counter()
+    assert trails.roads_and_trails(s.ro(), lane="work", as_of=as_of, counts=work) == 3 + 1   # N leaves WIDE out
+    assert trails.roads_and_trails(s.ro(), lane="personal", as_of=as_of, counts=personal) == 0
+    assert work["sessions_too_large"] == personal["sessions_too_large"] == 1     # every lane's call sees it
+    assert trails.count_roads_and_trails(s.ro(), as_of, counts=both) == 4
+    assert both["sessions_too_large"] == 1                                 # once, not once per lane
 ```
 
 `raises(exc)` (a callable that raises `exc`) joins `trails_support.py` here, before Part B's tasks use it.
@@ -838,7 +859,7 @@ still in the WAL) and sets `meta.instance_id_origin` to `imprint`; add it to `tr
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "mf1 or mf3_the or co_cited_and or xs2 or in_seconds or streams_through"`
+Run: `cd /home/andy/superyak/.worktrees/trail-derivation/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trails.py -k "mf1 or mf3_the or co_cited_and or xs2 or in_seconds or streams_through or r26_n"`
 Expected: FAIL, `AttributeError: module 'trails' has no attribute 'step_support'`.
 
 - [ ] **Step 3: Implement `StepStats`, `step_support`, `is_road`, `road_summary`, `roads_and_trails`, `count_roads_and_trails` and `check_as_of`**
@@ -1190,7 +1211,7 @@ first, at most `ROAD_EVIDENCE`. No weight observation is written.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trail_observer.py`
-Expected: PASS, 14 passed.
+Expected: PASS, 15 passed (Task 6's 9 and these 6).
 
 - [ ] **Step 5: Commit**
 
@@ -1346,7 +1367,7 @@ skipping any whose rewrite id already exists, and drops the generator.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd /home/andy/superyak/.worktrees/trail-step-1/engram && PYTHONDONTWRITEBYTECODE=1 uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_trail_observer.py`
-Expected: PASS, 19 passed.
+Expected: PASS, 20 passed (Task 7's 15 and these 5).
 
 - [ ] **Step 5: Commit**
 
@@ -2659,7 +2680,9 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
   - a trail source, either a `TrailSet` (tests) or `ScratchTrails` (`evaluate`): `ScratchTrails.load(conn, as_of, *,
     lane, scratch, counts) -> ScratchTrails` reads `iter_trails` into the scratch file, one row per touch
     `(session, view, position, memory id, kind, t, recall id, rank, bits)`, with each session's first touch and
-    newest row, and gives `sessions(lane)` in order and `trail(session, view)` one at a time (T 7, R23);
+    newest row, and gives `sessions(lane)` in order and `trail(session, view)` one at a time (T 7, R23). It passes
+    `counts` to `iter_trails`, which reads every closed session in every lane, so when it returns `counts` holds
+    `sessions_too_large` for the whole store (TR31);
   - `Split`, a dataclass `(cutoff: int, n_training: int, n_held_out: int)`; `split_sessions(source, lane) -> Split`
     (TR19, TR31) marks each session training or held out in the source (a column in `ScratchTrails`, a dict on a
     `TrailSet`) and keeps no list of sessions; `source.held_out(lane)` and `source.training(lane)` read them back
@@ -2684,8 +2707,9 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
   - `evaluate(conn, *, lane: str, seed: int, as_of: int, embedder=None, deadline_s: float | None = None,
     clock=time.monotonic, scratch: Scratch | None = None) -> dict`, the report's body. A route of more than 64 stops
     counts as no route. `TooLarge` makes both gates "not evaluable: too large", and so does any closed session over
-    T 4's bound, in any lane (TR31; Task 25 tests it). `counts` holds `sessions_too_large` and `rows_unparsed` in
-    every report.
+    T 4's bound, in any lane, by any of its rows or ids: `evaluate` reads `counts["sessions_too_large"]` once
+    `ScratchTrails.load` has returned, never the index alone (TR31; Task 25 tests it, by recall rows, by
+    `operation_log` rows and by mentions). `counts` holds `sessions_too_large` and `rows_unparsed` in every report.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2784,8 +2808,11 @@ Expected: FAIL, `KeyError: 'route_gate'`.
 In bounded memory (T 7 step 3, R23, 10.1): `evaluate` loads its trails into a `ScratchTrails` (under `TMPDIR`,
 TR28), builds T and then B, and then, for each shuffle k in turn, builds S_k, routes every qualifying session in it,
 and drops it before S_{k+1}. Qualifying sessions are read from the scratch file one at a time; per held-out session
-it keeps only its scores, as arrays. Before it loads anything it reads the `Reader`'s index for closed sessions over
-T 4's bound (TR31). T 10.1 gives the arithmetic: 296.9 MiB at the bounds, under `PEAK_EVAL_MIB`.
+it keeps only its scores, as arrays. Once the load has returned, and before it splits or builds anything, it reads
+`counts["sessions_too_large"]`. The load's `Reader` has counted there every closed session over T 4's bound, in every
+lane, with its `operation_log` rows and ids and its episodes' mentions, which the index doesn't hold (TR24). Above
+0, both gates are "not evaluable: too large" and the run builds nothing more (TR31; the re-check's RM1). T 10.1 gives
+the arithmetic: 296.9 MiB at the bounds, under `PEAK_EVAL_MIB`.
 Routing uses A* with the expansion bound only: every search passes `wall_s=None`, so no route is cut by wall time and
 the hashed report holds no count that depends on the machine (T 7 steps 4 and 7). The deadline of step 10 is the
 evaluation's only wall clock, and a run that hits it reports `limit`. The report also gives reach, hop ratio, the
@@ -2959,7 +2986,8 @@ git -C /home/andy/superyak/.worktrees/trail-step-1 commit --trailer "Co-Authored
   places, NaN as null); the report names `lane` and `embedder`; `--deadline` checked between sessions, past which
   both gates read `"not evaluable: limit"`; T over `EVAL_MAX_NODES` nodes, T or an S over `EVAL_MAX_STEPS` steps, T
   over `EVAL_MAX_TOUCHES` touches, more than `EVAL_MAX_HELD_OUT` held-out sessions, or any closed session over
-  `SESSION_ROWS_MAX` rows or `SESSION_IDS_MAX` ids gives `"not evaluable: too large"` for both, and the report's
+  `SESSION_ROWS_MAX` rows or `SESSION_IDS_MAX` ids, as counted once the load has read every closed session (TR31),
+  gives `"not evaluable: too large"` for both, and the report's
   `counts` carry `sessions_too_large` and `rows_unparsed` in every run (T 7 steps 3 and 7, R23, R26; TR31). On an
   imprint holding `imprint_subjects`, the run reads no row of it and the report holds counts and rates only (T R24).
 
@@ -3001,13 +3029,29 @@ def test_a_graph_or_a_held_out_set_over_its_bound_is_too_large(tmp_path, monkeyp
     rep = trails.evaluate(planted_routes_store(tmp_path, sessions=200).ro(), lane="work", seed=7, as_of=END)
     assert rep["route_gate"]["verdict"] == rep["goal_gate"]["verdict"] == "not evaluable: too large"
 
-@pytest.mark.parametrize("name, small", [("SESSION_ROWS_MAX", 10), ("SESSION_IDS_MAX", 30)])
-def test_a_closed_session_over_the_session_bound_makes_both_gates_too_large(tmp_path, monkeypatch, name, small):
+def wide_by_recalls(s):                         # 13 recall rows, 48 ids: the index sees all of it
+    wide = s.walk("WIDE", [f"p{i}" for i in range(12)], on_day(3, 12), lane="personal", create=True)
+    s.recall("WIDE", on_day(3, 13), wide * 3)
+
+def wide_by_operations(s):                      # the index sees 2 rows; with its 9 operation rows, 11
+    wide = s.walk("WIDE", ["p0", "p1"], on_day(3, 12), lane="personal", create=True)
+    for i in range(9): s.operation("WIDE", on_day(3, 13, i), "share", wide)
+
+def wide_by_mentions(s):                        # the index sees 20 ids; with one episode mentioning all 20, 40
+    wide = s.walk("WIDE", [f"p{i}" for i in range(20)], on_day(3, 12), lane="personal", create=True)
+    s.episode(None, "WIDE", on_day(3, 14), lane="personal", content=" ".join(wide))
+
+@pytest.mark.parametrize("name, small, plant, seen", [
+    ("SESSION_ROWS_MAX", 10, wide_by_recalls, (13, 48)), ("SESSION_IDS_MAX", 30, wide_by_recalls, (13, 48)),
+    ("SESSION_ROWS_MAX", 10, wide_by_operations, (2, 2)),          # the re-check's RM1: not in the index
+    ("SESSION_IDS_MAX", 30, wide_by_mentions, (21, 20))])          # the same
+def test_a_closed_session_over_the_session_bound_makes_both_gates_too_large(tmp_path, monkeypatch, name, small,
+                                                                           plant, seen):
     s = planted_routes_store(tmp_path, sessions=200, end_with_summary=True)    # every session: < 10 rows, < 30 ids
     rep = trails.evaluate(s.ro(), lane="work", seed=7, as_of=END, embedder=DocumentEchoProvider(s))
     assert rep["counts"]["sessions_too_large"] == 0 and rep["route_gate"]["verdict"] == "pass"    # R26; M3
-    wide = s.walk("WIDE", [f"p{i}" for i in range(12)], on_day(3, 12), lane="personal", create=True)  # another lane
-    s.recall("WIDE", on_day(3, 13), wide * 3)                                  # WIDE: 13 rows, 48 ids
+    plant(s)                                                                   # WIDE, in another lane
+    info = index(s, END)["WIDE"]; assert (info.rows, info.ids) == seen        # what the index alone shows
     monkeypatch.setattr(trails, name, small)                                   # TR13
     rep = trails.evaluate(s.ro(), lane="work", seed=7, as_of=END, embedder=DocumentEchoProvider(s))
     assert rep["route_gate"]["verdict"] == rep["goal_gate"]["verdict"] == "not evaluable: too large"
@@ -3029,7 +3073,9 @@ def test_r24_a_run_on_a_full_store_imprint_reads_no_co_subject_row(tmp_path):   
 one row per memory and a made-up person. `assert_counts_and_rates_only(report, store, path)` fails when the report's
 bytes hold any memory id, session id or `imprint_subjects` value, or any 12 characters in a row of any memory's
 content, or a string value other than a verdict, the lane, a regime or the embedder's fields. Both join
-`trails_support.py`.
+`trails_support.py`. The session-bound test also imports Task 1's `index` from `trails_support`, and its three
+`wide_by_…` planters stay in the test file. Its `seen` column pins what the `Reader`'s index alone shows of WIDE, so
+the two RM1 cases are ones a check from the index would miss (TR31).
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -3314,8 +3360,21 @@ recall rows of 20 ids (327,680 ids); one at the id bound with few rows, 1,638 re
 the fresh check's M1 case); a `memory_log` of 200,000 recall rows; and T as near 20,000 nodes, 262,144 steps and
 262,144 touches as the store allows. `hundred_thousand` is T 10.1's shape, 100,000 memories with random 768-dimension
 vectors. `long_value` is a small store of planted sessions in which one closed session wrote an episode of 128 MiB
-of content, made inside SQLite in one statement (for example `hex(zeroblob(67108864))`, 134,217,728 characters) so the
-parent never holds it as a Python string. The fixtures write in batches through `Storage`.
+of TEXT content, 134,217,728 characters of short words, made without the parent ever holding it whole: the fixture
+drops the episodes table's FTS insert trigger (`engram/migrations/002_v3_layers.sql:102-105`), inserts the row with
+`CAST(zeroblob(134217728) AS TEXT)`, creates the trigger again from the migration's text, and then writes
+`b"abc " * 262_144` (1 MiB) 128 times through `conn.blobopen(..., readonly=False)`, which fires no trigger (checked on
+this Pi: no FTS hit for `abc` afterwards, with the update trigger in place). So FTS never indexes that episode, which
+neither of its two tests needs. Its id, session id, lane and `created_at` go in that one INSERT, it is the fixture's
+last write, and no statement updates or deletes it afterwards: the update and delete triggers would ask FTS to delete
+content it never held, which fails as "database disk image is malformed" (`engram/migrations/002_v3_layers.sql:107-121`).
+It must stay TEXT, not
+a BLOB: SQLite's `length()` reads a long TEXT value whole but only the header of a BLOB, so a BLOB would hide a
+regression to `length(content)`. Measured on this Pi on 2026-10-26 (SQLite 3.40.1, Python 3.11.2, a fresh process at
+10.2 MiB): this build peaked at 267.8 MiB; the same with the FTS trigger in place, 396.2; and revision 9's one
+statement, `hex(zeroblob(67108864))`, 716.4 with the trigger (332.2 without), over the parent's 512 MiB cap (the
+re-check's RN1). `length(content)` raised the peak by 130.5 MiB on such a TEXT row and by 0.5 on a 128 MiB BLOB. The
+other fixtures write in batches through `Storage`.
 In each child, the server's passes (`observer_pass`, `tool_graph_build`, `tool_call`) first run `server._init()` on
 the store with a fake embedder, as Task 9's `trail_init_env` does, and take their setup figure there; `tool_call`
 then builds the graph and answers 50 calls, so its rise is the held graph with a call. The other passes take their
@@ -3408,7 +3467,7 @@ None of these is run by this plan. Each waits for the person named.
 | G12 | The imprints plan's gate G13: imprints with `route` are refused until `trails` imports on the Pi; then its `test_count_matches_the_trail_functions` must pass against Part A's `roads_and_trails`, through a `_trail_derive` that passes `as_of * 10**6` (TR22), with N above 0 on its trail-rich store. | Cross-plan: Part A merged and deployed with engram on the Pi, which is a deploy act for later. |
 | G13 | The road index, once any store holds 10,000 `trail_observed` events (`report()["trails"]["trail_events"]`), and a per-session newest row there if Task 28 finds the ranking too slow. | T 5 and 10: required then, with a schema version bump. |
 | G14 | The license. | T 14: Andy's. Engram has none yet. |
-| G15 | The whole 2 GB Pi. One imprint job takes at most 512 MiB beside the shared embedder, which rests near 1.1 GB (1,049 MiB; `scripts/superyak-embedder.service:13`), leaving 2,048 − 1,049 − 512 = 487 MiB for the system and the lighthouse (T 10.1). Where the embedder doesn't fit, it doesn't run, and W is "not evaluable: no embedder". | I 18's deploy gate measures it on the station; a deploy act for later. |
+| G15 | The whole 2 GB Pi. One imprint job takes at most 512 MiB beside the shared embedder, which rests near 1.1 GB (1,049 MiB; `scripts/superyak-embedder.service:13`), 2,048 − 1,049 − 512 = 487 MiB of the 2,048 for the system and the lighthouse. That is not room to spare: I 18's deploy gate, the one that decides, takes a 2 GB Pi's usable memory as 2,048 − 165 = 1,883 MiB until one is measured and keeps 256 MiB available, so one job and the embedder leave 1,883 − 256 − 1,561 = 66 MiB, which I 14.1 calls unlikely to be enough (T 10.1; the re-check's RS4). Where the embedder doesn't fit, it doesn't run, and W is "not evaluable: no embedder". | I 18's deploy gate measures it on the station; a deploy act for later. |
 
 ## Results (filled by the builder in Task 28)
 
@@ -3481,7 +3540,7 @@ None of these is run by this plan. Each waits for the person named.
 | One value (R25, TR30) | 1 (no SQL reads episode text, an id across two pieces, a long `target_ids` or `context`, `text_head`), 24 (the embedder check passes over long episodes), 28 (a 128 MiB episode on the Pi) |
 | Graphs as arrays (R22, TR25) | 10, 16 |
 | The evaluation in bounded memory (R23) | 23 (B's tiles, the bootstrap's chunks, one S at a time, training detours one at a time), 25 (too large, the touch bound) |
-| No silent sample (R26, TR31) | 25 (a closed session over the bound, by rows or by ids, in another lane) |
+| No silent sample (R26, TR31) | 25 (a closed session over the bound, in another lane, by recall rows or ids, by `operation_log` rows, or by mentions, decided after the load), 4 (N leaves such a session out, and it counts once, not once per lane) |
 | No model in process (R19) | 20, 24 |
 | Peak memory on the Pi, per pass (T 12, TR29) | 28 |
 | Pi measurements, times | 28 |
@@ -3508,7 +3567,11 @@ None of these is run by this plan. Each waits for the person named.
   its 384 (T I7, replacing the earlier 185.0). The evaluation's design peak is 320 MiB, 296.9 by T 10.1's arithmetic,
   answering G19's second part. R(I) is counted under T 4's session bound, so N leaves out a session over it though
   its rows ship; `roads_and_trails(..., counts=)` gives that number as `sessions_too_large`, and T I7 asks that
-  admission show it beside N. `local_files_only` is withdrawn (T R19; Task 20): that plan's "From
+  admission show it beside N. Every lane's call gives the same number, since each reads every closed session, so
+  admission takes it from one call, as `count_roads_and_trails` does, and never sums it over the lanes (TR20; the
+  re-check's RS3). The imprint spec's revision 7, as revised in parallel on 2026-10-26, keeps K as the largest of
+  the lanes' counts (its section 10, "Counting R(I)", and section 16), which is that same number, so the two agree;
+  its plan should take K the same way. `local_files_only` is withdrawn (T R19; Task 20): that plan's "From
   the trails plan" line naming `embeddings.create_embedding_provider(local_files_only=True)` no longer applies, and
   its gate G11, as revised, already asks for the shared service only. `trails.py` never makes a model in process
   and, without `ENGRAM_EMBEDDER_SOCKET`, reports W "not evaluable: no embedder", answering G19's third part.
@@ -3561,7 +3624,8 @@ ship.
    imports fastembed (T 7 step 8.2, R19), that no reader calls `fetchall` on a store table, derives more than one
    session at a time, or writes memory text to a scratch file (T 4, R21), that no SQL statement reads episode text
    and no text value over `TEXT_PIECE_BYTES` is read whole (T 4 "One value", R25, TR30), that a closed session over
-   the session bound makes both gates "not evaluable: too large" (T 7 step 3, R26), and that `count_roads_and_trails`
+   the session bound makes both gates "not evaluable: too large", decided after the load and never from the index
+   alone (T 7 step 3, R26, TR31), and that `count_roads_and_trails`
    and `derive_trails` open no store file.
 8. **Not a Pi suite.** `make check-integration` needs Node.js 24 and pnpm 11.20.0; the Pi has Node 18.20.4 and no pnpm
    (checked 2026-10-25). It must pass in CI or on the Mac before the merge, and its result is posted with the verdict.
