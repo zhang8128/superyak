@@ -697,13 +697,22 @@ def _stamp(value) -> str:
 
 
 def _use_line(r: dict) -> list[str]:
+    """A receipt in words. A shadow receipt (an owner's row) is marked so: its outcome is the ledger's, while the
+    legacy path decided what was delivered, and a refusal by the publisher's audience check, which such a receipt
+    cites as an entry of kind `audience` (the final review's M8), is printed too, so a delivery only that check
+    refused does not read as a plain "allowed" (the re-review's Minor 2)."""
     who = r.get("agent") or r.get("requester")
     what = f"{r['action']} {r['object']}" if r.get("object") else f"{r['action']} ({r.get('kind') or r.get('count')})"
-    lines = [f"{_stamp(r['at'])}  {r['outcome']}  {_clean(who)}  {_clean(what)}  at {_clean(r['place'])}  "
+    outcome = f"{r['outcome']} (shadow)" if r.get("shadow") else r["outcome"]
+    lines = [f"{_stamp(r['at'])}  {outcome}  {_clean(who)}  {_clean(what)}  at {_clean(r['place'])}  "
              f"for {_clean(r['purpose'])}  [{r['id']}]"]
     if r.get("refusal"):
         ref = r["refusal"]
         lines.append(f"    refused: {_clean(ref.get('code'))} at {_clean(ref.get('layer'))}")
+    for c in r.get("cited") or ():
+        if isinstance(c, dict) and c.get("kind") == "audience" and c.get("verdict") == "deny":
+            lines.append(f"    refused by the {_clean(c.get('layer'))}'s audience check (LEGACY_DENY at "
+                         f"{_clean(c.get('layer'))}): the legacy path delivered nothing")
     lines += [f"    note: {_clean(n)}" for n in r.get("notes") or ()]
     return lines
 

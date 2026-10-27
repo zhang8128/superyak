@@ -549,3 +549,32 @@ def test_concern3_a_place_one_writer_retired_is_not_retired_again_by_another(tmp
         do(led, "person:ph-steward", "retire-place", now="2026-11-06", place=CLINIC_3)
     s = Ledger.open(tmp_path).state()
     assert s.seq_at[s.places[CLINIC_3].retired_seq] == T("2026-11-05")
+
+
+# ---------------------------------------------------------------- the re-review's Minor 2: `uses` text and shadow rows
+
+def _block(out, rid):
+    """A receipt's line in `uses` text and the indented lines under it."""
+    lines = out.splitlines()
+    i = next(k for k, line in enumerate(lines) if line.endswith(f"[{rid}]"))
+    j = next((k for k in range(i + 1, len(lines)) if not lines[k].startswith("    ")), len(lines))
+    return lines[i], lines[i + 1:j]
+
+
+def test_minor2_uses_text_marks_a_shadow_row_and_prints_its_audience_refusal(cli_shadow_world, capsys):
+    from tests.test_permissions_cli_read import add_receipt
+    home, ledger_deny = cli_shadow_world.home, {"code": "DENIED", "layer": HOME, "action": "inject_context"}
+    only_audience = _shadow_receipt(home, "2026-11-07", allowed=True, refusal=None, cited=[AUDIENCE])
+    both = _shadow_receipt(home, "2026-11-08", allowed=False, refusal=ledger_deny,
+                           cited=[deny_cited(HOME), AUDIENCE])
+    plain = add_receipt(home, place=HOME, at="2026-11-09", action="inject_context")
+    audience = ("    refused by the publisher's audience check (LEGACY_DENY at publisher): the legacy path "
+                "delivered nothing")
+    assert cli_main(["uses"]) == 0
+    out = capsys.readouterr().out
+    head, rest = _block(out, only_audience)
+    assert "  allowed (shadow)  " in head and rest == [audience]      # not a plain "allowed"
+    head, rest = _block(out, both)
+    assert "  refused (shadow)  " in head and rest[:2] == [f"    refused: DENIED at {HOME}", audience]
+    head, rest = _block(out, plain)
+    assert "  allowed  " in head and "shadow" not in head and rest == []
