@@ -33,6 +33,8 @@ see them everywhere in the military." This list is the pause: the army's after-a
 ticket. A timer starts it (each ship keeps a recurring reminder), not a mood. Write the answers in the room, short and
 honest. A review that blames no one and changes nothing was skipped, not run.
 
+- [ ] **Review against the goals** in docs/goals.md: the overarching ones first, then your department's. For each,
+      did it move, stall or need to change? A stalled overarching goal that no ship's goals serve is a gap; say so.
 - [ ] **What was supposed to happen?** Say what we meant to do since the last review, in the why's terms.
 - [ ] **What actually happened?** Give the facts: what landed, what didn't, where the hours went.
 - [ ] **Why the difference?** Name the cause, not the symptom: a missing check, a wrong assumption, the queue eating
