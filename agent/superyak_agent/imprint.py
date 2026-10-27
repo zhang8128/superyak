@@ -310,7 +310,9 @@ def _shown(value, limit=80):
 def _receipts_of(found):
     """The station's receipts in seq order. Each is an object whose `seq` is an int from 0 to 2**53, none repeated,
     and whose `record` is an object; anything else is refused before a file name is made from it (review I2)."""
-    receipts = found.get('receipts') if isinstance(found, dict) else None
+    if not isinstance(found, dict):
+        raise ImprintRefused(MALFORMED, 1)
+    receipts = found.get('receipts')
     receipts = [] if receipts is None else receipts
     if not isinstance(receipts, list) or not all(
             isinstance(r, dict) and type(r.get('seq')) is int and 0 <= r['seq'] <= MAX_SEQ

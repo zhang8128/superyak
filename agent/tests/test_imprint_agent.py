@@ -37,6 +37,7 @@ class FakeStation:
         self.status, self.holds, self.reason = status, list(holds), reason
         self.receipts, self.extra = receipts, extra or {}
         self.calls, self.part_bodies, self.labels = [], {}, []
+        self.reply = None           # a raw JSON value to send for the imprint's own GET, when set
 
     def allow(self):
         self.status = 'allowed'
@@ -62,6 +63,8 @@ class FakeStation:
             return 201, json.dumps({'id': REQUEST_ID, 'code': 'AB12CD34', 'expires': 5000,
                                     'confirm_url': 'http://station/#imprint?code=AB12CD34'}).encode()
         if method == 'GET' and path == f'/api/imprints/{REQUEST_ID}':
+            if self.reply is not None:
+                return 200, json.dumps(self.reply[0]).encode()
             receipts = []
             if self.reason:
                 receipts = [{'seq': 3, 'record': {'event': 'deleted', 'detail': {'reason': self.reason}}, 'signature': None}]
@@ -329,6 +332,19 @@ def test_the_list_names_a_malformed_seq_and_carries_on(tmp_path):
     receipts = chain(2)
     receipts[1]['seq'] = '../x'
     station, home = FakeStation(status='admitted', receipts=receipts), sent_home(tmp_path)
+    lines = []
+    out = Imprint(home, station.client(), out=lines.append).status()
+    assert out['imprints'] == [] and len(lines) == 1 and 'not read' in lines[0]
+
+
+@pytest.mark.parametrize('reply', [None, [], [{'seq': 0}], 'text', 7])
+def test_a_reply_that_is_not_an_object_is_not_read_and_is_no_traceback(tmp_path, reply):
+    from superyak_agent.imprint import ImprintRefused
+    from superyak_agent.station import StationError
+    station, home = FakeStation(), sent_home(tmp_path)
+    station.reply = (reply,)
+    with pytest.raises((ImprintRefused, StationError)):       # null is the client's own refusal
+        Imprint(home, station.client()).status(IMPRINT_ID)
     lines = []
     out = Imprint(home, station.client(), out=lines.append).status()
     assert out['imprints'] == [] and len(lines) == 1 and 'not read' in lines[0]
