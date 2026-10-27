@@ -264,3 +264,59 @@ def test_m3_under_shadow_the_legacy_path_still_delivers_it(tmp_path):
     rig = shadow_daemon(tmp_path)
     _add_sourceless_row(tmp_path, M1_ITEM)
     assert rig.read(M1_ITEM)["content"] is not None
+
+
+# ---------------------------------------------------------------- M8: a shadow receipt keeps the ledger's own refusal
+
+import json
+
+from permission_cli import main as cli_main
+from tests.permissions_support import cli_home_with_house, write_publisher_policy       # noqa: F401 (fixture)
+from tests.test_permissions_cli_read import add_receipt, cli_shadow_world, deny_cited   # noqa: F401 (fixture)
+
+AUDIENCE = {"layer": "publisher", "kind": "audience", "action": "inject_context", "verdict": "deny",
+            "record": None, "version": None}
+OLD_AUDIENCE = {"code": "LEGACY_DENY", "layer": "publisher", "action": "inject_context"}
+
+
+def test_m8_a_shadow_receipt_both_paths_refuse_keeps_the_ledgers_code_and_cites_the_audience(tmp_path):
+    d = shadow_daemon(tmp_path, legacy_allows=True, ledger_allows=False)
+    assert d.read(M1_ITEM)["content"]
+    ledger_only = json.loads(receipt_rows(tmp_path, action="inject_context")[-1]["refusal"])
+    write_publisher_policy(tmp_path, receiver_audiences=["group:other"])
+    assert d.read(M1_ITEM)["content"] is None
+    row = receipt_rows(tmp_path, action="inject_context")[-1]
+    assert row["shadow"] == 1 and row["allowed"] == 0 and row["content_digest"] is None
+    assert json.loads(row["refusal"]) == ledger_only and ledger_only["code"] != "LEGACY_DENY"
+    assert AUDIENCE in json.loads(row["cited"])
+
+
+def test_m8_a_shadow_receipt_only_the_audience_refuses_is_allowed_with_no_refusal_and_cites_it(tmp_path):
+    d = shadow_daemon(tmp_path, legacy_allows=True, ledger_allows=True)
+    write_publisher_policy(tmp_path, receiver_audiences=["group:other"])
+    assert d.read(M1_ITEM)["content"] is None
+    row = receipt_rows(tmp_path, action="inject_context")[-1]
+    assert row["shadow"] == 1 and row["allowed"] == 1 and row["refusal"] is None
+    assert AUDIENCE in json.loads(row["cited"])
+
+
+def _shadow_receipt(home, at, *, allowed, refusal, cited, digest=None):
+    return add_receipt(home, place=HOME, at=at, allowed=allowed, action="inject_context", shadow=1, cited=cited,
+                       refusal=refusal, content_digest=digest)
+
+
+def test_m8_report_shadow_reads_the_audience_refusal_from_its_cited_entry_and_still_reads_old_receipts(
+        cli_shadow_world, capsys):
+    home, ledger_deny = cli_shadow_world.home, {"code": "DENIED", "layer": HOME, "action": "inject_context"}
+    both = _shadow_receipt(home, "2026-11-06", allowed=False, refusal=ledger_deny,
+                           cited=[deny_cited(HOME), AUDIENCE])
+    only_audience = _shadow_receipt(home, "2026-11-07", allowed=True, refusal=None, cited=[AUDIENCE])
+    old_both = _shadow_receipt(home, "2026-11-08", allowed=False, refusal=OLD_AUDIENCE, cited=[deny_cited(HOME)])
+    old_only_audience = _shadow_receipt(home, "2026-11-09", allowed=True, refusal=OLD_AUDIENCE, cited=[])
+    assert cli_main(["report", "shadow", "--json"]) == 0
+    rows = {r["id"]: r for r in json.loads(capsys.readouterr().out)["disagreements"]}
+    assert both not in rows and old_both not in rows
+    assert rows[only_audience]["refusal"] == rows[old_only_audience]["refusal"] == OLD_AUDIENCE
+    assert cli_main(["report", "shadow"]) == 0
+    out = capsys.readouterr().out
+    assert f"{only_audience}" in out and "LEGACY_DENY at publisher" in out.split(only_audience)[1].splitlines()[0]

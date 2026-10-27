@@ -550,7 +550,7 @@ class _LedgerSide:
         only when both paths allow it and its receipt is written; under ``shadow`` the legacy path decides."""
         from dataclasses import replace
         from permission_uses import row_for_decision
-        from permissions import Refusal, annotation, subjects_of
+        from permissions import Cited, Refusal, annotation, subjects_of
         legacy_delivers = content is not None
         found = [_object_of(r["layer"], r["source_instance_id"], r["source_id"])
                  for r in self.publisher.storage.conn.execute(
@@ -565,12 +565,16 @@ class _LedgerSide:
         obj, decision = next(((o, d) for o, d in decided if not d.allowed), decided[0])
         if not legacy_delivers and (self.shadow or decision.allowed):
             # The audience check is the publisher's policy refusing. Under shadow it is recorded on the receipt
-            # whether or not the ledger also refuses, so `report shadow` reads it instead of inferring it (P 12.3);
-            # an allowing ledger keeps its verdict and only notes the refusal. Under enforce the receipt must not
-            # say "allowed" for an item not delivered; a ledger refusal there stays the receipt's refusal.
-            legacy_refusal = Refusal("LEGACY_DENY", "publisher", "inject_context")
-            decision = replace(decision, refusal=legacy_refusal) if self.shadow else replace(
-                decision, allowed=False, refusal=legacy_refusal)
+            # whether or not the ledger also refuses, so `report shadow` reads it instead of inferring it (P 12.3),
+            # in a `cited` entry of its own: the receipt keeps the ledger's own verdict and refusal (the final
+            # review's M8). Under enforce the receipt must not say "allowed" for an item not delivered; a ledger
+            # refusal there stays the receipt's refusal.
+            if self.shadow:
+                decision = replace(decision, cited=decision.cited + (
+                    Cited("publisher", "audience", "inject_context", "deny"),))
+            else:
+                decision = replace(decision, allowed=False,
+                                   refusal=Refusal("LEGACY_DENY", "publisher", "inject_context"))
         from lighthouse_protocol import content_digest as _digest
         row = row_for_decision(
             decision, self._use(obj, "inject_context"), acting_for=self.acting_for,

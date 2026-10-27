@@ -1093,19 +1093,29 @@ def _migrate(args) -> int:
 
 # ---------------------------------------------------------------- report shadow (P 12.3, 12.1)
 
+def _audience_refusal(cited, refusal) -> dict | None:
+    """The publisher's audience refusal a shadow receipt records, as LEGACY_DENY by the publisher: a `cited` entry of
+    kind `audience` (the final review's M8), or, on a receipt written before it, the receipt's own refusal."""
+    for c in cited if isinstance(cited, list) else ():
+        if isinstance(c, dict) and c.get("kind") == "audience" and c.get("verdict") == "deny":
+            return {"code": "LEGACY_DENY", "layer": c.get("layer"), "action": c.get("action")}
+    if refusal and refusal.get("code") == "LEGACY_DENY" and refusal.get("layer") == "publisher":
+        return refusal
+    return None
+
+
 def _legacy_agreed(row) -> bool:
     """A shadow receipt on which the two paths differ. A ledger refusal the legacy path did not make: no cited legacy
-    layer denies it and the refusal is not the legacy path's own (the daemon records the publisher's audience refusal
-    as LEGACY_DENY on the receipt, whether or not the ledger also refused). Or the converse, a delivery the ledger allowed that the publisher's audience
-    check refused (recorded as LEGACY_DENY by the publisher)."""
+    layer denies it, the publisher's audience check did not refuse it, and the refusal is not the legacy path's own.
+    Or the converse, a delivery the ledger allowed that the publisher's audience check refused (`_audience_refusal`)."""
     try:
         cited = json.loads(row["cited"])
         refusal = json.loads(row["refusal"]) if row["refusal"] else None
     except (TypeError, ValueError):
         return False
     if row["allowed"]:
-        return bool(refusal) and refusal.get("code") == "LEGACY_DENY" and refusal.get("layer") == "publisher"
-    if refusal and refusal.get("code") == "LEGACY_DENY":
+        return _audience_refusal(cited, refusal) is not None
+    if (refusal and refusal.get("code") == "LEGACY_DENY") or _audience_refusal(cited, refusal) is not None:
         return False
     return not any(isinstance(c, dict) and c.get("kind") == "legacy" and c.get("verdict") != "allow" for c in cited)
 
@@ -1122,6 +1132,8 @@ def _shadow_disagreements() -> tuple[int, list[dict]]:
                 count += 1
                 if len(rows) < REPORT_ROWS:
                     refusal = json.loads(r["refusal"]) if r["refusal"] else None
+                    if r["allowed"]:          # what refused it is the audience check
+                        refusal = _audience_refusal(json.loads(r["cited"]), refusal)
                     rows.append({"id": r["id"], "at": r["at"], "agent": r["agent"], "place": r["place"],
                                  "action": r["action"], "purpose": r["purpose"], "object": r["object"],
                                  "copy": r["copy"], "refusal": refusal})

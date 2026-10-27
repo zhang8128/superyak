@@ -17,7 +17,9 @@ def test_shadow_receipt_records_the_audience_refusal_when_the_ledger_refuses_too
     assert d.read(M1_ITEM)["content"] is None
     row = receipt_rows(tmp_path, action="inject_context")[-1]
     assert row["shadow"] == 1 and row["allowed"] == 0 and row["content_digest"] is None
-    assert json.loads(row["refusal"]) == LEGACY_DENY
+    assert json.loads(row["refusal"])["code"] != "LEGACY_DENY"      # the ledger's own code (final review M8)
+    assert {"layer": "publisher", "kind": "audience", "action": "inject_context", "verdict": "deny",
+            "record": None, "version": None} in json.loads(row["cited"])
 
 
 def test_shadow_receipt_of_a_ledger_only_refusal_is_not_marked_as_an_audience_refusal(tmp_path):
