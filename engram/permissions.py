@@ -1327,7 +1327,11 @@ def _prefilter(state: State, layer_id: str, use: Use, action: str) -> list:
 
 def layer_version(state: State, layer_id: str) -> int:
     """The highest seq that touches the layer: its records and grants (made, revoked), and the place's own
-    creation, retirement and stewards."""
+    creation, retirement and stewards. It reads nothing of a use, so it is made once per layer for a State."""
+    return state._memo(("layer-version", layer_id), lambda: _layer_version(state, layer_id))
+
+
+def _layer_version(state: State, layer_id: str) -> int:
     best = 0
     records, grants = _layer_index(state)
     for r in records.get(layer_id, ()):
@@ -1483,9 +1487,10 @@ def _subject_retired(state: State, subject: str) -> bool:
 
 
 def _live_denies(state: State, layer_id: str, t: int):
-    """The layer's denies that are not revoked and start after t."""
-    return [r for r in _layer_index(state)[0].get(layer_id, ())
-            if r.effect == "deny" and r.valid_from > t and not _revoked(state, r)]
+    """The layer's denies that are not revoked and start after t; made once per (layer, t) for a State."""
+    return state._memo(("live-denies", layer_id, t), lambda: tuple(
+        r for r in _layer_index(state)[0].get(layer_id, ())
+        if r.effect == "deny" and r.valid_from > t and not _revoked(state, r)))
 
 
 def _until(state: State, t: int, end: int | None, layers: Sequence[str], read: Iterable[tuple]) -> int | None:
@@ -1502,53 +1507,67 @@ def _until(state: State, t: int, end: int | None, layers: Sequence[str], read: I
     return min(out) if out else None
 
 
+def _horizon_layers(state: State, t: int, layers: tuple) -> tuple:
+    """What `_horizon` reads of the required layers alone: (the earliest term after t, or None; the collections
+    some selector of theirs names). It reads no object, so it is made once per (t, layers) for a State. The key is
+    the whole ordered layers tuple: the shared `seen_chain` walk depends on the layer order."""
+    def compute():
+        out: list[int] = []
+        seen_chain: set = set()
+        backings: list[str] = []
+        selectors: list[Selector] = []
+
+        def note_record(r, *, allow_grants: bool) -> None:
+            for v in (r.valid_from, r.valid_until):
+                if v is not None and v > t:
+                    out.append(v)
+            selectors.append(r.selector)
+            if allow_grants:
+                backings.append(r.backing)
+
+        for layer_id in layers:
+            for r in _layer_index(state)[0].get(layer_id, ()):
+                if _revoked(state, r) or (r.valid_until is not None and r.valid_until <= t):
+                    continue
+                note_record(r, allow_grants=True)
+                cur, n = r.replaces, 0
+                while cur is not None and cur not in seen_chain and n < MAX_REPLACES:
+                    seen_chain.add(cur)
+                    link = state.records.get(cur)
+                    if link is None:
+                        break
+                    note_record(link, allow_grants=False)
+                    cur, n = link.replaces, n + 1
+        for b in set(backings):
+            if b.startswith("grant:"):
+                try:
+                    chain = grant_chain(state, b[len("grant:"):])
+                except RuleError:
+                    continue
+                out.extend(g.expires for g in chain if g.expires > t)
+                selectors.extend(g.envelope for g in chain)
+        named = set()
+        for sel in selectors:
+            if sel.collections != STAR:
+                named.update(sel.collections)
+        return (min(out) if out else None, frozenset(named))
+    return state._memo(("horizon-layers", t, layers), compute)
+
+
 def _horizon(state: State, t: int, layers: Sequence[str], objs: Sequence[str]) -> int | None:
     """P 6.5 step 7: the earliest `valid_from` or `valid_until` after t of every record in a required ledger layer
     that is not revoked and has not ended, or is in the `replaces` chain of one; and every `expires` after t of
     a grant behind such a record, behind a grant in its chain, or behind a membership of a needed object in a
-    collection that one of their selectors names. Terms beyond the spec's reading are only ever earlier ones."""
-    out: list[int] = []
-    seen_chain: set = set()
-    backings: list[str] = []
-    selectors: list[Selector] = []
-
-    def note_record(r, *, allow_grants: bool) -> None:
-        for v in (r.valid_from, r.valid_until):
-            if v is not None and v > t:
-                out.append(v)
-        selectors.append(r.selector)
-        if allow_grants:
-            backings.append(r.backing)
-
-    for layer_id in layers:
-        for r in _layer_index(state)[0].get(layer_id, ()):
-            if _revoked(state, r) or (r.valid_until is not None and r.valid_until <= t):
-                continue
-            note_record(r, allow_grants=True)
-            cur, n = r.replaces, 0
-            while cur is not None and cur not in seen_chain and n < MAX_REPLACES:
-                seen_chain.add(cur)
-                link = state.records.get(cur)
-                if link is None:
-                    break
-                note_record(link, allow_grants=False)
-                cur, n = link.replaces, n + 1
-    for b in set(backings):
-        if b.startswith("grant:"):
-            try:
-                chain = grant_chain(state, b[len("grant:"):])
-            except RuleError:
-                continue
-            out.extend(g.expires for g in chain if g.expires > t)
-            selectors.extend(g.envelope for g in chain)
-    named = set()
-    for sel in selectors:
-        if sel.collections != STAR:
-            named.update(sel.collections)
-    for obj in objs:
-        for m in state.member_of.get(obj, ()):
-            if m.collection in named:
-                out.extend(e for e in _chain_expiries(state, m.backing) if e > t)
+    collection that one of their selectors names. Terms beyond the spec's reading are only ever earlier ones.
+    The layers' part is made once per (t, layers) for a State (`_horizon_layers`); only the memberships are read
+    per object."""
+    least, named = _horizon_layers(state, t, tuple(layers))
+    out: list[int] = [] if least is None else [least]
+    if named:
+        for obj in objs:
+            for m in state.member_of.get(obj, ()):
+                if m.collection in named:
+                    out.extend(e for e in _chain_expiries(state, m.backing) if e > t)
     return min(out) if out else None
 
 
