@@ -2,6 +2,9 @@
 from .common import REPLACED_ADD, REPLACED_ROOMS, Problem, text, ids, uid, require
 from .tickets import DEFER_BOUND_SECONDS
 
+# The `since` read's query: it walks the existing events_kind_room_id index (kind, resource_id, id) in id order.
+SINCE_SQL = "SELECT id, json_extract(payload, '$.message_id') FROM events WHERE kind='chat.message' AND resource_id=? AND id>? ORDER BY id"
+
 class Chats:
     def _room(self, db, actor, key):
         row = require(db.execute('SELECT rooms.* FROM rooms JOIN room_members ON rooms.id=room_members.room_id WHERE rooms.id=? AND user_id=?', (key, actor)).fetchone())
@@ -75,6 +78,8 @@ class Chats:
         the full read's, `system_author` included, so a client never merges them across pages."""
         order = self._message_order(db, key)
         total, limit = len(order), page.get('limit', 100)
+        if 'since' in page:
+            return self._since(db, room, key, page, order)
         where = [name for name in ('before', 'at', 'start', 'after') if name in page]
         if where == ['before']:
             if not 0 <= page['before'] <= total:
@@ -92,19 +97,43 @@ class Chats:
                     raise Problem(404, 'No message in this room')
                 begin = known[0] + (where == ['after'])
             end = min(total, begin + limit)
-        else:  # limit alone: the newest. (`since` is Task 2's.)
+        else:  # limit alone: the newest
             begin, end = max(0, total - limit), total
         picked = order[begin:end]
+        room['messages'] = self._messages_of(db, key, picked)
+        room.update(paged=True, total=total, first_position=begin, seq=self._room_seq(db, key))
+        return self._room_fields(db, room, key)
+
+    def _since(self, db, room, key, page, order):
+        """What arrived after event `since`: the oldest `limit` messages by `chat.message` event id, shown in display
+        order. Arrival order, not position, so a federated message that lands late with an older `created` is still
+        seen once. An event whose message is not in the room's order is passed over, its cursor position included."""
+        position = {message_id: i for i, (message_id, _) in enumerate(order)}
+        limit, taken, last, more = page.get('limit', 100), [], None, False
+        for event_id, message_id in db.execute(SINCE_SQL, (key, page['since'])):
+            if message_id not in position:
+                continue
+            if len(taken) == limit:
+                more = True
+                break
+            taken.append(position[message_id])
+            last = event_id
+        taken.sort()
+        picked = [order[i] for i in taken]
+        room.update(paged=True, total=len(order), first_position=taken[0] if taken else len(order), more=more,
+                    seq=last if more else self._room_seq(db, key))
+        room['messages'] = self._messages_of(db, key, picked)
+        return self._room_fields(db, room, key)
+
+    def _messages_of(self, db, key, picked):
         local, peer = [m for m, source in picked if source == 0], [m for m, source in picked if source == 1]
         rows = {}
         for table, wanted in (('messages', local), ('peer_messages', peer)):
             rows.update({r['id']: dict(r) for r in db.execute(
                 f'SELECT * FROM {table} WHERE room_id=? AND id IN ({",".join("?" * len(wanted))})', (key, *wanted))})
         sources, replies = self._sources(db, key, local), self._replies(db, key, local)
-        room['messages'] = [dict(rows[m], source=sources.get(m), reply_to=replies.get(m)) if source == 0 else dict(rows[m], reply_to=None)
-                            for m, source in picked]
-        room.update(paged=True, total=total, first_position=begin, seq=self._room_seq(db, key))
-        return self._room_fields(db, room, key)
+        return [dict(rows[m], source=sources.get(m), reply_to=replies.get(m)) if source == 0 else dict(rows[m], reply_to=None)
+                for m, source in picked]
 
     def _room_fields(self, db, room, key):
         """The room fields both reads share, whatever messages they hold. `system_author` is room-wide."""

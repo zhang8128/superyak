@@ -154,3 +154,70 @@ def test_paged_messages_equal_the_full_reads_slices(env):
         page = client.get(f'/api/chats/{key}?{query}').json()
         assert page['messages'] == full[begin:end], query
         assert page['first_position'] == begin
+
+def seq_of(client, key):
+    return client.get(f'/api/chats/{key}?limit=1').json()['seq']
+
+def newest_event(app, key):
+    with app.state.store.transaction() as db:
+        return db.execute("SELECT MAX(id) FROM events WHERE kind='chat.message' AND resource_id=?", (key,)).fetchone()[0]
+
+def test_since_returns_what_arrived_after_the_cursor(env):
+    app, clients, users, clock = env
+    key = room_of(env, 5)
+    client = clients[0]
+    cursor = seq_of(client, key)
+    new = fill(client, key, 3, clock, prefix='n')
+    body = client.get(f'/api/chats/{key}?since={cursor}').json()
+    assert [m['id'] for m in body['messages']] == new
+    assert body['more'] is False and body['seq'] == newest_event(app, key) and body['paged'] is True
+
+def test_since_sees_a_late_peer_message_with_an_older_created(env):
+    app, clients, users, clock = env
+    key = room_of(env, 5)
+    client = clients[0]
+    cursor = seq_of(client, key)
+    late = uuid.uuid4().hex
+    with app.state.store.transaction() as db:
+        db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (late, key, f'{"a" * 64}:remote', 'late', 'relayed late', 1, 0.5))
+        app.state.store.emit(db, 'chat.message', key, 1, {'message_id': late, 'author_id': f'{"a" * 64}:remote'})
+    body = client.get(f'/api/chats/{key}?since={cursor}').json()
+    assert [m['id'] for m in body['messages']] == [late]
+    assert body['first_position'] == 0 and body['more'] is False
+
+def test_since_pages_from_the_oldest_and_never_skips(env):
+    app, clients, users, clock = env
+    key = room_of(env, 5)
+    client = clients[0]
+    cursor = seq_of(client, key)
+    new = fill(client, key, 150, clock, prefix='n')
+    first = client.get(f'/api/chats/{key}?since={cursor}&limit=100').json()
+    assert [m['id'] for m in first['messages']] == new[:100] and first['more'] is True
+    second = client.get(f'/api/chats/{key}?since={first["seq"]}&limit=100').json()
+    assert [m['id'] for m in second['messages']] == new[100:] and second['more'] is False
+    assert second['seq'] == newest_event(app, key)
+
+def test_since_with_nothing_new(env):
+    app, clients, users, clock = env
+    key = room_of(env, 5)
+    client = clients[0]
+    body = client.get(f'/api/chats/{key}?since={seq_of(client, key)}').json()
+    assert body['messages'] == [] and body['more'] is False and body['first_position'] == body['total'] == 5
+
+def test_since_skips_an_event_whose_message_is_gone_but_passes_the_cursor(env):
+    app, clients, users, clock = env
+    key = room_of(env, 2)
+    client = clients[0]
+    cursor = seq_of(client, key)
+    with app.state.store.transaction() as db:
+        app.state.store.emit(db, 'chat.message', key, 1, {'message_id': 'gone', 'author_id': users[0]['id']})
+    body = client.get(f'/api/chats/{key}?since={cursor}').json()
+    assert body['messages'] == [] and body['more'] is False and body['seq'] == newest_event(app, key) > cursor
+
+def test_since_uses_the_existing_index(env):
+    from superyak_peer.chats import SINCE_SQL
+    app, clients, users, clock = env
+    key = room_of(env, 2)
+    with app.state.store.transaction() as db:
+        plan = ' '.join(str(tuple(r)) for r in db.execute('EXPLAIN QUERY PLAN ' + SINCE_SQL, (key, 0)))
+    assert 'events_kind_room_id' in plan, plan
