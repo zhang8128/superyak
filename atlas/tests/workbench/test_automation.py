@@ -285,7 +285,9 @@ def test_missing_or_changed_overlap_report_invalidates_generation(project, draft
         path.unlink()
     else:
         report = json.loads(path.read_text())
-        report["record_pairs"] = []
+        # A tamper that always changes the report: emptying record_pairs did nothing once the fixture's allow rule
+        # ended (validUntil 2026-10-07) and the overlap became a denial with no pairs.
+        report["status"] = "denied" if report["status"] != "denied" else "allowed"
         path.write_text(json.dumps(report))
     assert inbox.status()["publication_status"] == "invalid"
     with pytest.raises((ValueError, OSError)):
