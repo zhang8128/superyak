@@ -28,6 +28,7 @@ cohesion and persistence specs require before either ``enabled`` flag is set.
 from __future__ import annotations
 
 import argparse
+import heapq
 import json
 import math
 import shutil
@@ -35,6 +36,7 @@ import sqlite3
 import stat
 import sys
 import traceback
+from array import array
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +47,8 @@ import store_reader
 
 PRUNE_THRESHOLD = 0.05  # server.py sleep maintenance: prune_decayed(threshold=0.05)
 DECAY_EXPONENT = 0.5
+MAX_LANE_EPISODES = 16_000      # lane and core sets, in blocks (I 10, D31)
+MAX_SEMANTIC_EPISODES = 1_024   # per-semantic dense sets (I 10, D31)
 
 
 def _pending_wal(source: Path) -> bool:
@@ -88,25 +92,30 @@ def first_open_preview(conn: sqlite3.Connection, now: datetime | None = None) ->
     and decay exponents vary by ±15%, so treat this as the upper bound.
     """
     now = now or datetime.now(timezone.utc)
-    rows = conn.execute(
+    stored, recomputed = array("d"), array("d")   # the cursor is read once; only these and a count are kept
+    pruned_n, pruned_ids, last_touch = 0, [], None
+    for r in conn.execute(
         "SELECT id, created_at, last_accessed, accessed_count, decay_strength,"
         " compressed, core, dormant FROM episodes"
-    ).fetchall()
-    stored, recomputed, pruned = [], [], []
-    last_touches = []
-    for r in rows:
-        stored.append(r["decay_strength"])
+    ):
+        if r["decay_strength"] is not None:
+            stored.append(r["decay_strength"])
         strength = r["decay_strength"]
         if r["core"] == 0 and (strength or 0) > 0.01:
             strength = decay_strength(r["accessed_count"], r["last_accessed"] or r["created_at"], now)
-        recomputed.append(strength)
+        if strength is not None:
+            recomputed.append(strength)
         if (strength or 0) < PRUNE_THRESHOLD and r["compressed"] == 1 \
                 and r["core"] == 0 and r["dormant"] == 0:
-            pruned.append(r["id"])
-        last_touches.append(r["last_accessed"] or r["created_at"])
+            pruned_n += 1
+            if len(pruned_ids) < 50:
+                pruned_ids.append(r["id"])
+        touch = r["last_accessed"] or r["created_at"]
+        if touch and (last_touch is None or touch > last_touch):
+            last_touch = touch
 
     def dist(values):
-        arr = np.array([v for v in values if v is not None], dtype=np.float64)
+        arr = np.array(values, dtype=np.float64)
         if not arr.size:
             return {"count": 0}
         return {"count": int(arr.size),
@@ -115,11 +124,11 @@ def first_open_preview(conn: sqlite3.Connection, now: datetime | None = None) ->
 
     return {
         "as_of": now.isoformat(),
-        "last_touch": max((t for t in last_touches if t), default=None),
+        "last_touch": last_touch,
         "stored_strength": dist(stored),
         "strength_if_opened_now": dist(recomputed),
-        "would_prune_to_cold": len(pruned),
-        "would_prune_ids": pruned[:50],
+        "would_prune_to_cold": pruned_n,
+        "would_prune_ids": pruned_ids,
     }
 
 
@@ -144,17 +153,34 @@ class _ReadOnlyStore:
         pass  # scores are reported, never cached
 
 
-def persistence_scores(conn) -> dict[str, dict]:
-    """``persistence.compute_scores`` without its cache write."""
+def persistence_scores(conn, *, max_episodes: int | None = None, skips: list | None = None) -> dict[str, dict]:
+    """``persistence.compute_scores`` without its cache write.
+
+    With ``max_episodes`` each lane is counted first (``COUNT(*)``, before any vector is read). A lane over
+    the bound is not scored (never sampled) and is named in ``skips`` as ``lane:<lane>``; the others use the
+    blocked filtration (R28). Without it, today's dense filtration.
+    """
     import persistence
 
     gen = persistence.generativity_scores(conn)
     out = {}
     for lane in ("personal", "work"):
-        ids, X = persistence._episodes_with_vectors(conn, lane=lane)
-        if not ids:
-            continue
-        f = persistence.build_filtration(X)
+        if max_episodes is None:
+            ids, X = persistence._episodes_with_vectors(conn, lane=lane)
+            if not ids:
+                continue
+            f = persistence.build_filtration(X)
+        else:
+            n = conn.execute("SELECT COUNT(*)" + persistence._LANE_SET, (lane,)).fetchone()[0]
+            if not n:
+                continue
+            if n > max_episodes:
+                persistence._skip(skips, f"lane:{lane}", n, max_episodes)
+                continue
+            ids, U = persistence._unit_rows(
+                conn, "SELECT e.id, ev.embedding" + persistence._LANE_SET, (lane,), n)
+            f = persistence.build_filtration_blocked(U, unit=True)
+            del U
         red, uniq = persistence.redundancy(f), persistence.uniqueness(f)
         for i, eid in enumerate(ids):
             out[eid] = {"episode_id": eid, "lane": lane,
@@ -180,25 +206,44 @@ def strip_content(value):
     return value
 
 
-def cohesion_report(store) -> dict:
+def cohesion_report(store, *, max_episodes: int | None = None, skips: list | None = None) -> dict:
+    """The cohesion summary, one semantic at a time: a five-bin histogram, the 15 hottest and the 5 coolest.
+
+    Two bounded heaps hold the extremes, so the ranked list ``sheaf.measure_all`` builds never exists. Ties
+    keep ``measure_all``'s order (energy descending, then the order measured)."""
     import sheaf
     from config import CohesionConfig
 
-    ranked = sheaf.measure_all(store, CohesionConfig())
-    for m in ranked:
+    hist = np.zeros(5, dtype=np.int64)
+    hottest: list = []   # min-heap of (energy, -seq, m): the 15 largest
+    coolest: list = []   # min-heap of (-energy, seq, m): the 5 smallest energies
+    measured = 0
+    for seq, m in enumerate(sheaf.measure_each(store, CohesionConfig(), max_episodes=max_episodes, skips=skips)):
+        measured += 1
+        hist += np.histogram([m["energy"]], bins=5, range=(0, 1))[0]
+        for heap, key, size in ((hottest, (m["energy"], -seq), 15), (coolest, (-m["energy"], seq), 5)):
+            item = (*key, m)
+            if len(heap) < size:
+                heapq.heappush(heap, item)
+            elif key > heap[0][:2]:
+                heapq.heapreplace(heap, item)
+    ranked_hot = [it[2] for it in sorted(hottest, key=lambda it: it[:2], reverse=True)]
+    ranked_cool = [it[2] for it in sorted(coolest, key=lambda it: it[:2], reverse=True)]
+    for m in ranked_hot + ranked_cool:
         sem = store.get_semantic(m["semantic_id"]) or {}
         m["content"] = (sem.get("content") or "")[:100]
-    energies = [m["energy"] for m in ranked]
     return {
-        "measured": len(ranked),
-        "energy_histogram": [int(x) for x in np.histogram(energies, bins=5, range=(0, 1))[0]]
-        if energies else [],
-        "hottest": ranked[:15],
-        "coolest": ranked[-5:][::-1] if len(ranked) > 15 else [],
+        "measured": measured,
+        "energy_histogram": [int(x) for x in hist] if measured else [],
+        "hottest": ranked_hot,
+        "coolest": ranked_cool if measured > 15 else [],
     }
 
 
-def persistence_preview(store) -> dict:
+def persistence_preview(store, *, max_episodes: int | None = None, max_semantic_episodes: int | None = None,
+                        skips: list | None = None) -> dict:
+    """The persistence section. ``max_episodes`` bounds the core set (lane sets are bounded where the
+    scores are made); ``max_semantic_episodes`` bounds each hub and each audited event."""
     import persistence
     from config import PersistenceConfig
 
@@ -219,14 +264,15 @@ def persistence_preview(store) -> dict:
             "redundant_enough": int((red >= cfg.redundancy_floor).sum()),
             "generative": sum(1 for s in rows if s["generativity"] > 0),
         }
-    prune = persistence.evaluate_prune(store, cfg)
+    prune = persistence.evaluate_prune(store, cfg, counts_only=True)
     return {
         "lanes": lanes,
-        "two_key_prune": {"would_evict": len(prune["evict"]),
-                          "protected": len(prune["protected"])},
-        "hubs": persistence.classify_hubs(store, cfg),
-        "conjunct_audit": persistence.audit_unchecked_events(store, cfg),
-        "redundant_cores": persistence.flag_redundant_cores(store, cfg)[:20],
+        "two_key_prune": {"would_evict": prune["evict"], "protected": prune["protected"]},
+        "hubs": persistence.classify_hubs(store, cfg, max_episodes=max_semantic_episodes, skips=skips),
+        "conjunct_audit": persistence.audit_unchecked_events(
+            store, cfg, max_episodes=max_semantic_episodes, skips=skips),
+        "redundant_cores": persistence.flag_redundant_cores(
+            store, cfg, max_episodes=max_episodes, skips=skips)[:20],
     }
 
 
@@ -251,6 +297,13 @@ def identity_report(snapshot_survey: dict, working_conn) -> dict:
     }
 
 
+def _connect_read_only(path):
+    """The one place calibration opens the working copy: a read-only ``Storage``."""
+    from storage import Storage
+
+    return Storage.open_read_only(path)
+
+
 def _run(report: dict, name: str, fn, *args) -> None:
     try:
         report["analyses"][name] = fn(*args)
@@ -262,7 +315,8 @@ def _run(report: dict, name: str, fn, *args) -> None:
 def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
               now: datetime | None = None, *, no_content: bool = False,
               no_paths: bool = False, notes: Mapping[str, str] | None = None,
-              create_parents: bool = True) -> dict:
+              create_parents: bool = True, max_lane_episodes: int | None = None,
+              max_semantic_episodes: int | None = None) -> dict:
     from storage import Storage
 
     unknown = sorted(set(notes or {}) - set(NOTE_SECTIONS))
@@ -300,7 +354,8 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
     else:
         report["migration"] = {"applied": [], "skipped": bool(pending)}
 
-    ro = Storage.open_read_only(working)
+    skips: list[dict] = []   # dense sets over their bound, named (I 10); never sampled
+    ro = _connect_read_only(working)
     try:
         conn = ro.conn
         try:
@@ -310,12 +365,14 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
         _run(report, "first_open", first_open_preview, conn, now)
         scores: dict = {}
         try:
-            scores = persistence_scores(conn)
+            scores = persistence_scores(conn, max_episodes=max_lane_episodes, skips=skips)
         except Exception as e:
             report["analyses"]["persistence_scores"] = {"error": f"{type(e).__name__}: {e}"}
         store = _ReadOnlyStore(ro, scores)
-        _run(report, "cohesion", cohesion_report, store)
-        _run(report, "persistence", persistence_preview, store)
+        _run(report, "cohesion", lambda: cohesion_report(
+            store, max_episodes=max_semantic_episodes, skips=skips))
+        _run(report, "persistence", lambda: persistence_preview(
+            store, max_episodes=max_lane_episodes, max_semantic_episodes=max_semantic_episodes, skips=skips))
         if no_paths:
             report["analyses"]["paths"] = PATHS_NOT_MEASURED
         else:
@@ -323,6 +380,7 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
             _run(report, "paths", paths.report, conn)
     finally:
         ro.close()
+    report["analyses"]["skipped_dense_sets"] = skips
 
     source_after = store_reader.file_facts(source)
     # -shm is SQLite's shared-memory index, rewritten by any WAL reader.
@@ -425,6 +483,9 @@ def render_markdown(report: dict) -> str:
             lines.append(f"  - {h['classification']:>11}  n={h['n']}  band={h['band']}{text}")
         lines.append(f"- Conjunct audit entries: {len(pe['conjunct_audit'])}; "
                      f"redundant cores flagged: {len(pe['redundant_cores'])}")
+    if a.get("skipped_dense_sets"):
+        lines += ["", "## Dense sets over their bound (not measured)"]
+        lines += [f"- {k['set']}: {k['n']} episodes, bound {k['bound']}" for k in a["skipped_dense_sets"]]
     pa = a.get("paths", {})
     if section("Session paths (Layer 5)", pa, "paths"):
         lines.append(f"- Sessions with paths: {pa['sessions_with_paths']} of {pa['sessions_total']}; "

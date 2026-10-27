@@ -13,7 +13,7 @@ import logging
 import sqlite3
 import struct
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import numpy as np
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 _EPS = 1e-12
 _MST_FLOOR = 1e-9  # scipy MST treats 0 as "no edge"; duplicates have d=0
+BLOCK_ROWS = 256   # rows of the n x n distances held at once by build_filtration_blocked (R28)
 
 
 def _unpack_embedding(blob: bytes) -> np.ndarray:
@@ -52,18 +53,11 @@ class Filtration:
     nn_dist: np.ndarray   # per-point nearest-neighbor distance
     death: np.ndarray     # per-point lineage death height (inf = survivor)
     max_height: float     # final merge height of the whole set
+    heights: np.ndarray = field(default_factory=lambda: np.zeros(0))   # the tree's n - 1 edge heights
 
 
-def build_filtration(X) -> Filtration:
-    n = len(X)
-    if n == 0:
-        return Filtration(0, np.zeros(0), np.zeros(0), 0.0)
-    if n == 1:
-        return Filtration(1, np.array([1.0]), np.array([np.inf]), 0.0)
-    D = distance_matrix(X)
-    off = D + np.diag(np.full(n, np.inf))
-    nn = off.min(axis=1)
-    edges = _mst_edges(D)
+def _merge(n: int, edges: list[tuple[float, int, int]]) -> tuple[np.ndarray, float]:
+    """Union-find over the tree's edges in order: each point's lineage death and the final height."""
     death = np.full(n, np.inf)
     parent = list(range(n))
     size = [1] * n
@@ -84,8 +78,83 @@ def build_filtration(X) -> Filtration:
         death[carrier[rj]] = h  # smaller component's lineage dies
         parent[rj] = ri
         size[ri] += size[rj]
-    max_height = edges[-1][0] if edges else 0.0
-    return Filtration(n, nn, death, max_height)
+    return death, edges[-1][0] if edges else 0.0
+
+
+def build_filtration(X) -> Filtration:
+    n = len(X)
+    if n == 0:
+        return Filtration(0, np.zeros(0), np.zeros(0), 0.0)
+    if n == 1:
+        return Filtration(1, np.array([1.0]), np.array([np.inf]), 0.0)
+    D = distance_matrix(X)
+    off = D + np.diag(np.full(n, np.inf))
+    nn = off.min(axis=1)
+    edges = _mst_edges(D)
+    death, max_height = _merge(n, edges)
+    return Filtration(n, nn, death, max_height, np.array([e[0] for e in edges]))
+
+
+def _prim_edges(U: np.ndarray) -> list[tuple[float, int, int]]:
+    """The minimum spanning tree of unit rows ``U`` by dense Prim's algorithm, one row of n distances per
+    added point and no n x n matrix. Each edge is (h, min(u, v), max(u, v)) with h floored at _MST_FLOOR, and
+    the list is sorted by that triple, as ``_mst_edges`` returns scipy's (every scipy edge has i < j)."""
+    n = len(U)
+    if n < 2:
+        return []
+    best = np.maximum(1.0 - U @ U[0], _MST_FLOOR)
+    near = np.zeros(n, dtype=np.int64)       # the tree point each point is closest to
+    in_tree = np.zeros(n, dtype=bool)
+    in_tree[0] = True
+    best[0] = np.inf
+    edges = []
+    for _ in range(n - 1):
+        v = int(np.argmin(best))
+        u = int(near[v])
+        edges.append((float(best[v]), min(u, v), max(u, v)))
+        in_tree[v] = True
+        best[v] = np.inf
+        d = np.maximum(1.0 - U @ U[v], _MST_FLOOR)
+        closer = (d < best) & ~in_tree
+        best[closer] = d[closer]
+        near[closer] = v
+    edges.sort()
+    return edges
+
+
+def build_filtration_blocked(X, *, block_rows: int = BLOCK_ROWS, unit: bool = False) -> Filtration:
+    """``build_filtration`` without an n x n matrix (R28), with the same outputs when no two rows are equal.
+
+    The rows are float64 and L2-normalized in one n x d array, allocated once and normalized in place
+    (``unit=True``: ``X`` already is that array and is used as it is). The nearest neighbours come from
+    one ``block_rows`` x n buffer; the tree comes from ``_prim_edges``.
+    """
+    n = len(X)
+    if n == 0:
+        return Filtration(0, np.zeros(0), np.zeros(0), 0.0)
+    if n == 1:
+        return Filtration(1, np.array([1.0]), np.array([np.inf]), 0.0)
+    if unit:
+        U = X
+    else:
+        U = np.empty((n, len(X[0])), dtype=np.float64)
+        for lo in range(0, n, block_rows):
+            blk = U[lo:lo + block_rows]
+            blk[:] = X[lo:lo + block_rows]
+            blk /= np.linalg.norm(blk, axis=1, keepdims=True) + _EPS
+    nn = np.empty(n)
+    buf = np.empty((min(block_rows, n), n))
+    for lo in range(0, n, block_rows):
+        m = min(block_rows, n - lo)
+        d = buf[:m]
+        np.matmul(U[lo:lo + m], U.T, out=d)
+        np.subtract(1.0, d, out=d)
+        np.maximum(d, 0.0, out=d)
+        d[np.arange(m), lo + np.arange(m)] = np.inf
+        nn[lo:lo + m] = d.min(axis=1)
+    edges = _prim_edges(U)
+    death, max_height = _merge(n, edges)
+    return Filtration(n, nn, death, max_height, np.array([e[0] for e in edges]))
 
 
 def redundancy(f: Filtration) -> np.ndarray:
@@ -138,6 +207,33 @@ def _episodes_with_vectors(conn, lane: str | None = None):
     return ids, X
 
 
+def _unit_rows(conn, sql: str, args: tuple, n: int) -> tuple[list[str], np.ndarray]:
+    """The ids and L2-normalized float64 rows of ``sql`` (id, embedding), read from the cursor into one
+    n x d array allocated once, never stacked (R28). ``n`` is the row count ``COUNT(*)`` gave."""
+    ids: list[str] = []
+    U = None
+    for row in conn.execute(sql, args):
+        if U is None:
+            U = np.empty((n, len(row[1]) // 4), dtype=np.float64)
+        if len(ids) == n:
+            break
+        u = U[len(ids)]
+        u[:] = np.frombuffer(row[1], dtype="<f4")
+        u /= np.linalg.norm(u) + _EPS
+        ids.append(row[0])
+    return ids, (U[:len(ids)] if U is not None else np.zeros((0, 0)))
+
+
+_LANE_SET = (" FROM episodes e JOIN episode_vectors ev ON ev.id = e.id"
+             " WHERE COALESCE(e.lane, 'personal') = ?")
+_CORE_SET = " FROM episodes e JOIN episode_vectors ev ON ev.id = e.id WHERE e.core > 0"
+
+
+def _skip(skips, name: str, n: int, bound: int) -> None:
+    if skips is not None:
+        skips.append({"set": name, "n": n, "bound": bound})
+
+
 _LAYER_VEC_TABLE = {
     "episode": "episode_vectors",
     "semantic": "semantic_vectors",
@@ -169,11 +265,9 @@ def generativity_scores(conn) -> dict[str, float]:
     Episode endpoints receive the credit; edges where either endpoint
     lacks a vector are skipped (no evidence, no credit).
     """
-    rows = conn.execute(
-        "SELECT memory_a, layer_a, memory_b, layer_b,"
-        " co_occurrences FROM resonances").fetchall()
     g: dict[str, float] = {}
-    for r in rows:
+    for r in conn.execute(
+            "SELECT memory_a, layer_a, memory_b, layer_b, co_occurrences FROM resonances"):
         va = _fetch_embedding(conn, r["layer_a"], r["memory_a"])
         vb = _fetch_embedding(conn, r["layer_b"], r["memory_b"])
         if va is None or vb is None:
@@ -212,27 +306,36 @@ def compute_scores(storage, cfg) -> dict[str, dict]:
     return out
 
 
-def audit_unchecked_events(storage, cfg) -> list[dict]:
+def audit_unchecked_events(storage, cfg, *, max_episodes: int | None = None,
+                           skips: list | None = None) -> list[dict]:
     """Re-run the band check on subdivision events recorded before the
     conjunct existed (persistence_checked=0). Best-effort: uses the peers'
-    CURRENT provenance; events whose peers lack >=1 vectored episode on
-    both sides are skipped with a reason."""
+    both sides are skipped with a reason. With ``max_episodes``, an event whose
+    two peers hold more vectored sources than that together is not measured
+    (never sampled) and is named in ``skips`` as ``event:<id>``."""
     try:
         events = storage.conn.execute(
-            "SELECT * FROM subdivision_events WHERE persistence_checked = 0"
-        ).fetchall()
+            "SELECT * FROM subdivision_events WHERE persistence_checked = 0")
     except sqlite3.OperationalError:
         # pre-migration-020 store (e.g. read-only calibration copy)
         return []
     report = []
     for ev in events:
         peer_ids = json.loads(ev["peer_ids"])
+        counts = [storage.conn.execute(
+            "SELECT COUNT(*) FROM semantic_sources ss"
+            " JOIN episode_vectors ev ON ev.id = ss.episode_id"
+            " WHERE ss.semantic_id = ?", (pid,)).fetchone()[0] for pid in peer_ids]
+        held = [c for c in counts if c]
+        if max_episodes is not None and len(held) >= 2 and sum(held[:2]) > max_episodes:
+            _skip(skips, f"event:{ev['id']}", sum(held[:2]), max_episodes)
+            continue
         parts: list[list[str]] = []
-        for pid in peer_ids:
+        for pid, c in zip(peer_ids, counts):
             rows = storage.conn.execute(
                 "SELECT ss.episode_id FROM semantic_sources ss"
                 " JOIN episode_vectors ev ON ev.id = ss.episode_id"
-                " WHERE ss.semantic_id = ?", (pid,)).fetchall()
+                " WHERE ss.semantic_id = ?", (pid,)).fetchall() if c else []
             parts.append([r["episode_id"] for r in rows])
         usable = [p for p in parts if p]
         if len(usable) < 2:
@@ -266,18 +369,22 @@ def _anchored_episode_ids(conn) -> set[str]:
     return {r["expected"] for r in rows if r["expected"]}
 
 
-def evaluate_prune(storage, cfg, threshold: float = 0.05) -> dict:
+def evaluate_prune(storage, cfg, threshold: float = 0.05, *, counts_only: bool = False) -> dict:
     """Pure preview of the two-key prune rule. Reads the score cache —
-    callers wanting live decisions refresh via compute_scores first."""
+    callers wanting live decisions refresh via compute_scores first.
+    Candidates are read from a cursor; with ``counts_only`` the result is
+    ``{"evict": n, "protected": n, "candidates": n}``, three integers."""
     scores = storage.get_persistence_scores()
     anchored = _anchored_episode_ids(storage.conn)
     rows = storage.conn.execute(
         "SELECT id, source FROM episodes WHERE decay_strength < ?"
         " AND compressed = 1 AND core = 0 AND dormant = 0",
-        (threshold,)).fetchall()
+        (threshold,))
     exempt = set(cfg.never_prune_sources)
     evict, protected = [], []
+    n_evict = n_protected = candidates = 0
     for r in rows:
+        candidates += 1
         eid = r["id"]
         s = scores.get(eid)
         reasons = []
@@ -297,11 +404,16 @@ def evaluate_prune(storage, cfg, threshold: float = 0.05) -> dict:
         if eid in anchored:
             reasons.append("anchored")
         if reasons:
-            protected.append({"id": eid, "reasons": reasons})
+            n_protected += 1
+            if not counts_only:
+                protected.append({"id": eid, "reasons": reasons})
         else:
-            evict.append(eid)
-    return {"evict": evict, "protected": protected,
-            "candidates": len(rows)}
+            n_evict += 1
+            if not counts_only:
+                evict.append(eid)
+    if counts_only:
+        return {"evict": n_evict, "protected": n_protected, "candidates": candidates}
+    return {"evict": evict, "protected": protected, "candidates": candidates}
 
 
 def guarded_prune(storage, cfg, threshold: float = 0.05) -> int:
@@ -339,10 +451,13 @@ def core_promotion_allowed(storage, episode_id: str, cfg) -> bool:
     return redundancy_vs_cores < cfg.redundancy_floor
 
 
-def classify_hubs(storage, cfg, min_episodes: int = 10) -> list[dict]:
+def classify_hubs(storage, cfg, min_episodes: int = 10, *, max_episodes: int | None = None,
+                  skips: list | None = None) -> list[dict]:
     """diffuse / multi-modal / looped, per provenance-heavy semantic.
     multi-modal: the best Fiedler split's band clears min_split_band.
-    looped: persistent H1 exists (optional ripser; omitted otherwise)."""
+    looped: persistent H1 exists (optional ripser; omitted otherwise).
+    With ``max_episodes``, a semantic with more sources than that is not
+    measured (never sampled) and is named in ``skips`` as ``hub:<id>``."""
     from sheaf import build_local_sheaf, cohesion_energy
     try:
         from ripser import ripser as _ripser
@@ -350,9 +465,12 @@ def classify_hubs(storage, cfg, min_episodes: int = 10) -> list[dict]:
         _ripser = None
     sems = storage.conn.execute(
         "SELECT semantic_id, COUNT(*) AS n FROM semantic_sources"
-        " GROUP BY semantic_id HAVING n >= ?", (min_episodes,)).fetchall()
+        " GROUP BY semantic_id HAVING n >= ?", (min_episodes,))
     out = []
     for r in sems:
+        if max_episodes is not None and r["n"] > max_episodes:
+            _skip(skips, f"hub:{r['semantic_id']}", r["n"], max_episodes)
+            continue
         rows = storage.conn.execute(
             "SELECT ss.episode_id, ev.embedding FROM semantic_sources ss"
             " JOIN episode_vectors ev ON ev.id = ss.episode_id"
@@ -396,16 +514,26 @@ def classify_hubs(storage, cfg, min_episodes: int = 10) -> list[dict]:
     return out
 
 
-def flag_redundant_cores(storage, cfg) -> list[dict]:
-    """Cores redundant within the core set — demotion candidates, review only."""
-    rows = storage.conn.execute(
-        "SELECT e.id, ev.embedding FROM episodes e"
-        " JOIN episode_vectors ev ON ev.id = e.id WHERE e.core > 0").fetchall()
-    if len(rows) < 2:
+def flag_redundant_cores(storage, cfg, *, max_episodes: int | None = None,
+                         skips: list | None = None) -> list[dict]:
+    """Cores redundant within the core set — demotion candidates, review only.
+    With ``max_episodes`` the core set is counted first; over the bound it is
+    not measured (never sampled) and is named in ``skips`` as ``core``;
+    within it the blocked filtration is used."""
+    conn = storage.conn
+    n = conn.execute("SELECT COUNT(*)" + _CORE_SET).fetchone()[0]
+    if n < 2:
         return []
-    ids = [r["id"] for r in rows]
-    X = np.stack([_unpack_embedding(r["embedding"]) for r in rows])
-    f = build_filtration(X)
+    if max_episodes is None:
+        rows = conn.execute("SELECT e.id, ev.embedding" + _CORE_SET).fetchall()
+        ids = [r["id"] for r in rows]
+        f = build_filtration(np.stack([_unpack_embedding(r["embedding"]) for r in rows]))
+    elif n > max_episodes:
+        _skip(skips, "core", n, max_episodes)
+        return []
+    else:
+        ids, U = _unit_rows(conn, "SELECT e.id, ev.embedding" + _CORE_SET, (), n)
+        f = build_filtration_blocked(U, unit=True)
     red = redundancy(f)
     flagged = []
     for i, eid in enumerate(ids):

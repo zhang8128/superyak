@@ -4,6 +4,8 @@ Nothing here opens a stamped file with ``Storage(path)``: writers use
 ``sqlite3`` with ``sqlite_vec`` and readers use ``store_reader.connect`` or
 ``Storage.open_read_only`` (an imprint refuses a writable open).
 """
+import re
+import shutil
 import sqlite3
 import uuid
 from pathlib import Path
@@ -187,8 +189,18 @@ def vec(store: Storage, layer: str, id: str, seed: int) -> None:
 MEMORY_PREFIX = "private memory text number"
 
 
-def calibration_source(tmp_path: Path) -> Path:
-    """12 work episodes with vectors, one semantic over 10 of them, two cores."""
+def _unit_blob(rng, dim: int) -> bytes:
+    import numpy as np
+
+    v = rng.standard_normal(dim)
+    return (v / np.linalg.norm(v)).astype("<f4").tobytes()
+
+
+def calibration_source(tmp_path: Path, *, resonances: int = 0, decayed: int = 0) -> Path:
+    """12 work episodes with vectors, one semantic over 10 of them, two cores.
+
+    ``resonances`` adds that many episode-to-episode resonance rows (at most 66); ``decayed`` adds that many
+    compressed, decayed work episodes with vectors, which the two-key prune preview weighs."""
     import numpy as np
 
     def v(seed: int) -> list[float]:
@@ -210,8 +222,210 @@ def calibration_source(tmp_path: Path) -> Path:
     store.conn.commit()
     store.add_semantic(str(uuid.uuid4()), f"{MEMORY_PREFIX} semantic about rivers and also cheese", "fact", 0.8,
                        v(0), ids[:10], lane="work")
+    for i in range(decayed):
+        eid = store.add_episode(str(uuid.uuid4()), f"d{i % 2}", f"{MEMORY_PREFIX} decayed {i}", embedding=v(100 + i),
+                                lane="work")
+        store.conn.execute("UPDATE episodes SET decay_strength = 0.01, compressed = 1 WHERE id = ?", (eid,))
+    pairs = [(a, b) for k, a in enumerate(ids) for b in ids[k + 1:]][:resonances]
+    assert len(pairs) == resonances, "at most 66 resonance rows over 12 episodes"
+    for k, (a, b) in enumerate(pairs):
+        store.conn.execute(
+            "INSERT INTO resonances (id, memory_a, layer_a, memory_b, layer_b, similarity, weight, strength,"
+            " co_occurrences, created_at, last_seen) VALUES (?, ?, 'episode', ?, 'episode', 0.5, 1.0, 0.5, ?,"
+            " '2026-10-25T00:00:00+00:00', '2026-10-25T00:00:00+00:00')", (f"r{k}", a, b, 1 + k % 3))
+    store.conn.commit()
     store.close()
     return path
+
+
+def dense_source(tmp_path: Path, lane_n: int, cores: int = 0, hub_sources: int = 0, event_sources: int = 0,
+                 semantics: int = 0, sources_each: int = 3, dim: int = 768, seed: int = 0) -> Path:
+    """A store of ``lane_n`` work episodes with random unit vectors (inserted in batches, not through
+    ``add_episode``). The first ``cores`` are cores. A hub semantic holds the first ``hub_sources``; an
+    unchecked subdivision event has two peer semantics that together hold the first ``event_sources``;
+    ``semantics`` more semantics hold ``sources_each`` episodes each, taken round the lane."""
+    import json
+
+    import numpy as np
+
+    assert max(cores, hub_sources, event_sources) <= lane_n
+    path = tmp_path / "dense" / "graph.db"
+    path.parent.mkdir()
+    rng = np.random.default_rng(seed)
+    store = Storage(str(path))
+    conn = store.conn
+    ids = [f"w{i}" for i in range(lane_n)]
+    for lo in range(0, lane_n, 1000):
+        chunk = ids[lo:lo + 1000]
+        conn.executemany(
+            "INSERT INTO episodes (id, content, created_at, lane, core) VALUES (?, ?, '2026-01-01T00:00:00+00:00',"
+            " 'work', ?)", [(e, f"episode {e}", 1 if lo + k < cores else 0) for k, e in enumerate(chunk)])
+        conn.executemany("INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
+                         [(e, _unit_blob(rng, dim)) for e in chunk])
+    conn.commit()
+
+    def semantic(sid: str, sources: list[str]) -> str:
+        store.add_semantic(sid, f"semantic {sid}", "fact", 0.8, rng.standard_normal(dim).tolist(), sources,
+                           lane="work")
+        return sid
+
+    if hub_sources:
+        semantic("hub", ids[:hub_sources])
+    if event_sources:
+        half = (event_sources + 1) // 2
+        peers = [semantic("peer-a", ids[:half]), semantic("peer-b", ids[half:event_sources])]
+        conn.execute(
+            "INSERT INTO subdivision_events (id, parent_id, peer_ids, energy_before, energy_after, dl_cost,"
+            " persistence_checked, site, created_at) VALUES ('ev1', 'parent', ?, 0.9, 0.1, 0.1, 0, 'sleep',"
+            " '2026-10-25T00:00:00+00:00')", (json.dumps(peers),))
+        conn.commit()
+    for k in range(semantics):
+        semantic(f"s{k}", [ids[(k * sources_each + j) % lane_n] for j in range(sources_each)])
+    store.close()
+    return path
+
+
+# --- bounded-calibration test seams -----------------------------------------------------------------
+
+PEAK_BUDGET = 384 * 2**20          # R27, per process at its bounds
+ENGRAM_DIR = Path(__file__).resolve().parent.parent
+
+
+def random_unit_vectors(n: int, dim: int, *, seed: int = 0, duplicate_rows: int = 0):
+    """``n`` random vectors (not yet normalized); the last ``duplicate_rows`` repeat the first rows exactly."""
+    import numpy as np
+
+    X = np.random.default_rng(seed).standard_normal((n, dim))
+    for j in range(duplicate_rows):
+        X[n - 1 - j] = X[j]
+    return X
+
+
+def unit_rows(X):
+    """``X`` with every row L2-normalized as ``persistence.distance_matrix`` does."""
+    import numpy as np
+
+    X = np.asarray(X, dtype=np.float64)
+    return X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
+
+
+def heights(f) -> list[float]:
+    """The sorted edge heights of a filtration's tree."""
+    return sorted(float(h) for h in f.heights)
+
+
+def spy(fn, built: list, *, size=len):
+    """``fn`` wrapped so each call appends ``size(*args)`` to ``built``."""
+    def wrapper(*args, **kwargs):
+        built.append(size(*args))
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def refuse_over(limit: int, *, size=len):
+    """A stand-in that fails when called over ``limit``. It wraps no real function: a call at or under the
+    limit fails too, so a test that installs it asserts the dense code is never reached at all."""
+    def refuse(*args, **kwargs):
+        n = size(*args)
+        raise AssertionError(f"dense code reached with {n} rows (limit {limit})"
+                             if n > limit else f"unexpected call with {n} rows")
+    return refuse
+
+
+GROWING_TABLES = ("episodes", "episode_vectors", "semantics", "semantic_vectors", "semantic_sources",
+                  "resonances", "memory_log", "subdivision_events", "subdivision_queue", "semantic_peers",
+                  "persistence_scores")
+# A statement keyed to one memory (``... id = ?``) is bounded by that memory, not by the store.
+_KEYED = re.compile(r"\b(?:semantic_id|episode_id|id)\s*=\s*\?", re.I)
+
+
+class _Cursor:
+    def __init__(self, cur, sql: str, tables):
+        self._cur, self._sql, self._tables = cur, sql, tables
+
+    def fetchall(self):
+        if not _KEYED.search(self._sql) and any(re.search(rf"\b{t}\b", self._sql) for t in self._tables):
+            raise AssertionError(f"fetchall on a table that grows with the store: {self._sql}")
+        return self._cur.fetchall()
+
+    def __iter__(self):
+        return iter(self._cur)
+
+    def __getattr__(self, name):
+        return getattr(self._cur, name)
+
+
+class _Connection:
+    def __init__(self, conn, tables):
+        self._conn, self._tables = conn, tables
+
+    def execute(self, sql, *args):
+        return _Cursor(self._conn.execute(sql, *args), sql, self._tables)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def refusing_fetchall(tables):
+    """A replacement for ``calibrate._connect_read_only``: a read-only Storage whose connection raises on
+    ``fetchall`` of a statement naming one of ``tables`` unless it is keyed to one memory."""
+    def connect(path):
+        store = Storage.open_read_only(path)
+        store.conn = _Connection(store.conn, tables)
+        return store
+    return connect
+
+
+_PREAMBLE = ("import sys; sys.path.insert(0, {engram!r}); SRC = {src!r}\n"
+             "import calibrate, persistence, sheaf\nfrom storage import Storage\n")
+_RUN_ONE = "from tests.imprint_support import run_one\n"   # only when used: the support module is heavy
+_LAUNCHER = ("import resource, subprocess, sys, time\n"
+             "t = time.monotonic(); r = subprocess.run(sys.argv[1:])\n"
+             "print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, time.monotonic() - t, r.returncode)\n")
+
+
+def child_peak_rss(code: str, *, src, timed: bool = False):
+    """Peak resident bytes of ``code`` run in a child (``timed``: and its wall seconds). The child runs under
+    ``systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0`` where that exists (R27). A launcher
+    process reads ``RUSAGE_CHILDREN``, so the figure is this child's alone."""
+    import subprocess
+    import sys
+
+    preamble = _PREAMBLE.format(engram=str(ENGRAM_DIR), src=str(src)) + (_RUN_ONE if "run_one" in code else "")
+    cmd = [sys.executable, "-c", preamble + code]
+    if shutil.which("systemd-run"):
+        cmd = ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0"] + cmd
+    out = subprocess.run([sys.executable, "-c", _LAUNCHER, *cmd], cwd=ENGRAM_DIR, capture_output=True, text=True)
+    peak, seconds, status = out.stdout.split()[-3:]
+    assert int(status) == 0, out.stderr[-2000:]
+    return (int(peak), float(seconds)) if timed else int(peak)
+
+
+def base_peak(step=None) -> int:
+    """The peak a child reaches after its imports alone. ``step`` is reserved for Task 50's per-command
+    imports and changes nothing here."""
+    return child_peak_rss("pass", src="")
+
+
+def run_one(analysis: str, src) -> None:
+    """One dense analysis over the store's ``hub`` semantic, for the Pi measurements."""
+    import persistence
+    import sheaf
+    from config import PersistenceConfig
+
+    store = Storage.open_read_only(src)
+    try:
+        if analysis == "classify_hubs":
+            persistence.classify_hubs(store, PersistenceConfig(enabled=True))
+            return
+        ids, X = sheaf._episode_matrix(store.conn, "hub")
+        if analysis == "cohesion_energy":
+            sheaf.cohesion_energy(sheaf.build_local_sheaf("hub", ids, X))
+        else:
+            half = len(ids) // 2
+            persistence.split_band(X, list(range(half)), list(range(half, len(ids))))
+    finally:
+        store.close()
 
 
 def memory_texts(path: Path) -> list[str]:
