@@ -265,7 +265,7 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
     pending = report["snapshot"].get("schema", {}).get("pending", [])
     if migrate and pending:
         vectors_before = report["snapshot"].get("row_counts", {}).get("episode_vectors_rowids")
-        Storage(str(working)).close()
+        Storage(str(working), imprint_working_copy=True).close()
         after = store_reader.survey(working)
         report["migration"] = {
             "applied": pending,

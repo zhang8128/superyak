@@ -27,6 +27,15 @@ def fork_instance(name: str, engram_dir: Path | None = None, from_source: str = 
         print(f"Error: source database not found at {source_db}", file=sys.stderr)
         sys.exit(1)
 
+    check = sqlite3.connect(f"file:{source_db.resolve()}?mode=ro", uri=True)
+    try:
+        refused = store_identity.is_imprint(check)
+    finally:
+        check.close()
+    if refused:
+        print("Error: the source is an imprint; imprints are never forked", file=sys.stderr)
+        sys.exit(1)
+
     inst_dir = engram_dir / "instances" / name
     inst_dir.mkdir(parents=True, exist_ok=True)
     inst_db = inst_dir / "graph.db"

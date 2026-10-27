@@ -131,3 +131,33 @@ def genome_with_parent(tmp_path: Path) -> Path:
     finally:
         genome.close()
     return engram_dir
+
+
+def imprint_file(tmp_path: Path, name: str = "imprint.db") -> Path:
+    """A rollback-journal file stamped ``imprint``, holding work-lane episode ``e1``, with its newest
+    ``schema_version`` row deleted so a migration is pending."""
+    stem = name[:-3] if name.endswith(".db") else name
+    src = new_store(tmp_path, f"{stem}-src")
+    src.add_episode("e1", None, "an imprinted note", lane="work")
+    imp = imprint_of(tmp_path, src, stem)
+    path = Path(imp.db_path)
+    imp.close()
+    src.close()
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("DELETE FROM schema_version WHERE version = (SELECT MAX(version) FROM schema_version)")
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
+def engram_dir_with_imprint_instance(tmp_path: Path, name: str) -> Path:
+    """An engram dir whose ``instances/<name>/graph.db`` is stamped ``imprint``."""
+    engram_dir = tmp_path / "engram-dir"
+    inst = engram_dir / "instances" / name
+    inst.mkdir(parents=True)
+    import shutil
+
+    shutil.copyfile(imprint_file(tmp_path, "inst-imprint.db"), inst / "graph.db")
+    return engram_dir
