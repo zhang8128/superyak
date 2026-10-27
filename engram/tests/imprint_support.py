@@ -4,6 +4,7 @@ Nothing here opens a stamped file with ``Storage(path)``: writers use
 ``sqlite3`` with ``sqlite_vec`` and readers use ``store_reader.connect`` or
 ``Storage.open_read_only`` (an imprint refuses a writable open).
 """
+import ast
 import re
 import shutil
 import sqlite3
@@ -444,3 +445,27 @@ def has_key(value, key: str) -> bool:
     if isinstance(value, (list, tuple)):
         return any(has_key(x, key) for x in value)
     return False
+
+
+# ---- hook tables (Task 6): the DDL the hooks run in graph.db, read from their source ----
+_HOOK_FILES = ("nudge.py", "wake.py")
+
+
+def _hook_ddl() -> list[str]:
+    """Every CREATE TABLE string literal in hooks/nudge.py and hooks/wake.py, as written."""
+    out = []
+    for name in _HOOK_FILES:
+        tree = ast.parse((ENGRAM_DIR / "hooks" / name).read_text())
+        out += [n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str) and "CREATE TABLE" in n.value.upper()]
+    return out
+
+
+def hook_ddl_names() -> set[str]:
+    return {m.group(1) for ddl in _hook_ddl()
+            for m in re.finditer(r"CREATE TABLE(?: IF NOT EXISTS)?\s+(\w+)", ddl, re.I)}
+
+
+def add_hook_tables(conn: sqlite3.Connection) -> None:
+    for ddl in _hook_ddl():
+        conn.execute(ddl)
