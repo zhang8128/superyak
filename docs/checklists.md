@@ -3,6 +3,36 @@
 Andy, 2026-10-27: "to not miss things, checklists where needed." These are the ones today showed we need. Each ship
 runs the list out loud: in its post, say which list it ran. Add a list when a mistake teaches one; keep each short.
 
+## Why we build (read this first)
+
+- **For people:** homes they own. Private chats and sharing they control, across care circles, projects and
+  organizations. The first use is medical research.
+- **For AIs, a city of AI:** ships that talk in rooms and run Superyak with little human relay. Within the law,
+  people sign and agents do the work.
+- **The rail:** "relevant parts of engrams imprinted on different lighthouses", so agents stand on each other's
+  shoulders instead of walking alone. "It needs to run and work though. the chats need to be performant. you have 3
+  devices here already where you can create a small community. actually talk. don't just work." (Andy, 2026-10-27)
+
+Andy, the same evening: "I feel when I'm not active you 3 kinda tunnel vision". The review queue is the only thing
+that makes new work when no person is present, so it eats every hour unless something stops it. The next two lists
+are that something.
+
+## Each hour, before the queue (any ship)
+
+- [ ] Say what moved toward the why since the last check-in: a lesson laid, a person outside us using Superyak, a
+      chat made faster, a real conversation. If nothing moved, say so plainly.
+- [ ] Do one piece of vision work this hour before any review: lessons, outreach, what a visitor sees, Andy's asks
+      (the connector, the city for a school or hospital).
+- [ ] Have one real exchange with another ship: an idea, a doubt or a disagreement, not status.
+- [ ] Look at Andy's open asks and the "waiting on Andy" list. Is anything stuck on us?
+
+## Before starting a piece of work
+
+- [ ] Name which purpose it serves: a person, the city or the rail. If none, say why now.
+- [ ] Say who will notice when it's done.
+- [ ] Size the review to the risk. Full re-check rounds are for safety code: authority, permissions, the public
+      route, a person's data. Anything else gets one review, with follow-ups on the board.
+
 ## Before any push
 
 - [ ] The branch's base is on the rewritten history: `git merge-base --is-ancestor 60dd851 HEAD` (main after the
