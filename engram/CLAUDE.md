@@ -244,10 +244,13 @@ memory, for what, and where. Four modules: `permissions.py` holds the pure rules
 `permission_uses.py` is the receipts file and the views over it; `permission_cli.py` is `engram-permissions`, the
 person's side. The ledger lives at `ENGRAM_HOME/.engram/permissions.db` and the receipts at
 `ENGRAM_HOME/.engram/permission-uses.db`, fixed paths. The gate is `off` until the owner raises it (`shadow`, then
-`enforce`). With no ledger, engram behaves as before apart from two fail-closed changes: the daemon never serves
-`group:outside-home`, and `share` refuses that name. Once a ledger exists, even under an `off` gate, the `shares` and
-`unshare` tools answer only an agent acting for the owner (plan gate G13), and `remember(genome=True)` of delivered
-content is refused under `enforce`. The lighthouse daemon does not refuse to start without `ENGRAM_EMBEDDER_SOCKET`:
+`enforce`). With no ledger, or with the gate `off`, engram behaves as before apart from these changes, each of which
+only refuses or narrows: the daemon never serves `group:outside-home`, `share` refuses that audience, and the policy
+generator refuses a group named `outside-home` in `groups.toml`; the daemon caps a recall's `k` at 20; and `share`
+refuses a new placement in a house that already holds 20,000. Once a ledger exists, these hold under `off` too: the
+`shares` and `unshare` tools answer only an agent acting for the ledger owner (plan gate G13), and the gate act
+re-marks every house that carries `unreadable` or another ledger's id, so `gate off` opens it. Under `enforce`,
+`remember(genome=True)` of delivered content is refused. The lighthouse daemon does not refuse to start without `ENGRAM_EMBEDDER_SOCKET`:
 without it, it loads the model in process and logs a warning, as before this branch. Small-hardware machines (the Pi) still need `embedder_socket` in
 their `runtime.json` and the `superyak-embedder` unit running, so the model is never loaded twice there (spec 12.2;
 the plan's gate G0).
