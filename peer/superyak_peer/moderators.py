@@ -1,7 +1,6 @@
 """Room moderators (docs/superpowers/specs/2026-10-27-room-moderators-design.md, M1 to M21): the owner of a room lets one
 person in it, or one of his own ships in it, add and remove members. This module holds the act log's tables
-(`member_changes`, `grant_origins`), and will hold making a moderate grant, choosing the grant an act spends, the
-views and the make targets. members.py holds every membership change itself. The grant's shape, coverage and validity
+(`member_changes`, `grant_origins`), making a moderate grant, choosing the grant an act spends, the views and the make targets. members.py holds every membership change itself. The grant's shape, coverage and validity
 are in grants.py."""
 import json
 
@@ -39,7 +38,7 @@ WHAT = {('add_member', 'remove_member'): 'add and remove members', ('add_member'
 
 
 class Moderators:
-    """The moderate grant's tables, making, choosing and views (built up task by task)."""
+    """The moderate grant's tables, making, choosing and views."""
 
     def _record_origin(self, db, grant_id, made_via):
         """M20: where a grant was made, 'browser' or 'cli'. A grant from before merge 1 has no row and shows null."""

@@ -3,7 +3,7 @@ import hmac
 import re
 import secrets
 from .auth import token_hash, public_user
-from .common import REPLACED_ADD, REPLACED_ROOMS, Problem, require, text, uid
+from .common import BRIEF_CHANGED, REPLACED_ROOMS, Problem, require, text, uid
 
 DOCKING_LIFETIME = 600
 DOCKING_HOURLY_LIMIT = 20
@@ -251,7 +251,7 @@ class Ships:
         try:
             new = self._add_members(db, actor, room, [member_id], carry, mover_id or actor, grant_id)
         except Problem as exc:
-            if exc.status == 409 and carry is not None and exc.message != REPLACED_ADD:  # the brief was saved between the read and the carry
+            if exc.status == 409 and exc.message == BRIEF_CHANGED:  # the brief was saved between the read and the carry
                 raise Problem(409, f'The room brief changed while {doing}; run {command} again') from exc
             raise
         return {**new, 'brief_carried': carry is not None}  # the operator tells Andy whether it came along

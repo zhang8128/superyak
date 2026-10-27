@@ -1,12 +1,12 @@
 """Room moderators: every membership change of a room goes through the helpers here (spec M7, M8, M14). An add is one
 transaction: the checks, the new linked room, each member's row in the act log (`member_changes`) and the one notice
 the system author posts in the new room. The owner's routes (the participants route, make station-bridge and
-make station-add-ship) call `_add_members`; a moderator's path joins `add_participants` in a later task."""
+make station-add-ship) call `_add_members`; a moderator's add and removal take the same helpers, after their grant's checks."""
 from .common import REPLACED_ADD, REPLACED_REMOVE, REPLACED_ROOMS, Problem, ids, text, uid
 from .grants import is_moderate
+from .moderators import NOT_A_MODERATOR
 from .ships import safe_line
 
-NOT_A_MODERATOR = "Only the room's owner or one of its moderators can change its members"
 ONE_MEMBER = 'A moderator changes one member at a time'
 NAME_THE_MEMBER = 'Name the member to add'
 WORMHOLE_ADD = "Adding wormhole bridges the room to Stanley's aDNA lattice; only the room's owner bridges it (make station-bridge)"

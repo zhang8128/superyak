@@ -69,7 +69,7 @@ class Chats:
             if any(m.get('author_id') == system for m in room['messages']):
                 room['system_author'] = self.system_author_public(db)
             room['claims'] = self._active_claims(db, key)
-            room['moderators'] = [{'id': m['id'], 'name': m['name']} for m in self._moderators(db, key)]
+            room['moderators'] = list({m['id']: {'id': m['id'], 'name': m['name']} for m in self._moderators(db, key)}.values())  # a holder once, however many grants
             return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):

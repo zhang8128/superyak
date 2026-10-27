@@ -626,3 +626,27 @@ def test_station_moderate_needs_the_station_identity(fleet, capsys):
     with pytest.raises(SystemExit):
         run(capsys, store, 'station-moderate', '--id', f.city['id'][:6], '--grantee', 'rio-grande', '--as', 'andy')
     assert 'identity.json' in capsys.readouterr().err
+
+
+def test_a_409_that_is_not_the_brief_race_is_told_as_it_is(fleet, monkeypatch):
+    """_station_add renames only _brief_to_carry's own 409; any other 409 reaches the operator unchanged."""
+    f, store = fleet, fleet.store
+    store.save_brief(f.andy['id'], f.city['id'], 'The brief.', 0)
+
+    def refuse(*args, **kwargs):
+        raise Problem(409, 'Everyone named is already a member of room abcdef; nothing changed')
+    monkeypatch.setattr(store, '_add_members', refuse)
+    with pytest.raises(Problem) as stopped:
+        store.station_add_ship('andy', f.city['id'][:6], 'tardis')
+    assert (stopped.value.status, stopped.value.message) == (409, 'Everyone named is already a member of room abcdef; nothing changed')
+
+
+def test_station_unmoderate_says_so_when_the_grant_covers_no_current_room(fleet, capsys):
+    f, store = fleet, fleet.store
+    grant = store.make_moderate_grant(f.andy['id'], f.rio['id'], f.city['id'])
+    newer = store.add_participants(f.andy['id'], f.city['id'], [f.tardis['id']])['id']
+    with store.transaction() as db:  # a fork, by hand: add_participants never makes one
+        for fork in ('fork-a', 'fork-b'):
+            db.execute('INSERT INTO rooms VALUES(?,?,?,1,?)', (fork, f.andy['id'], 'Fork', newer))
+    out = run(capsys, store, 'station-unmoderate', '--grant', grant['id'][:4], '--as', 'andy')
+    assert out == f'Ended grant #{grant["id"][:4]}. It covers no current room, so no room was told.\n'

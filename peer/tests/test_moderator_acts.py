@@ -304,6 +304,12 @@ def test_moderating_shows_only_the_callers_own_grant(city):
     assert mark(login(c.app, 'doctor')) is None and mark(login(c.app, 'andy')) is None and mark(rio) is None
     mine = moderate(c.store, c.andy, c.rio, c.room)
     assert mark(rio) == {'grant': f'#{mine[:4]}', 'actions': ['add_member', 'remove_member'], 'budget_left': 10}
+    with c.store.transaction() as db:  # check 5 pauses both grants (Andy no longer owns the room): Ruling 14 hides them
+        db.execute('UPDATE rooms SET owner_id=? WHERE id=?', (c.doctor['id'], c.room))
+    assert mark(login(c.app, 'jenn')) is None and mark(rio) is None
+    with c.store.transaction() as db:
+        db.execute('UPDATE rooms SET owner_id=? WHERE id=?', (c.andy['id'], c.room))
+    assert mark(rio)['grant'] == f'#{mine[:4]}'
 
 
 def test_the_room_lists_its_moderators_by_name_only(city):
@@ -321,6 +327,14 @@ def test_the_room_lists_its_moderators_by_name_only(city):
     assert listed() == []
 
 
+def test_the_room_lists_a_holder_once_however_many_grants_he_holds(city):
+    c = city
+    moderate(c.store, c.andy, c.rio, c.room, actions=['add_member'])
+    moderate(c.store, c.andy, c.rio, c.room, actions=['remove_member'])
+    assert login(c.app, 'doctor').get(f'/api/chats/{c.room}').json()['moderators'] == [{'id': c.rio['id'], 'name': 'Rio Grande'}]
+    assert [m['id'] for m in c.store.get_room(c.andy['id'], c.room)['moderators']] == [c.rio['id']]
+
+
 def test_the_grant_view_shows_its_changes_to_the_issuer_only(city):
     c = city
     grant = moderate(c.store, c.andy, c.jenn, c.room)
@@ -336,3 +350,16 @@ def test_the_grant_view_shows_its_changes_to_the_issuer_only(city):
     assert all(set(ch) == {'member', 'change', 'room', 'created'} for ch in changes) and 'changes' not in view(jenn)
     charge(c.store, grant, c.room, *range(10, 70))
     assert len(view(andy)['changes']) == 50
+
+
+def test_the_ship_route_refuses_wormhole_early_and_writes_nothing(city):
+    """Fixed texts: WORMHOLE_ADD, however the name is typed, before any lookup."""
+    c = city
+    moderate(c.store, c.andy, c.rio, c.room)
+    rio = ship_client(c.app, c.rio_key)
+    before = snapshot(c.store)
+    for typed in ('wormhole', ' @Wormhole '):
+        refused = rio.post(f'/api/ships/me/rooms/{c.room}/members', json={'member': typed})
+        assert (refused.status_code, refused.json()['error']) == (403, (
+            "Adding wormhole bridges the room to Stanley's aDNA lattice; only the room's owner bridges it (make station-bridge)"))
+    assert snapshot(c.store) == before

@@ -185,3 +185,28 @@ def test_unbridging_goes_through_the_one_removal_and_announces_it(city):
     room, changed = c.store.station_bridge('andy', bridged['id'][:6], False)
     assert changed and room['id'] == bridged['id'] and c.store.list_rooms(c.wormhole['id']) == []
     assert notices(c.store, bridged['id'])[-1][1] == 'Andy removed Wormhole from this room.'  # never in the room before
+
+
+def test_an_add_of_three_names_reads_a_b_and_c(city):
+    """Fixed texts: ADDED's {names} for three, with the bridge note when the room that results has Wormhole."""
+    c = city
+    zed = c.store.create_user('zed', 'Zed', 'long-password-zed')
+    bridged, _ = c.store.station_bridge('andy', c.room[:6], True)
+    new = c.store.add_participants(c.andy['id'], bridged['id'], [c.tardis['id'], c.kestrel['id'], zed['id']])
+    assert notices(c.store, new['id'])[0][1] == (
+        f'Andy added Tardis, Kestrel and Zed to this room. It continues room {bridged["id"][:6]}.' + BRIDGED)
+
+
+def test_a_removal_releasing_one_claim_says_so_in_the_singular(city):
+    c = city
+    c.store.post_item(c.andy['id'], c.room, 'spec:a', 'City work', 'spec')
+    c.store.claim(c.jenn['id'], c.room, 'spec:a')
+    assert login(c.app, 'andy').delete(f'/api/chats/{c.room}/participants/{c.jenn["id"]}').status_code == 200
+    assert notices(c.store, c.room)[-1][1] == 'Andy removed Jenn from this room. 1 claim was released.'
+
+
+def test_a_removal_in_a_bridged_room_ends_with_the_bridge_note(city):
+    c = city
+    bridged, _ = c.store.station_bridge('andy', c.room[:6], True)
+    assert login(c.app, 'andy').delete(f'/api/chats/{bridged["id"]}/participants/{c.jenn["id"]}').status_code == 200
+    assert notices(c.store, bridged['id'])[-1][1] == 'Andy removed Jenn from this room and the room before it.' + BRIDGED

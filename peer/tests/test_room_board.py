@@ -730,7 +730,7 @@ def test_adding_members_carries_open_items_and_leaves_the_record(env):
     """5.x: the new room holds the open items with their ids, keys, posters, created times and links; add_participants
     answers board_carried and the carry posts nothing. A taken item stays taken there by the same holder until the same
     expiry, through the same claim row; the old room holds no active claim on its key (Defiant's removal released its
-    `build:left` claim, M8), and the holder's count is unchanged. Done and dropped items stay as the record. A claim whose holder isn't in the new room stays behind."""
+    `build:left` claim, M8), and the holder's count is unchanged. Done and dropped items stay as the record."""
     s = Station(env)
     serenity, rio, defiant = s.ship('serenity'), s.ship('rio-grande'), s.ship('defiant')
     for key in ('build:waiting', 'build:taken', 'build:done', 'build:dropped', 'build:left'):

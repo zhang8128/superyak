@@ -331,7 +331,7 @@ class Tools:
         added = done.get('added') or []
         name = label(added[0].get('name')) if added and isinstance(added[0], dict) else label(member)
         new = done.get('short') if plain_id(done.get('short')) else short6(done.get('id'))
-        parts = [f'Added {name} to room {new}, a new room that continues {short6(room_id)} with the same title, owner and members.',
+        parts = [f'Added {name} to room {new}, a new room that continues {short6(room_id)} with the same title and owner, and its members plus the new one.',
                  'The room brief came along.' if done.get('brief_carried') else 'The room had no brief to carry.']
         items = done.get('board_carried')
         items = items if type(items) is int else 0

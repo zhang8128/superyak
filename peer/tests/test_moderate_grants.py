@@ -86,6 +86,8 @@ def test_a_moderate_grant_is_a_depth_0_root_that_never_builds(city):
     assert row['signature'] and validity(c.store, grant) == (True, None)
     with c.store.transaction() as db:
         assert c.store._grant_policy(db)['delegable'] == ['direct']
+    with c.store.transaction() as db:  # by hand: with a listed target only the missing `direct` action can stop the build
+        db.execute('UPDATE grants SET targets=? WHERE id=?', (json.dumps([c.rio['id']]), grant))
     asked = c.store.send_message(c.jenn['id'], c.room, 'ask', '@rio-grande build the notes')
     assert c.store.issue_ticket(c.rio['id'], asked['id'])['mode'] == 'read'  # M1: _spendable_grant needs `direct`
 
@@ -290,6 +292,21 @@ def test_a_restore_copies_the_act_log_so_a_moderators_day_does_not_reset(city, t
     assert logged(copy) == [(grant, 'remove', c.doctor['id']), (grant, 'remove', c.rio['id']), (None, 'remove', c.odo['id'])]
     code, out, err = run_reconcile(capsys, '--db', copy, '--replaced', c.store.db_path)
     assert code == 0 and 'member changes added (0)' in out and len(logged(copy)) == 3
+
+
+def test_a_restore_copies_only_grantless_removals_never_a_grantless_add(city, tmp_path, capsys):
+    """Ruling 15 only takes power away: a grant-less add row is never copied, even when its rooms are in the copy."""
+    c = city
+    moderate(c.store, c.andy, c.jenn, c.room)
+    copy = staged(tmp_path, c.store)
+    with c.store.transaction() as db:
+        for change in ('add', 'remove'):
+            db.execute('INSERT INTO member_changes(id, grant_id, actor_id, member_id, change, room_id, new_room_id, created) '
+                       'VALUES(?, NULL, ?, ?, ?, ?, ?, ?)',
+                       (f'row-{change}', c.andy['id'], c.tardis['id'], change, c.room, c.room if change == 'add' else None, 5.0))
+    code, out, err = run_reconcile(capsys, '--db', copy, '--replaced', c.store.db_path)
+    assert code == 0, err
+    assert logged(copy) == [(None, 'remove', c.tardis['id'])]
 
 
 def test_a_replaced_file_without_the_act_log_is_treated_as_absent(city, tmp_path, capsys):

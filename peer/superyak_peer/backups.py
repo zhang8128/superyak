@@ -386,8 +386,8 @@ COMPARED = ('users.id', 'users.is_admin', 'users.is_super_admin', 'users.salt', 
             'grants.id', 'grants.revoked', 'grants.revoked_by', 'grants.revoke_reason', 'budget_uses.grant_id',
             'budget_uses.ticket_id', 'budget_uses.created',
             # room moderators, M20: the act log the member-changes step reads
-            'member_changes.id', 'member_changes.grant_id', 'member_changes.actor_id', 'member_changes.room_id',
-            'member_changes.new_room_id', 'member_changes.created')
+            'member_changes.id', 'member_changes.grant_id', 'member_changes.change', 'member_changes.actor_id',
+            'member_changes.room_id', 'member_changes.new_room_id', 'member_changes.created')
 
 
 class ReconcileRefused(ValueError):
@@ -568,8 +568,9 @@ def _add_budget_uses_like_replaced(db, old, now, report):
 def _add_member_changes_like_replaced(db, old, now, report):
     """M20, G13: each row of the replaced file's act log that this file lacks is copied here, in the replaced file's
     `created, rowid` order, when its grant (if any) is in both files and its room, new room and actor (if any) are here,
-    so a moderator's budget and the owner's removals survive and a second run adds none."""
-    if not _usable(db, old, report, 'grants.id', 'rooms.id', 'users.id', 'member_changes.id', 'member_changes.grant_id',
+    so a moderator's budget and the owner's removals survive and a second run adds none. A row with no grant is copied
+    only when it is a removal (Ruling 15 only takes power away); so only removals carry a day's budget across a restore."""
+    if not _usable(db, old, report, 'grants.id', 'rooms.id', 'users.id', 'member_changes.id', 'member_changes.grant_id', 'member_changes.change',
                    'member_changes.actor_id', 'member_changes.room_id', 'member_changes.new_room_id', 'member_changes.created'):
         return
     have = {row[0] for row in db.execute('SELECT id FROM member_changes')}
@@ -584,6 +585,7 @@ def _add_member_changes_like_replaced(db, old, now, report):
     for row in old.execute(f'SELECT {names} FROM member_changes ORDER BY created, rowid').fetchall():
         values = dict(zip(columns, row))
         if (values['id'] in have or (values['grant_id'] is not None and values['grant_id'] not in grants)
+                or (values['grant_id'] is None and values['change'] != 'remove')
                 or values['room_id'] not in rooms or (values['new_room_id'] is not None and values['new_room_id'] not in rooms)
                 or (values['actor_id'] is not None and values['actor_id'] not in users)):
             continue

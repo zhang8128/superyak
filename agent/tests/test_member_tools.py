@@ -91,7 +91,7 @@ def test_add_and_remove_report_what_the_station_did(station):
     text, error = call(tools_for(fake), 'station_add_member', room='Ops', member='tardis')
     new = next(r for r in fake.rooms.values() if r.get('linked_room_id') == room)['id']
     assert not error and text == (
-        f'Added Tardis to room {new[:6]}, a new room that continues {room[:6]} with the same title, owner and members. The '
+        f'Added Tardis to room {new[:6]}, a new room that continues {room[:6]} with the same title and owner, and its members plus the new one. The '
         "room brief came along. 2 open board items came along. The room is bridged to Stanley's aDNA lattice: the new "
         "member's posts that mention a lattice persona cross to it. " + TAIL)
     fake.member_extra = {'earlier_rooms': 3, 'claims_released': 1, 'grant_revoked': True}
