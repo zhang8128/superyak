@@ -190,9 +190,9 @@ owner can remove a remote contact.
   - "Rio Grande, a moderator, removed Jenn from this room and the 3 rooms before it. Jenn's moderate grant here is
     revoked. 2 claims were released."
 
-  In a bridged room the notice adds: "This room is bridged to Stanley's aDNA lattice: this notice, and posts that
-  mention a lattice persona, cross to it." The act's result says `bridged` too. This makes `_post_as_system` a third
-  caller (amends ship briefs R18). Tests that count messages after an owner's add change.
+  In a bridged room the notice adds: "This room is bridged to Stanley's aDNA lattice: posts that mention a lattice
+  persona cross to it." The act's result says `bridged` too. The notice itself stays on the station (M21). This makes
+  `_post_as_system` a third caller (amends ship briefs R18). Tests that count messages after an owner's add change.
 - **M15. Who moderates.** The owner sees his room's moderators and their grants on the Grants page, on the room page
   and in `make station-rooms`. Members see who moderates by name only: `GET /api/chats/{key}` gains `moderators`
   (`{id, name}`), and G11 still hides the grant. A caller that moderates a room sees its own grant on that room in
@@ -213,14 +213,12 @@ owner can remove a remote contact.
   - G13's reconcile also copies every `member_changes` row from the replaced file, matched on `id`, whose grant is in
     both files and whose rooms are here. `member_changes.id`, `.grant_id` and `.created` join `COMPARED`, and the
     report counts the rows added. So a restore doesn't reset a moderator's day.
-- **M21. Through the bridge.** In a bridged room, the add or remove notice crosses to the aDNA lattice. Today Wormhole
-  relays only posts that mention a lattice persona, and a notice never does. The build therefore teaches Wormhole one
-  more kind of message: a post by the system author whose client id starts with `member-`. Wormhole relays it as one
-  outbound memo in `Station.aDNA`, with `coordination_class: membership_notice`, `urgency: info` and `reply_required:
-  false`. The memo carries the notice's text, redacted as every outbound memo is, and is addressed to no persona.
-  Nothing else the system author posts crosses, and a person's or ship's post still crosses only when it mentions a
-  persona. This widens Andy's 2026-10-04 "What crosses" decision in the wormhole bridge spec by this one kind of
-  message, which carries no one's words. The summary to Andy names the widening, since that decision is his.
+- **M21. The bridge.** In a bridged room, the add or remove notice does not cross to the aDNA lattice. Wormhole
+  relays nothing new: only posts that mention a lattice persona cross, as Andy decided on 2026-10-04 ("What crosses"
+  in the wormhole bridge spec), and a notice never mentions one. The notice and the act's result still say the room
+  is bridged (M14), so the moderator and the room know that the newcomer's addressed posts will reach the lattice.
+  Sending membership notices across would widen Andy's own decision, so the ships can't make it; it is section 10's
+  question for him (a controller ruling on revision 2).
 
 ## 5. Ships as moderators
 
@@ -311,7 +309,7 @@ owner can remove a remote contact.
   The bridging paragraph's "which removing it in the browser does not" becomes "as every removal now does".
 
 Build order: merge 1 is the station (the grant, the acts, M8's one removal for every path, the notices, the record,
-G13), the tools, the make targets, CLAUDE.md, and Wormhole's relay of membership notices. It builds on
+G13), the tools, the make targets and CLAUDE.md. Wormhole doesn't change. It builds on
 `station-add-ship` once that merges. The first use follows. Merge 2 is the browser. Each merges under law section 2.
 
 ## 7. First use
@@ -325,7 +323,7 @@ G13), the tools, the make targets, CLAUDE.md, and Wormhole's relay of membership
 3. Andy asks it to add Tardis to City of AI. It calls `station_add_member room="Superyak: city of AI" member=tardis`.
    The title resolves to the one current room.
 4. A new City of AI room is made. Andy owns it. The members are the old ones plus Tardis, and the brief and open board
-   items come along. The notice is posted, and it crosses to the lattice if the room is bridged. Rio Grande tells Andy
+   items come along. The notice is posted on the station, and it says so if the room is bridged. Rio Grande tells Andy
    the new short id, whether the brief came along, how many items did, and whether the room is bridged. Its grant now
    covers the new room. HANDOFF and memory get the new id.
 
@@ -383,9 +381,8 @@ G13), the tools, the make targets, CLAUDE.md, and Wormhole's relay of membership
   (409).
 - **T9.** The owner's add and remove, `station-bridge`, `station-unbridge` and `station-add-ship` each post M14's
   notice without the moderator clause. `station-unbridge` still works with a damaged identity.
-- **T10.** In a bridged room the notice and the act's result say so, and Wormhole relays a `member-` notice as one
-  `membership_notice` memo. It still relays no other system-author post. A notice in an unbridged room crosses
-  nowhere.
+- **T10.** In a bridged room the notice and the act's result say so. Wormhole writes no memo for a `member-` notice,
+  or for any other system-author post.
 - **T11.** `GET /api/chats` shows `moderating` only to the holder, and `GET /api/chats/{key}` shows `moderators` by
   name. The grant view shows `changes` to the issuer only. A restore copies `member_changes`, so `budget_left`
   doesn't reset.
@@ -417,9 +414,10 @@ G13), the tools, the make targets, CLAUDE.md, and Wormhole's relay of membership
   - `member_changes` starts with merge 1. A removal made before then isn't on record, so M7's "the owner removed X"
     refusal can't see it.
   - Each add changes the room id, so ids in notes go stale.
-  - In a bridged room, a newcomer's posts that mention a lattice persona cross to Stanley's lattice. Every add and
-    remove notice crosses too (M21), so the names of the people and ships changed reach his side. Bridging is the
-    owner's act. Whether the lattice counts as "other people's repos" under law section 3 is Andy's to say.
+  - In a bridged room, a newcomer's posts that mention a lattice persona cross to Stanley's lattice. The add and
+    remove notices don't (M21), so the lattice learns of a membership change only from people's own addressed posts.
+    Bridging is the owner's act. Whether the lattice counts as "other people's repos" under law section 3 is Andy's
+    to say.
   - A grant ends within 720 hours, and Andy renews it with a new one.
   - A person moderator, such as Jenn, has only the API until merge 2 adds the browser, so in practice she can't
     moderate until then.
@@ -427,6 +425,11 @@ G13), the tools, the make targets, CLAUDE.md, and Wormhole's relay of membership
   sibling to a person's room creates a pair that lets them open breakouts together. The law's text is met ("a current
   room that a person owns"), but a ship chose the pair, at its owner's terminal. Whether that meets the law's purpose
   ("ones a person already put together") is Andy's to say. The summary posted to him names it.
+
+## 10. Open question for Andy
+
+1. Should membership notices in a bridged room cross to the aDNA lattice? That would widen your 2026-10-04 "What
+   crosses" decision. Until you answer, they don't (M21).
 
 ## Review response (revision 2: the D8 review of 417b4d3)
 
@@ -450,4 +453,4 @@ G13), the tools, the make targets, CLAUDE.md, and Wormhole's relay of membership
 | N1–N12 | nits | all applied: no short id in the notice (N1); `member-…` client ids (N2); section 2's order (N3); `safe_line` (N4); M8's codes (N5); "changes" (N6); "not the owner himself" (N7); API ranges and defaults (N8); `station-unmoderate` (N9); the default `grant_id` (N10); "no brief power" (N11); `(at)` in T6 (N12) |
 | Q1–Q6 | open questions | moved into the body as the ships answered them: M17 (1), M14 (2), M1 (3), M14 and M21 (4), M8 (5), M1's two actions (6) |
 | Q3 | a per-room total across moderators (optional) | not applied: the ships set the budget per grant, and the owner chooses how many moderators there are; section 9 says the budgets multiply |
-| Q4 | "notices never cross the bridge" | the premise is overridden: Serenity's addition sends the notice through the bridge (M21). The condition that the notice and the result say "bridged" is applied |
+| Q4 | the notice and the result say "bridged" | applied: M14, M21. Serenity's addition would have sent the notice through the bridge. A controller ruling kept it on the station, since that would widen Andy's own 2026-10-04 "What crosses" decision, and made it section 10's question for him |
