@@ -2056,6 +2056,9 @@ def verify_imprint_dir(dir, *, home):
         _atomic_json(folder / 'verified.json', {**shown, 'chain': out['chain'], 'pin': out['pin']})
         return out
 
+    if not folder.is_dir():                                 # nothing to check, and nowhere to write verified.json
+        out['problems'].append(f'there is no saved imprint at {folder}')
+        return out
     permission = _read_json(folder / 'permission.json', 1 << 20)
     if permission is None or not all(isinstance(permission.get(k), v) for k, v in
                                      (('record', dict), ('signature', str), ('station_key', str))):

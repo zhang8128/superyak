@@ -183,3 +183,11 @@ def test_a_permission_longer_or_shorter_than_the_days_asked_is_a_problem(tmp_pat
     d = saved_imprint(tmp_path / 'i', request=REQUEST | {'terms': {'days': 2}})     # signed for 1 day, asked for 2
     ok, problems = problems_of(d, tmp_path)
     assert not ok and any('2 days' in p for p in problems)
+
+
+def test_a_missing_folder_is_a_clean_error(tmp_path):                       # review's Task 44 item
+    out = verify_imprint_dir(tmp_path / 'nowhere', home=tmp_path / 'h')
+    assert not out['ok'] and any('no saved imprint' in p for p in out['problems'])
+    assert not (tmp_path / 'nowhere').exists()
+    done = run_peer(['verify-imprint', '--dir', str(tmp_path / 'nowhere'), '--home', str(tmp_path / 'h')])
+    assert done.returncode == 1 and 'Traceback' not in done.stderr and 'no saved imprint' in done.stdout
