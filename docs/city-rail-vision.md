@@ -33,8 +33,13 @@ it says so.
 3. **Free and open source.** Status on 2026-10-25: only `peer/` carries a license (Apache-2.0). Engram and
    Lighthouse carry none and the repository is private. Releasing needs Andy's license choice and a check that the
    code imported from earlier projects can be released.
-4. **Runs on a Raspberry Pi.** SQLite, Python with numpy, no GPU, bounded passes. A county office or a person's home
-   can run a station on a Pi.
+4. **Runs on a Raspberry Pi, and on small hardware.** SQLite, Python with numpy, no GPU, bounded passes. A county
+   office or a person's home can run a station on a Pi. Andy, 2026-10-26: "remember the ram limitations of this
+   machine, build this so that it can run easily with small amounts of hardware." Rio Grande's call on what that
+   means: the target is a Raspberry Pi with 2 GB of RAM. Every process this work adds peaks under 512 MB resident,
+   measured on the Pi. Work over a large store streams or runs in bounded batches; nothing holds a whole store, a
+   dense matrix or a whole graph in memory when its size grows with the store. The embedder is shared and never loaded
+   twice. Every systemd unit this work adds carries `MemoryMax` of 512 MB or less.
 5. **Transparency is a receipt.** Every use of a memory leaves a receipt that its owner and the place's people can
    read. Every place publishes its rules.
 6. **Conflicts go to a person.** When two rules disagree, the system shows the conflict to a person. It never picks.
@@ -133,5 +138,7 @@ The Pi has no Engram store yet; the first imprint creates one.
 
 - The license.
 - One permission he pictures an agent setting on its own, without a person.
-- Which store to imprint first, and its owner's yes.
+- ~~Which store to imprint first, and its owner's yes.~~ Answered 2026-10-26: Andy, the owner, said "yes you can
+  copy the full store." Memories that mention other people may be copied too. They keep their recorded people as
+  co-subjects, so any use of them outside Andy's home still needs those people's yes (permissions spec P12, P25).
 - What the county itself sets: its ceilings, its receipts, and who signs its law.

@@ -1,7 +1,10 @@
 # Permissions by Place
 
 **Date:** 2026-10-25
-**Status:** Revision 6, the fixes after the cross-check of the consolidation pass
+**Status:** Revision 7, for Andy's two decisions of 2026-10-26 (below), with the fixes from its check and its re-check
+([small-hardware review](../reviews/2026-10-25-small-hardware-permissions-review.md), "Response" and "Re-check
+response"). Revision 6 was
+the fixes after the cross-check of the consolidation pass
 ([consolidation](../reviews/2026-10-25-city-rail-consolidation.md), "Cross-check" and "Cross-check fixes"). Revision 5
 was the consolidation pass itself (the same file, which logs each change). It answers the check of
 revision 4 ([review](../reviews/2026-10-25-permissions-by-place-spec-review.md), "Check of the follow-up revision":
@@ -39,7 +42,41 @@ Revision 6 applies the cross-check's items for this spec:
 - U24's fixture's trails have 512 touches each (XN3);
 - the imprints spec is revision 6 and the trail spec revision 8 (header, 6.4, 11).
 
-Every revision keeps every section number. No change in any pass widens a permission. Nothing here is built.
+Revision 7 applies Andy's two decisions of 2026-10-26, which the vision records (its principle 4 and "Open for Andy"),
+and then the fixes from its check (M1 to M7 and S1 to S9 of the review named above) and from its re-check (RC1 to RC4
+and RCS1 to RCS10, the same file):
+- "remember the ram limitations of this machine, build this so that it can run easily with small amounts of
+  hardware." (A7) Rio Grande's call on what that means (P37):
+  - the target is a Raspberry Pi with 2 GB of RAM;
+  - every process this work adds peaks under 512 MB resident, measured on the Pi;
+  - work over a large store streams or runs in bounded batches;
+  - the embedder is shared and never loaded twice;
+  - every systemd unit this work adds carries `MemoryMax` of 512 MB or less.
+
+  Section 15 gains the memory budget, with each operation's figure and margin, the reference ledger it is measured
+  on, and the parts that must stream or run in batches. 5.6 follows (a State reads per-object rows when decisions
+  ask, `perform` holds one State at a time, and `rebuild` streams the log), and so do 5.4 (a ledger holds at most
+  16,384 records, and one act names at most 10,000 collection members), 6.4, 8 (the box refs bound), 9.1 (the fold
+  reads one receipt at a time, in batches), 12.2 (the cache's byte bound, two frames at once, at most 20 candidates
+  per recall, the shared embedder), 16, and PT10, U9, U15, U24 and U27. None of these changes a permission decision.
+  The new write bounds refuse a write as 5.4's other bounds do.
+
+  Why: measured on the station's Pi on 2026-10-26 and scaled to the reference ledger, the step 1 build as it stood
+  peaked at about 1.4 GB in `Ledger.state()` on that ledger. One cached eligible set at 20,000 placements and 43
+  layers held about 182 MB, so the 64-entry cache could reach about 11.4 GB.
+- "yes you can copy the full store." (A6) Andy, the owner, decided that his whole store may be copied, memories that
+  mention other people included. Revision 6 refused a memory with a recorded co-subject until that person said yes,
+  even into his own home. Revision 7 widens that one rule, on Andy's decision: P36 (end of 6.3). Inside the owner's
+  home, his `imprint`, and every bulk use there that shows nothing to any agent, read each co-subject's layer as a
+  restriction layer. A co-subject's silence passes, and their deny still refuses. The copy carries every subject
+  (P25). Every use that shows content to an agent, and every use outside the owner's home, still needs every
+  subject's yes. Sections 3 (A6, A7, P36, P37), 6.4, 6.6, 7.4, 14, 16, 17 (U5, U22, U29, F1) and 19 follow. Section
+  19 lists P36 as a departure from the words of the vision's principle 1.
+
+Every revision keeps every section number. No pass before revision 7 widened a permission. Revision 7 widens one, on
+Andy's decision: P36. Step 1 is being built on branch `permissions-core`. Tasks 1 to 24 of its plan were done when
+revision 7 was first written, and Tasks 1 to 28 when its check's fixes were applied. Its re-check's fixes cite that
+build at `dc0881e`. Revision 7's memory changes and P36 reach that build as controller tasks of their own.
 **Contract:** [the city rail vision](../../city-rail-vision.md). Its principles and its "Permissions by place"
 section bind this spec. Rio Grande wrote them from Andy's words. Where they go past a quote, they are Rio Grande's
 call carried by the contract, and this spec says so.
@@ -51,8 +88,8 @@ warning, 12.3), and migration `029`.
 [layered lighthouse](../../../engram/docs/superpowers/specs/2026-09-02-layered-lighthouse-design.md),
 [memory lanes](../../../engram/docs/superpowers/specs/2026-06-12-memory-lanes-design.md),
 [spec A](2026-10-08-instruction-layers-and-grants-design.md), [grants step 3](2026-10-15-grants-step3-design.md).
-**Depended on by:** the imprints spec revision 6 and the trail spec revision 8. Both cite sections 5, 6 and 11.
-Revisions 2 to 6 keep every section number, but line numbers moved. These changes reach them:
+**Depended on by:** the imprints spec revision 7 and the trail spec revision 9. Both cite sections 5, 6 and 11.
+Revisions 2 to 7 keep every section number, but line numbers moved. These changes reach them:
 
 - `route` also needs `read` and `inject_context` on every memory whose content a route answer shows (6.4). From
   revision 3, every action on a road or trail needs `recall` on each memory it names (6.4).
@@ -70,6 +107,17 @@ Revisions 2 to 6 keep every section number, but line numbers moved. These change
   the imprint holds, and it holds at most 100,000 (its section 8 and D36).
 - Revision 6: an imported counted row for an imprint's roads and trails holds the count the station's receipts carry,
   or null for a use refused before the station counted them (9.1, item 3). No rule either spec relies on changes.
+- Revision 7: the memory bounds (15) change no decision. P36 (6.3) widens one rule, on Andy's decision. Inside the
+  owner's home, the owner's `imprint`, and every bulk use there that shows nothing to any agent, named or counted,
+  read each co-subject's layer as a restriction layer, and so do the uses their `need` adds on the owner's own
+  memories. So the imprints spec's admission and trail evaluation on a copy kept in the owner's home are no longer
+  refused for a carried co-subject who has no layer or is silent, and are refused for one who denies. Both other
+  specs now read a carried co-subject's layer this way (the imprints spec's section 8, "Carried co-subjects in the
+  meet"; the trail spec's section 7, "On a full-store imprint"). They still differ on one rule: a road or trail with
+  more than 8 subjects in a bulk use, which this spec refuses with `BOUND` (19). A copy carries its source's subjects
+  as 6.3, item 1 reads them, through `copies` too (7.4), and the imprints spec's `cosubjects(m)` must read them the
+  same way (19). Every use that shows content to an agent, or whose P or H is outside the owner's home, still needs
+  every subject's yes.
 
 ## 1. Why
 
@@ -131,7 +179,7 @@ of them need design.
 | **Layer** | One authority's set of records. A **consent** layer denies by default. A **restriction** layer only denies. |
 | **Record** | One permission: allow or deny, a selector, a validity interval, and who set it under what (section 5). |
 | **Use** | One act on one object: who asks, from which place, for what purpose, which action, when. |
-| **Subject** | A person or place a memory is about. Each subject's consent layer must allow every use. |
+| **Subject** | A person or place a memory is about. Each subject's consent layer must allow every use, except as P36 reads it (6.3). |
 | **Collection** | A person's named set of memories, for example `collection:andy/medical-history`. |
 | **Grant** | A person's standing grant to an agent: which edits it may make to that person's layer, within an envelope. |
 | **Envelope** | The selector that bounds every record an agent makes under a grant. |
@@ -153,6 +201,8 @@ cites its number where it applies. `place:home` and `home` as a first place segm
 | A3 | "the county can provide rules and transparancy." | Andy (quote) |
 | A4 | "free, open source, uses universal mathmatical principles as connector standards and runs on a raspberry pi." | Andy (quote) |
 | A5 | "make it easy to port engram stores with permission from other computers." | Andy (quote) |
+| A6 | "yes you can copy the full store." The owner may imprint his whole store, memories that mention other people included. They keep their recorded people as co-subjects, so any use of them outside his home still needs those people's yes (P12, P25). Copying is not sharing. | Andy (quote, 2026-10-26, the vision's "Open for Andy"); the rest is the vision's reading, Rio Grande's call carried by the contract |
+| A7 | "remember the ram limitations of this machine, build this so that it can run easily with small amounts of hardware." | Andy (quote, 2026-10-26, the vision's principle 4) |
 | P1 | Inside a layer, deny records win literally; across layers, the meet (intersection). No specificity. | Rio Grande's call (the vision says "Deny wins") |
 | P2 | Every consent layer belongs to a place. A person's consent layer is the layer of their home place. | Rio Grande's call |
 | P3 | An allow's `place:Z` reaches a requester only when Z dominates both its place and its acts-for place. A deny's `place:Z` reaches every requester whose place or acts-for place has Z as an ancestor. | Rio Grande's call |
@@ -188,6 +238,8 @@ cites its number where it applies. `place:home` and `home` as a first place segm
 | P33 | A use whose answer names no object and shows no content to any agent, so that only counts, rates and digests leave, may be decided as one bulk use over a finite set of objects: `need` over every object, the bound of 32 named memories waived, one receipt with counts. | Rio Grande's call (the re-check's RMF1, option (a)) |
 | P34 | A use names the copy that serves it, `h`. The chain of h's place is required. | Rio Grande's call |
 | P35 | Every action on a road or trail needs `recall` on each memory it names, and `read` and `inject_context` on each memory whose content it shows. | Rio Grande's call |
+| P36 | Inside the owner's home, his `imprint`, and every bulk use that shows nothing to any agent, read each co-subject's layer as a restriction layer: silence and a missing layer pass, a deny refuses. It covers the uses their `need` adds on the owner's own memories. Every other use reads it as a consent layer. It widens what revision 6 allowed (6.3). | Rio Grande's call on the form, on Andy's decision A6 |
+| P37 | Every process this work adds peaks under 512 MB resident, measured on the Pi, for a Raspberry Pi with 2 GB of RAM. What grows with the store streams or runs in bounded batches. The embedder is shared and never loaded twice. Each systemd unit this work adds carries `MemoryMax` of 512 MB or less. | Rio Grande's call, reading A7 (the vision's principle 4) |
 
 ## 4. Names and places
 
@@ -458,6 +510,16 @@ assumes the lane held since creation. Compression review re-lanes only toward wh
 - A deny may have a null `valid_until` anywhere.
 - At most 256 effective records per layer, 8 subjects per object, and 100,000 members per collection. A write over a
   bound is refused with the bound in the reason.
+- **Two bounds for memory** (revision 7; Rio Grande's call; 15, "Memory"). A ledger holds at most 16,384 records,
+  revoked and replaced ones included, because a State holds them whole (5.6). A `collect` or `uncollect` act names at
+  most 10,000 objects, because `perform` and `rebuild` each hold one act's body whole. A write over either is refused
+  with the bound in the reason. The records count is taken inside the write's own `BEGIN IMMEDIATE` (5.5), for every
+  write that adds a record: an act, a signed proposal (7.1) and `migrate`. So two writers at once can't both pass it.
+  A revocation writes no record, so a person can always revoke. A new deny, a shortening and a narrowing each write a
+  record, so at the bound they are refused too, until a State reads records per layer (15, "Records per ledger").
+  At the bound a person narrows by revoking. One CLI command splits a larger set of members into acts of at most
+  10,000 under its one yes (7.6). `migrate` already writes acts of 500 (`COLLECT_CHUNK`,
+  `engram/permission_cli.py:755`).
 
 ### 5.5 Storage
 
@@ -515,9 +577,27 @@ The builder adds indexes as needed (section 18).
 
 - **The log is the source of truth.** Every write appends one `ledger_log` row, in the same transaction as its table
   row. The tables are projections of the log. `engram-permissions rebuild` replays the log into a fresh file and must
-  get the same tables.
+  get the same tables. It reads the log row by row and never holds it whole (15, "Memory").
 - **The version is the sequence number.** A layer's version is the highest `seq` that touched it. Every decision
   cites the `seq` it read, so `state(seq)` replays it exactly.
+- **A State reads what grows with the store when it is asked** (revision 7; Rio Grande's call). `state(seq)` holds
+  the registry, the records, the grants and the proposals whole. It reads an object's subjects, lane notes,
+  memberships and copies, and a log row's time, from the ledger when a decision asks, as they were at `seq`. It keeps
+  at most 65,536 of those rows and 65,536 log times. So its memory doesn't grow with the store (15, "Memory").
+  - **Rows read later read as at `seq`.** Of those four tables, only `subjects` and `collection_members` change in
+    place, and only to set `removed_seq` and `removed_by` (`engram/permission_ledger.py:1026-1027`, `:1052-1054`). A
+    State clears those when their seq is past its own, and leaves out a row added after it
+    (`engram/permissions.py:390-399`, `:458-467`). `lane_notes` and `copies` are only appended. So a State asked
+    after later writes decides as it would have at its own `seq` (PT10).
+  - **A failed read** during a decision counts as an unreadable ledger: under `enforce` the daemon serves nothing for
+    that frame (12.2), and the CLI refuses the command and says why.
+  - A ledger that holds more than 16,384 records (5.4), which no write of this spec makes, also reads as unreadable:
+    the State refuses to build, and says why.
+- **`perform` holds one State at a time** (revision 7; Rio Grande's call). Today an act keeps the State it checked
+  with while its gluing check builds a second, and a record act builds a third to find the record's layer
+  (`engram/permission_ledger.py:340`, `:372`, `:377`). A signed proposal keeps the State it was checked with in the
+  same way (`:405`, alive at `:445` and `:465`). An act, a signed one included, reads the record's layer from the
+  ledger and drops its own State before the check builds the next (15, "Memory").
 - **The log is hash-chained.** `digest = sha256(prev_digest + "\n" + canonical_json(entry))`, where the entry is the
   row without `prev_digest` and `digest`, and the first `prev_digest` is 64 zeros. `canonical_json` is the
   canonicalization named in 5.2. Anyone holding a published digest can detect a changed history. In step 1 records
@@ -533,7 +613,9 @@ x, for purpose p, at time t. h is a copy ref (4.1), and H, the **holding place**
 `place` of that store's `stores` row; for `imprint:<station>/<id>`, the place the station's ledger registers for it,
 or, at a station with no ledger in step 1, the operator's home, as the imprints spec fixes it (its section 8). t is the
 deciding party's clock, never the requester's (as the daemon does today, `engram/lighthouse_daemon.py:309-311`). 𝒰 is
-the set of all uses (P34; revision 2 left h out, though 6.3 item 3 read it).
+the set of all uses (P34; revision 2 left h out, though 6.3 item 3 read it). A single `imprint` use also names k, the
+store it keeps into, as a `store:` copy ref (the `remember` guard's own store, section 10). No layer reads k. Only
+P36's test of who qualifies does (6.3; Rio Grande's call, the re-check's RC4).
 
 No selector names h in this spec. h reaches a decision through the layers of `anc(H)` (6.3, item 3). The same ref
 held in two houses is two uses, each with its own holding place, so a place's rules for the copies it holds (7.5)
@@ -585,6 +667,65 @@ in `memory/technical` both score the same, and deny wins the tie (`:146-152`). N
 A layer that appears twice counts once. A use is also refused if a is not registered or is retired, or is not in P
 at t.
 
+**The owner's own copies (P36; Andy's decision A6: "yes you can copy the full store").** Revision 6 required every
+subject's consent layer for every use. So a memory with a recorded co-subject could not be imprinted, even into its
+owner's own home, until that person said yes. P36 changes that. It is the one rule any revision of this spec has
+widened. A use **qualifies** when all of these hold, where the owner is the owner of o's store (P12):
+- the requester acts for the owner: `act(a)` is the owner's home;
+- the use's place P and its holding place H are both inside the owner's home: `place:home/<owner>` dominates both;
+- the use is an `imprint`, single or an imprint batch, and the copy it keeps is held inside the owner's home; or it
+  is a bulk use (P33), named or counted, which by 6.4 shows nothing to any agent. For an imprint batch the copy it
+  keeps is h. A single `imprint` is the `remember` guard's (section 10), and the copy it keeps is k, the store the
+  guard writes into, which is not h: h is the copy the delivery came from (6.1). That store's place is its `stores`
+  row's `place`. A store with no `stores` row has no place, and the use doesn't qualify (Rio Grande's call; the
+  re-check's RC4). In the imprints spec, for a copy kept in the owner's home, these are all its step-1 uses: its
+  requester `agent:station-imprints` acts for the operator, who is then the owner, in the operator's home (its D9).
+  They are admission's imprint batches (its checks and calibration), its `read` batches for `trail-evaluation` and
+  its counted bulk `imprint` on R(I), and the trail evaluation's `read` batches and its counted bulk `route` (6.4, its
+  last paragraph).
+
+**How a qualifying use is decided.** Each use in its `need` (6.4) is tested on its own object: the `recall` and
+`read` an `imprint` needs, and the `recall` on every memory a road or trail names. It keeps its parent's a, P, h and
+t. It qualifies when its parent does and the first two conditions hold for the owner of its own object's store. So a
+memory that a road or trail names from another person's store, such as a memory of Jenn's store on one of Andy's
+trails, is decided with every subject's layer as a consent layer, as before. A6 is Andy's answer about his own store
+(Rio Grande's call; the re-check's RC4). In item 1 of a qualifying use the owner's home layer stays a consent layer.
+Each other subject's layer is read as a **restriction layer**, `⟦L⟧ = 𝒰 \ D_L` (6.1). So in step 3 of 6.5 its
+silence passes, a missing layer passes, and a deny in it refuses with `DENIED` at that layer. It keeps its place in
+step 2's order and cites no record (step 5). Its dated denies still count for `until`, and its records' times for
+the horizon (steps 6 and 7). Step 1 of 6.5 is unchanged: a retired co-subject's home still refuses with `RETIRED`, an
+object with no subject with `NO_LAYER`, and one with more than 8 subjects with `BOUND`. Items 2 to 5 still apply.
+A place co-subject that is also in `anc(P)` or `anc(H)` keeps its consent layer: items 2 and 3 require it as one,
+and the layer counts once, as consent (Rio Grande's call; the re-check's RCS4).
+
+**How `cited` shows it** (Rio Grande's call; the re-check's RCS1). A co-subject's layer read this way has its own
+kind in `cited` (6.5) and in receipts (9.1): `co-subject`. Its verdict is `deny` when a deny matches, `missing` when
+the layer doesn't exist, and `silent` otherwise, whatever allows it holds. Only `deny` fails. Its records are empty,
+and its version is the layer's version, as every ledger layer's is (0 for a layer that doesn't exist). It is not
+`restriction`, because a place's stewards see a `restriction` layer as that word, while a home's layer must show as
+its person's pseudonym (9.2). It is not `consent`, because it neither cites nor needs an allow.
+
+**Whom it reaches.** Every co-subject: one the owner or his agents recorded, one who claimed the memory
+(`self_claimed`, 7.4), and the source's people that a kept copy carries (P25). So a copy the owner kept of someone
+else's memory may be imprinted into his own home without that person's allow, but never against their deny. A
+`remember` of delivered content (section 10) is an `imprint`. By an agent acting for the owner, kept in a store whose
+`stores` row places it in his home, it qualifies, and the kept memory carries every subject.
+
+**What it never covers.** A use that is neither an `imprint` nor a bulk use, such as any `recall`, `read`,
+`inject_context` or `route` answer use, which names objects or shows content to an agent. A use whose requester
+doesn't act for the owner, or whose P or H is outside his home. For all of these every subject's layer stays a
+consent layer, so they still need every subject's yes. The copy carries every subject (P25, 7.4), so every later use
+of it is decided by the same rules.
+
+**Why this form** (Rio Grande's call, on A6). It is the narrowest rule that lets the owner copy his full store into
+his own home and evaluate it there, as Andy decided. Nothing about another person reaches an agent, or leaves the
+home, on the owner's yes alone. It overrides no one's no: a deny is a person's explicit refusal, P1 makes a deny win
+literally, and the vision's principle 6 forbids picking a winner. In step 1 the CLI writes no other person's layer
+(7.6), so a person co-subject's layer is empty or missing, and passes: Andy's full store copies into his own home, as
+he decided. A place co-subject's layer can hold a deny in step 1, when the owner stewards that place, since the CLI
+writes those layers (7.6), and that deny refuses (the re-check's RC1). P36 departs from the words of the vision's
+principle 1 inside the owner's home (section 19).
+
 ### 6.4 Actions and their closure (P5)
 
 Each action needs others. A use with action x is allowed only if every use in `need(u)` is in every required layer of
@@ -610,7 +751,7 @@ audience may not recall, which P23 forbids. The imprints spec already meets the 
 every target of the row ships (its section 6.2).
 
 This matches today's receiver: `recall` before asking, and all three before reading and delivering
-(`engram/neighbors.py:82`, `:120`, `:138`). The trail spec (revision 8) uses `route` in place of its work-lane rule,
+(`engram/neighbors.py:82`, `:120`, `:138`). The trail spec (revision 9) uses `route` in place of its work-lane rule,
 and its section 8 already shows a stop's summary only when `inject_context` is allowed on that memory, naming the id
 alone otherwise. Its "separate owner opt-in to route publication" is a `route` record. Its minimum published support
 of 3 stays in the trail spec. The imprints spec uses `imprint` on the memories it keeps, and on the roads and trails
@@ -678,10 +819,12 @@ and this spec's `explain` would refuse what the imprints spec's check allows. So
   decision: kind, store, layer, lane history, collection memberships, whether a record lists them in `memories`, and
   subjects. So the evaluator may decide each such group once. The imprints spec's finite check is this shortcut:
   every object of one kind in an imprint matches the same records (its section 8, "A finite check").
-- **Its Pi budget.** With or without grouping, one bulk decision at the largest size must fit the budget in section
-  15, which U24 measures. `explain` on a bulk use runs the same decision. **Size** fixes the largest: at most 100,000
-  objects, each needing at most three actions (`imprint`'s `recall`, `read` and `imprint`), and at most 100,000 named
-  memories, each needing `recall`. That is at most 400,000 (object, action) pairs.
+- **Its Pi budget.** With or without grouping, one bulk decision at the largest size must fit the time and memory
+  budgets in section 15, which U24 measures. It keeps, per object, only the object's subjects and which actions it
+  decided, and it keeps the earliest effective end as it goes (revision 7). `explain` on a bulk use runs the same
+  decision. **Size** fixes the largest: at most 100,000 objects, each needing at most three actions (`imprint`'s
+  `recall`, `read` and `imprint`), and at most 100,000 named memories, each needing `recall`. That is at most 400,000
+  (object, action) pairs.
 
 So the imprints spec's `Need(trail-evaluation)` is bulk uses with h = `imprint:<station peer id>/<imprint id>`:
 `read` on the shipped memories, in batches of 512 (its `need` adds `recall`), and one `route` on all the roads and
@@ -689,7 +832,9 @@ trails derived from them (its `need` adds `recall` on every memory they name). I
 batches on the memories and, with `route`, one counted bulk `imprint` on the roads and trails derivable from the
 package's session ids and log rows (that spec's R(I)), and `read` batches on the memories for `trail-evaluation`,
 since admission counts R(I) and deriving it reads memory text (that spec's sections 8 and 10; the cross-check's
-XS2). This spec's `decide` and `explain` then agree with the station's check, and F1 holds for both.
+XS2). This spec's `decide` and `explain` then agree with the station's check, and F1 holds for both. Each of these is
+a bulk use inside the owner's home when the copy is kept there, so P36 (6.3) decides a carried co-subject's layer in
+all of them.
 
 ### 6.5 The decision
 
@@ -718,7 +863,8 @@ decide(u, σ) → {allowed, at, ledger_seq, action, cited: [{layer, kind, action
    effective allows in L that match the use with action y, the one whose effective end is latest, then the smallest
    id. A record's **effective end** is the earliest of its own `valid_until`, the `valid_until` of every record in its
    `replaces` chain, the `expires` of every grant in its grant chain, and, when it matched through a grant-backed
-   membership, the `expires` of every grant in that membership's chain.
+   membership, the `expires` of every grant in that membership's chain. A co-subject's layer that P36 reads as a
+   restriction layer is not a consent layer here: it shows in `cited` with kind `co-subject` and no record (6.3).
 6. **`until`** is the earliest of: the effective end of every cited record; and the `valid_from` of every deny in a
    required layer whose `valid_from` is after t and which would match some use in `need(u)` at that `valid_from`,
    with σ fixed. It is a lower bound on when the ledger stops allowing the use: another record may carry it further.
@@ -758,7 +904,8 @@ expiry, the same read gets `EXPIRED`, which the table checks first.
 
 **How it is computed.** The evaluator first selects, per layer, the records whose audience, `requesters`, `actions`
 and `purposes` can match the requester, its place, the action and the purpose. Only those are matched against the
-object. The result depends only on u (h included), σ and t. A bulk use's result depends only on U, σ and t (6.4).
+object. The result depends only on u (h included, and k for a single `imprint`), σ and t. A bulk use's result
+depends only on U, σ and t (6.4).
 Conforming implementations agree on `allowed`, `cited`, `refusal`, `until` and `horizon` for both (test F1).
 
 ### 6.6 Proofs
@@ -845,6 +992,13 @@ With no write, no note or membership row is added. So "held throughout `[…, t�
 have the same truth as at t. Every interval endpoint and expiry that could flip a rule between t and t′ is a term of
 the horizon (6.5, step 7). ∎ So a cache that ends at the horizon never serves a stale decision.
 
+**P36 and the proofs** (revision 7). For a qualifying use, P36 reads a co-subject's layer as a restriction layer
+(6.3). L1, L2, L3, L5, L7 and L8 hold as written: that layer is still a term of the meet, and adding a co-subject
+still only narrows, since `𝒰 \ D_L` only removes uses. The second half of L4 holds: no agent act removes a
+co-subject's deny, and P36 keeps every deny. Its first half doesn't bound a qualifying use: there a co-subject's
+layer passes uses they never signed, by Andy's decision (A6), never by an agent's act. L6 holds for every use P36
+doesn't cover, and a copy still carries its source's people.
+
 ## 7. Who may set what
 
 ### 7.1 The table
@@ -923,6 +1077,10 @@ A memory about two people needs both yeses. Its subjects are its store's owner b
   narrows. In step 1 only the ledger owner writes the ledger (7.6), so no one else can claim.
 - A co-subject who can't say yes on this ledger refuses: `NO_ALLOW` if they are registered with an empty home layer,
   `NO_LAYER` if not. The memory doesn't move until they say yes on a ledger that holds their home.
+  - **One exception, on Andy's decision: the owner's own copy inside his home** (P36, 6.3). For the owner's `imprint`
+    there, and for a bulk use there that shows nothing to any agent, a co-subject's layer is read as a restriction
+    layer. Their silence, or a missing layer, passes, and their deny refuses. The copy carries them (below), so it
+    shows nothing to an agent, and moves nowhere else, without their yes.
 - The person whose allow was blocked by a co-subject sees "needs Jenn's yes" in their use list (9.3). In step 1 the
   system sends Jenn nothing.
 
@@ -933,10 +1091,12 @@ A memory about two people needs both yeses. Its subjects are its store's owner b
 - by genome sync, which copies genome-core episodes into an instance and records their origin (`engram/federation.py:155`).
 
 In the same act, the ledger writes a `copies` row (the copy's ref, the source's ref). It also adds every subject of
-the source, other than the copy's own default subject, as a co-subject of the copy, with `added_by` =
-`copy:<source ref>`. The ledger write comes first. If the store write then fails, the extra rows only narrow. A copy
-that would have more than 8 subjects is refused. The copy's people are then its source's people plus its keeper,
-so public health's copy of Andy's m1 can't reach parks without Andy's yes.
+the source at that moment, as 6.3, item 1 reads them (so through `copies` too, when the source is itself a copy),
+other than the copy's own default subject, as a co-subject of the copy, with `added_by` = `copy:<source ref>`. The
+build does this (`subjects_of` at `engram/permission_ledger.py:511` on `permissions-core`). The ledger write comes
+first. If the store write then fails, the extra rows only narrow. A copy that would have more than 8 subjects is
+refused. The copy's people are then its source's people plus its keeper, so public health's copy of Andy's m1 can't
+reach parks without Andy's yes.
 
 **Subjects recorded on the source later** (the re-check's RS5; Rio Grande's call). Adding a subject is meant to
 narrow every use, copies included. So on the ledger that holds both the copy and its source, a copy's subjects at a
@@ -949,10 +1109,18 @@ kept a copy of m3, the copy needs Jenn's yes from the next decision on, with no 
 from the source leaves the copy's carried row, which only that subject may remove (above).
 
 **A copy held on another ledger**, such as an imprint at a station, or a copy kept on a machine whose ledger doesn't
-hold the source, has only the subjects carried when it was made. It learns of a subject recorded at the source later
-only in step 2, when such changes go to every holder with a receipt, as withdrawal notices do (section 14, step 2).
-Until then the owner can withdraw it, and the imprints spec's withdrawal acts at once (its section 12). That spec also
-keeps at home every memory that has a recorded co-subject when the imprint is built (its D27).
+hold the source, has only the subjects carried when it was made. It carries exactly its source's subjects at that
+moment, as 6.3, item 1 reads them on the source's ledger, through `copies` too, less its own default subject. A
+source that is itself a kept copy has the subjects of its own sources, so a copy made from it carries them (the
+re-check's RC2). It learns of a subject recorded at the source later only in step 2, when such changes go to every
+holder with a receipt, as withdrawal notices do (section 14, step 2). Until then the owner can withdraw it, and the
+imprints spec's withdrawal acts at once (its section 12). An imprint's carried subjects are its `imprint_subjects`
+rows (imprints spec D43): one per subject of that set other than the owner, at the plan. That spec ships a memory
+with a recorded co-subject only in a copy kept in the owner's home, with its co-subjects carried. It keeps the memory
+at home otherwise, and also when a co-subject's layer on the owner's ledger denies a use the imprint needs, since the
+station can't read that deny (its D27 and `denied(m)`, revision 7). As committed in `c795c59`, its `cosubjects(m)`
+read `subjects` rows alone (its section 5.2), and so missed a memory's subjects through `copies`. Its revision after
+the re-check must read the set as this paragraph says (section 19).
 
 An imprint keeps its source's refs, `mem:<source instance id>/…` (imprints spec D11 keeps memory ids, and its
 objects are the owner's own refs). So its memories' subjects are their source's. The imprint store's `stores` row
@@ -1088,7 +1256,11 @@ oracle with the same expansion. A person who wants certainty about one use runs 
 calls `decide`.
 
 The check never holds more than 4,096 boxes. If it would, it reports "could not check: too complex" for J to the
-same stewards, and that counts as a disagreement.
+same stewards, and that counts as a disagreement. Nor does it hold more than 2,000,000 memory refs in its sets at
+once, past which it reports the same (revision 7; Rio Grande's call; 15, "Memory"). The count is of the sets held:
+those one State keeps for its layers' boxes, counted once when they are made, plus those the current check has made,
+counted afresh for each check. So the sets one check frees don't count against the next of an act's up to 64 checks
+(the re-check's RCS8). A meet with a full set shares the other set rather than copying it.
 
 **When it runs.** It runs after every change to the layer of J, of a parent, or of an ancestor. It also runs after
 every registry change, because audiences and collections become sets at the current state: places, parent edges,
@@ -1116,9 +1288,9 @@ CREATE TABLE uses_monthly(month TEXT NOT NULL, subject TEXT NOT NULL, place TEXT
   PRIMARY KEY(month, subject, place, action, purpose, outcome));
 ```
 
-- **A recall** writes one receipt. It holds the object refs it returned (`returned`), and how many copies were
-  filtered out (`filtered`), as a count only. Filtered copies get no ids and no `use_subjects` rows. A filtered
-  recall is not a use of the memory. Filtering happens before ranking, so for an outsider every placement is
+- **A recall** writes one receipt. It holds the object refs it returned (`returned`), at most 20 (12.2), and how many
+  copies were filtered out (`filtered`), as a count only. Filtered copies get no ids and no `use_subjects` rows. A
+  filtered recall is not a use of the memory. Filtering happens before ranking, so for an outsider every placement is
   filtered. Attributing those to subjects would write up to 20,000 rows per recall and tell nobody anything.
 - **A read or delivery** writes one receipt per item asked for, allowed or refused, because the requester named that
   id. An allowed delivery records the item's `content_digest`, which the `remember` guard reads (section 10). No view
@@ -1173,6 +1345,15 @@ CREATE TABLE uses_monthly(month TEXT NOT NULL, subject TEXT NOT NULL, place TEXT
 - **Retention.** Receipts are kept 400 days. Then they are folded into `uses_monthly` counts per subject, place,
   action, purpose and outcome, which are kept. The fold writes one `uses_anchor` row holding the last folded row's
   `seq` and digest, and verification of the chain starts from the latest anchor.
+  - **Only the leading run folds.** The fold reads receipts in `seq` order from the latest anchor, and stops at the
+    first one whose `at` is at or after the cutoff, as today (`engram/permission_uses.py:344-347`). A receipt's `at` is
+    when its use was decided, and the daemon and the servers both append, so `at` is not in `seq` order. A filter on
+    `at` alone could fold past a younger receipt and anchor beyond it, which would then never be verified or folded.
+  - **In batches, one receipt at a time** (revision 7; 15, "Memory"). The fold works in batches of at most 4,096
+    receipts, oldest first, each in a transaction of its own. Inside it, the fold reads the receipts through a cursor.
+    It verifies each against the running digest, adds it to the monthly counts in the file, and keeps nothing of it.
+    Then it deletes the batch and writes its anchor. So its memory is one receipt, however many bytes a batch holds.
+    A break in the chain rolls back its batch, and the fold stops there.
 
 ### 9.2 Who can read them
 
@@ -1250,7 +1431,9 @@ to Andy.
   `permission-uses.db`: allowed `inject_context` receipts with `agent` = this instance's agent, from the last
   24 hours, at most 200. The daemon writes those receipts whichever reader asked, so deliveries through the context
   runtime are caught as well as those through `neighbors.py` (12.1). This catches copies, not paraphrases. When
-  `imprint` is allowed, the kept memory carries its source's subjects (P25).
+  `imprint` is allowed, the kept memory carries its source's subjects (P25). The use's h is the copy the delivery
+  came from. The guard also passes k, the store it keeps into, its own instance's, whose `stores` row's place P36
+  tests (6.1, 6.3).
   - **What the agent is told** (the check of revision 4, BS1). To an agent that doesn't act for the ledger owner, a
     refused `remember` says only that keeping this content is not allowed: no code, layer or action, as 9.2 says of
     a refused read. Its receipt shows as 9.2's agents row. A layer can name a person. If Andy records `person:amy` as
@@ -1290,7 +1473,7 @@ The agent sees one line. `neighbors.py` prints nothing; it returns JSON, which t
 `laid by andy (engram) · allowed by home/andy #7f3a, la-county #0b9e · until 2027-01-31 · receipt #5e21a9c0`
 
 - `laid_by`: who made it. For a memory, its store's owner and instance name. For a road or trail, the trail spec
-  (revision 8) fills it in the same field.
+  (revision 9) fills it in the same field.
 - `allowed_by`: each consent layer's cited records, in the order of 6.5, step 2. Each layer shows its place's short
   name and the short ids of its distinct cited records, joined by `+`.
 - `until`: the decision's `until`, as a date. It covers ledger layers only (6.5, step 6): a legacy policy rule may
@@ -1393,11 +1576,13 @@ files a proposal, and says which.
   (12.3, step 2).
   A row with no `source_instance_id` has no object, so under `enforce` it is refused (`NO_LAYER`). The daemon decides
   `recall` for each placement before ranking.
-- **The cache.** The daemon keeps an eligible-set cache per (agent, place, purpose, action), at most 64 entries. An
-  entry is valid while three things hold: the ledger's `seq`, the placements' change counter, and the clock before
-  the entry's horizon (the earliest horizon among its decisions, 6.5). Migration 029 adds the change counter: a
-  one-row table whose count triggers raise on every insert, update and delete of `shared_memories`. A count and
-  highest rowid would miss a delete followed by an insert.
+- **The cache.** The daemon keeps an eligible-set cache per (agent, place, purpose, action), at most 64 entries and
+  96 MB, whichever it reaches first (revision 7). It sizes each entry by an estimate from its decisions, which U9
+  checks against a measure. An entry larger than 96 MB alone serves its own frame and is not kept. The decisions of
+  one entry share their equal citations. An entry is valid while three things hold: the ledger's `seq`, the
+  placements' change counter, and the clock before the entry's horizon (the earliest horizon among its decisions,
+  6.5). Migration 029 adds the change counter: a one-row table whose count triggers raise on every insert, update and
+  delete of `shared_memories`. A count and highest rowid would miss a delete followed by an insert.
 - **The rebuild budget.** Rebuilding one eligible set for 20,000 placements against 43 layers of 256 records is about
   220 million record checks if done naively. With the pre-filter of 6.5, it must take at most 2 seconds on the
   station's Raspberry Pi 5. That is a calibration hypothesis, and test U24 measures it. The rebuild runs at the first
@@ -1413,8 +1598,30 @@ files a proposal, and says which.
   it. With `shadow`, the legacy path alone decides, and both decisions go to the receipts with `shadow = 1`.
 - **Bounds.** `share` refuses the 20,001st placement in a house, with the bound in its reason. Under `enforce`, a
   house that holds more than 20,000 placements (written by older code) serves nothing, and the daemon warns.
+- **At most 20 candidates per recall** (revision 7; Rio Grande's call). The daemon answers a recall frame with at
+  most 20 candidates, whatever `k` it names. The protocol checks only `k > 0`
+  (`engram/lighthouse_protocol.py:234-236`), and the daemon passes `k` to retrieval as it is
+  (`engram/lighthouse_daemon.py:752`). 20 is the cap engram's own client already sets (`MAX_CANDIDATES`,
+  `engram/lighthouse_client.py:17`, checked at `:109`), and both readers go through that client
+  (`engram/neighbors.py:90`, `engram/context_lighthouse.py:159`). So nothing engram sends changes. The cap bounds a
+  recall's receipt: it names every ref returned, with one `use_subjects` row per subject of each
+  (`engram/lighthouse_daemon.py:493`; 9.1). At `k` = 20,000 with 8 subjects a ref, writing that receipt peaks at
+  75.1 MB and verifying it at 102.4 MB (15, "Memory").
 - **Closed** (12.3). The daemon serves nothing: no candidates, and no content in any read item. It warns with the
   cause.
+- **Memory** (revision 7; Rio Grande's call). At most 2 frames decide at once, and a third waits. Each holds one
+  State (5.6). The daemon embeds through the shared embedder service that `ENGRAM_EMBEDDER_SOCKET` names, and never
+  loads a model of its own. Without the service it refuses to start, and says why. Its peak resident memory is in the
+  budget of section 15.
+  - **A failed ledger read** during a decision, which a State's lazy reads make possible (5.6), is handled as a State
+    that can't be built is today (`engram/lighthouse_daemon.py:678-689`): the daemon warns, serves nothing for that
+    frame under `enforce`, and lets the legacy path decide under `shadow`.
+  - **A deploy gate.** `superyak-runtime` sets `ENGRAM_EMBEDDER_SOCKET` only when `runtime.json` has
+    `embedder_socket` (`scripts/runtime.py:653-655`). So before the daemon's refusal ships, every machine that runs
+    the daemon has that key and runs the embedder unit.
+  - **Per process, not per machine.** The 2 GB target bounds each process this work adds. The embedder unit is not
+    one of them, and carries `MemoryMax=3G` (`scripts/superyak-embedder.service:14`). This spec doesn't claim that a
+    whole machine running the daemon, the engram servers and the embedder fits in 2 GB, and it doesn't measure that.
 
 ### 12.3 The migration path
 
@@ -1640,7 +1847,8 @@ place (12.3, step 2). So every use below names h = `store:<the house's instance_
 One person's stores and the local city on one machine:
 
 - the pure model: names and copy refs, selectors, matching with history, dominance, `decide` with its codes, `until`
-  and horizon, `need` with named memories, bulk uses, boxes, the gluing check and ineffective parts;
+  and horizon, `need` with named memories, bulk uses, P36's reading of a co-subject's layer inside the owner's home,
+  boxes, the gluing check and ineffective parts;
 - the ledger, its log and projections, `rebuild`, `PlaceRules` export, and the receipts file;
 - `engram-permissions`: `init`, `migrate`, `gate`, `rebuild` (5.6), `person`, `agent`, `store`, `place` (register,
   parent, steward, retire, show), `group`, `collection`, `subject`, `allow`, `deny`, `revoke`, `shorten`, `narrow`,
@@ -1684,8 +1892,8 @@ limits.
    that reach a place are disclosed to that place's decider. This spec does not choose.
 3. **Data classes (step 4).** A shared vocabulary such as `class:health`, so places can write rules about kinds of
    content. Labels cut both ways (a label can match an allow or a deny), so only the person sets one. A name detector
-   that only adds co-subjects (7.4). Whether memories that mention other people may move at all is still open for
-   Andy (section 19).
+   that only adds co-subjects (7.4). Andy answered on 2026-10-26 whether memories that mention other people may
+   move (A6). P36 (6.3) applies his answer, and section 19 says how.
 4. **Routes on the rail.** The trail spec and its later steps use `route` across lighthouses, one edge per answer use
    (6.4).
 
@@ -1708,6 +1916,7 @@ limits.
 - **Widening by a derived signal.** A lane move, a write-time lane or store choice, a classifier, an embedding or a
   category that adds an allowed use outside a home (L5, P28).
 - **Picking a winner.** Resolving a disagreement by anything other than the meet and a person.
+- **Overriding a no.** A use allowed against a deny that matches it in a required layer, P36's included (6.3).
 - **Content in receipts.** A receipt holding content or query text.
 - **Secret place rules.** A place's decisions that cite rules its people can't read (homes excepted, 9.4).
 - **Trusting the requester's clock.** A requester's time extending any record.
@@ -1745,7 +1954,7 @@ limits.
 | Boxes per record | `64 × (1 + k)`, k the grant chains behind its members | bounds the check (the box cap still applies) |
 | Joint places checked per change | 64 | bounds the check |
 | Sweep per pass | 256 placements | bounds startup work |
-| Eligible-set cache | 64 entries | bounds daemon memory |
+| Eligible-set cache | 64 entries and 96 MB, whichever comes first | bounds daemon memory (12.2); the 96 MB is Rio Grande's call, from the daemon's memory budget (below) |
 | Placements per published house | 20,000 | bounds a cache rebuild on a Pi |
 | Eligible-set rebuild | 2 s on the station's Raspberry Pi 5 | the Pi budget (12.2) |
 | Bulk decision | 40 s on the station's Raspberry Pi 5, for a bulk `imprint` of 100,000 derived objects whose `need` names 100,000 memories, the largest that "Objects per bulk use" and "Memories named per bulk use" allow | the Pi budget for one bulk use at its largest (6.4), and so for `explain` on one (U24). It is the rebuild's rate: the rebuild makes 20,000 (object, action) decisions in 2 s, and this use at most 400,000 (three actions on each derived object, and `recall` on each memory) |
@@ -1757,21 +1966,132 @@ limits.
 | Confirmation code | 6 characters | step 1 terminal yes |
 | Short id prefix | at least 4 hex, unique on the ledger | 4.1 |
 | Receipt short form | `#` and 8 hex | the agent's handle on a receipt (4.1, 11); fixed to match the trail spec's receipts |
+| Peak resident memory | 512 MB per process, measured on the Pi | Andy's decision of 2026-10-26 (A7; vision, principle 4). The number, and the 2 GB Raspberry Pi it is for, are Rio Grande's call (P37). It holds for the daemon and for each operation U24 measures (below) |
+| Reference ledger | 100,000 memories, each with 8 subjects (its store's owner and 7 co-subjects, each added by an act of its own), 3 lane notes (a first note, then one re-lane, in passes of 256) and one collection membership (in collect acts of 10,000); 41 ledger layers of 256 effective records in U24's mix; and the log rows that wrote them all, about 811,000 | the ledger U24 measures memory on. Rio Grande's call: the collection size, the subjects bound and a decision's 41 ledger layers, each at its bound |
+| Per-object rows a State holds | 65,536 rows, and 65,536 log times | bounds a State whatever the store's size (5.6). Rio Grande's call |
+| Records per ledger | 16,384, revoked and replaced ones included; a write past it is refused (5.4), and a ledger past it reads as unreadable (5.6) | a State holds the records whole, and the daemon's budget holds only up to about 20,200 records (below). Records grow with acts and places, not with the store. Reading them per layer lifts the bound, and is due before a ledger needs more. Rio Grande's call |
+| Objects per `collect` or `uncollect` act | 10,000; a larger set is several acts (5.4) | bounds one act's body in `perform` and in `rebuild` (below). Rio Grande's call |
+| Frames deciding at once | 2 | bounds the daemon's States (12.2). Rio Grande's call |
+| Candidates per recall | 20, whatever `k` the frame names | bounds a recall's receipt and its `use_subjects` rows (12.2, 9.1). Fixed to match engram's client (`engram/lighthouse_client.py:17`); Rio Grande's call |
+| Receipt fold batch | 4,096 receipts per transaction, read one at a time | bounds the fold's transaction; its memory is one receipt (9.1). Rio Grande's call |
+| Box refs per State | 2,000,000 memory refs in the sets held at once: a State's kept layer boxes, plus the current check's sets; past it, "could not check" | bounds the check's memory, as the box cap bounds its boxes (8, U15). Rio Grande's call |
+| A systemd unit's memory | `MemoryMax=512M` or less on each unit this work adds; step 1 adds none | Andy's decision; the number is Rio Grande's call |
 
 Everything runs on a Raspberry Pi. It needs only Python's standard library and `sqlite3`: the vision allows numpy,
 and nothing here needs it, or a GPU. Every pass is bounded by the table. The definitions in sections 4 to 8 are the
 connector standard. An implementation conforms when it gives the same decisions on the shared fixtures (test F1), as
 the local city's two policy evaluators must agree (local-city spec, section 4.4).
 
+**Memory** (revision 7). Andy, 2026-10-26: "remember the ram limitations of this machine, build this so that it can
+run easily with small amounts of hardware." (A7) Rio Grande's call on what that means is the vision's principle 4
+(P37). The target is a Raspberry Pi with 2 GB of RAM. Every process this work adds peaks under 512 MB resident,
+measured on the Pi. On the reference ledger above, and with its records at their bound, each of these peaks under
+512 MB (U24; the budget below):
+
+- the daemon, serving recall and read frames for a house of 20,000 placements, with its cache full;
+- one eligible-set rebuild for 20,000 placements (12.2);
+- one bulk decision at its largest: 100,000 objects whose roads and trails name 100,000 memories, not grouped (6.4);
+- `Ledger.state()` (5.6);
+- `perform`, one act with its gluing check at the box refs bound (5.6, 8), which every writing command and
+  `migrate` run;
+- `engram-permissions rebuild`, `check` and `uses` (5.6, 8, 9.3);
+- the receipts fold (9.1).
+
+What grows with the store or the ledger streams or runs in bounded batches. Nothing holds a whole store, a whole log,
+a dense matrix or a whole graph:
+
+- a State reads per-object rows and log times when decisions ask, through its bounded cache. It holds the records
+  whole only up to their bound, 16,384 (5.4, 5.6);
+- `perform` holds one State at a time, and an act's body holds at most 10,000 collection members (5.4, 5.6);
+- `rebuild` reads the log row by row (5.6);
+- the fold reads one receipt at a time, in batches (9.1), and a recall's receipt names at most 20 refs (12.2);
+- a bulk decision keeps, per object, only its subjects and which actions it decided, and keeps the earliest effective
+  end as it goes (6.4);
+- the decisions of an eligible set share equal citations, and the cache is bounded in bytes as well as entries
+  (12.2);
+- a gluing check shares sets where it can, and stops at the box refs bound (8).
+
+The embedder is shared and never loaded twice: the daemon embeds through the shared embedder service and never loads
+a model (12.2). Measured on the station's Pi on 2026-10-26, before these bounds, and scaled to the reference ledger
+from measured sizes per row:
+- `Ledger.state()` peaked at about 1.4 GB on the reference ledger;
+- `rebuild`'s read of the whole log came to about 845 MB;
+- one eligible set at 20,000 placements and 43 layers held about 182 MB, so the cache's 64 entries could reach about
+  11.4 GB.
+
+**The budget** (revision 7; Rio Grande's call). MB means 2^20 bytes, as systemd's `512M` does. Each figure is an
+estimate. It adds the measured resident high-water of importing the daemon's modules, 30.3 MB, to traced sizes from
+unit sizes measured on the station's Pi on 2026-10-26 with `tracemalloc` (Python 3.13). Each part is rounded to
+0.1 MB before it is added. "At the bounds" means 16,384 records (5.4), full row and time caches, at most 20 candidates
+per recall, and the largest receipt and act this spec writes. The units are:
+- a record in a State, 4,126 B; a record's table row while a State builds, 2,877 B;
+- a per-object row, 404 B; a log time, 97 B. So a full row cache is 65,536 × 404 B = 25.3 MB, and a full time
+  cache 65,536 × 97 B = 6.1 MB;
+- at the reference ledger's 10,496 records, 41.3 MB in a State and 28.8 MB while it builds. At 16,384 records,
+  16,384 × 4,126 B = 64.5 MB and 16,384 × 2,877 B = 45.0 MB;
+- so a State with full caches is 41.3 + 25.3 + 6.1 = 72.7 MB at the reference, and 64.5 + 25.3 + 6.1 = 95.9 MB at
+  the bounds.
+
+| Operation | Parts | Reference ledger | At the bounds | Margin at the bounds |
+|---|---|---|---|---|
+| `Ledger.state()` | 30.3 + the records' table rows while it builds + the records; then its row and time caches fill (+ 25.3 + 6.1) | 30.3 + 28.8 + 41.3 = 100.4; 131.8 with full caches | 30.3 + 45.0 + 64.5 = 139.8; 171.2 | 340.8 |
+| Eligible-set rebuild, 20,000 placements | 30.3 + a State + the set 16.0 + `made` 1.8 + placements 6.0 | 126.8 | 150.0 | 362.0 |
+| Bulk decision at its largest (6.4) | 30.3 + a State + the run 47.5 + the caller's 100,000 trail refs 13.6 | 164.1 | 187.3 | 324.7 |
+| The fold (9.1) | 30.3 + one receipt + one connection's page cache 2.0 | a recall of 20 refs with 8 subjects each: 160 (subject, ref) pairs × 671 B = 0.1, so 32.4 | a named bulk receipt of 512 objects with 8 subjects each, 4,096 pairs × 671 B = 2.6, citing 256 records in each of 40 consent layers for 3 actions, 30,720 ids × 37 B = 1.1, held about 3 times = 3.3: 38.2 | 473.8 |
+| The daemon (12.2) | 30.3 + 2 frames × (a State + a set being built 23.8 + met decisions 15.5 + objects 7.2) + the cache 96.0 + page caches 15.6; then one frame's build transient | 30.3 + 2 × 119.2 + 96.0 + 15.6 = 380.3; + 28.8 = 409.1 | 30.3 + 2 × 142.4 + 96.0 + 15.6 = 426.7; + 45.0 = 471.7 | 40.3 |
+| `perform`, one act and its gluing check | 30.3 + one State + box refs 80.0 + the act's insert list, 10,000 × 753 B = 7.2 | 190.2 | 213.4 | 298.6 |
+| `check` (8) | 30.3 + a State + box refs 80.0 | 183.0 | 206.2 | 305.8 |
+| `uses` views (9.3) | 30.3 + a State + the 200 rows shown, each at most about 40 KB in step 1, held about twice: 15.6 | 118.6 | 141.8 | 370.2 |
+| `rebuild` (5.6) | 30.3 + its largest log row, a `collect` act of 10,000 members, measured replaying at 35.7 + two connections' page caches 3.9 | 69.9 | 69.9 | 442.1 |
+
+Where the parts come from:
+- **The fold.** Verifying one receipt was measured at 671 B per (subject, ref) pair: 102.4 MB for one recall of
+  20,000 refs with 8 subjects each. The largest receipt step 1 writes is a named bulk receipt, such as an imported
+  imprint batch with its co-subjects, at 512 refs × 8 subjects. A receipt's `cited` holds at most 256 records for
+  each of 40 consent ledger layers and 3 actions, as the row, its canonical JSON and their UTF-8 bytes. Before this
+  revision the fold held a whole batch: 4,096 recalls of 20,000 refs each would have held 4,096 × 20,000 × 89 B =
+  6,953 MB of `returned` alone.
+- **The daemon.** A frame is 72.7 + 46.5 = 119.2 MB at the reference and 95.9 + 46.5 = 142.4 MB at the bounds. Each
+  recall's receipt adds at most 160 pairs × 492 B = 0.1 MB, measured at 492 B a pair (75.1 MB for one receipt of
+  20,000 refs with 8 subjects each). Without the cap of 20 candidates, two such receipts at once would add 150.2 MB.
+  The cache holds 6 eligible sets at the bound: 6 × 15.99 MB = 95.9 MB.
+- **The records bound.** The daemon's parts that don't grow with the records come to 30.3 + 2 × (25.3 + 6.1 + 46.5)
+  + 96.0 + 15.6 = 297.7 MB. Each record adds 2 × 4,126 B in two States and 2,877 B in one build: 11,129 B = 0.0106 MB.
+  So the daemon fits only up to (512 − 297.7) / 0.0106 = about 20,200 records. At 32,768, revision 7's first draft,
+  it would reach 297.7 + 32,768 × 11,129 B (347.8) = 645.5 MB, or 555.6 MB without the build. At 16,384 it is
+  297.7 + 16,384 × 11,129 B (173.9) = 471.6 MB, which is the table's 471.7 with its parts rounded first.
+- **`perform`.** One State at a time (5.6): 30.3 + 72.7 + 80.0 + 7.2 = 190.2 at the reference, 30.3 + 95.9 + 80.0 +
+  7.2 = 213.4 at the bounds. Before the check, a `collect` act at its bounds holds the collection's members as a set
+  of at most 100,000 refs (16.8) and its body at 10,000 members, measured at 4,009 B a member with its first lane
+  note (38.2): 30.3 + 95.9 + 16.8 + 38.2 = 181.2, under the figure. Holding three States, as `perform` does today
+  (5.6), would be 30.3 + 3 × 95.9 + 45.0 + 80.0 = 443.0 at the bounds. A `collect` of 100,000 members in one act would
+  hold 100,000 × 4,009 B = 382.3 MB of body, and its replay in `rebuild` 100,000 × 3,742 B = 356.9 MB.
+- **`uses`.** In step 1 the largest row a view shows is a recall's: 20 refs, and at most 20 records cited in each of
+  40 consent layers, 40 × 20 × 37 B = 29,600 B, with its other columns under 40 KB. So 200 rows × 40 KB = 7.8 MB,
+  held about twice.
+- **`migrate`** runs once, on the ledger it has just made, so its States hold few records. Its acts are `perform`'s,
+  each `collect` of at most 500 members (`engram/permission_cli.py:755`), and the share rows it reads carry no
+  content (`engram/migrations/027_shared_memories.sql:1-11`). U24 measures it.
+- **The engram server** is not a process this work adds. It already peaks at about 320 MB with the shared embedder
+  (`engram/CLAUDE.md:44-45`, measured 2026-10-02). This work adds to it, one permissions call at a time, at most what
+  one `perform` holds above its imports, when `permit` writes: 159.9 MB at the reference and 183.1 MB at the bounds.
+  So the server may reach about 480 MB and 503 MB. It also folds at each start (`engram/server.py:2205`), one receipt
+  at a time. 512 MB doesn't bind it, since this work doesn't add it.
+
+**Margin** (Rio Grande's call). The figures are traced bytes over a measured base, and how far resident memory runs
+above traced bytes was not measured. The daemon at the records bound leaves the least, 40.3 MB (8 %). If a daemon run
+in U24 reads 480 MB or more, the first lever is a cache of 64 MB (32 MB less). The second is one frame at a time (one
+frame less: 119.2 MB at the reference, 142.4 MB at the bounds).
+
 ## 16. Components
 
 | Component | Responsibility |
 |---|---|
-| `engram/permissions.py` | Pure functions: name and copy-ref grammars, selector parsing and checks, dominance and ancestry, matching with history, `need` with named memories, `decide` for single and bulk uses with its codes and a candidate's grant chains, `until` and horizon, boxes with collection expansion, narrowing and envelope checks, the gluing check and ineffective parts, proposal words. No I/O. |
-| `engram/permission_ledger.py` | The ledger: schema, log with hash chain, projections, `state(seq)`, `rebuild`, read-only open, the gate and the effective-gate rule over houses, marking every house with the ledger's id at the raise, a copy's subjects through `copies`, `PlaceRules` export, proposals, kept-copy rows, the sweep's queries. |
-| `engram/permission_uses.py` | The receipts file: writes in `BEGIN IMMEDIATE` with the hash chain, single and bulk receipts (named and counted, 9.1), owner view, which marks imported station rows and counts them apart (9.3), place view with pseudonyms, the retention fold with its anchor. The imported rows themselves are written in 9.1's imported form by the imprints spec's `import-receipts` (its section 15). |
-| `engram/permission_cli.py` | `engram-permissions` (section 14), acting only as the ledger owner, with the terminal yes. `gate` refuses a raise without a published house (12.3), and `explain` takes single and bulk uses. A `[project.scripts]` entry and a `py-modules` entry in `engram/pyproject.toml`. |
-| `engram/lighthouse_daemon.py` | Decisions before retrieval and read, each placement with its object and copy h (12.2), the cache with the horizon and the change counter, receipts, the `permission` member, the placement audience, stripping `group:outside-home` from every policy's audiences under every gate and with no ledger, and adding it back only under `enforce` (12.1), the effective gate over the houses it serves (12.3). |
+| `engram/permissions.py` | Pure functions: name and copy-ref grammars, selector parsing and checks, dominance and ancestry, matching with history, `need` with named memories, `decide` for single and bulk uses with its codes and a candidate's grant chains, `until` and horizon, boxes with collection expansion, narrowing and envelope checks, the gluing check and ineffective parts, proposal words. P36's reading of a co-subject's layer for a qualifying use (6.3). Shared citations in an eligible set, a bulk decision's small working set per object, and the box refs bound (15, "Memory"). No I/O. |
+| `engram/permission_ledger.py` | The ledger: schema, log with hash chain, projections, `state(seq)` with its bounded reads of per-object rows (5.6), the records bound and the act bound (5.4), `perform` holding one State at a time (5.6), `rebuild` reading the log row by row, read-only open, the gate and the effective-gate rule over houses, marking every house with the ledger's id at the raise, a copy's subjects through `copies`, `PlaceRules` export, proposals, kept-copy rows, the sweep's queries. |
+| `engram/permission_uses.py` | The receipts file: writes in `BEGIN IMMEDIATE` with the hash chain, single and bulk receipts (named and counted, 9.1), owner view, which marks imported station rows and counts them apart (9.3), place view with pseudonyms, the retention fold in batches, one receipt at a time, each batch with its anchor (9.1). The imported rows themselves are written in 9.1's imported form by the imprints spec's `import-receipts` (its section 15). |
+| `engram/permission_cli.py` | `engram-permissions` (section 14), acting only as the ledger owner, with the terminal yes. A command that adds or removes more than 10,000 collection members splits them into acts under its one yes (5.4). `gate` refuses a raise without a published house (12.3), and `explain` takes single and bulk uses. A `[project.scripts]` entry and a `py-modules` entry in `engram/pyproject.toml`. |
+| `engram/lighthouse_daemon.py` | Decisions before retrieval and read, each placement with its object and copy h (12.2), the cache with the horizon and the change counter, receipts, the `permission` member, the placement audience, stripping `group:outside-home` from every policy's audiences under every gate and with no ledger, and adding it back only under `enforce` (12.1), the effective gate over the houses it serves (12.3), the cache's byte bound, at most 2 frames deciding at once, at most 20 candidates per recall, and the shared embedder only (12.2). |
 | `engram/lighthouse_client.py`, `engram/neighbors.py`, `engram/context_lighthouse.py` | Accept and pass `permission`, rendered as one line; the receipt extension. |
 | `engram/sharing.py`, `engram/server.py` | `share` through records, refusing `group:outside-home` as an argument; `record_id` and `source_instance_id`; the `permissions` and `permit` tools; the sweep; the `remember` guard reading `permission-uses.db`; kept-copy subjects; the lane listener; the effective gate over the published house (12.3). |
 | `engram/storage.py` | The two-call lane listener hook in `set_episode_lanes`. Migration 029's step in the migration loop: inside 029's transaction, it writes `permissions_ledger_id`, or `unreadable`, into a house created while a raised ledger exists (12.3), as the loop runs `_assign_instance_id` for 028 (`engram/storage.py:228-230`). |
@@ -1814,7 +2134,8 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
 - **PT9 Boxes.** Intersection, difference, emptiness and subset agree with brute force on universes of up to 3 values
   per dimension and 4 time points.
 - **PT10 Determinism.** The same decision, cited records, `until` and horizon, whatever the insertion order, and after
-  replaying the log to the same `seq`.
+  replaying the log to the same `seq`. A State that reads per-object rows when asked (5.6), asked only after later
+  ledger writes that add, remove and re-lane those rows, decides as a State read whole at its own `seq` (revision 7).
 - **PT11 Gluing.** Δ and ineffective parts from boxes equal those of a brute-force oracle with the same collection
   expansion, at the current state. A fixture covers the collection case: m in C1 and C2, own allows C1, parent A
   allows C2, parent B allows C3. It must report a disagreement.
@@ -1830,11 +2151,14 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   agent.
 - **U3** Write rules: an outside-home allow needs purposes and an end at most 366 days out; an inside-home allow may
   use `"*"` and no end; an outside-home memory allow without a finite `memories` or `collections` list is refused, and
-  so is a road allow without a finite `stores` list (P28); each bound in 5.4 refuses with its reason.
+  so is a road allow without a finite `stores` list (P28); each bound in 5.4 refuses with its reason, among them the
+  16,385th record of a ledger and a `collect` act of 10,001 objects, while a revocation at the records bound is
+  written; a CLI command that adds 25,000 members writes 3 acts under one yes (revision 7).
 - **U4** Who may set what, as one table: actors (the person, a steward, an agent with a valid, expired, revoked or
   too-deep grant, an agent without one, another person) against the acts in 7.1. Each cell is allowed, refused or a
   proposal, as 7.1 says. A grantee can give its own grant up.
-- **U5** Co-subjects: a memory about Andy and Jenn is refused on Andy's yes alone; Andy can remove a co-subject his
+- **U5** Co-subjects: a memory about Andy and Jenn is refused on Andy's yes alone, for every use P36 doesn't cover
+  (U29 tests the ones it does); Andy can remove a co-subject his
   agent added; he can't remove one Jenn claimed herself or one a kept copy carries; a self-claim appears in Andy's
   list; a co-subject added to a source is written even when a copy's subjects would then number more than 8, and the
   copy's next use is refused with `BOUND` (7.4).
@@ -1857,7 +2181,10 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   bytes are unchanged and `total_changes` is 0; a frame's `at` in the future extends nothing; the cache recomputes on
   a new `seq`, a new change count, and at the horizon; refused copies never appear among candidates; a refused read
   item has `content: null`, `audiences: []` and no `permission`; the client accepts `permission` and still rejects any
-  other unknown member; the 20,001st placement is refused.
+  other unknown member; the 20,001st placement is refused; the cache holds at most 96 MB by its estimate, the
+  estimate is 1.0 to 1.6 times a measure, and an entry larger than 96 MB is not kept; at most 2 frames decide at once,
+  and the others wait; a recall frame with `k` = 21 or more returns at most 20 candidates, and its receipt names at
+  most 20 refs; a ledger read that fails during a decision serves nothing under `enforce` (12.2, revision 7).
 - **U10** Receivers: `permission` reaches each delivered item in `response["neighbors"]["delivered"]` as one line of at
   most 240 characters, with long place names cut and `+N`, and the receipt's short form has 8 hex; the context
   runtime's `_evidence` carries it; the RecallReceipt still validates against its schema, with the
@@ -1881,7 +2208,8 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   `sign` prints the full selector; signing writes a person-backed record with its `proposal_id`; declining writes
   nothing else.
 - **U15** Gluing and ineffective parts: each is reported to the right stewards, at single-parent and joint places;
-  the check reruns after a registry change; hitting the box cap reports "could not check".
+  the check reruns after a registry change; hitting the box cap, or the box refs bound (15), reports "could not
+  check".
 - **U16** Gate:
   - with no ledger, the existing daemon, neighbor and sharing tests pass unchanged;
   - a `[permissions]` section in `config.toml`, or a config that fails to parse, changes no mode, and the section
@@ -1937,7 +2265,9 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   - a bulk use with an object that has no subject is refused with `NO_LAYER`, and one with an object of 9 subjects
     with `BOUND`, unless an earlier object in ref order fails first (6.5, step 1);
   - the imprints spec's `Need(trail-evaluation)` and `Need(admission)` on a fixture imprint, decided by this spec's
-    `decide`, give that spec's verdicts (P33; the re-check's RMF1).
+    `decide`, give that spec's verdicts (P33; the re-check's RMF1). One fixture imprint carries no co-subject. A
+    second, kept in the owner's home, has memories that carry a co-subject with no layer, as at a station in step 1:
+    each of its uses is allowed under P36, as that spec's check allows it (6.3; its section 8).
 - **U23** Placement audience: each row of the mapping table in 12.1, including an allow naming two groups (the
   re-check's RN5); a `group:outside-home` placement is never served under `off` or `shadow`, or with no ledger, even
   when a hand-written policy lists `group:outside-home` for the receiver (the re-check's RS1); `share` refuses the
@@ -1948,14 +2278,72 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   takes at most 40 s there, with objects that don't group (the final check's FN3). Its trails have 512 touches each,
   the trail spec's cap, so the decision reads 51.2 million touches though it makes at most 400,000 decisions (the
   cross-check's XN3). Marked slow, and run on the Pi.
+  - **Memory** (revision 7). Each of these runs on the reference ledger (15) in a fresh process of its own:
+    - the two timed decisions above;
+    - `Ledger.state()`;
+    - `perform` of an `allow` in a parent's layer of a joint place, whose gluing checks meet collections of 100,000
+      members, and of a `collect` of 10,000 members into a collection that holds 90,000 (5.4, 5.6);
+    - `rebuild`, whose log holds that `collect` act;
+    - `check`, and `uses` for the owner and for a place;
+    - the fold of 100,000 receipts, each a recall that cites 43 layers and returns 20 refs with 8 subjects each,
+      among them, in the first batch, 64 named bulk receipts at the largest: 512 objects with 8 subjects each,
+      citing 256 records in each of 40 consent layers for 3 actions (9.1);
+    - a daemon serving recall and read frames from 3 threads, for a house of 20,000 of the ledger's memories, with
+      its cache filled past 96 MB. It runs once on the reference ledger, and once with 5,888 revoked records added,
+      so that the ledger holds 16,384, the records bound.
+
+    `migrate` runs the same way on a house of 20,000 shares with no ledger. Each process's peak resident memory,
+    `VmHWM` in `/proc/self/status`, stays under 512 MB, which is 524,288 kB, since MB means 2^20 bytes (15). The test
+    records each peak beside its estimate in section 15's budget. Each runs as the user under
+    `systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0`, as `engram/CLAUDE.md`'s test command does, so a
+    breach fails as an out-of-memory kill. Rio Grande's call: a process's peak doesn't depend on how much RAM the Pi
+    has, so the station's 16 GB Pi 5 measures for the 2 GB target. Any error is in the safe direction: this Pi's
+    kernel (`6.12.109+rpt-rpi-2712`) uses 16 KB pages (`getconf PAGESIZE` gives 16384), so a resident figure here is
+    no lower than on a Pi with 4 KB pages.
 - **U25** Lane notes: a failed `UPDATE` settles to the old lane; a crash between the two calls leaves a pending note
   that allows read as neither lane and denies as both; a memory with no note matches no lane-limited allow.
 - **U26** Ids: the CLI takes full ids and unique prefixes, and refuses an ambiguous prefix with its matches.
 - **U27** Receipt writes: the daemon and a server writing at once keep one valid chain; after the 400-day fold, the
-  chain verifies from its anchor.
+  chain verifies from its anchor; a fold of more than 4,096 receipts works in batches, each with its own anchor, and
+  a break in the chain stops it at the batch that holds the break (9.1, revision 7). A receipt younger than the cutoff,
+  at a lower `seq` than older ones, stops the fold there: no anchor passes it, and the older ones after it wait for a
+  later fold. A fold of receipts whose rows hold 1 MB each keeps one receipt at a time, so its peak doesn't grow with
+  the batch's bytes.
 - **U28** Refusal codes: a fixture for each code's condition in 6.5, including `EXPIRED` against `GRANT_INVALID` and
   `NOT_YET` on one record, and use 10's read of m4: `GRANT_INVALID` before G1's expiry and `EXPIRED` after, since a
   candidate's chains include those of the memberships it matched through (6.5; the re-check's RS7).
+- **U29** The owner's own copies (P36, 6.3; revision 7). m3 is about Andy and Jenn. Andy's layer allows `recall`,
+  `read`, `inject_context`, `imprint` and `route` for his own agents inside his home. So that each refusal below falls
+  at Jenn's home and not at his (the re-check's RCS3), it also holds outside-home allows for the uses that would
+  otherwise fail there: `commons` narrowed by `requesters` to his agent working at an outside place Q and to an agent
+  b that acts for Lee and works inside his home, with named purposes and an end date (5.4), one naming m3 for
+  `recall`, `read`, `inject_context` and `imprint`, and one naming his store for `route` on roads and trails. Jenn's
+  layer is empty in one case, and she is unregistered in another.
+  - Qualifying uses are allowed: an `imprint` of m3 by an agent acting for Andy, with P and H inside his home and the
+    copy kept there; a named bulk `read` and a counted bulk `route` over trails that name m3, there. The decision
+    cites no record in Jenn's layer, and shows it with kind `co-subject`, verdict `silent` or `missing` (6.3).
+  - With any one condition false, each is refused as before, `NO_ALLOW` or `NO_LAYER` at `place:home/jenn`: the agent
+    is b; P is Q; H is outside his home; the use is an answer use inside the home (a `recall`, `read` or
+    `inject_context` of m3, or a `route` answer use on a trail that names m3). Each case first checks that Andy's
+    layer allows that use, so the test fails if the refusal comes from his layer.
+  - A memory from another person's store (the re-check's RC4). One of Andy's trails also names mj, a memory of Jenn's
+    store with Lee recorded on it. Andy's bulk `route` over it at home is refused: `NO_ALLOW` at `place:home/jenn`
+    with her layer empty, and `NO_LAYER` when she is unregistered. The trail's own decision qualifies; the `recall` on
+    mj doesn't, since its store's owner is Jenn.
+  - The `remember` guard's kept store (the re-check's RC4). An agent acting for Andy keeps m3, delivered from a copy
+    inside his home, into a store whose `stores` row places it outside his home: refused at `place:home/jenn`. Into a
+    store at his home: allowed. Into a store with no `stores` row: refused at `place:home/jenn` too.
+  - A place co-subject that is also in `anc(P)` keeps its consent layer (6.3): with that place's layer silent, a
+    qualifying use is refused there with `NO_ALLOW`.
+  - With a deny in Jenn's layer that matches, each qualifying use is refused, `DENIED` at `place:home/jenn`. A deny
+    dated to start later sets `until` and the horizon.
+  - A self-claimed co-subject, and a co-subject a kept copy carries (`added_by` = `copy:<source ref>`), are read the
+    same way.
+  - A retired co-subject's home refuses with `RETIRED`, and a ninth subject with `BOUND`.
+  - The kept copy carries Jenn (P25). A later answer use of it at home, and any use of it outside the home, is refused
+    at `place:home/jenn`.
+  - The oracle (section 17's opening) has P36, and agrees with `decide` on 500 seeded cases that include qualifying
+    uses.
 
 **End to end and conformance**
 
@@ -1965,7 +2353,10 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
   2026-12-15 with no source subjects (section 10's known limit; the final check after repair, AS1).
 - **F1** Fixtures: JSON files of a ledger state, uses and expected decisions (`allowed`, `cited`, `refusal`, `until`,
   `horizon`), which any implementation can run. Every use carries its copy h. The fixtures include bulk uses, among
-  them the trail evaluation on an imprint of section 6.4's last paragraph.
+  them the trail evaluation on an imprint of section 6.4's last paragraph. They also include that evaluation and
+  admission on an imprint kept in the owner's home whose memories carry a co-subject: allowed when the co-subject has
+  no layer, and refused with `DENIED` at their home when their layer denies (P36). `cited` shows that layer with kind
+  `co-subject`, as 6.3 fixes it.
 
 ## 18. Left to the builder
 
@@ -1973,7 +2364,7 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
 - CLI output formatting and the exact wording of errors, as long as each refusal names its rule. That is for the
   owner's CLI. What an agent that doesn't act for the owner is told of a refusal is fixed by 9.2 and section 10.
 - The random generators for the property tests, as long as they reach every op, every membership kind, joint places,
-  roots, pending notes, kept copies with chains of up to 4 links, and bulk uses.
+  roots, pending notes, kept copies with chains of up to 4 links, bulk uses, and uses that qualify under P36.
 
 ## 19. Open for Andy
 
@@ -1993,21 +2384,66 @@ seed, 500 cases each, as spec A does. Their oracle is a small brute-force evalua
 - **Two departures from the vision's principle 5**, "Every use of a memory leaves a receipt ... Every place publishes
   its rules". Home rules are private (9.4), and a store's own sessions recalling their own store leave no receipt
   (section 14, non-goals). Both follow principle 1, but they change principle 5's words. Andy decides.
+- **One departure from the vision's principle 1**, "Anything about a person moves only with that person's yes": P36
+  (6.3). Inside the owner's home, his `imprint` and his bulk uses that show nothing to any agent go ahead on a
+  co-subject's silence, and only that person's deny stops them. Andy's own answer decided it ("yes you can copy the
+  full store", A6), and the vision records that answer in its "Open for Andy", but the principle's words don't say
+  it. Rio Grande's call to list it here, as the departures from principle 5 are. Nothing more is asked of Andy.
 - **Who decides in the county steps** (section 14, step 3): the person's own machine, or the place's decider with the
   person's records disclosed to it.
 - **The license** (vision, principle 3). This spec adds only standard-library code to engram, which has no license
   yet.
-- **Memories that mention other people** (family, colleagues, patients). This spec's default: a recorded co-subject's
-  layer must allow every use (7.4), and a memory that mentions someone with no recorded co-subject moves on its
-  owner's yes alone. A name detector may only add co-subjects (section 14, step 4). The imprints spec keeps a stricter
-  default for copies that leave a machine: no memory with a recorded co-subject leaves, and the owner confirms the
-  rest (its D27 and section 20). The trail spec lists the same question (its section 14). Andy decides whether such
-  memories may move at all. Until then each spec keeps its default.
+- **Memories that mention other people** (family, colleagues, patients). **Answered 2026-10-26, and applied as P36.**
+  Andy, the owner, said: "yes you can copy the full store" (A6). The vision records it with Rio Grande's reading:
+  memories that mention other people may be copied too; they keep their recorded people as co-subjects; and any use
+  of them outside Andy's home still needs those people's yes (P12, P25).
+  - **What this spec does with it** (P36, end of 6.3; Rio Grande's call on the form). Revision 6 refused an imprint of
+    a memory with a recorded co-subject until that person said yes, even into the owner's own home (7.4). It refused
+    whole any bulk use that held one, such as an imprint batch or the trail evaluation's `read` batch (6.4). Revision
+    7 widens that, inside the owner's home only. There, the owner's `imprint`, and every bulk use that shows nothing
+    to any agent, read each co-subject's layer as a restriction layer, and so do the uses their `need` adds on his
+    own memories. A co-subject's silence, or a missing layer, passes, and their deny still refuses. Every use that
+    shows content to an agent, and every use outside the owner's home, still needs every subject's yes. A memory that
+    mentions someone with no recorded co-subject moves on its owner's yes alone, as before. A name detector may only
+    add co-subjects (section 14, step 4). P36 departs from the words of the vision's principle 1 (above).
+  - **The other two specs.** The imprints spec (revision 7) ships a memory with a recorded co-subject only in a copy
+    kept in the owner's home, with its co-subjects carried. It keeps the memory at home otherwise, and also when a
+    co-subject's layer on the owner's ledger denies a use the imprint needs (its D27, D43 and `denied(m)`). Its
+    section 8 ("Carried co-subjects in the meet") reads each carried co-subject's layer as a restriction layer under
+    P36, as this spec does. The trail spec (revision 9, section 7, "On a full-store imprint", and its section 14) says
+    that both specs follow P36. Every step-1 use at a station of a copy kept in the owner's home is a bulk use inside
+    that home. That answers that spec's ask (a) (its section 17). Three points remain (the re-check's RC1 and RC2):
+    - **Denies in step 1.** A person co-subject's layer is empty in step 1, since the CLI writes no other person's
+      layer (7.6). A place co-subject that the owner stewards can hold his deny, since the CLI writes that layer
+      (7.6), and P36 lets that deny refuse. The imprints spec's `denied(m)` keeps such a memory at home, so its
+      station never decides one.
+    - **The bound of 8 subjects.** A road or trail whose memories carry 8 or more distinct co-subjects has 9 or more
+      subjects (P24). P36 keeps 6.5's step 1, so this spec refuses the whole bulk use with `BOUND` (6.4, "Nothing else
+      is waived"), and so does the build (`engram/permissions.py:1630` on `permissions-core`). The imprints spec's
+      finite check doesn't test that bound (its section 8, "The bound of 8 subjects on roads and trails"), and its
+      gate holds every imprint with a carried co-subject until the specs are re-checked side by side (its section
+      18). This spec's answer for that re-check, unless Rio Grande rules otherwise: the station's check takes the
+      bound and refuses, as `decide` does. Lifting the bound for counted bulk uses would be a second widening, with
+      its own ruling.
+    - **What an imprint carries.** A copy carries its source's subjects as 6.3, item 1 reads them, through `copies`
+      too (7.4, "A copy held on another ledger"). As committed in `c795c59`, the imprints spec's `cosubjects(m)` read
+      `subjects` rows alone (its section 5.2), as the build's `Ledger.cosubjects` does
+      (`engram/permission_ledger.py:574-577`). So a memory that is itself a kept copy, whose source gained a
+      co-subject after the copy was made, would ship with no `imprint_subjects` row for that person. Only
+      `subjects_of` follows `copies` (`engram/permissions.py:1100-1118`). The fix is that spec's revision after the
+      re-check: the set is `subjects_of` at the plan, less the owner, and `denied(m)` and the bound of 8 read the
+      same set. The side-by-side re-check confirms it.
+
+    Lifting that spec's hold on approving an imprint whose `others.memories` is above 0 (its section 18) is for its
+    own revision, after those points. Under P36 a carried co-subject no longer refuses the trail evaluation on a copy
+    kept in the owner's home, unless that person denies.
   - **A fact for his answer, not a decision** (the re-check's RN8). For the same kind of yes, a memory leaving its
     owner's home, this spec asks less. Here a memory that mentions someone with no recorded co-subject moves on the
-    owner's yes alone. The imprints spec also makes the owner tick a box first: "Nothing I am sending is about
-    another person who hasn't agreed to share it, and none of it is patient or participant data" (its D27 and
-    section 8). This spec has no such confirmation for an outside-home allow. The question stays open.
+    owner's yes alone. For a copy kept outside the owner's home, the imprints spec also makes the owner tick a box
+    first: "Nothing I am sending is about another person who hasn't agreed to share it, and none of it is patient or
+    participant data" (its D27 and section 8). For a copy kept in his home, its revision 7 asks him to acknowledge,
+    with counts, that such memories are copied (its D27). This spec has no such confirmation for an outside-home
+    allow. The question stays open.
   - **A second fact, not a decision** (the check of revision 4, BS3). Once co-subjects can say yes (step 2), an
     allowed item's annotation names each allowing home (section 11). So an agent shown a memory about Andy and Jenn
     learns both homes from the line. Each said yes to the use, not necessarily to being named.
