@@ -2662,3 +2662,94 @@ def log_rows(home):
         return [dict(r) for r in con.execute("SELECT * FROM ledger_log ORDER BY seq")]
     finally:
         con.close()
+
+
+# ---------------------------------------------------------------- Task 31: U24's generated world (R23)
+
+from tests.permissions_budget_core import (AGENT, ALL, BULK_BUDGET_S, COLLECTIONS as BUDGET_COLLECTIONS, COPY, HOLDING_CHAIN,
+                                           HOLDING_PLACE, HOMES, JOINT, LEFT, PLACE, REBUILD_BUDGET_S, REQUESTER_CHAIN,
+                                           RIGHT, budget_refs, derived_trails, touches)
+
+# The 41 ledger layers of a decision: 8 homes, the two chains of 16 places, and the requester's restriction layer.
+LEDGER_LAYERS = tuple(home_of(h) for h in HOMES) + REQUESTER_CHAIN + HOLDING_CHAIN + (AGENT,)
+
+
+def _legacy_layers():
+    from permissions import LegacyLayer
+    return (LegacyLayer("publisher", lambda use, action: True), LegacyLayer("receiver", lambda use, action: True))
+
+
+LEGACY_LAYERS = _legacy_layers()           # the two legacy layers, callables that allow
+
+
+def _budget_records(w, layer, refs, trails, per_layer):
+    """`per_layer` effective records in one layer: 32 pass the pre-filter (8 allows each naming a collection, 8
+    naming 512 memories, 8 naming the lane `work`, 8 denies naming 64 refs outside the placed memories) and the
+    rest fail on exactly one of audience, requesters, actions and purposes, 56 each at 256 (R23). A selector
+    for a road or trail may name no collection, lane or memory (5.2), so with `trails` the last of the 8 memory
+    lists is one allow of kind `trail`, which is what lets a derived trail be allowed at all."""
+    ok = dict(audience=["commons"], kinds=["memory"])
+    for k in range(8):
+        w.allow(layer, collections=[BUDGET_COLLECTIONS[k]], **ok)
+    for k in range(8 - bool(trails)):
+        w.allow(layer, memories=refs[k * 512:(k + 1) * 512], **ok)
+    if trails:
+        w.allow(layer, audience=["commons"], kinds=["road", "trail"])
+    for k in range(8):
+        w.allow(layer, lanes=["work"], **ok)
+    for k in range(8):
+        w.deny(layer, memories=[f"mem:S/episode/ghost{k}-{j}" for j in range(64)], **ok)
+    fails = ({"audience": ["place:elsewhere"]}, {"requesters": ["agent:someone-else"]},
+             {"actions": ["route"]}, {"purposes": ["unrelated"]})
+    for i in range(per_layer - 32):
+        bad = dict(ok)
+        bad.update(fails[i % 4])
+        w.allow(layer, lanes=["work"] if i % 2 else "*", collections=[BUDGET_COLLECTIONS[i % 8]], **bad)
+
+
+def generated_world_parts(placements, layers=43, records_per_layer=256, universe=None, trails=0):
+    """(the World, the placements). `universe` memories (default: `placements`) of store S, each with Andy and 7
+    co-subjects and 3 lane notes (every other one `work`), in 8 collections; `trails` says the derived trails
+    `derived_trails(trails)` are to be allowed too; the requester's chain, the holding chain, the restriction layer and `records_per_layer`
+    records in each of the 41 ledger layers. Every placement is allowed in every layer."""
+    from permissions import Placement
+    if layers != 43:
+        raise ValueError("the generated world has 43 layers: 41 in the ledger and 2 legacy")
+    universe = placements if universe is None else universe
+    refs = budget_refs(max(universe, 8 * 512))
+    w = World()
+    for h in HOMES[1:]:
+        w.person(h)
+    prev = None
+    for chain in (REQUESTER_CHAIN, HOLDING_CHAIN):
+        prev = None
+        for p in chain:
+            w.place(p, parents=[prev] if prev else [], stewards=["andy"])
+            prev = p
+    w.agent(AGENT[len("agent:"):], REQUESTER_CHAIN[0], at=PLACE)
+    w.store("S", owner=ANDY, place=HOME)
+    w.store(STORE_HOUSE, owner=ANDY, place=HOLDING_PLACE)
+    for cid in BUDGET_COLLECTIONS:
+        w._add("collections", id=cid, owner=ANDY, created_seq=w._bump())
+    per = max(universe // 8, 1)
+    members = {cid: [] for cid in BUDGET_COLLECTIONS}
+    for i in range(universe):
+        members[BUDGET_COLLECTIONS[min(i // per, 7)]].append(refs[i])
+    for cid, objs in members.items():
+        w.collect(cid, objs)
+    for i in range(universe):
+        seq = w._bump()
+        for s in HOMES[1:]:
+            w._add("subjects", object=refs[i], subject=s, added_seq=seq, added_by=w.owner, self_claimed=0)
+        lane = "work" if i % 2 == 0 else "personal"
+        for j in range(3):
+            w._add("lane_notes", object=refs[i], lane=lane, at=w.start + j, seq=seq)
+    for layer in LEDGER_LAYERS:
+        _budget_records(w, layer, refs, trails, records_per_layer)
+    return w, [Placement(f"id{i}", refs[i], COPY) for i in range(placements)]
+
+
+def generated_world(placements, layers=43, records_per_layer=256, universe=None, trails=0):
+    """(the State, the placements) of `generated_world_parts`."""
+    w, placed = generated_world_parts(placements, layers, records_per_layer, universe, trails)
+    return w.state(), placed
