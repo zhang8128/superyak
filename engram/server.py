@@ -1902,6 +1902,12 @@ def remember(
     keep = _keep_decision(content, agent=_agent_ref(), now=_permission_now(), raw=raw_content)
     if keep.reply is not None:
         return keep.reply
+    if genome and keep.source is not None:
+        # Delivered content is kept only here, as a copy of its source (P25): a genome copy would carry none of
+        # the source's subjects, and genome sync would spread it (Tardis's T2).
+        if not keep.shadow:
+            return dict(_GENOME_REFUSED)
+        keep.would_refuse = True
 
     lane = _derive_lane(
         work,
@@ -1985,6 +1991,8 @@ def remember(
 
 
 _KEEP_REFUSED = {"error": "keeping this content is not allowed", "layer": "rejected"}
+_GENOME_REFUSED = {"error": "delivered content cannot be written to the genome: remember it without genome=True to "
+                            "keep it in this store", "layer": "rejected"}
 
 
 @dataclass

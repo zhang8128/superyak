@@ -2,8 +2,13 @@
 test names its finding."""
 from dataclasses import replace
 
-from permissions import Placement, Refusal, decide, eligible_set, parse_selector, selector_json
-from tests.permissions_support import HOME, M1, T, andy_world, home_use
+import server
+from permission_ledger import Ledger
+from permissions import Act, Placement, Refusal, decide, eligible_set, parse_selector, selector_json
+from storage import Storage
+from tests.permissions_support import (  # noqa: F401
+    ANDY, HOME, M1, M1_TEXT, T, andy_world, deliver_m1_through, home_use, keep_world, keep_world_with_imprint_allowed)
+from tests.test_recall_margins import engram_server_env  # noqa: F401
 
 
 # ---------------------------------------------------------------- T1: a grant behind a grant's envelope (P 6.5, L8)
@@ -60,3 +65,60 @@ def test_t1_an_eligible_set_ends_at_the_inner_grants_expiry():
     assert es.memory_ids == {"p1"} and es.horizon == T("2026-11-05")
     later = replace(home_use(M1, T("2026-11-02")), copy="store:house")
     assert not decide(s, replace(later, at=es.horizon)).allowed
+
+
+# ---------------------------------------------------------------- T2: a delivered item is never written to the genome
+
+GENOME_REFUSED = {"error": "delivered content cannot be written to the genome: remember it without genome=True to keep "
+                           "it in this store", "layer": "rejected"}
+
+
+def _genome_store():
+    server._genome_db_path.parent.mkdir(parents=True, exist_ok=True)
+    Storage(str(server._genome_db_path)).close()
+
+
+def _genome_writes():
+    g = Storage(str(server._genome_db_path))
+    try:
+        return g.conn.execute("SELECT count(*) FROM episodes WHERE episode_type = 'genome_write'").fetchone()[0]
+    finally:
+        g.close()
+
+
+def _set_gate(root, mode):
+    led = Ledger.open(root)
+    try:
+        led.perform(Act("gate", {"mode": mode}), actor=ANDY, channel="terminal", now=T("2026-11-02"))
+    finally:
+        led.close()
+
+
+def _episodes():
+    return server._storage.conn.execute("SELECT count(*) FROM episodes").fetchone()[0]
+
+
+def test_t2_remember_into_the_genome_after_a_delivery_is_refused_and_writes_nothing(
+        keep_world_with_imprint_allowed):
+    _genome_store()
+    deliver_m1_through(keep_world_with_imprint_allowed, "neighbors")
+    before = _episodes()
+    copies = len(Ledger.open_read_only(server.ENGRAM_HOME).state().copies)
+    assert server.remember(content=M1_TEXT, genome=True) == GENOME_REFUSED
+    assert _genome_writes() == 0 and _episodes() == before
+    assert len(Ledger.open_read_only(server.ENGRAM_HOME).state().copies) == copies
+    assert "episode_id" in server.remember(content=M1_TEXT)          # it can still be kept in this store
+
+
+def test_t2_under_shadow_the_genome_write_goes_on_and_is_reported(keep_world_with_imprint_allowed):
+    _genome_store()
+    _set_gate(keep_world_with_imprint_allowed.root, "shadow")
+    deliver_m1_through(keep_world_with_imprint_allowed, "neighbors")
+    out = server.remember(content=M1_TEXT, genome=True)
+    assert "episode_id" in out and out.get("would_refuse") is True and _genome_writes() == 1
+
+
+def test_t2_remember_into_the_genome_of_content_never_delivered_is_unchanged(keep_world_with_imprint_allowed):
+    _genome_store()
+    out = server.remember(content="a genome note nobody delivered to this agent", genome=True)
+    assert "episode_id" in out and "would_refuse" not in out and _genome_writes() == 1
