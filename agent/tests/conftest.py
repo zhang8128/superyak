@@ -155,16 +155,16 @@ class FakeStation:
         view = self.view(room)
         messages = view['messages']
         total = len(messages)
-        newest = max([self.seqs[m['id']] for m in messages], default=0)
+        newest = max([self.seqs.get(m['id'], 0) for m in messages], default=0)
         extra = {}
         if 'since' in page:
-            fresh = [m for m in messages if self.seqs[m['id']] > page['since']]
-            oldest = sorted(fresh, key=lambda m: self.seqs[m['id']])[:limit]
+            fresh = [m for m in messages if self.seqs.get(m['id'], 0) > page['since']]
+            oldest = sorted(fresh, key=lambda m: self.seqs.get(m['id'], 0))[:limit]
             more = len(fresh) > limit
             picked = [m for m in messages if m in oldest]
             begin = messages.index(picked[0]) if picked else total
             extra = {'more': more}
-            seq = self.seqs[oldest[-1]['id']] if more else newest
+            seq = self.seqs.get(oldest[-1]['id'], 0) if more else newest
         else:
             seq = newest
             if 'before' in page:

@@ -777,3 +777,60 @@ def test_station_rooms_shows_which_room_a_newer_room_replaces(station):
     assert listed[new]['replaces'] == old
     assert 'replaces' not in listed[old]
     assert listed[odd]['replaces'] == '(an id with unusual characters)'
+
+
+def read_queries(fake, tools, **args):
+    """The query strings the room was fetched with for one station_read (the resolving list call has none)."""
+    before = len(fake.requests)
+    call_text(tools, args)
+    return [r['query'] for r in fake.requests[before:] if r['path'] == f'/api/chats/{args["room"]}']
+
+
+def test_each_read_mode_asks_for_a_page(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn, f'note {n}') for n in range(12)]
+    tools, x = tools_for(fake), sent[3]['id']
+    assert read_queries(fake, tools, room=room, limit=7) == ['limit=7']
+    assert read_queries(fake, tools, room=room, oldest=True, limit=7) == ['at=0&limit=8']
+    assert read_queries(fake, tools, room=room, at=5, limit=7) == ['at=5&limit=8']
+    assert read_queries(fake, tools, room=room, start=x, limit=7) == [f'start={x}&limit=8']
+    assert read_queries(fake, tools, room=room, after=x, limit=7) == [f'after={x}&limit=8']
+    assert read_queries(fake, tools, room=room, message=x) == [f'start={x}&limit=1']
+    assert read_queries(fake, tools, room=room, thread=x) == ['']
+
+
+def test_paged_and_full_reads_print_the_same(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn if n % 2 else serenity, f'note {n}' + (' long ' * 900 if n == 7 else '')) for n in range(40)]
+    fake.brief(room, andy, 'The brief.')
+    tools = tools_for(fake)
+    modes = [{}, {'limit': 5}, {'oldest': True}, {'oldest': True, 'limit': 100}, {'at': 0}, {'at': 17, 'limit': 4}, {'at': 39},
+             {'start': sent[0]['id']}, {'start': sent[6]['id'], 'limit': 3}, {'after': sent[0]['id']}, {'after': sent[38]['id']},
+             {'after': sent[39]['id']}, {'message': sent[7]['id']}, {'message': sent[0]['id']}, {'thread': sent[7]['id']}]
+    for mode in modes:
+        fake.pages = True
+        paged = call_text(tools, {'room': room, **mode})
+        fake.pages = False
+        assert call_text(tools, {'room': room, **mode}) == paged, mode
+
+
+def test_errors_keep_todays_wording(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    for n in range(40):
+        fake.say(room, jenn, f'note {n}')
+    tools = tools_for(fake)
+    for key in ('start', 'after', 'message'):
+        result = call(tools, 'station_read', room=room, **{key: 'nope'})
+        assert result['isError'] is True and "No message 'nope' in this room" in result['content'][0]['text'], key
+    for at in (99, -1):
+        result = call(tools, 'station_read', room=room, at=at)
+        assert result['isError'] is True and 'at must be between 0 and 39' in result['content'][0]['text'], at
+
+
+def test_an_empty_room_reads_no_messages(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    assert call_text(tools_for(fake), {'room': room}) == f'Room Promenade ({room})\n\n(no messages)'

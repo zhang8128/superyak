@@ -64,34 +64,36 @@ def _block(room, members, m, chars, position):
             fence_message(members.get(m['author_id']), m['body'], chars, read_hint(room['id'], m['id'], position)))
 
 
-def render_one(room, messages, position):
-    """One message, whole: where every cut note points."""
-    return _block(room, authors(room), messages[position], MESSAGE_LIMIT, position)
+def render_one(room, messages, position, offset=0):
+    """One message, whole: where every cut note points. `offset` is the room position of messages[0]."""
+    return _block(room, authors(room), messages[position], MESSAGE_LIMIT, offset + position)
 
 
-def _on_from(room, messages, k):
-    """The call that reads on from messages[k], the first message not shown: by id, or by position."""
+def _on_from(room, messages, k, offset=0):
+    """The call that reads on from messages[k], the first message not shown: by id, or by room position."""
     if not plain_id(room['id']):
         return ''
     if plain_id(messages[k]['id']):
         return f'`station_read room={room["id"]} start={messages[k]["id"]}`'
-    return f'`station_read room={room["id"]} at={k}`'  # by position: a remote peer chooses its own ids
+    return f'`station_read room={room["id"]} at={offset + k}`'  # by position: a remote peer chooses its own ids
 
 
-def render_forward(room, messages, first, limit, chars, used=0):
+def render_forward(room, messages, first, limit, chars, used=0, offset=0, total=None):
     """Oldest first from messages[first]: at most `limit` messages and TOTAL_CHARS in all (at least one), then a
-    note naming the call that reads on, whenever any message follows. Following notes reaches every message."""
+    note naming the call that reads on, whenever any message follows. Following notes reaches every message.
+    `messages` may be a window of the room: `offset` is the room position of messages[0], `total` the room's count."""
+    total = len(messages) + offset if total is None else total
     members = authors(room)
     blocks, size, k, end = [], used + NOTE_ROOM, first, min(len(messages), first + limit)
     while k < end:
-        block = _block(room, members, messages[k], chars, k)
+        block = _block(room, members, messages[k], chars, offset + k)
         if blocks and size + len(block) + 2 > TOTAL_CHARS:
             break
         blocks.append(block)
         size, k = size + len(block) + 2, k + 1
-    left = len(messages) - k
+    left = total - offset - k
     if left:
-        call = _on_from(room, messages, k)
+        call = _on_from(room, messages, k, offset) if k < len(messages) else ''
         blocks.append(f'[{left} more message{"s" if left > 1 else ""} after these' + (f'; {call} shows them' if call else '') + ']')
     return '\n\n'.join(blocks) or '(no messages after that one)'
 
@@ -116,21 +118,22 @@ def brief_top(room):
     return '\n\n'.join(blocks) + '\n\n' if blocks else ''
 
 
-def render_newest(room, messages, limit, chars, used=0):
+def render_newest(room, messages, limit, chars, used=0, offset=0, total=None):
     """The newest `limit` messages that fit TOTAL_CHARS (at least one), oldest of them first, after a note saying
-    how many came before and the call that reads the room from its first message."""
+    how many came before and the call that reads the room from its first message. `messages` may be the room's
+    newest window: `offset` is the room position of messages[0]; `total` is accepted to match render_forward."""
     members = authors(room)
     blocks, size, j, floor = [], used + NOTE_ROOM, len(messages), max(0, len(messages) - limit)
     while j > floor:
-        block = _block(room, members, messages[j - 1], chars, j - 1)
+        block = _block(room, members, messages[j - 1], chars, offset + j - 1)
         if blocks and size + len(block) + 2 > TOTAL_CHARS:
             break
         blocks.append(block)
         size, j = size + len(block) + 2, j - 1
     blocks.reverse()
-    if j:
+    if offset + j:
         call = f'`station_read room={room["id"]} oldest=true`' if plain_id(room['id']) else ''
-        blocks.insert(0, f'[{j} earlier message{"s" if j > 1 else ""}' + (f'; {call} reads from the first' if call else '') + ']')
+        blocks.insert(0, f'[{offset + j} earlier message{"s" if offset + j > 1 else ""}' + (f'; {call} reads from the first' if call else '') + ']')
     return '\n\n'.join(blocks) or '(no messages)'
 
 
@@ -200,42 +203,66 @@ class Tools:
         return json.dumps([room_entry(r) for r in self.client.rooms()], indent=1)
 
     def station_read(self, args):
-        room = self.client.room(resolve_room(self.client, args['room']))
-        header = room_header(room)
-        messages, ids = room['messages'], [m['id'] for m in room['messages']]
-        if args.get('thread') is not None:
-            return header + self._thread(room, messages, ids, args)
+        room_id = resolve_room(self.client, args['room'])
+        if args.get('thread') is not None:  # a thread needs the whole room
+            room = self.client.room(room_id)
+            return room_header(room) + self._thread(room, room['messages'], [m['id'] for m in room['messages']], args)
         for key in ('message', 'start', 'after'):
             if args.get(key) is not None and not isinstance(args[key], str):
                 raise ValueError(f'{key} is a message id')
-            if args.get(key) and args[key] not in ids:
-                raise ValueError(f'No message {label(str(args[key]), 100)!r} in this room')
         if args.get('oldest') not in (None, False, True, 'true', 'false'):
             raise ValueError('oldest is true or false')
         oldest = args.get('oldest') in (True, 'true')
         at = args.get('at')
-        if at is not None:
-            if type(at) is not int:
-                raise ValueError('at is a whole number')
-            if not 0 <= at < len(messages):
-                raise ValueError(f'at must be between 0 and {len(messages) - 1}')
+        if at is not None and type(at) is not int:
+            raise ValueError('at is a whole number')
         if sum(x is not None and x is not False and x != '' for x in (args.get('message'), args.get('start'), args.get('after'), oldest or None, at)) > 1:
             raise ValueError('Use one of message, start, after, oldest or at')
-        if args.get('message'):
-            return header + render_one(room, messages, ids.index(args['message']))
         limit = max(1, min(100, int(args.get('limit') or 30)))
-        if args.get('start') or args.get('after') or oldest or at is not None:  # pages forward, oldest first
-            if args.get('start'):
+        forward = bool(args.get('start') or args.get('after') or oldest or at is not None)  # pages forward, oldest first
+        # Ask for the window shown; a forward read takes one more, which names the call that reads on.
+        if args.get('message'):
+            page = {'start': args['message'], 'limit': 1}
+        elif forward:
+            page = ({'start': args['start']} if args.get('start') else {'after': args['after']} if args.get('after')
+                    else {'at': max(at or 0, 0)})  # a negative at asks for 0; the total then refuses it below
+            page['limit'] = limit + 1
+        else:
+            page = {'limit': limit}
+        asked = args.get('message') or args.get('start') or args.get('after')
+        try:
+            room = self.client.room(room_id, **page)
+        except StationError as exc:  # the station's refusals, in the words this tool has always used
+            if exc.status == 404 and asked:
+                raise ValueError(f'No message {label(str(asked), 100)!r} in this room') from None
+            if exc.status == 400 and at is not None and exc.message.startswith('at must be between'):
+                raise ValueError(exc.message) from None
+            raise
+        header, messages = room_header(room), room['messages']
+        paged = room.get('paged') is True
+        offset, total = (room['first_position'], room['total']) if paged else (0, len(messages))
+        if at is not None and not 0 <= at < total:
+            raise ValueError(f'at must be between 0 and {total - 1}')
+        if not paged:  # an older station or a remote room sent the whole room: find the window here
+            ids = [m['id'] for m in messages]
+            if asked and asked not in ids:
+                raise ValueError(f'No message {label(str(asked), 100)!r} in this room')
+        if args.get('message'):
+            return header + render_one(room, messages, 0 if paged else ids.index(args['message']), offset)
+        if forward:
+            if paged:
+                first = 0
+            elif args.get('start'):
                 first = ids.index(args['start'])
             elif args.get('after'):
                 first = ids.index(args['after']) + 1
             else:
                 first = at or 0
             # The brief opens the room, so it opens a read from the first message; its length counts in the total.
-            top = header + (brief_top(room) if first == 0 else '')
-            return top + render_forward(room, messages, first, limit, max_chars(args), len(top))
+            top = header + (brief_top(room) if offset + first == 0 else '')
+            return top + render_forward(room, messages, first, limit, max_chars(args), len(top), offset, total)
         top = header + brief_top(room)
-        return top + render_newest(room, messages, limit, max_chars(args), len(top))
+        return top + render_newest(room, messages, limit, max_chars(args), len(top), offset, total)
 
     def _thread(self, room, messages, ids, args):
         """A message and every reply under it, oldest first, from this room only."""
