@@ -26,6 +26,11 @@ from lighthouse_protocol import content_digest
 from permissions import (MAX_COPY_CHAIN, MAX_SUBJECTS, Use, home_of, parse_object_ref, place_retired,
                          record_matches)
 
+# I 6.2's fixed DDL of the package-only table (D43). The build creates it, no migration does, and Task 32's reference
+# file uses this same string.
+IMPRINT_SUBJECTS_DDL = ("CREATE TABLE imprint_subjects (memory_id TEXT NOT NULL, layer TEXT NOT NULL, "
+                        "subject TEXT NOT NULL, PRIMARY KEY (memory_id, layer, subject))")
+
 # Every table of I 6.2, in its order.
 TABLE_RULES: dict[str, str] = {
     "episodes": "filtered",                 # the memories chosen; session_id scrubbed without route (D7)

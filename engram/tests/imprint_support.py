@@ -885,3 +885,79 @@ def digest_ledger(tmp_path: Path, s: Storage):
     add_subject(led, ref_of(s, "s1", "semantic"), "person:lee")
     add_subject(led, ref_of(s, "s1", "semantic"), "person:jenn")
     return led
+
+
+# Task 13: a package written from a source whose rowids have gaps and odd order.
+
+def gap_source(tmp_path: Path, name: str = "gaps") -> Storage:
+    """Work-lane episodes and semantics inserted out of creation order, with personal ones and a pruned row between
+    them, so the source's rowids have gaps and run in no order of ``(created_at, id)``."""
+    s = new_store(tmp_path, name)
+    ep(s, "e3", at="2026-10-25T12:00:00+00:00")
+    ep(s, "p1", lane="personal", at="2026-10-25T09:00:00+00:00")
+    ep(s, "e1", at="2026-10-25T10:00:00+00:00")
+    ep(s, "gone", at="2026-10-25T10:30:00+00:00")
+    ep(s, "e2", at="2026-10-25T10:00:00+00:00")
+    sem(s, "s2", sources=["e3"], at="2026-10-25T13:00:00+00:00")
+    sem(s, "q1", lane="personal", at="2026-10-25T08:00:00+00:00")
+    sem(s, "s1", sources=["e1", "e2"], at="2026-10-25T11:00:00+00:00")
+    for i, (layer, id) in enumerate([("episode", "e3"), ("episode", "p1"), ("episode", "e1"), ("episode", "e2"),
+                                     ("semantic", "s2"), ("semantic", "q1"), ("semantic", "s1")]):
+        vec(s, layer, id, seed=i + 20)
+    prune(s, "gone")
+    return s
+
+
+def before_identity_source(tmp_path: Path, name: str = "old") -> Storage:
+    """Episodes and no stored identity: the id its migration would assign is derived from them."""
+    s = gap_source(tmp_path, name)
+    s.conn.execute(f"DELETE FROM meta WHERE key IN ({', '.join('?' * len(store_identity.KEYS))})",
+                   store_identity.KEYS)
+    s.conn.commit()
+    return s
+
+
+def stored_instance_id(store: Storage) -> str | None:
+    return store_identity.read(store.conn).get("instance_id")
+
+
+def written_with_source(tmp_path: Path, *, source: str = "gaps", cosubjects: dict | None = None, home: bool = True):
+    """``(source store, package path)``: the package of the source's work lane, written by ``write_package``."""
+    from imprint import write_package
+    from imprint_filter import package_rows
+
+    s = {"gaps": gap_source, "before_identity": before_identity_source}.get(source)
+    s = s(tmp_path) if s else fork_of(tmp_path, gap_source(tmp_path, "parent"), "fork")
+    led = ledger(tmp_path / "home", owner="andy", store=s, cosubjects=cosubjects) if cosubjects else None
+    rows = package_rows(s.conn, selection(), terms(), ctx(s, ledger=led, home=home))
+    out = tmp_path / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "imprint.db"
+    ids, complete = store_identity.ancestry(s.conn)
+    write_package(rows, path, source_id=store_identity.effective_id(s.conn), source_ancestry=ids,
+                  source_complete=complete, imprint_id=str(uuid.uuid4()))
+    return s, path
+
+
+def written(tmp_path: Path) -> Path:
+    return written_with_source(tmp_path)[1]
+
+
+def vectors_of(where, layer: str, only=None) -> dict:
+    """``{id: raw embedding bytes}`` of a package path or a store, optionally only the ids in ``only``."""
+    own = not isinstance(where, Storage)
+    conn = _writable(where) if own else where.conn
+    try:
+        got = {r[0]: bytes(r[1]) for r in conn.execute(f"SELECT id, embedding FROM {layer}_vectors")}
+    finally:
+        if own:
+            conn.close()
+    return got if only is None else {k: v for k, v in got.items() if k in only}
+
+
+def shipped_ids(path: Path, layer: str) -> set:
+    conn = sqlite3.connect(path)
+    try:
+        return {r[0] for r in conn.execute(f"SELECT id FROM {layer}s")}
+    finally:
+        conn.close()
