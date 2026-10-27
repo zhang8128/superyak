@@ -118,6 +118,9 @@ PARTS_PER_MINUTE = 120
 REVIEW_WINDOW = 7 * 86400
 SIGN_INTERVAL = 60      # seconds between the lighthouse's passes over receipts a key-less command wrote
 KEEP_DAYS = 400         # D32: a deleted imprint's row, permission, receipts and tombstone
+DECLINED_KEEP_DAYS = 30    # D32: a declined or expired request's row
+SWEEP_BATCH = 100       # I 12, D42: the sweep reads rows 100 at a time
+HAND_OFF_GRACE = 600    # seconds an approved row may lack its directory while its hand-off runs after the commit
 MAX_REPORT_BYTES = 8 * 2**20
 COPY_BUFFER = 1024 * 1024
 MAX_MEMORIES = 100_000
@@ -1368,6 +1371,201 @@ class Imprints:
             return decide_use(json.loads(found['permission']), records, self._owner_layer_of(db, found['owner_id']),
                               status=found['status'], kind=kind, t=int(self.clock()),
                               operator=self._imprint_operator(db))
+
+    # The sweep (I 12, D32, D42): hourly, never waits for the job lock, one transaction per row
+
+    def _sweep_ids(self, where, params=()):
+        """The ids of rows matching `where`, read SWEEP_BATCH at a time by rowid with no transaction held between."""
+        last = 0
+        while True:
+            with self.transaction() as db:
+                rows = db.execute(f'SELECT rowid AS n, id FROM imprint_requests WHERE rowid>? AND ({where}) '
+                                  f'ORDER BY rowid LIMIT {SWEEP_BATCH}', (last, *params)).fetchall()
+            if not rows:
+                return
+            yield from (r['id'] for r in rows)
+            last = rows[-1]['n']
+
+    def station_imprint_sweep(self, *, root):
+        """I 12's list, in order; each step runs on its own and a step that fails is logged and named in `errors`
+        without stopping the others. `approved` rows are left to the sync, which ends them with the same receipts as
+        any admission's end. Returns the counts."""
+        out = {'ended': 0, 'windows': 0, 'expired': 0, 'sync': None, 'retried': 0, 'reconciled': 0, 'removed': 0,
+               'purged': 0, 'errors': []}
+        for name, step in (('ends', self._sweep_ends), ('expire', self._sweep_expire), ('sync', self._sweep_sync),
+                           ('retry', self._sweep_retry), ('reconcile', self._sweep_reconcile),
+                           ('retention', self._sweep_retention)):
+            try:
+                step(root, out)
+            except Exception as error:      # one step's failure must not stop the others
+                log.warning('imprint sweep step %s failed: %s', name, type(error).__name__)
+                out['errors'].append(name)
+        return out
+
+    def _sweep_ends(self, root, out):
+        for request_id in self._sweep_ids("status IN ('allowed','received','admitted') AND permission IS NOT NULL"):
+            with self.transaction() as db:
+                found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+                if found is None or found['permission'] is None or found['status'] not in ('allowed', 'received',
+                                                                                          'admitted'):
+                    continue
+                records = self._receipt_records(db, request_id)
+                now = int(self.clock())
+                if now >= effective_end(json.loads(found['permission']), records):
+                    reason = 'ended'
+                    if not any(r['event'] == 'ended' for r in records):
+                        self._append_imprint_receipt(db, request_id, 'ended', None, {}, sign=False)
+                elif found['status'] == 'allowed' and found['expires'] <= now:
+                    reason = 'upload-expired'
+                elif found['status'] == 'received' and found['expires'] <= now:
+                    reason = 'review-expired'
+                else:
+                    continue
+            self._end_imprint(request_id, reason=reason, actor_id=None, root=root, withdrawn=False)
+            out['ended' if reason == 'ended' else 'windows'] += 1
+
+    def _sweep_expire(self, root, out):
+        """A `requested` row past its 10 minutes becomes `expired`; the staging of every declined or expired request
+        goes (a request's contents are removed within the hour)."""
+        for request_id in self._sweep_ids("status IN ('requested','declined','expired')"):
+            with self.transaction() as db:
+                found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+                if found is None:
+                    continue
+                status, now = found['status'], int(self.clock())
+                if status == 'requested' and found['expires'] <= now:
+                    db.execute("UPDATE imprint_requests SET status='expired', code_hash=NULL, ended_at=? WHERE id=?",
+                               (now, request_id))
+                    status = 'expired'
+                    out['expired'] += 1
+                if status in ('declined', 'expired'):
+                    shutil.rmtree(self.data_dir / 'imprints' / request_id, ignore_errors=True)
+
+    def _sweep_sync(self, root, out):
+        out['sync'] = self.station_imprint_sync(root=root)
+
+    def _sweep_retry(self, root, out):
+        for request_id in self._sweep_ids("status='deleting'"):
+            with self.transaction() as db:
+                found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+                if found is None or found['status'] != 'deleting':
+                    continue
+                records = self._receipt_records(db, request_id)
+                now = int(self.clock())
+            events = {r['event']: r for r in records}
+            terms = [r['detail'].get('term') for r in records if r['event'] == 'failed']
+            actor = None
+            if 'withdrawn' in events:
+                reason, actor = 'withdrawn', events['withdrawn']['actor_id']
+            elif 'ended' in events or 'end' in terms:
+                reason = 'ended'
+            elif 'failed' in events:
+                reason = 'failed'
+            elif 'approved' not in events and found['expires'] <= now:
+                reason = 'upload-expired' if 'received' not in events else 'review-expired'
+            else:
+                reason = 'station'
+            result = self._end_imprint(request_id, reason=reason, actor_id=actor, root=root,
+                                       withdrawn='withdrawn' in events)
+            out['retried'] += result['status'] == 'deleted'
+
+    def _sweep_reconcile(self, root, out):
+        """After a restore (I 12): tombstones win; a row whose files are gone is closed; a directory no live row owns
+        is removed."""
+        live = ','.join(f"'{s}'" for s in LIVE_STATUSES)
+        for request_id in self._sweep_ids(f'status IN ({live})'):
+            with self.transaction() as db:
+                found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+                if found is None or found['status'] not in LIVE_STATUSES:
+                    continue
+                base = self._imprint_folders(found, root)[0]
+                now = int(self.clock())
+                if base is not None and os.path.lexists(base / 'tombstones' / f'{found["imprint_id"]}.json'):
+                    db.execute("UPDATE imprint_requests SET status='deleted', ended_at=? WHERE id=?", (now, request_id))
+                    out['reconciled'] += 1
+                    continue
+                if found['status'] == 'deleting':
+                    continue
+                if found['status'] in ('requested', 'allowed', 'received'):
+                    gone = not (self.data_dir / 'imprints' / request_id).is_dir()
+                else:
+                    held_since = found['decided_at'] if found['decided_at'] is not None else found['created']
+                    gone = base is not None and not (base / found['imprint_id']).is_dir() \
+                        and now - held_since >= HAND_OFF_GRACE
+                if not gone:
+                    continue
+                if found['permission'] is None:
+                    db.execute("UPDATE imprint_requests SET status='expired', code_hash=NULL, ended_at=? WHERE id=?",
+                               (now, request_id))
+                    shutil.rmtree(self.data_dir / 'imprints' / request_id, ignore_errors=True)
+                    out['reconciled'] += 1
+                    continue
+                try:
+                    files = self._remove_imprint(db, found, reason='missing', actor_id=None, root_flag=root)
+                except _RemovalFailed:
+                    db.execute("UPDATE imprint_requests SET status='deleting' WHERE id=?", (request_id,))
+                    continue
+                self._append_imprint_receipt(db, request_id, 'deleted', None,
+                                             {'reason': 'missing', 'files': files, 'limits': KNOWN_LIMITS}, sign=False)
+                if base is not None:
+                    self._write_tombstone(base, found, db)
+                db.execute("UPDATE imprint_requests SET status='deleted', ended_at=?, delete_reason='missing' "
+                           "WHERE id=?", (now, request_id))
+                out['reconciled'] += 1
+        self._sweep_orphans(Path(root), out)
+
+    def _sweep_orphans(self, root, out):
+        """Removes an imprint or state directory no live row owns, listing the root one entry at a time and skipping
+        `tombstones/` and `.jobs.lock`. Only a name shaped like an imprint id is touched. A deleted receipt (reason
+        `restore`) is written when the station holds a permission for it."""
+        if not root.is_dir():
+            return
+        with os.scandir(root) as entries:
+            for entry in entries:
+                matched = re.fullmatch(f'({_ANY_UUID.pattern})(\\.state)?', entry.name)
+                if matched is None or not os.path.lexists(entry.path):
+                    continue
+                with self.transaction() as db:
+                    found = db.execute('SELECT * FROM imprint_requests WHERE imprint_id=?', (matched[1],)).fetchone()
+                    if found is not None and found['status'] in LIVE_STATUSES:
+                        continue
+                    if found is None or found['permission'] is None:
+                        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                            if entry.is_symlink():
+                                os.unlink(entry.path)
+                            continue
+                        _restore_write(entry.path)
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                        out['removed'] += 1
+                        continue
+                    here = {'id': found['id'], 'imprint_id': found['imprint_id'], 'imprints_root': str(root)}
+                    try:
+                        files = self._remove_imprint(db, here, reason='restore', actor_id=None, root_flag=root)
+                    except _RemovalFailed:
+                        continue
+                    self._append_imprint_receipt(db, found['id'], 'deleted', None,
+                                                 {'reason': 'restore', 'files': files, 'limits': KNOWN_LIMITS},
+                                                 sign=False)
+                    out['removed'] += 1
+
+    def _sweep_retention(self, root, out):
+        """D32: a declined or expired request's row goes 30 days after it ended, a deleted imprint's row, permission,
+        receipts and tombstone 400 days after `deleted`."""
+        for request_id in self._sweep_ids("status IN ('declined','expired','deleted')"):
+            with self.transaction() as db:
+                found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+                if found is None:
+                    continue
+                ended = next(v for v in (found['ended_at'], found['decided_at'], found['created']) if v is not None)
+                keep = KEEP_DAYS if found['status'] == 'deleted' else DECLINED_KEEP_DAYS
+                if int(self.clock()) - ended <= keep * 86400:
+                    continue
+                for base in {b for b in (found['imprints_root'], root) if b is not None}:
+                    (Path(base) / 'tombstones' / f'{found["imprint_id"]}.json').unlink(missing_ok=True)
+                shutil.rmtree(self.data_dir / 'imprints' / request_id, ignore_errors=True)
+                db.execute('DELETE FROM imprint_receipts WHERE request_id=?', (request_id,))
+                db.execute('DELETE FROM imprint_requests WHERE id=?', (request_id,))
+                out['purged'] += 1
 
     # Admission on the station (I 10, D16, D39, R24, R25)
 

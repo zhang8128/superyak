@@ -320,6 +320,9 @@ def main(argv=None):
     sync.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     sync.add_argument('--as', dest='person', help='The operator (receipts name no one; accepted so make passes one line)')
     sync.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
+    sweep = commands.add_parser('station-imprint-sweep', help='Trusted local: end, expire, retry, reconcile after a restore and remove what the retention ended (hourly)')
+    sweep.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    sweep.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
     listing = commands.add_parser('station-imprints', help='Trusted local: list the imprints and what admission found')
     listing.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     listing.add_argument('--as', dest='person', help='The operator (accepted so make passes one line)')
@@ -432,6 +435,13 @@ def main(argv=None):
         elif args.command == 'station-imprint-sync':
             result = Store(args.data_dir, signing=False).station_imprint_sync(root=args.imprints_dir)
             print(f'Imprint admissions: {result["admitted"]} admitted, {result["failed"]} failed and deleted, {result["waiting"]} waiting; {result["finished"]} uses finished.')
+        elif args.command == 'station-imprint-sweep':
+            result = Store(args.data_dir, signing=False).station_imprint_sweep(root=args.imprints_dir)
+            print(f'Imprint sweep: {result["ended"]} ended, {result["windows"]} past a window, {result["expired"]} requests expired, '
+                  f'{result["retried"]} removals retried, {result["reconciled"]} reconciled, {result["removed"]} stray directories removed, '
+                  f'{result["purged"]} rows past their retention removed.')
+            if result['errors']:
+                parser.exit(1, f'station-imprint-sweep: these steps failed (see the log): {", ".join(result["errors"])}\n')
         elif args.command == 'station-imprints':
             store = Store(args.data_dir, signing=False)
             if args.resolve is not None:
