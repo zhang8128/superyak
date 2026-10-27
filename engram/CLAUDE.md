@@ -240,7 +240,8 @@ payloads down to the same metadata-only representation.
 (`imprint.py`: plan, request, send, verify, use; filter in `imprint_filter.py`, leak and admission checks in
 `imprint_checks.py`). A copy kept in the owner's home may carry memories that name other people, as co-subjects the
 owner acknowledges with counts. Each imprint process stays under 512 MiB resident on the Pi, and each unit it adds
-carries `MemoryMax=512M`. One imprint job (an admission or a use) runs at a time (`flock` on `.jobs.lock`). Nothing
+carries `MemoryMax=512M`, `LimitDATA=512M` and `OPENBLAS_NUM_THREADS=1`; the Pi's user manager has no memory
+controller, so `LimitDATA` is the cap that holds there (spec 14.1). One imprint job (an admission or a use) runs at a time (`flock` on `.jobs.lock`). Nothing
 loads an embedder. Imprint files are never opened with `Storage(path)`. Spec:
 docs/superpowers/specs/2026-10-25-store-imprint-design.md.
 

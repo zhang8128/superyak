@@ -1594,7 +1594,8 @@ requests, read from its `request.json`:
 4. The Makefile then starts admission as a detached user unit and returns at once (D29):
 
        systemd-run --user --unit=superyak-imprint-admit-<imprint id> --collect \
-           -p MemoryMax=512M -p MemorySwapMax=0 -p RuntimeMaxSec=3600 \
+           -p MemoryMax=512M -p MemorySwapMax=0 -p LimitDATA=512M --setenv=OPENBLAS_NUM_THREADS=1 \
+           -p RuntimeMaxSec=3600 -p TimeoutStopSec=60 \
            flock -n <root>/.jobs.lock make -C <repository> station-imprint-admit ID=<imprint id>
 
    The unit is named by the full imprint id, so two imprints whose short ids match never share a unit (the re-check's
@@ -2056,7 +2057,8 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
   does (section 10), with calibration's limits:
 
       systemd-run --user --unit=superyak-imprint-use-<imprint id> --collect \
-          -p MemoryMax=512M -p MemorySwapMax=0 -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 \
+          -p MemoryMax=512M -p MemorySwapMax=0 -p LimitDATA=512M --setenv=OPENBLAS_NUM_THREADS=1 \
+          -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 \
           [--setenv=ENGRAM_EMBEDDER_SOCKET=<path>] \
           flock -n <root>/.jobs.lock \
           make -C <repository> station-imprint-use-run ID=<imprint id> USE=trail-evaluation [LANE=<lane>]
@@ -2174,7 +2176,7 @@ The effective end is the earliest of the records' `valid_until` and every shorte
   restore that brings such a row back has it removed again at the next sweep.
 
 The sweep's service carries `MemoryMax=512M` and `MemorySwapMax=0`, as the backup's carries `MemoryMax=512M`
-(`peer/systemd/superyak-backup.service:14`) (D42). It reads rows in batches of 100, hashes each file 1 MiB at a time,
+(`peer/systemd/superyak-backup.service:14`), and `LimitDATA=512M` with `OPENBLAS_NUM_THREADS=1` (D42, 14.1). It reads rows in batches of 100, hashes each file 1 MiB at a time,
 and lists the imprints root one entry at a time, skipping `tombstones/` and `.jobs.lock`. It never takes the job lock
 (section 10).
 
@@ -2393,6 +2395,17 @@ holds the system, the lighthouse, the shared embedder when it runs, and one impr
 process this work adds has a design peak of 384 MiB at the bounds, which the Pi tests assert (section 16). That leaves
 128 MiB of its unit's 512 MiB cap for the page cache that SQLite reads through, which the kernel charges to the unit
 and reclaims under pressure, and for slack.
+
+**The cap that holds on this kernel** (the final review's I4; Rio Grande's call). The Pi's user manager has no memory
+controller (its `cgroup.controllers` lists only `cpu pids`), so `MemoryMax=512M` is accepted and does nothing there.
+Every unit this work adds therefore also sets `LimitDATA=512M`: each process's private writable memory, reserved or
+touched, is held at 512 MiB, and an allocation past it fails in that process alone, with no OOM kill. It counts what a
+resident figure leaves out. numpy's and scipy's OpenBLAS each reserve 32 MiB of buffers per thread and an 8 MiB stack
+for each extra one: 430 MiB after the imports alone on the Pi's 4 cores (measured 2026-10-27), and the lane and core
+filtrations then raised `MemoryError`. So the units, admission's re-exec and the trail child set
+`OPENBLAS_NUM_THREADS=1`, which leaves 185 MiB after the imports. One admission at its bounds then ran every analysis
+under the data limit, peaking at 284.4 MiB resident in 294 s. The Pi tests run each child under the same data limit
+and the same variable.
 
 **What a process starts with.** Measured on this Pi on 2026-10-26, with its system Python 3.11: the interpreter with
 `sqlite3` imported peaked at 13,712 KiB (13.4 MiB), and with numpy 1.24.2 imported too at 30,832 KiB (30.1 MiB). Engram
