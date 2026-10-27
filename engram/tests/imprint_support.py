@@ -15,7 +15,7 @@ from pathlib import Path
 import store_identity
 import store_reader
 from storage import Storage
-from tests.permissions_support import T  # noqa: F401  (re-exported)
+from tests.permissions_support import T, World  # noqa: F401  (T re-exported)
 from tests.test_store_identity import build_schema27_store
 
 GENOME_PARENT = "3f2b8c1e-5a4d-4e6f-9b7a-1c2d3e4f5a6b"
@@ -1538,3 +1538,158 @@ def exactly_one_target_answers(path: Path, only=None) -> dict:
 def kept_recalls(built) -> set:
     """The recall ids of the package's recall rows."""
     return {rid for rid, _, _ in _recall_rows(built.dir / "imprint.db")}
+
+
+# ---------------------------------------------------------------- Task 28: P's meet over the ceiling fixture
+
+_AGENT = "agent:station-imprints"
+_CALIB, _TRAILEV = "calibration", "trail-evaluation"
+_CEILING_C = frozenset({("recall", _CALIB), ("read", _CALIB), ("imprint", _CALIB), ("recall", _TRAILEV),
+                        ("read", _TRAILEV), ("imprint", _TRAILEV), ("route", _TRAILEV)})
+_STATUS_FOR = {"admission": "approved", "trail-evaluation": "admitted"}
+_BATCH = 512
+_MEMORIES = 40
+_TOUCHES = {"road": {"r2": 2}, "trail": {"t3": 3, "t40": 40}}
+
+
+def _memories_of(source: str) -> tuple:
+    return tuple(f"mem:{source}/episode/m{i}" for i in range(1, _MEMORIES + 1))
+
+
+def _derived_of(source: str) -> dict:
+    """R(I) of every copy of `source` in the world: its roads and trails, each with the memories it names. Every
+    memory a road or trail names is in objects(I)."""
+    mem = _memories_of(source)
+    return {f"{kind}:{source}/{name}": mem[:n] for kind, names in _TOUCHES.items() for name, n in names.items()}
+
+
+def _effective_end(permission: dict, receipts: list) -> int:
+    return min([r["valid_until"] for r in permission["records"]]
+               + [x["detail"]["valid_until"] for x in receipts if x["event"] == "shortened"])
+
+
+def ceiling_world(fixture: dict):
+    """(State, ceiling) for the ceiling fixture: P 5.5's tables built with `World`. Persons `sam` and `andy` (the
+    operator), `agent:station-imprints` acting for andy in `place:home/andy`, each source store with its owner, each
+    imprint a store held at the operator's home, its collection and members, and every inner record in its owner's
+    home layer (a record the owner withdrew is revoked; the owner's shortenings cut `valid_until`, as a replacement
+    does; the ship's act on the ceiling only). The ceiling is I 8's items 1 to 5, for the layer kept outside a
+    ledger for the operator's home (P 6.1; XM1), so the operator's own records add nothing there."""
+    imprints = fixture["imprints"]
+    start = min(i["permission"]["created"] for i in imprints.values())
+    w = World(owner=fixture["operator"], start=start)
+    operator = f"person:{fixture['operator']}"
+    home = f"place:home/{fixture['operator']}"
+    owners = {i["permission"]["owner"] for i in imprints.values()} - {operator}
+    for owner in sorted(owners):
+        w.person(owner)
+    w.agent("station-imprints", home, at=home)
+    sources = {i["permission"]["source_instance_id"]: i["permission"]["owner"] for i in imprints.values()}
+    for source, owner in sorted(sources.items()):
+        w.store(source, owner=owner, place=f"place:home/{owner.split(':', 1)[1]}")
+    info = {}
+    for name, imp in imprints.items():
+        p, receipts = imp["permission"], imp["receipts"]
+        source, owner_id = p["source_instance_id"], p["owner_id"]
+        w.store(p["imprint_id"], owner=operator, place=home, imprint_of=source)
+        w.now = p["created"]
+        collection = next(r["selector"]["objects"]["collections"][0] for r in p["records"]
+                          if r["selector"]["objects"]["collections"] != "*")
+        w.collect(collection, _memories_of(source))
+        withdrawn_by_owner = [r for r in receipts if r["event"] == "withdrawn" and r["actor_id"] == owner_id]
+        cut = [r["detail"]["valid_until"] for r in receipts
+               if r["event"] == "shortened" and r["actor_id"] == owner_id]
+        for r in p["records"]:
+            sel, obj = r["selector"], r["selector"]["objects"]
+            rid = w.allow(r["layer"], audience=sel["audience"], requesters=sel["requesters"], stores=obj["stores"],
+                          kinds=obj["kinds"], collections=obj["collections"], actions=sel["actions"],
+                          purposes=sel["purposes"], valid_from=r["valid_from"],
+                          valid_until=min([r["valid_until"]] + cut))
+            if withdrawn_by_owner:
+                w.now = withdrawn_by_owner[0]["at"]
+                w.revoke(rid)
+                w.now = p["created"]
+        info[p["imprint_id"]] = dict(permission=p, receipts=receipts, source=source,
+                                     objects=frozenset(_memories_of(source)), derived=_derived_of(source),
+                                     route=any("route" in r["selector"]["actions"] for r in p["records"]),
+                                     end=_effective_end(p, receipts),
+                                     start=min(r["valid_from"] for r in p["records"]),
+                                     withdrawn=[x["at"] for x in receipts if x["event"] == "withdrawn"])
+    state = w.state()
+
+    def ceiling(sub, action) -> str:
+        """I 8, items 1 to 5, for the uses of every copy at the station."""
+        imp = info.get(sub.copy.rpartition("/")[2])
+        if imp is None or sub.requester != _AGENT or sub.place != home:                         # item 1
+            return "silent"
+        p, x, purpose, t = imp["permission"], action, sub.purpose, sub.at
+
+        def holds(kind: str, objects: dict) -> bool:
+            for r in p["records"]:
+                sel = r["selector"]
+                if kind in sel["objects"]["kinds"] and x in sel["actions"] and purpose in sel["purposes"]:
+                    return sub.obj in objects
+            return False
+
+        if not (holds("memory", imp["objects"]) or holds("road", imp["derived"]) or holds("trail", imp["derived"])):
+            return "silent"                                                                     # item 2
+        if (x, purpose) not in _CEILING_C:                                                      # item 3
+            return "silent"
+        if not (imp["start"] <= t < imp["end"]):                                                # item 4
+            return "silent"
+        if any(t >= at for at in imp["withdrawn"]):                                             # item 5
+            return "silent"
+        return "allow"
+
+    ceiling.info = info
+    return state, ceiling
+
+
+def status_ok(fixture: dict, case: dict) -> bool:
+    """The status conjunct of I 8's rule `allowed(k, t) <=> status(I) in Status(k) and Need(k, t) in meet`; the
+    permissions spec has no status, so the test applies it beside `decide_bulk`."""
+    status = case.get("status", fixture["imprints"][case["imprint"]]["status"])
+    return status == _STATUS_FOR[case["kind"]]
+
+
+def _batches(objects) -> list:
+    objects = list(objects)
+    return [tuple(objects[i:i + _BATCH]) for i in range(0, len(objects), _BATCH)] or [()]
+
+
+def _bulk(fixture: dict, name: str, objects, action: str, purpose: str, at: int, *, named: bool, names=lambda o: ()):
+    from permissions import BulkUse
+
+    p = fixture["imprints"][name]["permission"]
+    return BulkUse(requester=_AGENT, place=f"place:home/{fixture['operator']}",
+                   objects=tuple(objects), copy=f"imprint:{p['station']}/{p['imprint_id']}", action=action,
+                   purpose=purpose, at=at, named=named, names=names)
+
+
+def bulk_uses_of(fixture: dict, case: dict) -> list:
+    """Need(kind) as P's bulk uses (I 8, "Bulk uses"): the memories named, in batches of 512, and R(I) counted. R(I)
+    is every road and trail of the source in the world, whether or not the copy has `route`, so a copy without
+    `route` is refused by its own ceiling."""
+    name, at = case["imprint"], case["t"]
+    p = fixture["imprints"][name]["permission"]
+    memories, derived = _memories_of(p["source_instance_id"]), _derived_of(p["source_instance_id"])
+    route = any("route" in r["selector"]["actions"] for r in p["records"])
+    uses = []
+    if case["kind"] == "admission":
+        uses += [_bulk(fixture, name, b, "imprint", _CALIB, at, named=True) for b in _batches(memories)]
+        if route:
+            uses += [_bulk(fixture, name, b, "read", _TRAILEV, at, named=True) for b in _batches(memories)]
+            uses.append(_bulk(fixture, name, derived, "imprint", _TRAILEV, at, named=False, names=derived.__getitem__))
+    else:
+        uses += [_bulk(fixture, name, b, "read", _TRAILEV, at, named=True) for b in _batches(memories)]
+        uses.append(_bulk(fixture, name, derived, "route", _TRAILEV, at, named=False, names=derived.__getitem__))
+    return uses
+
+
+def evaluation_route_bulk(fixture: dict, name: str, *, touches: int, at: int | None = None):
+    """The counted bulk `route` use of a trail evaluation on one trail that names `touches` memories."""
+    source = fixture["imprints"][name]["permission"]["source_instance_id"]
+    derived = _derived_of(source)
+    trail = next(ref for ref in derived if ref.startswith("trail:") and len(derived[ref]) == touches)
+    return _bulk(fixture, name, (trail,), "route", _TRAILEV, fixture["now"] if at is None else at, named=False,
+                 names=derived.__getitem__)
