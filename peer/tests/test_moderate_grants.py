@@ -261,3 +261,45 @@ def test_appointment_and_end_notices_pass_names_through_safe_line(city):
     assert bodies[1] == "Andy ended (at)venus hello's moderation of this room." and not any('@' in b for b in bodies)
     with c.store.transaction() as db:
         assert db.execute('SELECT count(*) FROM mentions').fetchone()[0] == 0
+
+
+import shutil
+import sqlite3
+from contextlib import closing
+from test_restore import reconcile as run_reconcile, staged
+
+
+def logged(path):
+    with closing(sqlite3.connect(path)) as db:
+        return db.execute('SELECT grant_id, change, member_id FROM member_changes ORDER BY created, rowid').fetchall()
+
+
+def test_a_restore_copies_the_act_log_so_a_moderators_day_does_not_reset(city, tmp_path, capsys):
+    from test_moderator_acts import add, drop
+    c = city
+    grant = moderate(c.store, c.andy, c.jenn, c.room, budget=5)
+    copy = staged(tmp_path, c.store)                                   # A: the grant, no changes yet
+    jenn = login(c.app, 'jenn')
+    for member in (c.doctor, c.rio):                                    # B: two changes in a room the copy has
+        assert drop(jenn, c.room, member['id']).status_code == 200
+    c.store.remove_participant(c.andy['id'], c.room, c.odo['id'])       # the owner's own (ruling 15)
+    assert add(jenn, c.room, c.tardis['id']).status_code == 201         # its new room isn't in the copy
+    code, out, err = run_reconcile(capsys, '--db', copy, '--replaced', c.store.db_path)
+    assert code == 0, err
+    assert 'member changes added (3)' in out
+    assert logged(copy) == [(grant, 'remove', c.doctor['id']), (grant, 'remove', c.rio['id']), (None, 'remove', c.odo['id'])]
+    code, out, err = run_reconcile(capsys, '--db', copy, '--replaced', c.store.db_path)
+    assert code == 0 and 'member changes added (0)' in out and len(logged(copy)) == 3
+
+
+def test_a_replaced_file_without_the_act_log_is_treated_as_absent(city, tmp_path, capsys):
+    c = city
+    moderate(c.store, c.andy, c.jenn, c.room)
+    copy = staged(tmp_path, c.store)
+    replaced = copy.parent / 'peer.sqlite3'
+    shutil.copyfile(c.store.db_path, replaced)
+    with closing(sqlite3.connect(replaced)) as db:
+        db.execute('DROP TABLE member_changes')
+        db.commit()
+    code, out, err = run_reconcile(capsys, '--db', copy, '--replaced', replaced)
+    assert code == 0 and 'The replaced file was treated as absent (it lacks tables or columns the copy has: ' in out

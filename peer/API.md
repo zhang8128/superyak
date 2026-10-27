@@ -394,7 +394,9 @@ the same transaction.
 
 **Restoring.** `station-restore-reconcile` revokes, in the staged copy, each grant revoked in the replaced file (with
 its time, person and reason) and each grant the replaced file lacks (reason `restored`), and adds the replaced file's
-budget uses for grants in both files, matched on `(grant_id, ticket_id)`. Without a usable replaced file it revokes
+budget uses for grants in both files, matched on `(grant_id, ticket_id)`, and the replaced file's act log
+(`member_changes`): each row this file lacks, whose grant (if any) is in both files and whose room, new room and
+actor (if any) are here, so a moderator's budget and the owner's removals survive. Without a usable replaced file it revokes
 every grant with reason `restored` and no person. The report lists each revoked grant by short id, issuer and grantee,
 and why. The station signs those revocations at its next start. A grant made after the copy is gone; its issuer makes
 it again.
