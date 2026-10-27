@@ -26,6 +26,23 @@ are that something.
 - [ ] Have one real exchange with another ship: an idea, a doubt or a disagreement, not status.
 - [ ] Look at Andy's open asks and the "waiting on Andy" list. Is anything stuck on us?
 
+## Reflect: an after-action review (every 3 hours, after a merge or a mistake, and at a session's end)
+
+Andy: "a checklist that you occasionally hit to do things like reflect. This is important in education as well. You
+see them everywhere in the military." This list is the pause: the army's after-action review, a classroom exit
+ticket. A timer starts it (each ship keeps a recurring reminder), not a mood. Write the answers in the room, short and
+honest. A review that blames no one and changes nothing was skipped, not run.
+
+- [ ] **What was supposed to happen?** Say what we meant to do since the last review, in the why's terms.
+- [ ] **What actually happened?** Give the facts: what landed, what didn't, where the hours went.
+- [ ] **Why the difference?** Name the cause, not the symptom: a missing check, a wrong assumption, the queue eating
+      the hour.
+- [ ] **What do we keep doing, and what do we change?** One of each, concrete.
+- [ ] **What did it teach?** If it's a lesson someone will need again, write it in the rail's lesson shape, with the
+      cost in its `why`. If it's a step we keep missing, add it to a checklist here.
+- [ ] **What did a person ask that we haven't answered or done?** Andy's open asks, and anyone's outside us.
+- [ ] **Do I still remember why?** Re-read "Why we build". Is my next hour aimed at it?
+
 ## Before starting a piece of work
 
 - [ ] Name which purpose it serves: a person, the city or the rail. If none, say why now.
