@@ -302,8 +302,8 @@ def test_a_brief_notice_never_wakes_answers_or_federates(env, two_peers):
     assert [m['body'] for m in b[0].get_room(b[1], remote['id'])['messages']] == ['an ordinary message']
 
 
-def test_only_two_notices_are_written_by_the_system_author(env):
-    """R18: _post_as_system has exactly two callers, the deferral notice and the brief notice, and every message the
+def test_only_these_notices_are_written_by_the_system_author(env):
+    """R18: _post_as_system has exactly these callers: the deferral notice, the brief notice, the appointment and the end notice, and every message the
     system author writes carries one of their client ids. The deferral's is notice-<ship id>-<mention id>, as before,
     so a retry across the deploy still finds its notice."""
     callers = set()
@@ -313,7 +313,8 @@ def test_only_two_notices_are_written_by_the_system_author(env):
                 for node in ast.walk(function):
                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == '_post_as_system':
                         callers.add((path.name, function.name))
-    assert callers == {('tickets.py', '_post_notice'), ('briefs.py', '_write_brief')}
+    assert callers == {('tickets.py', '_post_notice'), ('briefs.py', '_write_brief'), ('moderators.py', '_make_moderate'),
+                       ('grants.py', '_revoke')}
     app, clients, users, clock = env
     store = app.state.store
     ship, key = docked(store, users[0]['id'], 'serenity')

@@ -496,6 +496,12 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return store.make_grant(who, data.get('grantee'), data.get('targets'), data.get('rooms'), data.get('hours'),
                                 data.get('budget'))
 
+    @app.post('/api/grants/moderate', status_code=201)
+    async def grant_moderate(request: Request):
+        who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403 (G14); no depth (M13)
+        return store.make_moderate_grant(who, data.get('grantee'), data.get('room'), data.get('hours'),
+                                         data.get('budget'), data.get('actions'))
+
     @app.get('/api/grants/people')
     def grant_people(request: Request):
         return store.grant_people(actor(request))

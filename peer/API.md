@@ -318,6 +318,7 @@ Every `/api/grants` route takes a person session (CSRF on writes), and a ship ke
 | Method/path | Body | Behavior |
 |---|---|---|
 | POST `/api/grants` | `{grantee, targets, rooms, hours, budget}` | 201 with the grant as `GET /api/grants` shows it; the caller is the issuer |
+| POST `/api/grants/moderate` | `{grantee, room, hours?, budget?, actions?}` | 201 with the moderate grant as `GET /api/grants` shows it; the caller, the room's owner, is the issuer |
 | GET `/api/grants` | — | The grants the caller issued, holds, or that cover their ships, newest first |
 | POST `/api/grants/{id}/revoke` | `{reason?}` | The revoked grant; for its issuer, an issuer above it, or a target ship's owner |
 | GET `/api/grants/{id}/signed` | — | `{station, record, signature}`, plus `revocation` once revoked (see Signed records) |
@@ -341,6 +342,31 @@ unrestricted grantee set. Every check reads it there, so a narrower policy takes
 
 `true`, `24.0` and `"24"` are not integers. The grant is stored with `actions` `["direct"]`, `depth` 0 and `confirm`
 `none`, and signed in the same transaction.
+
+**Moderate grants.** `POST /api/grants/moderate` lets one person in a room, or one of the caller's own ships in it, add
+and remove its members (room moderators, M1 to M3). A person session only; a ship key gets 403 `Ship keys cannot use
+this route`. No `depth` is read: the grant is depth 0, `delegable` stays `["direct"]`, `targets` is `[]` and `rooms`
+lists the one room. Checked in this order; the first failure answers and nothing is written:
+
+1. `room` is a room the caller is in: not a remote id, not a breakout (404 `The room must be a room you are in`); the
+   caller owns it (403 `Only the room's owner can let someone moderate it`); it is current (400 `The room was replaced by
+   a newer linked room; name the current one`); no member is on another station (400 `A room with a member on another
+   station can't have moderators`).
+2. `grantee` is not the caller (400 `You cannot grant to yourself`), and is an active person in the room or a ship of the
+   caller's in it (400 `A moderator is a person in this room or one of your own ships in it`).
+3. `hours`, default 720, a JSON integer from 1 to `max_expiry_hours` (400 `hours is a whole number from 1 to 720`).
+4. `budget`, default 10, a JSON integer from 1 to 50 (400 `budget is a whole number from 1 to 50`).
+5. `actions`, default both, a non-empty list of `add_member` and `remove_member`, each at most once (400 `actions is a
+   list of add_member and remove_member, each at most once`).
+
+Making it posts, as the system author in the room, `<owner> made <name> a moderator of this room, to add and remove
+members, until 2026-11-26 14:00 UTC.` (client id `moderator-<grant id>`; `add members` or `remove members` for one
+action). The grant's budget counts member changes in the last 24 hours instead of builds ("Grant #a1b2 has used its 10
+changes for the last 24 hours"), and check 5 of Validity is that the covered room is owned by the issuer, holds the
+grantee and has no member on another station. Revoking a moderate grant (see Revoking) posts `<name> ended <grantee>'s
+moderation of this room.` (client id `moderator-<grant id>-revoked`) in the room it covers now. Every grant view has
+`actions` (`["direct"]`, or the moderate list) and `made_via` (`browser` or `cli`; null for a grant made before room
+moderators).
 
 **Validity.** Checked in this order; the first that fails is the `reason`: not revoked ("Grant #a1b2 was revoked by
 Andy"; "Grant #a1b2 was revoked" when the restore revoked it); not expired (from its `expires` instant on: "Grant #a1b2

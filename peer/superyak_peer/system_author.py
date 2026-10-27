@@ -1,7 +1,8 @@
 """The system author (spec S11): the one place the station writes a message. One users row, kind 'system', username
 '_station', found only by the id in system_meta; never a room member, never keyed, never signed in. Its only writer
-is _post_as_system, which exactly two notices call (ship briefs R18): the ticket decision's (tickets.py _post_notice)
-and the room brief's (briefs.py _write_brief). message_kinds marks claim and notice messages, which are never answered
+is _post_as_system, which exactly these notices call (ship briefs R18, room moderators M19): the ticket decision's
+(tickets.py _post_notice), the room brief's (briefs.py _write_brief), a moderator's appointment (moderators.py
+_make_moderate) and its end (grants.py _revoke). Tasks 3 and 4 of room moderators add the member notices. message_kinds marks claim and notice messages, which are never answered
 (422) and never federate."""
 import secrets
 from .common import uid
@@ -32,8 +33,9 @@ class SystemAuthor:
 
     def _post_as_system(self, db, room_id, client_id, text):
         """One station notice, in the caller's transaction: the message under the caller's client id, its message_kinds
-        row and its chat.message event. Its two callers (R18) pass notice-<ship id>-<mention id> (the deferral) or
-        brief-<room id>-<revision> (the brief). No reply_to, no ticket, no mentions, no post budget; local rooms only.
+        row and its chat.message event. Its callers pass notice-<ship id>-<mention id> (the deferral),
+        brief-<room id>-<revision> (the brief), moderator-<grant id> and moderator-<grant id>-revoked (the appointment and
+        the end) and, from Tasks 3 and 4, member-<row id>. No reply_to, no ticket, no mentions, no post budget; local rooms only.
         Returns the message id, or None when the text holds a live ship key or the room is a closed breakout; the
         caller's own write still stands. A retry under the same client id returns the message already posted."""
         if ':' in room_id:

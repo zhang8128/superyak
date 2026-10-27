@@ -27,6 +27,7 @@ GRANTEE_IS_YOU = 'You cannot grant to yourself'
 TARGETS_SHAPE = 'targets is a list of 1 to 20 ship ids, each listed once'
 TARGET_NOT_YOURS = 'Each target must be a ship you own'
 BUDGET_RANGE = 'budget is a whole number from 1 to 500'
+ENDED = "{by} ended {name}'s moderation of this room."
 REASON_SHAPE = 'A reason is one line of at most 200 characters'
 
 
@@ -245,11 +246,13 @@ class Grants:
                 listed.append(entry)
             rooms = listed
         valid, reason = self._grant_validity(db, grant)
+        origin = db.execute('SELECT made_via FROM grant_origins WHERE grant_id=?', (grant['id'],)).fetchone()
         view = {'id': grant['id'], 'short': short_id(grant['id']), 'issuer': person(grant['issuer_id']),
                 'grantee': person(grant['grantee_id']), 'targets': targets, 'rooms': rooms, 'expires': grant['expires'],
                 'budget': grant['budget'], 'budget_left': max(0, grant['budget'] - self._budget_used(db, grant['id'], now)),
                 'created': grant['created'], 'revoked': grant['revoked'], 'revoked_by': person(grant['revoked_by']),
-                'revoke_reason': grant['revoke_reason'], 'valid': valid}
+                'revoke_reason': grant['revoke_reason'], 'valid': valid, 'actions': json.loads(grant['actions']),
+                'made_via': origin['made_via'] if origin else None}
         if not valid:
             view['reason'] = reason
         return view
@@ -322,12 +325,25 @@ class Grants:
             if not _whole(budget, 1, MAX_BUDGET):
                 raise Problem(400, BUDGET_RANGE)
             key = self._insert_grant(db, actor, grantee, targets, rooms, hours, budget)
+            self._record_origin(db, key, 'browser')  # M20, ruling 16
             return self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (key,)).fetchone())
 
     def _may_revoke(self, db, actor, grant):
         """G10: the issuer, the issuer of any grant above it (none in step 3, but the walk is the same), or the owner of
         any target ship. Being an admin gives no power over other people's grants."""
         return any(link['issuer_id'] == actor for link in self._grant_chain(db, grant)) or self._owns_a_target(db, actor, grant)
+
+    def _revoke(self, db, actor, grant, reason):
+        """The revocation, signed (G12) in the caller's transaction. A moderate grant's end is announced in the room it
+        covers now (M19), under the revoker's display name."""
+        db.execute('UPDATE grants SET revoked=?, revoked_by=?, revoke_reason=? WHERE id=?',
+                   (self.clock(), actor, reason, grant['id']))
+        self._sign_revocation(db, grant['id'])
+        room = self._covered_room(db, grant)
+        if room is not None:
+            name = lambda user_id: safe_line(db.execute('SELECT name FROM users WHERE id=?', (user_id,)).fetchone()['name'], 40)
+            self._post_as_system(db, room, f'moderator-{grant["id"]}-revoked',
+                                 ENDED.format(by=name(actor), name=name(grant['grantee_id'])))
 
     def revoke_grant(self, actor, grant_id, reason=None):
         """G10: POST /api/grants/{id}/revoke. 404 for anyone G11 doesn't show the grant to, then 403 for one who sees it
@@ -343,7 +359,5 @@ class Grants:
                 raise Problem(403, 'Only its issuer or the owner of one of its ships can revoke this grant')
             if grant['revoked'] is not None:
                 raise Problem(409, f'Grant {short_id(grant["id"])} is already revoked')
-            db.execute('UPDATE grants SET revoked=?, revoked_by=?, revoke_reason=? WHERE id=?',
-                       (self.clock(), actor, reason, grant['id']))
-            self._sign_revocation(db, grant['id'])
+            self._revoke(db, actor, grant, reason)
             return self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (grant['id'],)).fetchone())
