@@ -1,4 +1,5 @@
 """Trusted local approval on the station host: list, approve and deny without a browser."""
+from types import SimpleNamespace
 import pytest
 from superyak_peer.common import Problem
 from superyak_peer.__main__ import main as cli
@@ -400,3 +401,79 @@ def test_a_brief_saved_between_the_read_and_the_carry_stops_the_bridge_with_its_
     assert stopped.value.code not in (0, None)
     assert 'The room brief changed while bridging; run station-bridge again' in capsys.readouterr().err
     assert sorted(r['id'] for r in store.list_rooms(andy['id'])) == before  # no new room; the notice may reorder them
+
+
+# station-add-ship: one of the owner's own ships joins a room he owns, the way station-bridge adds Wormhole ------------
+
+@pytest.fixture
+def fleet(rooms):
+    """Andy's room "Superyak: city of AI" with the doctor and his ship Rio Grande in it; his ship Tardis, docked but
+    not in it; Jenn's ship Kestrel and the station ship Odo."""
+    store, andy, doctor, wormhole, gamma = rooms
+    rio, tardis = (store.ship_for_key(docked(store, name, f'{name}-machine')[1]) for name in ('rio-grande', 'tardis'))
+    store.create_user('jenn', 'Jenn', 'long-password-jenn')
+    kestrel = store.station_decide('jenn', store.start_docking('kestrel', 'jenn-laptop')['id'][:6], True)[1]
+    odo = store.create_station_ship('odo', 'Odo')
+    city = store.create_room(andy['id'], 'Superyak: city of AI', [doctor['id'], rio['id']])
+    return SimpleNamespace(store=store, andy=andy, doctor=doctor, wormhole=wormhole, rio=rio, tardis=tardis,
+                           kestrel=kestrel, odo=odo, city=city)
+
+
+def add_ship(capsys, store, prefix, ship, who='andy'):
+    return run(capsys, store, 'station-add-ship', '--id', prefix, '--ship', ship, '--as', who)
+
+
+def test_adding_a_ship_makes_a_new_linked_room_carrying_the_brief_and_the_open_board(fleet, capsys):
+    """Rio Grande adds Tardis to Andy's room as station-bridge adds Wormhole: a new room with the same title and members
+    plus the ship, linked from the old one, carrying the brief and the open board items with their claims."""
+    f, store = fleet, fleet.store
+    city = f.city['id']
+    store.save_brief(f.andy['id'], city, 'City of AI: law only.', 0)
+    for key in ('spec:a', 'spec:b', 'spec:c'):
+        store.post_item(f.andy['id'], city, key, 'City work', 'spec')
+    store.claim(f.rio['id'], city, 'spec:a', note='drafting')
+    store.drop_item(f.andy['id'], city, 'spec:c')
+    out = add_ship(capsys, store, city[:6].upper(), 'Tardis')
+    new = current_room(store, f.andy, f.city)
+    assert new['id'] != city and new['linked_room_id'] == city
+    assert new['owner_id'] == f.andy['id'] and new['title'] == 'Superyak: city of AI'
+    assert set(new['member_ids']) == {f.andy['id'], f.doctor['id'], f.rio['id'], f.tardis['id']}
+    assert set(store.get_room(f.andy['id'], city)['member_ids']) == {f.andy['id'], f.doctor['id'], f.rio['id']}
+    brief = store.get_room(f.tardis['id'], new['id'])['brief']
+    assert (brief['body'], brief['revision'], brief['carried_from'], brief['author_id']) == ('City of AI: law only.', 1, city, f.andy['id'])
+    board = store.room_board(f.tardis['id'], new['id'])
+    assert [(i['key'], i['state']) for i in board] == [('spec:a', 'open'), ('spec:b', 'open')]
+    assert (board[0]['claim']['holder_id'], board[0]['claim']['note']) == (f.rio['id'], 'drafting') and board[1]['claim'] is None
+    assert [i['key'] for i in store.room_board(f.andy['id'], city)] == ['spec:c']
+    assert out == (f'Added tardis to a new room {new["id"][:6]} Superyak: city of AI with the same members; the room it '
+                   f'replaces, {city[:6]}, keeps its messages and closed board items but is no longer the current room. '
+                   "The room's brief came along. 2 open board items came along.\n")
+    line = next(l for l in run(capsys, store, 'station-rooms', '--as', 'andy').splitlines() if l.startswith(new['id'][:6]))
+    assert 'Superyak: city of AI' in line and 'tardis' in line and not line.endswith('bridged')
+
+
+def test_adding_a_ship_to_a_room_without_a_brief_or_open_items_says_so(fleet, capsys):
+    f, store = fleet, fleet.store
+    out = add_ship(capsys, store, f.city['id'][:6], 'tardis')
+    new = current_room(store, f.andy, f.city)
+    assert store.get_room(f.andy['id'], new['id'])['brief'] is None and store.room_board(f.andy['id'], new['id']) == []
+    assert out.rstrip().endswith("The room had no brief to carry. The room had no open board items.")
+    assert out.startswith(f'Added tardis to a new room {new["id"][:6]} ')
+
+
+def test_a_brief_saved_between_the_read_and_the_carry_stops_the_add_with_its_own_words(fleet, capsys, monkeypatch):
+    f, store = fleet, fleet.store
+    store.save_brief(f.andy['id'], f.city['id'], 'Plan.', 0)
+    real = Store.add_participants
+
+    def save_first(self, actor, key, member_ids, carry_brief=None):
+        self.save_brief(actor, key, 'Plan, changed.', 1)  # someone saves after the add read the brief
+        return real(self, actor, key, member_ids, carry_brief)
+
+    monkeypatch.setattr(Store, 'add_participants', save_first)
+    before = sorted(r['id'] for r in store.list_rooms(f.andy['id']))
+    with pytest.raises(SystemExit) as stopped:
+        add_ship(capsys, store, f.city['id'][:6], 'tardis')
+    assert stopped.value.code == 1
+    assert capsys.readouterr().err == 'The room brief changed while adding the ship; run station-add-ship again\n'
+    assert sorted(r['id'] for r in store.list_rooms(f.andy['id'])) == before
