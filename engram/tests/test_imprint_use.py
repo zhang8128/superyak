@@ -78,6 +78,7 @@ def test_the_child_gets_the_scratch_directory_and_the_parent_no_numpy(tmp_path):
     env = json.loads((uses_dir(root, iid_, use_id) / "report.json").read_text())
     scratch = str(root / f"{iid_}.state" / "scratch")
     assert env["SQLITE_TMPDIR"] == env["TMPDIR"] == scratch and env["exists"] is True
+    assert env["OPENBLAS_NUM_THREADS"] == "1"          # the evaluation's numpy reserves one BLAS thread's buffers (review I4)
     assert not (root / f"{iid_}.state" / "scratch").exists()
     assert "numpy" not in subprocess.run([sys.executable, "-c", "import imprint, sys; print(sorted(sys.modules))"],
                                          capture_output=True, text=True, cwd=ENGRAM).stdout

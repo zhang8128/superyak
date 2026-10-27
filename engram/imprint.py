@@ -1326,7 +1326,7 @@ def use(imprint_id: str, use_id: str, *, root: Path, lane: str | None = None, tr
         argv = [*(trails_cmd if trails_cmd is not None else DEFAULT_TRAILS_CMD), str(root / imprint_id / "imprint.db"),
                 "--evaluate", "--lane", lane, "--seed", str(int(use_id[:8], 16)), "--deadline", USE_DEADLINE,
                 "--json", "--imprint-use", use_id]
-        env = {**os.environ, "SQLITE_TMPDIR": str(scratch), "TMPDIR": str(scratch)}
+        env = {**os.environ, "SQLITE_TMPDIR": str(scratch), "TMPDIR": str(scratch), **ONE_BLAS_THREAD}
         exit_, out = _run_trails(argv, env)
         if exit_ == 0:
             _write_atomic(here / "report.json", out)
@@ -1564,16 +1564,23 @@ def _list(args) -> int:
 
 # ---- The command ---------------------------------------------------------------------------------------------
 
+ONE_BLAS_THREAD = {"OPENBLAS_NUM_THREADS": "1"}   # what numpy reserves must fit under LimitDATA=512M (review I4)
+
+
 def ensure_scratch_env(scratch: Path, *, environ, execve) -> None:
     """R26: SQLite reads ``SQLITE_TMPDIR`` and ``TMPDIR`` once, when ``sqlite3`` is imported, so the process starts
     again with the three variables naming ``scratch`` unless they already do. Every subcommand that opens SQLite
-    calls this first."""
+    calls this first. The new process also gets ``OPENBLAS_NUM_THREADS=1`` (``ONE_BLAS_THREAD``), read once when
+    numpy loads: numpy's and scipy's OpenBLAS each reserve 32 MiB of buffers and an 8 MiB stack per thread, 430 MiB
+    of private memory before any work on a 4-core Pi, and the units' ``LimitDATA=512M`` counts all of it (review I4).
+    Only the three variables decide whether to start again; a process they already name was started by this."""
     value = str(scratch)
     keys = ("SQLITE_TMPDIR", "TMPDIR", "IMPRINT_SCRATCH")
     if all(environ.get(k) == value for k in keys):
         return
     env = dict(environ)
     env.update({k: value for k in keys})
+    env.update(ONE_BLAS_THREAD)
     execve(sys.executable, [sys.executable, *sys.orig_argv[1:]], env)
 
 

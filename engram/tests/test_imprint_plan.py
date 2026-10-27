@@ -118,8 +118,11 @@ def test_the_scratch_directory_is_set_before_python_starts(tmp_path):           
     ensure_scratch_env(scratch, environ={"TMPDIR": "/tmp"}, execve=lambda *a: calls.append(a))
     (_, argv, env), = calls
     assert argv[0] == sys.executable and env["SQLITE_TMPDIR"] == env["TMPDIR"] == env["IMPRINT_SCRATCH"] == str(scratch)
+    assert env["OPENBLAS_NUM_THREADS"] == "1"          # one BLAS thread, set before numpy loads (review I4)
     ensure_scratch_env(scratch, environ=env, execve=lambda *a: calls.append(a))     # already set: no second exec
     assert len(calls) == 1
+    ensure_scratch_env(scratch, environ={"OPENBLAS_NUM_THREADS": "4"}, execve=lambda *a: calls.append(a))
+    assert len(calls) == 2 and calls[-1][2]["OPENBLAS_NUM_THREADS"] == "1"        # the caller's own setting gives way
 
 
 def test_list_writes_one_line_per_row_that_would_leave(tmp_path, monkeypatch):

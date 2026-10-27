@@ -35,6 +35,7 @@ class Unit:
     memory_max: str | None
     memory_swap_max: str | None
     limit_data: str | None = None
+    blas_threads: str | None = None
 
 
 def units_in_make(text):
@@ -44,7 +45,9 @@ def units_in_make(text):
         found = UNIT_NAME.search(line)
         if 'systemd-run' in line and found:
             props = dict(p.split('=', 1) for p in re.findall(r'-p ([A-Za-z]+=\S+)', line))
-            units.append(Unit(found.group(1), props.get('MemoryMax'), props.get('MemorySwapMax'), props.get('LimitDATA')))
+            blas = re.search(r'--setenv=OPENBLAS_NUM_THREADS=(\S+)', line)
+            units.append(Unit(found.group(1), props.get('MemoryMax'), props.get('MemorySwapMax'), props.get('LimitDATA'),
+                              blas.group(1) if blas else None))
     return units
 
 
@@ -52,7 +55,8 @@ def unit_in_service(name, text):
     """A `.service` file's [Service] section as a Unit."""
     service = text.split('[Service]', 1)[1] if '[Service]' in text else ''
     props = dict(re.findall(r'^([A-Za-z]+)=(.*)$', service, re.M))
-    return Unit(name, props.get('MemoryMax'), props.get('MemorySwapMax'), props.get('LimitDATA'))
+    blas = re.search(r'^Environment=OPENBLAS_NUM_THREADS=(\S+)$', service, re.M)
+    return Unit(name, props.get('MemoryMax'), props.get('MemorySwapMax'), props.get('LimitDATA'), blas.group(1) if blas else None)
 
 
 def imprint_units_from_the_makefile_and_systemd(repo):
@@ -77,6 +81,7 @@ def test_every_imprint_unit_is_capped_at_512m():
     for unit in units:                                          # admit, use, sweep
         assert unit.memory_max == '512M' and unit.memory_swap_max == '0', unit.name
         assert unit.limit_data == '512M', unit.name     # what holds where there is no memory controller (review I4)
+        assert unit.blas_threads == '1', unit.name      # numpy's two OpenBLAS pools fit under it single-threaded
 
 
 # ---- The Pi measurement -------------------------------------------------------------------------------------------

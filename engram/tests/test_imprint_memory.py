@@ -18,7 +18,7 @@ import pytest
 import imprint
 from imprint import admit, build, make_plan
 from tests.imprint_support import (EH, _Connection, FAR, GROWING_TABLES, HOME, IMPRINT_PY, NOW_SECONDS, PEAK_BUDGET, admit_command,
-                                   admission_result, base_peak, build_bounds_store, build_cap_store, built_of,
+                                   admission_result, analysis_errors, base_peak, build_bounds_store, build_cap_store, built_of,
                                    cap_command, child_peak_rss, memory_cap_enforced, counting_stub, handed_off, mib, plan_args,
                                    refusing_fetchall, stub_verify, strace_temp_files, use_command)
 
@@ -60,6 +60,7 @@ def test_pi_one_admission_at_its_bounds_timed(bounds_store):                # I 
     assert peak < PEAK_BUDGET and seconds < 3300, (mib(peak), seconds)
     result = admission_result(bounds_store)
     assert result["status"] == "admitted" and "skipped" not in result            # every set ran at its bound
+    assert analysis_errors(bounds_store) == []                                   # and none raised (review I4)
     print("admission at its bounds", mib(peak), "MiB", round(seconds), "s")
 
 

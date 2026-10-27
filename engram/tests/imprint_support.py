@@ -499,7 +499,7 @@ def child_peak_rss(code: str | None = None, *, src=None, timed: bool = False, cm
     """Peak resident bytes (``VmHWM``, read as ``ru_maxrss``) of ``code`` run in a child, or of the whole command
     ``cmd`` (a list) when it is given (``timed``: and its wall seconds). The child runs under
     ``systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0`` where that exists (R27), and always under a
-    hard ``RLIMIT_DATA`` of 512 MiB (the units' ``LimitDATA``) and a ``wall`` seconds kill, so a runaway fails the test on its own where the
+    hard ``RLIMIT_DATA`` of 512 MiB and ``OPENBLAS_NUM_THREADS=1``, as the units start it, and a ``wall`` seconds kill, so a runaway fails the test on its own where the
     cap is not applied (``memory_cap_enforced``; a warning says so). A launcher process reads ``RUSAGE_CHILDREN``,
     so the figure is this child's alone, whatever it re-executes or forks."""
     if cmd is not None:
@@ -512,8 +512,10 @@ def child_peak_rss(code: str | None = None, *, src=None, timed: bool = False, cm
         if not memory_cap_enforced():
             warnings.warn("MemoryMax=512M is not applied here (the user manager has no memory controller); "
                           "the child's RLIMIT_DATA and wall-clock kill are the only backstop", stacklevel=2)
-    env = {**(os.environ if env is None else env), "IMPRINT_DATA_LIMIT": str(HARD_DATA_LIMIT),
-           "IMPRINT_WALL": str(wall)}
+    import imprint
+
+    env = {**(os.environ if env is None else env), **imprint.ONE_BLAS_THREAD,     # as the units start it (review I4)
+           "IMPRINT_DATA_LIMIT": str(HARD_DATA_LIMIT), "IMPRINT_WALL": str(wall)}
     out = subprocess.run([sys.executable, "-c", _LAUNCHER, *argv], cwd=cwd or ENGRAM_DIR, env=env,
                          capture_output=True, text=True, timeout=wall + 60)
     assert out.returncode == 0 and out.stdout.split(), out.stderr[-2000:]
@@ -2163,7 +2165,7 @@ STUB_OK = _stub("import json, sys; print(json.dumps({'ok': True}))")
 STUB_EXIT_3 = _stub("import sys; sys.exit(3)")
 STUB_EXIT_1 = _stub("import sys; print('{}'); sys.exit(1)")
 STUB_KILLED = _stub("import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
-STUB_PRINTS_ENV = _stub("import json, os; print(json.dumps({k: os.environ.get(k) for k in ('SQLITE_TMPDIR', 'TMPDIR')}"
+STUB_PRINTS_ENV = _stub("import json, os; print(json.dumps({k: os.environ.get(k) for k in ('SQLITE_TMPDIR', 'TMPDIR', 'OPENBLAS_NUM_THREADS')}"
                         " | {'exists': os.path.isdir(os.environ['TMPDIR'])}))")
 STUB_PRINTS_ARGV = _stub("import json, sys; print(json.dumps(sys.argv[1:]))")
 
@@ -2713,6 +2715,15 @@ def admission_result(world: CapWorld) -> dict:
     if not result.get("skipped"):
         result.pop("skipped", None)
     return result
+
+
+def analysis_errors(world: CapWorld) -> list[str]:
+    """Each analysis of the admission's calibration report that raised (``calibrate._run`` records it and goes on, so
+    an admission can end ``admitted`` with an analysis lost to a MemoryError): ``"<analysis>: <error>"``."""
+    (state,) = world.root.glob("*.state")
+    report = json.loads((state / "calibration" / "report.json").read_text())
+    return [f"{name}: {body['error']}" for name, body in report["analyses"].items()
+            if isinstance(body, dict) and "error" in body]
 
 
 def use_command(tmp_path: Path, *, trails_cmd) -> list[str]:
