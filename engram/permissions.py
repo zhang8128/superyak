@@ -1183,9 +1183,10 @@ def needs(use: Use) -> tuple[Need, ...]:
     return tuple(out)
 
 
-def _own_subjects(state: State, ref: str, at: int | None = None) -> set[str]:
+def _own_subjects(state: State, ref: str, at: int | None = None, later: list | None = None) -> set[str]:
     """The ref's store's owner and its co-subjects: those in force at `at`, or every one not removed when `at` is
-    None. A ref that names no registered store has none of its own."""
+    None. A ref that names no registered store has none of its own. With `later` (and `at`), the times after `at`
+    at which a subject row comes into or goes out of force are added to it (the final review's M2)."""
     out: set[str] = set()
     parsed = _parsed_or_none(ref) if isinstance(ref, str) else None
     if parsed is None:
@@ -1194,15 +1195,27 @@ def _own_subjects(state: State, ref: str, at: int | None = None) -> set[str]:
     if store is not None and store.imprint_of is None:     # an imprint's owner is never a default subject
         out.add(store.owner)
     for row in state.subjects.get(ref, ()):
-        if (row.removed_seq is None if at is None else _in_force(state, row.added_seq, row.removed_seq, at)):
+        if at is None:
+            if row.removed_seq is None:
+                out.add(row.subject)
+            continue
+        lo, hi = _span(state, row.added_seq, row.removed_seq)
+        if lo <= at and (hi is None or at < hi):
             out.add(row.subject)
+        if later is not None:
+            if lo > at:
+                later.append(lo)
+            if hi is not None and hi > at:
+                later.append(hi)
     return out
 
 
-def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = ()) -> tuple[str, ...]:
+def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = (), *,
+                later: list | None = None) -> tuple[str, ...]:
     """P 6.3 item 1 and 7.4: the object's store's owner and its co-subjects in force at `at`, those of each
     source up the `copies` chain (at most MAX_COPY_CHAIN links), and for a road or trail those of the memories
-    it names. Sorted. An object whose ref names no registered store has none of its own."""
+    it names. Sorted. An object whose ref names no registered store has none of its own. `later`: see
+    `_own_subjects`."""
     out: set[str] = set()
 
     def with_sources(ref: str) -> None:
@@ -1211,7 +1224,7 @@ def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = ()) -> t
             if cur is None or cur in seen:
                 return
             seen.add(cur)
-            out.update(_own_subjects(state, cur, at))
+            out.update(_own_subjects(state, cur, at, later))
             cur = state.copies.get(cur)
 
     with_sources(obj)
@@ -2358,19 +2371,24 @@ def _envelopes_list_memories(state: State) -> bool:
         _grant_of(g).envelope.memories != STAR for g in state.grants.values()))
 
 
-def _share_key(state: State, obj, t: int):
+def _share_key(state: State, obj, t: int, later: list | None = None):
     """Everything a decision at t reads of a memory object, up to the order of times (P 6.5, How it is computed):
     two objects with equal keys get equal decisions for the same requester, place, copy, action, purpose and t.
     Its kind, store and layer; its subjects; which records list it in `memories`; its lane notes and its
     memberships with each time replaced by its place among Θ (`_times_of_interest`) and, for notes, its rank among
     the object's own times there, so every comparison a lane or membership test makes comes out the same. None
     (decide it alone) for a malformed ref, a road or trail, an object with a grant-backed membership, or a ledger
-    whose grant envelopes list memories."""
+    whose grant envelopes list memories. With `later`, the times `_object_times_after` gives are added to it, read
+    in the same pass (the final review's M2)."""
     ref = _parsed_or_none(obj) if isinstance(obj, str) else None
     if ref is None or ref.kind != "memory" or _envelopes_list_memories(state):
+        if later is not None:
+            later.extend(_object_times_after(state, obj, t))
         return None
     rows, grant = _members(state, obj)
     if grant:
+        if later is not None:
+            later.extend(_object_times_after(state, obj, t))
         return None
     theta = _times_of_interest(state, t)
 
@@ -2381,6 +2399,8 @@ def _share_key(state: State, obj, t: int):
     last, rank = None, -1
     for n in state.lane_notes.get(obj, ()):
         here = place(n.at)
+        if later is not None and n.at > t:
+            later.append(n.at)
         if last is None or here != last[0]:
             rank = 0
         elif n.at != last[1]:
@@ -2392,8 +2412,11 @@ def _share_key(state: State, obj, t: int):
         lo, hi = _span(state, m.added_seq, m.removed_seq)
         members.append((m.collection, m.backing, m.removed_seq is not None and m.removed_seq <= state.seq,
                         place(lo), None if hi is None else place(hi)))
+        if later is not None:
+            later.extend(x for x in (lo, hi) if x is not None and x > t)
     listed = tuple(sorted(rid for ids in _listing(state, obj).values() for rid in ids))
-    return (ref.instance_id, ref.layer, subjects_of(state, obj, t), listed, tuple(notes), tuple(members))
+    return (ref.instance_id, ref.layer, subjects_of(state, obj, t, later=later), listed, tuple(notes),
+            tuple(members))
 
 
 def _later_times(state: State, added: int, removed: int | None, t: int, out: list) -> None:
@@ -2412,14 +2435,7 @@ def _object_times_after(state: State, obj: str, t: int) -> list[int]:
     out: list[int] = []
     for m in _members(state, obj)[0]:
         _later_times(state, m.added_seq, m.removed_seq, t, out)
-    seen, cur = set(), obj
-    for _ in range(MAX_COPY_CHAIN + 1):
-        if cur is None or cur in seen:
-            break
-        seen.add(cur)
-        for r in state.subjects.get(cur, ()):
-            _later_times(state, r.added_seq, r.removed_seq, t, out)
-        cur = state.copies.get(cur)
+    subjects_of(state, obj, t, later=out)
     out.extend(n.at for n in state.lane_notes.get(obj, ()) if n.at > t)
     return out
 
@@ -2449,7 +2465,6 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
     decisions: dict[str, Decision] = {}
     made: dict[tuple, Decision | None] = {}
     horizons: list[int] = _requester_times_after(state, requester, at)
-    timed: set = set()              # the objects whose row times are in `horizons`
     pool_cited: dict = {}           # equal Cited, equal `cited` tuples and equal `versions` are shared by every
     pool_tuples: dict = {}          # decision that holds them (frozen, so safe to share)
     pool_versions: dict = {}
@@ -2461,10 +2476,7 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
             state.prefetch([q.obj for q in placements[i:i + PREFETCH_CHUNK] if q.obj is not None])
         if p.obj is None or (p.obj, p.copy) in made:
             continue
-        if p.obj not in timed:
-            timed.add(p.obj)
-            horizons.extend(_object_times_after(state, p.obj, at))
-        skey = _share_key(state, p.obj, at)
+        skey = _share_key(state, p.obj, at, horizons)          # adds the object's row times after `at` (M2)
         if skey is not None:
             skey = (skey, p.copy)
             if skey in shared:
