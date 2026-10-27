@@ -216,3 +216,18 @@ def test_item2_past_the_step_budget_the_use_is_refused_never_decided_on_a_part(m
     monkeypatch.setattr(permissions, "ROUTE_STEPS", 2)
     with pytest.raises(RuleError, match="membership routes"):
         decide(state, use)
+
+
+# ---------------------------------------------------------------- item 3: a refused genome keep leaves no allowed receipt
+
+def test_item3_a_refused_genome_keep_writes_no_receipt_and_the_list_shows_no_keep(keep_world_with_imprint_allowed):
+    import server
+    from tests.test_permissions_tardis_fixes import GENOME_REFUSED, _genome_store, _genome_writes
+    world = keep_world_with_imprint_allowed
+    _genome_store()
+    deliver_m1_through(world, "neighbors")
+    assert receipt_rows(world.root, "imprint") == []
+    assert server.remember(content=M1_TEXT, genome=True) == GENOME_REFUSED
+    assert receipt_rows(world.root, "imprint") == [] and _genome_writes() == 0     # no keep, so no receipt of one
+    assert "episode_id" in server.remember(content=M1_TEXT)                        # the keep that happens has one
+    assert [(r["action"], r["allowed"]) for r in receipt_rows(world.root, "imprint")] == [("imprint", 1)]

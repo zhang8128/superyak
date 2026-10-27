@@ -1904,12 +1904,13 @@ def remember(
 
     logger.info("Tool called: remember(content_len=%d, core=%s, source=%s, work=%s)", len(content), core, source, work)
 
-    keep = _keep_decision(content, agent=_agent_ref(), now=_permission_now(), raw=raw_content)
+    keep = _keep_decision(content, agent=_agent_ref(), now=_permission_now(), raw=raw_content, genome=genome)
     if keep.reply is not None:
         return keep.reply
     if genome and keep.source is not None:
         # Delivered content is kept only here, as a copy of its source (P25): a genome copy would carry none of
-        # the source's subjects, and genome sync would spread it (Tardis's T2).
+        # the source's subjects, and genome sync would spread it (Tardis's T2). Under `enforce` the guard refused
+        # it before deciding, so no receipt names a keep that never happened; under `shadow` it goes on.
         if not keep.shadow:
             return dict(_GENOME_REFUSED)
         keep.would_refuse = True
@@ -2051,10 +2052,11 @@ def _keep_reply(state, agent: str, refusal=None, cause: str | None = None) -> di
     return out
 
 
-def _keep_decision(content: str, *, agent: str, now: int, raw: str | None = None) -> _Keep:
+def _keep_decision(content: str, *, agent: str, now: int, raw: str | None = None, genome: bool = False) -> _Keep:
     """The `remember` guard (P 10; R10, R11). It acts only when the digest of the stripped or the raw content is
     that of a delivery receipt of `agent` in the last 24 hours (the newest 200), and it asks the ledger layers
-    alone whether `imprint` of that item is allowed."""
+    alone whether `imprint` of that item is allowed. A `genome` keep of delivered content is refused under
+    `enforce` before anything is decided (Tardis's T2), so it writes no `imprint` receipt (Serenity's item 3)."""
     try:
         gate = _permission_gate()
     except Exception as exc:
@@ -2087,6 +2089,8 @@ def _keep_decision(content: str, *, agent: str, now: int, raw: str | None = None
         return _Keep()
     if gate.mode == "closed":
         return _Keep(reply=_keep_reply(None, agent))
+    if genome and not shadow and any(d.object is not None for d in deliveries):
+        return _Keep(reply=dict(_GENOME_REFUSED))
     return _decide_keep(deliveries, agent=agent, now=now, shadow=shadow)
 
 
