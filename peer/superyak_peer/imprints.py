@@ -540,13 +540,13 @@ def decide_use(permission, receipts, owner_records, *, status, kind, t, operator
     failed = [s for s in failed if s]
     if failed:
         return refuse(min(failed, key=_RANK.__getitem__))
-    used = []
+    used = set()
     for u in uses:
         stage, speaking = _failing_stage(own, u, source, home, t)
         if stage or (u[1], u[2]) not in CEILING:
             return refuse('ceiling')
-        used += [r['id'] for r in speaking if r['id'] not in used]
-    return UseDecision(True, None, None, end, tuple(used))
+        used.update(r['id'] for r in speaking)
+    return UseDecision(True, None, None, end, tuple(r['id'] for r in own if r['id'] in used))
 
 
 class Imprints:
