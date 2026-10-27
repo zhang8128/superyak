@@ -1967,8 +1967,8 @@ def _horizon_layers(state: State, t: int, layers: tuple) -> int | None:
                     cur, n = link.replaces, n + 1
         for b in set(backings):
             out.extend(e for e in _chain_expiries(state, b) if e > t)
-        return min(out) if out else None
-    return state._memo(("horizon-layers", t, layers), compute)
+        return (min(out) if out else None,)              # a tuple, so a None result is kept too
+    return state._memo(("horizon-layers", t, layers), compute)[0]
 
 
 def _horizon(state: State, t: int, layers: Sequence[str], objs: Sequence[str]) -> int | None:
