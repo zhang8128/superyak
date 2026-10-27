@@ -1441,11 +1441,12 @@ def _live_denies(state: State, layer_id: str, t: int):
             if r.effect == "deny" and r.valid_from > t and not _revoked(state, r)]
 
 
-def _until(state: State, t: int, ends: Sequence[int], layers: Sequence[str], read: Sequence[tuple]) -> int | None:
+def _until(state: State, t: int, end: int | None, layers: Sequence[str], read: Iterable[tuple]) -> int | None:
     """P 6.5 step 6: the earliest effective end of a cited record, and the `valid_from` of every deny in a
     required ledger layer that starts after t and would match some use of `read` (each (use, actions) of need(u))
-    at that time, σ fixed."""
-    out = list(ends)
+    at that time, σ fixed. `end` is the earliest effective end of the cited records so far (a running minimum),
+    and `read` can be iterated again for each deny."""
+    out = [] if end is None else [end]
     for layer_id in layers:
         for r in _live_denies(state, layer_id, t):
             if any(record_matches(state, r, replace(sub, at=r.valid_from), x) for sub, actions in read
@@ -1532,13 +1533,35 @@ def _listed_memories(state: State) -> frozenset:
     return state._memo(("listed-memories",), compute)
 
 
+_ACTION_BIT = {a: i for i, a in enumerate(ACTIONS)}
+
+
+def _bits(actions: Iterable[str]) -> int:
+    out = 0
+    for a in actions:
+        out |= 1 << _ACTION_BIT[a]
+    return out
+
+
+class _BitsRead:
+    """The (use, actions) of each object a bulk decision read, rebuilt from action bits on every iteration."""
+
+    def __init__(self, proto: Use, bits: Mapping[str, int]):
+        self.proto, self.bits = proto, bits
+
+    def __iter__(self):
+        for obj, b in self.bits.items():
+            yield replace(self.proto, obj=obj), [a for i, a in enumerate(ACTIONS) if b >> i & 1]
+
+
 class _Run:
     """The accumulation of P 6.5 over one or many (object, action) pairs: each pair is decided once, however many
     objects need it (P 6.4: need(U) is a union)."""
 
     def __init__(self, state: State, proto: Use, legacy: Sequence[LegacyLayer], outside: Mapping | None, *,
-                 multi: bool, group: bool = False):
+                 multi: bool, group: bool = False, bulk: bool = False):
         self.state, self.proto, self.legacy, self.multi, self.group = state, proto, tuple(legacy), multi, group
+        self.bulk = bulk
         self.outside = outside or {}
         self.by_name = {layer.name: layer for layer in legacy}
         self.entries: dict = {}
@@ -1547,12 +1570,17 @@ class _Run:
         self.failure: tuple | None = None
         self.cur = 0                             # the index in need(u) being decided (decide only)
         self.failed_need: int | None = None
-        self.ends: list[int] = []                # effective ends of the cited records (step 5)
+        self.end: int | None = None              # the earliest effective end of the cited records (step 5)
         self.ledger_layers: list[str] = []       # the required consent and restriction layers, first seen order
         self._ledger_seen: set = set()
-        self.read: dict = {}                     # obj -> (use, [actions]) for each need(u) decided
+        # decide for one use holds at most 33 objects: obj -> (use, [actions]) for each need(u) decided, and the
+        # (obj, action) pairs already decided. A bulk decision holds the same as action bits per object (SH-3):
+        # each sub-use is `replace(proto, obj=o)`, rebuilt when `_until` needs it.
+        self.read: dict = {}
+        self.done: set = set()
+        self.read_bits: dict[str, int] = {}
+        self.done_bits: dict[str, int] = {}
         self.objs: list[str] = []
-        self.done: set = set()                   # (obj, action) pairs already decided
         self._subjects: dict = {}
         self._retired: dict = {}
         self._shared: dict = {}                  # group key -> (layers, {(ledger layer id, action): row})
@@ -1570,6 +1598,23 @@ class _Run:
         for name in names:
             out.update(self.subjects(name))
         return tuple(sorted(out, key=_units))
+
+    def is_done(self, obj: str, action: str) -> bool:
+        if self.bulk:
+            return bool(self.done_bits.get(obj, 0) >> _ACTION_BIT[action] & 1)
+        return (obj, action) in self.done
+
+    def _mark_done(self, obj: str, actions: Sequence[str]) -> None:
+        if self.bulk:
+            self.done_bits[obj] = self.done_bits.get(obj, 0) | _bits(actions)
+        else:
+            self.done.update((obj, x) for x in actions)
+
+    def _mark_read(self, sub: Use, actions: Sequence[str]) -> None:
+        if self.bulk:
+            self.read_bits[sub.obj] = self.read_bits.get(sub.obj, 0) | _bits(actions)
+        else:
+            self.read.setdefault(sub.obj, (sub, []))[1].extend(actions)
 
     def _any_retired(self, subjects: Sequence[str]) -> bool:
         for s in subjects:
@@ -1619,7 +1664,10 @@ class _Run:
             keep = was_passes and not passes
             self.entries[key] = (layer, action, verdict if keep else was, was_passes and passes,
                                  held_recs | set(recs))
-        self.ends.extend(ends)
+        if ends:
+            low = min(ends)
+            if self.end is None or low < self.end:
+                self.end = low
         if not passes and self.failure is None:
             code = ("NO_LAYER" if verdict == "missing" else
                     "LEGACY_DENY" if layer.kind == "legacy" else "DENIED" if verdict == "deny" else
@@ -1638,7 +1686,7 @@ class _Run:
                 gkey=None) -> bool:
         """Decide `actions` on sub.obj, each pair once. False when the object's own tests (a retired subject's
         home, no subject, more than 8 subjects or a name count past the bound) stop the decision (P 6.5 step 1)."""
-        todo = [x for x in actions if (sub.obj, x) not in self.done]
+        todo = [x for x in actions if not self.is_done(sub.obj, x)]
         if not todo:
             return True
         code = ("RETIRED" if self._any_retired(subjects) else "NO_LAYER" if not subjects else
@@ -1647,7 +1695,7 @@ class _Run:
             if self.failure is None:
                 self.failure, self.failed_need = (code, None, None), self.cur
             return False
-        self.done.update((sub.obj, x) for x in todo)
+        self._mark_done(sub.obj, todo)
         shared = self._shared.get(gkey) if gkey is not None else None
         if shared is None:
             layers = required_layers(self.state, sub, legacy=self.legacy, outside=self.outside, subjects=subjects)
@@ -1660,7 +1708,7 @@ class _Run:
         fresh = todo if shared is None else [x for x in todo if x not in shared[1]]
         if fresh:
             self.objs.append(sub.obj)
-            self.read.setdefault(sub.obj, (sub, []))[1].extend(fresh)
+            self._mark_read(sub, fresh)
         for layer in layers:
             ledger = layer.kind in ("consent", "restriction")
             for action in todo:
@@ -1671,6 +1719,11 @@ class _Run:
             shared[1].update(todo)
         return True
 
+    def _read_uses(self) -> Iterable[tuple]:
+        if self.bulk:
+            return _BitsRead(self.proto, self.read_bits)
+        return list(self.read.values())
+
     def result(self) -> Decision:
         proto, state = self.proto, self.state
         order = sorted(self.entries.values(), key=lambda e: (self.layer_pos[e[0].id], ACTIONS.index(e[1])))
@@ -1678,7 +1731,7 @@ class _Run:
                       for (layer, action, verdict, _, recs) in order)
         return Decision(allowed=self.failure is None, at=proto.at, ledger_seq=state.seq, action=proto.action,
                         cited=cited, refusal=None if self.failure is None else Refusal(*self.failure),
-                        until=_until(state, proto.at, self.ends, self.ledger_layers, list(self.read.values())),
+                        until=_until(state, proto.at, self.end, self.ledger_layers, self._read_uses()),
                         horizon=_horizon(state, proto.at, self.ledger_layers, self.objs),
                         versions=self.versions, multi=self.multi)
 
@@ -1728,7 +1781,7 @@ def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = 
         raise RuleError("6.4 need", f"{bulk.action!r} is not an action")
     proto = Use(requester=bulk.requester, place=bulk.place, obj="", copy=bulk.copy, action=bulk.action,
                 purpose=bulk.purpose, at=bulk.at)
-    run = _Run(state, proto, legacy, outside, multi=True, group=group)
+    run = _Run(state, proto, legacy, outside, multi=True, group=group, bulk=True)
     if not run.before_any_object():
         return run.result()
     objects = sorted(set(bulk.objects), key=_units)
@@ -1751,7 +1804,7 @@ def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = 
         if _kind_of(obj) in ("road", "trail"):
             names = set(bulk.names(obj))
             ok = run.process(replace(proto, obj=obj), closure, run.subjects(obj, tuple(names)))
-            fresh = sorted((m for m in names if (m, "recall") not in run.done), key=_units) if ok else ()
+            fresh = sorted((m for m in names if not run.is_done(m, "recall")), key=_units) if ok else ()
             for m in fresh:
                 subjects = run.subjects(m)
                 ok = run.process(replace(proto, obj=m), ("recall",), subjects,
