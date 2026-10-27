@@ -259,7 +259,10 @@ Interfaces every task can rely on, by the task that makes them:
 - Modify: `peer/superyak_peer/grants.py` (`_insert_grant` :60-70, `_budget_used` :84-87, `_grant_validity` :95-122)
 - Create: `peer/superyak_peer/moderators.py` (the schema and an empty `Moderators` mixin)
 - Modify: `peer/superyak_peer/db.py` (imports, `Store` bases, the schema script)
-- Test: `peer/tests/test_moderate_grants.py` (create)
+- Test: `peer/tests/test_moderate_grants.py` (create); modify `peer/tests/test_restore.py`
+  (`COORDINATION_TABLES` :1392 gains `'member_changes'` and `'grant_origins'`, so
+  `test_every_table_is_either_reconciled_or_named_coordination` still passes; Task 8 moves `'member_changes'` to
+  `RECONCILED_TABLES`)
 
 **Interfaces:**
 - Produces: `MODERATE_ACTIONS`, `is_moderate`, `_insert_grant(..., actions=('direct',))`, `_covered_room`,
@@ -430,13 +433,13 @@ its docstring only. In `db.py` import `Moderators, MODERATE_SCHEMA`, append `Mod
 
 - [ ] **Step 4: Run the tests to see them pass, and the grants files**
 
-Run: `cd peer && uv run --locked --python 3.11 python -m pytest tests/test_moderate_grants.py tests/test_grants.py tests/test_grant_tickets.py -q -p no:cacheprovider`
+Run: `cd peer && uv run --locked --python 3.11 python -m pytest tests/test_moderate_grants.py tests/test_grants.py tests/test_grant_tickets.py tests/test_restore.py -q -p no:cacheprovider`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add peer/superyak_peer/grants.py peer/superyak_peer/moderators.py peer/superyak_peer/db.py peer/tests/test_moderate_grants.py
+git add peer/superyak_peer/grants.py peer/superyak_peer/moderators.py peer/superyak_peer/db.py peer/tests/test_moderate_grants.py peer/tests/test_restore.py
 git commit -m "Room moderators 1: the moderate grant's shape, coverage and validity (M1, M4, M5)"
 ```
 
@@ -447,7 +450,11 @@ git commit -m "Room moderators 1: the moderate grant's shape, coverage and valid
   :289-306, `_grant_view` :179-212), `peer/superyak_peer/app.py` (after `grant_make` :493-497),
   `peer/superyak_peer/system_author.py` (docstrings :1-5, :34-38), `peer/API.md` (Grants)
 - Test: `peer/tests/test_moderate_grants.py`; modify `peer/tests/test_ship_briefs.py`
-  (`test_only_two_notices_are_written_by_the_system_author`)
+  (`test_only_two_notices_are_written_by_the_system_author`); modify `peer/tests/test_grants.py`:
+  `::test_a_grant_shows_its_people_ships_rooms_budget_and_validity` compares a whole grant view with `==`, so its
+  expected view gains `'actions': ['direct'], 'made_via': None` (its grant is made by `_insert_grant`, so it has no
+  origin row); `::test_a_grant_made_in_the_browser_is_stored_signed_and_shown` gains `'actions': ['direct'],
+  'made_via': 'browser'` (ruling 16)
 
 **Interfaces:**
 - Consumes: Task 1's `_insert_grant(actions=)`, `_covered_room`, `MODERATE_ACTIONS`.
@@ -660,7 +667,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add peer/superyak_peer/moderators.py peer/superyak_peer/grants.py peer/superyak_peer/app.py peer/superyak_peer/system_author.py peer/API.md peer/tests/test_moderate_grants.py peer/tests/test_ship_briefs.py
+git add peer/superyak_peer/moderators.py peer/superyak_peer/grants.py peer/superyak_peer/app.py peer/superyak_peer/system_author.py peer/API.md peer/tests/test_moderate_grants.py peer/tests/test_ship_briefs.py peer/tests/test_grants.py
 git commit -m "Room moderators 2: making a moderate grant, its appointment and end notices, made_via (M1-M3, M13, M19, M20)"
 ```
 
@@ -1358,6 +1365,16 @@ def test_a_self_removed_moderator_added_back_by_another_keeps_its_grant_revoked(
     assert drop(login(c.app, 'jenn'), c.room, c.jenn['id']).status_code == 200
     assert add(login(c.app, 'doctor'), c.room, c.jenn['id']).status_code == 201  # not the owner's removal: allowed
     assert validity(c.store, grant) == (False, f'Grant #{grant[:4]} was revoked by Jenn')
+
+
+def test_a_removal_under_an_add_only_grant_is_refused_and_writes_nothing(city):
+    """T3, the reverse of Task 5's remove-only case: only self-removal ignores the grant's actions (R-S4)."""
+    c = city
+    grant = moderate(c.store, c.andy, c.jenn, c.room, actions=['add_member'])
+    jenn, before = login(c.app, 'jenn'), snapshot(c.store)
+    refused = drop(jenn, c.room, c.doctor['id'])
+    assert (refused.status_code, refused.json()['error']) == (403, f"Grant #{grant[:4]} doesn't let you remove members")
+    assert snapshot(c.store) == before
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -1550,7 +1567,8 @@ git commit -m "Room moderators 7: ship member routes, moderating, moderators, an
 **Files:**
 - Modify: `peer/superyak_peer/backups.py` (`COMPARED` :380-387, a new step after `_add_budget_uses_like_replaced`
   :549-562, the step tuple in `reconcile` :912-914), `peer/API.md` (Restoring)
-- Test: `peer/tests/test_moderate_grants.py`
+- Test: `peer/tests/test_moderate_grants.py`; modify `peer/tests/test_restore.py`: `'member_changes'` moves from
+  `COORDINATION_TABLES` (Task 1) to `RECONCILED_TABLES` (:1387), because this step reads and changes it
 
 **Interfaces:**
 - Produces: `_add_member_changes_like_replaced(db, old, now, report)`; report count `member changes added`.
@@ -1623,7 +1641,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add peer/superyak_peer/backups.py peer/API.md peer/tests/test_moderate_grants.py
+git add peer/superyak_peer/backups.py peer/API.md peer/tests/test_moderate_grants.py peer/tests/test_restore.py
 git commit -m "Room moderators 8: a restore copies the act log, so budgets and the owner's removals survive (M20, G13)"
 ```
 
@@ -1915,7 +1933,7 @@ def test_add_and_remove_report_what_the_station_did(station):
                                   'is revoked. 1 claim was released. ' + TAIL)
     fake.member_refusal = (403, 'Jenn moderates this room too; only Andy can remove a moderator')
     assert call(tools_for(fake), 'station_remove_member', room=new, member='jenn') == (
-        'station error: Jenn moderates this room too; only Andy can remove a moderator', True)
+        'station error: 403: Jenn moderates this room too; only Andy can remove a moderator', True)
 
 
 def test_station_rooms_marks_the_rooms_this_ship_moderates(station):
@@ -2093,8 +2111,21 @@ Expected: a merge commit; the push succeeds.
 
 - [ ] **Step 8: Restart the user units and check them**
 
-Run: `systemctl --user restart superyak-lighthouse superyak-door && sleep 5 && systemctl --user is-active superyak-lighthouse superyak-door && curl -fsS http://127.0.0.1:7435/api/health && journalctl --user-unit superyak-lighthouse -n 30 --no-pager`
-Expected: `active` twice, `{"ok":true}`, no traceback, the version-check line. Then `make station-rooms` (read-only)
+These are user units (`systemctl --user`). The ship, Odo and Wormhole units run agent code from the main checkout
+(`agent/run_agent.py`), and the merge changes `agent/superyak_agent`, so they restart too, with any `superyak-ship-*`
+units.
+
+```bash
+for unit in lighthouse door ship odo wormhole; do systemctl --user restart superyak-$unit; done
+sleep 5
+for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done
+for unit in $(systemctl --user list-units --plain --no-legend 'superyak-ship-*' | awk '{print $1}'); do systemctl --user restart "$unit"; done
+systemctl --user list-units --plain --no-legend 'superyak-ship-*'   # each active running; none is fine
+curl -fsS http://127.0.0.1:7435/api/health && journalctl --user-unit superyak-lighthouse -n 30 --no-pager
+```
+
+Expected: five lines ending in `active`, `{"ok":true}`, no traceback, the version-check line. If a unit isn't active,
+show `journalctl --user-unit <unit> -n 50 --no-pager`, then revert as this step says. Then `make station-rooms` (read-only)
 lists Andy's rooms as before, with no moderators yet, and this prints `['grant_origins', 'member_changes']`:
 
 ```bash
