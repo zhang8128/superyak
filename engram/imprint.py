@@ -1347,6 +1347,173 @@ def list_imprints(root: Path) -> list[dict]:
     return rows
 
 
+# ---------------------------------------------------------------- the owner's machine: the station's receipts (I 12)
+
+IMPORT_AGENT = "agent:station-imprints"
+ROAD_BATCH = 100_000                 # a bulk use names at most this many roads and trails (I 8)
+_USE_NEED = frozenset({("memory", "recall", _TRAIL_EVALUATION), ("memory", "read", _TRAIL_EVALUATION),
+                       ("road-or-trail", "route", _TRAIL_EVALUATION)})
+_ADMISSION_EVENTS = frozenset({"admitted", "failed", "denied"})
+_REFUSED_EVENTS = frozenset({"failed", "denied", "refused"})
+_KINDS_OF = {"memory": ("memory",), "road-or-trail": ("road", "trail")}
+
+
+def _json_lines(path: Path) -> Iterator:
+    """The elements of an owner's list (R30): a JSON array with one element a line, read a line at a time."""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip().rstrip(",")
+            if line not in ("", "[", "]"):
+                yield json.loads(line)
+
+
+def _row_id(receipt_id: str, action: str, purpose: str, batch: str) -> str:
+    """R13: ``u-`` + the first 32 hex of SHA-256 of the receipt id, action, purpose and batch number. The batches of
+    roads and trails are written ``road<n>``: a memory row and a road row of one action and purpose are different
+    rows."""
+    return "u-" + hashlib.sha256((receipt_id + action + purpose + batch).encode()).hexdigest()[:32]
+
+
+def _count(value) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def _importable(record: dict, route: bool):
+    """(need, N) for a receipt of a use, else None. ``need`` is the (object kind, action, purpose) set the use
+    needed; N is the roads and trails the receipt counts, or None."""
+    event, detail = record.get("event"), record.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    if event in _ADMISSION_EVENTS:
+        if event != "admitted" and "term" not in detail:
+            return None                                     # a failure of a step, or a denial naming no term
+        return NEED_ADMISSION(route), (_count(detail.get("roads_and_trails")) if event == "admitted" else None)
+    if event in ("use-finished", "refused"):
+        actions, purpose = detail.get("actions"), detail.get("purpose")
+        need = frozenset(n for n in _USE_NEED if n[1] in (actions or ()) and n[2] == purpose)
+        objects = detail.get("objects")
+        found = objects.get("roads_and_trails") if isinstance(objects, dict) else detail.get("roads_and_trails")
+        return need, _count(found)
+    return None
+
+
+def import_receipts(imprint_id: str, *, home: Path, engram_home: Path) -> int:
+    """Writes the rows of section 12 for each verified receipt of a use of ``home/imprints/<imprint id>/`` that
+    ``permission-uses.db`` does not hold yet, and returns how many it wrote. A machine with no permissions ledger
+    does nothing. Importing twice adds nothing: a row's id is fixed by the receipt, action, purpose and batch."""
+    from imprint_copies import saved_receipts, verified_ids
+    from lighthouse_protocol import canonical_json
+    from permission_ledger import Ledger, ledger_path
+    from permission_uses import UseRow, Uses
+
+    folder = Path(home) / "imprints" / imprint_id
+    if not ledger_path(Path(engram_home)).is_file():
+        return 0
+    verified = verified_ids(folder)
+    try:
+        permission = json.loads((folder / "permission.json").read_text())
+        record = permission["record"]
+        terms = terms_of(permission)
+        station = record["station"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+    led = Ledger.open_read_only(Path(engram_home))
+    try:
+        owner = led.meta()["owner"]
+    finally:
+        led.close()
+    saved = [r for r in saved_receipts(folder) if r["record"].get("id") in verified]
+    ends = [r["valid_until"] for r in record["records"]]
+    ends += [r["record"]["detail"]["valid_until"] for r in saved
+             if r["record"].get("event") == "shortened" and type(r["record"].get("detail", {}).get("valid_until")) is int]
+    until = min(ends)
+    place = record["records"][0]["selector"]["audience"][0]
+    copy = f"imprint:{station}/{imprint_id}"
+    cited = {kind: canonical_json(sorted(r["id"] for r in record["records"]
+                                         if set(r["selector"]["objects"]["kinds"]) & set(_KINDS_OF[kind])))
+             for kind in _KINDS_OF}
+    objects_path, subjects_path = folder / "objects.json", folder / "subjects.json"
+    written = 0
+    uses = Uses.open(Path(engram_home))
+    try:
+        def exists(row_id: str) -> bool:
+            return uses.conn.execute("SELECT 1 FROM uses WHERE id = ?", (row_id,)).fetchone() is not None
+
+        for receipt in saved:
+            body = receipt["record"]
+            found = _importable(body, terms.route)
+            if found is None:
+                continue
+            need, n = found
+            event, term = body["event"], (body.get("detail") or {}).get("term")
+            allowed = int(event in ("admitted", "use-finished"))
+            code = {"valid_from": "NOT_YET", "end": "EXPIRED"}.get(term, "NO_ALLOW")
+
+            def make(kind: str, action: str, purpose: str, batch: str, returned: str | None) -> tuple[str, UseRow]:
+                row_id = _row_id(body["id"], action, purpose, batch)
+                return row_id, UseRow(
+                    at=body["at"], ledger_id=station, ledger_seq=receipt["seq"], agent=IMPORT_AGENT, place=place,
+                    acting_for=record["owner"], action=action, purpose=purpose, allowed=allowed, cited=cited[kind],
+                    id=row_id, copy=copy, until=until, returned=returned,
+                    refusal=None if event not in _REFUSED_EVENTS else
+                    canonical_json({"code": code, "layer": None, "action": action}))
+
+            memory = sorted((a, p) for k, a, p in need if k == "memory")
+            if memory and objects_path.is_file():
+                refs = _json_lines(objects_path)
+                pairs = _json_lines(subjects_path) if subjects_path.is_file() else iter(())
+                waiting = next(pairs, None)
+                batch_no = 0
+                while True:
+                    refs_here = list(itertools.islice(refs, USE_BATCH))
+                    if not refs_here:
+                        break
+                    shipped = set(refs_here)
+                    subjects = {(owner, ref) for ref in refs_here}
+                    while waiting is not None and waiting[0] <= refs_here[-1]:
+                        if waiting[0] in shipped:
+                            subjects.add((waiting[1], waiting[0]))
+                        waiting = next(pairs, None)
+                    returned = canonical_json({"count": len(refs_here), "sha256": hashlib.sha256(
+                        "\n".join(sorted(refs_here)).encode()).hexdigest()})
+                    for action, purpose in memory:
+                        row_id, row = make("memory", action, purpose, str(batch_no), returned)
+                        if not exists(row_id):
+                            uses.append_imported(row, sorted(subjects))
+                            written += 1
+                    batch_no += 1
+            roads = sorted((a, p) for k, a, p in need if k == "road-or-trail") if terms.route else []
+            sizes = ([None] if n is None else
+                     [min(ROAD_BATCH, n - i) for i in range(0, n, ROAD_BATCH)])      # None: the station did not count
+            for action, purpose in roads:
+                for j, size in enumerate(sizes):
+                    row_id, row = make("road-or-trail", action, purpose, f"road{j}",
+                                       None if size is None else canonical_json({"count": size}))
+                    if not exists(row_id):
+                        uses.append_imported(row, [(owner, copy)])
+                        written += 1
+    finally:
+        uses.close()
+    return written
+
+
+def _import_receipts(args) -> int:
+    root = Path(args.superyak_home) / "imprints"
+    found = sorted(p.name for p in root.iterdir() if p.is_dir() and p.name.startswith(args.id.lower())) if root.is_dir() else []
+    if len(args.id) < 4 or len(found) != 1:
+        print(f"{args.id} matches {'no' if not found else 'more than one'} imprint kept here; give 4 or more characters "
+              f"of its id.", file=sys.stderr)
+        return 2
+    engram_home = args.engram_home or _default_engram_home()
+    from permission_ledger import ledger_path
+    if not ledger_path(Path(engram_home)).is_file():
+        print("There is no permissions ledger here, so nothing was imported.")
+        return 0
+    count = import_receipts(found[0], home=Path(args.superyak_home), engram_home=Path(engram_home))
+    print(f"{count} uses imported.")
+    return 0
+
+
 def _admit(args) -> int:
     root = Path(args.imprints_dir)
     if not _UUID.fullmatch(args.id):
@@ -1455,6 +1622,10 @@ def _parser() -> argparse.ArgumentParser:
     u.add_argument("--trails-cmd", help="the trails command (one string); default trails.py")
     ls = sub.add_parser("list", help="on the Pi: the admitted imprints")
     ls.add_argument("--imprints-dir", type=Path, required=True)
+    im = sub.add_parser("import-receipts", help="enter the verified station receipts of an imprint in the use list")
+    im.add_argument("--id", required=True, help="the imprint's first 4 or more characters")
+    im.add_argument("--superyak-home", type=Path, default=Path.home() / ".superyak")
+    im.add_argument("--engram-home", type=Path)
     return ap
 
 
@@ -1585,6 +1756,8 @@ def main(argv: list[str] | None = None, *, clock=time.time) -> int:
             return _use(args)
         if args.command == "list":
             return _list(args)
+        if args.command == "import-receipts":
+            return _import_receipts(args)
     except PlanBusy as busy:
         print(str(busy), file=sys.stderr)
         return 4

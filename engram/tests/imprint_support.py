@@ -5,6 +5,7 @@ Nothing here opens a stamped file with ``Storage(path)``: writers use
 ``Storage.open_read_only`` (an imprint refuses a writable open).
 """
 import ast
+import json
 import re
 import shutil
 import sqlite3
@@ -2146,3 +2147,163 @@ def recording_replace(order: list):
         return real(src, dst, *args, **kwargs)
 
     return replace
+
+
+# ---------------------------------------------------------------- Task 45: the owner's side of the receipts
+
+IMPRINT_ID = "c0a8f5e2-7b1d-4a3c-9e5f-2d6b8a1c4e70"
+STATION = "5" * 64
+
+
+def ledger_home(tmp_path: Path, owner: str = "andy") -> Path:
+    """An engram home holding a permissions ledger for ``owner`` and nothing else."""
+    from permission_ledger import Ledger
+
+    home = Path(tmp_path) / "engram"
+    Ledger.create(home, owner, now=T("2026-11-01")).close()
+    return home
+
+
+def state_of(engram_home: Path):
+    from permission_ledger import Ledger
+
+    led = Ledger.open_read_only(engram_home)
+    try:
+        return led.state()
+    finally:
+        led.close()
+
+
+def _record(id_: str, kinds: list, actions: list, purposes: list, owner: str) -> dict:
+    return {"id": id_, "layer": f"place:home/{owner}", "effect": "allow",
+            "selector": {"audience": [f"place:home/{owner}"], "requesters": ["agent:station-imprints"],
+                         "objects": {"kinds": kinds}, "actions": actions, "purposes": purposes},
+            "valid_from": 1, "valid_until": T("2027-01-30"), "created": 1}
+
+
+def _write_lines(path: Path, items) -> None:
+    path.write_text("[\n" + ",\n".join(json.dumps(i) for i in items) + ("\n" if items else "") + "]\n")
+
+
+def _receipt_record(n: int, event: str, detail: dict, at: int) -> dict:
+    return {"kind": "imprint-receipt", "station": STATION, "id": f"rc{n:02d}-{event}", "permission": "req1",
+            "event": event, "actor_id": "o", "at": at, "detail": detail, "previous": "0" * 64}
+
+
+def _detail(event: str, n, term, route: bool, count: int) -> dict:
+    if event == "admitted":
+        return {"checks": 17, "report_sha256": "a" * 64, "skipped": [], "roads_and_trails": n or 0, "sessions_too_large": 0}
+    if event in ("denied", "failed"):
+        return {"term": term} if term else ({} if event == "denied" else {"step": "calibration", "message": "x"})
+    actions = ["read", "recall", "route"]
+    use = {"use": "trail-evaluation", "actions": actions, "purpose": "trail-evaluation"}
+    if event == "use-finished":
+        return {**use, "use_id": "u1", "end": 5,
+                "objects": {"imprint": IMPRINT_ID, "count": count, "roads_and_trails": n or 0}}
+    if event == "refused":
+        return {**use, "term": term or "end", **({"roads_and_trails": n} if n is not None else {})}
+    return {}
+
+
+def add_receipt(home: Path, event: str, *, n=None, term=None, verified: bool = True, route: bool = False, memories: int = 0):
+    folder = Path(home) / "imprints" / IMPRINT_ID
+    existing = sorted((folder / "receipts").glob("*.json"))
+    seq = len(existing) + 1
+    record = _receipt_record(seq, event, _detail(event, n, term, route, memories) if event != "deleted"
+                             else {"reason": "ended", "files": 1, "limits": "x"}, 1_800_000_000 + seq * 100)
+    (folder / "receipts" / f"{seq}-{IMPRINT_ID}.json").write_text(
+        json.dumps({"seq": seq, "record": record, "signature": "sig"}))
+    if verified:
+        vf = folder / "verified.json"
+        doc = json.loads(vf.read_text())
+        doc["verified"].append(record["id"])
+        vf.write_text(json.dumps(doc))
+    return record
+
+
+def imported_home(tmp_path: Path, *, memories: int = 3, route: bool = False, receipts=("admitted",), owner: str = "andy",
+                  subjects=None) -> Path:
+    """What ``make imprint-status`` and ``verify-imprint`` leave under ``~/.superyak/imprints/<id>/``."""
+    home = Path(tmp_path) / "superyak"
+    folder = home / "imprints" / IMPRINT_ID
+    (folder / "receipts").mkdir(parents=True)
+    refs = sorted(f"mem:S/episode/m{i:05d}" for i in range(memories))
+    _write_lines(folder / "objects.json", refs)
+    _write_lines(folder / "subjects.json", sorted([refs[i], s] for i, extra in (subjects or {}).items() for s in extra))
+    records = [_record("r-mem", ["memory"], ["imprint", "read", "recall"],
+                       ["calibration", "trail-evaluation"] if route else ["calibration"], owner)]
+    if route:
+        records.append(_record("r-road", ["road", "trail"], ["imprint", "read", "recall", "route"], ["trail-evaluation"], owner))
+    permission = {"kind": "imprint-permission", "station": STATION, "id": "req1", "owner": f"person:{owner}",
+                  "imprint_id": IMPRINT_ID, "attestation": "others-copied-at-home-v1", "records": records}
+    for r in records:
+        r["selector"]["actions"] = sorted(r["selector"]["actions"])
+    (folder / "permission.json").write_text(json.dumps({"record": permission, "signature": "s", "station_key": "k"}))
+    (folder / "verified.json").write_text(json.dumps({"station_key": "k", "verified": [], "chain": "intact", "pin": "pinned"}))
+    for spec in receipts:
+        event, n, term = (spec, None, None) if isinstance(spec, str) else (*spec, *([None] * (3 - len(spec))))
+        add_receipt(home, event, n=n, term=term, route=route, memories=memories)
+    return home
+
+
+def add_verified(home: Path, event: str, **kw):
+    return add_receipt(home, event, **kw)
+
+
+def saved_receipts(home: Path) -> list:
+    folder = Path(home) / "imprints" / IMPRINT_ID / "receipts"
+    return [json.loads(p.read_text()) for p in sorted(folder.glob("*.json"))]
+
+
+def shipped_refs(home: Path) -> list:
+    return json.loads((Path(home) / "imprints" / IMPRINT_ID / "objects.json").read_text())
+
+
+def first_ref(home: Path) -> str:
+    return shipped_refs(home)[0]
+
+
+def imported_rows(engram_home: Path) -> list:
+    from permission_uses import Uses
+
+    uses = Uses.open_read_only(engram_home)
+    try:
+        rows = []
+        for r in uses.conn.execute("SELECT * FROM uses ORDER BY seq"):
+            d = dict(r)
+            d["subjects"] = [(s["subject"], s["object"]) for s in uses.conn.execute(
+                "SELECT subject, object FROM use_subjects WHERE use_seq=? ORDER BY rowid", (r["seq"],))]
+            rows.append(d)
+        return rows
+    finally:
+        uses.close()
+
+
+def subject_pairs(engram_home: Path, *, action: str) -> list:
+    return [p for r in imported_rows(engram_home) if r["action"] == action and r["object"] is None
+            for p in r["subjects"] if p[1].startswith("mem:")]
+
+
+def subject_rows(engram_home: Path, *, action: str) -> int:
+    return len(subject_pairs(engram_home, action=action))
+
+
+def is_copy_subject(row: dict) -> bool:
+    return any(obj.startswith("imprint:") for _, obj in row["subjects"])
+
+
+def render(listed) -> str:
+    lines = [c["line"] for c in listed.copies]
+    lines += [f"{r['action']} {r['purpose']} {r['id']}" for r in listed.rows]
+    return "\n".join(lines)
+
+
+def render_list(engram_home: Path, home: Path) -> str:
+    from imprint_copies import copies_held
+    from permission_uses import Uses
+
+    uses = Uses.open_read_only(engram_home)
+    try:
+        return render(uses.owner_list(state_of(engram_home), copies=copies_held(home)))
+    finally:
+        uses.close()

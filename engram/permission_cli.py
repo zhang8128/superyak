@@ -666,14 +666,23 @@ def _use_line(r: dict) -> list[str]:
     return lines
 
 
+def _copies_held() -> list:
+    """The imprint copies this machine holds at a station (imprint_copies reads two files and loads no numpy)."""
+    from imprint_copies import copies_held
+    return copies_held(Path(os.environ.get("SUPERYAK_HOME") or Path.home() / ".superyak"))
+
+
 def _uses(a) -> int:
     from permission_uses import Uses, uses_path
+    copies = []
     with _ledger(read_only=True) as led:
         state = led.state()
         owner = state.meta["owner"]
         place = _qualify("place", a.place) if a.place else None
         if not uses_path(led.root).is_file():
             shown = None
+            if place is None:
+                copies = _copies_held()
         else:
             uses = Uses.open_read_only(led.root)
             try:
@@ -683,13 +692,16 @@ def _uses(a) -> int:
                 if place is not None and place in state.places and owner in stewards(state, place):
                     shown = uses.place_view(state, place, **filters)            # a place he stewards: P 9.2's view
                 else:
-                    shown = uses.owner_list(state, place=place, **filters)
+                    copies = _copies_held()
+                    shown = uses.owner_list(state, place=place, copies=copies, **filters)
             finally:
                 uses.close()
     counts, rows = (shown.counts, shown.rows) if shown else ({"total": 0, "local": 0, "imported": 0}, [])
     if a.json:
-        print(json.dumps({"counts": counts, "rows": rows}, sort_keys=True))
+        print(json.dumps({"counts": counts, "rows": rows, "copies": copies}, sort_keys=True))
         return 0
+    for c in copies:
+        print(_clean(c["line"]))
     if not rows:
         print("No uses.")
         return 0
