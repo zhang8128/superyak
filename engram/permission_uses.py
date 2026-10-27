@@ -580,12 +580,11 @@ def _refusal_note(state: State, r, refusal) -> str | None:
 def _self_claims(state: State) -> list:
     """(object, "Jenn claimed m3 on 2026-11-03", the time of the claim) for each live self-claimed co-subject."""
     out = []
-    for obj, rows in state.subjects.items():
-        for s in rows:
-            if s.self_claimed and s.removed_seq is None and s.added_seq in state.seq_at:
-                at = state.seq_at[s.added_seq]
-                day = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%d")
-                out.append((obj, f"{_name(s.subject)} claimed {_short(obj)} on {day}", at))
+    for s in state.self_claims:
+        if s.added_seq in state.seq_at:
+            at, obj = state.seq_at[s.added_seq], s.object
+            day = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%d")
+            out.append((obj, f"{_name(s.subject)} claimed {_short(obj)} on {day}", at))
     return out
 
 

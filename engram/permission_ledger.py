@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import dataclasses
 import os
 import sqlite3
 import threading
@@ -86,11 +87,14 @@ CREATE INDEX records_layer ON records(layer);
 CREATE INDEX grants_layer ON permission_grants(layer);
 CREATE INDEX place_stewards_place ON place_stewards(place);
 CREATE INDEX collection_members_object ON collection_members(object);
+CREATE INDEX collection_members_collection ON collection_members(collection);
 CREATE INDEX subjects_object ON subjects(object);
 CREATE INDEX lane_notes_object ON lane_notes(object);
 CREATE INDEX group_members_group ON group_members(group_id);
 """
 
+# the tables a State reads per object, through StateRows, and not whole
+_PER_OBJECT = frozenset({"subjects", "lane_notes", "collection_members", "copies"})
 # table order for tables(): the order of the schema
 _TABLES = tuple(_COLUMNS)
 _LOG_COLUMNS = ("seq", "at", "kind", "ref", "actor", "channel", "under_grant", "proposal_id", "body",
@@ -161,6 +165,195 @@ class LogTimes(Mapping):
 
     def __len__(self) -> int:
         return self._query("SELECT COUNT(*) FROM ledger_log WHERE seq <= ?", (self._seq,))[0][0]
+
+class _Spec:
+    """How one per-object table is read: its key column, the column that says when a row was added, the rows'
+    order within a key, the columns that go back to null while their seq is in the future (`permissions._UNDONE`)
+    and the columns whose strings repeat, which a State pools."""
+    def __init__(self, table: str, key: str, order: str, pooled: Sequence[str]):
+        self.table, self.key, self.order = table, key, order
+        cols = permissions._COLUMNS[table]
+        self.cols = ", ".join(cols)
+        self.added = permissions._ADDED[table]
+        self.make = permissions._ROW[table]
+        self.key_at = cols.index(key)
+        self.pooled = tuple(cols.index(c) for c in pooled)
+        undone = permissions._UNDONE.get(table)
+        self.seq_at = cols.index(undone[0]) if undone else None
+        self.clear = tuple(cols.index(c) for c in undone[1]) if undone else ()
+
+
+_SPECS = {
+    "subjects": _Spec("subjects", "object", "rowid", ("subject", "added_by", "removed_by")),
+    "member_of": _Spec("collection_members", "object", "rowid", ("collection", "backing", "added_by", "removed_by")),
+    "collection_members": _Spec("collection_members", "collection", "rowid",
+                                ("collection", "backing", "added_by", "removed_by")),
+    "lane_notes": _Spec("lane_notes", "object", "at, seq, rowid", ("lane",)),
+    "copies": _Spec("copies", "object", "rowid", ()),
+}
+
+
+class StateRows:
+    """The per-object rows of one State, read from the ledger when a decision asks (P 5.6, 15). One bounded cache
+    serves every `RowMap` of the State: at most `permissions.STATE_ROWS` rows (an empty key counts as one), the
+    least recently used keys leaving first. A key whose rows alone pass the bound is returned and not kept.
+    Strings that repeat come from a pool of this State's. A row is read as `State.from_tables` reads it at the
+    State's seq: one added past it is left out, and the `_UNDONE` columns are cleared when their seq is past it.
+    The reader connection is shared between threads under a lock and closed when this object is collected."""
+    BATCH = 512
+
+    def __init__(self, conn: sqlite3.Connection, seq: int):
+        conn.row_factory = None
+        self.conn, self.seq = conn, seq
+        self._db_lock = threading.Lock()
+        self._lock = threading.Lock()
+        self._cache: OrderedDict = OrderedDict()
+        self._held = 0
+        self._pool: dict = {}
+        weakref.finalize(self, conn.close)
+
+    def cached_rows(self) -> int:
+        return self._held
+
+    def _query(self, sql: str, args: tuple) -> list:
+        try:
+            with self._db_lock:
+                return self.conn.execute(sql, args).fetchall()
+        except sqlite3.Error as e:
+            raise LedgerUnreadable(f"the permission ledger's rows could not be read: {e}") from e
+
+    def _build(self, spec: _Spec, vals: tuple):
+        if spec.seq_at is not None:
+            v = vals[spec.seq_at]
+            if v is not None and v > self.seq:
+                vals = list(vals)
+                for i in spec.clear:
+                    vals[i] = None
+        if spec.pooled:
+            vals = list(vals)
+            pool = self._pool
+            for i in spec.pooled:
+                v = vals[i]
+                if v is not None:
+                    vals[i] = pool.setdefault(v, v)
+        return spec.make(*vals)
+
+    def load(self, name: str, keys: Sequence[str]) -> dict:
+        """The rows of each key (an empty tuple for a key with none), read now and not cached."""
+        spec = _SPECS[name]
+        out: dict = {k: [] for k in keys}
+        marks = ", ".join("?" * len(keys))
+        rows = self._query(f"SELECT {spec.cols} FROM {spec.table} WHERE {spec.key} IN ({marks}) "
+                           f"AND {spec.added} <= ? ORDER BY {spec.order}", (*keys, self.seq))
+        for vals in rows:
+            out[vals[spec.key_at]].append(self._build(spec, vals))
+        return {k: tuple(v) for k, v in out.items()}
+
+    def _keep(self, name: str, key: str, rows: tuple) -> None:
+        cost = max(1, len(rows))
+        if cost > permissions.STATE_ROWS:
+            return
+        with self._lock:
+            old = self._cache.pop((name, key), None)
+            if old is not None:
+                self._held -= max(1, len(old))
+            self._cache[(name, key)] = rows
+            self._held += cost
+            while self._held > permissions.STATE_ROWS:
+                _, gone = self._cache.popitem(last=False)
+                self._held -= max(1, len(gone))
+
+    def rows(self, name: str, key) -> tuple:
+        if not isinstance(key, str):
+            return ()
+        with self._lock:
+            hit = self._cache.get((name, key))
+            if hit is not None:
+                self._cache.move_to_end((name, key))
+                return hit
+        rows = self.load(name, (key,))[key]
+        self._keep(name, key, rows)
+        return rows
+
+    def prefetch(self, refs: Sequence[str]) -> None:
+        wanted = list(dict.fromkeys(r for r in refs if isinstance(r, str)))
+        for i in range(0, len(wanted), self.BATCH):
+            chunk = wanted[i:i + self.BATCH]
+            for name in ("subjects", "member_of", "lane_notes", "copies"):
+                with self._lock:
+                    need = [k for k in chunk if (name, k) not in self._cache]
+                if need:
+                    for k, rows in self.load(name, need).items():
+                        self._keep(name, k, rows)
+
+    def count(self, name: str) -> int:
+        spec = _SPECS[name]
+        return self._query(f"SELECT COUNT(DISTINCT {spec.key}) FROM {spec.table} WHERE {spec.added} <= ?",
+                           (self.seq,))[0][0]
+
+    def keys(self, name: str) -> Iterator[str]:
+        spec, last = _SPECS[name], None
+        while True:
+            after = "" if last is None else f"{spec.key} > ? AND "
+            args = (self.seq,) if last is None else (last, self.seq)
+            rows = self._query(f"SELECT DISTINCT {spec.key} FROM {spec.table} WHERE {after}{spec.added} <= ? "
+                               f"ORDER BY {spec.key} LIMIT {self.BATCH}", args)
+            if not rows:
+                return
+            for (k,) in rows:
+                yield k
+            last = rows[-1][0]
+
+    def batches(self, name: str) -> Iterator[dict]:
+        """Every key's rows, in batches of 512 keys, read and not cached."""
+        batch: list = []
+        for k in self.keys(name):
+            batch.append(k)
+            if len(batch) == self.BATCH:
+                yield self.load(name, batch)
+                batch = []
+        if batch:
+            yield self.load(name, batch)
+
+
+class RowMap(Mapping):
+    """A read-only `Mapping` over one per-object table at the State's seq, as `State.from_tables` makes it: the
+    rows of a key as a tuple (or, for `copies` and `copy_seqs`, the source or the seq). A key with no rows is
+    absent. `len` counts the keys at seq, and iteration and `items()` stream in batches of 512 keys."""
+    def __init__(self, reader: StateRows, name: str, project: Callable | None = None):
+        self._reader, self._name, self._project = reader, name, project
+
+    def _out(self, rows: tuple):
+        return rows if self._project is None else self._project(rows[0])
+
+    def __getitem__(self, key):
+        rows = self._reader.rows(self._name, key)
+        if not rows:
+            raise KeyError(key)
+        return self._out(rows)
+
+    def get(self, key, default=None):
+        rows = self._reader.rows(self._name, key)
+        return self._out(rows) if rows else default
+
+    def __contains__(self, key) -> bool:
+        return bool(self._reader.rows(self._name, key))
+
+    def __len__(self) -> int:
+        return self._reader.count(self._name)
+
+    def __iter__(self) -> Iterator[str]:
+        return self._reader.keys(self._name)
+
+    def items(self):
+        for batch in self._reader.batches(self._name):
+            for k, rows in batch.items():
+                if rows:
+                    yield k, self._out(rows)
+
+    def values(self):
+        for _k, v in self.items():
+            yield v
 
 
 @dataclass(frozen=True)
@@ -234,6 +427,13 @@ class Ledger:
             conn.close()
             hot = path.with_name(path.name + "-journal").exists()
             raise LedgerUnreadable(f"{path}: {e}. {_HOT if hot else ''}".strip()) from e
+        if not read_only:
+            try:            # a ledger made before this index was in the schema reads a collection by it
+                conn.execute("CREATE INDEX IF NOT EXISTS collection_members_collection "
+                             "ON collection_members(collection)")
+            except sqlite3.Error as e:
+                conn.close()
+                raise LedgerUnreadable(f"{path}: {e}") from e
         return cls(conn, path, read_only)
 
     @classmethod
@@ -305,7 +505,8 @@ class Ledger:
                     f"a State holds whole (P 5.4, 15); it reads as unreadable (P 5.6) until the records are read "
                     f"per layer")
             tables = {t: [dict(r) for r in self.conn.execute(
-                f"SELECT {', '.join(_COLUMNS[t])} FROM {t} ORDER BY rowid")] for t in _TABLES}
+                f"SELECT {', '.join(_COLUMNS[t])} FROM {t} ORDER BY rowid")] for t in _TABLES
+                if t not in _PER_OBJECT}
             meta = self.meta()
             # the only log bodies a State reads: place names. Log times are read when a decision asks.
             names = {}
@@ -315,11 +516,40 @@ class Ledger:
                 name = json.loads(r["body"]).get("name")
                 if name:
                     names[r["ref"]] = name
+            claims = tuple(self._self_claims(seq))
         finally:
             self.conn.execute("COMMIT")
-        # a second read-only connection: the log is append-only, so rows up to `seq` read the same later
-        reader = self._connect(self.path, read_only=True, shared=True)
-        return State.from_tables(tables, seq=seq, seq_at=LogTimes(reader, seq), meta=meta, names=names)
+        # second read-only connections: the log is append-only and the per-object rows carry the seqs that say
+        # what they were, so rows up to `seq` read the same later
+        reader = StateRows(self._connect(self.path, read_only=True, shared=True), seq)
+        state = State.from_tables(tables, seq=seq, seq_at=LogTimes(self._connect(self.path, read_only=True,
+                                                                                  shared=True), seq),
+                                  meta=meta, names=names)
+        return dataclasses.replace(
+            state, subjects=RowMap(reader, "subjects"), lane_notes=RowMap(reader, "lane_notes"),
+            member_of=RowMap(reader, "member_of"), collection_members=RowMap(reader, "collection_members"),
+            copies=RowMap(reader, "copies", lambda r: r.source),
+            copy_seqs=RowMap(reader, "copies", lambda r: r.added_seq), self_claims=claims, _loader=reader)
+
+    def _self_claims(self, seq: int) -> Iterator:
+        """The live self-claimed subject rows at `seq`, objects in the order of their first row (7.4)."""
+        cols = ", ".join("s." + c for c in _COLUMNS["subjects"])
+        for r in self.conn.execute(
+                f"SELECT {cols} FROM subjects s WHERE s.self_claimed != 0 AND s.added_seq <= ? "
+                f"AND (s.removed_seq IS NULL OR s.removed_seq > ?) "
+                f"ORDER BY (SELECT MIN(f.rowid) FROM subjects f WHERE f.object = s.object AND f.added_seq <= ?), "
+                f"s.rowid", (seq, seq, seq)).fetchall():
+            row = permissions._ROW["subjects"](*r)
+            yield row._replace(removed_seq=None, removed_by=None)
+
+    def pending_lane_notes(self) -> Iterator[str]:
+        """The objects whose latest lane note at the ledger's seq is `pending`, streamed (P 5.3)."""
+        seq = self.seq()
+        for (obj,) in self.conn.execute(
+                "SELECT n.object FROM lane_notes n WHERE n.lane = 'pending' AND n.seq <= ? AND NOT EXISTS ("
+                "SELECT 1 FROM lane_notes m WHERE m.object = n.object AND m.seq <= ? AND "
+                "(m.at, m.seq, m.rowid) > (n.at, n.seq, n.rowid)) ORDER BY n.object", (seq, seq)):
+            yield obj
 
     def verify(self) -> int | None:
         prev, expect = ZERO, 1

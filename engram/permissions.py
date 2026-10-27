@@ -15,6 +15,8 @@ from lighthouse_protocol import canonical_json
 
 MAX_RECORDS_PER_LAYER = 256
 MAX_RECORDS = 16_384            # records in one ledger, revoked and replaced ones included (5.4, 15)
+PREFETCH_CHUNK = 512            # refs a bulk decision or an eligible set prefetches at once
+STATE_ROWS = 65_536             # per-object rows a State keeps at once; the rest are read again on demand (5.6, 15)
 STATE_LOG_TIMES = 65_536        # log times a State keeps at once; the rest are read again on demand (5.6, 15)
 MAX_AUDIENCE = 32
 MAX_LIST = 64
@@ -446,7 +448,15 @@ class State:
     member_of: Mapping[str, tuple]       # collection_members by object
     subjects: Mapping[str, tuple]
     lane_notes: Mapping[str, tuple]      # ordered by (at, seq)
+    self_claims: tuple = ()              # the live self-claimed subject rows at seq (7.4), none in step 1
     _cache: dict = field(default_factory=dict, compare=False, repr=False)
+    _loader: object = field(default=None, compare=False, repr=False)   # the ledger's row reader, if lazy
+
+    def prefetch(self, refs: Sequence[str]) -> None:
+        """Load the per-object rows of up to 512 refs in one query each, so a chunk of decisions reads them from
+        the cache. A no-op for a State built whole."""
+        if self._loader is not None:
+            self._loader.prefetch(refs)
 
     @classmethod
     def from_tables(cls, tables: Mapping[str, Sequence], *, seq: int, seq_at: Mapping[int, int],
@@ -493,7 +503,8 @@ class State:
         kw["names"] = {p: given.get(p, p.rsplit("/", 1)[-1].removeprefix("place:")) for p in kw["places"]}
         # a dict is copied; any other mapping (the ledger's lazy log times) is kept as given
         seq_at = dict(seq_at) if isinstance(seq_at, dict) else seq_at
-        return cls(seq=seq, seq_at=seq_at, meta=dict(meta), **kw)
+        claims = tuple(s for g in kw["subjects"].values() for s in g if s.self_claimed and s.removed_seq is None)
+        return cls(seq=seq, seq_at=seq_at, meta=dict(meta), self_claims=claims, **kw)
 
     def to_tables(self) -> dict:
         def dump(table, items):
@@ -1734,7 +1745,9 @@ def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = 
                     return run.result()
     del named
     closure = _CLOSURE[bulk.action]
-    for obj in objects:
+    for i, obj in enumerate(objects):
+        if i % PREFETCH_CHUNK == 0:
+            state.prefetch(objects[i:i + PREFETCH_CHUNK])
         if _kind_of(obj) in ("road", "trail"):
             names = set(bulk.names(obj))
             ok = run.process(replace(proto, obj=obj), closure, run.subjects(obj, tuple(names)))
@@ -1786,7 +1799,9 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
     decisions: dict[str, Decision] = {}
     made: dict[tuple, Decision | None] = {}
     horizons: list[int] = []
-    for p in placements:
+    for i, p in enumerate(placements):
+        if i % PREFETCH_CHUNK == 0:
+            state.prefetch([q.obj for q in placements[i:i + PREFETCH_CHUNK] if q.obj is not None])
         if p.obj is None or (p.obj, p.copy) in made:
             continue
         u = Use(requester=requester, place=place, obj=p.obj, copy=p.copy, action=action, purpose=purpose, at=at)
