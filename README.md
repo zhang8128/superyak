@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/superyak-logo.svg" width="260" alt="Three super yaks in capes and sunglasses, each with a gold diamond Y, on a jutting rock at sunrise"></p>
+
 # Superyak
 
 The product goal is an **open-source, peer-to-peer system** where people have
