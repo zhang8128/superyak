@@ -6,12 +6,15 @@ table as a fresh child under `systemd-run --user --scope -p MemoryMax=512M -p Me
 (`VmHWM`, read as `ru_maxrss` of that one child) under 384 MiB."""
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+import time
+import warnings
 
 import pytest
 
@@ -74,10 +77,42 @@ def test_every_imprint_unit_is_capped_at_512m():
 
 # ---- The Pi measurement -------------------------------------------------------------------------------------------
 
-_LAUNCHER = ('import resource, subprocess, sys\n'
-             'r = subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)\n'
-             'sys.stderr.write(r.stderr[-1500:])\n'
-             'print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, r.returncode)\n')
+_LAUNCHER = ('import os, resource, signal, subprocess, sys\n'
+             "lim = int(os.environ.pop('IMPRINT_DATA_LIMIT')); wall = float(os.environ.pop('IMPRINT_WALL'))\n"
+             'p = subprocess.Popen(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, start_new_session=True,\n'
+             '                     preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_DATA, (lim, lim)))\n'
+             'try:\n'
+             '    err, code = p.communicate(timeout=wall)[1], p.returncode\n'
+             'except subprocess.TimeoutExpired:\n'
+             '    os.killpg(p.pid, signal.SIGKILL); err, code = p.communicate()[1] or "", 124\n'
+             'sys.stderr.write((err or "")[-1500:])\n'
+             'print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, code)\n')
+
+CAP_BYTES = 512 * 2**20
+HARD_DATA_LIMIT = 2 * CAP_BYTES      # the backstop where MemoryMax is silently ignored (no memory controller)
+
+
+def memory_cap_enforced(controllers=None):
+    """True when `systemd-run --user --scope -p MemoryMax=…` is applied here: the user manager must hold `memory`."""
+    if controllers is None:
+        uid = os.getuid()
+        try:
+            controllers = Path(f'/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/cgroup.controllers').read_text()
+        except OSError:
+            return False
+    return 'memory' in controllers.split()
+
+
+def capped(argv, env):
+    """`argv` under the 512M scope where systemd-run exists, with the hard data limit and a wall-clock kill in the
+    launcher either way; warns when the cap itself is not applied."""
+    if shutil.which('systemd-run'):
+        argv = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=512M', '-p', 'MemorySwapMax=0'] + argv
+        if not memory_cap_enforced():
+            warnings.warn('MemoryMax=512M is not applied here (the user manager has no memory controller); '
+                          "the child's RLIMIT_DATA and wall-clock kill are the only backstop", stacklevel=3)
+    return argv, {**(os.environ if env is None else env), 'IMPRINT_DATA_LIMIT': str(HARD_DATA_LIMIT), 'IMPRINT_WALL': '1800'}
+
 
 
 def mib(n):
@@ -86,10 +121,9 @@ def mib(n):
 
 def child_peak_rss(*, cmd, env=None, ok=(0,)):
     """Peak resident bytes of the command `cmd` in a fresh child under the 512M scope; its exit status must be in `ok`."""
-    argv = [str(a) for a in cmd]
-    if shutil.which('systemd-run'):
-        argv = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=512M', '-p', 'MemorySwapMax=0'] + argv
-    out = subprocess.run([sys.executable, '-c', _LAUNCHER, *argv], cwd=PEER, env=env, capture_output=True, text=True)
+    argv, env = capped([str(a) for a in cmd], env)
+    out = subprocess.run([sys.executable, '-c', _LAUNCHER, *argv], cwd=PEER, env=env, capture_output=True, text=True,
+                         timeout=1860)
     assert out.returncode == 0 and out.stdout.split(), out.stderr[-2000:]
     peak, status = (int(x) for x in out.stdout.split()[-2:])
     assert status in ok, (cmd[:4], status, out.stderr[-1500:])
@@ -160,17 +194,37 @@ def test_pi_the_lighthouse_and_the_station_commands(tmp_path):
     small = upload_part_by_part(st, package_bytes=100)
     env = {**os.environ, 'HOME': str(tmp_path / 'home')}
     (tmp_path / 'home').mkdir()
-    # station-imprint-use-begin answers 3 (refused: nothing is admitted yet) and admit-begin may too; both run their
-    # whole decision. Every other command must succeed.
+    # admit-begin and use-begin must answer 0, so each runs the work of an allowed decision (a receipt, a state file),
+    # not a refusal: the package is approved by station-approve, begun by admit-begin, given the result a finished
+    # admission leaves (the unit's job, not a peer command's), admitted by station-imprint-sync, and then used.
+    state = Path(st.root) / f'{big["imprint_id"]}.state'
+    admitted_result = {'status': 'admitted', 'ended_at': int(time.time()), 'checks': 17, 'report_sha256': 'ab' * 32,
+                       'skipped': [], 'roads_and_trails': 4, 'sessions_too_large': 0}
     plan = [('station-approve', big, (0,)), ('station-imprints', big, (0,)),
-            ('station-imprint-admit-begin', big, (0, 3)), ('station-imprint-use-begin', big, (0, 3)),
-            ('station-imprint-sync', big, (0,)), ('station-imprint-sweep', big, (0,)),
+            ('station-imprint-admit-begin', big, (0,)), ('result', big, (0,)),
+            ('station-imprint-sync', big, (0,)), ('station-imprint-use-begin', big, (0,)),
+            ('station-imprint-sweep', big, (0,)),
             ('station-imprint-unit-env', big, (0,)), ('verify-imprint', big, (0,)),
             ('station-deny', small, (0,)), ('station-imprint-delete', big, (0,))]
     for name, found, ok in plan:
+        if name == 'result':
+            (state / 'result.json').write_text(json.dumps(admitted_result))
+            continue
         cmd = peer_command(st, name, request=found['id'], imprint_id=found['imprint_id'], root=st.root)
         peak = child_peak_rss(cmd=cmd, env=env, ok=ok)
         assert peak < PEAK_BUDGET, (name, mib(peak))
         print(name, mib(peak), 'MiB')
     base = child_peak_rss(cmd=[sys.executable, '-c', 'import superyak_peer.__main__'], env=env)
     print('peer command base (imports alone)', mib(base), 'MiB')
+
+
+def test_the_cap_guard_reads_the_controllers():
+    assert not memory_cap_enforced('cpu pids\n')                   # this Pi: the property is accepted and ignored
+    assert memory_cap_enforced('cpu memory pids\n')
+
+
+def test_a_runaway_child_fails_on_its_own_hard_limit():
+    code = "x = bytearray(1536 * 2**20); x[::4096] = b'x' * len(x[::4096])"
+    with pytest.raises(AssertionError) as raised:
+        child_peak_rss(cmd=[sys.executable, '-c', code])
+    assert 'MemoryError' in str(raised.value)

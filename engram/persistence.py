@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 _EPS = 1e-12
 _MST_FLOOR = 1e-9  # scipy MST treats 0 as "no edge"; duplicates have d=0
+H1_EDGES_PER_POINT = 16   # ripser's H1 sees at most this many edges per point (a revision of I 10: its work is bounded by the edges, never sampled)
 BLOCK_ROWS = 256   # rows of the n x n distances held at once by build_filtration_blocked (R28)
 
 
@@ -451,6 +452,39 @@ def core_promotion_allowed(storage, episode_id: str, cfg) -> bool:
     return redundancy_vs_cores < cfg.redundancy_floor
 
 
+def h1_persistence(X, _ripser=None) -> float | None:
+    """The longest H1 bar of the rows' Rips filtration over the neighbourhood's merge range (None: no bar).
+
+    The filtration is read up to the ``H1_EDGES_PER_POINT * n``-th smallest distance, so ripser's work and memory are
+    bounded by the edges it is given (at most ~(2E)^1.5 / 6 triangles), whatever the data: on random vectors in 768
+    dimensions every distance is nearly equal and an unbounded H1 reaches 14 GiB at n = 1,024. A bar still alive at
+    that scale counts to it, so the figure is exact when every bar dies inside the scale and a lower bound
+    otherwise (a "looped" verdict from it is therefore sound). Never a sample: every row is in every distance."""
+    if _ripser is None:
+        from ripser import ripser as _ripser
+    n = len(X)
+    D = distance_matrix(X)
+    kw = {}
+    thresh = None
+    if n * (n - 1) // 2 > H1_EDGES_PER_POINT * n:
+        keep = H1_EDGES_PER_POINT * n
+        thresh = float(np.partition(D[np.triu_indices(n, 1)], keep - 1)[keep - 1])
+        kw["thresh"] = thresh
+    dgm1 = _ripser(D, maxdim=1, distance_matrix=True, **kw)["dgms"][1]
+    del D
+    if not len(dgm1):
+        return None
+    deaths = dgm1[:, 1]
+    if thresh is not None:
+        deaths = np.where(np.isfinite(deaths), deaths, thresh)
+    keep_bars = np.isfinite(deaths)    # inf would leak invalid JSON through the MCP transport
+    if not keep_bars.any():
+        return None
+    f_full = build_filtration(X)
+    denom = max(f_full.max_height, _EPS)
+    return float(np.max(deaths[keep_bars] - dgm1[keep_bars, 0]) / denom)
+
+
 def classify_hubs(storage, cfg, min_episodes: int = 10, *, max_episodes: int | None = None,
                   skips: list | None = None) -> list[dict]:
     """diffuse / multi-modal / looped, per provenance-heavy semantic.
@@ -490,15 +524,7 @@ def classify_hubs(storage, cfg, min_episodes: int = 10, *, max_episodes: int | N
                 band = split_band(X, a, b)
         h1 = None
         if _ripser is not None:
-            D = distance_matrix(X)
-            dgm1 = _ripser(D, maxdim=1, distance_matrix=True)["dgms"][1]
-            # inf deaths can't occur without thresh=, but guard anyway:
-            # inf would leak invalid JSON through the MCP transport
-            finite = dgm1[np.isfinite(dgm1[:, 1])] if len(dgm1) else dgm1
-            if len(finite):
-                f_full = build_filtration(X)
-                denom = max(f_full.max_height, _EPS)
-                h1 = float(np.max(finite[:, 1] - finite[:, 0]) / denom)
+            h1 = h1_persistence(X, _ripser)
         if band is not None and band >= cfg.min_split_band:
             cls = "multi-modal"
         elif h1 is not None and h1 >= 0.10:

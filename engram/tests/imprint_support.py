@@ -12,6 +12,7 @@ import shlex
 import shutil
 import sqlite3
 import subprocess
+import warnings
 import sys
 import uuid
 from collections import defaultdict
@@ -463,16 +464,43 @@ def refusing_fetchall(tables):
 _PREAMBLE = ("import sys; sys.path.insert(0, {engram!r}); SRC = {src!r}\n"
              "import calibrate, persistence, sheaf\nfrom storage import Storage\n")
 _RUN_ONE = "from tests.imprint_support import run_one\n"   # only when used: the support module is heavy
-_LAUNCHER = ("import resource, subprocess, sys, time\n"
-             "t = time.monotonic(); r = subprocess.run(sys.argv[1:])\n"
-             "print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, time.monotonic() - t, r.returncode)\n")
+# The backstop of R27's cap: where the user manager has no memory controller, ``MemoryMax=512M`` is silently not
+# applied, so the child also gets a hard ``RLIMIT_DATA`` (private writable memory, twice the cap) and a wall-clock
+# kill, and a runaway ends in the child's own MemoryError or timeout, never in someone killing it by hand.
+CAP_BYTES = 512 * 2**20
+HARD_DATA_LIMIT = 2 * CAP_BYTES
+_LAUNCHER = ("import os, resource, signal, subprocess, sys, time\n"
+             "lim = int(os.environ.pop('IMPRINT_DATA_LIMIT')); wall = float(os.environ.pop('IMPRINT_WALL'))\n"
+             "t = time.monotonic()\n"
+             "p = subprocess.Popen(sys.argv[1:], start_new_session=True,\n"
+             "                     preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_DATA, (lim, lim)))\n"
+             "try:\n"
+             "    code = p.wait(timeout=wall)\n"
+             "except subprocess.TimeoutExpired:\n"
+             "    os.killpg(p.pid, signal.SIGKILL); p.wait(); code = 124\n"
+             "print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, time.monotonic() - t, code)\n")
 
 
-def child_peak_rss(code: str | None = None, *, src=None, timed: bool = False, cmd=None, env=None, cwd=None):
+def memory_cap_enforced(controllers: str | None = None) -> bool:
+    """True when ``systemd-run --user --scope -p MemoryMax=…`` is applied here: the user manager must hold the
+    ``memory`` controller. On a Pi whose user cgroup lists only ``cpu pids`` the property is accepted and ignored."""
+    if controllers is None:
+        path = Path(f"/sys/fs/cgroup/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/cgroup.controllers")
+        try:
+            controllers = path.read_text()
+        except OSError:
+            return False
+    return "memory" in controllers.split()
+
+
+def child_peak_rss(code: str | None = None, *, src=None, timed: bool = False, cmd=None, env=None, cwd=None,
+                   wall: float = 3600.0):
     """Peak resident bytes (``VmHWM``, read as ``ru_maxrss``) of ``code`` run in a child, or of the whole command
     ``cmd`` (a list) when it is given (``timed``: and its wall seconds). The child runs under
-    ``systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0`` where that exists (R27). A launcher
-    process reads ``RUSAGE_CHILDREN``, so the figure is this child's alone, whatever it re-executes or forks."""
+    ``systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0`` where that exists (R27), and always under a
+    hard ``RLIMIT_DATA`` of 1 GiB and a ``wall`` seconds kill, so a runaway fails the test on its own where the
+    cap is not applied (``memory_cap_enforced``; a warning says so). A launcher process reads ``RUSAGE_CHILDREN``,
+    so the figure is this child's alone, whatever it re-executes or forks."""
     if cmd is not None:
         argv = [str(a) for a in cmd]
     else:
@@ -480,11 +508,17 @@ def child_peak_rss(code: str | None = None, *, src=None, timed: bool = False, cm
         argv = [sys.executable, "-c", preamble + code]
     if shutil.which("systemd-run"):
         argv = ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0"] + argv
+        if not memory_cap_enforced():
+            warnings.warn("MemoryMax=512M is not applied here (the user manager has no memory controller); "
+                          "the child's RLIMIT_DATA and wall-clock kill are the only backstop", stacklevel=2)
+    env = {**(os.environ if env is None else env), "IMPRINT_DATA_LIMIT": str(HARD_DATA_LIMIT),
+           "IMPRINT_WALL": str(wall)}
     out = subprocess.run([sys.executable, "-c", _LAUNCHER, *argv], cwd=cwd or ENGRAM_DIR, env=env,
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, timeout=wall + 60)
     assert out.returncode == 0 and out.stdout.split(), out.stderr[-2000:]
     peak, seconds, status = out.stdout.split()[-3:]
-    assert int(status) == 0, (out.stdout[-1000:], out.stderr[-2000:])
+    assert int(status) == 0, ("killed at the wall-clock limit" if int(status) == 124 else "",
+                              out.stdout[-1000:], out.stderr[-2000:])
     return (int(peak), float(seconds)) if timed else int(peak)
 
 
@@ -2434,7 +2468,8 @@ def _fill_store(path: Path, *, lanes: dict, semantics: int, hub_sources: int, lo
             chunk = ids[lo:lo + 1000]
             conn.executemany(
                 "INSERT INTO episodes (id, session_id, content, created_at, lane, core) VALUES (?, ?, ?, ?, ?, ?)",
-                [(e, f"sess-{(k + j) % sessions}", _text(k + j, "episode"), stamp, lane, int(cores))
+                [(e, f"sess-{(k + j) % sessions}", _text(k + j, "episode"), stamp, lane,
+                  int(cores and lane == next(iter(lanes))))
                  for j, e in enumerate(chunk)])
             X = _unit_vectors(rng, len(chunk))
             conn.executemany("INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
@@ -2563,7 +2598,8 @@ def build_cap_store(tmp_path: Path) -> CapWorld:
 
 
 def build_bounds_store(tmp_path: Path) -> CapWorld:
-    """Every calibration set at its bound: two lanes of 16,000 episodes, every one a core, a semantic of 1,024
+    """Every calibration set at its bound: two lanes of 16,000 episodes, the first lane's all cores (one core set of
+    16,000: both lanes as cores would be a set of 32,000, over its bound and skipped), a semantic of 1,024
     sources, and a resonance on every episode. Built once under ``/var/tmp``."""
     return _cap_world(tmp_path, "bounds", _build_bounds)
 

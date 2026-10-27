@@ -19,7 +19,7 @@ import imprint
 from imprint import admit, build, make_plan
 from tests.imprint_support import (EH, _Connection, FAR, GROWING_TABLES, HOME, IMPRINT_PY, NOW_SECONDS, PEAK_BUDGET, admit_command,
                                    admission_result, base_peak, build_bounds_store, build_cap_store, built_of,
-                                   cap_command, child_peak_rss, counting_stub, handed_off, mib, plan_args,
+                                   cap_command, child_peak_rss, memory_cap_enforced, counting_stub, handed_off, mib, plan_args,
                                    refusing_fetchall, stub_verify, strace_temp_files, use_command)
 
 PI = pytest.mark.skipif(os.environ.get("ENGRAM_PI_BUDGET") != "1", reason="Pi measurement (R16, R27)")
@@ -112,3 +112,24 @@ def test_scratch_stays_on_disk_where_it_belongs(tmp_path):                  # I 
     assert any(e.get("SQLITE_TMPDIR") == e.get("TMPDIR") == e.get("IMPRINT_SCRATCH") == scratch for e in envs)   # the re-exec ran
     assert all(Path(p).parent == Path(scratch) for p in opened)        # admission may need no temporary file (the re-check's S5)
     assert not [p for p in opened if Path(p).is_relative_to(watched)] and not Path(scratch).exists()
+
+
+# ---- the cap's backstop (Task 50 fix): MemoryMax is silently ignored where the user manager has no memory controller ----
+
+def test_the_cap_guard_reads_the_controllers():
+    assert not memory_cap_enforced("cpu pids\n")                  # this Pi: the property is accepted and ignored
+    assert memory_cap_enforced("cpu memory pids\n")
+    assert not memory_cap_enforced("")
+
+
+def test_a_runaway_child_fails_on_its_own_hard_limit():
+    code = "x = bytearray(1536 * 2**20); x[::4096] = b'x' * len(x[::4096])"      # 1.5 GiB, over the 1 GiB data limit
+    with pytest.raises(AssertionError) as raised:
+        child_peak_rss(cmd=[sys.executable, "-c", code])
+    assert "MemoryError" in str(raised.value)
+
+
+def test_a_child_past_its_wall_clock_is_killed():
+    with pytest.raises(AssertionError) as raised:
+        child_peak_rss(cmd=[sys.executable, "-c", "import time; time.sleep(30)"], wall=1)
+    assert "wall-clock" in str(raised.value)

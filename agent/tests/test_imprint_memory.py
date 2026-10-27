@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import warnings
 import threading
 
 import pytest
@@ -23,10 +24,42 @@ IMPRINT_ID = '5b0e7f3a-1c2d-4e5f-8a9b-0c1d2e3f4a5b'
 REQUEST_ID = 'a1b2c3d4-0000-4000-8000-000000000001'
 PLAN, PLAN_FILE = '7c41', '7c41aa00bb11cc22'
 RUN_AGENT = Path(__file__).resolve().parents[1] / 'run_agent.py'
-_LAUNCHER = ('import resource, subprocess, sys\n'
-             'r = subprocess.run(sys.argv[1:], capture_output=True, text=True)\n'
-             'sys.stderr.write(r.stdout[-1500:] + r.stderr[-1500:])\n'
-             'print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, r.returncode)\n')
+_LAUNCHER = ('import os, resource, signal, subprocess, sys\n'
+             "lim = int(os.environ.pop('IMPRINT_DATA_LIMIT')); wall = float(os.environ.pop('IMPRINT_WALL'))\n"
+             'p = subprocess.Popen(sys.argv[1:], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,\n'
+             '                     preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_DATA, (lim, lim)))\n'
+             'try:\n'
+             '    out, err = p.communicate(timeout=wall); code = p.returncode\n'
+             'except subprocess.TimeoutExpired:\n'
+             '    os.killpg(p.pid, signal.SIGKILL); out, err = p.communicate(); code = 124\n'
+             'sys.stderr.write((out or "")[-1500:] + (err or "")[-1500:])\n'
+             'print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, code)\n')
+
+CAP_BYTES = 512 * 2**20
+HARD_DATA_LIMIT = 2 * CAP_BYTES      # the backstop where MemoryMax is silently ignored (no memory controller)
+
+
+def memory_cap_enforced(controllers=None):
+    """True when `systemd-run --user --scope -p MemoryMax=…` is applied here: the user manager must hold `memory`."""
+    if controllers is None:
+        uid = os.getuid()
+        try:
+            controllers = Path(f'/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/cgroup.controllers').read_text()
+        except OSError:
+            return False
+    return 'memory' in controllers.split()
+
+
+def capped(argv, env):
+    """`argv` under the 512M scope where systemd-run exists, with the hard data limit and a wall-clock kill in the
+    launcher either way; warns when the cap itself is not applied."""
+    if shutil.which('systemd-run'):
+        argv = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=512M', '-p', 'MemorySwapMax=0'] + argv
+        if not memory_cap_enforced():
+            warnings.warn('MemoryMax=512M is not applied here (the user manager has no memory controller); '
+                          "the child's RLIMIT_DATA and wall-clock kill are the only backstop", stacklevel=3)
+    return argv, {**(os.environ if env is None else env), 'IMPRINT_DATA_LIMIT': str(HARD_DATA_LIMIT), 'IMPRINT_WALL': '1800'}
+
 
 
 def mib(n):
@@ -117,10 +150,8 @@ def agent_send_command(home, station):
 
 
 def child_peak_rss(*, cmd, env=None):
-    argv = [str(a) for a in cmd]
-    if shutil.which('systemd-run'):
-        argv = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=512M', '-p', 'MemorySwapMax=0'] + argv
-    out = subprocess.run([sys.executable, '-c', _LAUNCHER, *argv], env=env, capture_output=True, text=True)
+    argv, env = capped([str(a) for a in cmd], env)
+    out = subprocess.run([sys.executable, '-c', _LAUNCHER, *argv], env=env, capture_output=True, text=True, timeout=1860)
     assert out.returncode == 0 and out.stdout.split(), out.stderr[-2000:]
     peak, status = (int(x) for x in out.stdout.split()[-2:])
     assert status == 0, out.stderr[-2000:]
@@ -153,3 +184,15 @@ def test_pi_send_holds_one_part_at_a_time(tmp_path):
     assert len(station.parts) == 128
     print('agent send', mib(peak), 'MiB, base', mib(base), 'MiB')
     assert peak < PEAK_BUDGET and peak < 64 * 2**20 + 2 * PART_BYTES, mib(peak)
+
+
+def test_the_cap_guard_reads_the_controllers():
+    assert not memory_cap_enforced('cpu pids\n')
+    assert memory_cap_enforced('cpu memory pids\n')
+
+
+def test_a_runaway_child_fails_on_its_own_hard_limit():
+    code = "x = bytearray(1536 * 2**20); x[::4096] = b'x' * len(x[::4096])"
+    with pytest.raises(AssertionError) as raised:
+        child_peak_rss(cmd=[sys.executable, '-c', code])
+    assert 'MemoryError' in str(raised.value)
