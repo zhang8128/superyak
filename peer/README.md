@@ -269,8 +269,11 @@ tailscale serve --bg 7435
 tailscale funnel --bg --https=8443 http://127.0.0.1:7436
 ```
 
-`--proxy-headers` trusts `X-Forwarded-*` from loopback and needs a loopback bind and explicit
-HTTPS origins. The door serves only access-request submission and status, ignores cookies and
+`--proxy-headers` trusts `X-Forwarded-*` from 127.0.0.1 only and needs an IPv4 loopback bind and
+explicit HTTPS origins. `serve` keeps no access log. If Funnel publishes the app as well, a public
+request reaches only the sign-in, the app shell, health, invitation links and published layers
+unless it carries a valid session or ship key, so docking needs the tailnet (see
+[API.md](API.md), Public requests). The door serves only access-request submission and status, ignores cookies and
 serves no interface; `tailscale funnel --https=8443 off` closes it. Add a Tailscale policy rule
 that lets shared users (`autogroup:shared`) reach only this host's port 443.
 
