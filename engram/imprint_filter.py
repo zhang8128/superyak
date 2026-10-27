@@ -785,6 +785,92 @@ def cosubject_rows(sh: Shipped, ctx: SourceContext) -> Iterator[tuple[str, str, 
             yield id, layer, subject
 
 
+# ---- Sessions closed at t1 (I 5.2), session ids and operation_log (D6, D7) ----------------------------------
+
+CLOSED_SECONDS = 3600
+
+_SESSION_ROWS_SQL = """
+SELECT sid, ts FROM (
+    SELECT session_id AS sid, inst(created_at) AS ts FROM episodes
+    UNION ALL
+    SELECT CASE WHEN json_valid(context) AND json_type(context, '$.session_id') = 'text'
+                THEN json_extract(context, '$.session_id') END AS sid, inst(timestamp) AS ts FROM memory_log
+    UNION ALL
+    SELECT session_id AS sid, inst(timestamp) AS ts FROM operation_log
+) WHERE sid IS NOT NULL AND sid != '' AND ts IS NOT NULL AND ts < :t1
+"""
+
+
+def _instant_seconds(text: Any) -> float | None:
+    at = parse_instant(text)
+    return None if at is None else at.timestamp()
+
+
+def closed_sessions(conn: sqlite3.Connection, t1: int, *, scratch: Scratch | None = None) -> IdSet:
+    """The sessions closed at t1: the newest of a session's rows before t1 (episodes by ``session_id``,
+    ``memory_log`` by ``context.session_id`` of any event type, ``operation_log`` by ``session_id``) is older than
+    ``t1 - CLOSED_SECONDS``. Rows whose time does not parse take no part. The ``GROUP BY`` runs in SQL and its
+    groups stream into the scratch file's id set."""
+    own = scratch if scratch is not None else Scratch(":memory:")
+    closed = IdSet(own)
+    conn.create_function("inst", 1, _instant_seconds, deterministic=True)
+    cur = conn.cursor()
+    cur.row_factory = None
+    for (sid,) in cur.execute(
+            f"SELECT sid FROM ({_SESSION_ROWS_SQL}) GROUP BY sid HAVING MAX(ts) < :cutoff ORDER BY sid",
+            {"t1": t1, "cutoff": t1 - CLOSED_SECONDS}):
+        closed.add(sid)
+    return closed
+
+
+def episode_rows(conn: sqlite3.Connection, sh: Shipped, terms: Terms, closed: IdSet) -> Iterator[dict]:
+    """The shipped episodes, every column but ``rowid``, in ``(created_at, id)`` order. ``session_id`` is kept
+    only when the terms include ``route`` and its session is closed at t1; otherwise it is null (D6, D7)."""
+    stays = frozenset(sh.episodes)
+    columns = [r[1] for r in conn.execute("PRAGMA table_info(episodes)") if r[1] != "rowid"]
+    names = ", ".join(f'"{c}"' for c in columns)
+    cur = conn.cursor()
+    cur.row_factory = sqlite3.Row
+    for r in cur.execute(f"SELECT {names} FROM episodes ORDER BY created_at, id"):
+        if r["id"] not in stays:
+            continue
+        row = dict(r)
+        if not (terms.route and row.get("session_id") is not None and row["session_id"] in closed):
+            row["session_id"] = None
+        yield row
+
+
+def operation_rows(conn: sqlite3.Connection, sel: Selection, terms: Terms, closed: IdSet,
+                   sh: Shipped) -> Iterator[dict]:
+    """The ``operation_log`` rows that ship (empty without ``route``): ``operation`` in ``CITING_OPERATIONS``,
+    ``t0 <= tau < t1``, a closed session, and at least one target, every one an episode or semantic in M.
+    ``harness``, ``model`` and ``repo`` are null and ``details`` is ``{}``."""
+    if not terms.route:
+        return
+    inside = frozenset(sh.episodes) | frozenset(sh.semantics)
+    marks = ", ".join("?" * len(CITING_OPERATIONS))
+    cur = conn.cursor()
+    cur.row_factory = sqlite3.Row
+    for r in cur.execute(f"SELECT * FROM operation_log WHERE operation IN ({marks}) ORDER BY timestamp, id",
+                         CITING_OPERATIONS):
+        sid = r["session_id"]
+        if not sid or sid not in closed:
+            continue
+        at = parse_instant(r["timestamp"])
+        if at is None or (sel.since is not None and at.timestamp() < sel.since) or at.timestamp() >= sel.until:
+            continue
+        try:
+            targets = json.loads(r["target_ids"])
+        except (TypeError, ValueError):
+            continue
+        if not (isinstance(targets, list) and targets
+                and all(isinstance(t, str) and t in inside for t in targets)):
+            continue
+        row = dict(r)
+        row.update(harness=None, model=None, repo=None, details="{}")
+        yield row
+
+
 # ---- The source (I 5.1) -------------------------------------------------------------------------------------
 
 def published_house(engram_home: Path) -> Path:

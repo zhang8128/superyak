@@ -539,11 +539,14 @@ def selection(**over):
 
 
 def terms(**over):
-    """Terms for the home place of andy, without route."""
+    """Terms for the home place of andy, without route; ``route=True`` adds the route action and the
+    trail-evaluation purpose."""
     from imprint_filter import Terms
 
     values = dict(audience="place:home/andy", actions=frozenset({"imprint"}),
                   purposes=frozenset({"calibration"}), days=90)
+    if over.pop("route", False):
+        values.update(actions=frozenset({"imprint", "route"}), purposes=frozenset({"calibration", "trail-evaluation"}))
     values.update(over)
     return Terms(**values)
 
@@ -770,3 +773,42 @@ def future_store(tmp_path: Path) -> Path:
     s.conn.commit()
     s.close()
     return path
+
+
+# Task 10: sessions closed at t1 and the two log tables.
+
+def op(store: Storage, id: str, *, session: str | None, at: str, operation: str, targets=(),
+       harness: str | None = "claude-code", model: str | None = "m1", repo: str | None = "/work/repo",
+       details: dict | None = None, outcome: str = "ok") -> str:
+    """Insert an ``operation_log`` row with ``timestamp`` as given; returns its id."""
+    import json
+
+    store.conn.execute(
+        "INSERT INTO operation_log (id, timestamp, operation, session_id, harness, model, repo, target_ids, "
+        "details, outcome) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (id, at, operation, session, harness, model, repo, json.dumps(list(targets)),
+         json.dumps(details if details is not None else {"note": "x"}), outcome))
+    store.conn.commit()
+    return id
+
+
+def log_row(store: Storage, *, session: str | None, at: str, event: str = "recall", id: str | None = None,
+            targets=(), context=None) -> str:
+    """Insert a ``memory_log`` row whose context holds ``session_id``; ``context`` (a string) replaces the context."""
+    import json
+
+    id = id or f"log-{uuid.uuid4().hex[:8]}"
+    ctx_text = context if context is not None else json.dumps({"session_id": session})
+    store.conn.execute(
+        "INSERT INTO memory_log (id, timestamp, event_type, layer, target_ids, context, outcome) "
+        "VALUES (?, ?, ?, 'episode', ?, ?, NULL)", (id, at, event, json.dumps(list(targets)), ctx_text))
+    store.conn.commit()
+    return id
+
+
+def footpath_store(tmp_path: Path) -> Storage:
+    """One closed session wrote two work-lane episodes and made no recall."""
+    s = new_store(tmp_path, "footpath")
+    ep(s, "f1", session="walker", at="2026-10-25T10:00:00+00:00")
+    ep(s, "f2", session="walker", at="2026-10-25T10:05:00+00:00")
+    return s
