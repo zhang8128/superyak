@@ -6,9 +6,11 @@ import pytest
 from permission_cli import main as cli_main
 from permission_ledger import Gate, Ledger, LedgerUnreadable, effective_gate, houses, ledger_path
 from permissions import decide
-from tests.permissions_support import (
-    ANDY, M1, M3, T, add_subject, do, raise_gate, raised_ledger, remove_subject)
+from tests.permissions_support import (  # noqa: F401
+    ANDY, M1, M1_TEXT, M3, T, add_subject, deliver_m1_through, do, keep_world, keep_world_with_imprint_allowed,
+    raise_gate, raised_ledger, receipt_rows, remove_subject)
 from tests.test_permissions_serenity_fixes import _revoked_r1
+from tests.test_recall_margins import engram_server_env  # noqa: F401
 
 
 def _meta(home) -> dict:
@@ -220,3 +222,27 @@ def test_should_fix_3_a_writer_with_no_state_never_covers_a_last_row_whose_chang
     assert _log(tmp_path)[-1][0] == seq
     with pytest.raises(LedgerUnreadable):
         decide(_state(tmp_path), use)
+
+
+# ---------------------------------------------------------------- should-fix 4: a failed kept copy leaves no allowed receipt
+
+@pytest.mark.parametrize("how", ["raises", "no_store_id"])
+def test_should_fix_4_an_unrecordable_kept_copy_under_enforce_leaves_no_imprint_receipt(
+        keep_world_with_imprint_allowed, monkeypatch, how):
+    """As a refused genome keep (Serenity's item 3): the keep is refused, so no receipt says it was allowed. Once the
+    copy can be recorded, the keep that happens has its one allowed receipt."""
+    import permission_ledger
+    import server
+    from tests.test_permissions_keep import REFUSED, _break_copy_record
+    world = keep_world_with_imprint_allowed
+    real_copy, real_store_id = permission_ledger.Ledger.record_copy, server._store_id
+    deliver_m1_through(world, "neighbors")
+    _break_copy_record(monkeypatch, how)
+    assert server.remember(content=M1_TEXT) == REFUSED
+    assert receipt_rows(world.root, "imprint") == []
+    monkeypatch.setattr(permission_ledger.Ledger, "record_copy", real_copy)
+    monkeypatch.setattr(server, "_store_id", real_store_id)
+    out = server.remember(content=M1_TEXT)
+    assert "episode_id" in out
+    assert [(r["action"], r["allowed"]) for r in receipt_rows(world.root, "imprint")] == [("imprint", 1)]
+    assert f"mem:{world.ids.PHC_STORE}/episode/{out['episode_id']}" in _state(world.root).copies
