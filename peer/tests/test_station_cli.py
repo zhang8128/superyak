@@ -385,22 +385,34 @@ def test_bridging_a_room_without_a_brief_carries_nothing(rooms, capsys):
     assert 'The room had no brief to carry.' in again
 
 
+def race(monkeypatch, competing):
+    """Runs competing(store, db, room) inside the act's own transaction, right after _owned_room's read: the only place
+    left for a change to land between the read and the add, since both now run in one transaction (ruling 1)."""
+    real = Store._owned_room
+
+    def read_then_compete(self, db, actor, prefix):
+        found = real(self, db, actor, prefix)
+        competing(self, db, found[0])
+        return found
+    monkeypatch.setattr(Store, '_owned_room', read_then_compete)
+
+
+def save_competing_brief(store, db, room):
+    store._write_brief(db, room['id'], 'Plan, changed.', store._room_brief(db, room['id'])[1] + 1, room['owner_id'])
+
+
 def test_a_brief_saved_between_the_read_and_the_carry_stops_the_bridge_with_its_own_words(rooms, capsys, monkeypatch):
     store, andy, doctor, wormhole, gamma = rooms
     store.save_brief(andy['id'], gamma['id'], 'Plan.', 0)
-    real = Store.add_participants
-
-    def save_first(self, actor, key, member_ids, carry_brief=None):
-        self.save_brief(actor, key, 'Plan, changed.', 1)  # someone saves after the bridge read the brief
-        return real(self, actor, key, member_ids, carry_brief)
-
-    monkeypatch.setattr(Store, 'add_participants', save_first)
+    race(monkeypatch, save_competing_brief)  # someone saves after the bridge read the brief; the save rolls back with the act
     before = sorted(r['id'] for r in store.list_rooms(andy['id']))
     with pytest.raises(SystemExit) as stopped:
         cli(['station-bridge', '--data-dir', str(store.data_dir), '--id', gamma['id'][:6], '--as', 'andy'])
     assert stopped.value.code not in (0, None)
     assert 'The room brief changed while bridging; run station-bridge again' in capsys.readouterr().err
     assert sorted(r['id'] for r in store.list_rooms(andy['id'])) == before  # no new room; the notice may reorder them
+    with store.transaction() as db:
+        assert store._room_brief(db, gamma['id'])[0]['body'] == 'Plan.'  # the competing save rolled back too
 
 
 # station-add-ship: one of the owner's own ships joins a room he owns, the way station-bridge adds Wormhole ------------
@@ -464,19 +476,15 @@ def test_adding_a_ship_to_a_room_without_a_brief_or_open_items_says_so(fleet, ca
 def test_a_brief_saved_between_the_read_and_the_carry_stops_the_add_with_its_own_words(fleet, capsys, monkeypatch):
     f, store = fleet, fleet.store
     store.save_brief(f.andy['id'], f.city['id'], 'Plan.', 0)
-    real = Store.add_participants
-
-    def save_first(self, actor, key, member_ids, carry_brief=None):
-        self.save_brief(actor, key, 'Plan, changed.', 1)  # someone saves after the add read the brief
-        return real(self, actor, key, member_ids, carry_brief)
-
-    monkeypatch.setattr(Store, 'add_participants', save_first)
+    race(monkeypatch, save_competing_brief)  # someone saves after the add read the brief; the save rolls back with the act
     before = sorted(r['id'] for r in store.list_rooms(f.andy['id']))
     with pytest.raises(SystemExit) as stopped:
         add_ship(capsys, store, f.city['id'][:6], 'tardis')
     assert stopped.value.code == 1
     assert capsys.readouterr().err == 'The room brief changed while adding the ship; run station-add-ship again\n'
     assert sorted(r['id'] for r in store.list_rooms(f.andy['id'])) == before
+    with store.transaction() as db:
+        assert store._room_brief(db, f.city['id'])[0]['body'] == 'Plan.'  # the competing save rolled back too
 
 
 def station_rows(store):

@@ -1,5 +1,5 @@
 """Member-only rooms, linked new audiences, epoch-rechecked messages."""
-from .common import REPLACED_ADD, REPLACED_ROOMS, Problem, text, ids, uid, require
+from .common import Problem, text, ids, uid, require
 from .tickets import DEFER_BOUND_SECONDS
 
 class Chats:
@@ -107,23 +107,6 @@ class Chats:
                 if waiting:  # R35: present only when it has something to say
                     sent['deferred_here'] = waiting
             return sent
-
-    def add_participants(self, actor, key, member_ids, carry_brief=None):
-        if carry_brief is not None and type(carry_brief) is not int:
-            raise Problem(400, 'carry_brief is the revision of the brief you saw, or null')
-        with self.transaction() as db:
-            room = self._room(db, actor, key)
-            if room['owner_id'] != actor:
-                raise Problem(403, 'Room owner required')
-            if db.execute(f'SELECT 1 FROM rooms WHERE id=? AND id IN ({REPLACED_ROOMS})', (key,)).fetchone():
-                raise Problem(409, REPLACED_ADD)  # one replacement per room, so the chain never forks (work board 8.4)
-            carried = self._brief_to_carry(db, key, carry_brief)
-            new = self._create_room(db, actor, room['title'], ids(room['member_ids'] + ids(member_ids)), key)
-            if carried is not None:  # the brief, under its own author; open board items move too (below), but the old room's messages stay with their participants
-                body, author = carried
-                self._write_brief(db, new['id'], body, 1, author, carried_from=key)
-            new['board_carried'] = self._carry_board(db, key, new['id'])  # work board 5.x: open items, with claims whose holder is in the new room
-            return new
 
     def remove_participant(self, actor, key, user_id):
         text(user_id, 'user ID', 100)

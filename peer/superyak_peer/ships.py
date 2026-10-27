@@ -257,12 +257,12 @@ class Ships:
         brief, revision = self._room_brief(db, room['id'])
         return room, (revision if brief else None)
 
-    def _station_add(self, actor, room, member_id, carry, doing, command):
-        """One member added by an operator command, which picked the room and read its brief (carry) in one transaction,
-        through the station's own rule (add_participants): a new linked room with the same title and members, the brief
-        at that revision, and the open board items with their claims. Returns the new room, saying whether the brief came."""
+    def _station_add(self, db, actor, room, member_id, carry, doing, command, mover_id=None, grant_id=None):
+        """One member added by an operator command, in the same transaction that picked the room and read its brief
+        (carry), through the station's own rule (_add_members): a new linked room with the same title and members, the
+        brief at that revision, and the open board items with their claims. Returns the new room, saying whether the brief came."""
         try:
-            new = self.add_participants(actor, room['id'], [member_id], carry)
+            new = self._add_members(db, actor, room, [member_id], carry, mover_id or actor, grant_id)
         except Problem as exc:
             if exc.status == 409 and carry is not None and exc.message != REPLACED_ADD:  # the brief was saved between the read and the carry
                 raise Problem(409, f'The room brief changed while {doing}; run {command} again') from exc
@@ -282,10 +282,10 @@ class Ships:
                 raise Problem(404, 'There is no wormhole ship on the station; create it first (create-ship --username wormhole)')
             room, carry = self._owned_room(db, actor, prefix)
             earlier = [] if bridge else self._earlier_bridged(db, actor, room, wormhole)
-        if (wormhole in room['member_ids']) == bridge and not earlier:
-            return room, False
-        if bridge:
-            return self._station_add(actor, room, wormhole, carry, 'bridging', 'station-bridge'), True
+            if (wormhole in room['member_ids']) == bridge and not earlier:
+                return room, False
+            if bridge:  # the read and the add share this transaction
+                return self._station_add(db, actor, room, wormhole, carry, 'bridging', 'station-bridge'), True
         for key in earlier:  # the earlier rooms first: if this stops halfway, the current room still shows bridged
             self.remove_participant(actor, key, wormhole)
         if wormhole in room['member_ids']:
@@ -317,7 +317,7 @@ class Ships:
                 raise Problem(403, f"{said} is not one of {safe_line(username)}'s ships")
             if row['id'] in room['member_ids']:
                 raise Problem(409, f'{said} is already a member of room {room["id"][:6]}; nothing changed')
-        return self._station_add(actor, room, row['id'], carry, 'adding the ship', 'station-add-ship'), name
+            return self._station_add(db, actor, room, row['id'], carry, 'adding the ship', 'station-add-ship'), name
 
     def station_decide(self, username, prefix, approve):
         """Trusted local operator only: approve or refuse one pending item by a short id,

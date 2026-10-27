@@ -19,7 +19,8 @@ def test_new_audience_gets_linked_empty_room_and_removal_revokes(env):
     linked = patient.post(f'/api/chats/{key}/participants', json={'member_ids': [users[1]['id']]}).json()
     assert linked['linked_room_id'] == key
     assert doctor.get(f'/api/chats/{key}').status_code == 404
-    assert doctor.get('/api/chats/' + linked['id']).json()['messages'] == []
+    notice = doctor.get('/api/chats/' + linked['id']).json()['messages']  # the linked room is empty but for the one member- notice
+    assert [m['client_message_id'].startswith('member-') for m in notice] == [True]
     assert patient.delete(f'/api/chats/{key}/participants/' + users[3]['id']).status_code == 200
     assert family.get(f'/api/chats/{key}').status_code == 404
     assert not app.state.store.can_deliver_message(message['id'], users[3]['id'], 1)
