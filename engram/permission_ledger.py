@@ -1559,9 +1559,9 @@ def _prep_revoke(state, actor, args):
 
 
 def _make_revoke(state, actor, args, auth, now):
-    return args["record"], {"update": [_upd(
-        "records", {"id": args["record"]}, revoked="@at", revoked_by=actor, revoke_reason=args["reason"],
-        revoked_seq="@seq")]}
+    return args["record"], {"update": [_upd(            # a second revocation matches no row (P 5.1)
+        "records", {"id": args["record"], "revoked_seq": None}, revoked="@at", revoked_by=actor,
+        revoke_reason=args["reason"], revoked_seq="@seq")]}
 
 
 def _prep_shorten(state, actor, args):
@@ -1612,7 +1612,7 @@ def _make_replacement(state, actor, args, auth, now):
                         valid_from=old.valid_from, valid_until=new.valid_until, anchor=old.anchor,
                         backing=auth.backing, set_by=actor, under_grant=auth.under_grant, replaces=old.id,
                         reason=args["reason"], created=now, created_seq="@seq")],
-        "update": [_upd("records", {"id": old.id}, revoked="@at", revoked_by=actor,
+        "update": [_upd("records", {"id": old.id, "revoked_seq": None}, revoked="@at", revoked_by=actor,
                         revoke_reason=f"replaced by {rid}", revoked_seq="@seq")]}
 
 
@@ -1678,8 +1678,8 @@ def _prep_end_grant(state, actor, args):
 
 
 def _make_end_grant(state, actor, args, auth, now):
-    return args["grant"], {"update": [_upd(
-        "permission_grants", {"id": args["grant"]}, revoked="@at", revoked_by=actor,
+    return args["grant"], {"update": [_upd(             # a second end matches no row (P 5.1)
+        "permission_grants", {"id": args["grant"], "revoked_seq": None}, revoked="@at", revoked_by=actor,
         revoke_reason=args["reason"], revoked_seq="@seq")]}
 
 
