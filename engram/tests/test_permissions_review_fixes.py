@@ -31,7 +31,7 @@ def test_m1_a_record_one_writer_revoked_is_not_revoked_again_by_another(tmp_path
     rid, before = led.ids.R1, len(led.state().records)
     other = Ledger.open(tmp_path)
     _another_writer_goes_first(led, lambda: do(other, ANDY, "revoke", now="2026-11-05", record=rid, reason="first"))
-    with pytest.raises(RuleError, match="matched no row"):
+    with pytest.raises(RuleError, match=rf"^.*: {rid} is already revoked \(by another write\)$"):
         do(led, ANDY, kind, now="2026-11-06", record=rid, reason="second", **SECOND[kind])
     s = Ledger.open(tmp_path).state()
     assert (s.records[rid].revoke_reason, s.records[rid].revoked) == ("first", T("2026-11-05"))
@@ -47,7 +47,7 @@ def test_m1_a_grant_one_writer_ended_is_not_ended_again_by_another(tmp_path, kin
     _another_writer_goes_first(led, lambda: do(other, ANDY, "revoke-grant", now="2026-11-05", grant=gid,
                                                reason="first"))
     actor, channel = (ANDY, "terminal") if kind == "revoke-grant" else ("agent:rio-grande", "tool")
-    with pytest.raises(RuleError, match="matched no row"):
+    with pytest.raises(RuleError, match=rf"^.*: {gid} has already ended \(by another write\)$"):
         do(led, actor, kind, now="2026-11-06", channel=channel, grant=gid, reason="second")
     g = Ledger.open(tmp_path).state().grants[gid]
     assert (g.revoke_reason, g.revoked, g.revoked_by) == ("first", T("2026-11-05"), ANDY)
@@ -518,9 +518,10 @@ def test_concern3_a_proposal_one_writer_decided_is_not_decided_again_by_another(
     pid = _propose(led, RIO, 0)
     other = Ledger.open(tmp_path)
     _another_writer_goes_first(led, lambda: do(other, ANDY, first, now=WHEN, proposal=pid))
-    with pytest.raises(RuleError, match="matched no row"):
+    decided = "signed" if first == "sign" else "declined"
+    with pytest.raises(RuleError, match=rf"^.*: {pid} is already {decided} \(by another write\)$"):
         do(led, ANDY, second, now=WHEN, proposal=pid)
-    assert Ledger.open(tmp_path).state().proposals[pid].status == ("signed" if first == "sign" else "declined")
+    assert Ledger.open(tmp_path).state().proposals[pid].status == decided
     assert len(_proposal_records(tmp_path, pid)) == (1 if first == "sign" else 0)      # its act ran at most once
     assert Ledger.open(tmp_path).verify() is None
 
@@ -529,7 +530,7 @@ def test_concern3_a_person_one_writer_retired_is_not_retired_again_by_another(tm
     led = county_ledger(tmp_path)
     other = Ledger.open(tmp_path)
     _another_writer_goes_first(led, lambda: do(other, ANDY, "retire-person", now="2026-11-05", person="person:amy"))
-    with pytest.raises(RuleError, match="matched no row"):
+    with pytest.raises(RuleError, match=r"^.*: person:amy is already retired \(by another write\)$"):
         do(led, ANDY, "retire-person", now="2026-11-06", person="person:amy")
     s = Ledger.open(tmp_path).state()
     first = s.persons["person:amy"].retired_seq
@@ -542,7 +543,7 @@ def test_concern3_a_place_one_writer_retired_is_not_retired_again_by_another(tmp
     other = Ledger.open(tmp_path)
     _another_writer_goes_first(led, lambda: do(other, "person:ph-steward", "retire-place", now="2026-11-05",
                                                place=CLINIC_3))
-    with pytest.raises(RuleError, match="matched no row"):
+    with pytest.raises(RuleError, match=rf"^.*: {CLINIC_3} is already retired \(by another write\)$"):
         do(led, "person:ph-steward", "retire-place", now="2026-11-06", place=CLINIC_3)
     s = Ledger.open(tmp_path).state()
     assert s.seq_at[s.places[CLINIC_3].retired_seq] == T("2026-11-05")

@@ -711,6 +711,28 @@ class Ledger:
                                     f"a grant has at most {permissions.MAX_CHILD_GRANTS} live child grants, and "
                                     f"{row['parent_id']} has {live}: end one, or wait for one to expire")
 
+    _ALREADY = {"revoked_seq": "is already revoked", "retired_seq": "is already retired"}
+
+    def _unmatched(self, table: str, where: Mapping) -> str:
+        """Why an update matched no row, in words. An update that names its row by id and guards it (unrevoked,
+        unretired, still pending: P 5.1, a row is changed once) finds that row already changed when another writer
+        changed it after this write's checks read the ledger: the act is refused for that reason (the re-review's
+        Minor 6). Anything else is the raw where clause."""
+        rid = where.get("id")
+        guards = [c for c in where if c in ("revoked_seq", "retired_seq", "status")]
+        if rid is not None and guards:
+            row = self.conn.execute(f"SELECT {', '.join(guards)} FROM {table} WHERE id IS ?", (rid,)).fetchone()
+            if row is not None:
+                for c in guards:
+                    if row[c] == where[c]:
+                        continue
+                    if c == "status":
+                        return f"{rid} is already {row[c]} (by another write)"
+                    if table == "permission_grants":
+                        return f"{rid} has already ended (by another write)"
+                    return f"{rid} {self._ALREADY[c]} (by another write)"
+        return f"{table} update matched no row: {where}"
+
     def _project(self, body: dict, seq: int, at: int) -> None:
         def fill(v):
             if v == "@seq":
@@ -746,7 +768,7 @@ class Ledger:
                 f"UPDATE {table} SET {', '.join(c + '=?' for c in sets)} WHERE {clause}",
                 [fill(v) for v in sets.values()] + [fill(v) for v in where.values()])
             if cur.rowcount < 1:
-                raise _bad(f"{table} update matched no row: {where}")
+                raise _bad(self._unmatched(table, where))
         for k, v in body.get("meta", {}).items():
             self.conn.execute("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                               (k, str(v)))
