@@ -279,9 +279,9 @@ def _audience_receipt(home, at, *, allowed, refusal, digest):
 
 def test_report_shadow_counts_the_audience_refusal_as_legacy(cli_shadow_world, capsys):
     home = cli_shadow_world.home
-    # both refuse: the ledger's refusal, and the publisher delivered nothing (no content digest)
+    # both refuse: the daemon records the publisher's audience refusal on the receipt (Task 30C)
     _audience_receipt(home, "2026-11-06", allowed=False, digest=None,
-                      refusal={"code": "DENIED", "layer": HOME, "action": "inject_context"})
+                      refusal={"code": "LEGACY_DENY", "layer": "publisher", "action": "inject_context"})
     # the ledger alone refuses: the legacy path delivered (digest kept under shadow)
     only_ledger = _audience_receipt(home, "2026-11-07", allowed=False, digest="d" * 64,
                                     refusal={"code": "DENIED", "layer": HOME, "action": "inject_context"})

@@ -1068,8 +1068,8 @@ def _migrate(args) -> int:
 
 def _legacy_agreed(row) -> bool:
     """A shadow receipt on which the two paths differ. A ledger refusal the legacy path did not make: no cited legacy
-    layer denies it, the refusal is not the legacy path's own, and for a delivery the publisher did deliver (under
-    shadow the digest is kept only then). Or the converse, a delivery the ledger allowed that the publisher's audience
+    layer denies it and the refusal is not the legacy path's own (the daemon records the publisher's audience refusal
+    as LEGACY_DENY on the receipt, whether or not the ledger also refused). Or the converse, a delivery the ledger allowed that the publisher's audience
     check refused (recorded as LEGACY_DENY by the publisher)."""
     try:
         cited = json.loads(row["cited"])
@@ -1080,8 +1080,6 @@ def _legacy_agreed(row) -> bool:
         return bool(refusal) and refusal.get("code") == "LEGACY_DENY" and refusal.get("layer") == "publisher"
     if refusal and refusal.get("code") == "LEGACY_DENY":
         return False
-    if row["action"] == "inject_context" and row["content_digest"] is None:
-        return False                    # the publisher's audience check delivered nothing: both paths refused
     return not any(isinstance(c, dict) and c.get("kind") == "legacy" and c.get("verdict") != "allow" for c in cited)
 
 

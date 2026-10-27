@@ -529,10 +529,11 @@ class _LedgerSide:
         if not decided or any(d is None for _, d in decided):
             return (legacy_delivers and self.shadow), None        # no object to name: no receipt
         obj, decision = next(((o, d) for o, d in decided if not d.allowed), decided[0])
-        if decision.allowed and not legacy_delivers:
-            # The audience check is the publisher's policy refusing. Under enforce the receipt must not say
-            # "allowed" for an item not delivered; under shadow it keeps the ledger's verdict and only notes the
-            # legacy refusal, so the owner can see where the two paths disagree (P 12.3).
+        if not legacy_delivers and (self.shadow or decision.allowed):
+            # The audience check is the publisher's policy refusing. Under shadow it is recorded on the receipt
+            # whether or not the ledger also refuses, so `report shadow` reads it instead of inferring it (P 12.3);
+            # an allowing ledger keeps its verdict and only notes the refusal. Under enforce the receipt must not
+            # say "allowed" for an item not delivered; a ledger refusal there stays the receipt's refusal.
             legacy_refusal = Refusal("LEGACY_DENY", "publisher", "inject_context")
             decision = replace(decision, refusal=legacy_refusal) if self.shadow else replace(
                 decision, allowed=False, refusal=legacy_refusal)
