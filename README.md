@@ -249,3 +249,8 @@ The newly authored standalone `peer/` application is Apache-2.0. Imported code
 retains its existing notices and is not relicensed. The historical parent
 repository remains private; the allowlisted peer source archive is the reviewable
 public-release candidate. Preparing it does not publish it or change visibility.
+
+## License
+
+Superyak is free and open source under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for the one
+exception: `lighthouse/fixtures/adna-upstream/` is a Lat Labs fixture under the MIT License.
