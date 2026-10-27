@@ -7,6 +7,14 @@ from .grants import is_moderate
 from .ships import safe_line
 
 NOT_A_MODERATOR = "Only the room's owner or one of its moderators can change its members"
+ONE_MEMBER = 'A moderator changes one member at a time'
+NAME_THE_MEMBER = 'Name the member to add'
+WORMHOLE_ADD = "Adding wormhole bridges the room to Stanley's aDNA lattice; only the room's owner bridges it (make station-bridge)"
+NOT_ADDABLE = '{x} is not someone a moderator can add'
+OWNERLESS = '{name} is a station ship with no owner; a moderator never adds or removes it'
+NOT_OWNERS_SHIP = '{name} is not one of {owner}\'s ships'
+OWNER_REMOVED = '{owner} removed {name} from this room; only he can add them back'
+ALREADY_MEMBER = '{name} is already a member of room {short}; nothing changed'
 NO_ONE_NEW = 'Everyone named is already a member of room {short}; nothing changed'
 ADDED = '{by} added {names} to this room. It continues room {old}.'
 REMOVED = '{by} removed {name} from {where}.'
@@ -77,7 +85,7 @@ class Members:
         new['board_carried'] = self._carry_board(db, key, new['id'])  # work board 5.x
         logged = [self._record_change(db, 'add', key, m, actor_id, grant_id, new_room_id=new['id']) for m in new_ids]
         bridged = self._bridged(db, new['id'])
-        by = self._account_name(db, actor_id)
+        by = self._account_name(db, actor_id) + (', a moderator,' if grant_id else '')
         names = joined([self._account_name(db, m) for m in new_ids])
         self._post_as_system(db, new['id'], f'member-{logged[0]}',
                              ADDED.format(by=by, names=names, old=key[:6]) + (BRIDGED_NOTE if bridged else ''))
@@ -97,7 +105,50 @@ class Members:
             room = self._act_room(db, actor, key, adding=True)
             if room['owner_id'] == actor:
                 return self._add_members(db, actor, room, member_ids, carry_brief, actor)
-            raise Problem(403, NOT_A_MODERATOR)  # Task 5 puts the moderator's path here
+            grant = self._acting_grant(db, actor, room['id'], 'add_member', grant_id)
+            if len(member_ids) != 1:
+                raise Problem(400, ONE_MEMBER)
+            return self._moderator_add(db, actor, room, grant, member_ids[0], False)
+
+    def _owner_removed(self, db, room_id, member_id, owner_id):
+        """M7: the owner (not a moderator) removed the member and nothing has changed them since: their latest row in this
+        room's chain is a removal with no grant by the owner (or by no one)."""
+        chain = self._rooms_back(db, room_id)
+        last = db.execute(f'SELECT change, grant_id, actor_id FROM member_changes WHERE member_id=? AND room_id IN ({",".join("?" * len(chain))})'
+                          ' ORDER BY created DESC, rowid DESC LIMIT 1', (member_id, *chain)).fetchone()
+        return (last is not None and last['change'] == 'remove' and not last['grant_id']
+                and (not last['actor_id'] or last['actor_id'] == owner_id))
+
+    def _moderator_add(self, db, actor, room, grant, typed, by_username):
+        """M7 in its order, in the caller's transaction (ruling 1): the typed member (a username on the ship route, an id on
+        the person route), the refusals, then the owner's own add, charged to the grant. The brief comes at the revision
+        _owned_room read (R-S3)."""
+        typed = typed if isinstance(typed, str) else ''
+        if by_username:
+            typed = typed.strip().removeprefix('@').lower()
+        if not typed:
+            raise Problem(400, NAME_THE_MEMBER)
+        if by_username and typed == 'wormhole':
+            raise Problem(403, WORMHOLE_ADD)
+        row = db.execute(f'SELECT id,username,name,kind,owner_id,activation_pending FROM users WHERE {"username" if by_username else "id"}=?',
+                         (typed,)).fetchone()
+        if row is None or row['kind'] == 'system' or row['activation_pending']:
+            raise Problem(404, NOT_ADDABLE.format(x=safe_line(typed)))
+        name = safe_line(row['name'], 40)
+        if row['username'] == 'wormhole':
+            raise Problem(403, WORMHOLE_ADD)
+        if row['kind'] == 'ship':
+            if row['owner_id'] is None:
+                raise Problem(403, OWNERLESS.format(name=name))
+            if row['owner_id'] != room['owner_id']:
+                raise Problem(403, NOT_OWNERS_SHIP.format(name=name, owner=self._account_name(db, room['owner_id'])))
+        if self._owner_removed(db, room['id'], row['id'], room['owner_id']):
+            raise Problem(403, OWNER_REMOVED.format(owner=self._account_name(db, room['owner_id']), name=name))
+        if row['id'] in room['member_ids']:
+            raise Problem(409, ALREADY_MEMBER.format(name=name, short=room['id'][:6]))
+        owned, carry = self._owned_room(db, room['owner_id'], room['id'])
+        return self._station_add(db, room['owner_id'], owned, row['id'], carry, 'adding the member', 'station_add_member',
+                                 mover_id=actor, grant_id=grant['id'])
 
     def _earlier_with(self, db, owner_id, room, member_id):
         """Rooms earlier in this room's linked chain, owned by owner_id, that still have the member: a replaced room keeps

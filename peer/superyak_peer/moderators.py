@@ -3,8 +3,10 @@ person in it, or one of his own ships in it, add and remove members. This module
 (`member_changes`, `grant_origins`), and will hold making a moderate grant, choosing the grant an act spends, the
 views and the make targets. members.py holds every membership change itself. The grant's shape, coverage and validity
 are in grants.py."""
+import json
+
 from .common import REPLACED_ROOMS, Problem
-from .grants import GRANTEE_IS_YOU, MODERATE_ACTIONS, _utc, _whole
+from .grants import GRANTEE_IS_YOU, MODERATE_ACTIONS, _utc, _whole, is_moderate
 from .ships import safe_line
 
 MODERATE_SCHEMA = '''
@@ -29,6 +31,8 @@ MODERATOR_REFUSED = 'A moderator is a person in this room or one of your own shi
 MODERATE_BUDGET_RANGE = f'budget is a whole number from 1 to {MODERATE_MAX_BUDGET}'
 ACTIONS_SHAPE = 'actions is a list of add_member and remove_member, each at most once'
 APPOINTED = '{owner} made {name} a moderator of this room, to {what}, until {when}.'
+NOT_A_MODERATOR = "Only the room's owner or one of its moderators can change its members"
+NO_ACTION = "Grant #{short} doesn't let you {verb} members"
 WHAT = {('add_member', 'remove_member'): 'add and remove members', ('add_member',): 'add members',
         ('remove_member',): 'remove members'}
 
@@ -87,3 +91,20 @@ class Moderators:
             self._person(db, actor)
             key = self._make_moderate(db, actor, grantee, room, hours, budget, actions, 'browser')
             return self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (key,)).fetchone())
+
+    def _acting_grant(self, db, actor, room_id, action, grant_id=None, self_removal=False):
+        """Ruling 12: the moderate grant an act spends. Candidates are the caller's moderate grants covering the room,
+        oldest first (created, then id), revoked ones included; a named grant_id keeps only that one, and one that isn't a
+        candidate is answered as if the caller held none. The first valid candidate with the action is returned (any action
+        for a moderator removing itself, which needs no budget). Otherwise 403 with the newest candidate's reason."""
+        grants = [g for g in db.execute('SELECT * FROM grants WHERE grantee_id=? ORDER BY created, id', (actor,)).fetchall()
+                  if is_moderate(g) and self._covered_room(db, g) == room_id and (grant_id is None or g['id'] == grant_id)]
+        if not grants:
+            raise Problem(403, NOT_A_MODERATOR)
+        reason = None
+        for grant in grants:
+            valid, why = self._grant_validity(db, grant, budget=not self_removal)
+            if valid and (self_removal or action in json.loads(grant['actions'])):
+                return grant
+            reason = why if not valid else NO_ACTION.format(short=grant['id'][:4], verb='add' if action == 'add_member' else 'remove')
+        raise Problem(403, reason)
