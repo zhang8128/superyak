@@ -4,8 +4,10 @@ tests/permissions_reference.py is a copy of a083a96's decision code, never edite
 fixtures and bulk uses under small bounds, `decide`, `decide_bulk` (named and counted, grouped and not) and
 `eligible_set` must give the reference's `to_json()`, versions, `processed` and `failed_need`, or the same refusal
 error, on a whole State and on a lazy State written to a ledger by SQL. The worlds are a083a96's (`nested=False`).
-One change is on purpose: Tardis's T1 reads the expiry of the grant behind every grant-backed membership of a
-needed object, so a horizon may move earlier, to one of those expiries (`t1_terms`)."""
+Two changes are on purpose. Tardis's T1 reads the expiry of the grant behind every grant-backed membership of a
+needed object, so a horizon may move earlier, to one of those expiries (`t1_terms`). Tardis's T6 gives an object in a
+store with no `stores` row no subject, so a decision that needs one may become a `NO_LAYER` refusal at that object
+(`unregistered`); an eligible set is then compared with the reference's for its other placements."""
 import dataclasses
 import hashlib
 import json
@@ -17,7 +19,7 @@ import pytest
 import permissions
 import tests.permissions_reference as ref
 from permissions import (BulkUse, LegacyLayer, Placement, RuleError, _COLUMNS, decide, decide_bulk, eligible_set,
-                         selector_json)
+                         parse_object_ref, selector_json)
 from tests.permissions_support import Bulk, T, derived_trails, generated_world, random_world, sample_uses, touches
 from tests.permissions_support import AGENT, COPY, PLACE
 from tests.test_permissions_f1 import FIXTURES, load_state, run_case
@@ -65,9 +67,31 @@ def t1_terms(s, objs, t):
     return out
 
 
-def same(label, live, old, t1=()):
-    """Equal decisions, except that T1 may move the horizon earlier, to one of `t1`, the times `t1_terms` reads."""
+T6_CHANGED = []          # the decisions Tardis's T6 made a NO_LAYER refusal at an object in an unregistered store
+NO_SUBJECT = {"code": "NO_LAYER", "layer": None, "action": None}
+
+
+def unregistered(s, refs):
+    """Tardis's T6, read from the State apart from the code under test: the refs whose store has no `stores` row."""
+    out = set()
+    for r in refs:
+        try:
+            iid = parse_object_ref(r).instance_id
+        except RuleError:
+            continue
+        if iid not in s.stores:
+            out.add(r)
+    return out
+
+
+def same(label, live, old, t1=(), t6=False):
+    """Equal decisions, except that T1 may move the horizon earlier, to one of `t1`, the times `t1_terms` reads; and,
+    for a use that needs an object in an unregistered store (`t6`), T6 may make it a NO_LAYER refusal there."""
     a, b = fields(live), fields(old)
+    if t6 and "d" in a and a != b:
+        assert not a["d"]["allowed"] and a["d"]["refusal"] == NO_SUBJECT, label
+        T6_CHANGED.append(label)
+        return
     if "d" in a and "d" in b and a["d"]["horizon"] != b["d"]["horizon"]:
         h, before = a["d"]["horizon"], b["d"]["horizon"]
         assert h in t1 and (before is None or h < before), label
@@ -110,14 +134,23 @@ def m2_terms(s, placements, requester, t):
     return out
 
 
-def same_set(label, live, old, m2=(), t1=None):
+def same_set(label, live, old, m2=(), t1=None, t6=frozenset(), full=None):
     """Equal eligible sets, except that M2 (the final review) may move the horizon earlier: to the earliest of the
     reference's horizon and `m2`, the times `m2_terms` reads; and T1 may move it earlier still, to one of the
-    times `t1_terms` reads of a placed object (`t1`, by object)."""
+    times `t1_terms` reads of a placed object (`t1`, by object). `old` was made without the placements whose objects
+    are in `t6`, those in unregistered stores: each of those is a NO_LAYER refusal, so its memory is not eligible,
+    unless the decision was refused before any object, as the reference's set over every placement (`full`) says."""
     M2_COMPARED.append(label)
     if isinstance(live, Exception) or isinstance(old, Exception):
         assert fields(live) == fields(old), label
         return
+    for o in t6:
+        got = live.decisions[o]
+        if json.dumps(fields(got), sort_keys=True) == json.dumps(fields(full.decisions[o]), sort_keys=True):
+            continue
+        assert got.refusal is not None and got.refusal.to_json() == NO_SUBJECT, label
+        T6_CHANGED.append(f"{label}/{o}")
+    live = dataclasses.replace(live, decisions={k: v for k, v in live.decisions.items() if k not in t6})
     t1 = t1 or {}
     terms = list(m2) + ([] if old.horizon is None else [old.horizon])
     expected = min(terms) if terms else None
@@ -185,32 +218,35 @@ def check_world(tag, w, s, rng, n_uses, when=None):
                 b = BulkUse(requester=first.requester, place=first.place, objects=objs, copy=first.copy,
                             action=first.action, purpose=first.purpose, at=first.at, named=named,
                             names=lambda o: roads.get(o, ()))
-                t1 = t1_terms(s, list(objs) + [m for o in objs for m in roads.get(o, ())], first.at)
+                needed = list(objs) + [m for o in objs for m in roads.get(o, ())]
+                t1, t6 = t1_terms(s, needed, first.at), bool(unregistered(s, needed))
                 for group in (True, False):
                     same(f"{tag}/{i}/bulk/{named}/{group}", guard(lambda: decide_bulk(s, b, group=group)),
-                         guard(lambda: ref.decide_bulk(s, b, group=group)), t1)
+                         guard(lambda: ref.decide_bulk(s, b, group=group)), t1, t6)
                 same(f"{tag}/{i}/bulk-legacy/{named}", guard(lambda: decide_bulk(s, b, legacy=leg)),
-                     guard(lambda: ref.decide_bulk(s, b, legacy=leg)), t1)
+                     guard(lambda: ref.decide_bulk(s, b, legacy=leg)), t1, t6)
             for j, x in enumerate(u.uses):
                 same(f"{tag}/{i}/sub/{j}", guard(lambda: decide(s, x)), guard(lambda: ref.decide(s, x)),
-                     t1_terms(s, (x.obj, *x.names), x.at))
+                     t1_terms(s, (x.obj, *x.names), x.at), bool(unregistered(s, (x.obj, *x.names))))
             continue
-        t1 = t1_terms(s, (u.obj, *u.names), u.at)
-        same(f"{tag}/{i}", guard(lambda: decide(s, u)), guard(lambda: ref.decide(s, u)), t1)
+        t1, t6 = t1_terms(s, (u.obj, *u.names), u.at), bool(unregistered(s, (u.obj, *u.names)))
+        same(f"{tag}/{i}", guard(lambda: decide(s, u)), guard(lambda: ref.decide(s, u)), t1, t6)
         same(f"{tag}/{i}/legacy", guard(lambda: decide(s, u, legacy=leg)), guard(lambda: ref.decide(s, u, legacy=leg)),
-             t1)
+             t1, t6)
         objs = list(getattr(w.cfg, "objects", [])) + [None]
         placements = [Placement(f"id{k}", o, u.copy) for k, o in enumerate(objs)]
         placements += [Placement(f"dup{k}", o, u.copy) for k, o in enumerate(objs[:3])]
         kw = dict(requester=u.requester, place=u.place, purpose=u.purpose, action=u.action, at=u.at)
+        t6 = frozenset(unregistered(s, [o for o in objs if o is not None]))
         same_set(f"{tag}/{i}/es", guard(lambda: eligible_set(s, placements, **kw)),
-                 guard(lambda: ref.eligible_set(s, placements, **kw)),
+                 guard(lambda: ref.eligible_set(s, [p for p in placements if p.obj not in t6], **kw)),
                  m2=m2_terms(s, placements, u.requester, u.at),
-                 t1={o: t1_terms(s, (o,), u.at) for o in objs if o is not None})
+                 t1={o: t1_terms(s, (o,), u.at) for o in objs if o is not None}, t6=t6,
+                 full=guard(lambda: ref.eligible_set(s, placements, **kw)) if t6 else None)
         for k, o in enumerate(objs[:-1]):
             x = dataclasses.replace(u, obj=o, names=roads.get(o, ()), shows=frozenset())
             same(f"{tag}/{i}/each/{k}", guard(lambda: decide(s, x)), guard(lambda: ref.decide(s, x)),
-                 t1_terms(s, (o, *x.names), u.at))
+                 t1_terms(s, (o, *x.names), u.at), bool(unregistered(s, (o, *x.names))))
 
 
 @pytest.mark.parametrize("case", range(CASES))
@@ -282,8 +318,10 @@ def test_bulk_bound_equals_the_reference(cap, trails_world, monkeypatch):
             bb = BulkUse(requester=first.requester, place=first.place,
                          objects=tuple(x.obj for x in u.uses) + tuple(roads), copy=first.copy, action=first.action,
                          purpose=first.purpose, at=first.at, named=False, names=lambda o: roads.get(o, ()))
+            needed = list(bb.objects) + [m for o in bb.objects for m in roads.get(o, ())]
             same(f"rw{case}/{i}/{cap}", guard(lambda: decide_bulk(st, bb, group=False)),
-                 guard(lambda: ref.decide_bulk(st, bb, group=False)))
+                 guard(lambda: ref.decide_bulk(st, bb, group=False)), t1_terms(st, needed, bb.at),
+                 bool(unregistered(st, needed)))
 
 
 def test_the_comparison_notices_one_changed_cited_id():
@@ -318,6 +356,7 @@ def test_the_random_worlds_keep_exercising_m2(tmp_path, capsys):
     before = [x for x in M2_CHANGED if "-before" in x]
     with capsys.disabled():
         print(f"\nM2 moved {len(M2_CHANGED)} of {len(M2_COMPARED)} eligible-set horizons, {len(before)} of them in "
-              f"uses drawn before t0; Tardis's T1 moved {len(T1_CHANGED)} horizons")
+              f"uses drawn before t0; Tardis's T1 moved {len(T1_CHANGED)} horizons and T6 refused "
+              f"{len(T6_CHANGED)} decisions with NO_LAYER")
     assert len(M2_CHANGED) - len(before) > 0 and len(before) > 0
-    assert T1_CHANGED            # T1's allowance in `same` and `same_set` is exercised too
+    assert T1_CHANGED and T6_CHANGED       # T1's and T6's allowances are exercised too

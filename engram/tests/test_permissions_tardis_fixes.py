@@ -16,7 +16,8 @@ from permissions import (STAR, Act, Placement, Refusal, RuleError, authorize, ch
 from storage import Storage
 from tests.permissions_support import (  # noqa: F401
     ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, andy_world, deliver_m1_through, fails_the_test, genome_world, home_use,
-    keep_world, keep_world_with_imprint_allowed, make_ledger_unreadable)
+    e1_ledger_through_andys_side, keep_world, keep_world_with_imprint_allowed, make_ledger_unreadable, use_json)
+from tests.permissions_oracle import oracle_decide
 from tests.test_permissions_server import enforce_server  # noqa: F401
 from tests.test_recall_margins import engram_server_env  # noqa: F401
 
@@ -287,3 +288,41 @@ def test_t5_the_owners_agent_still_lists_and_removes_its_placements(enforce_serv
     [row] = server.shares()["shares"]
     assert row["share_id"] == sid and row["reason"] == "Jenn's [condition] result for her care group"
     assert server.unshare(share_id=sid) == {"removed": True} and _placed(sid) == 0
+
+
+# ---------------------------------------------------------------- T6: an object in an unregistered store (P 6.3 item 1, P32)
+
+K_COPY, K_MEM, K_ROAD = "mem:nowhere/episode/c1", "mem:nowhere/episode/x", "road:nowhere/r1"   # no `stores` row
+
+
+def _unregistered_k():
+    """Andy's home allows Rio Grande everything on memories and roads. `nowhere` is no registered store, yet its
+    objects have co-subject rows and one is a copy of m1, as an unchecked write could leave them."""
+    w = andy_world()
+    w.copy(K_COPY, M1)
+    w.subject(K_COPY, ANDY)
+    w.subject(K_MEM, ANDY)
+    w.allow(HOME, audience=["self"], kinds=["memory", "road"])
+    return w
+
+
+@pytest.mark.parametrize("obj,names", [(K_COPY, ()), (K_MEM, ()), (K_ROAD, (M1,))])
+def test_t6_an_object_in_an_unregistered_store_has_no_subject_and_is_refused_with_no_layer(obj, names):
+    w = _unregistered_k()
+    s = w.state()
+    u = replace(home_use(obj, T("2026-11-02"), action="route" if obj == K_ROAD else "recall"), names=names)
+    d = decide(s, u)
+    assert d.refusal == Refusal("NO_LAYER", None, None) and not d.allowed
+    assert oracle_decide(s.to_tables(), dict(s.seq_at), use_json(u), seq=s.seq) == ("NO_LAYER", None, None)
+    assert decide(s, home_use(M1, T("2026-11-02"))).allowed           # its registered source is decided as before
+
+
+def test_t6_a_kept_copy_is_never_recorded_into_an_unregistered_store(tmp_path):
+    led = e1_ledger_through_andys_side(tmp_path)
+    s = led.state()
+    store = next(iter(s.stores))
+    with pytest.raises(RuleError, match="no registered store"):
+        led.record_copy(K_COPY, f"mem:{store}/episode/m1", now=T("2026-11-03"))
+    assert K_COPY not in led.state().copies
+    led.record_copy(f"mem:{store}/episode/kept-1", f"mem:{store}/episode/m1", now=T("2026-11-03"))
+    assert led.state().copies[f"mem:{store}/episode/kept-1"] == f"mem:{store}/episode/m1"

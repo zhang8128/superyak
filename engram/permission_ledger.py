@@ -962,6 +962,10 @@ class Ledger:
         state = self.state()
         if copy_ref == source_ref:
             raise RuleError(rule, "a memory is not a copy of itself")
+        if parse_object_ref(copy_ref).instance_id not in state.stores:
+            # it would have no subject (P32), so its source's would never be read (Tardis's T6)
+            raise RuleError(rule, f"{copy_ref} names no registered store; the person registers it first "
+                                  "(engram-permissions store add)")
         if copy_ref in state.copies:
             raise RuleError(rule, f"{copy_ref} is already recorded as a copy")
         links, cur, seen = 1, source_ref, {copy_ref}

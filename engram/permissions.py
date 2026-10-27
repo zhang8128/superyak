@@ -1233,6 +1233,19 @@ def subjects_of(state: State, obj: str, at: int, names: Sequence[str] = (), *,
     return tuple(sorted(out, key=_units))
 
 
+def _store_registered(state: State, ref) -> bool:
+    """Does the ref name a store with a `stores` row?"""
+    parsed = _parsed_or_none(ref) if isinstance(ref, str) else None
+    return parsed is not None and parsed.instance_id in state.stores
+
+
+def _decision_subjects(state: State, obj: str, at: int, names: Sequence[str] = ()) -> tuple[str, ...]:
+    """The subjects a decision reads of an object (P 6.3 item 1): `subjects_of`, except that an object whose store
+    has no `stores` row has none, whatever co-subject or `copies` rows name it, so it is refused with `NO_LAYER`
+    (P32; Tardis's T6). Its rows still count where it is the source of another copy."""
+    return subjects_of(state, obj, at, names) if _store_registered(state, obj) else ()
+
+
 @dataclass(frozen=True)
 class Layer:
     id: str
@@ -1336,7 +1349,7 @@ def _required_layers(state: State, use: Use, legacy: Sequence[LegacyLayer], outs
     held_places = [] if held is None else sorted(ancestors(state, held), key=_units)
     carried = qualifies(state, use, bulk)
     fixed = set(places) | set(held_places) | set(outside)
-    for s in (subjects_of(state, use.obj, use.at, use.names) if subjects is None else subjects):
+    for s in (_decision_subjects(state, use.obj, use.at, use.names) if subjects is None else subjects):
         layer_id = _subject_layer(state, s)
         add(layer_id, "co-subject" if carried and layer_id not in fixed else "consent")
     for p in places:
@@ -2062,14 +2075,17 @@ class _Run:
 
     # -- subjects, with one memo per ref
     def subjects(self, obj: str, names: Sequence[str] = ()) -> tuple:
+        """`_decision_subjects(state, obj, t, names)`, each object's read once."""
         t = self.proto.at
         if not names:
             got = self._subjects.get(obj)
             if got is None:
-                got = subjects_of(self.state, obj, t)
+                got = _decision_subjects(self.state, obj, t)
                 got = self._subjects[obj] = self._subject_ids.setdefault(got, got)
                 self._by_id.setdefault(id(got), got)
             return got
+        if not _store_registered(self.state, obj):
+            return ()
         out = set(self.subjects(obj))
         for name in names:
             out.update(self.subjects(name))
@@ -2078,6 +2094,8 @@ class _Run:
     def subjects_of_names(self, obj: str, names) -> tuple:
         """`subjects(obj, names)` for many names (a set): each distinct subjects tuple is kept once, so the union
         reads each name with one lookup and adds each distinct tuple once."""
+        if not _store_registered(self.state, obj):
+            return ()
         memo = self._subjects
         for n in names.difference(memo):
             self.subjects(n)

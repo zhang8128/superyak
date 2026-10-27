@@ -199,10 +199,19 @@ class _View:
             cur = self.copies.get(cur)
         return out
 
+    def registered(self, ref):
+        parsed = _parse_ref(ref)
+        return parsed is not None and parsed[1] in self.stores
+
     def subjects_of(self, obj, names, t):
+        """P 6.3 item 1: an object whose store has no `stores` row has no subject (P32, Tardis's T6), nor does it
+        give any to a road or trail that names it; through `copies` its rows still count."""
+        if not self.registered(obj):
+            return set()
         out = self.chain_subjects(obj, t)
         for m in names:
-            out |= self.chain_subjects(m, t)
+            if self.registered(m):
+                out |= self.chain_subjects(m, t)
         return out
 
     # -- lanes
