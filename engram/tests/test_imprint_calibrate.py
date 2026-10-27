@@ -115,10 +115,15 @@ def test_pi_budget_a_16000_episode_lane_in_blocks(tmp_path):
     assert peak < PEAK_BUDGET and seconds < 600
 
 
+RATIO_BOUND = {"cohesion_energy": 16, "classify_hubs": 20, "split_band": 16}   # I 10; classify_hubs revised (Task 50)
+
+
 @pytest.mark.skipif(os.environ.get("ENGRAM_PI_BUDGET") != "1", reason="Pi measurement (R16, R27)")
 @pytest.mark.parametrize("analysis", ["cohesion_energy", "classify_hubs", "split_band"])
 def test_pi_budget_a_1024_source_semantic(tmp_path, analysis):
     src = dense_source(tmp_path, lane_n=1_024, cores=0, hub_sources=1_024, dim=768)
     peak = child_peak_rss(f"run_one({analysis!r}, SRC)", src=src)
     assert peak < PEAK_BUDGET
-    print(f"{analysis}: ratio {(peak - base_peak()) / (1_024**2 * 8):.2f} (I 10 assumes at most 16)")
+    ratio = (peak - base_peak()) / (1_024**2 * 8)
+    print(f"{analysis}: ratio {ratio:.2f} (I 10: at most {RATIO_BOUND[analysis]})")
+    assert ratio <= RATIO_BOUND[analysis], (analysis, ratio)

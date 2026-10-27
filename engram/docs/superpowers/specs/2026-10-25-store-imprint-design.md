@@ -1760,6 +1760,17 @@ Those rest on the source build, its L1 and L4, and its tests.
   bytes, 128 MiB, plus the vectors, 1,024 × 6,144 = 6,291,456 bytes, 6 MiB. The Pi test measures both at their
   bounds against the 384 MiB design peak, and measures the ratio for the dense sets (section 16). If either fails,
   the bound is lowered in a revision, never sampled.
+  **Revision to this budget (Task 50, D42).** `classify_hubs` is the exception to the 16. Unbounded, ripser's H1 on a
+  1,024-source hub of random 768-dimension vectors reached 14.3 GiB (every distance nearly equal, so the Rips
+  complex fills at once). `persistence.h1_persistence` therefore hands ripser only the `H1_EDGES_PER_POINT * n`
+  (16 n) shortest distances, which caps its triangles at about (2E)^1.5 / 6 whatever the data; nothing is sampled,
+  every row is in every distance. Measured on the Pi at n = 1,024, `classify_hubs` peaks at 18.48 × n² × 8 bytes
+  (cohesion_energy 9.14, split_band 9.74), so it is budgeted at 20 × n² × 8 bytes, 160 MiB, plus the vectors; the
+  other two stay at 16. The sum stays far under the 384 MiB design peak. **What `classify_hubs` now means:** a
+  bar still alive at that scale counts to it, so the H1 figure is exact when every bar dies inside the scale and a
+  lower bound otherwise. A "looped" verdict is sound (the loop is there); it is no longer complete: a loop born
+  beyond the 16 n shortest distances reads "diffuse" where unbounded ripser said "looped". Sets of 33 or fewer
+  sources are read whole.
 - **Time** (Rio Grande's call, from the check's S3). Prim's algorithm reads the n × 768 float64 matrix once per point:
   6,144·n² bytes, 1.57 × 10¹² bytes at n = 16,000. Revision 7's first draft gave each 16,000-episode lane 600 s, so
   two lanes and the core set took 3 × 600 = 1,800 s, all of the unit's `RuntimeMaxSec=1800`, and left nothing for
@@ -2335,7 +2346,7 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
 | Closed session | newest row before t₁ older than t₁ − 3,600 s | the trail spec's closed session (its section 4) |
 | Ancestry | at most 64 ids | bounds `meta`; a longer chain is marked incomplete |
 | Memories per imprint | 100,000 | the permissions spec's collection bound (its 5.4), since r_M names them as one collection (D36) |
-| Calibration | `MemoryMax=512M`, `MemorySwapMax=0`; admission's unit 60 minutes (`RuntimeMaxSec=3600`), each blocked set at most 600 s and a whole admission at its bounds at most 3,300 s (section 10, "Time"); lane and core sets in blocks of 256 rows, at most 16,000 episodes each; per-semantic sets dense, at most 1,024 each (D31) | 8,704 bytes per episode in blocks, 16 × n² × 8 bytes dense, under the 384 MiB design peak (section 10, 14.1) |
+| Calibration | `MemoryMax=512M`, `MemorySwapMax=0`; admission's unit 60 minutes (`RuntimeMaxSec=3600`), each blocked set at most 600 s and a whole admission at its bounds at most 3,300 s (section 10, "Time"); lane and core sets in blocks of 256 rows, at most 16,000 episodes each; per-semantic sets dense, at most 1,024 each (D31) | 8,704 bytes per episode in blocks, 16 × n² × 8 bytes dense (20 for `classify_hubs`, whose H1 reads 16 n edges and so reads "looped" soundly but not completely), under the 384 MiB design peak (section 10, 14.1) |
 | Memory per process | under 512 MiB resident on the Pi; 384 MiB design peak at the bounds, asserted by the Pi tests (D42) | a 2 GB Pi (A4) |
 | Units this work adds | `MemoryMax=512M`, `MemorySwapMax=0`: admission's, the use's and the sweep's (D42) | `512M` is 512 MiB (systemd.resource-control(5): suffixes are base 1024) |
 | Imprint jobs at once | 1 (`flock -n <root>/.jobs.lock`; D42) | two at 512 MiB each would take half of a 2 GB Pi |
@@ -2741,8 +2752,8 @@ embedder" while the route gate still runs (section 12).
   measured and reported beside the allowance of section 14.1.
 - **Calibration at its bounds.** A 16,000-episode lane on random vectors: `build_filtration_blocked` peaks under
   384 MiB and finishes within 600 s. A 1,024-source semantic: `cohesion_energy`, `classify_hubs` (ripser included)
-  and `split_band` each peak under 384 MiB, and each one's peak, as a ratio to n² × 8 bytes, is reported against the
-  16 assumed in section 10.
+  and `split_band` each peak under 384 MiB, and each one's peak, as a ratio to n² × 8 bytes, is reported and asserted
+  against the 16 assumed in section 10 (20 for `classify_hubs`, the revision to that section: 18.48 measured).
 - **One admission at its bounds, timed** (the check's S3). The cap fixture's lanes are over 16,000, so every set
   there is skipped. This fixture keeps every set at its bound: two lanes and a core set of 16,000 episodes each, a
   1,024-source hub and resonances on every episode, with `route` and a stub count. `imprint.py admit` runs whole in

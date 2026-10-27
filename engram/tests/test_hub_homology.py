@@ -48,3 +48,28 @@ def test_a_bar_alive_at_the_scale_counts_to_it_and_is_finite():
     rng = np.random.default_rng(5)
     h1 = h1_persistence(rng.standard_normal((200, 32)))
     assert h1 is None or np.isfinite(h1)
+
+
+def test_a_loop_that_is_born_beyond_the_bound_reads_lower_than_whole_ripser():
+    """The 'looped' verdict is sound but not complete (I 10, D42): a ring whose edges all lie beyond the 16 n
+    shortest distances is not seen, where unbounded ripser sees it."""
+    n_blob, n_ring = 100, 20
+    rng = np.random.default_rng(5)
+    blob = np.zeros((n_blob, 8))
+    blob[:, 2] = 1.0                                   # distances are cosine: a tight cluster is one direction
+    blob[:, 3:] = 1e-3 * rng.standard_normal((n_blob, 5))
+    t = np.linspace(0, 2 * np.pi, n_ring, endpoint=False)
+    ring = np.zeros((n_ring, 8))
+    ring[:, 0], ring[:, 1], ring[:, 2] = 0.5 * np.cos(t), 0.5 * np.sin(t), 1.0
+    X = np.vstack([blob, ring])
+    n = len(X)
+    assert n * (n - 1) // 2 > H1_EDGES_PER_POINT * n
+    dgm = ripser(distance_matrix(X), maxdim=1, distance_matrix=True)["dgms"][1]
+    whole = float(np.max(dgm[:, 1] - dgm[:, 0])) / persistence.build_filtration(X).max_height
+    assert whole >= 0.10
+    assert (h1_persistence(X) or 0.0) < 0.10
+
+
+def test_the_hub_documentation_says_looped_is_not_complete():
+    doc = persistence.classify_hubs.__doc__
+    assert "lower bound" in doc and "diffuse" in doc and "H1_EDGES_PER_POINT" in doc

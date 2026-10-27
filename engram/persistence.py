@@ -489,7 +489,10 @@ def classify_hubs(storage, cfg, min_episodes: int = 10, *, max_episodes: int | N
                   skips: list | None = None) -> list[dict]:
     """diffuse / multi-modal / looped, per provenance-heavy semantic.
     multi-modal: the best Fiedler split's band clears min_split_band.
-    looped: persistent H1 exists (optional ripser; omitted otherwise).
+    looped: persistent H1 exists (optional ripser; omitted otherwise). H1 is read over the
+    ``H1_EDGES_PER_POINT * n`` shortest distances only (``h1_persistence``), so "looped" is sound but not
+    complete: a loop born beyond that scale reads "diffuse" where unbounded ripser said "looped", and the
+    figure is a lower bound.
     With ``max_episodes``, a semantic with more sources than that is not
     measured (never sampled) and is named in ``skips`` as ``hub:<id>``."""
     from sheaf import build_local_sheaf, cohesion_energy
