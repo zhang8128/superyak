@@ -13,7 +13,9 @@ owner raises it with his own terminal yes.
 point for every act, the gate and the houses. `engram/permission_uses.py` is the receipts file and its views.
 `engram/permission_cli.py` is `engram-permissions`, acting only as the ledger owner. The daemon, the receivers, the
 server, storage, federation, the policy generator and config gain small hooks. With no ledger the gate reads `off`
-and they behave as today, with two fail-closed changes the spec makes in every mode.
+and they behave as today, with two fail-closed changes the spec makes in every mode (the daemon never serves
+`group:outside-home`, and `share` refuses that name) and one requirement: the lighthouse daemon refuses to start,
+under every gate, without `ENGRAM_EMBEDDER_SOCKET` (spec 12.2; gate G0), as `engram/CLAUDE.md` says.
 
 **Tech Stack:** Python 3.12 or later (`requires-python = ">=3.12"` in engram's `pyproject.toml` and `uv.lock`; there is
 no `.python-version`, so on this Pi uv picks its own 3.14.8, the only installed interpreter that fits). Standard library
@@ -235,7 +237,13 @@ Kept stable after this plan merges. A change to any of these is a change to the 
   `mode=ro` and `query_only` (T 6.5). It may call `Ledger.open_read_only(engram_home)` and
   `Ledger.store_row(instance_id) -> dict | None` (Tasks 10, 11). The `stores` table is exactly P 5.5's.
 - **Imprints** reads, on the source machine: `Ledger.store_row(instance_id)` for D37 and
-  `Ledger.cosubjects(ref) -> frozenset[str]` for `cosubjects(m)` (I 5.2), both Task 11; and
+  `Ledger.cosubjects(ref, at=None) -> frozenset[str]` for `cosubjects(m)` (I 5.2), both Task 11. Since the final
+  review's M6, `cosubjects` follows copies: it is `subjects_of(state, ref, at)` (the ref's own subject rows and its
+  sources' up the `copies` chain, at most `MAX_COPY_CHAIN` links) less the ref's default subject, its store's owner
+  (not for an imprint store). `at` None reads every subject row not removed; a time reads those in force then. It
+  builds a State per call, and raises `RuleError` on a malformed ref. The imprints plan's Task 8 test
+  `test_a_copy_carries_what_its_source_gains_after_the_copy` asserts `led.cosubjects(copy) == frozenset()` (the
+  copy's own rows only); at the rebase it changes to `{"person:jenn"}`, equal to its `cosubjects_of`. It also reads
   `Ledger.latest_lane_note(ref) -> str | None` for `pending(m)` (I 5.2), Task 17. It writes imported receipts with `Uses.append_imported(row, subjects)` (Task 14), and its
   `import-receipts` test runs `Uses.owner_list` (Task 15). It names copies `imprint:<station peer id>/<imprint id>`,
   which `permissions.parse_copy_ref` accepts (Task 1).
@@ -3946,11 +3954,11 @@ None of these is run by this plan. Each waits for the person named.
 | G3 | `engram-permissions migrate` on Andy's machine, the one whose `ENGRAM_HOME` holds the published house the daemon serves, after he checks that the words of the yes name `person:andy` (R24), then `gate shadow`, then reading `report shadow`. Before `gate shadow`, each house that `migrate` and `gate` list as lacking 029 is opened once by its own engram server at its next start (G2), or it serves nothing under `shadow` (R27). | Andy's own terminal yes (P 7.6, 12.3). No agent runs them (Task 32's rule). |
 | G4 | Andy's home grant for his own agents (P 12.3 step 4), and his answer on agent shares at home lasting at most 720 hours. | Section 19, "Agent shares at home under `enforce`". |
 | G5 | `gate enforce`. | Andy's yes, after G3's report and G4; and his answer on whether the terminal yes is enough at home (P 19). |
-| G6 | The imprints plan's build: `import-receipts`, `pending(m)`, `cosubjects(m)` and D37 read this plan's files. | Build order: imprints after this merges. |
+| G6 | The imprints plan's build: `import-receipts`, `pending(m)`, `cosubjects(m)` and D37 read this plan's files. `Ledger.cosubjects(ref, at=None)` now follows copies (M6: `subjects_of` less the default subject), builds a State per call and raises `RuleError` on a malformed ref ("What the other plans use"), so the imprints plan's Task 8 assertion `led.cosubjects(copy) == frozenset()` becomes `{"person:jenn"}` at its rebase. | Build order: imprints after this merges. |
 | G7 | The trails step 1 plan's build: `laid_by` reads `stores.owner`. | Build order: trails after imprints. |
 | G8 | YN6's wording in P 9.1 item 1 ("per action and purpose") in the spec's next revision. | This plan edits no spec; the code already counts per (action, purpose). |
 | G11 | R10's departure in the spec's next revision: P 6.3 item 4 and section 10 say that the `remember` guard decides `imprint` from ledger layers only, ignoring any legacy `imprint` rule, allow or deny, and why (today's generated files and E1's give no `imprint`; both legacy layers already allowed the delivery under `enforce`; every person the memory is about still says yes in the ledger). | This plan edits no spec. The re-check confirmed R10 on this condition. |
-| G12 | The spec's next revision records the final review's changes that its text does not hold: R34's three bounds in section 15; R36's `audience` entry of a shadow receipt's `cited` in 9.1; and, in 15's "Measured", that the probes' `MemoryMax=512M` was not enforced on the station's Pi (no memory controller), that the peaks are `VmHWM` read directly, and that the probe now records `VmSwap` beside it (M10). | This plan edits no spec; spec changes need their own reviewer. |
+| G12 | The spec's next revision records the final review's changes that its text does not hold: R34's three bounds in section 15; R36's `audience` entry of a shadow receipt's `cited` in 9.1; and, in 15's "Measured", that the probes' `MemoryMax=512M` was not enforced on the station's Pi (no memory controller), that the peaks are `VmHWM` read directly, and that the probe now records `VmSwap` beside it (M10). And, in 12.2's "Modes", a departure (the final fix wave's concern 5, M3): under `shadow`, an item one of whose placements has no object gets no receipt, as an item with no object at all, while the legacy path still delivers it; `report shadow` lists that placement ("no object") instead. 12.2 says "both decisions go to the receipts", so its next revision must say so. | This plan edits no spec; spec changes need their own reviewer. |
 | G9 | Step 2's items: the browser yes and station signatures (P 14 step 2), what a subject sees of another subject's home (BS3), which item of `Req` holds a station ceiling (XN6), a copy held away reading lanes from the imprint (P 5.3), and the `remember` guard seeing deliveries decided elsewhere (P 10). | Later specs. Not built here. |
 | G10 | Section 19's open questions: the license, one permission an agent may set alone, what the county sets, pseudonyms, the two departures from principle 5, who decides in the county steps, and memories that mention other people. | Andy's. Each spec keeps its default. |
 
