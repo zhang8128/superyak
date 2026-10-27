@@ -403,3 +403,29 @@ def test_a_public_websocket_is_closed_before_any_lookup(watched):
         with public(app, cookie=f'superyak_session={clients[0].cookies.get("superyak_session")}').websocket_connect('/api/chats'):
             pass
     assert reached == []
+
+
+def served(monkeypatch, tmp_path, *args):
+    """What `serve` hands uvicorn.run, or the error it exits with."""
+    import uvicorn
+    from superyak_peer.__main__ import main
+    calls = []
+    monkeypatch.setattr(uvicorn, 'run', lambda app, **kwargs: calls.append(kwargs))
+    main(['serve', '--data-dir', str(tmp_path / 'peer'), *args])
+    return calls[0]
+
+
+def test_serve_turns_off_the_access_log(monkeypatch, tmp_path):
+    """Spec 4: no secret lands in a log; a docking poll from an older client still carries ?secret=."""
+    assert served(monkeypatch, tmp_path)['access_log'] is False
+    behind = served(monkeypatch, tmp_path, '--proxy-headers', '--origin', 'https://station.example.ts.net')
+    assert (behind['access_log'], behind['proxy_headers'], behind['forwarded_allow_ips']) == (False, True, TRUSTED_PROXY)
+
+
+@pytest.mark.parametrize('host', ['localhost', '::1', '0.0.0.0', '100.70.202.124'])
+def test_proxy_headers_need_an_ipv4_loopback_bind(monkeypatch, tmp_path, capsys, host):
+    """Spec 1: the trusted proxy is 127.0.0.1 only, so a proxy on ::1 would make every request look like loopback."""
+    with pytest.raises(SystemExit) as refused:
+        served(monkeypatch, tmp_path, '--host', host, '--proxy-headers', '--origin', 'https://station.example.ts.net')
+    assert refused.value.code == 1 and 'IPv4 loopback' in capsys.readouterr().err
+    assert served(monkeypatch, tmp_path, '--host', '127.0.0.1', '--proxy-headers', '--origin', 'https://station.example.ts.net')['proxy_headers']
