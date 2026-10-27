@@ -709,6 +709,23 @@ def _rebuild(a) -> int:
     return 0
 
 
+def _verify(a) -> int:
+    """P 5.6: the log's hash chain, `meta.head` and every table's seqs against the log's last row. It writes
+    nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does not."""
+    with _ledger(read_only=True) as led:
+        top, problems = led.integrity()
+    if not problems:
+        print(f"The ledger verifies: {top} log rows, the hash chain is whole, and no table names a seq past the "
+              f"log's last row.")
+        return 0
+    print(f"The ledger does not verify ({top} log rows):")
+    print("\n".join(f"  - {p}" for p in problems))
+    print("Every reader refuses a ledger whose tables name a seq past its log, or whose head is not its last row, so "
+          "under `enforce` nothing is served. Restore the file together with its journal, or replay the log that "
+          "is left with `engram-permissions rebuild --out <dir>` and make the lost acts again.")
+    return 1
+
+
 def _stamp(value) -> str:
     return "none" if value is None else _time_text(value)
 
@@ -1449,6 +1466,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("mode", choices=["off", "shadow", "enforce"])
     leaf(top, "rebuild", _rebuild, "replay the log into a fresh ledger (no yes needed)").add_argument(
         "--out", required=True, help="a directory that holds no ledger yet; the file lands in .engram/ under it")
+    leaf(top, "verify", _verify, "check the log's chain and that no table runs past it (no yes needed; writes "
+                                 "nothing)")
     p = leaf(top, "uses", _uses, "list the uses (no yes needed)")
     p.add_argument("--since", type=_when)
     p.add_argument("--until", type=_when)

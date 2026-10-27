@@ -73,8 +73,11 @@ def test_u15_the_check_reruns_after_a_registry_change(tmp_path):
 # ---------------------------------------------------------------- what the brief leaves to the builder
 
 def only_proposal_rows_changed(before, after):
+    """The log, the head that follows it in `meta`, and the proposals changed; nothing else."""
+    def kept(t, rows):
+        return [r for r in rows if r.get("key") != "head"] if t == "meta" else rows
     keys = {t for t in after if t not in ("ledger_log", "proposals")}
-    return all(before[t] == after[t] for t in keys) and after["proposals"] != before["proposals"]
+    return all(kept(t, before[t]) == kept(t, after[t]) for t in keys) and after["proposals"] != before["proposals"]
 
 
 def test_a_refused_act_writes_nothing(tmp_path):

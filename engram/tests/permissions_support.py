@@ -1638,8 +1638,10 @@ def e1_through_use_9(tmp_path):
 
 
 def only_proposal_rows_changed(before: dict, after: dict) -> bool:
-    """Of two `Ledger.tables()`, only the log and the proposals differ."""
-    return all(before[t] == after[t] for t in before if t not in ("ledger_log", "proposals"))
+    """Of two `Ledger.tables()`, only the log, the head that follows it in `meta`, and the proposals differ."""
+    def kept(t, rows):
+        return [r for r in rows if r.get("key") != "head"] if t == "meta" else rows
+    return all(kept(t, before[t]) == kept(t, after[t]) for t in before if t not in ("ledger_log", "proposals"))
 
 
 R26_SAMPLE_ACTS = [
