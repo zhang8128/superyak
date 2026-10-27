@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import tempfile
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 import urllib.error
 import urllib.request
 from superyak_team.teamlib import fence_external
@@ -138,8 +138,10 @@ class StationClient:
     def rooms(self):
         return self.request('GET', '/api/chats')
 
-    def room(self, room_id):
-        return self.request('GET', f'/api/chats/{quote(room_id, safe="")}')
+    def room(self, room_id, **page):
+        """The room. `page` (limit, before, at, start, after, since) asks for a window of its messages; values of None are left out."""
+        query = urlencode({name: value for name, value in page.items() if value is not None})
+        return self.request('GET', f'/api/chats/{quote(room_id, safe="")}' + (f'?{query}' if query else ''))
 
     def post(self, room_id, body, client_message_id, ticket_id=None, reply_to=None):
         payload = {'client_message_id': client_message_id, 'body': body}
