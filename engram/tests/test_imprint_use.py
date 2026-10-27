@@ -101,3 +101,21 @@ def test_the_uses_directory_is_private_and_its_parents_are_never_made(tmp_path):
 def test_the_cli_refuses_a_bad_use_id(tmp_path, capsys):
     root, iid_, _ = with_allow(tmp_path)
     assert imprint.main(["use", "--id", iid_, "--use-id", "x", "--imprints-dir", str(root)]) == 2
+
+
+# ---- The run's deadline is the end's when that is sooner (final review M5); the lane is the scope's (M6) ----
+
+def test_the_deadline_is_the_time_left_to_the_end_when_that_is_sooner(tmp_path):
+    from tests.imprint_support import FAR
+    root, iid_, use_id = with_allow(tmp_path)
+    assert use(iid_, use_id, root=root, trails_cmd=STUB_PRINTS_ARGV, now=lambda: FAR - 100) == 0
+    argv = json.loads((uses_dir(root, iid_, use_id) / "report.json").read_text())
+    assert argv[argv.index("--deadline") + 1] == "100"
+
+
+@pytest.mark.parametrize("lane", ["personal", "Work", "work "])
+def test_a_lane_outside_the_scope_is_refused_before_the_use_directory(tmp_path, lane):
+    root, iid_, use_id = with_allow(tmp_path, lanes=["work"])
+    assert use(iid_, use_id, root=root, lane=lane, trails_cmd=STUB_OK) == 2
+    assert not uses_dir(root, iid_, use_id).exists()
+    assert use(iid_, use_id, root=root, lane="work", trails_cmd=STUB_OK) == 0     # the scope's own lane still runs

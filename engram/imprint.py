@@ -1269,15 +1269,19 @@ USE_DEADLINE = "1740"                # seconds the trail evaluation may take; th
 DEFAULT_TRAILS_CMD = (sys.executable, str(Path(__file__).resolve().parent / "trails.py"))
 
 
-def _use_allowed(root: Path, imprint_id: str, use_id: str, now: float) -> bool:
-    """Whether the imprint still stands and its allow file for this use exists, names it and has not ended."""
+def _use_end(root: Path, imprint_id: str, use_id: str, now: float) -> float | None:
+    """When this use must end, the earlier of ``admission.json``'s and its allow file's ``valid_until``; None unless
+    the imprint still stands and its allow file for this use exists, names it and has not ended."""
     if _still_allowed(root, imprint_id, now) is not None:
-        return False
+        return None
     try:
-        doc = json.loads((root / f"{imprint_id}.state" / "uses" / f"{use_id}.allow.json").read_text())
-        return doc["use_id"] == use_id and doc["instance_id"] == imprint_id and doc["valid_until"] > now
+        state = root / f"{imprint_id}.state"
+        doc = json.loads((state / "uses" / f"{use_id}.allow.json").read_text())
+        end = min(doc["valid_until"], json.loads((state / "admission.json").read_text())["valid_until"])
+        ok = doc["use_id"] == use_id and doc["instance_id"] == imprint_id and end > now
+        return end if ok else None
     except (OSError, ValueError, KeyError, TypeError):
-        return False
+        return None
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -1306,8 +1310,19 @@ def use(imprint_id: str, use_id: str, *, root: Path, lane: str | None = None, tr
     ``uses/<use id>/`` and always writes ``result.json`` (the exit status, or the class name of what raised), and
     ``report.json`` only when the child exited 0. Returns 0 when the report was written, else 1. It imports no numpy."""
     root = Path(root)
-    if not USE_ID.fullmatch(use_id) or not _UUID.fullmatch(imprint_id) or not _use_allowed(root, imprint_id, use_id, now()):
+    if not USE_ID.fullmatch(use_id) or not _UUID.fullmatch(imprint_id):
         return 2
+    started = now()
+    end = _use_end(root, imprint_id, use_id, started)
+    if end is None:
+        return 2
+    try:
+        lanes = json.loads((root / imprint_id / "manifest.json").read_text())["scope"]["lanes"]
+    except (OSError, ValueError, KeyError, TypeError):
+        lanes = None
+    if lane is not None and not (isinstance(lanes, list) and lane in lanes):    # section 12: one lane of the scope
+        return 2
+    deadline = str(max(1, min(int(USE_DEADLINE), int(end - started))))       # never past the end (final review M5)
     state = root / f"{imprint_id}.state"
     here = state / "uses" / use_id
     try:
@@ -1319,12 +1334,11 @@ def use(imprint_id: str, use_id: str, *, root: Path, lane: str | None = None, tr
     try:
         scratch.mkdir(mode=0o700, exist_ok=True)                # no parents (D42)
         if lane is None:
-            lanes = json.loads((root / imprint_id / "manifest.json").read_text())["scope"]["lanes"]
-            if len(lanes) != 1:
+            if not isinstance(lanes, list) or len(lanes) != 1:
                 raise ValueError("a use names one lane")
             lane = lanes[0]
         argv = [*(trails_cmd if trails_cmd is not None else DEFAULT_TRAILS_CMD), str(root / imprint_id / "imprint.db"),
-                "--evaluate", "--lane", lane, "--seed", str(int(use_id[:8], 16)), "--deadline", USE_DEADLINE,
+                "--evaluate", "--lane", lane, "--seed", str(int(use_id[:8], 16)), "--deadline", deadline,
                 "--json", "--imprint-use", use_id]
         env = {**os.environ, "SQLITE_TMPDIR": str(scratch), "TMPDIR": str(scratch), **ONE_BLAS_THREAD}
         exit_, out = _run_trails(argv, env)
