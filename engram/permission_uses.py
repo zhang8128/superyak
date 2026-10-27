@@ -207,8 +207,10 @@ class Uses:
     @classmethod
     def open(cls, engram_home) -> "Uses":
         """Open for writing, creating the file and its four tables when there are none."""
+        from permission_ledger import make_private
         path = uses_path(engram_home)
         path.parent.mkdir(parents=True, exist_ok=True)
+        make_private(path)
         conn = cls._connect(path, False)
         try:
             conn.execute("BEGIN IMMEDIATE")

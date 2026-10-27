@@ -485,6 +485,16 @@ def ledger_path(engram_home: Path) -> Path:
     return Path(engram_home) / ".engram" / "permissions.db"
 
 
+def make_private(path: Path) -> None:
+    """Create `path` empty with mode 0600 unless it exists: the ledger, the receipts file and the migrate plan name
+    people and their uses (Serenity's section 2, nits). SQLite fills an empty file as a new database, and makes
+    its journal with the database's mode."""
+    try:
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except FileExistsError:
+        pass
+
+
 def new_id(prefix: str) -> str:
     return prefix + os.urandom(16).hex()
 
@@ -561,6 +571,7 @@ class Ledger:
         if path.exists():
             raise FileExistsError(str(path))
         path.parent.mkdir(parents=True, exist_ok=True)
+        make_private(path)
         conn = cls._connect(path, read_only=False)
         conn.executescript(_SCHEMA)
         conn.executemany("INSERT INTO meta VALUES(?,?)",

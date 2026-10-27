@@ -9,9 +9,10 @@ from permission_cli import main as cli_main
 from permission_ledger import _SEQ_COLUMNS, Ledger, LedgerUnreadable, ledger_path
 from permissions import decide
 from tests.permissions_support import (  # noqa: F401
-    ANDY, HOME, M1, M1_TEXT, M3, T, deliver_m1_through, do, e1_county_ledger, keep_world,
+    ANDY, HOME, M1, M1_TEXT, M3, T, deliver_m1_through, do, e1_county_ledger, fake_tty, keep_world,
     keep_world_with_imprint_allowed, read_by_ph, receipt_rows)
 from tests.test_recall_margins import engram_server_env  # noqa: F401
+from tests.test_permissions_migrate import legacy_home  # noqa: F401
 
 
 # ---------------------------------------------------------------- item 1: a cut log tail reads as unreadable (P 5.6)
@@ -396,3 +397,31 @@ def test_item8_off_linux_the_probe_reads_its_peak_from_getrusage_and_has_no_swap
 def test_item8_on_linux_the_probe_still_reads_vmhwm_and_vmswap():
     from tests import pi_budget_probe
     assert pi_budget_probe.peak_kb() > 0 and isinstance(pi_budget_probe.swap_kb(), int)
+
+
+# ---------------------------------------------------------------- nits: the files that name people and uses are 0600
+
+def _mode(path):
+    import os
+    import stat
+    return stat.S_IMODE(os.stat(path).st_mode)
+
+
+def test_nit_the_ledger_and_the_receipts_file_are_made_0600(tmp_path):
+    from permission_uses import Uses, uses_path
+    Ledger.create(tmp_path, "andy", now=T("2026-11-01")).close()
+    Uses.open(tmp_path).close()
+    assert _mode(ledger_path(tmp_path)) == 0o600 and _mode(uses_path(tmp_path)) == 0o600
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        out = led.rebuild(tmp_path / "rebuilt")
+    finally:
+        led.close()
+    assert _mode(ledger_path(out)) == 0o600
+
+
+def test_nit_the_migrate_plan_and_ledger_are_made_0600(legacy_home, fake_tty):
+    fake_tty.answer_the_printed_code()
+    assert cli_main(["migrate"]) == 0
+    [plan] = (legacy_home / ".engram").glob("permissions-migrate-*.json")
+    assert _mode(plan) == 0o600 and _mode(ledger_path(legacy_home)) == 0o600

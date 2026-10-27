@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
-                               check_retire_person, effective_gate, houses, ledger_path)
+                               check_retire_person, effective_gate, houses, ledger_path, make_private)
 from permissions import (CODE_CHARS, MAX_ACT_OBJECTS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse,
                          RuleError, Use, affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
                          home_of, parse_copy_ref, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
@@ -1057,6 +1057,7 @@ def _migrate(args) -> int:
     lacking = [str(p) for p in houses(root) if p.resolve() != house.resolve() and _lacks_029(p)]
     at = _now()
     plan_path = root / ".engram" / f"permissions-migrate-{datetime.fromtimestamp(at, timezone.utc):%Y%m%dT%H%M%SZ}.json"
+    make_private(plan_path)
     plan_path.write_text(json.dumps({"at": at, "owner": owner, "rows": migrated, "unmatched": unmatched},
                                     indent=1, sort_keys=True), encoding="utf-8")
     shown = unmatched[:REPORT_ROWS]
