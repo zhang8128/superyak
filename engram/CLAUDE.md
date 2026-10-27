@@ -245,15 +245,16 @@ memory, for what, and where. Four modules: `permissions.py` holds the pure rules
 person's side. The ledger lives at `ENGRAM_HOME/.engram/permissions.db` and the receipts at
 `ENGRAM_HOME/.engram/permission-uses.db`, fixed paths. The gate is `off` until the owner raises it (`shadow`, then
 `enforce`), so with no ledger or an `off` gate engram behaves as before apart from two fail-closed changes (the
-daemon never serves `group:outside-home`, and `share` refuses that name) and one requirement: the lighthouse daemon
-refuses to start, under every gate, without `ENGRAM_EMBEDDER_SOCKET`. Every machine that runs it needs
-`embedder_socket` in its `runtime.json` and the `superyak-embedder` unit running before it takes this code (spec
-12.2; the plan's gate G0).
+daemon never serves `group:outside-home`, and `share` refuses that name) and one requirement on small machines: the
+lighthouse daemon no longer refuses to start without `ENGRAM_EMBEDDER_SOCKET`. Without it, it loads the model in
+process and logs a warning, as before this branch. Small-hardware machines (the Pi) still need `embedder_socket` in
+their `runtime.json` and the `superyak-embedder` unit running, so the model is never loaded twice there (spec 12.2;
+the plan's gate G0).
 
 Agents never run, for the person, any `engram-permissions` command that writes, such as `sign`, `allow`, `grant`, `migrate` or `gate`. Each needs the person's own terminal yes.
 
 An agent asks through the `permit` tool (a proposal the owner signs, unless a grant covers it) and reads through
-`permissions`. Memory: each process peaks under 512 MB on the Pi (spec 15); the daemon needs `ENGRAM_EMBEDDER_SOCKET`.
+`permissions`. Memory: each process peaks under 512 MB on the Pi (spec 15); on the Pi the daemon needs `ENGRAM_EMBEDDER_SOCKET`, or it loads a second model.
 
 ## MCP Tools
 

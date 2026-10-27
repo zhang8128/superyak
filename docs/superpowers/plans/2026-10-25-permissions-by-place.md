@@ -14,8 +14,9 @@ point for every act, the gate and the houses. `engram/permission_uses.py` is the
 `engram/permission_cli.py` is `engram-permissions`, acting only as the ledger owner. The daemon, the receivers, the
 server, storage, federation, the policy generator and config gain small hooks. With no ledger the gate reads `off`
 and they behave as today, with two fail-closed changes the spec makes in every mode (the daemon never serves
-`group:outside-home`, and `share` refuses that name) and one requirement: the lighthouse daemon refuses to start,
-under every gate, without `ENGRAM_EMBEDDER_SOCKET` (spec 12.2; gate G0), as `engram/CLAUDE.md` says.
+`group:outside-home`, and `share` refuses that name) and one requirement on small machines: the lighthouse daemon no
+longer refuses to start without `ENGRAM_EMBEDDER_SOCKET` (R37); it loads the model in process and logs a warning, and
+gate G0 still requires the socket and the embedder unit on small-hardware machines (spec 12.2), as `engram/CLAUDE.md` says.
 
 **Tech Stack:** Python 3.12 or later (`requires-python = ">=3.12"` in engram's `pyproject.toml` and `uv.lock`; there is
 no `.python-version`, so on this Pi uv picks its own 3.14.8, the only installed interpreter that fits). Standard library
@@ -143,6 +144,7 @@ Choices the spec leaves to the builder (P 18) or does not fix. A reviewer checks
 | R34 | An agent's proposals and child grants are bounded (the final review's I1): at most `MAX_OPEN_PROPOSALS_PER_AGENT = 64` open proposals (pending and not expired) per filer, `MAX_OPEN_PROPOSALS = 1024` per ledger, and `MAX_CHILD_GRANTS = 64` live (not revoked, not expired) child grants per parent grant. Each is counted inside the write's `BEGIN IMMEDIATE`, as the records bound is, and a refusal names the bound. A State reads proposals on demand (`ProposalMap`) and holds none. | Spec 15 bounds records, caches and sets, not proposals, and an agent can file proposals and issue child grants with no yes. 300 proposals of 512 refs added 4.1 MB to every State, so an agent in a retry loop could push the daemon's two States past 512 MB. No decision reads a proposal. The numbers are the controller's; gate G12 has the spec record them. |
 | R35 | An eligible set's horizon also holds every time after its `at` at which a row it reads by its log time comes into or goes out of force: the requester's places and group memberships, and each placed object's memberships, subject rows (up its `copies` chain) and lane notes (the final review's M2); and the earliest anchor after `at` of an unrevoked record, of any layer or effect, made once per (State, t) (the re-review's M2: a back-dated deny, a `--from` in the past or a deny proposal signed after it was filed, counts only from its anchor). A decision's own horizon is unchanged. | After a backward clock step, a row written by the faster clock does not count at the daemon's t, and the cache would serve that decision until the next ledger write. 6.5 step 7 allows terms beyond its reading that are only ever earlier ones. Every decision stays as 5.3 reads it, so the oracle, the gluing check and F1 are unchanged; the cache ends when the row starts to count. |
 | R36 | Under `shadow`, a read the publisher's audience check refused keeps the ledger's own verdict and refusal on its receipt, and records the audience refusal as a `cited` entry of its own: `{"layer": "publisher", "kind": "audience", "action": "inject_context", "verdict": "deny"}` (the final review's M8). `report shadow` reads it there, and still reads a receipt written before as it did. | One field held two refusals: when both refused, the ledger's code was lost. Gate G12 has the spec's 9.1 name the entry. |
+| R37 | The lighthouse daemon does not refuse to start without `ENGRAM_EMBEDDER_SOCKET` (the controller's ruling, "G0 on the Mac"). Without it, `main` embeds in process through `create_embedding_provider()`, as main does, and logs a warning that names `scripts/superyak-embedder.service` and says the model is loaded in this process. With it, `RemoteEmbedProvider` as before. G0 stays the deploy item for small-hardware machines. | "Gate off behaves as before" (`engram/CLAUDE.md`) must hold on every machine. Andy's Mac runs the daemon under launchd with KeepAlive and a 10-second throttle, with no socket and no shared embedder; with the refusal, a pull of this branch would make it exit 2 and relaunch every 10 s for good. Cost if wrong: a machine that should run the shared embedder and does not loads a second model in the daemon (about 1.5 GB more), which the Pi cannot hold; the warning in the log and G0 are the guard. |
 
 ## Carried items
 
@@ -3927,16 +3929,16 @@ ship.
    agent's refusal views against P 9.2, and the `remember` guard's reply against P 10.
 8. **Not a Pi suite.** `make check-integration` needs Node.js 24 and pnpm 11.20.0; the Pi has Node 18.20.4 and no pnpm
    (checked 2026-10-25). It must pass in CI or on the Mac before the merge, and its result is posted with the verdict.
-9. **The shared embedder on every daemon machine (gate G0; spec 12.2; the final review's I4).** With this branch the
-   lighthouse daemon refuses to start, under every gate, `off` included, when `ENGRAM_EMBEDDER_SOCKET` is unset
-   (`engram/lighthouse_daemon.py`, `main`). `superyak-runtime` sets it only from `embedder_socket` in
-   `~/.config/superyak/runtime.json`. So before the merge, on every machine of Andy's that runs the engram lighthouse
-   daemon (the Mac among them), someone on that machine checks both:
+9. **The shared embedder on small-hardware daemon machines (gate G0; spec 12.2; the final review's I4; R37).** The
+   lighthouse daemon does not refuse to start when `ENGRAM_EMBEDDER_SOCKET` is unset (`engram/lighthouse_daemon.py`,
+   `main`): it embeds in process through `create_embedding_provider()` and logs a warning that names
+   `scripts/superyak-embedder.service` and says the model is loaded in this process. So the Mac, which has no shared
+   embedder, keeps starting. On every small-hardware machine of Andy's that runs the daemon (the Pi), someone on that
+   machine checks both before the merge, so the model is never loaded twice there:
    `python3 -c "import json, pathlib; print(json.load(open(pathlib.Path.home() / '.config/superyak/runtime.json')).get('embedder_socket'))"`
-   prints a socket path, not `None`; and the embedder runs (`systemctl --user is-active superyak-embedder` prints
-   `active`, or, on the Mac, the job that runs `superyak-runtime embedder` is loaded and running). The verdict names
-   each machine and what it showed. A machine that fails either check keeps the code before this branch until it
-   passes; the daemon's refusal is not taken out of the code (12.2 puts it behind this gate).
+   prints a socket path, not `None`; and `systemctl --user is-active superyak-embedder` prints `active`. The verdict
+   names each such machine and what it showed. A machine without the socket still runs, with the model in the
+   daemon's own process and the warning in its log.
 
 The merging ship then merges as section 2 says. This branch changes only engram, which no Pi service runs (the Pi's
 user units on 2026-10-25: `superyak-door`, `superyak-lighthouse`, `superyak-odo`, `superyak-ship`,
@@ -3948,7 +3950,7 @@ None of these is run by this plan. Each waits for the person named.
 
 | # | Gate | Why it waits |
 |---|---|---|
-| G0 | Before G1 and G2: every machine that runs the engram lighthouse daemon has `embedder_socket` in its `~/.config/superyak/runtime.json` and runs the embedder unit (`superyak-embedder`), checked on each machine as Verification step 9 says. | Spec 12.2: "before the daemon's refusal ships, every machine that runs the daemon has that key and runs the embedder unit". The daemon refuses to start without `ENGRAM_EMBEDDER_SOCKET` under every gate, so a machine without it stops serving its neighbors at its next start (the final review's I4). Andy's machines, so Andy or an agent on each one checks. |
+| G0 | Before G1 and G2: every small-hardware machine (the Pi) that runs the engram lighthouse daemon has `embedder_socket` in its `~/.config/superyak/runtime.json` and runs the embedder unit (`superyak-embedder`), checked on each such machine as Verification step 9 says. Other machines, the Mac among them, may run without it (R37). | Spec 12.2: "before the daemon's refusal ships, every machine that runs the daemon has that key and runs the embedder unit". R37 took the refusal out of the code, so a machine without the socket still starts (the final review's I4). On the Pi a second model in the daemon's process would not fit beside the service's (spec 15), so the socket stays a deploy item there. Andy's machines, so Andy or an agent on each one checks. |
 | G1 | The merge itself, under section 2 (above). | Station law. |
 | G2 | Engram servers in running Claude Code sessions, and any engram daemon on Andy's machines, load the new code only at their next start. Nothing restarts them. | Nothing live here. With no ledger they behave as today except the two fail-closed changes, and a daemon starts only where G0 holds. |
 | G3 | `engram-permissions migrate` on Andy's machine, the one whose `ENGRAM_HOME` holds the published house the daemon serves, after he checks that the words of the yes name `person:andy` (R24), then `gate shadow`, then reading `report shadow`. Before `gate shadow`, each house that `migrate` and `gate` list as lacking 029 is opened once by its own engram server at its next start (G2), or it serves nothing under `shadow` (R27). | Andy's own terminal yes (P 7.6, 12.3). No agent runs them (Task 32's rule). |

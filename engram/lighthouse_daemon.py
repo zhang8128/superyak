@@ -1079,18 +1079,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     logging.basicConfig(level=os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
     embedder_socket = os.environ.get("ENGRAM_EMBEDDER_SOCKET")
-    if not embedder_socket:
-        logger.error(
-            "the lighthouse daemon embeds through the shared embedder service: "
-            "set ENGRAM_EMBEDDER_SOCKET (scripts/superyak-embedder.service)"
+    if embedder_socket:
+        from embeddings import RemoteEmbedProvider
+
+        provider = RemoteEmbedProvider(embedder_socket)
+    else:
+        logger.warning(
+            "ENGRAM_EMBEDDER_SOCKET is not set: the embedding model is loaded "
+            "in this process. Small machines should run the shared embedder "
+            "service (scripts/superyak-embedder.service) and set the variable, "
+            "so the model is not loaded twice"
         )
-        return 2
-    from embeddings import RemoteEmbedProvider
+        from embeddings import create_embedding_provider
+
+        provider = create_embedding_provider()
 
     daemon = PublisherDaemon(
         build_publishers(engram_home, config["publishers"]),
         socket_path,
-        RemoteEmbedProvider(embedder_socket),
+        provider,
         engram_home=engram_home,
     )
     logger.info("publishing %s on %s", ", ".join(config["publishers"]), socket_path)
