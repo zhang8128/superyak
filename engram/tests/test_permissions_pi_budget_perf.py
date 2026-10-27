@@ -6,7 +6,7 @@ import time
 import pytest
 
 from permissions import BulkUse, decide_bulk, eligible_set
-from tests.permissions_support import AGENT, COPY, PLACE, T, derived_trails, generated_world, touches
+from tests.permissions_support import AGENT, COPY, PLACE, T, derived_trails, generated_world, step1_world, touches
 
 pytestmark = pytest.mark.skipif(os.environ.get("ENGRAM_PI_BUDGET") != "1",
                                 reason="the perf budgets run on the station's Raspberry Pi 5 with ENGRAM_PI_BUDGET=1")
@@ -86,6 +86,26 @@ def test_p4_bulk_1000_trails_of_512_touches_within_8_seconds():
     took = time.perf_counter() - start
     assert d.allowed, d.refusal
     assert took <= P4_BULK_1000X512_S, f"{took:.1f} s for 1,000 trails of 512 touches"
+
+
+# ---------------------------------------------------------------- P6: Andy's step-1 world
+
+P6_STEP1_REBUILD_S = 3.0           # 1.5x the prototype's 2.0 s a rebuild of 20,000 placements (base: 2.5 s)
+
+
+def test_p6_andy_step_1_rebuilds_20000_placements_within_3_seconds():
+    from permissions import Placement
+    w, _, placed = step1_world(memories=30_000, placements=20_000)
+    state = w.state()
+    placements = [Placement(f"id{i}", r, "store:HOUSE") for i, r in enumerate(placed)]
+    kw = dict(requester="agent:rcv0", place="place:home/andy", purpose="session-recall", action="recall",
+              at=T("2026-11-02"))
+    eligible_set(state, placements, **kw)               # warms the State's own caches, as the daemon's first build does
+    start = time.perf_counter()
+    got = eligible_set(state, placements, **kw)
+    took = time.perf_counter() - start
+    assert len(got.memory_ids) > 0
+    assert took <= P6_STEP1_REBUILD_S, f"{took:.1f} s for 20,000 placements"
 
 
 # ---------------------------------------------------------------- P5: the lazy State, on the reference ledger

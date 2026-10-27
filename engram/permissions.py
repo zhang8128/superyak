@@ -1180,9 +1180,8 @@ def _own_subjects(state: State, ref: str, at: int | None = None) -> set[str]:
     """The ref's store's owner and its co-subjects: those in force at `at`, or every one not removed when `at` is
     None. A ref that names no registered store has none of its own."""
     out: set[str] = set()
-    try:
-        parsed = parse_object_ref(ref)
-    except RuleError:
+    parsed = _parsed_or_none(ref) if isinstance(ref, str) else None
+    if parsed is None:
         return out
     store = state.stores.get(parsed.instance_id)
     if store is not None and store.imprint_of is None:     # an imprint's owner is never a default subject
@@ -1286,6 +1285,23 @@ def required_layers(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (
     says it is part of a bulk use) a subject's layer is a `co-subject` layer, unless it is also a layer of
     anc(P) or anc(H), or an `outside` layer, which stay consent layers (P 6.3)."""
     outside = outside or {}
+    if subjects is not None and isinstance(use.obj, str):
+        ref = _parsed_or_none(use.obj)
+        key = ("req", use.requester, use.place, use.copy, use.action, use.keeps, None if ref is None else
+               ref.instance_id, tuple(subjects), bulk, tuple(layer.name for layer in legacy), tuple(sorted(outside)))
+        memo = state._memo(("required-layers",), dict)
+        got = memo.get(key)
+        if got is None:
+            got = _required_layers(state, use, legacy, outside, subjects, bulk)
+            if len(memo) >= LANE_TESTS_KEPT:
+                memo.clear()
+            memo[key] = got
+        return got
+    return _required_layers(state, use, legacy, outside, subjects, bulk)
+
+
+def _required_layers(state: State, use: Use, legacy: Sequence[LegacyLayer], outside: Mapping,
+                     subjects: Sequence[str] | None, bulk: bool) -> tuple[Layer, ...]:
     out: list[Layer] = []
     seen: set = set()
 
@@ -2173,16 +2189,26 @@ class _Run:
             return _BitsRead(self.proto, self.read_bits)
         return list(self.read.values())
 
-    def result(self) -> Decision:
+    def result(self, processed: int | None = None, failed_need: int | None = None, pools=None) -> Decision:
+        """The Decision. With `pools` (an eligible set's), equal Cited, cited tuples, versions and refusals are
+        the pooled objects (frozen, so safe to share)."""
         proto, state = self.proto, self.state
         order = sorted(self.entries.values(), key=lambda e: (self.layer_pos[e[0].id], ACTIONS.index(e[1])))
         cited = tuple(Cited(layer.id, layer.kind, action, verdict, tuple(sorted(recs, key=_units)))
                       for (layer, action, verdict, _, recs) in order)
+        refusal = None if self.failure is None else Refusal(*self.failure)
+        versions = self.versions
+        if pools is not None:
+            pool_cited, pool_tuples, pool_versions, pool_refusal = pools
+            cited = tuple(pool_cited.setdefault(c, c) for c in cited)
+            cited = pool_tuples.setdefault(cited, cited)
+            versions = pool_versions.setdefault(tuple(sorted(versions.items())), versions)
+            refusal = None if refusal is None else pool_refusal.setdefault(refusal, refusal)
         return Decision(allowed=self.failure is None, at=proto.at, ledger_seq=state.seq, action=proto.action,
-                        cited=cited, refusal=None if self.failure is None else Refusal(*self.failure),
+                        cited=cited, refusal=refusal,
                         until=_until(state, proto.at, self.end, self.ledger_layers, self._read_uses()),
                         horizon=_horizon(state, proto.at, self.ledger_layers, self.objs),
-                        versions=self.versions, multi=self.multi)
+                        versions=versions, multi=self.multi, processed=processed, failed_need=failed_need)
 
     def before_any_object(self) -> bool:
         """P 6.5 step 1, the tests on a, P, anc(P) and anc(H). False, with the failure set, when one fails."""
@@ -2198,7 +2224,7 @@ class _Run:
 
 
 def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
-           outside: Mapping | None = None) -> Decision:
+           outside: Mapping | None = None, _pools=None) -> Decision:
     """P 6.5 steps 1 to 8. Every decision in need(u) is made, the
     object first, then the memories it names in ref order; the refusal is the first failing one. A use on a road
     or trail that names more than MAX_ANSWER_NAMES memories (the ones it shows are named ones) is refused with
@@ -2206,7 +2232,7 @@ def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
     multi = _kind_of(use.obj) in ("road", "trail")
     run = _Run(state, use, legacy, outside, multi=multi)
     if not run.before_any_object():
-        return replace(run.result(), processed=0)
+        return run.result(processed=0, pools=_pools)
     over = multi and len(set(use.names) | set(use.shows)) > MAX_ANSWER_NAMES
     processed = 0
     for run.cur, need in enumerate(needs(use)):
@@ -2214,7 +2240,7 @@ def decide(state: State, use: Use, *, legacy: Sequence[LegacyLayer] = (),
         if not run.process(sub, need.actions, run.subjects(sub.obj, sub.names), bound=over and sub is use):
             break
         processed += 1
-    return replace(run.result(), processed=processed, failed_need=run.failed_need)
+    return run.result(processed=processed, failed_need=run.failed_need, pools=_pools)
 
 
 def decide_bulk(state: State, bulk: BulkUse, *, legacy: Sequence[LegacyLayer] = (),
@@ -2321,6 +2347,7 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
     pool_tuples: dict = {}          # decision that holds them (frozen, so safe to share)
     pool_versions: dict = {}
     pool_refusal: dict = {}
+    pools = (pool_cited, pool_tuples, pool_versions, pool_refusal)
     for i, p in enumerate(placements):
         if i % PREFETCH_CHUNK == 0:
             state.prefetch([q.obj for q in placements[i:i + PREFETCH_CHUNK] if q.obj is not None])
@@ -2328,14 +2355,10 @@ def eligible_set(state: State, placements: Sequence[Placement], *, requester: st
             continue
         u = Use(requester=requester, place=place, obj=p.obj, copy=p.copy, action=action, purpose=purpose, at=at)
         try:
-            d = decide(state, u)
+            d = decide(state, u, _pools=pools)
         except RuleError:
             made[(p.obj, p.copy)] = None
             continue
-        cited = tuple(pool_cited.setdefault(c, c) for c in d.cited)
-        d = replace(d, cited=pool_tuples.setdefault(cited, cited),
-                    versions=pool_versions.setdefault(tuple(sorted(d.versions.items())), d.versions),
-                    refusal=None if d.refusal is None else pool_refusal.setdefault(d.refusal, d.refusal))
         made[(p.obj, p.copy)] = d
         prior = decisions.get(p.obj)
         if prior is None or (prior.allowed and not d.allowed):

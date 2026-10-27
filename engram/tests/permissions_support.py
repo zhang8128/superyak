@@ -2753,3 +2753,59 @@ def generated_world(placements, layers=43, records_per_layer=256, universe=None,
     """(the State, the placements) of `generated_world_parts`."""
     w, placed = generated_world_parts(placements, layers, records_per_layer, universe, trails)
     return w.state(), placed
+
+
+def step1_world(memories=30_000, placements=20_000):
+    """Step 1 as Andy runs it (the old tests/perf_tools/andy.py): one owner, a ledger of a few dozen records, a station
+    ceiling of one rule for the house copy, a store of `memories` memories, a house of up to `placements` placements.
+    Returns (the World, the receivers, the placed refs); `w.state()` is its State."""
+    import random
+    rng = random.Random(20261027)
+    w = World(start=T("2026-10-20"))
+    w.now = T("2026-10-20")
+    w.person("jenn")
+    home, station = "place:home/andy", "place:station"
+    w.place(station, stewards=["andy"])                     # the station: the house's holding place
+    receivers = [w.agent(f"rcv{k}", home, at=home) for k in range(7)]
+    w.agent("rio-grande", home, at=home)
+    w.store("S", owner="person:andy", place=home)            # Andy's store
+    w.store("HOUSE", owner="person:andy", place=station, name="lighthouse")
+    w.group("group:family", "person:andy", receivers[:2])
+    w.group("group:work", "person:andy", receivers[2:5])
+    refs = [f"mem:S/episode/m{i}" for i in range(memories)]
+    # memories made over a year, each with its first lane note at its own created time; a tenth re-laned since
+    base = T("2025-10-20")
+    for i, r in enumerate(refs):
+        created = base + i * 997
+        lane = "work" if rng.random() < 0.4 else "personal"
+        w.lane(r, lane, created)
+        if rng.random() < 0.1:
+            w.lane(r, "pending", created + 86400)
+            w.lane(r, "personal" if lane == "work" else "work", created + 86400)
+    for r in rng.sample(refs, memories // 20):              # 5% about Jenn too
+        w.subject(r, "person:jenn")
+    placed = refs[:placements]
+    w.collect("collection:andy/legacy-commons", placed[: int(0.8 * len(placed))])
+    w.collect("collection:andy/legacy-group-family", placed[int(0.8 * len(placed)): int(0.9 * len(placed))])
+    w.collect("collection:andy/legacy-group-work", placed[int(0.9 * len(placed)):])
+    w.collect("collection:andy/medical", rng.sample(refs, 300))
+    # the records: a few dozen, the way migrate and Andy write them
+    acts = ["recall", "read", "inject_context"]
+    w.allow(home, audience=[home], collections=["collection:andy/legacy-commons"], actions=acts, reason="legacy share")
+    w.allow(home, audience=["group:family"], collections=["collection:andy/legacy-group-family"], actions=acts)
+    w.allow(home, audience=["group:work"], collections=["collection:andy/legacy-group-work"], actions=acts)
+    w.deny(home, audience=[home], collections=["collection:andy/medical"], requesters=["agent:rcv3", "agent:rcv4"])
+    w.allow(home, audience=["self"], lanes=["work"], actions=["recall"], purposes=["session-recall"])
+    w.deny(home, audience=[home], lanes=["personal"], requesters=["agent:rcv6"])
+    for k in range(12):                                       # notes Andy shared one by one
+        w.allow(home, audience=[home], memories=rng.sample(placed, 20), actions=["recall", "read"])
+    for k in range(4):
+        w.deny(home, audience=[home], memories=rng.sample(refs, 10))
+    for k in range(6):                                        # dated and ended rules
+        w.allow(home, audience=[home], collections=["collection:andy/legacy-commons"], actions=["recall"],
+                valid_from=T("2026-10-01"), valid_until=T("2026-12-01") + k * 86400)
+    w.allow(station, audience=["commons"], actions="*", purposes="*")    # the station's ceiling: one rule for the copy
+    w.allow("place:home/jenn", audience=["commons"], actions=["recall"])  # Jenn's own yes
+    for r in receivers[:3]:
+        w.deny(r, audience=["commons"], collections=["collection:andy/medical"])
+    return w, receivers, placed

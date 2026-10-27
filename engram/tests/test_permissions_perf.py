@@ -220,3 +220,59 @@ def test_a_grant_backed_membership_takes_the_general_path_and_any_other_the_prog
     assert permissions._ledger_verdict(s, _home_layer(s), home_use(M1, T("2026-11-02")), "recall") == \
         ref._ledger_verdict(s, _home_layer(s), home_use(M1, T("2026-11-02")), "recall")
     assert calls == {"program": 0, "general": 1}
+
+
+# -- Task P6 (perf-design.md 2.G): what a decision does besides its verdicts
+
+
+def test_required_layers_with_given_subjects_is_computed_once_per_distinct_key(monkeypatch):
+    s, placements = generated_world(placements=200, layers=43, records_per_layer=RECORDS_PER_LAYER)
+    calls = []
+    real = permissions.qualifies
+    monkeypatch.setattr(permissions, "qualifies", lambda *a, **k: calls.append(1) or real(*a, **k))
+    got = eligible_set(s, placements, requester=AGENT, place=PLACE, purpose="care-coordination", action="recall",
+                       at=T("2026-11-02"))
+    assert len(got.memory_ids) == 200
+    first = len(calls)
+    assert first <= 4, f"{first} computations of Req(u) for 200 objects of one store with the same subjects"
+    again = eligible_set(s, placements, requester=AGENT, place=PLACE, purpose="care-coordination", action="recall",
+                         at=T("2026-11-02"))
+    assert len(again.memory_ids) == 200 and len(calls) == first      # the State keeps them
+
+
+def test_required_layers_kept_per_key_never_mixes_different_subjects_or_requesters():
+    w = andy_world()
+    s = w.state()
+    for subjects in (("person:andy",), ("person:andy", "person:jenn"), ()):
+        for requester in (AGENT, "agent:other"):
+            u = Use(requester=requester, place=PLACE, obj=M1, copy=COPY, action="recall", purpose="care-coordination",
+                    at=T("2026-11-02"))
+            for _ in range(2):
+                got = permissions.required_layers(s, u, subjects=subjects)
+                want = ref.required_layers(s, u, subjects=subjects)
+                assert [(x.id, x.kind) for x in got] == [(x.id, x.kind) for x in want]
+
+
+def test_an_eligible_set_does_not_copy_each_decision(monkeypatch):
+    copies = []
+    real = permissions.replace
+    monkeypatch.setattr(permissions, "replace", lambda *a, **k: copies.append(1) or real(*a, **k))
+    s, placements = generated_world(placements=50, layers=43, records_per_layer=RECORDS_PER_LAYER)
+    got = eligible_set(s, placements, requester=AGENT, place=PLACE, purpose="care-coordination", action="recall",
+                       at=T("2026-11-02"))
+    assert len(got.memory_ids) == 50 and not copies, f"{len(copies)} dataclasses.replace calls"
+    assert all(d.processed == 1 and d.failed_need is None for d in got.decisions.values())
+
+
+def test_decisions_carry_processed_and_failed_need_as_the_reference_does():
+    w = andy_world()
+    s = w.state()
+    for u in (home_use(M1, T("2026-11-02")), home_use(M1, T("2026-11-20")), home_use("mem:ghost", T("2026-11-02"))):
+        try:
+            got = decide(s, u, legacy=LEGACY_LAYERS)
+        except Exception as e:
+            with pytest.raises(type(e)):
+                ref.decide(s, u, legacy=LEGACY_LAYERS)
+            continue
+        want = ref.decide(s, u, legacy=LEGACY_LAYERS)
+        assert (got.to_json(), got.processed, got.failed_need) == (want.to_json(), want.processed, want.failed_need)
