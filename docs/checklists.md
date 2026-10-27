@@ -56,6 +56,30 @@ runs the list out loud: in its post, say which list it ran. Add a list when a mi
       worktree).
 - [ ] Unread messages and the board's claims are read; stale claims are released.
 
+## The Mac's main checkout (launchd runs from it)
+
+- [ ] `git status --short` in `~/Projects/superyak` is empty. If it isn't, the work may be another session's: stop and
+      ask.
+- [ ] `git diff --stat HEAD <target>` is read first. If anything under `engram/` or `scripts/runtime.py` changes, the
+      lighthouse daemon (launchd `com.kairos.superyak-lighthouse`) and every session's engram MCP server run the new
+      code at their next start. Say so.
+- [ ] Reset with `git reset --keep <target>` on branch `main`, never `--hard`.
+- [ ] If the daemon's code changed, restart it only with Andy's yes, then read its log.
+
+## Reviewing or building on the Mac
+
+- [ ] Never check out a branch in `~/Projects/superyak`. Use a worktree under `.worktrees/` or a scratch clone.
+- [ ] Reviewers and probes write only in their own directories. To them, the clone is read-only.
+- [ ] Linux-only tests (`/proc`, systemd) fail on macOS. Name them and don't count them against the branch, for
+      example the 12 Pi budget probes.
+
+## Before claiming a cause, a cost or a count
+
+- [ ] The claim comes from reading the content, not a keyword count.
+- [ ] The code path is traced from its callers. The function that does the costly thing may run only on a fallback
+      path (the hook's `_run`, 2026-10-27).
+- [ ] The number was measured, and the post says how.
+
 ## A spec
 
 - [ ] A fresh reviewer approves it (law section 3). Must-fix items are applied and re-checked.
