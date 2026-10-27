@@ -107,7 +107,11 @@ class StationClient:
         self.key, self.transport = key, transport or urllib_transport()
         self.presence = dict(presence or {})  # spec S1: names the session on every call; {} sends nothing new
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, raw=None):
+        """`raw` sends those bytes as the body (content-type application/octet-stream), for the imprint request, its
+        manifest and its parts; `body` is JSON. Not both."""
+        if raw is not None and body is not None:
+            raise ValueError('send a JSON body or raw bytes, not both')
         headers = {'origin': self.origin, 'accept': 'application/json'}
         if self.origin != self.base:
             scheme, _, host = self.origin.partition('://')
@@ -116,7 +120,10 @@ class StationClient:
             headers['authorization'] = f'Bearer {self.key}'
         headers.update(self.presence)
         data = None
-        if body is not None:
+        if raw is not None:
+            headers['content-type'] = 'application/octet-stream'
+            data = bytes(raw)
+        elif body is not None:
             headers['content-type'] = 'application/json'
             data = json.dumps(body).encode()
         status, raw = self.transport(method, self.base + path, headers, data)

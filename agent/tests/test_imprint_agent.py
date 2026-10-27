@@ -1,0 +1,192 @@
+"""Task 43a: the agent's `imprint context` and `send` (store-imprint I 9, 13, D24, RF5)."""
+import fcntl
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from collections import namedtuple
+from pathlib import Path
+
+import pytest
+
+from superyak_agent import imprint as imprint_module
+from superyak_agent.imprint import Imprint
+from superyak_agent.station import StationClient, StationError
+
+IMPRINT_ID = '5b0e7f3a-1c2d-4e5f-8a9b-0c1d2e3f4a5b'
+REQUEST_ID = 'a1b2c3d4-0000-4000-8000-000000000001'
+PLAN = '7c41'
+PLAN_FILE = '7c41aa00bb11cc22'
+PART = 4
+Call = namedtuple('Call', 'method path body')
+
+
+@pytest.fixture(autouse=True)
+def fast_waits(monkeypatch):
+    """A fake clock: every sleep jumps past any wait, so a waiting send polls once and returns."""
+    now = [1000.0]
+    monkeypatch.setattr(imprint_module.time, 'time', lambda: now[0])
+    monkeypatch.setattr(imprint_module.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + 10_000))
+
+
+class FakeStation:
+    def __init__(self, status='requested', holds=(), reason=None):
+        self.status, self.holds, self.reason = status, list(holds), reason
+        self.calls, self.part_bodies, self.labels = [], {}, []
+
+    def allow(self):
+        self.status = 'allowed'
+
+    def order(self):
+        return self.labels
+
+    def client(self):
+        return StationClient('http://station', 'key', transport=self.transport)
+
+    def transport(self, method, url, headers, data):
+        path = url[len('http://station'):]
+        self.calls.append(Call(method, path, data))
+        if method == 'GET' and path == '/api/imprints':
+            return 200, json.dumps({'ship': 'rio', 'owner': 'andy', 'operator': 'andy', 'station': 'st', 'imprints': []}).encode()
+        if method == 'POST' and path == '/api/imprints':
+            return 201, json.dumps({'id': REQUEST_ID, 'code': 'AB12CD34', 'expires': 5000,
+                                    'confirm_url': 'http://station/#imprint?code=AB12CD34'}).encode()
+        if method == 'GET' and path == f'/api/imprints/{REQUEST_ID}':
+            receipts = []
+            if self.reason:
+                receipts = [{'seq': 3, 'record': {'event': 'deleted', 'detail': {'reason': self.reason}}, 'signature': None}]
+            return 200, json.dumps({'status': self.status, 'held': self.holds, 'receipts': receipts}).encode()
+        if method == 'PUT' and path.endswith('/manifest'):
+            self.labels.append('manifest')
+            return 200, b'{"parts": 3}'
+        if method == 'PUT' and '/parts/' in path:
+            n = int(path.rsplit('/', 1)[1])
+            self.labels.append(f'part {n}')
+            self.part_bodies[n] = data
+            self.holds.append(n)
+            return 200, json.dumps({'held': sorted(self.holds)}).encode()
+        if method == 'POST' and path.endswith('/complete'):
+            self.labels.append('complete')
+            self.status = 'received'
+            return 200, b'{"status": "received"}'
+        return 404, b'{"error": "No such route"}'
+
+
+def built_home(tmp_path, parts=1):
+    home = tmp_path / 'superyak'
+    local = home / 'imprints' / IMPRINT_ID
+    local.mkdir(parents=True, mode=0o700)
+    (home / 'imprints' / 'plans').mkdir(mode=0o700)
+    data = b''.join(bytes([97 + n]) * PART for n in range(parts))
+    (local / 'imprint.db').write_bytes(data)
+    os.chmod(local / 'imprint.db', 0o400)
+    hashes = [hashlib.sha256(data[n * PART:(n + 1) * PART]).hexdigest() for n in range(parts)]
+    manifest = {'kind': 'engram-imprint-manifest', 'package': {'file': 'imprint.db', 'bytes': len(data), 'part_bytes': PART,
+                                                                'sha256': hashlib.sha256(data).hexdigest(), 'parts': hashes}}
+    (local / 'manifest.json').write_text(json.dumps(manifest, sort_keys=True))
+    (local / 'request.json').write_text(json.dumps({'imprint_id': IMPRINT_ID}, sort_keys=True))
+    for name in ('objects.json', 'subjects.json'):
+        (local / name).write_text('')
+    (home / 'imprints' / 'plans' / f'{PLAN_FILE}.json').write_text(json.dumps({'id': PLAN_FILE, 'imprint_id': IMPRINT_ID}))
+    (home / 'station.json').write_text(json.dumps({'station': 'http://station', 'key': 'key'}))
+    return home
+
+
+def sent_home(tmp_path):
+    home = built_home(tmp_path)
+    (home / 'imprints' / IMPRINT_ID / 'send.json').write_text(json.dumps(
+        {'request_id': REQUEST_ID, 'imprint_id': IMPRINT_ID, 'code': 'AB12CD34', 'expires': 5000, 'confirm_url': 'x'}))
+    return home
+
+
+def held_lock(path):
+    class Held:
+        def __enter__(self):
+            self.f = open(path, 'a+')
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+        def __exit__(self, *exc):
+            self.f.close()
+    return Held()
+
+
+def run_agent(argv, home):
+    env = {**os.environ, 'HOME': str(home.parent)}
+    script = Path(__file__).resolve().parents[1] / 'run_agent.py'
+    return subprocess.run([sys.executable, str(script), *argv, '--home', str(home)], env=env, capture_output=True, text=True)
+
+
+def test_nothing_of_the_package_leaves_before_the_yes(tmp_path):
+    station, home = FakeStation(), built_home(tmp_path)
+    assert Imprint(home, station.client()).send(PLAN) == 'waiting-for-you'
+    assert [c.method for c in station.calls] == ['POST', 'GET'] and not station.part_bodies
+    saved = json.loads((home / 'imprints' / IMPRINT_ID / 'send.json').read_text())
+    assert saved['request_id'] == REQUEST_ID and saved['code'] == 'AB12CD34'
+    assert station.calls[0].body == (home / 'imprints' / IMPRINT_ID / 'request.json').read_bytes()
+
+
+def test_the_ids_the_code_and_the_link_are_printed(tmp_path):
+    lines = []
+    Imprint(built_home(tmp_path), FakeStation().client(), out=lines.append).send(PLAN)
+    text = '\n'.join(lines)
+    assert IMPRINT_ID[:4] in text and REQUEST_ID[:4] in text and 'AB12CD34' in text and '#imprint?code=AB12CD34' in text
+
+
+def test_after_the_yes_it_sends_the_manifest_then_the_missing_parts(tmp_path):
+    station, home = FakeStation(holds=[0]), built_home(tmp_path, parts=3)
+    station.allow()
+    (home / 'imprints' / IMPRINT_ID / 'send.json').write_text(json.dumps({'request_id': REQUEST_ID, 'imprint_id': IMPRINT_ID}))
+    assert Imprint(home, station.client()).send(PLAN) == 'received'
+    assert station.order() == ['manifest', 'part 1', 'part 2', 'complete']
+    assert station.part_bodies == {1: b'bbbb', 2: b'cccc'}
+
+
+def test_the_first_run_after_an_instant_yes_posts_then_uploads(tmp_path):
+    station, home = FakeStation(status='allowed'), built_home(tmp_path)
+    assert Imprint(home, station.client()).send(PLAN) == 'received'
+    assert [c.method for c in station.calls][:2] == ['POST', 'GET'] and station.order() == ['manifest', 'part 0', 'complete']
+
+
+def test_later_runs_report_and_drop_the_local_copy(tmp_path):
+    station, home = FakeStation(status='admitted'), sent_home(tmp_path)
+    assert Imprint(home, station.client()).send(PLAN) == 'admitted'
+    local = home / 'imprints' / IMPRINT_ID
+    assert not (local / 'imprint.db').exists() and {p.name for p in local.iterdir()} >= {'manifest.json', 'objects.json'}
+    assert [c.method for c in station.calls] == ['GET']      # never posted again
+
+
+def test_a_deleted_imprint_is_reported_by_its_reason(tmp_path):
+    station, home = FakeStation(status='deleted', reason='denied'), sent_home(tmp_path)
+    lines = []
+    assert Imprint(home, station.client(), out=lines.append).send(PLAN) == 'denied'
+    assert not (home / 'imprints' / IMPRINT_ID / 'imprint.db').exists()
+    station2, home2 = FakeStation(status='deleted', reason='withdrawn'), sent_home(tmp_path / 'b')
+    assert Imprint(home2, station2.client()).send(PLAN) == 'deleted'
+
+
+def test_a_pending_imprint_keeps_its_local_copy(tmp_path):
+    station, home = FakeStation(status='received'), sent_home(tmp_path)
+    assert Imprint(home, station.client()).send(PLAN) == 'received'
+    assert (home / 'imprints' / IMPRINT_ID / 'imprint.db').exists()
+
+
+def test_context_is_saved_private(tmp_path):
+    station, home = FakeStation(), tmp_path / 'superyak'
+    got = Imprint(home, station.client()).context()
+    path = home / 'imprints' / 'context.json'
+    assert got['operator'] == 'andy' and json.loads(path.read_text()) == got and path.stat().st_mode & 0o777 == 0o600
+
+
+def test_rf5_two_sends_of_one_plan_never_interleave(tmp_path):
+    home = built_home(tmp_path)
+    with held_lock(home / 'imprints' / IMPRINT_ID / 'send.lock'):
+        done = run_agent(['imprint', 'send', '--plan', PLAN], home=home)
+    assert done.returncode == 4 and 'Another make imprint-send of this plan is running.' in done.stdout
+    assert not (home / 'imprints' / IMPRINT_ID / 'send.json').exists()
+
+
+def test_an_unbuilt_plan_is_refused(tmp_path):
+    home = built_home(tmp_path)
+    (home / 'imprints' / 'plans' / f'{PLAN_FILE}.json').write_text(json.dumps({'id': PLAN_FILE}))
+    done = run_agent(['imprint', 'send', '--plan', PLAN], home=home)
+    assert done.returncode == 2 and 'not built' in done.stdout + done.stderr

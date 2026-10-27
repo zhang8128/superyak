@@ -23,6 +23,7 @@ only-include = [
     "superyak_agent/__main__.py",
     "superyak_agent/dock.py",
     "superyak_agent/hook.py",
+    "superyak_agent/imprint.py",
     "superyak_agent/install.py",
     "superyak_agent/mcp.py",
     "superyak_agent/memos.py",

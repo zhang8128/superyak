@@ -44,6 +44,14 @@ def build_parser():
         sub = commands.add_parser(name)
         sub.add_argument('--config', type=Path, default=CONFIG)
         sub.add_argument('--home', type=Path, help="The ship's home, instead of --config")
+    imprint = commands.add_parser('imprint', help='Send a copy of your store to the station (see make imprint-send)')
+    imprint_commands = imprint.add_subparsers(dest='imprint_command', required=True)
+    for name in ('context', 'send'):
+        sub = imprint_commands.add_parser(name)
+        sub.add_argument('--home', type=Path, default=HOME, help="The ship's home (default ~/.superyak)")
+        if name == 'send':
+            sub.add_argument('--plan', required=True, help='The first characters of a built plan')
+            sub.add_argument('--wait', type=int, default=540)
     worm = commands.add_parser('wormhole', help='Relay bridged rooms and the Station.aDNA vault (runs as a service)')
     worm.add_argument('--config', type=Path, required=True)
     worm.add_argument('--state', type=Path, required=True)
@@ -115,6 +123,27 @@ def _dock_project(args, fields):
         print(project.cleanup(error, rolled_back=getattr(error, 'rolled_back', False)), file=sys.stderr)
         return 2
     return 0
+
+
+def _imprint(args):
+    """`imprint context|send`: prints `STATUS: <value>` last; a send still waiting for the owner exits 3, as dock does."""
+    from .imprint import Imprint, ImprintRefused
+    from .station import StationError, client_for, load_config
+    imprint = Imprint(args.home, client_for(load_config(args.home / 'station.json'), timeout=120))
+    try:
+        if args.imprint_command == 'context':
+            found = imprint.context()
+            print(f'{len(found.get("imprints") or [])} imprint(s) for {found.get("ship")}; saved in {args.home}/imprints/context.json.')
+            return 0
+        status = imprint.send(args.plan, wait=args.wait)
+    except ImprintRefused as error:
+        print(error)
+        return error.code
+    except (StationError, OSError) as error:
+        print(f'imprint: {error}')
+        return 1
+    print(f'STATUS: {status}')
+    return 3 if status == 'waiting-for-you' else 0
 
 
 def main(argv=None):
@@ -228,6 +257,8 @@ def main(argv=None):
         from .install import uninstall_all
         uninstall_all(args.config)
         return 0
+    if args.command == 'imprint':
+        return _imprint(args)
     if args.command == 'wormhole':
         import logging
         import time
