@@ -2,12 +2,16 @@
 hash chain. A receipt names what happened and never what the store holds, so each event's detail keys are listed once,
 in DETAIL_KEYS (R25), and a receipt holding any other key is refused."""
 import base64
+import errno
+import fcntl
 import hashlib
 import json
 import os
 import re
 import secrets
 import shutil
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from .auth import token_hash
@@ -94,6 +98,10 @@ FREE_FLOOR = 4 * 2**30
 OPEN_PER_SHIP = 4
 CODE_LIFE = 600
 MAX_REQUEST_BODY = 64 * 1024
+MAX_MANIFEST = 256 * 1024
+PARTS_PER_MINUTE = 120
+REVIEW_WINDOW = 7 * 86400
+COPY_BUFFER = 1024 * 1024
 MAX_MEMORIES = 100_000
 MAX_COUNT = 2**53
 # A request that has not ended: it holds its source's one place (D20) and its bytes.
@@ -227,6 +235,147 @@ def check_request(doc, *, super_admin, owner_username):
     if not _count(package['parts']) or package['parts'] != -(-package['bytes'] // PART_SIZE):
         raise _bad('package.parts')
     return doc
+
+
+_COMMIT = re.compile(r'[0-9a-f]{7,64}')
+_MANIFEST_TOP = ('kind', 'version', 'imprint_id', 'filter', 'plan_digest', 'request_sha256', 'built_at', 'engram_commit',
+                 'source', 'schema', 'embedding', 'vec', 'scope', 'contents', 'others', 'package')
+_part_times: dict = {}
+_part_lock = threading.Lock()
+
+
+def _no_floats(value):
+    if isinstance(value, float):
+        raise _bad('manifest')
+    if isinstance(value, dict):
+        for item in value.values():
+            _no_floats(item)
+    elif isinstance(value, list):
+        for item in value:
+            _no_floats(item)
+
+
+def check_manifest(man, request):
+    """I 7.2 and I 14: the manifest's own formats, and every field it shares with the request equal to it (`scope`,
+    `contents`, `others`, `imprint_id`, `plan_digest`, the source's id and ancestry, `package.bytes`, the number of
+    parts, and `request_sha256`, the request's hash). Raises Problem(400) and keeps nothing."""
+    man = _keys(man, _MANIFEST_TOP, 'manifest')
+    _no_floats(man)
+    if man['kind'] != 'engram-imprint-manifest' or man['version'] != 1 or type(man['version']) is not int:
+        raise _bad('kind')
+    if man['filter'] != 'imprint-filter-v1':
+        raise _bad('filter')
+    shared = {'imprint_id': request['imprint_id'], 'plan_digest': request['plan_digest'],
+              'request_sha256': hashlib.sha256(canonical(request)).hexdigest()}
+    for name, expected in shared.items():
+        if man[name] != expected:
+            raise _bad(name)
+    _time(man['built_at'], 'built_at', required=True)
+    if man['engram_commit'] is not None and not (isinstance(man['engram_commit'], str)
+                                                 and _COMMIT.fullmatch(man['engram_commit'])):
+        raise _bad('engram_commit')
+    source = _keys(man['source'], ('instance_id', 'identity', 'ancestry', 'ancestry_complete'), 'source')
+    if source['instance_id'] != request['source_instance_id']:
+        raise _bad('source.instance_id')
+    if source['identity'] not in ('present', 'derived'):
+        raise _bad('source.identity')
+    ancestry = source['ancestry']
+    if (not isinstance(ancestry, list) or len(ancestry) > 64
+            or not all(isinstance(a, str) and _ANY_UUID.fullmatch(a) for a in ancestry)
+            or ancestry != request['source_ancestry']):
+        raise _bad('source.ancestry')
+    if source['ancestry_complete'] is not request['source_ancestry_complete']:
+        raise _bad('source.ancestry_complete')
+    applied = _keys(man['schema'], ('applied',), 'schema')['applied']
+    if not isinstance(applied, list) or len(applied) > 1000 or not all(type(a) is int and a >= 0 for a in applied):
+        raise _bad('schema.applied')
+    embedding = _keys(man['embedding'], ('model', 'dimension'), 'embedding')
+    if not isinstance(embedding['model'], str) or not 1 <= len(embedding['model']) <= 200 \
+            or type(embedding['dimension']) is not int or not 1 <= embedding['dimension'] <= 65536:
+        raise _bad('embedding')
+    version = _keys(man['vec'], ('create_version',), 'vec')['create_version']
+    if not isinstance(version, str) or not 1 <= len(version) <= 64:
+        raise _bad('vec')
+    for name in ('scope', 'contents', 'others'):
+        if man[name] != request[name]:
+            raise _bad(name)
+    package = _keys(man['package'], ('file', 'bytes', 'sha256', 'part_bytes', 'parts'), 'package')
+    if package['file'] != 'imprint.db' or package['part_bytes'] != PART_SIZE or type(package['part_bytes']) is not int:
+        raise _bad('package')
+    if type(package['bytes']) is not int or package['bytes'] != request['package']['bytes']:
+        raise _bad('package.bytes')
+    if not isinstance(package['sha256'], str) or not _DIGEST.fullmatch(package['sha256']):
+        raise _bad('package.sha256')
+    parts = package['parts']
+    if (not isinstance(parts, list) or len(parts) != request['package']['parts']
+            or not all(isinstance(h, str) and _DIGEST.fullmatch(h) for h in parts)):
+        raise _bad('package.parts')
+
+
+def _copy_part(src, dst):
+    """Streams one part file into the open file `dst` through a 1 MiB buffer."""
+    with open(src, 'rb') as stream:
+        while block := stream.read(COPY_BUFFER):
+            dst.write(block)
+
+
+class _Sum:
+    """Wraps the open temporary file so the join hashes what it writes, with no second read."""
+    def __init__(self, stream):
+        self.stream, self.digest, self.size = stream, hashlib.sha256(), 0
+
+    def write(self, block):
+        self.digest.update(block)
+        self.size += len(block)
+        return self.stream.write(block)
+
+
+def _fsync_dir(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _out_of_space(error):
+    return Problem(507, 'The station is out of disk space; nothing was kept. Run make imprint-send again later.') \
+        if error.errno == errno.ENOSPC else error
+
+
+@contextmanager
+def _folder_lock(folder):
+    """An exclusive lock on the request's staging directory, never waited for: a second writer is told to retry. It
+    keeps a part, the join and a restart's leftovers from meeting."""
+    fd = os.open(folder, os.O_RDONLY)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Problem(409, 'This imprint is being written; try again in a moment') from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def _write_file(path, data):
+    """Writes `data` to `path` through `path.tmp`: 0600, fsynced, renamed, the directory fsynced."""
+    temporary = path.with_name(path.name + '.tmp')
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        _fsync_dir(path.parent)
+    except BaseException as error:
+        temporary.unlink(missing_ok=True)
+        raise (_out_of_space(error) if isinstance(error, OSError) else error) from None
+
+
+def _held(folder):
+    return sorted(int(m.group(1)) for m in (re.fullmatch(r'part-(\d+)', p.name) for p in folder.iterdir()) if m)
 
 
 def _filled(words, others):
@@ -504,3 +653,132 @@ class Imprints:
                        "ended_at=? WHERE id=?", (now, actor, now, request_id))
             shutil.rmtree(self.data_dir / 'imprints' / request_id)
             return {'id': request_id, 'status': 'declined'}
+
+    def _upload_row(self, db, ship_id, request_id):
+        """The requesting ship's `allowed` row inside its upload window. Any other ship, or an id nobody has, gets a
+        404 and learns nothing; the wrong status a 409."""
+        found = db.execute('SELECT * FROM imprint_requests WHERE id=? AND ship_id=?',
+                           (request_id, ship_id)).fetchone() if isinstance(request_id, str) else None
+        if found is None:
+            raise Problem(404, 'No such imprint request')
+        if found['status'] != 'allowed':
+            raise Problem(409, f'This imprint is {found["status"]}, not waiting for its upload')
+        if found['expires'] <= self.clock():
+            raise Problem(409, 'The upload window for this imprint has ended')
+        return found
+
+    def _staged_manifest(self, request_id):
+        try:
+            raw = (self.data_dir / 'imprints' / request_id / 'manifest.json').read_bytes()
+        except OSError:
+            raise Problem(409, 'Send the manifest first') from None
+        return raw, json.loads(raw)
+
+    def put_imprint_manifest(self, ship_id, request_id, raw):
+        """The manifest (I 7.2), once, only in `allowed`, only if it agrees with the staged request. It is kept
+        as `manifest.json`, canonical, and nothing is kept for a refused one."""
+        if not isinstance(raw, bytes) or len(raw) > MAX_MANIFEST:
+            raise Problem(413, 'Imprint manifest too large')
+        with self.transaction() as db:
+            found = self._upload_row(db, ship_id, request_id)
+            folder = self.data_dir / 'imprints' / request_id
+            if (folder / 'manifest.json').exists():
+                raise Problem(409, 'This imprint already has its manifest')
+            request = self._staged_request(found)
+            man = parse(raw)
+            if canonical(man) != raw:
+                raise _bad('manifest (not canonical JSON)')
+            check_manifest(man, request)
+            _write_file(folder / 'manifest.json', raw)
+            return {'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'parts': len(man['package']['parts'])}
+
+    def _count_part(self, ship_id):
+        now = self.clock()
+        with _part_lock:
+            times = [t for t in _part_times.get(ship_id, ()) if t > now - 60]
+            if len(times) >= PARTS_PER_MINUTE:
+                _part_times[ship_id] = times
+                raise Problem(429, 'Too many parts; wait a minute')
+            times.append(now)
+            _part_times[ship_id] = times
+
+    def put_imprint_part(self, ship_id, request_id, n, data):
+        """One 4 MiB part, only after the manifest and only if its length and SHA-256 are the manifest's. A part
+        already held with that hash changes nothing. Returns the part numbers the station holds."""
+        with self.transaction() as db:
+            self._upload_row(db, ship_id, request_id)
+        self._count_part(ship_id)
+        _, man = self._staged_manifest(request_id)
+        package = man['package']
+        if type(n) is not int or not 0 <= n < len(package['parts']):
+            raise Problem(404, 'No such part')
+        if len(data) != min(PART_SIZE, package['bytes'] - n * PART_SIZE):
+            raise Problem(400, 'This part is not the length the manifest gives')
+        if hashlib.sha256(data).hexdigest() != package['parts'][n]:
+            raise Problem(400, "This part's SHA-256 is not the manifest's")
+        folder = self.data_dir / 'imprints' / request_id
+        with _folder_lock(folder):
+            path = folder / f'part-{n}'
+            try:
+                held = hashlib.sha256(path.read_bytes()).hexdigest() == package['parts'][n]
+            except OSError:
+                held = False
+            if not held:
+                _write_file(path, data)
+            return {'held': _held(folder)}
+
+    def complete_imprint(self, ship_id, request_id):
+        """Joins the parts in order into `imprint.db`, streaming; checks its bytes and SHA-256; deletes the parts;
+        sets `received` (the review window starts) and writes the signed `received` receipt. A join that fails
+        leaves no partial file and the parts."""
+        with self.transaction() as db:
+            self._upload_row(db, ship_id, request_id)
+        raw, man = self._staged_manifest(request_id)
+        package, folder = man['package'], self.data_dir / 'imprints' / request_id
+        count = len(package['parts'])
+        if _held(folder) != list(range(count)):
+            raise Problem(409, 'Not every part has arrived')
+        with _folder_lock(folder):
+            temporary = folder / 'imprint.db.tmp'
+            temporary.unlink(missing_ok=True)       # a join a crash cut short
+            try:
+                with open(temporary, 'xb') as out:
+                    os.chmod(temporary, 0o600)
+                    joined = _Sum(out)
+                    for n in range(count):
+                        _copy_part(folder / f'part-{n}', joined)
+                    out.flush()
+                    os.fsync(out.fileno())
+                if joined.size != package['bytes'] or joined.digest.hexdigest() != package['sha256']:
+                    raise Problem(400, 'The joined parts are not the package the manifest names')
+                os.replace(temporary, folder / 'imprint.db')
+                _fsync_dir(folder)
+            except BaseException as error:
+                temporary.unlink(missing_ok=True)
+                raise (_out_of_space(error) if isinstance(error, OSError) else error) from None
+            try:
+                with self.transaction() as db:
+                    self._upload_row(db, ship_id, request_id)
+                    now = int(self.clock())
+                    db.execute("UPDATE imprint_requests SET status='received', expires=? WHERE id=?",
+                               (now + REVIEW_WINDOW, request_id))
+                    self._append_imprint_receipt(
+                        db, request_id, 'received', ship_id,
+                        {'bytes': joined.size, 'sha256': package['sha256'], 'parts': count,
+                         'manifest_sha256': hashlib.sha256(raw).hexdigest()}, sign=True)
+            except BaseException:
+                (folder / 'imprint.db').unlink(missing_ok=True)
+                raise
+            for n in range(count):
+                (folder / f'part-{n}').unlink(missing_ok=True)
+            return {'status': 'received', 'expires': now + REVIEW_WINDOW}
+
+    def imprint_status(self, actor, request_id):
+        """`{status, held}` for the owner or the requesting ship; anyone else gets a 404."""
+        with self.transaction() as db:
+            found = db.execute('SELECT status, ship_id, owner_id FROM imprint_requests WHERE id=?',
+                               (request_id,)).fetchone() if isinstance(request_id, str) else None
+            if found is None or actor not in (found['ship_id'], found['owner_id']):
+                raise Problem(404, 'No such imprint request')
+        folder = self.data_dir / 'imprints' / request_id
+        return {'status': found['status'], 'held': _held(folder) if folder.is_dir() else []}

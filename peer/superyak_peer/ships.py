@@ -1,5 +1,7 @@
 """Ships: agent accounts (users.kind='ship') owned by a person, with scoped bearer keys."""
+import hashlib
 import hmac
+import json
 import re
 import secrets
 from .auth import token_hash, public_user
@@ -196,7 +198,30 @@ class Ships:
                 "SELECT id,ship_name,machine,created,expires FROM dockings WHERE status='waiting' AND expires>? ORDER BY created", (now,))]
             requests = [{'kind': 'access', **dict(r)} for r in db.execute(
                 "SELECT id,name,contact,note,created,expires FROM access_requests WHERE status='pending' AND expires>? ORDER BY created", (now,))]
-            return dockings + requests
+            return dockings + requests + self._pending_imprints(db)
+
+    def _pending_imprints(self, db):
+        """Imprints waiting for review (`received`), read from their staged request.json (I 10). A request that cannot
+        be read back as the hash on its row says is listed with `request` None, so it is never silently hidden."""
+        items = []
+        for r in db.execute("""SELECT r.id, r.created, r.decided_at, r.request_sha256, r.permission, ships.username AS ship,
+                owners.username AS owner FROM imprint_requests r JOIN users ships ON ships.id=r.ship_id
+                JOIN users owners ON owners.id=r.owner_id WHERE r.status='received' ORDER BY r.created, r.rowid"""):
+            try:
+                raw = (self.data_dir / 'imprints' / r['id'] / 'request.json').read_bytes()
+                request = json.loads(raw) if hashlib.sha256(raw).hexdigest() == r['request_sha256'] else None
+            except (OSError, ValueError):
+                request = None
+            try:
+                ends = json.loads(r['permission'])['records'][0]['valid_until']
+            except (TypeError, ValueError, KeyError, IndexError):
+                ends = None
+            machine = db.execute('SELECT machine FROM dockings WHERE ship_id=(SELECT ship_id FROM imprint_requests WHERE id=?) '
+                                 'ORDER BY created DESC LIMIT 1', (r['id'],)).fetchone()
+            items.append({'kind': 'imprint', 'id': r['id'], 'ship': r['ship'], 'owner': r['owner'],
+                          'machine': machine['machine'] if machine else None, 'created': r['created'], 'ends': ends,
+                          'request': request})
+        return items
 
     def _operator(self, db, username):
         person = db.execute('SELECT id FROM users WHERE username=?', (username,)).fetchone()
@@ -288,6 +313,8 @@ class Ships:
         if len(matches) > 1:
             raise Problem(409, f'{prefix} matches more than one waiting item; give more characters')
         item = matches[0]
+        if item['kind'] == 'imprint':
+            raise Problem(409, 'Approving or refusing an imprint is not built yet')
         with self.transaction() as db:
             actor = self._operator(db, username)
         if item['kind'] == 'access':
@@ -390,4 +417,6 @@ class Ships:
                         for r in db.execute("""SELECT dockings.id, ships.name AS ship, owners.name AS owner, dockings.machine FROM dockings
                             JOIN users AS ships ON ships.id=dockings.ship_id JOIN users AS owners ON owners.id=dockings.owner_id
                             WHERE dockings.status IN ('confirmed','collected') ORDER BY dockings.created""")]
+            notices += [{'id': f'imprint-{r["id"]}', 'text': "An imprint is waiting for Andy's review. He decides with make station-pending on the Pi."}
+                        for r in db.execute("SELECT id FROM imprint_requests WHERE status='received' ORDER BY created, rowid")]
             return notices

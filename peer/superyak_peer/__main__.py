@@ -1,5 +1,6 @@
 """Explicit provisioning and loopback-first server commands."""
 import argparse
+from datetime import datetime, timezone
 import getpass
 import hmac
 import ipaddress
@@ -46,6 +47,32 @@ def existing_warning(existing, approver=None):
     return f'  RE-DOCK of the existing ship, owned by {owner}: approving revokes its {revokes}'
 
 
+def describe_imprint(item):
+    """I 10's item: two lines (the third when memories name other people), every requester value through safe_line."""
+    head = f'{item["id"][:4]}  IMPRINT  from {safe_line(item["owner"])} (ship {safe_line(item["ship"])}, ' \
+           f'machine {safe_line(item["machine"] or "unknown")})'
+    doc = item['request']
+    if doc is None:
+        return head + ': its request cannot be read back; do not approve it'
+    contents, scope, terms = doc['contents'], doc['scope'], doc['terms']
+    lanes = scope['lanes']
+    since = safe_line(scope['since'][:10]) if scope['since'] else 'no start date'
+    ends = datetime.fromtimestamp(item['ends'], timezone.utc).strftime('%Y-%m-%d') if item['ends'] else 'an unknown date'
+    audience = ', '.join(safe_line(a) for a in terms['audience'])
+    lines = [f'{head}: store {safe_line(doc["source_instance_id"][:8])}, {contents.get("episodes", 0):,} episodes and '
+             f'{contents.get("semantics", 0):,} semantics,',
+             f'      {safe_line(", ".join(lanes))} lane{"" if len(lanes) == 1 else "s"}, since {since}; '
+             f'{doc["package"]["bytes"] / 2**20:.1f} MiB; for {audience}; '
+             f'recall, read, {safe_line(", ".join(terms["actions"]))};',
+             f'      purposes {safe_line(", ".join(terms["purposes"]))}; ends {ends}']
+    others = doc['others']
+    if others['memories'] > 0:
+        home = audience.removeprefix('place:home/')
+        lines.append(f'      {others["memories"]} memories have other people recorded on them ({others["people"]} people); '
+                     f"copied in {home}'s home as co-subjects")
+    return '\n'.join(lines)
+
+
 def describe_pending(items, now, approver=None):
     """One line per waiting item, keyed by a short id; requester text is flattened to one safe line. `approver` is who
     would approve (make's APPROVER), so a taken ship name says what approving as them does."""
@@ -57,6 +84,8 @@ def describe_pending(items, now, approver=None):
             lines.append(f'docking {item["id"][:6]}  {safe_line(item["ship_name"])} from {safe_line(item["machine"])}'
                          f'  asked {ago(now - item["created"])} ago, expires in {ago(item["expires"] - now)}'
                          + existing_warning(item.get('existing'), approver))
+        elif item['kind'] == 'imprint':
+            lines.append(describe_imprint(item))
         else:
             note = f'  note: {safe_line(item["note"], 200)}' if item['note'].strip() else ''
             lines.append(f'access  {item["id"][:6]}  {safe_line(item["name"])} <{safe_line(item["contact"])}>'

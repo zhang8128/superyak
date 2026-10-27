@@ -655,6 +655,24 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         def imprint_decline(request_id: str, request: Request):
             return store.decline_imprint(actor(request), request_id)
 
+        @app.put('/api/imprints/{request_id}/manifest')
+        async def imprint_manifest(request_id: str, request: Request):
+            ship = ship_member(request)
+            return store.put_imprint_manifest(ship['id'], request_id, await request.body())
+
+        @app.put('/api/imprints/{request_id}/parts/{n}')
+        async def imprint_part(request_id: str, n: int, request: Request):
+            ship = ship_member(request)
+            return store.put_imprint_part(ship['id'], request_id, n, await request.body())
+
+        @app.post('/api/imprints/{request_id}/complete')
+        def imprint_complete(request_id: str, request: Request):
+            return store.complete_imprint(ship_member(request)['id'], request_id)
+
+        @app.get('/api/imprints/{request_id}')
+        def imprint_one(request_id: str, request: Request):
+            return store.imprint_status(member(request)['id'], request_id)
+
     @app.get('/api/mentions')
     def mentions(request: Request, after: int = 0, limit: int = 50):
         return store.mentions(member(request)['id'], after, limit)
