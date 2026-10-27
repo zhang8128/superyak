@@ -966,15 +966,22 @@ def main(argv: list[str] | None = None) -> int:
         or config["socket"]
         or engram_home / ".engram" / "lighthouse.sock"
     )
-    from embeddings import create_embedding_provider
+    logging.basicConfig(level=os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
+    embedder_socket = os.environ.get("ENGRAM_EMBEDDER_SOCKET")
+    if not embedder_socket:
+        logger.error(
+            "the lighthouse daemon embeds through the shared embedder service: "
+            "set ENGRAM_EMBEDDER_SOCKET (scripts/superyak-embedder.service)"
+        )
+        return 2
+    from embeddings import RemoteEmbedProvider
 
     daemon = PublisherDaemon(
         build_publishers(engram_home, config["publishers"]),
         socket_path,
-        create_embedding_provider(),
+        RemoteEmbedProvider(embedder_socket),
         engram_home=engram_home,
     )
-    logging.basicConfig(level=os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
     logger.info("publishing %s on %s", ", ".join(config["publishers"]), socket_path)
     try:
         daemon.serve_forever()
