@@ -416,6 +416,12 @@ class _Cursor:
             raise AssertionError(f"fetchmany beyond one batch on a table that grows with the store: {self._sql}")
         return self._cur.fetchmany(*(() if size is None else (size,)))
 
+    def execute(self, sql, *args):
+        """A statement run again on the same cursor is checked as its own (final review M12)."""
+        self._cur.execute(sql, *args)
+        self._sql = sql
+        return self
+
     def __iter__(self):
         return iter(self._cur)
 
@@ -431,6 +437,10 @@ class _Connection:
     def execute(self, sql, *args):
         return _Cursor(self._conn.execute(sql, *args), sql, self._tables)
 
+    def cursor(self, *args):
+        """A guarded cursor: its ``execute`` names the statement its fetches are checked against (M12)."""
+        return _Cursor(self._conn.cursor(*args), "", self._tables)
+
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
@@ -438,7 +448,8 @@ class _Connection:
         setattr(self._conn, name, value)
 
     def __enter__(self):
-        return self._conn.__enter__()
+        self._conn.__enter__()
+        return self                                     # the guard stays on inside ``with`` (final review M12)
 
     def __exit__(self, *exc):
         return self._conn.__exit__(*exc)

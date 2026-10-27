@@ -87,6 +87,23 @@ def test_plan_build_and_admission_read_no_whole_table(tmp_path, monkeypatch):
     assert guarded                                  # the plan and the build read through the refusing connection
 
 
+def test_the_whole_table_guard_holds_through_with_and_cursor():              # final review M12; logged item 7
+    raw = sqlite3.connect(":memory:")
+    raw.execute("CREATE TABLE memory_log (id TEXT, x TEXT)")
+    guarded = _Connection(raw, GROWING_TABLES)
+    with guarded as conn:
+        assert conn is guarded
+        with pytest.raises(AssertionError, match="grows with the store"):
+            conn.execute("SELECT * FROM memory_log").fetchall()
+    cur = guarded.cursor()
+    with pytest.raises(AssertionError, match="grows with the store"):
+        cur.execute("SELECT * FROM memory_log").fetchall()
+    cur.execute("SELECT * FROM memory_log")
+    with pytest.raises(AssertionError, match="grows with the store"):
+        cur.fetchall()
+    cur.execute("SELECT * FROM memory_log WHERE id = ?", ("a",)).fetchall()       # keyed to one memory: allowed
+
+
 def test_the_whole_table_guard_refuses_a_whole_table():
     raw = sqlite3.connect(":memory:")
     raw.execute("CREATE TABLE memory_log (id TEXT, x TEXT)")
