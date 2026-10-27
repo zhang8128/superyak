@@ -175,3 +175,23 @@ def test_the_core_set_at_its_bound_reads_nearest_neighbours_and_builds_no_tree(t
     finally:
         store.close()
     assert len(want) == 50 and got == want
+
+
+# --- the final review's M4: with no_content an error is its class name alone -----------------------------------
+
+def test_no_content_keeps_only_an_errors_class_name(tmp_path, monkeypatch):
+    import calibrate as calibrate_module
+
+    def leaky(*args, **kwargs):
+        raise ValueError("/home/sam/secret path, and a memory's words")
+    for name in ("first_open_preview", "persistence_scores", "identity_report", "cohesion_report", "persistence_preview"):
+        monkeypatch.setattr(calibrate_module, name, leaky)
+    src = calibration_source(tmp_path)
+    report = calibrate(src, tmp_path / "out", no_content=True, now=NOW)
+    text = (tmp_path / "out" / "report.json").read_text() + (tmp_path / "out" / "report.md").read_text()
+    assert "secret" not in text and "words" not in text and "Traceback" not in text and not has_key(report, "trace")
+    errors = [report["identity"]] + [report["analyses"][k] for k in ("first_open", "persistence_scores", "cohesion",
+                                                                     "persistence")]
+    assert all(e == {"error": "ValueError"} for e in errors), errors
+    kept = calibrate(src, tmp_path / "with-content", now=NOW)               # without no_content the message stays
+    assert "secret" in kept["analyses"]["first_open"]["error"]

@@ -304,12 +304,22 @@ def _connect_read_only(path):
     return Storage.open_read_only(path)
 
 
-def _run(report: dict, name: str, fn, *args) -> None:
+def _error(e: Exception, no_content: bool, *, trace: bool = False) -> dict:
+    """An analysis's error for the report. With ``no_content`` only its class name: a message or a traceback can
+    quote a value, a path or a memory, and the report reaches the owner's ship (final review M4)."""
+    if no_content:
+        return {"error": type(e).__name__}
+    out = {"error": f"{type(e).__name__}: {e}"}
+    if trace:
+        out["trace"] = traceback.format_exc(limit=3)
+    return out
+
+
+def _run(report: dict, name: str, fn, *args, no_content: bool = False) -> None:
     try:
         report["analyses"][name] = fn(*args)
     except Exception as e:  # one schema gap must not hide the other analyses
-        report["analyses"][name] = {"error": f"{type(e).__name__}: {e}",
-                                    "trace": traceback.format_exc(limit=3)}
+        report["analyses"][name] = _error(e, no_content, trace=True)
 
 
 def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
@@ -361,23 +371,24 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
         try:
             report["identity"] = identity_report(report["snapshot"], conn)
         except Exception as e:  # reported, like any analysis that cannot run
-            report["identity"] = {"error": f"{type(e).__name__}: {e}"}
-        _run(report, "first_open", first_open_preview, conn, now)
+            report["identity"] = _error(e, no_content)
+        _run(report, "first_open", first_open_preview, conn, now, no_content=no_content)
         scores: dict = {}
         try:
             scores = persistence_scores(conn, max_episodes=max_lane_episodes, skips=skips)
         except Exception as e:
-            report["analyses"]["persistence_scores"] = {"error": f"{type(e).__name__}: {e}"}
+            report["analyses"]["persistence_scores"] = _error(e, no_content)
         store = _ReadOnlyStore(ro, scores)
         _run(report, "cohesion", lambda: cohesion_report(
-            store, max_episodes=max_semantic_episodes, skips=skips))
+            store, max_episodes=max_semantic_episodes, skips=skips), no_content=no_content)
         _run(report, "persistence", lambda: persistence_preview(
-            store, max_episodes=max_lane_episodes, max_semantic_episodes=max_semantic_episodes, skips=skips))
+            store, max_episodes=max_lane_episodes, max_semantic_episodes=max_semantic_episodes, skips=skips),
+            no_content=no_content)
         if no_paths:
             report["analyses"]["paths"] = PATHS_NOT_MEASURED
         else:
             import paths
-            _run(report, "paths", paths.report, conn)
+            _run(report, "paths", paths.report, conn, no_content=no_content)
     finally:
         ro.close()
     report["analyses"]["skipped_dense_sets"] = skips
