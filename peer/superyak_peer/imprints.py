@@ -13,6 +13,7 @@ import re
 import secrets
 import shutil
 import threading
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -1374,6 +1375,68 @@ class Imprints:
             finally:
                 temporary.unlink(missing_ok=True)
             return {'allowed': True, 'decided_at': now, 'valid_until': decision.valid_until}
+
+    def station_imprint_use_begin(self, username, prefix, use, *, root):
+        """The use decision for one copy at the store's clock, then, in one transaction (I 12, D41). Allowed: a new
+        lowercase uuid4 `use_id`, the `use-started` receipt, and after it `<id>.state/uses/<use id>.allow.json` (0400);
+        a file that cannot be written rolls the receipt back. Refused: a `refused` receipt naming the term and nothing
+        else. `uses/` is made without its parents, so a removed state directory is never recreated."""
+        if use not in ('trail-evaluation',):
+            raise Problem(400, f'Unknown imprint use {use!r}')
+        imprint_id = self.station_imprint_resolve(prefix)
+        with self.transaction() as db:
+            operator = db.execute('SELECT username FROM users WHERE username=?', (username,)).fetchone()
+            if operator is None:
+                raise Problem(404, f'No account named {username}')
+            found = db.execute('SELECT * FROM imprint_requests WHERE imprint_id=?', (imprint_id,)).fetchone()
+            if found is None or found['permission'] is None:
+                raise Problem(404, 'No such imprint')
+            state = self._imprint_state(found, root)
+            records = self._receipt_records(db, found['id'])
+            permission = json.loads(found['permission'])
+            now = int(self.clock())
+            decision = decide_use(permission, records, self._owner_layer_of(db, found['owner_id']),
+                                  status=found['status'], kind=use, t=now, operator=username)
+            actions = sorted({a for _, a, _ in need(use, route=False)})
+            purpose = use
+            admitted = next((r for r in records if r['event'] == 'admitted'), None)
+            if not decision.allowed:
+                detail = {'use': use, 'actions': actions, 'purpose': purpose, 'term': decision.term}
+                if admitted is not None:
+                    detail['roads_and_trails'] = admitted['detail']['roads_and_trails']
+                self._append_imprint_receipt(db, found['id'], 'refused', None, detail, sign=False)
+                return {'allowed': False, 'term': decision.term}
+            if state is None or state.is_symlink() or not state.is_dir():
+                raise Problem(409, 'This imprint has no state directory; the sweep marks it missing')
+            try:
+                manifest = json.loads((self._imprint_folders(found, root)[1][1] / 'manifest.json').read_bytes())
+                contents = manifest['contents']
+                count = contents.get('episodes', 0) + contents.get('semantics', 0)
+            except (OSError, ValueError, KeyError, AttributeError, TypeError):
+                raise Problem(409, 'This imprint has no readable manifest') from None
+            use_id = str(uuid.uuid4())
+            objects = {'imprint': imprint_id, 'count': count, 'roads_and_trails': admitted['detail']['roads_and_trails']}
+            self._append_imprint_receipt(db, found['id'], 'use-started', None,
+                                         {'use': use, 'use_id': use_id, 'actions': actions, 'purpose': purpose,
+                                          'objects': objects}, sign=False)
+            doc = {'kind': 'imprint-use-allow', 'use_id': use_id, 'instance_id': imprint_id, 'use': use,
+                   'actions': actions, 'purpose': purpose, 'requester': AGENT, 'acting_for': f'person:{username}',
+                   'place': f'place:home/{username}', 'records': list(decision.records), 'decided_at': now,
+                   'valid_until': decision.valid_until}
+            uses = state / 'uses'
+            uses.mkdir(mode=0o700, exist_ok=True)           # parents=False: never recreates a removed state directory
+            temporary = uses / f'.{use_id}.allow.json.{secrets.token_hex(4)}.tmp'
+            try:
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+                with os.fdopen(fd, 'wb') as out:
+                    out.write(json.dumps(doc, indent=2, sort_keys=True).encode() + b'\n')
+                    out.flush()
+                    os.fsync(out.fileno())
+                os.link(temporary, uses / f'{use_id}.allow.json')
+                _fsync_dir(uses)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return {'allowed': True, 'use_id': use_id, 'valid_until': decision.valid_until}
 
     def station_imprint_sync(self, *, root):
         """Records what each `approved` row's admission left (I 10, "On 'ended'"; R24), one transaction per row that

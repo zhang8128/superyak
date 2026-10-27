@@ -286,6 +286,12 @@ def main(argv=None):
     begin.add_argument('--id', required=True, help='The full imprint id (make resolves a short id with station-imprints --resolve)')
     begin.add_argument('--as', dest='person', required=True, help='The operator whose home the imprint is for')
     begin.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
+    use_begin = commands.add_parser('station-imprint-use-begin', help='Trusted local: decide one use of an imprint (by a short id), write its use-started receipt and allow file, and print the use id; exits 3 when refused')
+    use_begin.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    use_begin.add_argument('--id', required=True, help='Short imprint id (at least 4 characters)')
+    use_begin.add_argument('--use', required=True, help='The use, for example trail-evaluation')
+    use_begin.add_argument('--as', dest='person', required=True, help='The operator whose home the imprint is for')
+    use_begin.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
     sync = commands.add_parser('station-imprint-sync', help='Trusted local: record what admission left for every approved imprint')
     sync.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     sync.add_argument('--as', dest='person', help='The operator (receipts name no one; accepted so make passes one line)')
@@ -392,6 +398,12 @@ def main(argv=None):
             else:
                 why = 'it already began; a begun admission runs once' if result.get('begun') else f'the check refused it ({result["term"]})'
                 parser.exit(3, f'Admission of {args.id[:4]} did not start: {why}.\n')
+        elif args.command == 'station-imprint-use-begin':
+            result = Store(args.data_dir, signing=False).station_imprint_use_begin(args.person, args.id, args.use, root=args.imprints_dir)
+            if result['allowed']:
+                print(result['use_id'])
+            else:
+                parser.exit(3, f'Use {args.use} of {args.id[:4]} did not start: the check refused it ({result["term"]}).\n')
         elif args.command == 'station-imprint-sync':
             result = Store(args.data_dir, signing=False).station_imprint_sync(root=args.imprints_dir)
             print(f'Imprint admissions: {result["admitted"]} admitted, {result["failed"]} failed and deleted, {result["waiting"]} waiting.')
