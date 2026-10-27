@@ -2359,12 +2359,38 @@ def share(
         return asdict(record)
 
 
+def _acts_for_owner() -> bool | None:
+    """Does this server's agent act for the ledger owner (as `permissions` asks)? None when there is no ledger
+    (main's behaviour), or when the ledger cannot be read or names no owner, so it cannot be told."""
+    from permission_ledger import Ledger, ledger_path
+    from permissions import _principals
+    if not ledger_path(ENGRAM_HOME).is_file():
+        return None
+    try:
+        led = Ledger.open_read_only(ENGRAM_HOME)
+    except Exception:
+        return None
+    try:
+        state = led.state()
+        return state.meta["owner"] in _principals(state, _agent_ref())
+    except Exception:
+        return None
+    finally:
+        led.close()
+
+
+_OWNER_ONLY_UNSHARE = {"error": "only agents acting for the ledger owner can remove a placement"}
+
+
 @_server_tool()
 @_mutation_logged
 def unshare(share_id: str) -> dict:
-    """Withdraw one share from the published house."""
+    """Withdraw one share from the published house. With a ledger, only an agent acting for its owner may (Tardis's
+    T5); when the ledger cannot be read it still works, since removing a placement only narrows (U11)."""
     _init()
     logger.info("Tool called: unshare(share_id=%s)", share_id)
+    if _acts_for_owner() is False:
+        return dict(_OWNER_ONLY_UNSHARE)
     with _published_house_storage() as (path, published_storage):
         if published_storage is None:
             return {"error": f"no published house at {path}"}
@@ -2554,9 +2580,21 @@ def permissions(
 
 @_server_tool()
 def shares(audience: str | None = None) -> dict:
-    """List valid shares, optionally restricted to one audience."""
+    """List valid shares, optionally restricted to one audience. With a ledger, only to an agent acting for its
+    owner, as `permissions(focus="rules")` (Tardis's T5): a placement's reason and digest can name a person and
+    what is shared about them (P23). With none, as before; a closed gate with no ledger lists nothing."""
     _init()
     logger.info("Tool called: shares(audience=%s)", audience)
+    owner = _acts_for_owner()
+    if owner is False:
+        return dict(_OWNER_ONLY)
+    if owner is None:
+        from permission_ledger import ledger_path
+        if ledger_path(ENGRAM_HOME).is_file():
+            return {"error": "the permissions ledger cannot be read, so no placement is listed"}
+        gate = _permission_gate()
+        if gate.mode == "closed":
+            return {"error": f"the permissions gate is closed, so no placement is listed: {gate.cause}"}
     with _published_house_storage() as (path, published_storage):
         if published_storage is None:
             return {"error": f"no published house at {path}"}

@@ -269,6 +269,9 @@ def test_server_startup_does_not_fold_when_the_gate_is_off(engram_server_env, tm
 
 def test_a_failing_sweep_never_stops_startup_or_changes_the_reply(engram_server_env, tmp_path, monkeypatch):
     raise_gate_through_perform(tmp_path, "enforce")
+    led = Ledger.open(tmp_path)              # unshare is for an agent acting for the owner (Tardis's T5)
+    do(led, ANDY, "register-agent", now="2026-11-03", agent="agent:default", acts_for=HOME)
+    led.close()
 
     def boom(**kw):
         raise RuntimeError("sweep broke")

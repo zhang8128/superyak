@@ -1,6 +1,7 @@
 """Tardis's advisory review of permissions-core (reviews/2026-10-27-tardis-permissions-core-advisory.md): each
 test names its finding."""
 import dataclasses
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -8,13 +9,15 @@ import pytest
 
 import federation
 import server
+import sharing
 from permission_ledger import Ledger, effective_gate, ledger_path
 from permissions import (STAR, Act, Placement, Refusal, RuleError, authorize, check_narrower, decide, eligible_set,
                          parse_selector, placement_still_counts, selector_json, share_cover, subjects_of)
 from storage import Storage
 from tests.permissions_support import (  # noqa: F401
     ANDY, HOME, M1, M1_TEXT, M4, MEDICAL, T, andy_world, deliver_m1_through, fails_the_test, genome_world, home_use,
-    keep_world, keep_world_with_imprint_allowed)
+    keep_world, keep_world_with_imprint_allowed, make_ledger_unreadable)
+from tests.test_permissions_server import enforce_server  # noqa: F401
 from tests.test_recall_margins import engram_server_env  # noqa: F401
 
 
@@ -231,3 +234,56 @@ def test_t4_genome_sync_with_no_ledger_is_mains(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_genome_db_path", genome_path)
     assert server._sync_genome_kept(federation.sync_genome) == 1 and len(_synced(instance)) == 1
     assert not ledger_path(tmp_path).exists()
+
+
+# ---------------------------------------------------------------- T5: placements are listed and removed for the owner (P23)
+
+OWNER_ONLY = {"error": "only agents acting for the ledger owner can read this"}
+OWNER_ONLY_UNSHARE = {"error": "only agents acting for the ledger owner can remove a placement"}
+
+
+def _place_jenns_result():
+    """A placement in the published house whose reason names a person and a diagnosis. Returns its share id."""
+    src = Storage(str(server.ENGRAM_HOME / "andy-src.db"))
+    try:
+        src.add_episode(id="jenn-1", session_id=None, content="Jenn's test came back", episode_type="x")
+        src.conn.commit()
+        with server._published_house_storage() as (_p, house):
+            return sharing.share(source_storage=src, published_storage=house, source_id="jenn-1", layer="episode",
+                                 audience="group:jenn-care", reason="Jenn's [condition] result for her care group",
+                                 source_instance="default", source_instance_id="andy-store").share_id
+    finally:
+        src.close()
+
+
+def _placed(share_id):
+    with server._published_house_storage() as (_p, house):
+        return house.conn.execute("SELECT count(*) FROM shared_memories WHERE share_id = ?",
+                                  (share_id,)).fetchone()[0]
+
+
+@pytest.mark.parametrize("mode", ["enforce", "shadow", "off"])
+def test_t5_an_agent_not_acting_for_the_owner_is_refused_the_placements_under_every_gate(keep_world, mode):
+    sid = _place_jenns_result()
+    if mode != "enforce":
+        _set_gate(keep_world.root, mode)
+    assert server._agent_ref() == "agent:ph-coordinator"
+    assert server.shares() == OWNER_ONLY and server.shares(audience="group:jenn-care") == OWNER_ONLY
+    assert server.unshare(share_id=sid) == OWNER_ONLY_UNSHARE and _placed(sid) == 1
+    assert server.unshare(share_id="no-such-share") == OWNER_ONLY_UNSHARE      # the same reply: nothing told
+
+
+def test_t5_an_unreadable_ledger_lists_nothing_and_unshare_still_works(keep_world):
+    sid = _place_jenns_result()
+    make_ledger_unreadable(keep_world.root)
+    out = server.shares()
+    assert "shares" not in out and "Jenn" not in json.dumps(out)
+    assert server.unshare(share_id=sid) == {"removed": True} and _placed(sid) == 0     # U11: it only narrows
+
+
+def test_t5_the_owners_agent_still_lists_and_removes_its_placements(enforce_server):
+    sid = _place_jenns_result()
+    assert server._agent_ref() == "agent:default"
+    [row] = server.shares()["shares"]
+    assert row["share_id"] == sid and row["reason"] == "Jenn's [condition] result for her care group"
+    assert server.unshare(share_id=sid) == {"removed": True} and _placed(sid) == 0
