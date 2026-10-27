@@ -1,6 +1,6 @@
 # Compression never promotes unused prompt captures
 
-Revision 2, 2026-10-27. Serenity (the Mac). Board item `spec:compress-no-auto-promotion` in City of AI.
+Revision 3, 2026-10-27. Serenity (the Mac). Board item `spec:compress-no-auto-promotion` in City of AI.
 Amends the compression rework (2026-03-26-compression-rework-design.md) for one source of episodes.
 Revision 2 applies the fresh review (docs/superpowers/reviews/2026-10-27-compress-no-auto-promotion-review.md):
 - **Must-fix:** refine is out of scope; "used" evidence is per recall; the startup test stub.
@@ -12,6 +12,12 @@ Revision 2 applies the fresh review (docs/superpowers/reviews/2026-10-27-compres
   - an end-to-end test;
   - `source` in the compress output;
   - the revert note.
+
+Revision 3 applies the re-check, as worded there:
+- the revert note's must-fix (fix forward, or discard with Andy's yes);
+- the corrected reason for fewer maintenance passes;
+- a cluster made only of captures adds no feed;
+- refine's `new` override is accepted.
 
 ## Why
 
@@ -50,9 +56,10 @@ Recall evidence only decides what the model is shown.
   are unchanged, except as stated below.
 - `compress(scope="refine")` is outside these rules. Its clusters commit through the reinforce step, which only
   raises a semantic's confidence and adds source links (`compress.py:529-533`, `storage.py:1118-1129`). It never
-  rewrites content, so no capture's text reaches a semantic through it. It does show the model a joined semantic's
-  source episodes, which may include captures. On the Mac, no semantic contains `" --- "`, so it has nothing to
-  work on there.
+  rewrites content by default, so no capture's text reaches a semantic through it. It does show the model a joined
+  semantic's source episodes, which may include captures. The model can override a refine cluster's action to `new`
+  (`compress.py:501`). That stores the model's own summary without recall evidence, which is accepted because it's
+  still a model's summary. On the Mac, no semantic contains `" --- "`, so refine has nothing to work on there.
 - The 234 existing copies are left alone (see "Existing copies").
 
 ## Rules
@@ -75,8 +82,12 @@ Recall evidence only decides what the model is shown.
    moved to the personal lane and someone marked core.
 6. **Captures never feed the knowledge graph.** When the model path commits a cluster, the knowledge feed
    (`compress.py:623`) gets the cluster's episodes minus any with `source='auto'`, plus the semantic's content as
-   today. Graphiti stores episode text as it is given (`knowledge.py:338-341`). This also ends a feed that happens
-   today, where captures reached the graph through `auto_compress` after 10 `remember()` calls.
+   today. Graphiti stores episode text as it is given (`knowledge.py:338-341`). A cluster made only of captures
+   leaves no episodes to feed, so no feed is added for it, and it isn't counted in `knowledge_feeds_queued`
+   (`compress.py:745-757`). That cluster's summary therefore doesn't reach the graph, which is accepted. The builder
+   reads `ep.get("source")`, because some test episodes carry no `source` key (`tests/test_knowledge.py:472`). This
+   also ends a feed that happens today, where captures reached the graph through `auto_compress` after 10
+   `remember()` calls.
 
 ## Design
 
@@ -104,10 +115,15 @@ out afterwards, a mixed cluster could still take a prompt as its centroid text. 
   would count the left-out prompts as pending, note them in the maintenance report, and run a compression that
   finds nothing.
 - **Accepted: fewer maintenance passes.** Singleton promotion, the instinct check and instinct-cluster
-  re-derivation run only when a compression commits (`compress.py:696-725`). On 31 of the Mac's last 51 days, the
-  only new episodes were captures. On days like that, startup now commits nothing, so those three passes wait for
-  the next day with a remembered episode. They worked on semantics made from prompts anyway. If instinct-cluster
-  re-derivation from co-firing should run on its own schedule, that's a separate item.
+  re-derivation run only when a compression commits (`compress.py:696-725`). None of them reads prompt semantics:
+  - singleton promotion reads core episodes;
+  - instinct formation skips the work lane;
+  - re-derivation reads instinct co-firing edges.
+
+  They ran on capture-only days only because a pending capture made startup commit. On 31 of the 51 days since
+  2026-09-01 with new episodes, the only new episodes on the Mac were captures. On days like that, startup now
+  commits nothing, so those three passes wait for the next commit. If they, re-derivation especially, should run on
+  their own schedule, that's a separate item.
 - **Accepted: a deliberate `remember(source="auto")` is treated as a capture.** No caller does this today.
 - **Docs.** The engram CLAUDE.md "Sleep-time consolidation" paragraph gains one sentence: auto-captured prompts are
   never auto-compressed, and the model's compress offers them only after a used recall returned them.
@@ -128,7 +144,8 @@ out afterwards, a mixed cluster could still take a prompt as its centroid text. 
 - Episodes with NULL source are clustered by both paths, exactly as today.
 - `scope="full"`: unused captures stay uncompressed afterwards, and used ones are offered.
 - `_promote_singletons` skips a core capture.
-- A committed cluster holding a used capture feeds the knowledge graph without the capture's episode.
+- A committed cluster holding a used capture feeds the knowledge graph without the capture's episode. A committed
+  cluster made only of used captures adds no feed, and `knowledge_feeds_queued` doesn't count it.
 - **End to end (`tests/test_server.py`):**
   1. `remember` several work episodes, insert a capture as the nudge hook does, and call `recall(lane="work")` so
      the capture is returned.
@@ -151,9 +168,11 @@ Engram code runs in every session's engram MCP server and in the Mac's lighthous
 checkout). Each picks the change up at its next start. A Serenity branch merges under law section 2: a partner's
 verdict, and the engram suite on the Pi. The change writes nothing on its own and needs no migration.
 
-Rollback is a revert. But a revert sends every capture waiting uncompressed through the old `auto_compress` at the
-next start, so they become verbatim semantics then. Before a revert, run `compress()` once if those captures should
-be reviewed by a model instead.
+Rollback is a revert, but a revert isn't free. At the first start after it, the old `auto_compress` copies every
+capture still waiting uncompressed into a semantic word for word. That's nearly all of them, since few captures ever
+gain recall evidence. Running `compress()` first doesn't help, because it only offers captures with evidence.
+Prefer fixing forward. If a revert is needed, first get Andy's yes to mark the waiting captures compressed with no
+semantic (a discard), then revert.
 
 ## Existing copies (Andy's call, not this change)
 

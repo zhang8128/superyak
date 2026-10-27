@@ -174,3 +174,80 @@ recall. The spec also promises that every existing test passes unchanged, which 
 - The lighthouse daemon serves only memories that were explicitly shared (lighthouse_daemon.py:6-7, 54).
 - `cold.db` holds 0 captures, and with this change uncompressed captures can never be moved there.
 - No migration is needed: every table and index the filter uses already exists.
+
+## Re-check of revision 2
+
+Revision: 944976d. I ran `git diff 02b112a 944976d -- engram/docs/superpowers/specs/` and checked each change
+against the code. Everything was read-only. The only new store fact is a SQLite in-memory check of the
+`json_valid` guard.
+
+**Verdict: APPROVE WITH CHANGES.** Every finding was applied, and Rules 5 and 6 match the code at the lines they
+cite. Nothing blocks planning or building. One Deploy instruction is newly wrong, and it must be corrected before
+merge because following it would not protect the captures. Two smaller sentences are newly inaccurate.
+
+### Findings from the first review
+
+| Finding | Status | Note |
+|---|---|---|
+| Must 1, refine | Applied | Moved to Non-goals. The reinforce-only claim (compress.py:529-533, storage.py:1118-1129) and "nothing on the Mac" are correct. The refine sentence is gone from Existing copies. |
+| Must 2, per-recall evidence | Applied | The Goal, Rule 2 and D3 now say the evidence is per recall and that the model's review is the gate. The false "cited the result" is gone. |
+| Must 3, startup stub | Applied | `lambda **_: [{"id": "x"}]` accepts `auto="none"`. |
+| Should 1, NULL sources | Applied | `coalesce(source,'') <> 'auto'` is in Rule 1 and the Design, with a test that NULL-source episodes are clustered by both paths. |
+| Should 2, singleton guard | Applied | Now Rule 5, with a test. |
+| Should 3, fewer passes | Applied wrongly | Accepted and disclosed, but the justification is false. See new item 2. |
+| Should 4, knowledge feed | Applied | Now Rule 6, with a test. One gap remains; see new item 3. |
+| Should 5, end-to-end test | Applied | It is buildable: `recall(lane="work")` rewrites `target_ids` with the delivered ids (server.py:2551-2560), and the compress tool runs at server.py:2989-3011. |
+| Should 6, `scope="full"` wording | Applied | |
+| Nits | Applied | `guarded_prune`, test locations, `remember(source="auto")`, the `json_valid` guard, `source` in the compress output, and the revert note. The revert note is applied wrongly; see new item 1. |
+
+### Rules 5 and 6 against the code
+
+- **Rule 5 matches.** The candidate query is at compress.py:1218-1224 inside `_promote_singletons`
+  (compress.py:1211-1271). One added `AND coalesce(e.source,'') <> 'auto'` closes the gap. The query already
+  selects `e.source`.
+- **Rule 6 matches.** The feed is appended at compress.py:623, and only on the non-reinforce branch. Cluster
+  episodes come from `SELECT *` (storage.py:612-617 today, and from `_refine_clusters`), so they carry `source`.
+  Graphiti stores `episode_body` as given (knowledge.py:338-341).
+- **Builder note.** Filter with `ep.get("source")`, not `ep["source"]`. The mocked episodes in
+  tests/test_knowledge.py:472-475 have no `source` key.
+- **The `json_valid` guard works as specified.** On SQLite 3.54.0, the unguarded join raises `malformed JSON` on a
+  bad row. With `AND json_valid(m.target_ids)` it skips the row, both as a join and inside the `IN (…)` subquery.
+  So the planned "malformed row is skipped" test is meaningful.
+- **No existing test asserts the compress tool's exact output shape**, so adding `source` is safe.
+
+### Newly wrong
+
+1. **Must fix: the Deploy revert advice doesn't do what it says.**
+   - The spec says: "Before a revert, run `compress()` once if those captures should be reviewed by a model
+     instead."
+   - Under this change, `compress()` offers only captures with used-recall evidence (Rule 2). Unused captures,
+     which are nearly all of them (0 of the 64 used recalls returned one), stay waiting. A revert's first startup
+     then copies them verbatim through the old `auto_compress`, before anyone can call `compress()`.
+   - Change: replace that sentence with "Running `compress()` first only reviews captures with recall evidence;
+     the unused ones still become verbatim semantics at the reverted start. If that matters, fix forward instead of
+     reverting, or get Andy's yes to mark the waiting captures discarded (`compressed = 1`, no semantic) before
+     the revert."
+2. **Should fix: "They worked on semantics made from prompts anyway" (Design, the fewer-passes bullet) is false.**
+   - None of the three passes reads capture-made semantics:
+     - singleton promotion reads core episodes not linked to any semantic (compress.py:1218-1224);
+     - instinct formation skips the work lane (compress.py:1094-1095), and every copy is in the work lane;
+     - re-derivation reads instinct co-firing edges (compress.py:717-725).
+   - They ran on capture-only days only because a capture was pending.
+   - Change: replace the sentence with "None of them reads capture-made semantics; they ran on those days only
+     because a capture was pending, so skipping them only delays them."
+   - Also, "the Mac's last 51 days" should read "the 51 days since 2026-09-01 with new episodes".
+3. **Should fix: say what happens to a cluster made only of captures.**
+   - "Minus any with `source='auto'`, plus the semantic's content as today" can leave an empty episode list.
+     `feed` and `feed_background` return None on empty episodes (knowledge.py:283-284, 299-300). The semantic
+     content is only each episode's `source_description` (knowledge.py:341), so nothing reaches the graph.
+   - `_feed_knowledge_graph` would still count the empty feed as handed (compress.py:745-757). That inflates
+     `knowledge_feeds_queued`.
+   - Change: "A cluster whose episodes are all captures appends no feed, so its summary doesn't reach the graph."
+   - Add that case to the Rule 6 test.
+
+### Nit
+
+- The refine Non-goal says "no capture's text reaches a semantic through it". That holds for refine's default
+  reinforce. A model can override the action to `new` (compress.py:501), which writes the model's own summary as
+  a new semantic, without recall evidence. Add "unless the model overrides the action to `new`, which stores its
+  own summary". On the Mac this can't happen, because no semantic qualifies for refine.
