@@ -469,3 +469,75 @@ def hook_ddl_names() -> set[str]:
 def add_hook_tables(conn: sqlite3.Connection) -> None:
     for ddl in _hook_ddl():
         conn.execute(ddl)
+
+
+# Task 7: the selection, the terms and the source context. The imports are inside the helpers so that
+# importing this module never needs imprint_filter.
+
+SELECTION_UNTIL = T("2026-10-25T18:00:00Z")
+
+
+def selection(**over):
+    """A Selection: work lane, both layers, no window start, until 2026-10-25T18:00Z, nothing else."""
+    from imprint_filter import Selection
+
+    values = dict(lanes=frozenset({"work"}), layers=frozenset({"episode", "semantic"}), since=None,
+                  until=SELECTION_UNTIL, shared_with=None, exclude=frozenset(), unsourced=False)
+    values.update(over)
+    return Selection(**values)
+
+
+def terms(**over):
+    """Terms for the home place of andy, without route."""
+    from imprint_filter import Terms
+
+    values = dict(audience="place:home/andy", actions=frozenset({"imprint"}),
+                  purposes=frozenset({"calibration"}), days=90)
+    values.update(over)
+    return Terms(**values)
+
+
+def ctx(store: Storage, *, published: Path | None = None, owner: str = "andy", home: bool = True,
+        instance_name: str = "default", ledger=None):
+    """A SourceContext for ``store``, with a scratch file beside it (a new one each call)."""
+    import store_identity
+    from imprint_filter import Scratch, SourceContext
+
+    path = Path(store.db_path)
+    return SourceContext(
+        source_path=path, source_id=store_identity.effective_id(store.conn), instance_name=instance_name,
+        owner=owner, published=published, ledger=ledger, home=home,
+        scratch=Scratch(path.parent / f"{path.stem}-scratch-{uuid.uuid4().hex[:8]}.db"))
+
+
+def published_house(tmp_path: Path) -> Path:
+    """An empty published house (a migrated store) at the path the server uses for the lighthouse instance."""
+    path = tmp_path / ".engram" / "instances" / "lighthouse" / "graph.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Storage(str(path)).close()
+    return path
+
+
+def share_as(store: Storage, published: Path, id: str, audience: str, *, layer: str = "episode",
+             source_instance_id: str | None = None):
+    """Record a share as ``sharing.share`` does, with the store's own id unless another is given.
+
+    A semantic share of an id the store holds only as an episode first gives the store a semantic of that id.
+    """
+    import sharing
+    import store_identity
+
+    if layer == "semantic" and store.get_semantic(id) is None:
+        store.conn.execute(
+            "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash,"
+            " lane) VALUES (?, ?, 'fact', 0.5, '2026-01-01T00:00:00+00:00', 0, ?, 'work')",
+            (id, f"semantic {id}", f"hash-{id}"))
+        store.conn.commit()
+    house = Storage(str(published))
+    try:
+        return sharing.share(
+            source_storage=store, published_storage=house, source_id=id, layer=layer, audience=audience,
+            reason="test", source_instance="default",
+            source_instance_id=source_instance_id or store_identity.effective_id(store.conn))
+    finally:
+        house.close()
