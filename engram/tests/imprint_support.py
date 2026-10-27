@@ -1155,3 +1155,215 @@ def expected_order(plan) -> list[str]:
     finally:
         conn.close()
     return [id for _, id in sorted(rows)]
+
+
+# Task 20: the canaries (store-copy spec I 16, "Canaries").
+
+def open_package(path: Path) -> sqlite3.Connection:
+    """A read-only, immutable connection to a built package with sqlite-vec loaded (never ``Storage``, P19)."""
+    conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+    load_vec(conn)
+    return conn
+
+
+def _ordinary_tables(conn: sqlite3.Connection) -> list[str]:
+    return [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                                       "AND sql NOT LIKE 'CREATE VIRTUAL%'")]
+
+
+def any_value_contains(conn: sqlite3.Connection, needle: str) -> bool:
+    """Whether any value of any ordinary table (every shadow table too) holds ``needle``, ignoring case. A BLOB is
+    read as Latin-1."""
+    low = needle.lower()
+    for table in _ordinary_tables(conn):
+        for row in conn.execute(f'SELECT * FROM "{table}"'):
+            for v in row:
+                if isinstance(v, (bytes, bytearray, memoryview)):
+                    v = bytes(v).decode("latin-1")
+                if isinstance(v, str) and low in v.lower():
+                    return True
+    return False
+
+
+def _folded(text: str) -> str:
+    import unicodedata
+
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(ch))
+
+
+def fts_vocab_contains(conn: sqlite3.Connection, needle: str) -> bool:
+    """Whether any FTS5 table's term list holds a term containing ``needle`` (case and accents folded, as the
+    tokenizer folds them), read through ``fts5vocab`` because the terms are stored prefix-compressed."""
+    wanted = _folded(needle)
+    fts = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%USING fts5%'")]
+    for name in fts:
+        conn.execute(f'CREATE VIRTUAL TABLE IF NOT EXISTS temp."{name}_canary_vocab" USING fts5vocab(main, "{name}", row)')
+        try:
+            if any(wanted in _folded(t) for (t,) in conn.execute(f'SELECT term FROM temp."{name}_canary_vocab"')):
+                return True
+        finally:
+            conn.execute(f'DROP TABLE temp."{name}_canary_vocab"')
+    return False
+
+
+def any_vec0_slot_equals(conn: sqlite3.Connection, vectors) -> bool:
+    """Whether any slot of any vec0 table's chunk blobs equals one of ``vectors`` (raw 4*dim-byte embeddings)."""
+    wanted = set(vectors)
+    for (table,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%\\_vector\\_chunks%' ESCAPE '\\'"):
+        base = table.split("_vector_chunks")[0]
+        dim = int(re.search(r"float\[(\d+)\]", conn.execute("SELECT sql FROM sqlite_master WHERE name=?",
+                                                             (base,)).fetchone()[0]).group(1))
+        for (blob,) in conn.execute(f'SELECT vectors FROM "{table}"'):
+            blob = bytes(blob)
+            if any(blob[i:i + 4 * dim] in wanted for i in range(0, len(blob), 4 * dim)):
+                return True
+    return False
+
+
+_PLANTED_VECTORS: dict[str, list[bytes]] = {}
+
+
+def planted_vectors(store: Storage) -> list[bytes]:
+    """The 3,072-byte embedding of every left-out vector row ``canary_store`` planted in ``store``."""
+    return _PLANTED_VECTORS[str(store.db_path)]
+
+
+def _fill(conn: sqlite3.Connection, table: str, canary, **values) -> None:
+    """Insert one row: ``values`` as given, every other TEXT, JSON or BLOB column without a default a fresh canary."""
+    row = dict(values)
+    ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name=?", (table,)).fetchone()[0]
+    for col, allowed in re.findall(r"(\w+)\s+IN\s*\(([^)]*)\)", ddl):      # an enum with a CHECK: its first value
+        row.setdefault(col, allowed.split(",")[0].strip().strip("'\""))
+    for _, name, typ, _, default, pk in conn.execute(f"PRAGMA table_info({table})").fetchall():
+        if name in row:
+            continue
+        typ = typ.upper()
+        if typ in ("TEXT", "JSON"):
+            if default is not None:             # an enum such as ``status`` (it has a CHECK), not free text
+                continue
+            row[name] = canary()
+        elif typ == "BLOB":
+            row[name] = canary().encode()
+        elif default is None:
+            row[name] = 1                       # a required number
+    cols = ", ".join(f'"{c}"' for c in row)
+    conn.execute(f"INSERT INTO {table} ({cols}) VALUES ({', '.join('?' * len(row))})", list(row.values()))
+
+
+def canary_store(tmp_path: Path) -> tuple[Storage, list[str]]:
+    """The anti-goal fixture of I 16: a route plan's store (kept work-lane memories ``e0`` to ``e2``, ``s1``, a
+    recall) with a unique random string in every TEXT column of every left-out row and of every dropped table, in
+    a recall's query and outcome note, and in the files beside the store; some canaries share a 14-letter prefix
+    with a shipped term, some are UUIDs (split at hyphens by the tokenizer), some sit in long values across an
+    overflow page boundary, and every left-out vector row holds a unique 3,072-byte vector. Returns the store
+    and every canary."""
+    import secrets
+
+    import numpy as np
+    from storage import _pack_embedding
+
+    canaries: list[str] = []
+
+    def canary(prefix: str = "") -> str:
+        c = prefix + secrets.token_hex(10)
+        canaries.append(c)
+        return c
+
+    def uuid_canary() -> str:
+        c = str(uuid.uuid4())
+        canaries.append(c)
+        return c
+
+    s = new_store(tmp_path, "src")
+    conn = s.conn
+    shipped_word = "uncharacteristically"       # a shipped term; the canaries below share its first 14 letters
+    ep(s, "e0", content=f"Jenn drove the truck to the clinic, trip 0, {shipped_word}", session="sx",
+       at="2026-10-25T09:00:00+00:00")
+    vec(s, "episode", "e0", seed=100)
+    for i in (1, 2):
+        ep(s, f"e{i}", content=f"Jenn drove the truck to the clinic, trip {i}", session="sx",
+           at=f"2026-10-25T10:{i:02d}:00+00:00")
+        vec(s, "episode", f"e{i}", seed=i)
+    sem(s, "s1", sources=["e1"], at="2026-10-25T12:00:00+00:00")
+    vec(s, "semantic", "s1", seed=99)
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    seeds = iter(range(1000, 2000))
+    left_vectors: list[bytes] = []
+
+    def left_out_vector(table: str, id: str) -> None:
+        dim = int(re.search(r"float\[(\d+)\]", conn.execute("SELECT sql FROM sqlite_master WHERE name=?",
+                                                             (table,)).fetchone()[0]).group(1))
+        v = np.random.default_rng(next(seeds)).standard_normal(dim)       # 768 (3,072 bytes), but residue's is 64
+        blob = _pack_embedding((v / np.linalg.norm(v)).tolist())
+        assert len(blob) == 4 * dim
+        conn.execute(f"INSERT INTO {table} (id, embedding) VALUES (?, ?)", (id, blob))
+        left_vectors.append(blob)
+
+    # Left-out episodes: another lane, and a work-lane episode too new for the plan.
+    long_value = ""
+    page = conn.execute("PRAGMA page_size").fetchone()[0]
+    left_ids = []
+    for lane, at in (("personal", "2026-10-25T09:30:00+00:00"), ("work", "2026-10-25T20:00:00+00:00")):
+        id = uuid_canary()
+        left_ids.append(id)
+        _fill(conn, "episodes", canary, id=id, lane=lane, created_at=at, core=0, dormant=0,
+              content=canary("uncharacteristic") + " " + canary(), context=f'{{"k": "{canary()}"}}')
+        left_out_vector("episode_vectors", id)
+    # A long value with left-out UUIDs at offsets that cross every overflow boundary of its payload.
+    for offset in (page - 18, 2 * page - 18, 3 * page - 5):
+        long_value += "x" * (offset - len(long_value)) + uuid_canary()
+    long_id = uuid_canary()
+    _fill(conn, "episodes", canary, id=long_id, lane="personal", created_at="2026-10-25T09:40:00+00:00", core=0,
+          dormant=0, content=long_value + "y" * (3 * page), context=None)
+    left_out_vector("episode_vectors", long_id)
+
+    # Left-out semantics (and what ties them to left-out episodes).
+    sid = uuid_canary()
+    _fill(conn, "semantics", canary, id=sid, lane="personal", created_at="2026-10-25T09:50:00+00:00", kind="fact",
+          content=canary("uncharacteristic"), contradicted_by=None)
+    left_out_vector("semantic_vectors", sid)
+    _fill(conn, "semantic_sources", canary, semantic_id=sid, episode_id=left_ids[0])
+    _fill(conn, "resonances", canary, id=uuid_canary(), memory_a=left_ids[0], layer_a="episode", memory_b="e1",
+          layer_b="episode", created_at="2026-10-25T09:55:00+00:00", last_seen="2026-10-25T09:55:00+00:00")
+    _fill(conn, "semantic_peers", canary, peer_id=sid, parent_id="s1", created_at="2026-10-25T09:55:00+00:00")
+    _fill(conn, "subdivision_events", canary, id=uuid_canary(), parent_id=sid, peer_ids=f'["{uuid_canary()}"]',
+          site="sleep", created_at="2026-10-25T09:55:00+00:00")
+
+    # Every dropped table: a row of canaries (the hook tables are not in graph.db, and the shadows of vec0 tables
+    # are filled by their embeddings below).
+    from imprint_filter import HOOK_TABLES, TABLE_RULES
+
+    for table, rule in TABLE_RULES.items():
+        if rule != "dropped" or table in HOOK_TABLES or table.endswith("_vectors"):
+            continue
+        _fill(conn, table, canary, **({"instinct_a": canary("a"), "instinct_b": canary("b")}   # CHECK a < b
+                                      if table == "instinct_co_firing" else {}))
+    for table in ("instinct_vectors", "instinct_context_vectors", "entity_vectors", "residue_vectors"):
+        left_out_vector(table, uuid_canary())
+    inst_id = inst(s, uuid_canary())
+
+    # The log: a query and an outcome note on a kept recall, a recall of left-out memories and an instinct, an
+    # operation that carries free text, and a route_shown row with a query.
+    recall(s, "l1", targets=["e1"], session="sx", outcome=f"used: {canary()}", recall_id="rc1", query=canary(),
+           note=canary())
+    recall(s, "l2", targets=["e2", inst_id], session="sx", outcome=f"not_used {canary()}", recall_id="rc2",
+           query=canary())
+    recall(s, "l3", targets=[left_ids[0]], session="sx", outcome="used", recall_id="rc3", query=canary())
+    route_shown(s, "l4", targets=["e1", left_ids[0]], session="sx", query=canary(), cut=canary())
+    op(s, "o1", session="sx", at="2026-10-25T10:20:00+00:00", operation="mark_core", targets=["e1"],
+       harness=canary(), model=canary(), repo=canary(), details={"note": canary()})
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.commit()
+
+    # The stores beside graph.db (the plan never reads them, so nothing of them may arrive).
+    import sqlite3 as _sq
+
+    for name in ("cold.db", "categories.db", "categories_v2.db", "clipboard.db", "notepad.db"):
+        side = _sq.connect(tmp_path / name)
+        side.execute("CREATE TABLE notes (id TEXT, body TEXT)")
+        side.execute("INSERT INTO notes VALUES (?, ?)", (uuid_canary(), canary()))
+        side.commit()
+        side.close()
+    _PLANTED_VECTORS[str(s.db_path)] = left_vectors
+    return s, canaries
