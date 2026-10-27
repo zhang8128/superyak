@@ -18,7 +18,7 @@ from .station import StationError, label, read_json, write_private
 PART_BYTES = 4_194_304            # one part on the wire; the agent holds at most one (I 9, D42)
 POLL_SECONDS = 15
 PART_RETRIES = 3                  # a 429 from the station's part limiter waits a minute, then tries the part again
-FINAL = ('admitted', 'declined', 'denied', 'failed', 'deleted')   # after these the local imprint.db goes (D24)
+FINAL = ('admitted', 'declined', 'denied', 'failed', 'deleted', 'expired')   # after these the local imprint.db goes (D24)
 BUSY = 'Another make imprint-send of this plan is running.'
 HEX = frozenset('0123456789abcdef')
 MAX_SEQ = 2**53                   # a receipt's seq is a bounded non-negative int before it names a file (review I2)
@@ -92,7 +92,7 @@ class Imprint:
             if state in FINAL:
                 self._drop_local_copy(imprint_id)
                 return state
-            if state != 'requested':          # received, approved, deleting, expired: the station's word, as it is
+            if state != 'requested':          # received, approved, deleting: the station's word, as it is
                 return state
             time.sleep(POLL_SECONDS)
             if time.time() >= deadline:

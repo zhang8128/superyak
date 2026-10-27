@@ -224,8 +224,53 @@ def plans_dir(home: Path) -> Path:
     return path
 
 
+SCRATCH_OWNER = "owner.pid"          # the pid of the run that made a scratch directory; an exec keeps it
+UNMARKED_STALE = 86_400              # a scratch directory with no owner file is a killed run's after a day
+
+
 def _new_scratch(home: Path) -> Path:
-    return Path(tempfile.mkdtemp(prefix="scratch-", dir=plans_dir(home)))      # 0700
+    """A new 0700 scratch directory ``scratch-*`` under the plans directory, holding ``owner.pid``. Removes first
+    what killed runs left (``_remove_stale_scratch``): a snapshot and a working copy are whole copies of the store."""
+    plans = plans_dir(home)
+    _remove_stale_scratch(plans)
+    making = Path(tempfile.mkdtemp(prefix=".making-", dir=plans))              # 0700; not a scratch-* name yet
+    (making / SCRATCH_OWNER).write_text(str(os.getpid()))
+    made = plans / ("scratch-" + making.name[len(".making-"):])
+    os.rename(making, made)
+    return made
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _remove_stale_scratch(plans: Path, *, now: Callable[[], float] = time.time) -> None:
+    """Removes the ``scratch-*`` (and half-made ``.making-*``) directories under ``plans`` that this tool made for a
+    run that is gone: its ``owner.pid`` names no live process, or, with no readable owner file, it is older than a
+    day. A live run's directory, a link and any other name are left alone (final review M9)."""
+    for entry in plans.iterdir():
+        if not entry.name.startswith(("scratch-", ".making-")) or entry.is_symlink() or not entry.is_dir():
+            continue
+        try:
+            if entry.stat().st_uid != os.getuid():
+                continue
+            text = (entry / SCRATCH_OWNER).read_text().strip()
+            stale = not (text.isdigit() and int(text) > 0 and _pid_alive(int(text)))
+        except FileNotFoundError:
+            try:
+                stale = now() - entry.stat().st_mtime > UNMARKED_STALE
+            except OSError:
+                continue
+        except (OSError, ValueError):
+            continue
+        if stale:
+            shutil.rmtree(entry, ignore_errors=True)
 
 
 def _remove_work(work: Path, *, whole: bool) -> None:

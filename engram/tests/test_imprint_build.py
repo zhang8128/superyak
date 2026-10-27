@@ -355,3 +355,41 @@ def test_rf5_a_second_build_of_one_plan_refuses(tmp_path, monkeypatch, capsys):
     assert imprint_dirs(tmp_path) == []                                                  # no imprint dir
     assert "imprint_id" not in plan_file(tmp_path, plan)
     assert issubclass(PlanBusy, PlanRefused)
+
+
+# ---- A killed plan or build leaves no copy of the store for good (final review M9) ----
+
+def leftover_scratch(plans):
+    """Scratch directories as a killed run leaves them, and others a sweep must keep: {name: path}."""
+    import subprocess
+    import sys
+    import time
+
+    plans.mkdir(parents=True, exist_ok=True)
+    dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    made = {}
+    for name, pid in (("scratch-dead", dead.stdout.strip()), ("scratch-live", str(os.getpid())),
+                      ("scratch-unmarked-old", None), ("scratch-unmarked-new", None), ("kept-dead", dead.stdout.strip())):
+        folder = plans / name
+        folder.mkdir(mode=0o700)
+        (folder / "snapshot.db").write_bytes(b"a whole copy of the store")
+        if pid is not None:
+            (folder / "owner.pid").write_text(pid)
+        made[name] = folder
+    old = time.time() - 2 * 86400
+    os.utime(made["scratch-unmarked-old"], (old, old))
+    (plans / "scratch-link").symlink_to(made["kept-dead"])
+    return made
+
+
+@pytest.mark.parametrize("step", ["plan", "build"])
+def test_a_killed_runs_scratch_is_removed_at_the_next_start_and_a_live_ones_kept(tmp_path, step):
+    args = plan_args(tmp_path)
+    plans = HOME(tmp_path) / "imprints" / "plans"
+    if step == "build":
+        plan = make_plan(*args)
+    made = leftover_scratch(plans)
+    make_plan(*args) if step == "plan" else run_build(tmp_path, plan)
+    left = {p.name for p in plans.iterdir() if p.is_dir() or p.is_symlink()}
+    assert left == {"scratch-live", "scratch-unmarked-new", "kept-dead", "scratch-link"}, left
+    assert (made["kept-dead"] / "snapshot.db").is_file()

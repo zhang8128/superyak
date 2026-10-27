@@ -408,3 +408,12 @@ def test_the_first_saved_permission_is_kept_and_a_different_one_is_named(tmp_pat
     out = Imprint(home, station.client(), out=lines.append).status(IMPRINT_ID)
     assert saved.read_text() == first and any('saved first' in line for line in lines)
     assert out['chain'] == 'intact'                       # checked against the permission saved first
+
+
+def test_an_expired_request_is_final_and_drops_the_local_copy(tmp_path):       # D24; final review M9
+    station, home = FakeStation(status='expired'), sent_home(tmp_path)
+    assert Imprint(home, station.client()).send(PLAN) == 'expired'
+    assert not (home / 'imprints' / IMPRINT_ID / 'imprint.db').exists()
+    station2, home2 = FakeStation(status='expired', receipts=[]), sent_home(tmp_path / 'b')
+    Imprint(home2, station2.client()).status(IMPRINT_ID)
+    assert not (home2 / 'imprints' / IMPRINT_ID / 'imprint.db').exists()
