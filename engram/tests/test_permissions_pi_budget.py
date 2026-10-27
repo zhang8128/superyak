@@ -20,7 +20,7 @@ def test_u24_one_eligible_set_rebuild_within_2_seconds():
                        at=T("2026-11-02"))
     took = time.perf_counter() - start
     assert len(got.memory_ids) == 20_000        # every placement is allowed, so none stops early
-    assert took <= REBUILD_BUDGET_S
+    assert took <= REBUILD_BUDGET_S, f"{took:.1f} s for 20,000 placements"
 
 
 def test_u24_explain_on_the_largest_bulk_imprint_within_40_seconds():
@@ -32,7 +32,7 @@ def test_u24_explain_on_the_largest_bulk_imprint_within_40_seconds():
     d = decide_bulk(s, bulk, group=False)                                     # objects that don't group (R22)
     took = time.perf_counter() - start
     assert d.allowed, d.refusal                 # a refusal at the first trail would time nothing
-    assert took <= BULK_BUDGET_S
+    assert took <= BULK_BUDGET_S, f"{took:.1f} s"
 
 
 # ---------------------------------------------------------------- memory: each operation in a process of its own
