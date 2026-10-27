@@ -3293,3 +3293,70 @@ def test_the_rooms_offered_for_a_grant_leave_out_breakouts_and_received_rooms(br
             expect(page.get_by_label("Made-up breakout")).to_have_count(0)
             expect(page.get_by_label("Made-up received")).to_have_count(0)
             assert served  # the interception ran, so the two added rooms were in the page's data
+
+
+def test_a_long_room_opens_on_the_newest_hundred_and_loads_earlier(browser_peer):
+    """Break caught: opening a long room fetches and draws all of it, or earlier messages cannot be reached."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(150):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            messages = page.locator(".messages .message p")
+            expect(messages).to_have_count(100)
+            expect(messages.first).to_have_text("message 50")
+            expect(messages.last).to_have_text("message 149")
+            page.get_by_role("button", name="Load earlier messages").click()
+            expect(messages).to_have_count(150)
+            assert messages.all_inner_texts() == [f"message {i}" for i in range(150)]
+            expect(page.get_by_role("button", name="Load earlier messages")).to_have_count(0)
+
+
+def test_a_refresh_appends_a_new_message_once(browser_peer):
+    """Break caught: a refresh after a brief save drops the messages shown, or shows a new one twice."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(3):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p")).to_have_count(3)
+            store.send_message(users["family"]["id"], room["id"], "late", "A word that arrived while you read.")
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Edit brief").click()
+            panel.get_by_label("Edit brief").fill("A brief.")
+            panel.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".notice", has_text="Room brief saved.")).to_be_visible()
+            shown = page.locator(".messages .message p").all_inner_texts()  # the brief's station notice joins them
+            assert shown[:3] == ["message 0", "message 1", "message 2"]
+            assert shown.count("A word that arrived while you read.") == 1
+
+
+def test_a_remote_room_still_opens(browser_peer):
+    """Break caught: a paired peer's room, which has no pages, fails to open or loses its messages."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    peer, patient = "b" * 64, users["patient"]["id"]
+    payload = {
+        "title": "Remote room", "owner_id": f"{peer}:casey", "created": 1000.0, "last_activity": 1002.0,
+        "members": [{"peer": peer, "id": "casey"}], "member_ids": [f"{peer}:casey", patient],
+        "messages": [
+            {"id": f"r{i}", "room_id": "remote-1", "author_id": f"{peer}:casey", "client_message_id": f"c{i}",
+             "body": f"remote word {i}", "epoch": 1, "created": 1000.0 + i}
+            for i in range(3)
+        ],
+    }
+    with store.transaction() as db:
+        db.execute("INSERT INTO peers VALUES(?,?,1)", (peer, "{}"))
+        db.execute("INSERT INTO inbox VALUES(?,?,?,?,?,?,?)", (peer, "remote-1", "room", patient, 1, "casey", json.dumps(payload)))
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{quote(peer + ':remote-1', safe='')}")
+            page.reload()
+            expect(page.get_by_role("heading", name="Remote room")).to_be_visible()
+            assert page.locator(".messages .message p").all_inner_texts() == [f"remote word {i}" for i in range(3)]
+            expect(page.get_by_role("button", name="Load earlier messages")).to_have_count(0)
