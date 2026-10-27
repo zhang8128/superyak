@@ -1214,6 +1214,9 @@ def _prep_register_place(state, actor, args):
     if name is not None:
         if not isinstance(name, str) or not name.strip() or len(name) > 255:
             raise RuleError(_REG, "a place's name is a non-empty text of at most 255 characters")
+        if not name.strip().isprintable():       # every later yes that names the place prints it (final review M5)
+            raise RuleError(_REG, "a place's name is one line of text that prints: no control, format or "
+                                  "line-break character")
         out["name"] = name.strip()
     return out
 

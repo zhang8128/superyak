@@ -338,3 +338,25 @@ def test_m9_a_sweep_that_fails_says_so_and_does_not_say_nothing_to_change(cli_ho
     out = capsys.readouterr()
     assert "nothing to change" not in out.out + out.err
     assert "sweep broke" in out.err and "The placement sweep failed" in out.err
+
+
+# ---------------------------------------------------------------- M5: a place's name cannot rewrite the terminal
+
+from tests.permissions_support import county_ledger
+
+
+@pytest.mark.parametrize("name", ["Public\x1b[2JHealth", "Public\nHealth", "Public‮Health", "Public\x07"])
+def test_m5_a_place_name_with_a_character_that_does_not_print_is_refused(tmp_path, name):
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    with pytest.raises(RuleError, match="prints"):
+        do(led, ANDY, "register-place", place="place:county", name=name)
+    assert "place:county" not in led.state().places
+
+
+def test_m5_confirm_cleans_what_it_prints_and_keeps_its_lines(fake_tty, capsys):
+    from permission_cli import confirm
+    fake_tty.answer_the_printed_code()
+    assert confirm("Allow \x1b[2Jplace:x to read.\nSecond line", "change \x1b]0;title\x07 here") is True
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    assert "Allow ?[2Jplace:x to read.\nSecond line" in out and "change ?]0;title? here" in out

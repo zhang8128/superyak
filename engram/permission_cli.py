@@ -88,9 +88,9 @@ def confirm(words: str, change: str) -> bool:
         raise NoTerminal(f"{TTY} cannot be opened ({e.strerror or e})") from e
     try:
         code = _code()
-        print(words)
+        print(_clean_lines(words))       # names in the words come from the ledger (final review M5)
         print()
-        print(change)
+        print(_clean_lines(change))
         print()
         print(f"To say yes, type this code and press enter.\ncode: {code}", flush=True)
         answer = _read_line(fd)
@@ -196,6 +196,11 @@ def _change(act: Act) -> str:
 def _clean(value) -> str:
     """One line with no control characters: text from an agent is data, and must not move the cursor."""
     return "".join(c if c.isprintable() else "?" for c in str(value))
+
+
+def _clean_lines(text: str) -> str:
+    """`_clean` on each line, keeping the line breaks."""
+    return "\n".join(_clean(line) for line in str(text).split("\n"))
 
 
 def _time_text(value) -> str:
