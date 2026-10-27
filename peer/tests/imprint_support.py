@@ -47,15 +47,16 @@ def _person(app, name, password):
 _TEST_ROOT = object()
 
 
-def station(tmp_path, imprints_dir=_TEST_ROOT):
+def station(tmp_path, imprints_dir=_TEST_ROOT, allowed_origins=('http://testserver',)):
     """A station with andy (super admin), sam and jenn, and a docked ship each: serenity, voyager and rio-grande.
     Nothing is signed and no identity exists until a test signs something. The imprint routes are on, rooted in
-    tmp_path / 'imprints'; `imprints_dir=None` turns them off (R8)."""
+    tmp_path / 'imprints'; `imprints_dir=None` turns them off (R8). `allowed_origins` is for a station a real
+    browser reaches."""
     clock = [float(NOW)]
     root = tmp_path / 'imprints'
     if imprints_dir is _TEST_ROOT:
         imprints_dir = root
-    app = create_app(tmp_path / 'peer', clock=lambda: clock[0], allowed_origins=['http://testserver'],
+    app = create_app(tmp_path / 'peer', clock=lambda: clock[0], allowed_origins=list(allowed_origins),
                      imprints_dir=imprints_dir)
     store, ids, clients, ships = app.state.store, {}, {}, {}
     for name, admin in (('andy', True), ('sam', False), ('jenn', False)):

@@ -18,6 +18,7 @@ const state = {
   corrections: [],
   connections: [],
   ships: [], dockCode: null, docking: null,
+  imprints: null, imprintCode: null, imprint: null, imprintAsk: null,
   activeLayers: {},
   activeLayerErrors: {},
   revisions: [],
@@ -105,6 +106,7 @@ function clearAccountAdministration() {
   state.accounts = []; state.accessRequests = []; state.roleChanges = []; state.invitation = null;
   state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null;
   state.ships = []; state.docking = null;
+  state.imprints = null; state.imprintCode = null; state.imprint = null; state.imprintAsk = null;
 }
 
 function bindEditorIdentity(user) {
@@ -139,7 +141,7 @@ async function api(path, options = {}) {
 function routeParts() {
   const raw = location.hash.replace(/^#\/?/, "") || "home";
   const [route, id] = raw.split("/");
-  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
+  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections", "accounts"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
 }
 
 function navLink(route, label, icon) {
@@ -168,6 +170,7 @@ function layout(content) {
         ${navLink("spaces", "Circles & projects", "◎")}
         ${navLink("research", "Research & data", "⌕")}
         ${navLink("connections", "Connections", "↔")}
+        ${state.imprints ? navLink("accounts", "Accounts", "☺") : ""}
       </nav>
       <div class="sidebar-foot">Private work stays on this peer until you choose an audience.</div>
     </aside>
@@ -191,7 +194,7 @@ function layout(content) {
         ${content}
       </main>
     </div>
-    ${spaceDialog()}${profileDialog()}${Dashboard.dialogs()}${reauthDialog()}${accountRoleDialog()}${dockingDialog()}
+    ${spaceDialog()}${profileDialog()}${Dashboard.dialogs()}${reauthDialog()}${accountRoleDialog()}${dockingDialog()}${imprintDialog()}${imprintAskDialog()}
   </div>`;
 }
 
@@ -965,6 +968,146 @@ async function loadDocking() {
   }
 }
 
+// Store copies (imprints): the owner's confirm view and Accounts, Imprints. The code in the link is taken out of the
+// address bar at once, as a docking code is. Every string from a request is escaped; the password is read from the
+// field and never kept in state, and an error is written into the dialog without a re-render that would clear it.
+function takeImprintCode() {
+  if (!location.hash.startsWith('#imprint?')) return false;
+  state.imprintCode = new URLSearchParams(location.hash.slice('#imprint?'.length)).get('code') || null;
+  history.replaceState(null, '', location.pathname + location.search);
+  return !!state.imprintCode;
+}
+
+async function loadImprintPreview() {
+  if (!state.imprintCode || state.imprint) return;
+  try {
+    state.imprint = await api(`/api/imprints/code/${pathPart(state.imprintCode)}`);
+  } catch (error) {
+    state.imprintCode = null;
+    if (error.status === 401) throw error;
+    setFlash(error.status === 404 ? "That imprint request is not yours, has ended or has already been answered." : error.message, true);
+  }
+}
+
+async function loadImprints() {
+  let list;
+  try { list = (await api("/api/imprints")).imprints; }
+  catch (error) {
+    if (error.status === 401) throw error;
+    return error.status === 404 ? null : state.imprints;  // R8: no imprint routes, no section
+  }
+  return Promise.all(list.map(async (row, index) => {
+    if (index >= 20) return { ...row, detail: null };
+    try { return { ...row, detail: await api(`/api/imprints/${pathPart(row.id)}`) }; }
+    catch (error) { if (error.status === 401) throw error; return { ...row, detail: null }; }
+  }));
+}
+
+function imprintDialog() {
+  const p = state.imprint;
+  if (!p) return "";
+  const e = escapeHtml, list = (items) => (items || []).map(e).join(", ") || "none";
+  const scope = p.scope, counts = p.counts, store = p.store;
+  const countWords = [["episodes", "episodes"], ["semantics", "semantic memories"], ["episode_vectors", "episode vectors"], ["semantic_vectors", "semantic vectors"], ["semantic_sources", "semantic sources"], ["resonances", "resonances"], ["semantic_peers", "semantic peers"], ["memory_log", "recall log entries"]]
+    .filter(([key]) => counts[key] !== undefined).map(([key, label]) => `${e(counts[key])} ${label}`).join(", ");
+  return `<dialog aria-labelledby="imprint-title"><div class="dialog-content imprint-view"><h2 id="imprint-title">Copy of ${e(p.ship)}’s memories (${e(p.imprint_short)})</h2>
+    <p>Asked by <strong>${e(p.ship)}</strong>${p.machine ? ` on <strong>${e(p.machine)}</strong>` : ""}. Allow only if you just asked for this copy there.</p>
+    <h3>What leaves</h3>
+    <dl class="imprint-facts">
+      <dt>Store</dt><dd>${e(store.id)}; ${e(store.lineage)}${store.copied_from.length ? ` (${list(store.copied_from)})` : ""}</dd>
+      <dt>Lanes</dt><dd>${list(scope.lanes)}</dd>
+      <dt>Layers</dt><dd>${list(scope.layers)}</dd>
+      <dt>Window</dt><dd>${e(scope.since || "the start")} to ${e(scope.until || "now")}</dd>
+      <dt>Shared with</dt><dd>${scope.shared_with ? e(JSON.stringify(scope.shared_with)) : "nobody in particular"}</dd>
+      <dt>Semantic memories with no source</dt><dd>${scope.unsourced_semantics ? "included" : "left behind"}</dd>
+      <dt>Contents</dt><dd>${countWords}</dd>
+      <dt>Size</dt><dd>${e(p.size)}</dd>
+      <dt>Plan digest</dt><dd>${e(p.digest)}</dd>
+    </dl>
+    <h3>Other people</h3><p>${e(p.others)}</p>
+    <h3>What it may be used for</h3>
+    <dl class="imprint-facts">
+      <dt>Used by</dt><dd>${e(p.audience)}</dd>
+      <dt>Actions</dt><dd>${e(p.actions)}</dd>
+      <dt>Purposes</dt><dd>${list(p.purposes)}</dd>
+      <dt>Ends</dt><dd>${e(p.ends)} (${e(p.days)} days)</dd>
+    </dl>
+    <h3>Times</h3><p>${e(p.times)}</p>
+    <h3>What the station keeps</h3><p>${e(p.keeps)}</p>
+    <label class="choice"><input type="checkbox" id="imprint-attest"><span class="choice-copy"><strong>${e(p.check)}</strong></span></label>
+    ${p.check_advice ? `<p class="meta">${e(p.check_advice)}</p>` : ""}
+    <p>${e(p.closing)}</p>
+    <div class="field"><label for="imprint-password">Password</label><input class="input" id="imprint-password" type="password" autocomplete="current-password"></div>
+    <p class="meta" id="imprint-error" role="alert"></p>
+    <div class="button-row"><button class="button" data-action="allow-imprint">Allow</button><button class="button secondary" data-action="decline-imprint">Decline</button></div></div></dialog>`;
+}
+
+function imprintAskDialog() {
+  const ask = state.imprintAsk;
+  if (!ask) return "";
+  const e = escapeHtml, short = e(ask.imprint_id.slice(0, 4));
+  if (ask.mode === "withdraw") {
+    return `<dialog aria-labelledby="imprint-ask-title"><div class="dialog-content"><h2 id="imprint-ask-title">Withdraw ${short}?</h2><p>The station stops using this copy at once and removes its files. This cannot be undone; a new copy needs a new request and a new yes.</p><p class="meta" id="imprint-error" role="alert"></p><div class="button-row"><button class="button danger" data-action="confirm-imprint-withdraw">Yes, withdraw</button><button class="button secondary" data-action="close-dialog">Keep it</button></div></div></dialog>`;
+  }
+  return `<dialog aria-labelledby="imprint-ask-title"><div class="dialog-content"><h2 id="imprint-ask-title">Shorten ${short}</h2><p>Move the end earlier. A later end needs a new request and a new yes.</p><div class="field"><label for="imprint-end">New end date</label><input class="input" id="imprint-end" type="date" max="${e(ask.max)}"></div><p class="meta" id="imprint-error" role="alert"></p><div class="button-row"><button class="button" data-action="confirm-imprint-shorten">Shorten</button><button class="button secondary" data-action="close-dialog">Cancel</button></div></div></dialog>`;
+}
+
+function imprintEnd(row) {
+  if (["deleted", "declined", "expired"].includes(row.status)) return row.ended_at;
+  const permission = row.detail?.permission?.record;
+  if (!permission) return null;
+  const ends = permission.records.map(record => record.valid_until);
+  for (const receipt of row.detail.receipts) if (receipt.record.event === "shortened") ends.push(receipt.record.detail.valid_until);
+  return Math.min(...ends);
+}
+
+const IMPRINT_EVENTS = { deleted: "files removed", "use-started": "a use began", "use-finished": "a use ended", "delete-failed": "removal failed" };
+
+function imprintLast(row) {
+  const receipts = row.detail?.receipts || [];
+  if (receipts.length) {
+    const last = receipts[receipts.length - 1].record;
+    return `${IMPRINT_EVENTS[last.event] || last.event} ${formatDate(last.at)}`;
+  }
+  return `${row.status} ${formatDate(row.ended_at || row.decided_at || row.created)}`;
+}
+
+function imprintRow(row) {
+  const e = escapeHtml, end = imprintEnd(row);
+  const over = ["deleted", "declined", "expired"].includes(row.status);
+  const canShorten = !over && row.status !== "deleting" && row.detail?.permission && end && end * 1000 > Date.now();
+  return `<div class="item"><span class="item-main"><strong>${e(row.imprint_id.slice(0, 4))} · ${e(row.ship)}</strong><span>${over ? "Ended" : "Ends"} ${end ? formatDate(end) : "when it is answered"} · last: ${e(imprintLast(row))}</span></span><span class="badge">${e(row.status)}</span>${over ? "" : `<div class="button-row">${canShorten ? `<button class="button secondary" data-action="ask-imprint-shorten" data-id="${e(row.id)}">Shorten</button>` : ""}<button class="button danger secondary" data-action="ask-imprint-withdraw" data-id="${e(row.id)}">Withdraw</button></div>`}</div>`;
+}
+
+function imprintsSection() {
+  if (!state.imprints) return "";
+  const rows = state.imprints.length ? state.imprints.map(imprintRow).join("") : `<p class="meta">No copies yet. A ship asks for one with <code>make imprint</code> on its machine, and you answer the link it shows.</p>`;
+  return `<section class="section"><div class="section-head"><div><h2>Imprints</h2><p class="meta">An imprint is a copy of part of a ship’s memory store, sent to the station only on your yes. Withdraw ends one at once and removes its files; Shorten moves its end earlier.</p></div></div><div class="item-list">${rows}</div></section>`;
+}
+
+function accountsView() {
+  return `<header class="page-head"><div><p class="eyebrow">Your account</p><h1>Accounts</h1></div></header>${imprintsSection()}`;
+}
+
+// The notice is a status region, so it is announced as it appears; the shared announcer would say it twice.
+function noteImprint(message) {
+  state.flash = { message, error: false };
+}
+
+async function imprintCall(action, path, json, failure) {
+  const identity = identityKey(state.me), error = document.querySelector("#imprint-error");
+  try {
+    const result = await api(path, { method: "POST", json });
+    if (identityKey(state.me) !== identity) return null;
+    return result;
+  } catch (problem) {
+    if (identityKey(state.me) !== identity) return null;
+    if (problem.status === 401 && !/password/i.test(problem.message)) throw problem;
+    if (error) error.textContent = problem.message || failure;
+    return null;
+  }
+}
+
 function roleLabel(role) {
   return { participant: 'Participant', admin: 'Admin', super_admin: 'Super admin' }[role] || 'Not assigned';
 }
@@ -1036,7 +1179,7 @@ async function loadData() {
     ]);
     if (!valid()) return false;
     if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
-    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList, ships] = await Promise.all([
+    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList, ships, imprints] = await Promise.all([
       api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
       api("/api/sources").catch(() => null),
       Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
@@ -1048,6 +1191,7 @@ async function loadData() {
       home.user.is_super_admin ? api("/api/account-role-changes") : [],
       home.user.is_admin ? api("/api/access-requests") : [],
       api("/api/ships"),
+      loadImprints(),
     ]);
     if (!valid()) return false;
     const previousActive = state.activeLayers;
@@ -1056,7 +1200,7 @@ async function loadData() {
       return active ? [[result.id, active]] : [];
     }));
     const activeLayerErrors = Object.fromEntries(activePairs.flatMap(result => result.error ? [[result.id, result.error.message]] : []));
-    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges, ships });
+    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges, ships, imprints });
     return true;
   } catch (error) { if (!valid()) return false; throw error; }
 }
@@ -1098,6 +1242,7 @@ async function loadRoute() {
     state.home.shared_layers = releases;
     if (!releases.some(layer => layer.id === state.selectedSharedId)) state.selectedSharedId = null;
   }
+  if (route === "accounts") state.imprints = await loadImprints();
   if (route === "research") await Research.load(id);
   if (route === "spaces") await Dashboard.loadSpace(id);
   if (routeParts().route === route && routeParts().id === id) state.currentSpaceId = route === "spaces" && id ? id : "all";
@@ -1106,7 +1251,7 @@ async function loadRoute() {
 let dialogReturn = null;
 function closeDialogs() {
   state.accountRolePreview = null;
-  state.docking = null; state.dockCode = null;
+  state.docking = null; state.dockCode = null; state.imprint = null; state.imprintCode = null; state.imprintAsk = null;
   state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.chatPicked = null; state.chatError = null; state.profileDialog = false; state.spaceDialog = false; state.reauth = false; Research.close(); Dashboard.close();
   render();
 }
@@ -1114,7 +1259,7 @@ function closeDialogs() {
 function render() {
   if (!state.me || !state.home) return;
   const route = routeParts().route;
-  const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView }[route]();
+  const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView, accounts: accountsView }[route]();
   const focused = document.activeElement;
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
@@ -1134,7 +1279,7 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
-  document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections" }[route]} · Superyak`;
+  document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", accounts: "Accounts" }[route]} · Superyak`;
 }
 
 async function refresh(message = null) {
@@ -1142,6 +1287,7 @@ async function refresh(message = null) {
     if (!await loadData()) return;
     await loadRoute();
     await loadDocking();
+    await loadImprintPreview();
     if (message) setFlash(message);
     render();
   } catch (error) {
@@ -1663,6 +1809,7 @@ async function bootstrap() {
     state.dockCode = new URLSearchParams(location.hash.slice('#dock?'.length)).get('code') || null;
     history.replaceState(null, '', location.pathname + location.search);
   }
+  takeImprintCode();
   if (location.hash.startsWith('#activate?')) {
     const fields = new URLSearchParams(location.hash.slice('#activate?'.length));
     state.activation = Object.fromEntries(['token', 'username', 'name'].map(key => [key, fields.get(key) || '']));
@@ -1911,6 +2058,56 @@ document.addEventListener("click", async (event) => {
     catch (error) { if (identityKey(state.me) !== identity) return; setFlash(error.message, true); }
     render();
   }
+  if (action === "decline-imprint") {
+    if (target.disabled || !state.imprint) return;
+    const id = state.imprint.id;
+    target.disabled = true;
+    const result = await imprintCall("decline", `/api/imprints/${pathPart(id)}/decline`, {});
+    target.disabled = false;
+    if (result) { state.imprint = null; state.imprintCode = null; noteImprint("Declined. Nothing was sent."); await refresh(); }
+    return;
+  }
+  if (action === "allow-imprint") {
+    if (target.disabled || !state.imprint) return;
+    const error = document.querySelector("#imprint-error");
+    const password = document.querySelector("#imprint-password").value;
+    if (!document.querySelector("#imprint-attest").checked) { error.textContent = "Tick the box to confirm."; return; }
+    if (!password) { error.textContent = "Enter your password to allow."; return; }
+    target.disabled = true;
+    const result = await imprintCall("allow", `/api/imprints/${pathPart(state.imprint.id)}/confirm`, { code: state.imprintCode, password, attest: true });
+    target.disabled = false;
+    if (result) { state.imprint = null; state.imprintCode = null; noteImprint("Allowed. The ship can now send the copy."); await refresh(); }
+    else document.querySelector("#imprint-password").value = "";
+    return;
+  }
+  if (action === "ask-imprint-withdraw" || action === "ask-imprint-shorten") {
+    const row = (state.imprints || []).find(item => item.id === target.dataset.id);
+    if (!row) return;
+    const end = imprintEnd(row);
+    state.imprintAsk = { id: row.id, imprint_id: row.imprint_id, mode: action === "ask-imprint-withdraw" ? "withdraw" : "shorten", max: end ? new Date(end * 1000).toISOString().slice(0, 10) : "" };
+    render();
+    return;
+  }
+  if (action === "confirm-imprint-withdraw") {
+    if (target.disabled || !state.imprintAsk) return;
+    target.disabled = true;
+    const result = await imprintCall("withdraw", `/api/imprints/${pathPart(state.imprintAsk.id)}/withdraw`, {});
+    target.disabled = false;
+    if (result) { state.imprintAsk = null; noteImprint("Withdrawn. The station has stopped using this copy and removed its files."); await refresh(); }
+    return;
+  }
+  if (action === "confirm-imprint-shorten") {
+    if (target.disabled || !state.imprintAsk) return;
+    const error = document.querySelector("#imprint-error"), value = document.querySelector("#imprint-end").value;
+    const [year, month, day] = value.split("-").map(Number);
+    if (!year) { error.textContent = "Choose the new end date."; return; }
+    target.disabled = true;
+    const until = Math.floor(new Date(year, month - 1, day, 23, 59, 59).getTime() / 1000);
+    const result = await imprintCall("shorten", `/api/imprints/${pathPart(state.imprintAsk.id)}/shorten`, { valid_until: until });
+    target.disabled = false;
+    if (result) { state.imprintAsk = null; noteImprint("Shortened. The new end is in the list."); await refresh(); }
+    return;
+  }
   if (action === "cancel-docking") { state.docking = null; state.dockCode = null; render(); return; }
   if (action === "confirm-docking") {
     if (target.disabled || !state.docking) return;
@@ -2050,6 +2247,7 @@ document.addEventListener("change", async (event) => {
 
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;
+  if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;
   try { await loadRoute(); render(); }

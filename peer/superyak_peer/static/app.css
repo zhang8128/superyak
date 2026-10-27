@@ -345,3 +345,9 @@ a.button { display: inline-block; text-decoration: none; }
 .brief-history h4 { margin: 0 0 8px; }
 .brief-revisions { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
 .brief-revision-body { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.imprint-view h3 { margin: 18px 0 6px; font-size: 15px; }
+.imprint-facts { display: grid; grid-template-columns: minmax(110px, 190px) 1fr; gap: 4px 14px; margin: 0; }
+.imprint-facts dt { font-weight: 800; }
+.imprint-facts dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .imprint-facts { grid-template-columns: 1fr; } .imprint-facts dd { margin-bottom: 8px; } }
