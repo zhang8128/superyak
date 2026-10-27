@@ -80,7 +80,17 @@ RECORD_KEYS = {
                         'budget', 'depth', 'confirm', 'parent_id', 'charter_layer_id', 'charter_revision', 'follow',
                         'created'}),
     'grant-revocation': frozenset({'kind', 'station', 'grant', 'revoked', 'revoked_by', 'reason'}),
+    # Store-copy step 1 (I 8, I 12): the first station-signed kinds that wrap permissions-spec records.
+    'imprint-permission': frozenset({'kind', 'station', 'id', 'owner', 'owner_id', 'ship_id', 'imprint_id',
+                                     'source_instance_id', 'request_sha256', 'plan_digest', 'attestation',
+                                     'created', 'records'}),
+    'imprint-receipt': frozenset({'kind', 'station', 'id', 'permission', 'event', 'actor_id', 'at', 'detail',
+                                  'previous'}),
 }
+
+# Each entry of an imprint-permission's `records`: the permissions spec's 5.1 fields less the five ledger-only ones.
+INNER_RECORD_KEYS = frozenset({'id', 'layer', 'effect', 'selector', 'valid_from', 'valid_until', 'anchor', 'backing',
+                               'set_by', 'channel', 'under_grant', 'proposal_id', 'replaces', 'reason', 'created'})
 
 def _record_shape_ok(record):
     return (isinstance(record, dict) and isinstance(record.get('kind'), str)
@@ -197,4 +207,21 @@ def verify_record(card, record, signature):
         key.verify(base64.b64decode(signature, validate=True), canonical(record))
         return True
     except Exception:  # noqa: BLE001 - a verifier answers False and never raises (G3)
+        return False
+
+def verify_station_record(public_key_b64, record, signature):
+    """I 15: True only when SHA-256 of the key is record['station'], the record has exactly its kind's keys (and each
+    inner record of an imprint-permission exactly INNER_RECORD_KEYS) and the signature verifies over its canonical
+    JSON. Anything else is False; it never raises."""
+    try:
+        key = base64.b64decode(public_key_b64, validate=True)
+        if not _record_shape_ok(record) or hashlib.sha256(key).hexdigest() != record['station']:
+            return False
+        if record['kind'] == 'imprint-permission':
+            inner = record['records']
+            if not isinstance(inner, list) or any(not isinstance(r, dict) or set(r) != INNER_RECORD_KEYS for r in inner):
+                return False
+        ed25519.Ed25519PublicKey.from_public_bytes(key).verify(base64.b64decode(signature, validate=True), canonical(record))
+        return True
+    except Exception:  # noqa: BLE001 - a verifier answers False and never raises
         return False
