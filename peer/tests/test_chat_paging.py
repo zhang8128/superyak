@@ -224,3 +224,33 @@ def test_since_uses_the_existing_index(env):
     with app.state.store.transaction() as db:
         plan = ' '.join(str(tuple(r)) for r in db.execute('EXPLAIN QUERY PLAN ' + SINCE_SQL, (key, 0)))
     assert 'events_kind_room_id' in plan, plan
+
+
+def _plans(db, sql, params):
+    return ' '.join(str(tuple(r)) for r in db.execute('EXPLAIN QUERY PLAN ' + sql, params))
+
+def test_the_pages_id_queries_look_ids_up_by_primary_key_not_the_room_index(env):
+    """M1: `room_id=? AND id IN (...)` made SQLite read the whole room through the room_id index."""
+    from superyak_peer.chats import page_rows_sql
+    from superyak_peer.inbox import replies_sql
+    from superyak_peer.tickets import sources_sql
+    app, clients, users, clock = env
+    key = room_of(env, 150)
+    others = [room_of(env, 1) for _ in range(10)]
+    queries = [page_rows_sql('messages', 100), page_rows_sql('peer_messages', 100), replies_sql(100), *sources_sql(100)]
+    with app.state.store.transaction() as db:
+        # Statistics as a Pi that has run ANALYZE has them: many rooms, so the room index looks selective.
+        for table in ('messages', 'peer_messages'):
+            db.executemany(f'INSERT INTO {table} VALUES(?,?,?,?,?,?,?)', [
+                (f'{table}-{n}', others[n % 10], users[0]['id'], f'c{n}', 'x', 1, float(n)) for n in range(1500)])
+        db.execute('ANALYZE')
+        ids = [r[0] for r in db.execute('SELECT id FROM messages WHERE room_id=? ORDER BY created DESC LIMIT 100', (key,))]
+        for sql in queries:
+            plan = _plans(db, sql, (key, *ids))
+            assert 'autoindex_messages_2' not in plan and 'autoindex_peer_messages_2' not in plan, (sql, plan)
+            assert 'autoindex_messages_1' in plan or 'autoindex_peer_messages_1' in plan or 'PRIMARY KEY' in plan, (sql, plan)
+
+def test_the_whole_room_queries_are_unchanged_by_the_page_fix():
+    from superyak_peer.inbox import replies_sql
+    from superyak_peer.tickets import sources_sql
+    assert '+' not in replies_sql() and not any('+' in sql for sql in sources_sql())

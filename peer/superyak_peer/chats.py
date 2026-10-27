@@ -5,6 +5,11 @@ from .tickets import DEFER_BOUND_SECONDS
 # The `since` read's query: it walks the existing events_kind_room_id index (kind, resource_id, id) in id order.
 SINCE_SQL = "SELECT id, json_extract(payload, '$.message_id') FROM events WHERE kind='chat.message' AND resource_id=? AND id>? ORDER BY id"
 
+def page_rows_sql(table, count):
+    """A page's rows by id. `+room_id` keeps the room filter off the room index so SQLite looks the ids up by primary key."""
+    return f'SELECT * FROM {table} WHERE +room_id=? AND id IN ({",".join("?" * count)})'
+
+
 class Chats:
     def _room(self, db, actor, key):
         row = require(db.execute('SELECT rooms.* FROM rooms JOIN room_members ON rooms.id=room_members.room_id WHERE rooms.id=? AND user_id=?', (key, actor)).fetchone())
@@ -129,8 +134,7 @@ class Chats:
         local, peer = [m for m, source in picked if source == 0], [m for m, source in picked if source == 1]
         rows = {}
         for table, wanted in (('messages', local), ('peer_messages', peer)):
-            rows.update({r['id']: dict(r) for r in db.execute(
-                f'SELECT * FROM {table} WHERE room_id=? AND id IN ({",".join("?" * len(wanted))})', (key, *wanted))})
+            rows.update({r['id']: dict(r) for r in db.execute(page_rows_sql(table, len(wanted)), (key, *wanted))})
         sources, replies = self._sources(db, key, local), self._replies(db, key, local)
         return [dict(rows[m], source=sources.get(m), reply_to=replies.get(m)) if source == 0 else dict(rows[m], reply_to=None)
                 for m, source in picked]
