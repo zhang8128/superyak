@@ -283,6 +283,7 @@ def main(argv=None):
     serve.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve.add_argument('--host', default='127.0.0.1')
     serve.add_argument('--port', type=int, default=7435)
+    serve.add_argument('--imprints-dir', type=Path, help='Turns on the imprint routes (R8); without it they answer 404')
     serve.add_argument('--local-demo', action='store_true', help='Open seeded test accounts without passwords, on loopback only')
     serve.add_argument('--tls-cert', type=Path)
     serve.add_argument('--tls-key', type=Path)
@@ -462,7 +463,7 @@ def main(argv=None):
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
             from .models import load_config
             model_config = load_config(args.model_config)
-            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=agent_version.load())
+            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=agent_version.load(), imprints_dir=args.imprints_dir)
             uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None, proxy_headers=args.proxy_headers, forwarded_allow_ips='127.0.0.1' if args.proxy_headers else None)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')

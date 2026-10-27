@@ -17,6 +17,7 @@ from .inbox import breakout_filter, wait_seconds, with_earlier_noise
 from .presence import parse_presence
 
 MAX_REQUEST = 6 * 1024 * 1024
+MAX_IMPRINT_REQUEST = 64 * 1024  # I 14: the largest request body
 COOKIE = 'superyak_session'
 DEFAULT_ORIGINS = ('http://127.0.0.1:7435', 'http://localhost:7435')
 STATIC_DIR = Path(__file__).with_name('static')
@@ -114,7 +115,7 @@ def actor(request):
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
-def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None):
+def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None, imprints_dir: Path | None = None):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
     demo_credentials = []
     if local_demo:
@@ -139,6 +140,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.federation = Federation(store, endpoint=federation_endpoint)
     app.state.agent_history = agent_history  # version check V1: read once by `serve`; None means off
     app.state.sync_enabled = sync_enabled
+    app.state.imprints_dir = imprints_dir  # R8: None leaves the imprint routes out
     install(app)
     from .models import LocalGemma
     from .source_routes import install as install_sources
@@ -619,6 +621,24 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.delete('/api/chats/{key}/participants/{user_id}')
     def chat_remove(key: str, user_id: str, request: Request):
         return store.remove_participant(actor(request), key, user_id)
+
+    if imprints_dir is not None:
+        @app.post('/api/imprints', status_code=201)
+        async def imprint_request(request: Request):
+            ship = ship_member(request)
+            raw = await request.body()
+            if len(raw) > MAX_IMPRINT_REQUEST:
+                raise Problem(413, 'Imprint request too large')
+            made = store.create_imprint_request(ship['id'], raw, staging=store.data_dir / 'imprints', root=imprints_dir)
+            return {'id': made['id'], 'code': made['code'], 'expires': made['expires'],
+                    'confirm_url': str(request.base_url).rstrip('/') + f'/#imprint?code={made["code"]}'}
+
+        @app.get('/api/imprints')
+        def imprint_list(request: Request):
+            user = member(request)
+            if user['kind'] == 'ship':
+                return store.imprint_context(user['id'])
+            return {'imprints': store.list_imprints(user['id'])}
 
     @app.get('/api/mentions')
     def mentions(request: Request, after: int = 0, limit: int = 50):

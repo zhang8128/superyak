@@ -1,8 +1,10 @@
 """Fixtures for the station side of store-copy imprints (spec I 7, 8, 12): a station on a temporary data directory with
 its people and ships, and rows and receipts written without the routes."""
 from dataclasses import dataclass
+import copy
 import hashlib
 import json
+import uuid
 
 from fastapi.testclient import TestClient
 
@@ -42,11 +44,19 @@ def _person(app, name, password):
     return client
 
 
-def station(tmp_path):
+_TEST_ROOT = object()
+
+
+def station(tmp_path, imprints_dir=_TEST_ROOT):
     """A station with andy (super admin), sam and jenn, and a docked ship each: serenity, voyager and rio-grande.
-    Nothing is signed and no identity exists until a test signs something."""
+    Nothing is signed and no identity exists until a test signs something. The imprint routes are on, rooted in
+    tmp_path / 'imprints'; `imprints_dir=None` turns them off (R8)."""
     clock = [float(NOW)]
-    app = create_app(tmp_path / 'peer', clock=lambda: clock[0], allowed_origins=['http://testserver'])
+    root = tmp_path / 'imprints'
+    if imprints_dir is _TEST_ROOT:
+        imprints_dir = root
+    app = create_app(tmp_path / 'peer', clock=lambda: clock[0], allowed_origins=['http://testserver'],
+                     imprints_dir=imprints_dir)
     store, ids, clients, ships = app.state.store, {}, {}, {}
     for name, admin in (('andy', True), ('sam', False), ('jenn', False)):
         ids[name] = store.create_user(name, name.title(), 'long-password-' + name, is_admin=admin)['id']
@@ -58,7 +68,6 @@ def station(tmp_path):
         record, key = docked(store, ids[owner], ship)
         ids[ship] = record['id']
         ships[ship] = ship_client(app, key)
-    root = tmp_path / 'imprints'
     root.mkdir(mode=0o700)
     return Station(app, store, clock, root, clients['andy'], clients['sam'], clients['jenn'], ships['voyager'],
                    ships['serenity'], ships['rio-grande'], ids)
@@ -125,3 +134,38 @@ def only_signed_imprint_record(st, signed):
     else:
         assert signed == 'permission', signed
     return rid
+
+
+REQUEST = {
+    'kind': 'engram-imprint-request', 'version': 1, 'imprint_id': 'c0a8f5e2-0000-4000-8000-000000000000',
+    'plan_digest': '9d3e' * 16, 'source_instance_id': '3f2a9c1e-0000-4000-8000-000000000000',
+    'source_ancestry': [], 'source_ancestry_complete': True,
+    'scope': {'lanes': ['work'], 'layers': ['episode', 'semantic'], 'since': '2026-01-01T00:00:00Z',
+              'until': '2026-10-25T18:00:00Z', 'shared_with': None, 'unsourced_semantics': False},
+    'contents': {'episodes': 1204, 'semantics': 88, 'episode_vectors': 1204, 'semantic_vectors': 88,
+                 'semantic_sources': 201, 'resonances': 31, 'semantic_peers': 8, 'memory_log': 1940},
+    'others': {'memories': 0, 'people': 0}, 'package': {'bytes': 43188224, 'parts': 11},
+    'terms': {'audience': ['place:home/andy'], 'actions': ['imprint', 'route'],
+              'purposes': ['calibration', 'trail-evaluation'], 'days': 90}}
+
+
+def request_doc(**changes):
+    """I 7.1's example request, with a fresh imprint id (a uuid4) and, unless given, a fresh source store id. A key
+    with a dot sets a nested value (`"scope.until"`); None sets null."""
+    doc = copy.deepcopy(REQUEST)
+    doc['imprint_id'] = str(uuid.uuid4())
+    doc['source_instance_id'] = str(uuid.uuid4())
+    for key, value in changes.items():
+        if key == 'owner_ship':
+            continue
+        target = doc
+        *path, last = key.split('.')
+        for part in path:
+            target = target[part]
+        target[last] = value
+    return doc
+
+
+def post(st, doc, ship='voyager'):
+    """POST a request document, canonically encoded, from a docked ship ('voyager' is Sam's, 'serenity' Andy's)."""
+    return getattr(st, ship).post('/api/imprints', content=canonical(doc))
