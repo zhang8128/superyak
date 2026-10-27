@@ -96,6 +96,11 @@ DETAIL_KEYS: dict[str, tuple[frozenset[str], ...]] = {
 }
 EVENTS = tuple(DETAIL_KEYS)
 
+# The admission unit's RuntimeMaxSec=3600 plus its TimeoutStopSec=60 (R24; I 10, "Time"): after this a unit is gone.
+ADMISSION_BOUND = 3660
+ADMISSION_STOPPED = ('Admission stopped before it wrote a result: it reached its memory or time limit, or the station '
+                     'stopped. Nothing was admitted; send it again.')
+
 KNOWN_LIMITS = 'Files removed. The station does not overwrite disk blocks, and cannot reach copies anyone made by hand.'
 
 PART_SIZE = 4_194_304
@@ -628,6 +633,56 @@ def _replace_allow_files(state_dir, valid_until):
                 temporary.unlink()
             if not mode & 0o200:
                 folder.chmod(mode)
+
+
+def _read_json(path, limit=65536):
+    """A small regular file's JSON object, or None for a missing, linked, large or unreadable one."""
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
+            return None
+        doc = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _is_count(value):
+    return type(value) is int and 0 <= value <= MAX_COUNT
+
+
+def _read_result(path):
+    """`result.json` from engram's admission, checked to the shapes the `admitted` and `failed` receipts take, or
+    None: a malformed result is not a result, and the bound fails the admission if nothing better arrives."""
+    doc = _read_json(path)
+    if doc is None:
+        return None
+    if doc.get('status') == 'admitted':
+        skipped = doc.get('skipped')
+        if (doc.get('checks') == 17 and type(doc['checks']) is int and isinstance(doc.get('report_sha256'), str)
+                and _DIGEST.fullmatch(doc['report_sha256']) and isinstance(skipped, list) and len(skipped) <= 1000
+                and _is_count(doc.get('roads_and_trails')) and _is_count(doc.get('sessions_too_large'))):
+            return doc
+        return None
+    if doc.get('status') == 'failed':
+        step, message = doc.get('step'), doc.get('message')
+        if (type(step) is int or isinstance(step, str) and len(step) <= 40) and isinstance(message, str) \
+                and len(message) <= 1000:
+            return doc
+    return None
+
+
+def _decided_at(path):
+    """When admission began: `decided_at` in `admission.json`, else the file's own time (a damaged file still bounds
+    the run). None when there is no file."""
+    if not os.path.lexists(path):
+        return None
+    doc = _read_json(path)
+    if doc is not None and _is_count(doc.get('decided_at')):
+        return doc['decided_at']
+    try:
+        return int(os.lstat(path).st_mtime)
+    except OSError:
+        return None
 
 
 class _RemovalFailed(Exception):
@@ -1268,3 +1323,169 @@ class Imprints:
             return decide_use(json.loads(found['permission']), records, self._owner_layer_of(db, found['owner_id']),
                               status=found['status'], kind=kind, t=int(self.clock()),
                               operator=self._imprint_operator(db))
+
+    # Admission on the station (I 10, D16, D39, R24, R25)
+
+    def _imprint_state(self, found, root):
+        base = self._imprint_folders(found, root)[0]
+        return None if base is None else base / f'{found["imprint_id"]}.state'
+
+    def _receipt_records(self, db, request_id):
+        return [json.loads(r['record']) for r in db.execute(
+            'SELECT record FROM imprint_receipts WHERE request_id=? ORDER BY seq', (request_id,))]
+
+    def station_imprint_admit_begin(self, imprint_id, *, root, operator):
+        """Section 8's whole check for admission, at the store's clock, at the start of every run (D39). Allowed: writes
+        `<id>.state/admission.json` (0400, exclusive). A begun admission runs once (R24): when the file exists this
+        refuses, writes nothing and leaves no receipt. Refused on an `approved` row: a `failed` receipt naming the
+        term, no file (R25). A row in another status is refused with the term `status` and no receipt."""
+        with self.transaction() as db:
+            found = db.execute('SELECT * FROM imprint_requests WHERE imprint_id=?', (imprint_id,)).fetchone() \
+                if isinstance(imprint_id, str) else None
+            if found is None or found['permission'] is None:
+                raise Problem(404, 'No such imprint')
+            state = self._imprint_state(found, root)
+            if state is not None and (os.path.lexists(state / 'admission.json')):
+                return {'allowed': False, 'begun': True}
+            records = self._receipt_records(db, found['id'])
+            now = int(self.clock())
+            decision = decide_use(json.loads(found['permission']), records, self._owner_layer_of(db, found['owner_id']),
+                                  status=found['status'], kind='admission', t=now, operator=operator)
+            if not decision.allowed:
+                if found['status'] == 'approved':
+                    self._append_imprint_receipt(db, found['id'], 'failed', None, {'term': decision.term}, sign=False)
+                return {'allowed': False, 'term': decision.term}
+            if state is None or state.is_symlink() or not state.is_dir():
+                raise Problem(409, 'This imprint has no state directory; the sweep marks it missing')
+            doc = {'kind': 'imprint-admission-allow', 'instance_id': found['imprint_id'], 'decided_at': now,
+                   'valid_until': decision.valid_until}
+            temporary = state / f'.admission.json.{secrets.token_hex(4)}.tmp'
+            try:
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+                with os.fdopen(fd, 'wb') as out:
+                    out.write(json.dumps(doc, indent=2, sort_keys=True).encode() + b'\n')
+                    out.flush()
+                    os.fsync(out.fileno())
+                try:
+                    os.link(temporary, state / 'admission.json')       # exclusive: two begins cannot both win
+                except FileExistsError:
+                    return {'allowed': False, 'begun': True}
+                _fsync_dir(state)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return {'allowed': True, 'decided_at': now, 'valid_until': decision.valid_until}
+
+    def station_imprint_sync(self, *, root):
+        """Records what each `approved` row's admission left (I 10, "On 'ended'"; R24), one transaction per row that
+        re-reads the status, so a withdrawal in between wins. Rows in any other status never move."""
+        with self.transaction() as db:
+            ids = [r['id'] for r in db.execute("SELECT id FROM imprint_requests WHERE status='approved' "
+                                               "ORDER BY created, rowid")]
+        out = {'admitted': 0, 'failed': 0, 'waiting': 0}
+        for request_id in ids:
+            out[self._sync_admission(request_id, root)] += 1
+        return out
+
+    def _sync_admission(self, request_id, root):
+        with self.transaction() as db:
+            found = db.execute('SELECT * FROM imprint_requests WHERE id=?', (request_id,)).fetchone()
+            if found is None or found['status'] != 'approved':
+                return 'waiting'
+            state = self._imprint_state(found, root)
+            records = self._receipt_records(db, request_id)
+            now = int(self.clock())
+            result = _read_result(state / 'result.json') if state is not None else None
+            if result is not None and result['status'] == 'admitted':
+                detail = {k: result[k] for k in ('checks', 'report_sha256', 'skipped', 'roads_and_trails',
+                                                 'sessions_too_large')}
+                self._append_imprint_receipt(db, request_id, 'admitted', None, detail, sign=False)
+                db.execute("UPDATE imprint_requests SET status='admitted' WHERE id=?", (request_id,))
+                return 'admitted'
+            failed_terms = [r['detail']['term'] for r in records if r['event'] == 'failed' and 'term' in r['detail']]
+            written = any(r['event'] == 'failed' for r in records)
+            detail = None
+            if result is not None:
+                detail, reason = {'step': result['step'], 'message': result['message']}, 'failed'
+            elif failed_terms:
+                reason = 'ended' if failed_terms[-1] == 'end' else 'failed'
+            elif now >= effective_end(json.loads(found['permission']), records):
+                detail, reason = {'term': 'end'}, 'ended'
+            else:
+                decided = _decided_at(state / 'admission.json') if state is not None else None
+                if decided is None or now - decided <= ADMISSION_BOUND:
+                    return 'waiting'
+                detail, reason = {'step': 'calibration', 'message': ADMISSION_STOPPED}, 'failed'
+            if detail is not None and not written:
+                self._append_imprint_receipt(db, request_id, 'failed', None, detail, sign=False)
+        self._end_imprint(request_id, reason=reason, actor_id=None, root=root, withdrawn=False)
+        return 'failed'
+
+    def station_imprints(self, *, root, awaiting=False):
+        """The live imprints for `make station-imprints`, newest first, each with its two display lines. `awaiting`
+        keeps the `approved` rows that have neither `admission.json` nor `result.json`: never begun (R24)."""
+        marks = ','.join('?' * len(LIVE_STATUSES))
+        shown = []
+        with self.transaction() as db:
+            for found in db.execute(f'SELECT r.*, u.username AS owner FROM imprint_requests r JOIN users u ON '
+                                    f'u.id=r.owner_id WHERE r.status IN ({marks}) ORDER BY r.created, r.rowid',
+                                    LIVE_STATUSES).fetchall():
+                state = self._imprint_state(found, root)
+                begun = state is not None and os.path.lexists(state / 'admission.json')
+                has_result = state is not None and os.path.lexists(state / 'result.json')
+                if awaiting and (found['status'] != 'approved' or begun or has_result):
+                    continue
+                rows = db.execute('SELECT record, signature FROM imprint_receipts WHERE request_id=? ORDER BY seq',
+                                  (found['id'],)).fetchall()
+                shown.append(self._imprint_row(found, rows, root, begun=begun))
+        return shown
+
+    def _imprint_row(self, found, rows, root, *, begun):
+        records = [json.loads(r['record']) for r in rows]
+        admitted = next((r for r in records if r['event'] == 'admitted'), None)
+        counts = admitted['detail'] if admitted else {}
+        permission = json.loads(found['permission']) if found['permission'] else None
+        route = permission is not None and any('route' in r['selector']['actions'] for r in permission['records'])
+        signed = all(r['signature'] for r in rows)
+        short, owner, status = found['imprint_id'][:4], found['owner'], found['status']
+        if status == 'admitted' and admitted:
+            when = datetime.fromtimestamp(admitted['at'], timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+            head = f'{short}  {owner}  admitted {when}   {counts["checks"]} of 17 checks; calibrated'
+            if counts['skipped']:
+                head += f'; {len(counts["skipped"])} analyses skipped'
+            if route:
+                head += f'; {counts["roads_and_trails"]} roads and trails counted'
+                if counts['sessions_too_large']:
+                    head += f' ({counts["sessions_too_large"]} sessions too large to count)'
+            else:
+                head += '; 0 sessions (route not chosen)'
+        elif status == 'approved':
+            wait = 'running, or stopped without a result' if begun else 'waiting: not begun; run make station-imprint-admit'
+            head = f'{short}  {owner}  approved   {wait}'
+        else:
+            head = f'{short}  {owner}  {status}'
+        tail = ''
+        if permission is not None:
+            base = self._imprint_folders(found, root)[0]
+            ends = datetime.fromtimestamp(effective_end(permission, records), timezone.utc).strftime('%Y-%m-%d')
+            tail = (f'\n      read-only at {base}/{found["imprint_id"]}/' if base and status == 'admitted' else
+                    f'\n      at {base}/{found["imprint_id"]}/' if base else '\n     ')
+            tail += f'   ends {ends}   receipts {"signed" if signed else "not yet signed"}'
+        return {'id': found['id'], 'imprint_id': found['imprint_id'], 'owner': owner, 'status': status,
+                'roads_and_trails': counts.get('roads_and_trails'), 'sessions_too_large': counts.get('sessions_too_large'),
+                'signed': signed, 'line': head + tail}
+
+    def station_imprint_resolve(self, prefix):
+        """The one full imprint id a short id starts, among live imprints."""
+        if not isinstance(prefix, str) or len(prefix.strip()) < 4:
+            raise Problem(400, 'Give at least 4 characters of the short id')
+        prefix = prefix.strip().lower()
+        marks = ','.join('?' * len(LIVE_STATUSES))
+        with self.transaction() as db:
+            matches = [r['imprint_id'] for r in db.execute(
+                f'SELECT imprint_id FROM imprint_requests WHERE status IN ({marks}) ORDER BY created, rowid',
+                LIVE_STATUSES) if r['imprint_id'].startswith(prefix)]
+        if len(matches) != 1:
+            raise Problem(404 if not matches else 409,
+                          f'No live imprint starts with {prefix}' if not matches else
+                          f'{prefix} matches more than one imprint; give more characters')
+        return matches[0]

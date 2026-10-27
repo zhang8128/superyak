@@ -281,6 +281,21 @@ def main(argv=None):
     delete.add_argument('--id', required=True, help='Short imprint id (at least 4 characters)')
     delete.add_argument('--as', dest='person', required=True, help='The operator deleting')
     delete.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
+    begin = commands.add_parser('station-imprint-admit-begin', help='Trusted local: decide admission again for one imprint (by its full imprint id) and write admission.json; exits 3 when it may not run')
+    begin.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    begin.add_argument('--id', required=True, help='The full imprint id (make resolves a short id with station-imprints --resolve)')
+    begin.add_argument('--as', dest='person', required=True, help='The operator whose home the imprint is for')
+    begin.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
+    sync = commands.add_parser('station-imprint-sync', help='Trusted local: record what admission left for every approved imprint')
+    sync.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    sync.add_argument('--as', dest='person', help='The operator (receipts name no one; accepted so make passes one line)')
+    sync.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
+    listing = commands.add_parser('station-imprints', help='Trusted local: list the imprints and what admission found')
+    listing.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    listing.add_argument('--as', dest='person', help='The operator (accepted so make passes one line)')
+    listing.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
+    listing.add_argument('--awaiting-admission', action='store_true', help='Print the full ids of approved imprints whose admission never began')
+    listing.add_argument('--resolve', metavar='PREFIX', help='Print the one full imprint id this short id starts, or exit 2')
     rooms = commands.add_parser('station-rooms', help='Trusted local: list the rooms a person owns by short id, and which are bridged to the wormhole')
     rooms.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     rooms.add_argument('--as', dest='person', required=True, help='The room owner')
@@ -370,6 +385,29 @@ def main(argv=None):
         elif args.command == 'station-imprint-delete':
             result = Store(args.data_dir, signing=False).station_imprint_delete(args.person, args.id, root=args.imprints_dir)
             print(f'Imprint {args.id}: {result["status"]}.' + (' A file would not go; the sweep retries.' if result['status'] == 'deleting' else ''))
+        elif args.command == 'station-imprint-admit-begin':
+            result = Store(args.data_dir, signing=False).station_imprint_admit_begin(args.id, root=args.imprints_dir, operator=args.person)
+            if result['allowed']:
+                print(f'Admission of {args.id[:4]} may run; it ends {datetime.fromtimestamp(result["valid_until"], timezone.utc):%Y-%m-%d %H:%M} UTC.')
+            else:
+                why = 'it already began; a begun admission runs once' if result.get('begun') else f'the check refused it ({result["term"]})'
+                parser.exit(3, f'Admission of {args.id[:4]} did not start: {why}.\n')
+        elif args.command == 'station-imprint-sync':
+            result = Store(args.data_dir, signing=False).station_imprint_sync(root=args.imprints_dir)
+            print(f'Imprint admissions: {result["admitted"]} admitted, {result["failed"]} failed and deleted, {result["waiting"]} waiting.')
+        elif args.command == 'station-imprints':
+            store = Store(args.data_dir, signing=False)
+            if args.resolve is not None:
+                try:
+                    print(store.station_imprint_resolve(args.resolve))
+                except Problem as unresolved:
+                    parser.exit(2, f'station-imprints: {safe_line(unresolved.message, 200)}\n')
+            elif args.awaiting_admission:
+                for shown in store.station_imprints(root=args.imprints_dir, awaiting=True):
+                    print(shown['imprint_id'])
+            else:
+                shown = store.station_imprints(root=args.imprints_dir)
+                print('\n'.join(item['line'] for item in shown) if shown else 'No imprints.')
         elif args.command == 'station-rooms':
             print(describe_rooms(args.person, Store(args.data_dir, signing=False).station_rooms(args.person)))
         elif args.command in ('station-bridge', 'station-unbridge'):
