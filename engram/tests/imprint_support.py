@@ -6,9 +6,13 @@ Nothing here opens a stamped file with ``Storage(path)``: writers use
 """
 import ast
 import json
+import os
 import re
+import shlex
 import shutil
 import sqlite3
+import subprocess
+import sys
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, replace
@@ -398,10 +402,18 @@ class _Cursor:
     def __init__(self, cur, sql: str, tables):
         self._cur, self._sql, self._tables = cur, sql, tables
 
+    def _grows(self) -> bool:
+        return not _KEYED.search(self._sql) and any(re.search(rf"\b{t}\b", self._sql) for t in self._tables)
+
     def fetchall(self):
-        if not _KEYED.search(self._sql) and any(re.search(rf"\b{t}\b", self._sql) for t in self._tables):
+        if self._grows():
             raise AssertionError(f"fetchall on a table that grows with the store: {self._sql}")
         return self._cur.fetchall()
+
+    def fetchmany(self, size=None):
+        if self._grows() and (size or self._cur.arraysize) > 1000:
+            raise AssertionError(f"fetchmany beyond one batch on a table that grows with the store: {self._sql}")
+        return self._cur.fetchmany(*(() if size is None else (size,)))
 
     def __iter__(self):
         return iter(self._cur)
@@ -412,7 +424,8 @@ class _Cursor:
 
 class _Connection:
     def __init__(self, conn, tables):
-        self._conn, self._tables = conn, tables
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_tables", tables)
 
     def execute(self, sql, *args):
         return _Cursor(self._conn.execute(sql, *args), sql, self._tables)
@@ -420,11 +433,27 @@ class _Connection:
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
+    def __setattr__(self, name, value):
+        setattr(self._conn, name, value)
+
+    def __enter__(self):
+        return self._conn.__enter__()
+
+    def __exit__(self, *exc):
+        return self._conn.__exit__(*exc)
+
 
 def refusing_fetchall(tables):
-    """A replacement for ``calibrate._connect_read_only``: a read-only Storage whose connection raises on
-    ``fetchall`` of a statement naming one of ``tables`` unless it is keyed to one memory."""
-    def connect(path):
+    """A replacement for ``calibrate._connect_read_only`` (called with a path) or for ``imprint._connect`` (called
+    with ``read_only=`` and the rest): a connection whose ``execute`` raises on ``fetchall``, or ``fetchmany`` of more
+    than a batch, of a statement naming one of ``tables`` unless it is keyed to one memory."""
+    import imprint
+
+    real = imprint._connect
+
+    def connect(path, **kw):
+        if "read_only" in kw:
+            return _Connection(real(path, **kw), tables)
         store = Storage.open_read_only(path)
         store.conn = _Connection(store.conn, tables)
         return store
@@ -439,27 +468,38 @@ _LAUNCHER = ("import resource, subprocess, sys, time\n"
              "print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, time.monotonic() - t, r.returncode)\n")
 
 
-def child_peak_rss(code: str, *, src, timed: bool = False):
-    """Peak resident bytes of ``code`` run in a child (``timed``: and its wall seconds). The child runs under
+def child_peak_rss(code: str | None = None, *, src=None, timed: bool = False, cmd=None, env=None, cwd=None):
+    """Peak resident bytes (``VmHWM``, read as ``ru_maxrss``) of ``code`` run in a child, or of the whole command
+    ``cmd`` (a list) when it is given (``timed``: and its wall seconds). The child runs under
     ``systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0`` where that exists (R27). A launcher
-    process reads ``RUSAGE_CHILDREN``, so the figure is this child's alone."""
-    import subprocess
-    import sys
-
-    preamble = _PREAMBLE.format(engram=str(ENGRAM_DIR), src=str(src)) + (_RUN_ONE if "run_one" in code else "")
-    cmd = [sys.executable, "-c", preamble + code]
+    process reads ``RUSAGE_CHILDREN``, so the figure is this child's alone, whatever it re-executes or forks."""
+    if cmd is not None:
+        argv = [str(a) for a in cmd]
+    else:
+        preamble = _PREAMBLE.format(engram=str(ENGRAM_DIR), src=str(src)) + (_RUN_ONE if "run_one" in code else "")
+        argv = [sys.executable, "-c", preamble + code]
     if shutil.which("systemd-run"):
-        cmd = ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0"] + cmd
-    out = subprocess.run([sys.executable, "-c", _LAUNCHER, *cmd], cwd=ENGRAM_DIR, capture_output=True, text=True)
+        argv = ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0"] + argv
+    out = subprocess.run([sys.executable, "-c", _LAUNCHER, *argv], cwd=cwd or ENGRAM_DIR, env=env,
+                         capture_output=True, text=True)
+    assert out.returncode == 0 and out.stdout.split(), out.stderr[-2000:]
     peak, seconds, status = out.stdout.split()[-3:]
-    assert int(status) == 0, out.stderr[-2000:]
+    assert int(status) == 0, (out.stdout[-1000:], out.stderr[-2000:])
     return (int(peak), float(seconds)) if timed else int(peak)
 
 
+_BASE_IMPORTS = {"admit": "import imprint, calibrate", "count": "import imprint, store_reader",
+                 "plan": "import imprint, imprint_filter", "read": "import imprint, imprint_filter",
+                 "build": "import imprint, imprint_filter", "import-receipts": "import imprint, imprint_copies",
+                 "use": "import imprint"}
+
+
 def base_peak(step=None) -> int:
-    """The peak a child reaches after its imports alone. ``step`` is reserved for Task 50's per-command
-    imports and changes nothing here."""
-    return child_peak_rss("pass", src="")
+    """The peak a child reaches after its imports alone: the modules the step's command loads, none of its data."""
+    if step is None:
+        return child_peak_rss("pass", src="")
+    code = f"import sys; sys.path.insert(0, {str(ENGRAM_DIR)!r}); {_BASE_IMPORTS[step]}"
+    return child_peak_rss(cmd=[sys.executable, "-c", code])
 
 
 def run_one(analysis: str, src) -> None:
@@ -2307,3 +2347,384 @@ def render_list(engram_home: Path, home: Path) -> str:
         return render(uses.owner_list(state_of(engram_home), copies=copies_held(home)))
     finally:
         uses.close()
+
+
+# ---- Task 50: peak memory on the Pi, for every process ---------------------------------------------------------------
+
+IMPRINT_PY = str(ENGRAM_DIR / "imprint.py")
+NOW_SECONDS = 1_761_415_451
+CAP_ROOT = Path("/var/tmp") / f"imprint-cap-{os.getuid()}"      # built once and kept (R27); not under tmp_path
+CAP_UNTIL = "2026-10-25T18:00:00Z"
+
+
+def mib(n: int) -> float:
+    return round(n / 2**20, 1)
+
+
+_STUB_TRAILS = '''"""A stand-in for the trails plan's roads_and_trails (G13): one SQL pass over the log, one session at a time."""
+
+
+def roads_and_trails(conn, *, lane, as_of, counts):
+    n = 0
+    for (_,) in conn.execute("SELECT DISTINCT json_extract(context, '$.session_id') FROM memory_log "
+                             "WHERE json_extract(context, '$.session_id') IS NOT NULL"):
+        n += 1
+    return n
+'''
+
+
+def _stub_trails_dir() -> Path:
+    path = CAP_ROOT / "stubs"
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "trails.py").write_text(_STUB_TRAILS)
+    return path
+
+
+@dataclass
+class CapWorld:
+    """A fixture store beside its ledger, and where one measured command runs."""
+    kind: str                   # "cap" or "bounds"
+    store: Path
+    engram_home: Path
+    work: Path                  # the test's tmp_path
+    env: dict
+
+    @property
+    def home(self) -> Path:
+        return self.work / "home"
+
+    @property
+    def root(self) -> Path:
+        return self.work / "root"
+
+
+def _unit_vectors(rng, n: int, dim: int = 768):
+    import numpy as np
+
+    X = rng.standard_normal((n, dim)).astype("<f4")
+    X /= np.linalg.norm(X, axis=1, keepdims=True)
+    return X
+
+
+def _text(i: int, kind: str, size: int = 1024) -> str:
+    return (f"{kind} {i} of the fixture store at its bounds, with no name in it. " * 20)[:size]
+
+
+def _memory_ids(lane: str, n: int):
+    return [f"{lane[0]}{i:07d}-0000-4000-8000-{i:012d}" for i in range(n)]
+
+
+def _fill_store(path: Path, *, lanes: dict, semantics: int, hub_sources: int, log_rows: int, sessions: int,
+                cold_keys: int, cores: bool, resonances: bool, seed: int) -> list[tuple[str, str]]:
+    """A store at ``path`` holding ``lanes`` (lane -> episode count) of work-or-personal episodes with random unit
+    vectors and 1 KiB of text, ``semantics`` semantics (the first a hub of ``hub_sources`` sources, the rest three
+    sources each), ``log_rows`` recall rows over ``sessions`` sessions, and a ``cold.db`` of ``cold_keys`` keys.
+    Returns every ``(layer, id)`` it wrote."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store = Storage(str(path))
+    conn, written, by_lane = store.conn, [], {}
+    stamp = "2026-01-01T00:00:00+00:00"
+    k = 0
+    for lane, n in lanes.items():
+        ids = by_lane[lane] = _memory_ids(lane, n)
+        for lo in range(0, n, 1000):
+            chunk = ids[lo:lo + 1000]
+            conn.executemany(
+                "INSERT INTO episodes (id, session_id, content, created_at, lane, core) VALUES (?, ?, ?, ?, ?, ?)",
+                [(e, f"sess-{(k + j) % sessions}", _text(k + j, "episode"), stamp, lane, int(cores))
+                 for j, e in enumerate(chunk)])
+            X = _unit_vectors(rng, len(chunk))
+            conn.executemany("INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
+                             [(e, X[j].tobytes()) for j, e in enumerate(chunk)])
+            conn.commit()
+            k += len(chunk)
+        written += [("episode", e) for e in ids]
+    lane_names = list(lanes)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    for lo in range(0, semantics, 1000):
+        rows, sources, ids = [], [], []
+        for j in range(lo, min(lo + 1000, semantics)):
+            lane = lane_names[j % len(lane_names)]
+            sid = f"s{j:07d}-0000-4000-8000-{j:012d}"
+            pool = by_lane[lane]
+            rows.append((sid, _text(j, "semantic"), "fact", 0.5, stamp, lane))
+            n_src = hub_sources if j == 0 else 3
+            sources += [(sid, pool[(j * 3 + m) % len(pool)]) for m in range(n_src)]
+            ids.append(sid)
+        conn.executemany("INSERT INTO semantics (id, content, kind, confidence, created_at, lane) VALUES (?, ?, ?, ?, ?, ?)", rows)
+        conn.executemany("INSERT OR IGNORE INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)", sources)
+        X = _unit_vectors(rng, len(ids))
+        conn.executemany("INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
+                         [(sid, X[j].tobytes()) for j, sid in enumerate(ids)])
+        conn.commit()
+        written += [("semantic", s) for s in ids]
+    conn.execute("PRAGMA foreign_keys=ON")
+    flat = [e for lane in lane_names for e in by_lane[lane]]
+    for lo in range(0, log_rows, 5000):
+        conn.executemany(
+            "INSERT INTO memory_log (id, timestamp, event_type, layer, target_ids, context, outcome) "
+            "VALUES (?, ?, 'recall', 'episode', ?, ?, NULL)",
+            [(f"log-{j:08d}", f"2026-01-02T00:{j % 60:02d}:00+00:00", json.dumps([flat[j % len(flat)]]),
+              json.dumps({"session_id": f"sess-{j % sessions}", "recall_id": f"rc{j}"}))
+             for j in range(lo, min(lo + 5000, log_rows))])
+        conn.commit()
+    if resonances:
+        for lane in lane_names:
+            ids = by_lane[lane]
+            conn.executemany(
+                "INSERT INTO resonances (id, memory_a, layer_a, memory_b, layer_b, similarity, weight, strength,"
+                " co_occurrences, created_at, last_seen) VALUES (?, ?, 'episode', ?, 'episode', 0.5, 1.0, 0.5, 2, ?, ?)",
+                [(f"res-{a}", a, ids[(i + 1) % len(ids)], stamp, stamp) for i, a in enumerate(ids)])
+        conn.commit()
+    if cold_keys:
+        cold = store._cold_storage()
+        for lo in range(0, cold_keys, 5000):
+            cold.executemany("INSERT INTO episodes (id, content, created_at, lane) VALUES (?, ?, ?, 'work')",
+                             [(f"c{j:07d}-0000-4000-8000-{j:012d}", _text(j, "cold"), stamp)
+                              for j in range(lo, min(lo + 5000, cold_keys))])
+            cold.commit()
+    store.close()
+    return written
+
+
+def _fixture_ledger(eh: Path, store_path: Path, memories, per_memory: int) -> None:
+    """A ledger for the owner ``andy`` (the operator, so every memory ships) that registers the store and gives each
+    memory ``per_memory`` co-subjects, every one a person of its own, written as rows in one pass."""
+    store = Storage.open_read_only(store_path)
+    try:
+        led = ledger(eh, owner="andy", store=store)
+        instance = iid(store)
+    finally:
+        store.close()
+    try:
+        seq = led.conn.execute("SELECT max(seq) FROM ledger_log").fetchone()[0]
+    except sqlite3.Error:
+        seq = 1
+    n = 0
+    batch = []
+    led.conn.execute("BEGIN IMMEDIATE")                  # one transaction: a commit a row would sync 700,000 times
+    for layer, id in memories:
+        ref = f"mem:{instance}/{layer}/{id}"
+        for _ in range(per_memory):
+            batch.append((ref, f"person:p{n:07d}", seq or 1, "person:fixture", 0))
+            n += 1
+        if len(batch) >= 50_000:
+            led.conn.executemany("INSERT INTO subjects (object, subject, added_seq, added_by, self_claimed) "
+                                 "VALUES (?, ?, ?, ?, ?)", batch)
+            batch = []
+    if batch:
+        led.conn.executemany("INSERT INTO subjects (object, subject, added_seq, added_by, self_claimed) "
+                             "VALUES (?, ?, ?, ?, ?)", batch)
+    led.conn.execute("COMMIT")
+    led.close()
+
+
+def _cap_world(tmp_path: Path, kind: str, build_fixture) -> CapWorld:
+    """The fixture of ``kind`` under ``CAP_ROOT``, built on first use. Several sessions at once wait on its lock."""
+    import fcntl
+
+    base = CAP_ROOT / kind
+    base.mkdir(parents=True, exist_ok=True)
+    with open(CAP_ROOT / f"{kind}.lock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not (base / ".ready").is_file():
+            shutil.rmtree(base, ignore_errors=True)
+            base.mkdir(parents=True)
+            build_fixture(base)
+            (base / ".ready").write_text("ok")
+    env = {**os.environ, "PYTHONPATH": str(_stub_trails_dir()), "PYTHONDONTWRITEBYTECODE": "1"}
+    env.pop("ENGRAM_HOME", None)
+    return CapWorld(kind, base / "src" / "graph.db", base / "eh", Path(tmp_path), env)
+
+
+def _build_cap(base: Path) -> None:
+    written = _fill_store(base / "src" / "graph.db", lanes={"personal": 45_000, "work": 45_000}, semantics=10_000,
+                          hub_sources=1_025, log_rows=200_000, sessions=2_000, cold_keys=100_000, cores=False,
+                          resonances=False, seed=1)
+    _fixture_ledger(base / "eh", base / "src" / "graph.db", written, 7)
+
+
+def _build_bounds(base: Path) -> None:
+    written = _fill_store(base / "src" / "graph.db", lanes={"personal": 16_000, "work": 16_000}, semantics=8,
+                          hub_sources=1_024, log_rows=2_000, sessions=100, cold_keys=0, cores=True, resonances=True,
+                          seed=2)
+    _fixture_ledger(base / "eh", base / "src" / "graph.db", written[:1], 0)
+
+
+def build_cap_store(tmp_path: Path) -> CapWorld:
+    """I 16's "Every process at its bounds": 100,000 memories (two lanes of 45,000 episodes, so both are over the
+    16,000 a calibration set may hold; 10,000 semantics, one a hub of 1,025 sources), random 768-dimension unit
+    vectors, 1 KiB of text each, 200,000 ``memory_log`` rows over 2,000 sessions, a ``cold.db`` of 100,000 keys, and
+    a ledger giving every memory 7 co-subjects, 700,000 people in all. Built once under ``/var/tmp``."""
+    return _cap_world(tmp_path, "cap", _build_cap)
+
+
+def build_bounds_store(tmp_path: Path) -> CapWorld:
+    """Every calibration set at its bound: two lanes of 16,000 episodes, every one a core, a semantic of 1,024
+    sources, and a resonance on every episode. Built once under ``/var/tmp``."""
+    return _cap_world(tmp_path, "bounds", _build_bounds)
+
+
+def _plan_command(world: CapWorld, home: Path, *, route: bool) -> list[str]:
+    return [sys.executable, IMPRINT_PY, "plan", "--store", str(world.store), "--lanes", "personal,work",
+            "--layers", "episode,semantic", "--until", CAP_UNTIL, "--audience", "place:home/andy",
+            "--actions", "imprint,route" if route else "imprint", "--superyak-home", str(home),
+            "--engram-home", str(world.engram_home), "--json"]
+
+
+def _context_home(world: CapWorld, home: Path) -> Path:
+    write_context(home, plan_context("andy"))
+    return home
+
+
+def _run(cmd, env, cwd=None) -> str:
+    out = subprocess.run([str(a) for a in cmd], env=env, cwd=cwd or ENGRAM_DIR, capture_output=True, text=True)
+    assert out.returncode == 0, (cmd[:4], out.stderr[-2000:])
+    return out.stdout
+
+
+def _staged(world: CapWorld, name: str, *, route: bool, built: bool) -> Path:
+    """A home holding a plan (and its built package) made once, unmeasured, beside the fixture; copied to the test."""
+    stage = CAP_ROOT / world.kind / f"stage-{name}"
+    if not (stage / ".ready").is_file():
+        shutil.rmtree(stage, ignore_errors=True)
+        _context_home(world, stage)
+        plan = json.loads(_run(_plan_command(world, stage, route=route), world.env))
+        (stage / "plan.id").write_text(plan["id"])
+        if built:
+            _run([sys.executable, IMPRINT_PY, "build", "--plan", plan["id"], "--superyak-home", stage,
+                  "--engram-home", world.engram_home], world.env)
+        (stage / ".ready").write_text("ok")
+    shutil.copytree(stage, world.home, symlinks=True)
+    return world.home
+
+
+def _plan_id(world: CapWorld) -> str:
+    return (world.home / "plan.id").read_text()
+
+
+def _handed_off_from(world: CapWorld, *, route: bool) -> tuple[Path, str]:
+    import imprint
+
+    saved = json.loads(next((world.home / "imprints" / "plans").glob("*.json")).read_text())
+    built = imprint._built_of(world.home, saved["imprint_id"])
+    return handed_off(world.work, built, route=route, valid_until=FAR)
+
+
+def cap_command(world: CapWorld, step: str) -> list[str]:
+    """The argv of one process of I 16's "Every process at its bounds" run on the cap fixture. What it needs made
+    first (a plan, a built package, a handed-off root) is made unmeasured and kept, then copied to ``world.work``."""
+    if step == "plan":
+        return _plan_command(world, _context_home(world, world.home), route=True)
+    if step == "read":
+        _staged(world, "planned-route", route=True, built=False)
+        return [sys.executable, IMPRINT_PY, "read", "--plan", _plan_id(world), "--start", "45000", "--limit", "1000",
+                "--superyak-home", world.home, "--engram-home", world.engram_home]
+    if step == "build":
+        _staged(world, "planned-route", route=True, built=False)
+        return [sys.executable, IMPRINT_PY, "build", "--plan", _plan_id(world), "--superyak-home", world.home,
+                "--engram-home", world.engram_home]
+    if step == "admit":                                         # a package without route: a count needs trails.py
+        _staged(world, "built-noroute", route=False, built=True)
+        root, imprint_id = _handed_off_from(world, route=False)
+        return [sys.executable, IMPRINT_PY, "admit", "--id", imprint_id, "--imprints-dir", root, "--verify-cmd",
+                shlex.join(stub_verify(ok=True))]
+    if step == "count":
+        _staged(world, "built-route", route=True, built=True)
+        saved = json.loads(next((world.home / "imprints" / "plans").glob("*.json")).read_text())
+        package = world.home / "imprints" / saved["imprint_id"] / "imprint.db"
+        code = ("import sys, store_reader, imprint\n"
+                "conn = store_reader.connect(sys.argv[1], immutable=True)\n"
+                "print(imprint.count_roads_and_trails(conn, lanes=['personal', 'work'], as_of=1761415451))\n")
+        return [sys.executable, "-c", code, package]
+    if step == "import-receipts":
+        led_home = ledger_home(world.work)
+        memories = 100_000
+        subjects = {i: [f"person:q{i * 7 + j:07d}" for j in range(7)] for i in range(memories)}
+        home = imported_home(world.work, memories=memories, receipts=["admitted"], subjects=subjects, route=False)
+        return [sys.executable, IMPRINT_PY, "import-receipts", "--id", IMPRINT_ID[:8], "--superyak-home", home,
+                "--engram-home", led_home]
+    raise ValueError(step)
+
+
+def admit_command(world: CapWorld, *, derive: str) -> list[str]:
+    """``imprint.py admit`` on the bounds fixture, with ``route`` and, for ``derive="stub"``, the stand-in trail
+    count on ``PYTHONPATH`` (``world.env``), so the whole command runs as the unit would."""
+    assert derive == "stub"
+    _staged(world, "built-bounds-route", route=True, built=True)
+    root, imprint_id = _handed_off_from(world, route=True)
+    return [sys.executable, IMPRINT_PY, "admit", "--id", imprint_id, "--imprints-dir", root, "--verify-cmd",
+            shlex.join(stub_verify(ok=True))]
+
+
+def admission_result(world: CapWorld) -> dict:
+    """The ``result.json`` an admission left, less an empty ``skipped``, so ``"skipped" in`` it says a set was skipped."""
+    (state,) = world.root.glob("*.state")
+    result = json.loads((state / "result.json").read_text())
+    if not result.get("skipped"):
+        result.pop("skipped", None)
+    return result
+
+
+def use_command(tmp_path: Path, *, trails_cmd) -> list[str]:
+    """``imprint.py use`` on a small admitted imprint, with a stand-in trails command: the parent's own peak."""
+    root, imprint_id, use_id = with_allow(Path(tmp_path))
+    return [sys.executable, IMPRINT_PY, "use", "--id", imprint_id, "--use-id", use_id, "--imprints-dir", root,
+            "--trails-cmd", shlex.join(trails_cmd)]
+
+
+_C_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"|\[|\]')
+
+
+def _c_unescape(text: str) -> str:
+    return text.encode("latin-1", "backslashreplace").decode("unicode_escape", "replace")
+
+
+def _execve_env(line: str) -> dict[str, str] | None:
+    """The environment of a successful ``execve`` line of ``strace -v``, or None."""
+    head = re.match(r'\d+\s+execve\(', line)
+    if not head or not re.search(r"\)\s*=\s*0\s*$", line):
+        return None
+    lists, current, depth, first = [], None, 0, True
+    for m in _C_STRING.finditer(line, head.end()):
+        token = m.group(0)
+        if token == "[":
+            current, depth = [], depth + 1
+        elif token == "]":
+            lists.append(current)
+            current, depth = None, depth - 1
+        elif current is not None:
+            current.append(_c_unescape(m.group(1)))
+    if len(lists) < 2:
+        return None
+    return dict(item.split("=", 1) for item in lists[1] if "=" in item)
+
+
+def strace_temp_files(cmd, env) -> tuple[list[str], list[dict[str, str]]]:
+    """Run ``cmd`` as a child under ``strace -f -v -s 65536 -e trace=execve,open,openat`` with ``env`` from its first
+    instruction; return every SQLite temporary file (``etilqs_…``) it opened and the environment of every ``execve``
+    (the re-exec's included, R26)."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("r", suffix=".strace") as log:
+        done = subprocess.run(["strace", "-f", "-v", "-s", "65536", "-e", "trace=execve,open,openat", "-o", log.name,
+                               *[str(a) for a in cmd]], env=env, cwd=ENGRAM_DIR, capture_output=True, text=True)
+        assert done.returncode == 0, (done.returncode, done.stderr[-2000:])
+        lines = Path(log.name).read_text(errors="replace").splitlines()
+    opened = []
+    for line in lines:
+        m = re.search(r'open(?:at)?\([^"]*"([^"]*etilqs_[^"]*)"[^)]*\)\s*=\s*(-?\d+)', line)
+        if m and int(m.group(2)) >= 0:
+            opened.append(m.group(1))
+    return opened, [e for e in map(_execve_env, lines) if e is not None]
+
+
+def built_of(tmp_path: Path, plan_id: str):
+    """The ``Built`` of a plan that a child process built under ``HOME(tmp_path)``."""
+    import imprint
+
+    saved = json.loads(imprint.resolve_plan(HOME(tmp_path), plan_id).read_text())
+    return imprint._built_of(HOME(tmp_path), saved["imprint_id"])
