@@ -575,7 +575,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.get('/api/chats/{key}')
     def chat_get(key: str, request: Request):
-        return store.get_room(member(request)['id'], key, paging(request.query_params))
+        return store.get_room(member(request)['id'], key, None if ':' in key else paging(request.query_params))
 
     @app.post('/api/chats/{key}/messages', status_code=201)
     async def chat_send(key: str, request: Request):

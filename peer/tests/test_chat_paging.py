@@ -254,3 +254,12 @@ def test_the_whole_room_queries_are_unchanged_by_the_page_fix():
     from superyak_peer.inbox import replies_sql
     from superyak_peer.tickets import sources_sql
     assert '+' not in replies_sql() and not any('+' in sql for sql in sources_sql())
+
+def test_a_remote_room_ignores_paging_even_when_it_is_invalid_for_a_local_room(env):
+    """S3: a paired peer's room answers as today; an over-long start= (a peer's id station_read printed) is not a 400."""
+    app, clients, users, clock = env
+    remote = 'f' * 64 + ':' + 'r' * 8
+    today = clients[0].get(f'/api/chats/{remote}')
+    for query in ('start=' + 'x' * 150, 'limit=0', 'before=nope', 'since=1&at=2'):
+        paged = clients[0].get(f'/api/chats/{remote}?{query}')
+        assert (paged.status_code, paged.json()) == (today.status_code, today.json()), query
