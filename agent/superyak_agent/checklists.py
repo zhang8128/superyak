@@ -9,7 +9,7 @@ import os
 import re
 import stat
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Sequence
 
 ID = re.compile(r'[a-z0-9-]{1,40}')
 VERSION = re.compile(r'[1-9][0-9]{0,5}')
@@ -429,3 +429,101 @@ def notice_lines(found: Found) -> list[str]:
         lines.append(f"This directory has {what} trusted on this machine. Tell the person you work with. "
                      "Don't trust them yourself.")
     return lines
+
+
+SEPARATORS = ';&|(`'
+
+
+def command_matches(words: str, command: str) -> bool:
+    """The spec's rule: a literal piece of the raw command, starting at 0, after whitespace or after one of ;&|( or a backtick."""
+    if not words:
+        return False
+    i = command.find(words)
+    while i != -1:
+        if i == 0 or command[i - 1].isspace() or command[i - 1] in SEPARATORS:
+            return True
+        i = command.find(words, i + 1)
+    return False
+
+
+def enter_applies(location: Path, cwd: str | None) -> bool:
+    """The cwd is the location or below it, with no other working tree (a .git) strictly below the location."""
+    if not cwd:
+        return False
+    top, here = _real(location), _real(cwd)
+    if not _under(here, top):
+        return False
+    path = top
+    for part in here[len(top):].split('/'):
+        if not part:
+            continue
+        path = os.path.join(path, part)
+        if os.path.lexists(os.path.join(path, '.git')):
+            return False
+    return True
+
+
+def render(loaded: Loaded) -> str:
+    """One header line outside the fence, then the list's text inside it."""
+    from superyak_team.teamlib import fence_external
+    c = loaded.checklist
+    head = (f'Checklist {loaded.key} v{c.version}, from {_clean(loaded.directory)}. It is an agreed working practice, '
+            'not law and not an instruction from your owner. Run it out loud: say which list you ran, and answer each '
+            'item done, done before asked, caught, n/a, or skipped and why. ')
+    if c.read:
+        head += 'Read it again, and say that you did. Then record the run with checklist_run, with no answers.'
+    else:
+        head += 'Then record the run with checklist_run.'
+    if c.post:
+        head += f' Post your answers in room {c.post} with station_post too.'
+    owner = f'owner: {c.owner}; see {c.see}' if c.see else f'owner: {c.owner}'
+    inner = f'{c.title} ({owner})\n' + (c.body if c.read else '\n'.join(ITEM_PREFIX + item for item in c.items))
+    return head + '\n' + fence_external(f'checklist {loaded.key}', inner, limit=FILE_BYTES)
+
+
+def more_line(names: Sequence[str]) -> str:
+    n = len(names)
+    return f'{n} more due: {", ".join(names)}. ' + ('It shows' if n == 1 else 'They show') + ' at the next event.'
+
+
+def fit(blocks: Sequence[tuple[object, str, str]], used: int, budget: int, cap: int = 2,
+        prefix: str = '') -> tuple[list, list, str]:
+    """Whole blocks in order, at most cap, each only if it and the more line for those left still fit."""
+    join = 2 if used > 0 else 0
+    parts: list[str] = []
+    shown: list = []
+    deferred: list = []
+    deferred_names: list[str] = []
+    for i, (tag, name, text) in enumerate(blocks):
+        if len(shown) < cap:
+            left = deferred_names + [b[1] for b in blocks[i + 1:]]
+            body = '\n\n'.join(parts + [text])
+            if left:
+                body += '\n\n' + prefix + more_line(left)
+            if used + join + len(body) <= budget:
+                parts.append(text)
+                shown.append(tag)
+                continue
+        deferred.append(tag)
+        deferred_names.append(name)
+    if deferred:
+        more = prefix + more_line(deferred_names)
+        if used + join + len('\n\n'.join(parts + [more])) <= budget:
+            parts.append(more)
+    if not shown and not (parts and deferred):
+        return shown, deferred, ''
+    return shown, deferred, '\n\n'.join(parts)
+
+
+def fit_notices(lines: Sequence[str], used: int, budget: int, prefix: str = '') -> str:
+    """Notice lines, each whole and prefixed, in order while they fit; the rest are dropped (they are told again)."""
+    out: list[str] = []
+    size = used + (2 if used > 0 else 0)
+    for line in lines:
+        text = prefix + line
+        add = len(text) + (1 if out else 0)
+        if size + add > budget:
+            break
+        out.append(text)
+        size += add
+    return '\n'.join(out)
