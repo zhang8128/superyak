@@ -31,6 +31,17 @@ def build_parser():
     held = commands.add_parser('hold', help='Claude Code PreToolUse hook on Bash: checklists and lessons hold a '
                                'command once (dispatched before this parser, which only describes it)')
     held.add_argument('--config', type=Path, default=CONFIG)
+    lists = commands.add_parser('checklists', help='Which checklists load from where; trust a directory of lists '
+                                '(a person at a terminal); propose changes from the run logs')
+    which = lists.add_subparsers(dest='checklists_command', required=True)
+    shown = which.add_parser('list', help='Show what loads from where, and when each list last fired')
+    shown.add_argument('--cwd')
+    shown.add_argument('--home', type=Path, help="The ship's home (default: the ship that acts at the cwd)")
+    trust = which.add_parser('trust', help='Trust a checklists directory (needs a terminal)')
+    trust.add_argument('path')
+    trust.add_argument('--home', type=Path, help="The ship's home (default: the ship that acts where the lists are)")
+    proposed = which.add_parser('report', help='Propose changes to lists from the run and firing logs; changes nothing')
+    proposed.add_argument('--home', type=Path, help="The ship's home (default: the ship that acts at the cwd)")
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
     dock.add_argument('--station', required=True)
     dock.add_argument('--door')
@@ -143,6 +154,9 @@ def main(argv=None):
     if argv[:1] == ['hook']:
         return _hook(parser, argv)
     args = parser.parse_args(argv)
+    if args.command == 'checklists':
+        from .checklist_cli import main as checklists
+        return checklists(args)
     if args.command == 'mcp':
         from .mcp import serve
         serve(args.config)
