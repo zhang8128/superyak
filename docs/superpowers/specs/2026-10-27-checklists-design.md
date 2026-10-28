@@ -245,6 +245,8 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
 - Its reason, in the rail's wording: "Held once: checklist <id> v<version> applies. It is a checklist, not a
   refusal.", then each due list as shown above (at most 2), then "Re-run the same command if you still want it."
 - It holds only when the input has no `agent_id`. Subagents are never held (D14).
+- **The cost in an incident is one round trip.** A revert pushed in a hurry is held once like any push, and its
+  re-run passes. That is accepted: the list it shows is the one an incident needs most.
 - Phase 1 keeps its own per-session record (Firing, above). When the rail's hook is built, the two holds become one
   hook process, whose single deny carries the checklist first and then the lesson (D16). Until then, the builder
   confirms on each ship's Claude Code version what the model sees when two `PreToolUse` hooks deny one call.
@@ -345,10 +347,10 @@ linked by each file's `see:` key. docs/checklists.md then points to the files, s
 | Each hour, before the queue | Repository | `every 1h` |
 | Reflect, an after-action review | Repository | `every 3h`, with `post: 1bfd1b03e9f94519b1bb3c86c0fafaa1` (all hands). "After a merge" becomes Merging to main's last item. "After a mistake" is the agent's own call. "At a session's end" has no moment: `SessionEnd` output never reaches the model. |
 | Before any push | Repository | `command git push` |
-| Merging to main | Repository | `command git push origin main`, where the irreversible step is (D10). A push to main spelt another way (`git push` from main, `HEAD:main`) gets only Before any push. Its run is recorded after its last item, so the items after the push are answered then. A last item is added: "Reflect is run once the merge is announced." |
+| Merging to main | Repository | `command git push origin main; command systemctl --user restart superyak-`. The Pi's units run from its main checkout, so the restart is where a merge goes live, and for a security fix the push comes after it (merge, restart, probe, then push: no unfixed hole is ever public). The list fires at whichever comes first in the session (D10). A push to main spelt another way (`git push` from main, `HEAD:main`) gets only Before any push. Its run is recorded after its last item, so the items after the push are answered then. A last item is added: "Reflect is run once the merge is announced." |
 | Before starting a piece of work | Repository | `claim`, once for each claimed item |
 | A session starting | Repository | `start` |
-| A live station act | Repository | `command make station-approve; command make station-bridge; command make station-add-ship` |
+| A live station act | Repository | `command make station-approve; command make station-deny; command make station-bridge; command make station-unbridge; command make station-add-ship; command make station-moderate; command make station-unmoderate` |
 | The Mac's main checkout | The Mac's `~/.superyak/checklists/` | `enter /Users/kairos/Projects/superyak`. In the repository it would break its own first item untracked, and fire in every clone tracked. |
 | Shell commands (zsh) | The Mac's `~/.superyak/checklists/` | `command --include=*`. The Pi's shell may not be zsh. Tardis may copy it into its own lists. |
 | Copying a person's store | Not yet | Waits for the imprint commands to land on main, then `command` with their exact words. |
@@ -464,8 +466,10 @@ skipped, the moments or the lists are wrong, and that is the first renegotiation
   project,local` leaves out the user-scope hooks (`agent/superyak_agent/runs.py:129`).
 - D9 (M3): the hold is its own subcommand, so an older checkout's argparse rejects it and the guard turns that into
   silence, with no change to old code.
-- D10 (M5): Merging to main fires at `git push origin main`, the irreversible step, since `git merge` also matches
-  merging main into a branch, and `git merge-base`.
+- D10 (M5): Merging to main fires at `git push origin main` or at the restart of the station's units
+  (`systemctl --user restart superyak-`), whichever comes first. Both are where a merge becomes real; on the Pi the
+  restart comes first, and a security fix is pushed only after its probe passes. `git merge` alone is not a moment,
+  since it also matches merging main into a branch, and `git merge-base`.
 - D11 (M10): `read:` and `post:` keys rather than items for Why we build, because Andy's words are there to be re-read,
   not ticked, and Reflect needs a room either way. `see:` (S7) joins them so that short items keep their why.
 - D12 (M12): removing or weakening an item in a list that guards no irreversible act needs one explicit yes from
