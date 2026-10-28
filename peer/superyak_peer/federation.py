@@ -3,12 +3,49 @@ import base64
 import hashlib
 import json
 import re
+import sqlite3
 import threading
 from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse, pairing_code, show_code, typed_code
 from .common import Problem, require, uid, encode, text, linked_room_ok
 
 class Obsolete(Exception):
     pass
+
+class Local(Exception):
+    """An exception _prepare raised, wrapped by the prepare callback so the outcome table can never take a local fault
+    for a peer's answer (federation-pull spec §7). Subclasses none of OSError, Problem or HTTPException (plan nit 5)."""
+    def __init__(self, error):
+        super().__init__(repr(error))
+        self.error = error
+
+# Spec §7: the answers that are about the peer, not the row. Every other 4xx is the peer's answer about this row.
+PEER_SCOPED_STATUS = frozenset({401, 404, 408, 421, 425, 429})
+PEER_SCOPED_403 = frozenset({'Unknown or unpaired peer', 'Peer authentication failed', 'Unrecognized host',
+                             'Same-origin request required', 'Federation requires HTTPS'})
+
+def classify(error):
+    """Spec §7's one outcome table: (the row's status, the peer's effect, the words to keep). The effect is 'neutral',
+    'failure' or 'reset'; the words are the row's last_error when it's refused, the peer's last_problem on a failure.
+    Anything the table doesn't name is a failure, so an unknown fault retries and is never terminal."""
+    from .transport import PinMismatch, PeerAnswer
+    if isinstance(error, Obsolete):
+        return 'withdrawn', 'neutral', None
+    if isinstance(error, Local):
+        inner = error.error
+        if isinstance(inner, sqlite3.OperationalError):  # locked, busy, I/O, full: nobody's fault (check 3 SF2)
+            return 'failed', 'neutral', None
+        return 'refused', 'neutral', f'{inner.status} {inner.message}' if isinstance(inner, Problem) else type(inner).__name__
+    if isinstance(error, PinMismatch):
+        return 'failed', 'failure', 'certificate differs'
+    if isinstance(error, PeerAnswer):
+        words = f'{error.status} {error.message}'.strip()
+        if (400 <= error.status < 500 and error.status not in PEER_SCOPED_STATUS
+                and not (error.status == 403 and error.message in PEER_SCOPED_403)):
+            return 'refused', 'reset', words
+        return 'failed', 'failure', words  # any 5xx, 3xx or 2xx that isn't an acknowledgement, and the named 4xx
+    if isinstance(error, ValueError):  # send_pinned's own refusals: the card can't be dialled (plan SF7)
+        return 'failed', 'failure', str(error)
+    return 'failed', 'failure', type(error).__name__  # OSError, TimeoutError, HTTPException, anything unnamed
 
 class _NoIdentity:
     """A peer with no identity yet, for the CLI's pair and connections, which never make one (fix:pairing-code SF2):
@@ -112,8 +149,11 @@ class Federation:
         with self.store.transaction() as db:
             self.store._admin(db, actor)
             rows = db.execute('SELECT remote_contacts.*,peers.card,peers.paired,pairing_confirmations.code AS confirmed_code,'
-                              'contact_holds.contact_id IS NOT NULL AS held '
+                              'contact_holds.contact_id IS NOT NULL AS held, peer_delivery.mode, peer_delivery.failures, '
+                              'peer_delivery.next_attempt, peer_delivery.last_success, peer_delivery.last_pull, '
+                              'peer_delivery.failing_since, peer_delivery.last_problem '  # spec §8
                               'FROM remote_contacts JOIN peers USING(peer_id) '
+                              'LEFT JOIN peer_delivery USING(peer_id) '
                               'LEFT JOIN pairing_confirmations ON pairing_confirmations.contact_id=remote_contacts.id '
                               'LEFT JOIN contact_holds ON contact_holds.contact_id=remote_contacts.id').fetchall()
         listed = []
@@ -233,32 +273,79 @@ class Federation:
                 db.execute('UPDATE outbox SET envelope=? WHERE id=?', (canonical(envelope).decode(),key))
             return canonical(envelope)
 
+    def _prepared(self, key):
+        """The prepare callback: _prepare, its local exceptions wrapped as Local so classify knows them (spec §7)."""
+        try:
+            return self._prepare(key)
+        except Obsolete:
+            raise
+        except Exception as error:
+            raise Local(error) from error
+
+    def _peer_outcome(self, db, peer_id, effect, words, now):
+        """Spec §7's per-peer backoff, one column at a time, since a listener writes the same table. A reset clears the
+        failures; a failure counts first, then waits min(cap, 2**min(failures, 12)), where a pull peer caps every dial
+        at 300 s and a listener at an hour (plan P4)."""
+        if effect == 'reset':
+            for column in ('next_attempt', 'failing_since', 'last_problem'):
+                db.execute(f'UPDATE peer_delivery SET {column}=NULL WHERE peer_id=?', (peer_id,))
+            db.execute('UPDATE peer_delivery SET failures=0 WHERE peer_id=?', (peer_id,))
+        elif effect == 'failure':
+            db.execute('UPDATE peer_delivery SET failures=failures+1 WHERE peer_id=?', (peer_id,))
+            row = db.execute('SELECT failures FROM peer_delivery WHERE peer_id=?', (peer_id,)).fetchone()
+            mode = db.execute("SELECT value FROM peer_meta WHERE key='federation_mode'").fetchone()
+            cap = 300 if mode and mode[0] == 'pull' else 3600
+            if row:
+                db.execute('UPDATE peer_delivery SET next_attempt=? WHERE peer_id=?', (now + min(cap, 2 ** min(row[0], 12)), peer_id))
+            db.execute('UPDATE peer_delivery SET failing_since=COALESCE(failing_since, ?) WHERE peer_id=?', (now, peer_id))
+            db.execute('UPDATE peer_delivery SET last_problem=? WHERE peer_id=?', (words, peer_id))
+
     def sync_once(self, *, send=None, limit=20):
-        from .transport import send_pinned, PinMismatch, PeerAnswer
-        import http.client
-        result = {'delivered':0, 'withdrawn':0, 'failed':0, 'pending':0}
+        """One pass over the push peers' due rows (spec §7): mode and due-ness are chosen before LIMIT, so a pull peer's
+        queue or a peer in backoff never fills the page a live peer needs. Each row's outcome comes from classify. On a
+        peer's first failure in the pass its other rows wait for the next one. A Problem from an in-process `send=`
+        arrives as the PeerAnswer HTTP would give (plan SF7)."""
+        from .transport import send_pinned, PeerAnswer
+        result = {'delivered':0, 'withdrawn':0, 'failed':0, 'refused':0, 'pending':0}
         if not self._sync_lock.acquire(blocking=False):
             return {**result, 'busy':True}
         try:
             self.collect()
             with self.store.transaction() as db:
-                work = [dict(r) for r in db.execute("SELECT outbox.*,peers.card FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id JOIN peers USING(peer_id) WHERE status IN ('pending','failed') AND attempts<8 AND next_attempt<=? ORDER BY event_seq,id LIMIT ?", (self.store.clock(),min(100,max(1,limit))))]
+                work = [dict(r) for r in db.execute(
+                    "SELECT outbox.*, peers.card, remote_contacts.peer_id AS row_peer FROM outbox "
+                    "JOIN remote_contacts ON contact_id=remote_contacts.id JOIN peers USING(peer_id) JOIN peer_delivery USING(peer_id) "
+                    "WHERE status IN ('pending','failed') AND peer_delivery.mode='push' "
+                    "AND (peer_delivery.next_attempt IS NULL OR peer_delivery.next_attempt<=?) ORDER BY event_seq, outbox.id LIMIT ?",
+                    (self.store.clock(), min(100, max(1, limit))))]
+            failing = set()
             for row in work:
+                if row['row_peer'] in failing:
+                    continue  # its peer failed in this pass: it waits for the next one
                 try:
                     card = json.loads(row['card'])
+                    prepare = lambda key=row['id']: self._prepared(key)
                     if send:
-                        send(card, lambda:self._prepare(row['id']))
+                        try:
+                            send(card, prepare)
+                        except Problem as answer:
+                            raise PeerAnswer(answer.status, answer.message) from None
                     else:
-                        send_pinned(card, lambda:self._prepare(row['id']), gate=self.store.dispatch_gate)
-                    status = 'delivered'
-                except Obsolete:
-                    status = 'withdrawn'
-                except (OSError, ValueError, Problem, PinMismatch, PeerAnswer, http.client.HTTPException):
-                    status = 'failed'  # Task 4 replaces this with spec §7's one outcome table
+                        send_pinned(card, prepare, gate=self.store.dispatch_gate)
+                    status, effect, words = 'delivered', 'reset', None
+                except Exception as error:  # noqa: BLE001 - every outcome is classify's; nothing escapes a pass
+                    status, effect, words = classify(error)
+                now = self.store.clock()
                 with self.store.transaction() as db:
-                    db.execute("UPDATE outbox SET status=?,attempts=attempts+1,next_attempt=? WHERE id=? AND status IN ('pending','failed')", (status,self.store.clock()+min(300,2**(row['attempts']+1)),row['id']))
+                    db.execute("UPDATE outbox SET status=?, attempts=attempts+1, next_attempt=0, last_error=? WHERE id=? "
+                               "AND status IN ('pending','failed')", (status, words if status == 'refused' else None, row['id']))
                     status = db.execute('SELECT status FROM outbox WHERE id=?', (row['id'],)).fetchone()[0]
-                result[status] += 1
+                    self._peer_outcome(db, row['row_peer'], effect, words, now)
+                    if status == 'delivered':
+                        db.execute('UPDATE peer_delivery SET last_success=? WHERE peer_id=?', (now, row['row_peer']))
+                if effect == 'failure':
+                    failing.add(row['row_peer'])
+                result[status] = result.get(status, 0) + 1
             with self.store.transaction() as db:
                 result['pending'] = db.execute("SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed')").fetchone()[0]
             return result
@@ -347,9 +434,12 @@ class Federation:
             row = require(db.execute('SELECT * FROM outbox WHERE id=?', (key,)).fetchone())
             if self._delivery_authority(db, row)[0] != actor:
                 raise Problem(404, 'Not found')
-            if row['status'] != 'failed':
-                raise Problem(409, 'Only failed deliveries can be retried')
-            db.execute("UPDATE outbox SET status='pending',attempts=0,next_attempt=0 WHERE id=?", (key,))
+            if row['status'] not in ('failed', 'refused'):
+                raise Problem(409, 'Only failed or refused deliveries can be retried')
+            db.execute("UPDATE outbox SET status='pending',attempts=0,next_attempt=0,last_error=NULL WHERE id=?", (key,))
+            # spec §7: the row's peer is due again, its failures kept so another failure still backs off further
+            db.execute('UPDATE peer_delivery SET next_attempt=NULL WHERE peer_id=(SELECT peer_id FROM remote_contacts WHERE id=?)',
+                       (row['contact_id'],))
         return {'ok':True}
 
     def _cancel_replies(self, db, origin, rid, recipient, revision):
@@ -478,8 +568,10 @@ class Federation:
 
     def _reply(self, db, e):
         rid, actor, origin, p = e['resource_id'],e['actor']['id'],e['origin'],e['payload']
-        room = require(db.execute('SELECT * FROM rooms WHERE id=?', (rid,)).fetchone())
-        if e['recipients'] != [room['owner_id']] or room['epoch'] != e['revision']:
+        room = db.execute('SELECT * FROM rooms WHERE id=?', (rid,)).fetchone()
+        # A room this station no longer has is an answer about this reply, not about the peer: never require()'s 404,
+        # which spec §7 calls peer-scoped, so one such reply would stall the sender's queue for good (plan SF13).
+        if room is None or e['recipients'] != [room['owner_id']] or room['epoch'] != e['revision']:
             raise Problem(403, 'Room recipient or epoch changed')
         contact = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (origin,actor)).fetchone()
         if not contact or not db.execute('SELECT 1 FROM remote_room_members WHERE room_id=? AND contact_id=?', (rid,contact[0])).fetchone():
