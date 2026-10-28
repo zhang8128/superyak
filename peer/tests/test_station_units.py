@@ -283,6 +283,9 @@ def test_lessons_units_install_and_remove_only_their_own_files(tmp_path):
     ('lessons-ship', ['SHIP=tardis', 'OWNER=andy'], ['ship', '--data-dir', 'L', '--username', 'tardis', '--owner', 'andy']),
     ('lesson-receipts', [], ['receipts', '--data-dir', 'L']),
     ('lesson-segments', [], ['segments', '--data-dir', 'L']),
+    ('lesson-repeat', ['LESSON=ab12cd34-ef56ab78', 'HOW=read', 'HOOK=off'],
+     ['repeat', '--data-dir', 'L', 'ab12cd34-ef56ab78', '--how', 'read', '--hook', 'off']),
+    ('lesson-repeats', [], ['repeats', '--data-dir', 'L']),
 ])
 def test_lessons_targets_run_the_lessons_command(tmp_path, target, variables, verb):
     """Each lessons target is one call of python -m superyak_peer.lessons; LESSONS_DATA defaults to STATION_DATA, and a
