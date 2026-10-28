@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import plistlib
 import subprocess
@@ -125,8 +126,8 @@ def test_every_installed_hook_exits_0_and_prints_nothing_when_the_checkout_is_go
     assert subprocess.run([sys.executable, str(gone)], capture_output=True).returncode == 2  # what the guard is for
     settings = tmp_path / 'settings.json'
     install.install_hooks(settings, tmp_path / 'station.json', messages=messages)
-    commands = hook_commands(settings, 'SessionStart') + hook_commands(settings, 'UserPromptSubmit') + hook_commands(settings, 'SessionEnd')
-    assert len(commands) == 3
+    commands = hook_commands(settings, 'SessionStart') + hook_commands(settings, 'UserPromptSubmit') + hook_commands(settings, 'SessionEnd') + hook_commands(settings, 'PreToolUse')
+    assert len(commands) == 4
     for command in commands:
         done = subprocess.run(['sh', '-c', command], capture_output=True, input=b'{"session_id": "s1"}', timeout=30)
         assert (done.returncode, done.stdout) == (0, b''), command
@@ -141,13 +142,14 @@ def test_docking_again_upgrades_unguarded_hooks_without_adding_a_second(tmp_path
     old = unguarded(SETTINGS_CONFIG, messages)
     settings.write_text(json.dumps({'hooks': {event: [{'hooks': [mine, {'type': 'command', 'command': command, 'timeout': 10}]}]
                                               for event, command in old.items()}}))
-    assert sorted(install.install_hooks(settings, SETTINGS_CONFIG, messages=messages)) == ['SessionEnd', 'SessionStart', 'UserPromptSubmit']
+    assert sorted(install.install_hooks(settings, SETTINGS_CONFIG, messages=messages)) == ['PreToolUse', 'SessionEnd', 'SessionStart', 'UserPromptSubmit']
     for event, wanted in install._hook_commands(SETTINGS_CONFIG, messages).items():
         assert hook_commands(settings, event) == ['notify-me', wanted]
     assert install.install_hooks(settings, SETTINGS_CONFIG, messages=messages) == []
     assert install.remove_hooks(settings) is True
     assert hook_commands(settings, 'SessionStart') == ['notify-me'] and hook_commands(settings, 'UserPromptSubmit') == ['notify-me']
     assert hook_commands(settings, 'SessionEnd') == ['notify-me']
+    assert hook_commands(settings, 'PreToolUse') == ['notify-me']
 
 
 def test_remove_hooks_skips_what_it_cannot_read_and_drops_emptied_events(tmp_path):
@@ -369,6 +371,16 @@ def test_dock_without_hook_flag_installs_the_law_hooks_with_messages_off(monkeyp
     machine.install(adna=False)
     assert 'Room messages will no longer appear in Claude Code sessions (instructions still load).' in machine.out
     assert len(hook_commands(settings, 'UserPromptSubmit')) == 1
+
+
+def test_machine_dock_trusts_this_checkout_s_checklists(monkeypatch, tmp_path):
+    from checklist_fakes import checkout
+    machine = Machine(monkeypatch, tmp_path)
+    superyak = checkout(tmp_path / 'superyak', ('reflect', {}))
+    monkeypatch.setattr(install, 'AGENT_DIR', superyak / 'agent')
+    machine.install(adna=False)
+    trusted = machine.home / '.superyak' / 'checklists' / 'trusted.json'
+    assert json.loads(trusted.read_text()) == {'trusted': [os.path.realpath(superyak / '.superyak' / 'checklists')]}
 
 
 def test_a_malformed_settings_file_is_reported_and_the_service_still_installs(monkeypatch, tmp_path):

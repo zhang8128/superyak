@@ -137,7 +137,11 @@ the username-and-source counter and gives back its other reservations; a tailnet
 also clears the username's public hold. A success sets `superyak_device` (random, HttpOnly,
 Secure, SameSite=Strict, 180 days, stored hashed, one row per browser, at most 20 per user,
 kept at logout): presented on a sign-in to its own username, it exempts that browser from
-the three holds, and its failures hold only its own token (eight in five minutes). Sign-ins
+the three holds, and its failures hold only its own token (eight in five minutes), as do
+its public sign-ins of any outcome (eight in five minutes; a held token gets 429 before
+entering a lane). A username's known browsers together are held after 24 public sign-ins
+of any outcome in five minutes, with the same 429 before a lane, since a cookieless sign-in
+mints a token for free; only a valid token's sign-in counts, and tailnet sign-ins never do. Sign-ins
 run in worker lanes of their own: public 2 at a time with 8 waiting, tailnet 1 with 4,
 known browsers 1 with 4; a full lane answers 429. One-use invitation redemption is atomic.
 
@@ -620,7 +624,7 @@ create_user(username, name, password, *, is_admin=False) -> user [trusted CLI on
 rename_user(actor, name) -> user
 account_corrections(actor) -> ordered actual self-correction records
 login(username, password, source, *, public=True, device=None) -> {user,csrf_token,token,device}
-session_is_valid(token); ship_key_is_valid(key); device_is_valid(device, username) -> bool, writing nothing
+session_is_valid(token); ship_key_is_valid(key); device_is_valid(device, username) -> bool, writing nothing; 429 for a held token
 session(token) -> user+csrf_token; logout(token) -> None
 accounts(actor); invite(actor, expires_in=86400); redeem(token,username,name,password)
 contacts(actor) -> [{id,name}]
