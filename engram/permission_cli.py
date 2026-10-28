@@ -720,21 +720,22 @@ def _rebuild(a) -> int:
 
 
 def _verify(a) -> int:
-    """P 5.6: the log's hash chain, `meta.head`, every table's seqs against the log's last row, and that row's
-    change in the tables. It writes nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does
-    not."""
+    """P 5.6: SQLite's integrity check of the file, the log's hash chain, `meta.head`, every table's seqs against
+    the log's last row, and that row's change in the tables, each table read past its indexes (`Ledger.integrity`).
+    It writes nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does not."""
     with _ledger(read_only=True) as led:
         top, problems = led.integrity()
     if not problems:
-        print(f"The ledger verifies: {top} log rows, the hash chain is whole, no table names a seq past the "
-              f"log's last row, and that row's change is in the tables.")
+        print(f"The ledger verifies: {top} log rows, SQLite's integrity check of the file is ok, the hash chain is "
+              f"whole, no table names a seq past the log's last row, and that row's change is in the tables.")
         return 0
     print(f"The ledger does not verify ({top} log rows):")
     print("\n".join(f"  - {p}" for p in problems))
     print("Every reader refuses a ledger whose tables name a seq past its log, whose head is not its last row, or "
-          "whose last row's change is not in its tables, so under `enforce` nothing is served. Restore the file "
-          "together with its journal, or replay the log that is left with `engram-permissions rebuild --out <dir>` "
-          "and make the lost acts again.")
+          "whose last row's change is not in its tables, so under `enforce` nothing is served. No reader runs "
+          "SQLite's integrity check or follows the hash chain, so a ledger that fails only those still reads as it "
+          "is. Restore the file together with its journal, or replay the log that is left with `engram-permissions "
+          "rebuild --out <dir>` and make the lost acts again.")
     return 1
 
 

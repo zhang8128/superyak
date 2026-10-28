@@ -712,10 +712,13 @@ class Ledger:
         `proposals_decided`, `records_revoked`, `grants_revoked`), or whole in the other tables a State reads whole
         (they are small), and one set only at insert from the table's newest row: rows are only ever inserted, in
         seq order, and never deleted, so the newest carries the highest. With `loaded` None (`integrity`), every
-        row is read."""
+        row is read from the table itself, past its indexes (`NOT INDEXED`), so a torn index page can neither hide
+        a row nor invent one."""
         if loaded is not None and table in loaded:
             return max((r[column] for r in loaded[table] if r[column] is not None), default=None)
-        if loaded is None or column in _SET_LATER:
+        if loaded is None:
+            sql = f"SELECT MAX({column}) FROM {table} NOT INDEXED WHERE {column} IS NOT NULL"
+        elif column in _SET_LATER:
             sql = f"SELECT MAX({column}) FROM {table} WHERE {column} IS NOT NULL"
         else:
             sql = f"SELECT {column} FROM {table} ORDER BY rowid DESC LIMIT 1"
@@ -761,13 +764,20 @@ class Ledger:
 
     def integrity(self) -> tuple[int, list[str]]:
         """What `engram-permissions verify` reports, read in one transaction: (the log's last seq, each problem
-        in words). The hash chain from the first row, `meta.head`, and every seq column of every row."""
+        in words). SQLite's own check of the file (`PRAGMA integrity_check`, which also holds every index against
+        its table), the hash chain from the first row, `meta.head`, and every seq column of every row. Each table
+        is read past its indexes (`NOT INDEXED`; `ledger_log` has none, its seq is the rowid), so a torn index page
+        can neither hide a row nor invent one."""
         self.conn.execute("BEGIN")
         try:
+            checked = [str(r[0]) for r in self.conn.execute("PRAGMA integrity_check")]
+            problems = [] if checked == ["ok"] else [f"SQLite's integrity check of the file: {m}"
+                                                     for m in checked or ["no answer"]]
             top = self.seq()
             broken = self.verify()
-            problems = [] if broken is None else [f"the log's hash chain breaks at seq {broken}"]
-            problems += self._tail_problems(top, self.meta())
+            problems += [] if broken is None else [f"the log's hash chain breaks at seq {broken}"]
+            meta = {r["key"]: r["value"] for r in self.conn.execute("SELECT key, value FROM meta NOT INDEXED")}
+            problems += self._tail_problems(top, meta)
         finally:
             self.conn.execute("COMMIT")
         return top, problems
