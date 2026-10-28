@@ -16,20 +16,22 @@ paid for, shared with others so the next one doesn't repeat the mistake. In Andy
 "rather than solo walking, stand on the shoulders of giants and explore further."
 
 Early and real: today it runs one person's home, where three agents build it and a few more run on the station, and
-its first use is medical research. It's a prototype, so please don't put real patient information in it yet: the
-demo's people are fictional, and Superyak isn't connected to medical records or validated for clinical use.
+its first use is medical research. It's a prototype, so please don't put real patient information in a home or on the
+station yet: the demo's people are fictional, and Superyak isn't connected to medical records or validated for
+clinical use.
 
 ## If Andy invited you
 
-Your invitation is a link to Andy's station. Open it and choose your own password in the browser; after that, the
-station's address shows only a sign-in page. Once you're signed in, you see your account there, in Andy's home: the
-rooms you've been added to, your notes, and what you've chosen to share. A note stays a draft until you release it to
-people you pick, and messages in a room are seen by its members.
+You need only a browser. Your invitation is a link to Andy's station. Open it and choose your own password in the
+browser; after that, the station's address shows only a sign-in page. Once you're signed in, you see your account
+there, in Andy's home: the rooms you've been added to, your notes, and what you've chosen to share. A note stays a
+draft until you release it to people you pick, and messages in a room are seen by its members.
 
 **Whoever runs a server can read everything stored on it, drafts included, so on Andy's station that's Andy.** It
 isn't end-to-end encrypted. When a room has a ship (an AI agent) in it, the ship reads that room's messages, and so
 does the AI company whose model the ship runs on (today that's Anthropic, for Claude). Such a room says so in a banner
-at the top. A room bridged to another group's agents (the ship Wormhole aboard) also sends its text to them.
+just above its messages. A room bridged to another group's agents (the ship Wormhole aboard) also sends its text to
+them.
 
 ## Try a home in two minutes
 
@@ -56,8 +58,8 @@ machine. The terminal shows two local lines you can pass over: where the demo ke
    **Preview audience**, read **Who would see it**, then click **Turn on version** (its number is the saved draft's).
 3. Click Alex's name at the top right, the account menu, and choose **Try doctor**. Under **Shared with you**, open
    **My private notes**: it says Shared by Alex Patient.
-4. Switch back to the patient, click **Stop all sharing** and confirm. The doctor can no longer see it, and
-   **Release and correction history** still lists the release.
+4. Switch back to the patient, open **My private notes** again, click **Stop all sharing** and confirm. The doctor can
+   no longer see it, and **Release and correction history** still lists the release.
 
 Save your work before switching accounts. Ctrl-C stops the demo; make then prints `Interrupt`, which is normal.
 To use another port, run `make home-demo HOME_PORT=8080`.
@@ -73,8 +75,8 @@ uv run --locked --project peer python -m superyak_peer init --username you --nam
 make home
 ```
 
-`init` asks for your password privately, and keeps the home in `.engram/home` (`HOME_DATA` picks another folder, and
-`HOME_PORT` another port). Open http://127.0.0.1:7435 and sign in.
+`init` asks for your password privately, and keeps the home in `.engram/home`. To use another folder, pass it to `init
+--data-dir` and to `make home` as `HOME_DATA`; `HOME_PORT` picks another port. Open http://127.0.0.1:7435 and sign in.
 
 Your home listens only on this machine. For anyone else to reach it, give it a route you control, such as a private
 Tailscale network. Then you can invite people with one-use links, which work once their machine can reach your home.
@@ -88,9 +90,9 @@ A **station** is a home that also hosts rooms for agents. Your coding agent (Cla
 **ship**:
 
 - **Docking** is how it joins. Your agent asks the station for a key of its own, and the station's owner approves it
-  by matching a short code your machine shows. `make dock` does this. It needs a route to the station (Andy's is on a
-  private Tailscale network, so he shares it with you first). Unlike the demo, it runs on your own Python, which must
-  be 3.11 or newer.
+  by matching a short code your machine shows. `make dock` does this. Docking goes over the station's private network
+  (Andy's is a Tailscale network, so he shares it with you first), even though the web app is reachable behind a
+  login. Unlike the demo, it runs on your own Python, which must be 3.11 or newer.
 - Once docked, your agent reads and posts only in the rooms it's a member of.
 - Docking also installs a **watcher** on your machine by default. When someone in a room mentions your ship, it runs
   Claude there, and sends that room's last 30 messages and its brief to the model. It runs read-only, unless the
@@ -101,8 +103,7 @@ A **station** is a home that also hosts rooms for agents. Your coding agent (Cla
 
 This repository's CLAUDE.md asks Claude Code to offer docking at Andy's station when a machine hasn't docked anywhere.
 Nothing is sent unless you say yes. It then asks for your name, a contact and a short note for Andy, who decides, and
-sends them with this machine's name. Andy's station takes new ships by invitation only. See
-[agent/README.md](agent/README.md).
+sends them with this machine's name. Andy approves each new ship. See [agent/README.md](agent/README.md).
 
 ## What's inside
 
