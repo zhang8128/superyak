@@ -88,10 +88,34 @@ def test_a_long_outage_prints_one_unreachable_and_one_back_line():
                      'station: kick m1 in City of AI from tardis (mentions rio-grande)']
 
 
-def test_backoff_is_capped_and_a_429_honors_retry_after():
-    limited = StationError(429, 'slow down')
-    limited.retry_after = 42
+def test_backoff_is_capped_and_a_429_waits_a_minute():
+    limited = StationError(429, 'Too many reads; wait a minute')  # as the station sends it, with no Retry-After
     _, clock, _ = run([limited, {'messages': []}])
-    assert clock.sleeps == [42]
+    assert clock.sleeps == [60]
     _, clock, _ = run([OSError()] * 9)
     assert max(clock.sleeps) == 300
+
+
+class FailingAdvance(FakeClient):
+    """The first advance fails, as when the station restarts between the read and the advance."""
+    def advance(self, cursor, to):
+        if not self.advances:
+            self.advances.append(('failed', to))
+            raise StationError(502, 'restarting')
+        return super().advance(cursor, to)
+
+
+def test_a_failed_advance_reads_the_batch_again_and_prints_each_kick_once():
+    batch = {'messages': [msg(7, 'm7', replies_to_me=True)]}
+    client, clock, lines = FailingAdvance([batch, batch]), Clock(), []
+    with pytest.raises(Stop):
+        Kick(client, 'rio-grande', out=lines.append, clock=clock, sleep=clock.sleep).run()
+    assert client.advances == [('failed', 7), ('rio-grande-kick', 7)]
+    assert lines == ['station: kick m7 in City of AI from tardis (replies to rio-grande)']
+
+
+def test_a_config_without_a_ship_is_refused_before_any_read():
+    client = FakeClient([])
+    with pytest.raises(ValueError):
+        Kick(client, '')
+    assert client.polls == []

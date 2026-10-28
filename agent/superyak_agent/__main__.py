@@ -162,6 +162,9 @@ def main(argv=None):
             Kick(client_for(config, timeout=40), config.get('ship') or '').run()
         except KeyboardInterrupt:
             return 0
+        except ValueError as error:  # a config naming no ship
+            print(f'superyak kick: {error}', file=sys.stderr)
+            return 2
     if args.command == 'dock':
         from .claims import Refused, check_mode
         from .dock import Dock

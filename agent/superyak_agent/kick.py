@@ -9,6 +9,7 @@ CURSOR_SUFFIX = '-kick'
 QUIET_SECONDS = 60     # an outage this short is silent
 FIRST_BACKOFF = 5
 MAX_BACKOFF = 300
+LIMITED_WAIT = 60     # a 429 says "wait a minute", and the client doesn't see Retry-After
 
 
 def kick_line(message, ship):
@@ -25,6 +26,8 @@ def kick_line(message, ship):
 
 class Kick:
     def __init__(self, client, ship, out=None, clock=time.time, sleep=time.sleep):
+        if not ship:
+            raise ValueError('The station config names no ship, so the kick has no cursor of its own')
         self.client, self.ship, self.clock, self.sleep = client, ship, clock, sleep
         self.out = out or (lambda line: print(line, flush=True))
         self.cursor = f'{ship}{CURSOR_SUFFIX}'
@@ -45,8 +48,7 @@ class Kick:
                 if not told and now - down_since > QUIET_SECONDS:
                     told = True
                     self.out(f"kick: station unreachable since {time.strftime('%H:%M', time.localtime(down_since))}")
-                pause = getattr(error, 'retry_after', None) if getattr(error, 'status', None) == 429 else None
-                self.sleep(pause if isinstance(pause, (int, float)) and pause > 0 else backoff)
+                self.sleep(max(backoff, LIMITED_WAIT) if getattr(error, 'status', None) == 429 else backoff)
                 backoff = min(backoff * 2, MAX_BACKOFF)
                 continue
             if told:
