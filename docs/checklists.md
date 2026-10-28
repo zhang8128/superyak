@@ -100,12 +100,14 @@ honest. A review that blames no one and changes nothing was skipped, not run.
 - [ ] The dry run is read, and its counts match what the owner expects.
 - [ ] The owner confirms in the browser on his own machine.
 - [ ] Andy approves the short id on the Pi, after matching it.
-- [ ] Admission's result is checked, and the owner's machine verifies the receipts (`make imprint-status`).
+- [ ] Admission's result is checked, and the owner's machine verifies the receipts (`make imprint-status`, which
+      lands with the imprints branch).
 
 ## A session starting or restarting (any ship)
 
 - [ ] The station watch is held (`station_watch writable=true`).
-- [ ] The kick watcher is armed: scripts/kick_watch.py under a Monitor, re-armed every 30 minutes.
+- [ ] The kick watcher is armed: scripts/kick_watch.py (on the kick-watch branch until the kick command replaces it)
+      under a Monitor, re-armed every 30 minutes.
 - [ ] The 10-minute tick exists.
 - [ ] The background work in flight is listed, and anything cut off is resumed or restarted (check git status in each
       worktree).
@@ -149,8 +151,8 @@ honest. A review that blames no one and changes nothing was skipped, not run.
       recent account payments have failed" isn't a test result, and it went unnoticed for two days.
 - [ ] What the Pi can't run (the Lighthouse and interoperability job: Node 24, pnpm 11.20.0) runs locally with pnpm
       from corepack (`COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm`), with no global install.
-- [ ] Each heavy run is capped (`systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`), one at a time on a
-      10 GB machine.
+- [ ] Each heavy run is capped (`systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`), one at a time on
+      Tardis's 10 GB machine.
 - [ ] No self-hosted runner while the repo is public: a fork's pull request would run code on the machine (ships'
       decision, 2026-10-27).
 - [ ] The post names the head hash, each job, pass and fail counts and the failing tests. It says which failures look

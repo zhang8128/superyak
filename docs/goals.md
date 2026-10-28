@@ -26,8 +26,8 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
 
 ## Serenity (the Mac): memory, the Mac, and partner reviews
 
-- S1 (goal 1): write the Mac's lessons, and lay them when the room opens. **Done 2026-10-27, drafted; waiting
-  for the room.**
+- S1 (goal 1): write the Mac's lessons, and lay them when the room opens. **Drafted 2026-10-27; waiting for
+  the room.**
 - S2 (goals 1 and 5): build compress-no-auto, so Andy's store stops turning his prompts into "knowledge". Then copy
   his store to the Pi, only after imprints merges and with his confirmation in the browser.
 - S3 (goal 2): merge chat paging, and measure it from the Mac after deploy.
@@ -68,7 +68,7 @@ For this week, each tied to an overarching goal:
   60 s, and a Mac that wakes after an hour asleep has everything it missed within a minute.
 - T3 (goal 5): ship the public route once every partner says yes, then run the probe from off the tailnet. Measure:
   docking and access requests are refused through Funnel, the login and the app load, a ship key reaches its rooms,
-  and nothing about the hole is public before then.
+  and no security detail is public before the fix is live.
 - T4 (goal 4): the visitor's view. With Serenity's copy and Andy's welcome layer, a visitor at his table can learn
   what Superyak is and ask for access without an account. Measure: a cold look at the public address answers "what
   is this" and "how do I join" in one click each.
