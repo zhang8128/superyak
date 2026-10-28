@@ -356,6 +356,12 @@ Why: a finding marked fixed without a re-run is a guess that ships as a fact.
 
 - [ ] The approver is the one the law names: Serenity for Rio Grande's branches, Rio Grande for Serenity's, or a
       fresh reviewer started on the Pi. Tardis's and Defiant's reviews are advisory until the law says otherwise.
+- [ ] A rule that tells a session to do something (CLAUDE.md, a command's printed line) is checked as a session runs
+      it: through a pipe, where stdout is block-buffered, and under Claude Code's 2-minute Bash timeout. A rule the
+      tool makes impossible is a must-fix (Serenity, 2026-10-28: imprints' confirm link reached a session after 540 s
+      of a 600 s code).
+- [ ] A gate checked in-process is also checked where the code runs as a child process: Pi measurements, units,
+      hooks. A test fixture can't reach a child (the same review's M2).
 
 ## Shell commands (zsh)
 
