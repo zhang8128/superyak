@@ -18,6 +18,8 @@ def build_parser():
     watch.add_argument('--resident', action='store_true', help='Station resident: always read-only; answers one-person rooms')
     watch.add_argument('--model')
     watch.add_argument('--once', action='store_true')
+    kick = commands.add_parser('kick', help='Print one line per mention of this ship or reply to its post (run under a Monitor)')
+    kick.add_argument('--config', type=Path, default=CONFIG)
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
@@ -152,6 +154,17 @@ def main(argv=None):
             if args.once:
                 return 0
             time.sleep(POLL_SECONDS)
+    if args.command == 'kick':
+        from .kick import Kick
+        from .station import client_for, load_config
+        config = load_config(args.config)
+        try:
+            Kick(client_for(config, timeout=40), config.get('ship') or '').run()
+        except KeyboardInterrupt:
+            return 0
+        except ValueError as error:  # a config naming no ship
+            print(f'superyak kick: {error}', file=sys.stderr)
+            return 2
     if args.command == 'dock':
         from .claims import Refused, check_mode
         from .dock import Dock

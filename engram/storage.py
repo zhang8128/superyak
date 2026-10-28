@@ -13,7 +13,7 @@ from session_bindings import valid_codex_run_key
 import store_identity
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from resources import resource_path
 
@@ -74,11 +74,18 @@ def _sanitize_fts_query(query: str) -> str:
     return " ".join(f'"{t.replace(chr(34), chr(34)+chr(34))}"' for t in tokens)
 
 
+class LaneNoteError(RuntimeError):
+    """The lane listener could not write the note that must precede a re-lane; nothing was updated."""
+
+
 class ReadOnlyStorageError(RuntimeError):
     """Raised when a mutation is attempted on a read-only Storage."""
 
 
 class Storage:
+    # Called with (phase, rows, target lane) around every re-lane; see set_episode_lanes (P 5.3).
+    lane_listener: Callable[[str, list[dict], str], None] | None = None
+
     """SQLite-backed storage for entities, relationships, episodes, and vectors."""
 
     def __init__(
@@ -96,6 +103,7 @@ class Storage:
         self._conn_closed = False
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
+        self._outcome_queue = []
         self.read_only = False
 
         # Load sqlite-vec extension
@@ -148,6 +156,7 @@ class Storage:
         self._conn_closed = False
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
+        self._outcome_queue = []
         self._migrations_dir = None
         self.read_only = True
         self.conn.enable_load_extension(True)
@@ -168,16 +177,45 @@ class Storage:
         if outermost:
             self.conn.execute("BEGIN IMMEDIATE")
         self._transaction_depth += 1
+        outcome = "rollback"
         try:
             yield
             if outermost:
                 self.conn.commit()
+            outcome = "commit"
         except BaseException:
             if outermost and self.conn.in_transaction:
                 self.conn.rollback()
             raise
         finally:
             self._transaction_depth -= 1
+            if outermost:
+                self._settle_outcomes(outcome)
+
+    def after_outcome(self, on_commit: Callable[[], None], on_rollback: Callable[[], None]) -> None:
+        """Run `on_commit` once the write just made is committed, or `on_rollback` if it is not.
+
+        Outside any transaction, `_commit` has just committed, so `on_commit` runs at once. Inside `transaction()`
+        both calls queue on the outermost block, which runs one of them after its commit or on any exceptional exit,
+        and then clears the queue. An `Exception` from a call is logged, since the store's outcome is already final;
+        a `BaseException` such as SystemExit propagates."""
+        if self._transaction_depth == 0:
+            self._run_outcome(on_commit)
+        else:
+            self._outcome_queue.append((on_commit, on_rollback))
+
+    def _settle_outcomes(self, outcome: str) -> None:
+        queue, self._outcome_queue = self._outcome_queue, []
+        for on_commit, on_rollback in queue:
+            self._run_outcome(on_commit if outcome == "commit" else on_rollback)
+
+    @staticmethod
+    def _run_outcome(call: Callable[[], None]) -> None:
+        try:
+            call()
+        except Exception:
+            logger.warning("a call after the store's outcome failed; the lane note it carried stays pending",
+                           exc_info=True)
 
     def _commit(self) -> None:
         """Commit immediately unless an outer storage transaction owns it."""
@@ -223,25 +261,45 @@ class Storage:
         # open; any other store predates whichever migrations are pending.
         created_now = not applied
         for ver, path in sorted(migrations):
-            sql = _skip_existing_columns(self.conn, path.read_text())
-            try:
-                self.conn.executescript("BEGIN IMMEDIATE;\n" + sql)
-                if ver == 28:
-                    self._assign_instance_id(created_now)
-                self.conn.execute(
-                    "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-                    (ver, _now_iso()),
-                )
-                self.conn.commit()
-            except Exception:
-                if self.conn.in_transaction:
-                    self.conn.rollback()
-                raise
-            finally:
-                self._restore_pragmas()
+            if not self._apply_migration(ver, path, created_now):
+                continue
             logger.info("Migration %d applied: %s", ver, path.name)
             if ver == 7:
                 self._backfill_content_hashes()
+
+    def _apply_migration(self, ver: int, path: Path, created_now: bool) -> bool:
+        """Apply one migration in its own ``BEGIN IMMEDIATE``. Returns False when another opener of the same
+        store applied it first: the version is read again, and the columns a migration adds are looked up, only
+        once the write lock is held, so two openers at once never both run its ALTERs ("duplicate column
+        name"). ``autocommit`` is True for the transaction because a legacy-mode ``executescript`` commits a
+        pending transaction before it runs."""
+        legacy = self.conn.autocommit
+        self.conn.autocommit = True
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            if self.conn.execute(
+                "SELECT 1 FROM schema_version WHERE version = ?", (ver,)
+            ).fetchone():
+                self.conn.execute("ROLLBACK")
+                return False
+            self.conn.executescript(_skip_existing_columns(self.conn, path.read_text()))
+            if ver == 28:
+                self._assign_instance_id(created_now)
+            if ver == 29:
+                self._mark_house_for_ledger(created_now)
+            self.conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                (ver, _now_iso()),
+            )
+            self.conn.execute("COMMIT")
+            return True
+        except BaseException:
+            if self.conn.in_transaction:
+                self.conn.execute("ROLLBACK")
+            raise
+        finally:
+            self.conn.autocommit = legacy
+            self._restore_pragmas()
 
     def _assign_instance_id(self, created_now: bool) -> None:
         """Give the store its identity inside migration 028's transaction.
@@ -256,6 +314,23 @@ class Storage:
             "Store identity %s (%s)",
             identity.get("instance_id"), identity.get("instance_id_origin"),
         )
+
+    def _mark_house_for_ledger(self, created_now: bool) -> None:
+        """Mark a house created by this open with the permissions ledger's id, inside migration 029's transaction
+        (P 12.3, 'A house made later'). A house 029 merely upgrades was not created now and is left unmarked: one
+        restored from before the raise stays closed until the gate act marks it."""
+        if not created_now:
+            return
+        from permission_ledger import house_mark  # deferred: the ledger module is not needed to open a store
+        mark = house_mark(Path(self.db_path))
+        if mark is not None:
+            self.conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('permissions_ledger_id', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (mark,))
+
+    def placement_changes(self) -> int:
+        """The count of inserts, updates and deletes on shared_memories since migration 029 (P 12.2)."""
+        return self.conn.execute("SELECT count FROM shared_memories_changes WHERE id = 1").fetchone()[0]
 
     def instance_identity(self) -> dict:
         """The identity keys in ``meta`` (``instance_id``, origin, basis, fork)."""
@@ -596,24 +671,75 @@ class Storage:
         self._commit()
 
     def set_episode_lanes(self, ids: list[str], lane: str) -> int:
-        """Re-lane episodes (e.g. when compression review reveals work content)."""
+        """Re-lane episodes (e.g. when compression review reveals work content).
+
+        With a `lane_listener`, it is told "before" (a failure refuses the re-lane with LaneNoteError and nothing
+        is updated), then "after" once the change is committed, or "failed" when it is not (P 5.3)."""
         if lane not in ("personal", "work"):
             raise ValueError(f"Invalid lane: {lane!r}. Must be 'personal' or 'work'.")
         if not ids:
             return 0
         placeholders = ", ".join("?" * len(ids))
-        cur = self.conn.execute(
-            f"UPDATE episodes SET lane = ? WHERE id IN ({placeholders})",
-            [lane, *ids],
-        )
-        self._commit()
+        listener = self.lane_listener
+        rows: list[dict] = []
+        if listener is not None:
+            rows = [dict(r) for r in self.conn.execute(
+                f"SELECT id, lane, created_at FROM episodes WHERE id IN ({placeholders})", ids)]
+            try:
+                listener("before", rows, lane)
+            except Exception as e:
+                raise LaneNoteError(f"the lane note could not be written: {e}") from e
+        try:
+            cur = self.conn.execute(
+                f"UPDATE episodes SET lane = ? WHERE id IN ({placeholders})",
+                [lane, *ids],
+            )
+            if self._transaction_depth == 0:
+                try:
+                    self._commit()
+                except BaseException:
+                    if self.conn.in_transaction:     # a COMMIT refused with SQLITE_BUSY leaves it open
+                        self.conn.rollback()
+                    raise
+            else:
+                self._commit()
+        except Exception:
+            if listener is not None:
+                self._run_outcome(lambda: listener("failed", rows, lane))
+            raise
+        if listener is not None:
+            self.after_outcome(lambda: listener("after", rows, lane), lambda: listener("failed", rows, lane))
         return cur.rowcount
 
-    def get_uncompressed_episodes(self) -> list[dict]:
-        """Return all episodes that have not been compressed."""
-        rows = self.conn.execute(
-            "SELECT * FROM episodes WHERE compressed = 0"
-        ).fetchall()
+    def get_uncompressed_episodes(self, *, auto: str) -> list[dict]:
+        """Return episodes that have not been compressed.
+
+        ``auto`` decides what happens to prompt captures (source 'auto'):
+        "all" returns every uncompressed episode; "none" leaves captures out
+        (NULL sources count as non-auto); "used" also admits captures that a
+        recall logged ``used...`` returned.
+        """
+        if auto == "all":
+            rows = self.conn.execute(
+                "SELECT * FROM episodes WHERE compressed = 0"
+            ).fetchall()
+        elif auto == "none":
+            rows = self.conn.execute(
+                "SELECT * FROM episodes WHERE compressed = 0 "
+                "AND coalesce(source, '') <> 'auto'"
+            ).fetchall()
+        elif auto == "used":
+            rows = self.conn.execute(
+                "SELECT * FROM episodes WHERE compressed = 0 AND ("
+                "coalesce(source, '') <> 'auto' OR id IN ("
+                # json_each gets '[]' for a malformed row, so a bad target_ids can never raise, whatever order
+                # SQLite evaluates the WHERE terms in (it doesn't promise json_valid runs before json_each).
+                "SELECT j.value FROM memory_log m, "
+                "json_each(CASE WHEN json_valid(m.target_ids) THEN m.target_ids ELSE '[]' END) j "
+                "WHERE m.event_type = 'recall' AND m.outcome LIKE 'used%'))"
+            ).fetchall()
+        else:
+            raise ValueError(f"auto must be 'all', 'used' or 'none', not {auto!r}")
         return [dict(r) for r in rows]
 
     def get_episode(self, id: str) -> dict | None:

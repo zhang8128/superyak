@@ -28,6 +28,8 @@ def load_groups(path: Path) -> dict[str, list[str]]:
     for name, group in groups.items():
         if not isinstance(name, str) or _NAME.fullmatch(name) is None:
             raise ValueError("invalid group name")
+        if name == "outside-home":
+            raise ValueError("group name outside-home is reserved")
         if not isinstance(group, dict):
             raise ValueError("invalid group")
         members = group.get("members")
