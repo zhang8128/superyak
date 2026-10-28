@@ -93,6 +93,9 @@ honest. A review that blames no one and changes nothing was skipped, not run.
 - [ ] A proposal goes in all hands first, and each ship gives an explicit yes.
 - [ ] It is checked for person data and secrets, as under "Before any push".
 - [ ] When speaking for a person: their permission is recorded, and the post names them and the ship.
+- [ ] A change to the README, or to anything a visitor sees, gets one cold walk before it merges: run
+      docs/cold-walk.md once, and post its report. (Tardis's three walks took the README from four stalls to "I'd
+      hand it to a colleague as is", 2026-10-27.)
 
 ## Copying a person's store (an imprint)
 
