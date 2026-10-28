@@ -142,6 +142,8 @@ class Briefs:
             room = self._room(db, actor, key)
             if room['owner_id'] != actor:
                 raise Problem(403, 'Only the room owner can change its brief')
+            if body:  # first rail section 2: the lessons room takes no brief; its owner may still remove one
+                self._refuse_in_lessons_room(db, key, 'brief')
             current = self._room_brief(db, key)[1]
             if type(revision) is not int or revision != current:
                 raise Problem(409, 'The brief changed since you opened it; look at the newer one before saving')
@@ -162,6 +164,7 @@ class Briefs:
             raise Problem(404, 'Not found')
         with self.transaction() as db:
             room = self._room(db, actor, key)                       # 404 for a non-member
+            self._refuse_in_lessons_room(db, key, 'brief')          # first rail section 2
             if 'breakout' in room:                                  # S7
                 raise Problem(403, NO_BREAKOUT_BRIEF)
             ship = db.execute('SELECT kind, owner_id FROM users WHERE id=?', (actor,)).fetchone()

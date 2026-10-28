@@ -412,6 +412,43 @@ def test_a_routes_own_error_still_reaches_the_500_handler(env, monkeypatch, wher
     assert answer(client.get('/api/chats')) == (500, {'error': 'Request could not be completed'})
 
 
+IMPRINT_TEMPLATES = {'/api/imprints', '/api/imprints/code/{code}', '/api/imprints/{request_id}',
+                     *(f'/api/imprints/{{request_id}}/{action}' for action in
+                       ('confirm', 'decline', 'manifest', 'parts/{n}', 'complete', 'withdraw', 'shorten'))}
+
+
+def files_under(path):
+    return sorted(str(p) for p in Path(path).rglob('*'))
+
+
+@pytest.mark.parametrize('credentials', [{}, {'authorization': 'Bearer made-up-ship-key'},
+                                         {'cookie': 'superyak_session=made-up'}], ids=['anonymous', 'made-up-key', 'made-up-cookie'])
+def test_every_route_with_the_imprint_routes_on_refuses_a_public_request(tmp_path, monkeypatch, credentials):
+    """Section 2 review S1: the walk above, over a station with its imprint routes on (`imprints_dir`) and a live
+    request, so every imprint template is walked with a real request id and code. No handler runs, and no row or
+    file changes."""
+    from imprint_support import post, request_doc, station
+    st = station(tmp_path)
+    made = post(st, request_doc()).json()
+    reached = []
+    for name in ('session', 'ship_for_key'):
+        def fail(*args, name=name, **kwargs):
+            reached.append(name)
+            raise AssertionError(f'a route handler ran and called store.{name}')
+        monkeypatch.setattr(st.store, name, fail)
+    walked = every_route(st.app)
+    assert {template for template, _, _ in walked if 'imprint' in template} == IMPRINT_TEMPLATES
+    before, files, client = rows(st.app), files_under(tmp_path), public(st.app, **credentials)
+    for template, method, path in walked:
+        if (template, method) in ALLOWED:
+            continue
+        if 'imprint' in template:
+            path = template.replace('{request_id}', made['id']).replace('{code}', made['code']).replace('{n}', '0')
+        response = client.request(method, path, json={} if method in ('POST', 'PUT', 'PATCH') else None)
+        assert refused(response), (method, path, response.status_code, response.text)
+    assert reached == [] and rows(st.app) == before and files_under(tmp_path) == files
+
+
 def test_a_public_websocket_is_closed_before_any_lookup(watched):
     from starlette.websockets import WebSocketDisconnect
     (app, clients, users, clock), reached = watched

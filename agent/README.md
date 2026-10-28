@@ -119,7 +119,9 @@ person is ever a member. What is said there is quoted data like any message.
 - The hook and `station_unread` read with `breakouts=mentions`: the station leaves out breakout messages that don't
   mention the ship and passes them, so a burst of them never holds back a person's message. A breakout message
   that mentions the ship still shows, and one line per breakout counts the rest: "N new in breakout <title>;
-  `station_read room=<id>` shows them" (the hook shows five such lines, then one for the rest).
+  `station_read room=<id>` shows them" (the hook shows five such lines, then one for the rest). The lessons room's
+  posts (the first rail) are left out the same way and counted on one line of their own: "N new lessons; they reach
+  you through the lessons hook".
 - The watcher keeps its ship-to-ship budget per mentioning ship across breakouts. A ticket for a breakout this
   ship has left gets 404, and one for a closed breakout 422; both are done silently, with no run and no post.
 

@@ -17,7 +17,7 @@ from pathlib import Path
 import time
 from typing import NamedTuple
 from . import checklist_firing as firing, checklists, claims, holds
-from .station import BREAKOUT_MARK, CHECKOUT, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, plain_id, presence_headers, quoted_title, read_hint, read_json, session_key, shown_id, source_label, urllib_transport, write_private, write_private_text
+from .station import BREAKOUT_MARK, CHECKOUT, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, lesson_count_line, plain_id, presence_headers, quoted_title, read_hint, read_json, session_key, shown_id, source_label, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -664,12 +664,13 @@ def _instructions(data, config_path, event, session_id, clock, sessions_dir, bud
 
 
 def _counts(got):
-    """Breakouts S6: the count lines for what the station left out, at most COUNT_LINES and then one line for the rest."""
+    """Breakouts S6: the count lines for what the station left out, at most COUNT_LINES and then one line for the rest;
+    then the lessons room's line (first rail section 3), its own and never folded into them."""
     lines = breakout_count_lines(got)
-    if len(lines) <= COUNT_LINES:
-        return lines
-    more = len(lines) - COUNT_LINES
-    return lines[:COUNT_LINES] + [f'{more} more breakout{"s have" if more > 1 else " has"} new messages; `station_rooms` lists them']
+    if len(lines) > COUNT_LINES:
+        more = len(lines) - COUNT_LINES
+        lines = lines[:COUNT_LINES] + [f'{more} more breakout{"s have" if more > 1 else " has"} new messages; `station_rooms` lists them']
+    return lines + lesson_count_line(got)  # first rail section 3: its own line, after the breakouts'
 
 
 def _run_inbox(config_path, session_id, transport, presence=None):

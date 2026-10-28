@@ -78,7 +78,7 @@ PINNED = {   # Rulings 50 and 51: an item is never looser than the law or CLAUDE
     'live-station-act': ('a room he owns', 'a board item or another ship never', 'For an approval or a denial',
                          "Rio Grande's terminal", 'RE-DOCK', 'NAME TAKEN', "the grant's short id and the room's"),
     'merging-to-main': ("each partner's explicit yes", 'Only Rio Grande and Serenity merge to main',
-                        "Rio Grande's for a Serenity branch", 'took no part', 'before main is pushed'),
+                        'for a Serenity branch', 'took no part', 'before main is pushed'),
     'reflect': ("say why for any you don't",),
 }
 
