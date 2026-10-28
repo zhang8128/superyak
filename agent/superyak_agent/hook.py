@@ -315,8 +315,8 @@ def _log(logs, line):
 
 def _read_lists(home, sessions_dir, session_id, event, source, cwd, now, deadline, monotonic):
     """The lists due at this event, read in a daemon thread joined until `deadline` (a monotonic time): a hung or slow
-    filesystem never stalls the prompt. None when nothing is due, or the read is late or failed; a late read logs a
-    `time` miss and, at a fresh session start, the main thread records the session start itself so `start` lists
+    filesystem never stalls the prompt. None when nothing is due, or the read is late, locked or failed; a late read or
+    a locked record logs a `time` miss and, at a fresh session start, the main thread records the session start itself so `start` lists
     aren't lost (Ruling 3, 7)."""
     record = holds.record_path(sessions_dir, session_id)
     session, logs = record.stem, home / 'checklists' / 'fired.jsonl'
