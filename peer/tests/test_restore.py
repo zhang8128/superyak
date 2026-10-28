@@ -1395,7 +1395,10 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'inbox_received', 'receipts', 'peer_messages', 'federation_cursor', 'layer_revisions',
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
     'pairing_confirmations',  # fix:pairing-code: a typed code's record; pairing itself is peers and remote_contacts
-    'contact_holds'}  # a contact waiting for its own code: it only takes away, so copying it as is is safe
+    'contact_holds',  # a contact waiting for its own code: it only takes away, so copying it as is is safe
+    # federation pull (plan SF9): copied as they are. Restored nonces are pruned by `at` on the next pull, and a restore
+    # takes longer than the 300 s replay window; the backfill covers a copy older than peer_delivery.
+    'peer_meta', 'pull_nonces', 'peer_delivery'}
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):

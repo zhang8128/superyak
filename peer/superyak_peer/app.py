@@ -272,6 +272,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         raise ValueError('Federation requires HTTPS')
     app = FastAPI(title='Superyak', docs_url=None, redoc_url=None, openapi_url=None, lifespan=federation_lifespan)
     store = app.state.store = Store(data_dir, clock=clock, share_link_file=share_link_file)
+    if federation_endpoint:
+        store.claim_federation_mode('push')  # federation pull spec §1: at every start; the same mode again is a no-op
     app.state.federation = Federation(store, endpoint=federation_endpoint)
     app.state.agent_history = agent_history  # version check V1: read once by `serve`; None means off
     app.state.sync_enabled = sync_enabled

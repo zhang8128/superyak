@@ -30,8 +30,12 @@ class Federation:
         self._sync_lock = threading.Lock()
 
     def card(self, actor):
+        """A v1 card with this peer's endpoint, or a v2 card with none once its mode is pull (federation-pull spec §2)."""
+        pull = self.store.federation_mode() == 'pull'
         with self.store.transaction() as db:
             user = require(db.execute('SELECT id,name FROM users WHERE id=?', (actor,)).fetchone())
+            if pull:
+                return self.identity.card(None, dict(user), delivery='pull')
             return self.identity.card(self.endpoint, dict(user))
 
     def pair(self, actor, card, *, code):
@@ -49,9 +53,15 @@ class Federation:
             if typed != expected:
                 raise Problem(400, f"That code doesn't match this card. Its code is {show_code(expected)}; read the "
                                    "other machine's screen again.")
+            mode = card.get('delivery', 'push')  # the effective mode: a v1 card has no `delivery` (spec §2)
+            here = db.execute("SELECT value FROM peer_meta WHERE key='federation_mode'").fetchone()
+            if mode == 'pull' and here and here[0] == 'pull':
+                raise Problem(400, 'Two pull peers can never reach each other: pair a pull card on a peer that listens')
             previous = db.execute('SELECT card FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()
             if previous:
                 prior = json.loads(previous['card'])
+                if prior.get('delivery', 'push') != mode:  # compared first, so a v1 prior meets a v2 card with no KeyError
+                    raise Problem(409, 'A known peer cannot change how it delivers; a pull peer is a new identity')
                 if any(prior[k] != card[k] for k in TRUST_KEYS):
                     raise Problem(409, 'Known peer trust material cannot be replaced')
             # The confirmation is for the card connections() will rebuild (the stored card with this participant), so
@@ -60,6 +70,9 @@ class Federation:
             if pairing_code({**(prior if previous else card), 'participant': card['participant']}) != expected:
                 raise Problem(409, 'Known peer trust material cannot be replaced')
             db.execute('INSERT INTO peers VALUES(?,?,1) ON CONFLICT(peer_id) DO UPDATE SET paired=1', (card['peer_id'], encode(card)))
+            # spec §7 and plan P14: the mode from the card, on both paths; a person re-pairing makes the peer due again
+            db.execute('INSERT INTO peer_delivery(peer_id, mode, failures) VALUES(?,?,0) ON CONFLICT(peer_id) DO UPDATE SET '
+                       'failures=0, next_attempt=NULL, failing_since=NULL', (card['peer_id'], mode))
             db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?) ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name', ('remote_'+uid(), card['peer_id'],card['participant']['id'],card['participant']['name']))
             contact = dict(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (card['peer_id'],card['participant']['id'])).fetchone())
             db.execute('INSERT INTO pairing_confirmations VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET '
