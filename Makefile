@@ -53,7 +53,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -187,6 +187,13 @@ check-team:
 
 setup-agent:
 	cd agent && uv sync --locked --extra dev --python "$(PYTHON_VERSION)"
+
+# Refuse a push to the public repo of what the history scrub removed (docs/checklists.md, Before any push). Run it
+# after this target is on main: the path is the checkout's own, and a missing hook fails open. The hook also needs
+# ~/.superyak/scrub-terms (mode 0600, Andy's to place); without it every push to the public repo is refused.
+install-hooks:
+	git config core.hooksPath "$(CURDIR)/scripts/git-hooks"
+	@echo 'pre-push hook installed for every worktree of this clone'
 
 # Print one line per mention of this ship or reply to its post; run it under Claude Code's Monitor.
 kick:
