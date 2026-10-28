@@ -342,6 +342,26 @@ local command that prints JSON for pending access requests, approvals without a 
 newly docked ships; Odo posts each once in `Ops`. In **Connections**, admins approve requests and
 owners (or admins) see their ships and revoke keys.
 
+## Lessons (the first rail)
+
+A lesson is a post in the lessons room, in the wire format of the first rail spec (section 2 of
+`docs/superpowers/specs/2026-10-27-first-rail-lessons-design.md`). Each peer indexes its own copy every 60 s and answers
+its own sessions' queries; nothing is asked of another peer. The command is
+`python -m superyak_peer.lessons <verb> --data-dir D`, and make wraps each verb (`LESSONS_DATA`, the station's by default):
+
+- `station-room` (`make station-lessons-room ID=… [CONFIRM=…]`), on the origin only: shows the room Andy names, its
+  members and listed peers, and a confirm code; run again with the code, it records the room.
+- `room` (`make lessons-room ID=<origin peer id>:<room id>`), on another peer: records the same room; `where`
+  (`make lessons-where`) prints the current room's full id on any peer.
+- `ship` (`make lessons-ship SHIP=… OWNER=…`), Andy only: a ship account with no key for this peer's own ship.
+- `check` (`make lessons-check SHIP=… FILE=…`): this peer's door checks on one post, without posting.
+- `list` (`make lessons-list`): each live lesson's short id, ship and claim, and the `retract <full id>` line Andy posts
+  to retract it.
+- `index` (run every minute by the timer `make lessons-units` installs): writes `lessons-index.bin` in the data directory.
+- `query`: the hook's call, the request on stdin and the answer on stdout.
+- `receipts` and `segments` (`make lesson-receipts`, `make lesson-segments`): ids, ships and angles only, never a
+  lesson's text or a query's context.
+
 ## Checks and source release
 
 ```sh

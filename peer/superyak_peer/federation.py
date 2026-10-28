@@ -478,6 +478,7 @@ class Federation:
             if old['body'] != p['body']:
                 raise Problem(409, 'Message ID already used')
             return
+        self.store._lessons_gate(db, rid, author, p['body'], client_id=p['client_message_id'])  # first rail section 3: the origin's reply door
         key = uid()
         db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (key,rid,author,p['client_message_id'],p['body'],room['epoch'],self.store.clock()))
         self.store.emit(db,'chat.message',rid,room['epoch'],{'message_id':key,'author_id':author})
