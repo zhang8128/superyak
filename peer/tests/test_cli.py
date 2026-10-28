@@ -436,3 +436,83 @@ def test_connections_needs_an_admin(tmp_path):
     here.create_user('carol', 'Carol', 'long-password')
     refused = run('connections', '--data-dir', here.data_dir, '--as', 'carol')
     assert refused.returncode == 1 and 'Admin required' in refused.stderr
+
+
+# Federation pull, plan Task 8: the card and delivery commands (P8, P10, SF5, SF6, nit 14)
+
+def pull_owner(path):
+    from superyak_peer.db import Store
+    store = Store(path)
+    return store, store.create_user('owner', 'Owner', 'a-long-password', is_admin=True)['id']
+
+
+def test_card_pull_prints_a_v2_card_whose_code_connections_lists_after_pairing(tmp_path):
+    from superyak_peer.federation import Federation
+    from superyak_peer.identity import pairing_code, show_code
+    pull_owner(tmp_path / 'mac')
+    done = run('card', '--data-dir', tmp_path / 'mac', '--username', 'owner', '--pull')
+    assert done.returncode == 0, done.stderr
+    card = json.loads(done.stdout)
+    assert (card['version'], card['endpoint'], card['delivery']) == (2, None, 'pull')
+    pi, owner = pull_owner(tmp_path / 'pi')
+    Federation(pi, endpoint='https://localhost:7435').pair(owner, card, code=pairing_code(card))
+    listed = run('connections', '--data-dir', tmp_path / 'pi', '--as', 'owner')
+    assert listed.returncode == 0, listed.stderr
+    assert f'code {show_code(pairing_code(card))}' in listed.stdout and 'fetches from us' in listed.stdout
+
+
+def test_card_pull_is_refused_on_a_store_paired_before_any_card(tmp_path):
+    """SF6: paired through `pair` before any card, it has a peers row, no identity.json and no mode."""
+    from superyak_peer.__main__ import admin_account, federation_here
+    from superyak_peer.federation import Federation
+    from superyak_peer.identity import pairing_code
+    mac, _ = pull_owner(tmp_path / 'mac')
+    pi, pi_owner = pull_owner(tmp_path / 'pi')
+    pi_card = Federation(pi, endpoint='https://localhost:7435').card(pi_owner)
+    federation_here(mac).pair(admin_account(mac, 'owner'), pi_card, code=pairing_code(pi_card))
+    done = run('card', '--data-dir', tmp_path / 'mac', '--username', 'owner', '--pull')
+    assert done.returncode == 1 and 'no identity' in done.stderr and not (tmp_path / 'mac' / 'identity.json').exists()
+
+
+def test_card_pull_and_card_endpoint_refuse_each_other(tmp_path):
+    pull_owner(tmp_path / 'a'), pull_owner(tmp_path / 'b')
+    assert run('card', '--data-dir', tmp_path / 'a', '--username', 'owner', '--endpoint', 'https://localhost:7435').returncode == 0
+    refused = run('card', '--data-dir', tmp_path / 'a', '--username', 'owner', '--pull')
+    assert refused.returncode == 1 and 'cannot export a pull card' in refused.stderr
+    assert run('card', '--data-dir', tmp_path / 'b', '--username', 'owner', '--pull').returncode == 0
+    refused = run('card', '--data-dir', tmp_path / 'b', '--username', 'owner', '--endpoint', 'https://localhost:7435')
+    assert refused.returncode == 1 and 'cannot export a push card' in refused.stderr
+
+
+def test_a_pull_peer_that_lost_its_identity_is_refused_and_none_is_made(tmp_path):
+    """SF5 and P8: once the mode is set, card never makes an identity."""
+    pull_owner(tmp_path / 'mac')
+    assert run('card', '--data-dir', tmp_path / 'mac', '--username', 'owner', '--pull').returncode == 0
+    (tmp_path / 'mac' / 'identity.json').unlink()
+    done = run('card', '--data-dir', tmp_path / 'mac', '--username', 'owner', '--pull')
+    assert done.returncode == 1 and 'identity.json is missing' in done.stderr
+    assert not (tmp_path / 'mac' / 'identity.json').exists()
+
+
+def test_deliveries_lists_a_refused_row_with_its_reason_and_another_admins_retry_is_404(tmp_path):
+    """P10: the Mac can see and retry its deliveries without the browser."""
+    from superyak_peer.identity import pairing_code
+    from test_federation_outcomes import Clock, share, station
+    clock = Clock()
+    a, mac = station(tmp_path / 'a', 'alice', clock), station(tmp_path / 'mac', 'mo', clock, mode='pull')
+    contact = a[2].pair(a[1], mac[2].card(mac[1]), code=pairing_code(mac[2].card(mac[1])))['id']
+    share(a, contact, 'for the mac')
+    a[2].collect()
+    with a[0].transaction() as db:
+        db.execute("UPDATE outbox SET status='refused', last_error='403 Unknown remote participant'")
+        key = db.execute('SELECT id FROM outbox').fetchone()[0]
+    a[0].create_user('bob', 'Bob', 'a-long-password', is_admin=True)
+    listed = run('deliveries', '--data-dir', tmp_path / 'a', '--as', 'alice')
+    assert listed.returncode == 0, listed.stderr
+    assert key in listed.stdout and 'refused: 403 Unknown remote participant' in listed.stdout
+    other = run('retry', key, '--data-dir', tmp_path / 'a', '--as', 'bob')
+    assert other.returncode == 1 and 'Not found' in other.stderr
+    mine = run('retry', key, '--data-dir', tmp_path / 'a', '--as', 'alice')
+    assert mine.returncode == 0, mine.stderr
+    with a[0].transaction() as db:
+        assert db.execute('SELECT status, last_error FROM outbox WHERE id=?', (key,)).fetchone()[:] == ('pending', None)

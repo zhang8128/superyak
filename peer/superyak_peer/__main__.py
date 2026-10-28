@@ -342,9 +342,24 @@ def describe_connections(listed):
     """A code is listed only for a confirmed contact (connections() shows no other: it could be copied into a re-pair)."""
     if not listed:
         return 'No paired peers.'
-    return '\n'.join(f"{safe_line(c['name'])} ({safe_line(c['user_id'])}) at {safe_line(c['card']['endpoint'], 200)}: "
+    return '\n'.join(f"{safe_line(c['name'])} ({safe_line(c['user_id'])}) "
+                     f"{('at ' + safe_line(c['card']['endpoint'], 200)) if c['card'].get('endpoint') else 'fetches from us'}: "
                      f"{('code ' + c['pairing_code']) if c['pairing_code'] else 'no code shown'}, {contact_state(c)}"
                      f"{'' if c['paired'] else ', unpaired'}" for c in listed)
+
+
+def describe_deliveries(rows):
+    """Federation pull P10: one safe line per delivery, with its id, status, why a refused one wasn't delivered, and
+    the peer's next attempt."""
+    if not rows:
+        return 'No deliveries.'
+    from datetime import datetime, timezone
+
+    def when(at):
+        return datetime.fromtimestamp(at, timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    return '\n'.join(f"{r['id']} {safe_line(r['status'])}{(': ' + safe_line(r['last_error'], 200)) if r['last_error'] else ''}"
+                     f"{(', next attempt ' + when(r['next_attempt'])) if r['next_attempt'] else ''}, to "
+                     f"{safe_line(r['contact_name'])}: {safe_line(r['resource_title'], 120)}" for r in rows)
 
 
 def main(argv=None):
@@ -366,7 +381,17 @@ def main(argv=None):
     card = commands.add_parser('card')
     card.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     card.add_argument('--username', required=True)
-    card.add_argument('--endpoint', required=True)
+    kind = card.add_mutually_exclusive_group(required=True)
+    kind.add_argument('--endpoint')
+    kind.add_argument('--pull', action='store_true', help='A pull card: no address; this peer fetches from its peers '
+                      '(federation pull)')
+    deliveries = commands.add_parser('deliveries', help="An admin's deliveries, one safe line each (federation pull P10)")
+    deliveries.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    deliveries.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
+    retry = commands.add_parser('retry', help='Retry a failed or refused delivery by its id (federation pull P10)')
+    retry.add_argument('key')
+    retry.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    retry.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
     pair = commands.add_parser('pair', help="Pair another peer's card; a person types its code, read off that machine's "
                                'screen, at this terminal')
     pair.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
@@ -577,17 +602,38 @@ def main(argv=None):
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
+            from .signatures import refuse_a_lost_identity_before_the_store
             from urllib.parse import urlsplit
+            refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b: before an identity is loaded or made
             store = Store(args.data_dir)
             with store.transaction() as db:
                 user = db.execute("SELECT id FROM users WHERE username=? AND kind!='system'", (args.username,)).fetchone()  # R34
                 if not user:
                     raise ValueError('Unknown local account')
-            host = urlsplit(args.endpoint).hostname
-            identity = PeerIdentity.load_or_create(store.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
-            exported = Federation(store, endpoint=args.endpoint, identity=identity).card(user[0])
+                paired_before = db.execute('SELECT 1 FROM peers LIMIT 1').fetchone()
+            mode, current = ('pull' if args.pull else 'push'), store.federation_mode()
+            has_identity = (store.data_dir / 'identity.json').is_file()
+            if current not in (None, mode):
+                store.claim_federation_mode(mode)  # refuses, in its own words: one identity never exports both kinds
+            if current is not None and not has_identity:  # plan P8 (review SF5): only the first card makes an identity
+                raise ValueError('identity.json is missing, and a card command never makes a new one once this peer has a '
+                                 'mode: restore identity.json, or make a new identity on purpose with station-new-identity')
+            if args.pull and not has_identity and paired_before:  # review SF6
+                raise ValueError('This peer already has peers but no identity, so a pull card would be an identity they '
+                                 'have never seen. Export a card here first, then pair again.')
+            hosts = ['localhost', '127.0.0.1'] + ([] if args.pull else [urlsplit(args.endpoint).hostname])
+            identity = PeerIdentity.load_or_create(store.data_dir, hosts=tuple(dict.fromkeys(hosts)))
+            store.claim_federation_mode(mode)  # plan P2: the first card sets the mode
+            exported = Federation(store, endpoint=None if args.pull else args.endpoint, identity=identity).card(user[0])
             print(json.dumps(exported, indent=2))  # stdout stays exactly a card
             show_card_code(exported)
+        elif args.command == 'deliveries':
+            store = Store(args.data_dir)
+            print(describe_deliveries(federation_here(store).status(admin_account(store, args.as_user))))
+        elif args.command == 'retry':
+            store = Store(args.data_dir)
+            federation_here(store).retry(admin_account(store, args.as_user), args.key)
+            print('Retrying: it goes with the next delivery pass.')
         elif args.command == 'pair':
             status = pair_command(args.data_dir, args.card, args.as_user)
             if status:
