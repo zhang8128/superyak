@@ -111,7 +111,7 @@ honest. A review that blames no one and changes nothing was skipped, not run.
 ## A session starting or restarting (any ship)
 
 - [ ] The station watch is held (`station_watch writable=true`).
-- [ ] The kick watcher is armed: scripts/kick_watch.py (on the kick-watch branch until the kick command replaces it)
+- [ ] The kick watcher is armed: `make kick`
       under a Monitor, re-armed every 30 minutes.
 - [ ] The 10-minute tick exists.
 - [ ] The background work in flight is listed, and anything cut off is resumed or restarted (check git status in each
