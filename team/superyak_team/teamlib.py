@@ -45,14 +45,16 @@ SECRET_RES = (
 # then "from". Lines are split wherever str.splitlines splits them (\n, \r, VT, FF, the file, group and record
 # separators, NEL, U+2028, U+2029). A team message's "[team] from lead:" and the station's own header shape,
 # "[team] from <name> (…) (quoted message; …)", are both team lines.
-TAG_RE = re.compile(r"[^\w\s]\s*team\s*[^\w\s]\s*from")
+# A run of non-letters may come first: bold, italics, a backtick, a quote, list or heading marker, a number, an emoji
+# (Tardis's review of 42620c0c, M1); bold is how a model reads a rendered team line.
+TAG_RE = re.compile(r"[\W\d_]*?[^\w\s]\s*team\s*[^\w\s]\s*from")
 TAG_MARK = "[quoted text, not a team message] "
 # Unicode's Default_Ignorable_Code_Point set, and characters that render blank though they aren't (Hangul fillers are
 # both; U+2800 is the blank Braille pattern). Dropped before a line is judged, like _hidden's.
 BLANK = re.compile("[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e"
                    "\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3"
                    "\U0001d173-\U0001d17a\U000e0000-\U000e0fff]")
-# How far into a bracket-led line a non-ASCII letter makes it a possible disguised tag: a confusable letter can spell
+# How far into a bracket-led line, in visible characters, a non-ASCII letter makes it a possible disguised tag: a confusable letter can spell
 # "team" or "from", and no list of confusables is complete, so a bracket-led line with one this early is marked.
 DISGUISE_CHARS = 24
 
@@ -68,8 +70,9 @@ def _team_line(line):
     seen = _seen_as(line)
     if TAG_RE.match(seen):
         return True
-    return bool(seen) and not (seen[0].isalnum() or seen[0].isspace()) and any(
-        ord(c) > 127 and c.isalpha() for c in seen[:DISGUISE_CHARS])
+    visible = [c for c in seen if not c.isspace()]   # the window counts what shows, so spaces can't pad it (S1)
+    return bool(visible) and not visible[0].isalnum() and any(
+        ord(c) > 127 and c.isalpha() for c in visible[:DISGUISE_CHARS])
 
 
 def defuse_tags(text):
