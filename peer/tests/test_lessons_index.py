@@ -293,7 +293,7 @@ def test_before_a_command_only_command_values_match_and_each_lesson_says_which(l
     store.send_message(ids['tardis'], room, 'c3', lesson_body(claim='Error.', command=('qqqq',), error=('no matches found',)))
     store.lessons_index(None)
     held, _ = ask(store, clock, command='make --include=*.py', error='zsh: no matches found', words_only=True)
-    assert sorted((e['claim'], e['command']) for e in held['lessons']) == [('Long.', '--include=*'), ('Short.', 'make')]
+    assert [(e['claim'], e['command']) for e in held['lessons']] == [('Long.', '--include=*')]   # make can't hold (M2)
     after, _ = ask(store, clock, command='make --include=*.py', error='make; zsh: no matches found')
     got = [(e['claim'], e.get('command')) for e in after['lessons']]
     assert got[0] == ('Long.', '--include=*') and sorted(got[1:]) == [('Error.', None), ('Short.', 'make')]   # 2 values, then 1 each by id
@@ -455,6 +455,68 @@ def test_a_words_match_shows_a_command_value_that_can_hold(lessons_station):
     store.lessons_index(None)
     held, _ = ask(store, clock, command='make check -j4', words_only=True)
     assert [(e['claim'], e['command']) for e in held['lessons']] == [('Both.', 'make check')]   # not 'make': it can't hold
+
+
+# The hold contract, the query's side (section 2 review of tardis/rail-lessons-hook, M2 and S1)
+SHORT_VALUES = lesson_body(claim='Short values.', command=('git', 'push'))
+LONG_VALUE = lesson_body(claim='Long value.', command=('push --force',))
+PROBE = 'git push --force origin main'
+
+
+def receipted(store):
+    """The full lesson id of each of this peer's receipts, oldest first."""
+    with store.transaction() as db:
+        return [r['lesson_id'] for r in db.execute('SELECT lesson_id FROM lesson_receipts ORDER BY created, rowid')]
+
+
+@pytest.mark.parametrize('limit', [1, 3])
+def test_before_a_command_a_lesson_matches_only_on_a_command_value_that_can_hold(lessons_station, limit):
+    """The reviewer's probe (M2). The hook holds only on a `command` value of at least HOLD_BYTES, and before a command
+    the seam shows a lesson only in a hold. So a lesson whose matched values are all shorter would be shown nowhere: it
+    is neither answered nor receipted, and it takes none of the `limit` slots. At limit 1, the limit when two checklists
+    lead the deny, it took the only slot."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', SHORT_VALUES)
+    store.send_message(ids['tardis'], room, 'c2', LONG_VALUE)
+    store.lessons_index(None)
+    held, note = ask(store, clock, command=PROBE, words_only=True, limit=limit)
+    assert ([(e['claim'], e['command']) for e in held['lessons']], note) == ([('Long value.', 'push --force')], None)
+    assert receipted(store) == [store.check_lesson(ids['tardis'], LONG_VALUE)['lesson_id']] and counts(store) == (1, 1)
+
+
+def test_before_a_command_only_values_that_can_hold_count_toward_the_order(lessons_station):
+    """A short value is no match before a command, so it doesn't count toward section 5's order there either. After a
+    failure it still does."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Many short.', command=('make', 'zz', 'make check')))
+    store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Two long.', command=('make check', 'check -j4')))
+    store.lessons_index(None)
+    held, _ = ask(store, clock, command='make check -j4 zz', words_only=True, limit=1)
+    assert [e['claim'] for e in held['lessons']] == ['Two long.']   # 2 values that can hold, against 1
+    failed, _ = ask(store, clock, command='make check -j4 zz', error='Error 2', limit=1)
+    assert [e['claim'] for e in failed['lessons']] == ['Many short.']   # 3 values, against 2
+
+
+def test_the_hold_contract_leaves_a_failure_a_session_start_and_a_prompt_as_they_were(lessons_station):
+    """Only `words_only` changed (M2). After a failure a `command` value of any length still matches, so the probe
+    answers and receipts both lessons, by the number of values matched. At session start a short `file` value still
+    matches the cwd. At a prompt every value needs 6 bytes, as it always did, and nothing is written."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', SHORT_VALUES)
+    store.send_message(ids['tardis'], room, 'c2', LONG_VALUE)
+    store.send_message(ids['tardis'], room, 'c3', lesson_body(claim='Short file.', command=(), file=('src',)))
+    store.lessons_index(None)
+    failed, _ = ask(store, clock, command=PROBE, error='! [rejected] main -> main (fetch first)')
+    assert [(e['claim'], e.get('command')) for e in failed['lessons']] == [
+        ('Short values.', 'git'), ('Long value.', 'push --force')]
+    assert counts(store) == (2, 1)
+    started, _ = ask(store, clock, cwd='/home/andy/src', branch='main')
+    assert [(e['claim'], e.get('command')) for e in started['lessons']] == [('Short file.', None)]
+    assert counts(store) == (3, 2)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'prompt': f'why did {PROBE} fail?'}))
+    prompted, _ = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: 0.0)
+    assert [(e['claim'], e['command']) for e in prompted['lessons']] == [('Long value.', 'push --force')]
+    assert counts(store) == (3, 2)
 
 
 def test_the_deadline_counts_from_the_request(lessons_station, fake_embedder):
@@ -689,6 +751,30 @@ def test_could_hold_skips_the_ships_own_lessons_its_learned_from_and_a_ship_outs
         assert lessons.could_hold('sed -i s/a/b/ f', stranger, store.data_dir) is False, stranger
 
 
+def test_could_hold_skips_a_lesson_in_seen_and_one_whose_matched_values_are_all_short(lessons_station):
+    """The hold contract (M2 and S1): True only when some lesson not in `seen` has a `command` value of at least
+    HOLD_BYTES in the command, as the words-only query answers. So once the hook passes the ids it will send, a head
+    whose only holding lesson was shown already (at a prompt, say) asks no query at all."""
+    store, clock, ids, room = lessons_station
+    also = lesson_body(claim='Also long.', command=('origin main',))
+    for n, body in enumerate((SHORT_VALUES, LONG_VALUE, also)):
+        store.send_message(ids['tardis'], room, f'c{n}', body)
+    store.lessons_index(None)
+    short, long_, other = (store.check_lesson(ids['tardis'], body)['short'] for body in (SHORT_VALUES, LONG_VALUE, also))
+
+    def hold(*seen, command=PROBE):
+        return lessons.could_hold(command, 'rio-grande', store.data_dir, list(seen))
+    assert hold() is True and hold(long_) is True and hold(other) is True and hold(short) is True
+    assert hold(long_, other) is False   # only "Short values." is left, and git and push can't hold
+    assert hold(command='git push') is False and hold(command='git push --force') is True
+    assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir) is True   # the three-argument call keeps working
+    assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir, (long_, other)) is False   # any collection of ids
+    assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir, frozenset({long_})) is True
+    for bad in (None, 3, long_, [None], ['nope'], [long_.upper()], {long_: 1}, [short] * (lessons.SEEN_MAX + 1)):
+        assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir, bad) is False, bad   # the query refuses these
+    assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir, [short] * lessons.SEEN_MAX) is True
+
+
 def test_could_hold_is_false_with_no_index_or_a_damaged_one_and_answers_from_a_stale_one(lessons_station, tmp_path):
     """It ignores the index's age: the full query re-checks retractions and membership in step 4, so a stale index can
     only make it say True too often (here, for a lesson retracted since the last run), never miss a hold."""
@@ -717,6 +803,7 @@ def test_could_hold_runs_on_the_standard_library_alone_and_opens_only_the_index_
     store, clock, ids, room = lessons_station
     store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Tardis.', command=('sed -i',)))
     store.lessons_index(None)
+    shown = store.check_lesson(ids['tardis'], lesson_body(claim='Tardis.', command=('sed -i',)))['short']
     package = Path(lessons.__file__).parent
     checkout = tmp_path / 'checkout'
     (checkout / 'superyak_peer').mkdir(parents=True)
@@ -728,15 +815,16 @@ def test_could_hold_runs_on_the_standard_library_alone_and_opens_only_the_index_
             'events = []\n'
             'sys.addaudithook(lambda event, args: events.append([event, *map(str, args)]) if event == "open" or '
             'event.partition(".")[0] in ("os", "shutil", "socket", "sqlite3", "subprocess") else None)\n'
-            f'got = [lessons.could_hold(c, "rio-grande", {str(store.data_dir)!r}) for c in ("sed -i s/a/b/ f", "ls -la")]\n'
+            f'got = [lessons.could_hold(c, "rio-grande", {str(store.data_dir)!r}, *s) for c, s in '
+            f'(("sed -i s/a/b/ f", ()), ("ls -la", ()), ("sed -i s/a/b/ f", ([{shown!r}],)))]\n'
             'seen = list(events)\n'
             'modules = sorted(m for m in sys.modules if m.startswith("superyak_peer") or "sqlite" in m)\n'
             'print(json.dumps({"got": got, "events": seen, "modules": modules}))')
     done = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', code], capture_output=True, text=True, cwd=tmp_path)
     assert done.returncode == 0, done.stderr
     got, index = json.loads(done.stdout), str(store.data_dir / lessons.INDEX_FILE)
-    assert got['got'] == [True, False]
-    assert [event[:3] for event in got['events']] == [['open', index, 'r']] * 2   # no other file, no socket, no database
+    assert got['got'] == [True, False, False]   # the third with the lesson in seen
+    assert [event[:3] for event in got['events']] == [['open', index, 'r']] * 3   # no other file, no socket, no database
     writes = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
     assert all(int(event[3]) & writes == 0 for event in got['events'])   # opened to read, and nothing else
     assert got['modules'] == ['superyak_peer', 'superyak_peer.common', 'superyak_peer.lessons']
@@ -744,17 +832,18 @@ def test_could_hold_runs_on_the_standard_library_alone_and_opens_only_the_index_
     assert {p: (p.stat().st_mtime_ns, p.stat().st_size) for p in store.data_dir.rglob('*')} == before
 
 
-def test_could_hold_is_true_exactly_when_the_querys_words_step_returns_a_lesson_whose_command_can_hold(lessons_station):
+def test_could_hold_is_true_exactly_when_the_words_only_query_answers_given_the_same_seen(lessons_station):
     """could_hold stands in for the full query before a Bash command (section 8's hold), so for every command of a
-    fixture and every asking ship it is True exactly when the query, words only, returns a lesson carrying a `command`
-    of at least 6 bytes: the value the hook holds on. The fixture matches at most 3 lessons per command, so the
-    query's limit never hides one (past 3 matches could_hold can only say True too often)."""
+    fixture, every asking ship and every `seen` the hook could send, it is True exactly when the query, words only,
+    answers anything; and since the hold contract (M2) the query answers there only lessons carrying a `command` of at
+    least 6 bytes, the value the hook holds on. The fixture matches at most 3 lessons per command, so the query's limit
+    never hides one (past 3 matches could_hold can only say True too often)."""
     store, clock, ids, room = lessons_station
     for n, (claim, command, error, learned) in enumerate((
-            ('Six.', ('sed -i',), (), 'own'), ('Five.', ('tar x',), (), 'own'), ('Short.', ('make', 'zz'), (), 'own'),
-            ('Both.', ('make', 'make check'), (), 'own'), ('Six bytes.', ('ééé',), (), 'own'),
-            ('Five bytes.', ('ééx',), (), 'own'), ('Error.', ('qqqq',), ('no matches found',), 'own'),
-            ('Taught.', ('awk -F',), (), 'rio-grande'))):
+            ('Six.', ('sed -i',), (), 'own'), ('Also six.', ('s/a/b/',), (), 'own'), ('Five.', ('tar x',), (), 'own'),
+            ('Short.', ('make', 'zz'), (), 'own'), ('Both.', ('make', 'make check'), (), 'own'),
+            ('Six bytes.', ('ééé',), (), 'own'), ('Five bytes.', ('ééx',), (), 'own'),
+            ('Error.', ('qqqq',), ('no matches found',), 'own'), ('Taught.', ('awk -F',), (), 'rio-grande'))):
         store.send_message(ids['tardis'], room, f't{n}', lesson_body(claim=claim, command=command, error=error, learned=learned))
     store.send_message(ids['rio-grande'], room, 'r1', lesson_body(ship='rio-grande', claim='Rio.', command=('git rm',)))
     store.lessons_index(None)
@@ -765,12 +854,17 @@ def test_could_hold_is_true_exactly_when_the_querys_words_step_returns_a_lesson_
     for ship in ('rio-grande', 'tardis', 'odo'):
         for command in commands:
             answer, _ = ask(store, clock, command=command[:300], words_only=True, ship=ship)   # the hook cuts to 300
-            said[ship, command] = any(len(e['command'].encode('utf-8')) >= lessons.HOLD_BYTES for e in answer['lessons']
-                                      if 'command' in e)
-            assert lessons.could_hold(command, ship, store.data_dir) is said[ship, command], (ship, command)
-    assert sorted(key for key, holds in said.items() if holds) == sorted([
-        ('rio-grande', 'sed -i s/a/b/ f'), ('rio-grande', 'make check -j4'), ('rio-grande', 'echo ééé'),
-        ('rio-grande', 'x' * 294 + 'sed -i'), ('tardis', 'git rm -r build')])
+            assert all(len(e['command'].encode('utf-8')) >= lessons.HOLD_BYTES for e in answer['lessons'])
+            got = [e['id'] for e in answer['lessons']]
+            said[ship, command] = len(got)
+            assert lessons.could_hold(command, ship, store.data_dir) is bool(got), (ship, command)
+            for n in range(1, len(got) + 1):   # seen holds the first n it answered: True while one is left
+                again, _ = ask(store, clock, command=command[:300], words_only=True, ship=ship, seen=got[:n])
+                assert [e['id'] for e in again['lessons']] == got[n:], (ship, command, n)
+                assert lessons.could_hold(command, ship, store.data_dir, got[:n]) is (n < len(got)), (ship, command, n)
+    assert sorted((key, n) for key, n in said.items() if n) == sorted([
+        (('rio-grande', 'sed -i s/a/b/ f'), 2), (('rio-grande', 'make check -j4'), 1), (('rio-grande', 'echo ééé'), 1),
+        (('rio-grande', 'x' * 294 + 'sed -i'), 1), (('tardis', 'git rm -r build'), 1)])
 
 
 # Task 12: receipts and segments
