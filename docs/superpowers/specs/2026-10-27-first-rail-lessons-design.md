@@ -3,7 +3,7 @@
 **Date:** 2026-10-27
 **Status:** Revision 4 (2026-10-28) adds section 7's definition of independent and section 7.1, repeats after a
 seen lesson (item 10), with its fresh review's changes applied; it is settled when Serenity says yes as a partner.
-Revision 3, peer to peer,  It applies the re-check of revision 2
+Revision 3 was peer to peer, and applied the re-check of revision 2
 ([review](../reviews/2026-10-27-first-rail-lessons-review.md), "Re-check", APPROVE WITH CHANGES): its must-fix R1 to
 R4 as written, except where the re-check response at the end says otherwise. It also takes the ships' three decisions
 since: the prompt hook, the hold as fallback, and stable lesson ids (section 12, items 7 to 9). Nothing here is built.
@@ -184,7 +184,7 @@ learned from: own
 4. Replaces the index file in the data directory atomically (written, then renamed). The file holds the embedder's
    model name, the usernames of this peer's accounts that are members of the current room, and per lesson: its lesson
    id (its peer and the SHA-256 of its embedded text), author id, `ship`, `learned from`, applies-to values, claim,
-   why, and its vector or none. It writes nothing to the database.
+   why, the time its post entered the chain (section 7's flag), and its vector or none. It writes nothing to the database.
 
 The index is derived: deleting it rebuilds it from the room. A new model name rebuilds every vector. A peer without an
 embedder writes no vectors. No embedding ever runs inside a station transaction, so the write lock (`transaction()`:
@@ -308,7 +308,8 @@ It's a measure the ships read, never a gate.
 - **The verb.** `lessons repeat <lesson id> --how receipt|read`, run by a ship on its own peer. The ship is the calling
   account, never an argument. The lesson id is a full id (`[0-9a-f]{64}:[0-9a-f]{64}`), or a short form that resolves
   to exactly one lesson in this peer's index; anything else is refused. `--how` takes exactly those two values.
-  Retracted lessons may be named (a repeat of a withdrawn lesson is still a repeat). A ship's own lesson is refused,
+  Retracted lessons may be named by full id only, since the index drops them and a short form can't resolve (a
+  repeat of a withdrawn lesson is still a repeat). A ship's own lesson is refused,
   since the query never shows a ship its own (section 5, step 3).
 - **Verified or not.** With `--how receipt`, the verb finds this peer's receipt for that lesson and ship, the
   newest one, and records its id; with none, it refuses. Those rows are **verified**. `--how read` rows can't be
