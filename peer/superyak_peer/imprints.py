@@ -587,6 +587,9 @@ def _removed_files(folder, *, by_manifest=False):
         if path.is_symlink() or not path.is_file():
             continue
         known = _manifest_sha256(path.parent) if by_manifest and path.name == 'imprint.db' else None
+        # Review N2: imprint.db is not read here. Its sha256 is the manifest's, which the join and admission checked
+        # the file against, so the `deleted` receipt says what was verified, not what the bytes were at removal
+        # (a package of up to 512 parts is not hashed again just to delete it). `bytes` is the file's size now.
         if known is not None:
             out.append({'path': str(path), 'bytes': path.stat().st_size, 'sha256': known})
             continue
