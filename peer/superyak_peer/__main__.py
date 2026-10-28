@@ -647,6 +647,9 @@ def main(argv=None):
                 raise ValueError('Remote binds require TLS certificate and key')
             if bool(args.tls_cert) != bool(args.tls_key):
                 raise ValueError('TLS requires both certificate and key')
+            if args.sync:  # one process syncs a directory: this one, or federate (federation pull plan, dispatch.py)
+                from .dispatch import federation_lock
+                sync_lock = federation_lock(args.data_dir)  # noqa: F841 - held for the life of the server
             from .app import TRUSTED_PROXY, create_app
             import uvicorn
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
