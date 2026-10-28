@@ -256,7 +256,9 @@ def seed_demo(data_dir):
     store.create_space(patient, 'Alex’s care circle', 'care-circle', [people['family']['id'], people['doctor']['id']])
     store.create_space(people['organizer']['id'], 'Wilhelm Foundation demo project', 'organization', [patient, people['doctor']['id']])
     for username, person in people.items():
-        store.create_layer(person['id'], {'title': 'My private notes', 'body': f'Fictional {username} notes. This draft is private.'})
+        body = ('Fictional lab result: total cholesterol 182 mg/dL, in the normal range.' if username == 'patient'
+                else f'Fictional {username} notes for the demo.')  # a note the doctor may later see never claims to be private
+        store.create_layer(person['id'], {'title': 'My private notes', 'body': body})
     store.create_room(patient, 'Family conversation', [people['family']['id']])
     private_json(marker, credentials)
     private_json(data_dir / 'demo-marker.json', {'application': 'superyak-demo', 'version': 1})
