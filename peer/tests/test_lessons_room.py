@@ -239,3 +239,31 @@ def test_the_station_room_verb_shows_then_records(origin):
                        '--confirm', code)
     assert done.returncode == 0 and f'{store._own_peer_id()}:{room}' in done.stdout
     assert run_lessons('where', '--data-dir', store.data_dir).stdout.strip() == f'{store._own_peer_id()}:{room}'
+
+
+# Task 6: the other peers
+def test_lessons_ship_makes_a_keyless_ship_for_a_person_and_refuses_the_rest(origin):
+    store, andy, rio, room = origin
+    made = store.lessons_ship('tardis', 'andy')
+    with store.transaction() as db:
+        row = db.execute('SELECT kind, owner_id FROM users WHERE id=?', (made['id'],)).fetchone()
+        assert tuple(row) == ('ship', andy)
+        assert db.execute('SELECT count(*) FROM ship_keys WHERE ship_id=?', (made['id'],)).fetchone()[0] == 0
+    for name, says in (('own', 'reserved'), ('owner', 'reserved'), ('tardis', 'taken'), ('andy', 'taken'), ('Bad', '2-32')):
+        with pytest.raises(Problem, match=says):
+            store.lessons_ship(name, 'andy')
+    with pytest.raises(Problem):
+        store.lessons_ship('defiant', 'rio-grande')   # a ship never owns a ship
+    assert run_lessons('ship', '--data-dir', store.data_dir, '--username', 'defiant', '--owner', 'andy').returncode == 0
+
+
+def test_another_peer_records_the_room_by_full_id_from_a_paired_origin(lessons_peers):
+    pi = lessons_peers['peers']['pi'][0]
+    tardis, tardis_fed, _ = lessons_peers['peers']['tardis']
+    assert tardis.lessons_room_full_id() == lessons_peers['key']
+    for wrong, says in ((lessons_peers['room'], 'full id'), (f'{"e" * 64}:{lessons_peers["room"]}', 'paired peer'),
+                        (f'{tardis_fed.identity.peer_id}:x', 'origin')):
+        with pytest.raises(Problem, match=says):
+            tardis.record_lessons_room(wrong)
+    with pytest.raises(Problem):
+        pi.record_lessons_room(lessons_peers['key'])  # on the origin it is station-lessons-room

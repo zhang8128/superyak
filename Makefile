@@ -62,7 +62,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-lessons-room station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-lessons-room lessons-room lessons-where lessons-ship station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -86,6 +86,9 @@ help:
 	@echo "make station-alerts     On the Pi: show the alert queue and what is held back"
 	@echo "make station-units      On the Pi: install the backup timers and the alert drop-ins; make station-units-remove undoes it"
 	@echo "make station-lessons-room ID=… [CONFIRM=…]  On the Pi: show, then record, the lessons room (first rail)"
+	@echo "make lessons-room ID=…  On another peer: record the lessons room by its full id (LESSONS_DATA=this peer)"
+	@echo "make lessons-where      This peer's lessons room, by its full id"
+	@echo "make lessons-ship SHIP=… OWNER=…  Andy only, on another peer: a ship account with no key"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
 	@echo "make wormhole-key KEY_FILE=…  On the Pi: authorize Stanley's sync key (a .pub file) for the station vault only"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
@@ -265,6 +268,17 @@ station-alerts:
 station-lessons-room:
 	@test -n "$(ID)" || { echo 'Usage: make station-lessons-room ID=<short id from make station-rooms> [CONFIRM=<the code it showed>] [LESSONS_SHIP=rio-grande] [APPROVER=andy]'; exit 2; }
 	$(LESSONS) station-room --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --ship "$(LESSONS_SHIP)"$(if $(CONFIRM), --confirm "$(CONFIRM)")
+
+lessons-room:
+	@test -n "$(ID)" || { echo 'Usage: make lessons-room ID=<origin peer id>:<room id> [LESSONS_DATA=<this peer data dir>]'; exit 2; }
+	$(LESSONS) room --data-dir "$(LESSONS_DATA)" --id "$(ID)"
+
+lessons-where:
+	$(LESSONS) where --data-dir "$(LESSONS_DATA)"
+
+lessons-ship:
+	@test -n "$(SHIP)" && test -n "$(OWNER)" || { echo 'Usage, Andy only: make lessons-ship SHIP=<ship username> OWNER=<his username on this peer> [LESSONS_DATA=…]'; exit 2; }
+	$(LESSONS) ship --data-dir "$(LESSONS_DATA)" --username "$(SHIP)" --owner "$(OWNER)"
 
 station-units:
 	@test -f "$(STATION_DATA)/peer.sqlite3" || { echo 'No station database at $(STATION_DATA)/peer.sqlite3: make station-units runs on the station host only'; exit 2; }

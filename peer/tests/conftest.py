@@ -127,3 +127,34 @@ def lessons_station(tmp_path):
     with store.transaction() as db:
         db.execute('INSERT INTO lessons_room VALUES(1,?,?,?)', (room, ids['rio-grande'], clock[0]))
     return store, clock, ids, room
+
+
+@pytest.fixture
+def lessons_peers(tmp_path):
+    """The origin (the Pi: andy and rio-grande) and a second peer (Tardis: andy's account there and its ship tardis),
+    paired both ways, card by card, with a lessons room on the origin holding all four and recorded on both. Returns a
+    dict; deliver(src, dst) runs one in-process sync."""
+    from superyak_peer.db import Store
+    from superyak_peer.federation import Federation
+    clock = [LESSON_TIME]
+    pi, tardis = Store(tmp_path / 'pi', clock=lambda: clock[0]), Store(tmp_path / 'tardis', clock=lambda: clock[0])
+    pi_fed, tardis_fed = Federation(pi, endpoint='https://pi:7437'), Federation(tardis, endpoint='https://tardis:7437')
+    andy = pi.create_user('andy', 'Andy Example', 'a-long-password', is_admin=True)['id']
+    rio = lesson_ship(pi, andy, 'rio-grande')['id']
+    andy_t = tardis.create_user('andy', 'Andy Example', 'a-long-password', is_admin=True)['id']
+    ship_t = tardis.lessons_ship('tardis', 'andy')['id']
+    contact_ship = pi_fed.pair(andy, tardis_fed.card(ship_t))['id']
+    contact_andy = pi_fed.pair(andy, tardis_fed.card(andy_t))['id']
+    tardis_fed.pair(andy_t, pi_fed.card(andy))
+    room = pi.create_room(andy, 'Lessons', [rio, contact_ship, contact_andy])['id']
+    view = pi.station_lessons_room('andy', room[:6], 'rio-grande', [tardis_fed.identity.peer_id])
+    recorded = pi.station_lessons_room('andy', room[:6], 'rio-grande', [tardis_fed.identity.peer_id], view['confirm'])
+    assert view['full_id'] == recorded['full_id'] == f'{pi_fed.identity.peer_id}:{room}'   # the origin's, never a listed peer's
+    peers = {'pi': (pi, pi_fed, {'andy': andy, 'rio-grande': rio, 'contact': contact_ship}), 'tardis': (tardis, tardis_fed, {'andy': andy_t, 'tardis': ship_t})}
+
+    def deliver(src, dst):
+        return peers[src][1].sync_once(send=lambda card, prepare: peers[dst][1].receive(prepare()))
+    deliver('pi', 'tardis')
+    key = pi_fed.identity.peer_id + ':' + room
+    tardis.record_lessons_room(key)
+    return {'peers': peers, 'deliver': deliver, 'clock': clock, 'room': room, 'key': key}

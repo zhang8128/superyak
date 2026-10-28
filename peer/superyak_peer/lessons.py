@@ -517,6 +517,42 @@ class Lessons:
                 return None
             return chain[-1] if ':' in chain[-1] else f'{self._lessons_peer(db)}:{chain[-1]}'
 
+    def record_lessons_room(self, key):
+        """`lessons room`, on every other peer: record the origin's room by its full id, `<origin peer id>:<room id>`."""
+        if not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}:[A-Za-z0-9_-]{1,64}', key):
+            raise Problem(400, 'Name the lessons room by its full id, <origin peer id>:<room id>')
+        origin, _, rid = key.partition(':')
+        with self.transaction() as db:
+            if origin == self._lessons_peer(db):
+                raise Problem(400, 'This peer is the origin: record the room with make station-lessons-room')
+            rooms = self._remote_rooms_from(db, origin)
+            if rid not in rooms:
+                raise Problem(404, 'No room with that id came to this peer from a paired peer')
+            if self._lessons_record(db) is not None and key not in self._lessons_chain(db):
+                raise Problem(409, 'This peer already records another lessons room')
+            db.execute('INSERT INTO lessons_room VALUES(1,?,NULL,?) ON CONFLICT(id) DO UPDATE SET room_key=excluded.room_key, '
+                       'recorded=excluded.recorded', (key, self.clock()))
+            return {'room': key, 'title': rooms[rid][2].get('title')}
+
+    def lessons_ship(self, username, owner):
+        """`lessons ship`, trusted local (section 11 item 3): a ship account with no key, owned by a person here."""
+        from .ships import SHIP_NAME
+        if not isinstance(username, str) or not SHIP_NAME.fullmatch(username):
+            raise Problem(400, 'Ship names are 2-32 lowercase letters, digits or dashes, starting with a letter')
+        if username in ('own', 'owner'):
+            raise Problem(400, 'own and owner are reserved: learned from: uses them')
+        with self.transaction() as db:
+            owner_id = self._operator(db, owner)
+            if db.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone():
+                raise Problem(409, f'The name {username} is taken on this peer')
+            return self._new_ship(db, username, username.replace('-', ' ').title(), owner_id)
+
+    def lessons_room_key(self):
+        """Where this peer's ships post a lesson: the chain's current room, or None."""
+        with self.transaction() as db:
+            chain = self._lessons_chain(db)
+            return chain[-1] if chain else None
+
 
 LESSON_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS lessons_room(id INTEGER PRIMARY KEY CHECK(id=1), room_key TEXT NOT NULL, ship_id TEXT REFERENCES users(id), recorded REAL NOT NULL);
@@ -581,6 +617,19 @@ def _station_room(store, args):
 @verb('where', "The lessons room's current room, by its full id")
 def _where(store, args):
     return store.lessons_room_full_id() or 'No lessons room is recorded on this peer.'
+
+
+@verb('ship', 'Trusted local, Andy only: a ship account with no key, owned by a person here',
+      ('--username', {'required': True}), ('--owner', {'required': True}))
+def _ship(store, args):
+    made = store.lessons_ship(args.username, args.owner)
+    return f"Ship {made['username']} is {args.owner}'s on this peer, with no key: its sessions reach this peer in process."
+
+
+@verb('room', "On a peer other than the origin: record the origin's lessons room by its full id", ('--id', {'required': True}))
+def _room(store, args):
+    got = store.record_lessons_room(args.id)
+    return f"Recorded the lessons room {args.id.partition(':')[2][:6]} from peer {args.id[:12]}."
 
 
 if __name__ == '__main__':
