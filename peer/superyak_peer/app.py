@@ -324,11 +324,17 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             db.execute('SELECT 1 FROM system_meta').fetchone()
         return {'ok': True}
 
-    async def login_response(request, username, password):
+    async def sign_in_lane(request, username):
+        """Public route spec 3: the lane a sign-in runs in, and the `public` and `device` it counts with. /api/login and
+        the imprint confirm's password (R19) both take it, so a confirm is laned as a sign-in is (review S3)."""
         public, device = is_public(request.scope), request.cookies.get(DEVICE_COOKIE)
         lane = lanes.public if public else lanes.tailnet
         if public and device is not None and await run_in_threadpool(store.device_is_valid, device, username):
             lane = lanes.known  # the read writes nothing and runs before queueing; Store.login checks again
+        return lane, public, device
+
+    async def login_response(request, username, password):
+        lane, public, device = await sign_in_lane(request, username)
         result = await lane.run(store.login, username, password, request.client.host if request.client else 'unknown',
                                 public=public, device=device)
         token, device = result.pop('token'), result.pop('device')
@@ -792,14 +798,17 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return store.remove_participant(actor(request), key, user_id, grant_id)
 
     if imprints_dir is not None:
+        # Review S3: every store call, hash, write and fsync of these async routes runs in a worker, never on the event
+        # loop; the confirm's in a sign-in lane. The sync routes below already run in FastAPI's threadpool.
         @app.post('/api/imprints', status_code=201)
         async def imprint_request(request: Request):
             tailnet_only(request)
-            ship = ship_member(request)
+            ship = await run_in_threadpool(ship_member, request)
             raw = await request.body()
             if len(raw) > MAX_IMPRINT_REQUEST:
                 raise Problem(413, 'Imprint request too large')
-            made = store.create_imprint_request(ship['id'], raw, staging=store.data_dir / 'imprints', root=imprints_dir)
+            made = await run_in_threadpool(store.create_imprint_request, ship['id'], raw,
+                                           staging=store.data_dir / 'imprints', root=imprints_dir)
             return {'id': made['id'], 'code': made['code'], 'expires': made['expires'],
                     'confirm_url': str(request.base_url).rstrip('/') + f'/#imprint?code={made["code"]}'}
 
@@ -817,10 +826,12 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
         @app.post('/api/imprints/{request_id}/confirm')
         async def imprint_confirm(request_id: str, request: Request):
-            who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403
-            return store.confirm_imprint(who, request_id, code=data.get('code'), password=data.get('password'),
-                                         attest=data.get('attest'),
-                                         source=request.client.host if request.client else 'unknown')
+            user = await run_in_threadpool(current_user, request)  # a person with CSRF; a ship key gets 403
+            data = await body(request)
+            lane, _, _ = await sign_in_lane(request, user['username'])
+            return await lane.run(store.confirm_imprint, user['id'], request_id, code=data.get('code'),
+                                  password=data.get('password'), attest=data.get('attest'),
+                                  source=request.client.host if request.client else 'unknown')
 
         @app.post('/api/imprints/{request_id}/decline')
         def imprint_decline(request_id: str, request: Request):
@@ -829,14 +840,16 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         @app.put('/api/imprints/{request_id}/manifest')
         async def imprint_manifest(request_id: str, request: Request):
             tailnet_only(request)
-            ship = ship_member(request)
-            return store.put_imprint_manifest(ship['id'], request_id, await request.body())
+            ship = await run_in_threadpool(ship_member, request)
+            raw = await request.body()
+            return await run_in_threadpool(store.put_imprint_manifest, ship['id'], request_id, raw)
 
         @app.put('/api/imprints/{request_id}/parts/{n}')
         async def imprint_part(request_id: str, n: int, request: Request):
             tailnet_only(request)
-            ship = ship_member(request)
-            return store.put_imprint_part(ship['id'], request_id, n, await request.body())
+            ship = await run_in_threadpool(ship_member, request)
+            data = await request.body()
+            return await run_in_threadpool(store.put_imprint_part, ship['id'], request_id, n, data)
 
         @app.post('/api/imprints/{request_id}/complete')
         def imprint_complete(request_id: str, request: Request):
@@ -849,14 +862,14 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
         @app.post('/api/imprints/{request_id}/shorten')
         async def imprint_shorten(request_id: str, request: Request):
-            who = member(request)
+            who = await run_in_threadpool(member, request)
             try:
                 body = await request.json()
             except ValueError:
                 body = None
             if not isinstance(body, dict) or set(body) != {'valid_until'}:
                 raise Problem(400, 'Send {"valid_until": seconds}')
-            return store.shorten_imprint(who, request_id, body['valid_until'], root=imprints_dir)
+            return await run_in_threadpool(store.shorten_imprint, who, request_id, body['valid_until'], root=imprints_dir)
 
         @app.get('/api/imprints/{request_id}')
         def imprint_one(request_id: str, request: Request):
