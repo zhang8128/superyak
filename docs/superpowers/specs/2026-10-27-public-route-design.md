@@ -141,11 +141,15 @@ names, and the dummy hash for unknown names kept explicitly, so a 401 takes the 
 - **Known-device cookie,** the OWASP device-cookie pattern in full (re-check should-fix 3(b)):
   - A successful sign-in sets `superyak_device`: a random 256-bit token with HttpOnly, Secure, SameSite=Strict and a
     180-day life.
-  - The token is stored hashed as **one row per browser** (user, token hash, expiry, failures, failure reset). A
+  - The token is stored hashed as **one row per browser** (user, token hash, expiry, failures, failure reset, attempts,
+    attempt reset). A
     sign-in presenting a valid cookie keeps that row and extends it rather than adding one. Expired rows are deleted,
     with at most 20 rows per user (the oldest goes). Logout keeps the cookie.
   - A browser presenting a cookie valid for the username it signs into is exempt from holds 1-3. Its failures count
     against its own token instead: 8 in 5 minutes holds that token only, and they never count toward hold 3.
+  - Its public sign-ins count against its token too, successes included: 8 in 5 minutes hold it, so one browser
+    signing in over and over can't keep the known browsers' lane full (section 2 review should-fix 1). A success
+    resets the failures, never the attempts.
   - A cookie for another user, an expired one or a made-up one exempts nothing.
 - **Recovery:** a successful tailnet sign-in clears that username's public hold.
 
@@ -165,7 +169,7 @@ anyio's shared threads.
 - **Tailnet sign-ins:** 1 at a time, with a queue of 4. Public requests never enter this lane.
 - **Known browsers:** a public sign-in presenting a `superyak_device` cookie that a side-effect-free read finds valid
   for the username uses a third lane, 1 at a time with a queue of 4. The read runs in a worker before queueing, like
-  the middleware's reads.
+  the middleware's reads. It answers a held token 429, so that token enters no lane; `Store.login` holds it again.
 - **A full lane** answers 429 without hashing or counting.
 
 **Old rows:** today's `user:` and `source:` rows go inert at deploy. The new keys are different, so any current hold

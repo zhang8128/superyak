@@ -10,6 +10,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 import pytest
 from superyak_peer import auth
 from superyak_peer.app import TRUSTED_PROXY, create_app
+from superyak_peer.common import Problem
 
 ORIGIN = 'https://testserver'
 WRONG = 'not-the-password'
@@ -259,12 +260,13 @@ def test_a_sign_in_sets_a_random_device_cookie_stored_hashed_as_one_row(station)
     token = client.cookies.get(DEVICE)
     assert len(token) >= 43
     assert devices(station) == [{'token_hash': auth.token_hash(token), 'user_id': devices(station)[0]['user_id'],
-                                 'expires': station.clock[0] + DEVICE_LIFETIME, 'failures': 0, 'failure_reset': 0}]
+                                 'expires': station.clock[0] + DEVICE_LIFETIME, 'failures': 0, 'failure_reset': 0, 'attempts': 0,
+                                 'attempt_reset': 0}]
     assert sign_in(station, 'patient', WRONG, '203.0.113.5') == INVALID and len(devices(station)) == 1  # failures add none
 
 
 def test_a_known_browser_is_exempt_from_holds_1_to_3_and_its_failures_hold_only_its_token(station):
-    known, other = known_browser(station), known_browser(station, source='203.0.113.7')
+    known, other, exempt = known_browser(station), known_browser(station, source='203.0.113.7'), known_browser(station)
     for n in range(1, 31):  # hold 3
         assert sign_in(station, 'patient', WRONG, f'198.51.100.{n}') == INVALID
     for name in ('patient', 'a2', 'a3', 'a4', 'a5'):  # holds 1 and 2 on the known browser's own source
@@ -273,7 +275,7 @@ def test_a_known_browser_is_exempt_from_holds_1_to_3_and_its_failures_hold_only_
     assert sign_in(station, 'patient', source='203.0.113.5') == HELD  # a new browser there is held
     assert sign_in(station, 'patient', source='198.51.100.99') == HELD  # and anywhere public, by hold 3
     before = counters(station)
-    assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
+    assert sign_in(station, 'patient', source='203.0.113.5', client=exempt)[0] == 200
     for _ in range(8):  # its failures count against its own token, never toward holds 1-3
         assert sign_in(station, 'patient', WRONG, '203.0.113.5', client=known) == INVALID
     assert counters(station) == before
@@ -290,6 +292,54 @@ def test_a_known_browsers_success_resets_its_tokens_failures(station):
     assert devices(station)[0]['failures'] == 7
     assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
     assert devices(station)[0]['failures'] == 0
+
+
+def test_a_known_browser_signing_in_over_and_over_is_held_before_any_lane(station, monkeypatch):
+    """Section 2 review should-fix 1: eight public sign-ins in five minutes, successes included, hold a known browser's
+    token, so one browser signing in correctly over and over can't keep the known lane full. The pre-lane read
+    refuses a held token with 429, so it enters no lane; another user's known browser still gets in. Tailnet sign-ins
+    neither count nor are held by it."""
+    known, doctors = known_browser(station), known_browser(station, 'doctor', '203.0.113.7')
+    lanes, entered = station.app.state.sign_in_lanes, []
+    for name in ('public', 'tailnet', 'known'):
+        lane = getattr(lanes, name)
+
+        async def run(call, *args, name=name, real=lane.run, **kwargs):
+            entered.append(name)
+            return await real(call, *args, **kwargs)
+        monkeypatch.setattr(lane, 'run', run)
+    for _ in range(8):
+        assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
+    assert sign_in(station, 'patient', source='203.0.113.5', client=known) == HELD
+    assert entered == ['known'] * 8  # the ninth entered no lane
+    assert sign_in(station, 'doctor', source='203.0.113.7', client=doctors)[0] == 200 and entered[-1] == 'known'
+    assert sign_in(station, 'patient', client=known)[0] == 200 and entered[-1] == 'tailnet'
+    station.clock[0] += 301
+    assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
+
+
+def test_store_login_enforces_the_attempts_hold_itself(station):
+    """The pre-lane read can race, so Store.login holds the token in its own transaction too. Failures and successes
+    count alike, and a success resets only the failures. The failure hold still holds a token on its own: eight
+    tailnet failures, which the attempts count skips."""
+    store, token = station.store, known_browser(station).cookies.get(DEVICE)
+    for password in [WRONG] * 4 + ['long-password-patient'] * 4:
+        try:
+            store.login('patient', password, '203.0.113.5', device=token)
+        except Problem as failed:
+            assert failed.status == 401
+    assert devices(station)[0]['failures'] == 0
+    with pytest.raises(Problem) as held:
+        store.login('patient', 'long-password-patient', '203.0.113.5', device=token)
+    assert (held.value.status, held.value.message) == (HELD[0], HELD[1]['error'])
+    tailnet = known_browser(station, source=None).cookies.get(DEVICE)
+    for _ in range(8):
+        with pytest.raises(Problem) as failed:
+            store.login('patient', WRONG, '127.0.0.1', public=False, device=tailnet)
+        assert failed.value.status == 401
+    with pytest.raises(Problem) as held:
+        store.login('patient', 'long-password-patient', '127.0.0.1', public=False, device=tailnet)
+    assert held.value.status == 429
 
 
 def test_a_cookie_for_another_user_an_expired_one_or_a_made_up_one_exempts_nothing(station):
@@ -313,7 +363,8 @@ def test_a_sign_in_with_a_valid_cookie_keeps_its_row_and_extends_it(station):
     station.clock[0] += 1000
     assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
     assert known.cookies.get(DEVICE) == token
-    assert devices(station) == [first[0] | {'expires': station.clock[0] + DEVICE_LIFETIME}]
+    assert devices(station) == [first[0] | {'expires': station.clock[0] + DEVICE_LIFETIME, 'attempts': 1,
+                                            'attempt_reset': station.clock[0] + 300}]
     known_browser(station, source='203.0.113.8')
     assert len(devices(station)) == 2  # another browser, another row
 
@@ -333,7 +384,7 @@ def test_at_most_20_device_rows_per_user_and_expired_rows_go(station):
     first = known_browser(station, source=None)
     with station.store.transaction() as db:
         doctor = db.execute("SELECT id FROM users WHERE username='doctor'").fetchone()[0]
-        db.execute('INSERT INTO login_devices VALUES(?,?,?,0,0)', ('stale', doctor, station.clock[0] - 1))
+        db.execute('INSERT INTO login_devices(token_hash,user_id,expires) VALUES(?,?,?)', ('stale', doctor, station.clock[0] - 1))
     for _ in range(20):
         station.clock[0] += 1
         known_browser(station, source=None)

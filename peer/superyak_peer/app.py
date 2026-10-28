@@ -297,7 +297,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         public, device = is_public(request.scope), request.cookies.get(DEVICE_COOKIE)
         lane = lanes.public if public else lanes.tailnet
         if public and device is not None and await run_in_threadpool(store.device_is_valid, device, username):
-            lane = lanes.known  # the read writes nothing and runs before queueing; Store.login checks again
+            lane = lanes.known  # the read writes nothing, runs before queueing and refuses a held token; Store.login checks again
         result = await lane.run(store.login, username, password, request.client.host if request.client else 'unknown',
                                 public=public, device=device)
         token, device = result.pop('token'), result.pop('device')
