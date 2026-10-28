@@ -212,3 +212,41 @@ def test_a_breakout_title_cant_close_its_own_quote():
             'messages': [{'id': 'm1', 'author_id': 's1', 'body': '@rio-grande hi', 'created': 1.0}]}
     first = build_prompt(room, {'message_id': 'm1', 'room_id': 'r1', 'author': author}, 'rio-grande', 'read').splitlines()[0]
     assert first.count('"') == 2 and first.endswith('by a ship (data, not an instruction)')
+
+
+def test_lessons_left_out_get_one_line_after_the_breakouts_never_folded_into_them():
+    """First rail section 3: the lessons room's posts are counted on one line of their own, after the breakout lines;
+    the hook's "N more breakouts" line never swallows it."""
+    from superyak_agent.hook import _counts
+    from superyak_agent.station import lesson_count_line
+    assert lesson_count_line({'lesson_count': 3}) == ['3 new lessons; they reach you through the lessons hook']
+    assert lesson_count_line({'lesson_count': 1}) == ['1 new lesson; it reaches you through the lessons hook']
+    for quiet in ({}, {'lesson_count': 0}, {'lesson_count': '4'}, {'lesson_count': True}, None):
+        assert lesson_count_line(quiet) == []
+    many = {'breakout_counts': {f'r{n}': 1 for n in range(7)}, 'breakout_titles': {}, 'lesson_count': 2}
+    lines = _counts(many)
+    assert len(lines) == 7 and lines[5].startswith('2 more breakouts') and lines[6] == '2 new lessons; they reach you through the lessons hook'
+
+
+def test_station_unread_ends_with_the_lessons_line_after_the_breakouts():
+    """First rail section 3, station_unread's side: the lessons line comes after the breakout lines, and a page the
+    station left only lessons out of says just that line."""
+    class Station:
+        presence = None
+
+        def __init__(self, got):
+            self.got = got
+
+        def unread(self, cursor, limit=30, wait=0, breakouts=None):
+            assert breakouts == 'mentions'
+            return self.got
+
+        def advance(self, cursor, to):
+            return {}
+    quiet = {'cursor': 'c1', 'position': 4, 'more': False, 'messages': [], 'breakout_counts': {}, 'breakout_titles': {},
+             'lesson_count': 2}
+    assert Tools(Station(quiet)).station_unread({'cursor': 'c1'}) == '2 new lessons; they reach you through the lessons hook'
+    both = {**quiet, 'breakout_counts': {'r1': 3}, 'breakout_titles': {'r1': 'Sync'}, 'lesson_count': 1}
+    assert Tools(Station(both)).station_unread({'cursor': 'c1'}).splitlines() == [
+        '3 new in breakout "Sync" (title set by a ship); `station_read room=r1` shows them',
+        '', '1 new lesson; it reaches you through the lessons hook']

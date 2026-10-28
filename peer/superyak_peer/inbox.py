@@ -60,6 +60,9 @@ def with_earlier_noise(earlier, later):
         for room, n in earlier['breakout_counts'].items():
             later['breakout_counts'][room] = later['breakout_counts'].get(room, 0) + n
         later['breakout_titles'] = {**earlier['breakout_titles'], **later['breakout_titles']}
+        lessons = earlier.get('lesson_count', 0) + later.get('lesson_count', 0)
+        if lessons:  # R35: present only when it has something to say
+            later['lesson_count'] = lessons
     return later
 
 
@@ -139,11 +142,12 @@ class Inbox:
             if counted:  # a wait's later checks don't count: a wait is one read
                 self._inbox_budget(actor)
             position = self._cursor(db, actor, name)
-            shown_only = f' AND NOT ({NOISE})' if breakouts else ''
+            noise, noise_args = self._noise(db, actor) if breakouts else ('', [])
+            shown_only = f' AND NOT {noise}' if breakouts else ''
             rows = db.execute(f'SELECT events.id, events.resource_id, events.payload, rooms.title {UNREAD_FROM}{shown_only} '
-                              'ORDER BY events.id LIMIT ?', (actor, position, actor, *([actor] if breakouts else []), limit + 1)).fetchall()
+                              'ORDER BY events.id LIMIT ?', (actor, position, actor, *noise_args, limit + 1)).fetchall()
             if breakouts:
-                position, counts, titles = self._left_out(db, actor, name, position, rows[:limit])
+                position, counts, titles, lesson_count = self._left_out(db, actor, name, position, rows[:limit])
             messages, sources, breakout_rooms, asked = [], {}, set(), []
             for row in rows[:limit]:
                 payload = json.loads(row['payload'])
@@ -178,19 +182,35 @@ class Inbox:
             got['on_watch'] = True
         if breakouts:
             got['breakout_counts'], got['breakout_titles'] = counts, titles
+            if lesson_count:  # first rail section 3; R35: present only when it has something to say
+                got['lesson_count'] = lesson_count
         return got
+
+    def _noise(self, db, actor):
+        """What breakouts=mentions leaves out: a breakout message that doesn't mention the reader (breakouts S6), and
+        every post in the lessons room's chain (first rail section 3). Returns (SQL, its arguments)."""
+        chain = [key for key in self._lessons_chain(db) if ':' not in key]
+        return f"(({NOISE}) OR events.resource_id IN ({','.join('?' * len(chain))}))", [actor, *chain]
 
     def _left_out(self, db, actor, name, position, page):
         """Breakouts S6: the breakout messages a breakouts=mentions page leaves out, up to its last message (all of
         them when the page is empty), counted per room with the room's title. Those before the page's first message
         are passed here, so the cursor never stops in front of noise; the rest are passed when the reader advances
-        through the page, as it does past any message it showed. Returns (position, counts, titles)."""
+        through the page, as it does past any message it showed. The lessons room's posts are left out and passed the same
+        way, and counted apart: a lesson, never a retraction or a station notice (first rail section 3). Returns
+        (position, counts, titles, lesson_count)."""
         bound = page[-1]['id'] if page else None
-        rows = db.execute(f'SELECT events.id, events.resource_id, rooms.title {UNREAD_FROM} AND {NOISE}'
+        noise, noise_args = self._noise(db, actor)
+        rows = db.execute(f"SELECT events.id, events.resource_id, rooms.title, json_extract(events.payload,'$.author_id') AS author, "
+                          f"json_extract(events.payload,'$.message_id') AS message_id {UNREAD_FROM} AND {noise}"
                           + ('' if bound is None else ' AND events.id<=?') + ' ORDER BY events.id',
-                          (actor, position, actor, actor, *([] if bound is None else [bound]))).fetchall()
-        counts, titles = {}, {}
+                          (actor, position, actor, *noise_args, *([] if bound is None else [bound]))).fetchall()
+        counts, titles, lesson_count = {}, {}, 0
+        chain, system = set(noise_args[1:]), self.system_author_id(db)
         for row in rows:
+            if row['resource_id'] in chain:  # first rail section 3: counted apart; the station's notices and retractions not at all
+                lesson_count += row['author'] != system and not self._is_retraction(db, row['message_id'])
+                continue
             counts[row['resource_id']] = counts.get(row['resource_id'], 0) + 1
             titles[row['resource_id']] = row['title']
         passed = [row['id'] for row in rows if not page or row['id'] < page[0]['id']]
@@ -199,7 +219,7 @@ class Inbox:
             db.execute('UPDATE read_cursors SET position=?, updated=? WHERE ship_id=? AND name=?', (position, self.clock(), actor, name))
         for room in counts:
             self._breakout_closed(db, room)  # S4: saved on first sight
-        return position, counts, titles
+        return position, counts, titles, lesson_count
 
     def _reply_to(self, db, message_id):
         row = db.execute('SELECT reply_to FROM message_replies WHERE message_id=?', (message_id,)).fetchone()

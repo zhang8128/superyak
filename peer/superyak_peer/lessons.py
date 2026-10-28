@@ -927,6 +927,12 @@ class Lessons:
             raise Problem(409, CAP)
         return found
 
+    def _is_retraction(self, db, message_id):
+        """Whether a post is a retraction, so unread doesn't count it as a new lesson (C32)."""
+        row = db.execute('SELECT body FROM messages WHERE id=? UNION ALL SELECT body FROM peer_messages WHERE id=?',
+                         (message_id, message_id)).fetchone()
+        return row is not None and RETRACT.fullmatch(row['body']) is not None
+
     def _refuse_in_lessons_room(self, db, key, what):
         if self._in_lessons_chain(db, key):
             raise Problem(409, NOT_HERE.format(what=what))

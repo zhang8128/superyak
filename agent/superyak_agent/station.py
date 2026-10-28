@@ -422,6 +422,16 @@ def breakout_count_lines(got):
     return lines
 
 
+def lesson_count_line(got):
+    """First rail section 3: one line for the lessons room's posts a breakouts=mentions read left out, after the
+    breakouts' lines and never folded into them; [] when there are none."""
+    lessons = got.get('lesson_count') if isinstance(got, dict) else None
+    if type(lessons) is not int or lessons < 1:
+        return []
+    return ['1 new lesson; it reaches you through the lessons hook' if lessons == 1
+            else f'{lessons} new lessons; they reach you through the lessons hook']
+
+
 def brief_date(updated):
     """A brief's `updated` (Unix seconds from the station) as a UTC date."""
     try:

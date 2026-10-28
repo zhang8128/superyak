@@ -604,3 +604,88 @@ def test_segments_pair_two_ships_own_lessons_and_never_a_copy(lessons_peers, fak
     listed = run_lessons('segments', '--data-dir', pi.data_dir)
     assert listed.stdout.startswith('rio-grande and tardis: 1 segment\n') and 'count' not in listed.stdout
     assert short(pi_fed.identity.peer_id, reworded) not in listed.stdout
+
+
+# Task 13: unread leaves the lessons room out
+def test_unread_leaves_the_lessons_room_out_counts_it_and_passes_it(lessons_station):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body())
+    store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Two.'))
+    store.send_message(ids['andy'], room, 'r1', 'retract ' + store.check_lesson(ids['tardis'], lesson_body(claim='Two.'))['lesson_id'])
+    with store.transaction() as db:
+        store._post_as_system(db, room, 'notice-1', 'A station notice.')
+    talk = store.create_room(ids['andy'], 'Talk', [ids['rio-grande']])['id']
+    store.send_message(ids['andy'], talk, 'm1', 'hello')
+    plain = store.unread(ids['rio-grande'], 'd', 30)   # first: a new cursor starts where the ship has read furthest
+    assert len(plain['messages']) == 5 and 'lesson_count' not in plain   # without the flag, exactly today's
+    got = store.unread(ids['rio-grande'], 'c', 30, breakouts=True)
+    assert [m['body'] for m in got['messages']] == ['hello'] and got['breakout_counts'] == {}
+    assert got['lesson_count'] == 2   # two lessons; the retraction and the station's notice are not new lessons
+    store.advance(ids['rio-grande'], 'c', got['messages'][-1]['event_id'])
+    assert 'lesson_count' not in store.unread(ids['rio-grande'], 'c', 30, breakouts=True)   # R35: only when it says something
+
+
+def test_a_wait_adds_up_the_lessons_it_left_out():
+    from superyak_peer.inbox import with_earlier_noise
+    earlier = {'breakout_counts': {}, 'breakout_titles': {}, 'lesson_count': 2}
+    assert with_earlier_noise(earlier, {'breakout_counts': {}, 'breakout_titles': {}, 'lesson_count': 1})['lesson_count'] == 3
+    assert 'lesson_count' not in with_earlier_noise({'breakout_counts': {}, 'breakout_titles': {}}, {'breakout_counts': {}, 'breakout_titles': {}})
+
+
+AGENT = Path(__file__).resolve().parents[2] / 'agent'
+
+
+@pytest.mark.skipif(not (AGENT / 'superyak_agent').is_dir(), reason='needs agent/ from the full repository')
+def test_a_lesson_never_kicks_a_ship_and_the_kick_never_hides_one_from_the_session(lessons_station, monkeypatch):
+    """Task 13 beside main's kick (agent/superyak_agent/kick.py): the kick reads unread without breakouts=mentions, on
+    its own cursor, so Task 13 doesn't change what it sees. The lessons room's doors refuse an @name and a reply label,
+    so no post there mentions a ship or replies to one, and none kicks; a mention and a reply elsewhere still do, and a
+    reply still carries replies_to_me on both reads. The kick passing the lessons moves only its own cursor: the
+    session's breakouts=mentions read still counts them."""
+    from superyak_peer.common import Problem
+    monkeypatch.syspath_prepend(str(AGENT.parent / 'team'))
+    monkeypatch.syspath_prepend(str(AGENT))
+    from superyak_agent.kick import Kick
+    store, clock, ids, room = lessons_station
+    rio = ids['rio-grande']
+    assert store.unread(rio, 'session', 30, breakouts=True)['messages'] == []   # the session's cursor, before anything
+    with pytest.raises(Problem, match='mentions no one'):
+        store.send_message(ids['tardis'], room, 'x1', lesson_body(claim='Ask @rio-grande first.'))
+    first = store.send_message(ids['tardis'], room, 'c1', lesson_body())['id']
+    with pytest.raises(Problem, match='no reply label'):
+        store.send_message(ids['tardis'], room, 'x2', lesson_body(claim='Two.'), reply_to=first)
+    store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Two.'))
+    talk = store.create_room(ids['andy'], 'Talk', [rio])['id']
+    mine = store.send_message(rio, talk, 'm0', 'my post')['id']
+    mention = store.send_message(ids['andy'], talk, 'm1', '@rio-grande look')['id']
+    reply = store.send_message(ids['andy'], talk, 'm2', 'seen it', reply_to=mine)['id']
+
+    class Stop(BaseException):
+        pass
+
+    class Client:   # the kick's StationClient, answered by the store in process
+        def __init__(self):
+            self.reads, self.flags = [], []
+
+        def unread(self, cursor, limit=30, wait=0, breakouts=None):
+            if self.reads:
+                raise Stop()
+            self.flags.append(breakouts)
+            self.reads.append(store.unread(rio, cursor, limit, breakouts=breakouts == 'mentions'))
+            return self.reads[-1]
+
+        def advance(self, cursor, to):
+            return store.advance(rio, cursor, to)
+
+    client, lines = Client(), []
+    with pytest.raises(Stop):
+        Kick(client, 'rio-grande', out=lines.append, clock=lambda: clock[0], sleep=lambda s: None).run()
+    assert client.flags == [None]   # the kick never asks for breakouts=mentions
+    seen = client.reads[0]['messages']
+    assert [m['room_title'] for m in seen] == ['Lessons', 'Lessons', 'Talk', 'Talk']   # the lessons reach it, and pass it
+    assert not any(m.get('mentions_me') or m.get('replies_to_me') for m in seen if m['room_title'] == 'Lessons')
+    assert lines == [f'station: kick {mention} in Talk from andy (mentions rio-grande)',
+                     f'station: kick {reply} in Talk from andy (replies to rio-grande)']
+    session = store.unread(rio, 'session', 30, breakouts=True)   # the kick's cursor moved; the session's didn't
+    assert session['lesson_count'] == 2 and [m['body'] for m in session['messages']] == ['@rio-grande look', 'seen it']
+    assert [m.get('replies_to_me') for m in session['messages']] == [None, True]
