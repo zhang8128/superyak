@@ -359,6 +359,8 @@ Test numbers are §10's groups.
 
 **Task 0: base.** Merge `tardis/pairing-code` into this branch. Record the whole peer suite's count on Tardis,
 browser tests included, as the baseline.
+- Done at bf16415e: 1,258 passed and 1 skipped, in 44:37 on Tardis.
+- The skip is `test_station_units.py:73`, which needs the station host's runtime.
 
 **Task 1: cards and signatures** (`tests/test_identity.py`). Group 1:
 - v2 validates, and its variants are refused.
