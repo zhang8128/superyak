@@ -224,7 +224,10 @@ Why: it copies a person's memories to another machine, and only the owner decide
 - [ ] The same run lists every semantic whose provenance touches an excluded id, live or in cold storage as far as
       cold.db records it, and the owner decides on each. Excluding an episode doesn't exclude a summary once built
       from it that still has other sources (imprints re-check, 2026-10-28).
+- [ ] The plan has no `route`: it waits until trails ships, and the plan and the station both refuse it.
 - [ ] The dry run is read, and its counts match what the owner expects.
+- [ ] killer: No session opens the confirm page, ticks its box or types the password, even with browser tools. It
+      relays the link and the two short ids (CLAUDE.md, "Sending an imprint").
 - [ ] The owner confirms in the browser on his own machine.
 - [ ] Andy approves the short id on the Pi, after matching it.
 - [ ] Admission's result is checked, and the owner's machine verifies the receipts (`make imprint-status`, which
