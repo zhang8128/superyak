@@ -10,6 +10,7 @@ case "$2" in  # the private archive keeps the old history on purpose; only its e
     https://github.com/zhang8128/superyak-archive|https://github.com/zhang8128/superyak-archive.git) exit 0 ;;
 esac
 zero=0000000000000000000000000000000000000000
+tmp=$(mktemp -d) && trap 'rm -rf "$tmp"' EXIT
 terms_file="${SUPERYAK_SCRUB_TERMS:-$HOME/.superyak/scrub-terms}"
 if [ ! -r "$terms_file" ] || [ -n "$(find "$terms_file" -perm /077 2>/dev/null)" ]; then
     echo "pre-push: $terms_file is missing, unreadable, or readable by others (it must be 0600), so the scrubbed-text" >&2
@@ -26,8 +27,18 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         status=1
         continue
     fi
-    # Commits new to this remote that touch a scrubbed path: catches old history merged into a current branch.
-    touched=$(git log --format=%h "$local_sha" --not --remotes="$1" -- \
+    # Commits new to this remote that neither descend from the base nor are its ancestors: old history, whatever it
+    # touched, even when a merge hides it (Serenity, 2026-10-28).
+    git rev-list "$local_sha" --not "$SCRUBBED_BASE" --remotes="$1" | sort > "$tmp/new"
+    git rev-list --ancestry-path "$SCRUBBED_BASE..$local_sha" | sort > "$tmp/after"
+    old=$(comm -23 "$tmp/new" "$tmp/after" | head -5 | cut -c1-8 | tr '\n' ' ')
+    if [ -n "$old" ]; then
+        echo "pre-push: $local_ref carries commits from the old history: $old" >&2
+        status=1
+        continue
+    fi
+    # Commits new to this remote that touch a scrubbed path, every side of a merge included (--full-history).
+    touched=$(git log --full-history --format=%h "$local_sha" --not --remotes="$1" -- \
         ':(glob)**/docs/sessions/**' ':(glob)**/fieldtests-2026-08-02/**' \
         ':(glob)**/research-fieldtest-results-2026-08-02.md' ':(glob)**/reports/2026-09-sharing-tests.md' \
         ':(glob)**/research-structural-prosody-in-llm-generation.md' | head -5)

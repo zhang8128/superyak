@@ -79,3 +79,29 @@ def test_a_delete_pushes_no_history(repo):
                          env={**os.environ, 'SUPERYAK_PREPUSH_BASE': base, 'SUPERYAK_SCRUB_TERMS': str(terms)},
                          capture_output=True, text=True)
     assert run.returncode == 0
+
+
+def test_old_history_a_merge_hides_is_still_refused(repo):
+    """Serenity's case: an old branch adds a scrubbed path, later removes it, and is merged into a branch on the base.
+    The merge carries no scrubbed path, so a simplified log would never show the side; the push uploads it anyway."""
+    repo, base, terms = repo
+    git(repo, 'checkout', '-q', '--orphan', 'old')
+    git(repo, 'rm', '-rqf', '.')
+    commit(repo, 'engram/docs/sessions/a.md', 'x\n')
+    git(repo, 'rm', '-q', 'engram/docs/sessions/a.md')
+    git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'removed')
+    git(repo, 'checkout', '-q', 'main')
+    git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'merge', '-q', '--allow-unrelated-histories', '-s', 'ours', 'old',
+        '-m', 'merge the old side')
+    merged = git(repo, 'rev-parse', 'HEAD')
+    code, said = push(repo, base, merged, terms)
+    assert code == 1 and 'old history' in said
+
+
+def test_a_push_by_url_scans_the_whole_branch_and_still_passes_a_clean_one(repo):
+    repo, base, terms = repo
+    clean = commit(repo, 'notes.md', 'fine\n')
+    run = subprocess.run([str(HOOK), PUBLIC, PUBLIC], input=f'refs/heads/t {clean} refs/heads/t {ZERO}\n', cwd=repo,
+                         env={**os.environ, 'SUPERYAK_PREPUSH_BASE': base, 'SUPERYAK_SCRUB_TERMS': str(terms)},
+                         capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
