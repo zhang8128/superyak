@@ -1,4 +1,5 @@
 """Real-browser acceptance flows for the same-origin personal home."""
+from superyak_peer.identity import pairing_code
 
 from contextlib import contextmanager
 import json
@@ -1292,7 +1293,7 @@ def test_fresh_participant_creates_space_and_previews_exact_selection(browser_pe
     import base64
     store = browser_peer['app'].state.store
     admin = browser_peer['users']['organizer']['id']
-    browser_peer['app'].state.federation.pair(admin, browser_peer['remote_card'])
+    browser_peer['app'].state.federation.pair(admin, browser_peer['remote_card'], code=pairing_code(browser_peer['remote_card']))
     invitation = store.invite(admin)
     fresh = store.redeem(invitation['token'], 'fresh', 'Fresh Person', browser_peer['password'])
     selected = store.upload_file(fresh['id'], 'selected-evidence.txt', 'text/plain', base64.b64encode(b'selected').decode())
@@ -1350,8 +1351,8 @@ def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer
     recipient = remote.create_user('remote', 'Casey Delivery', 'long-password', is_admin=True)['id']
     other = Federation(remote, endpoint='https://remote.example:7443')
     fed.endpoint = 'https://local.example:7443'
-    contact = fed.pair(owner, other.card(recipient))
-    back = other.pair(recipient, fed.card(owner))
+    contact = fed.pair(owner, other.card(recipient), code=pairing_code(other.card(recipient)))
+    back = other.pair(recipient, fed.card(owner), code=pairing_code(fed.card(owner)))
     original = fed.sync_once
     offline = [False]
     def sync(**kwargs):
@@ -2567,9 +2568,9 @@ def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_del
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
     here, remote = browser_peer["app"].state.federation, browser_peer["remote"]
     there, casey, patient = remote["federation"], remote["user"]["id"], users["patient"]["id"]
-    paired = here.pair(users["organizer"]["id"], browser_peer["remote_card"])  # pairing is an admin's act
+    paired = here.pair(users["organizer"]["id"], browser_peer["remote_card"], code=pairing_code(browser_peer["remote_card"]))  # pairing is an admin's act
     card = Federation(store, endpoint="https://localhost:7435").card(patient)  # this station's identity, an endpoint
-    contact = there.pair(casey, card)
+    contact = there.pair(casey, card, code=pairing_code(card))
     room = remote["store"].create_room(casey, "Hosted elsewhere", [contact["id"]])
     there.sync_once(send=lambda card, prepare: here.receive(prepare()))
     key = f"{there.identity.peer_id}:{room['id']}"

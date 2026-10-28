@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 import threading
-from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse
+from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse, pairing_code, show_code, typed_code
 from .common import Problem, require, uid, encode, text, linked_room_ok
 
 class Obsolete(Exception):
@@ -21,12 +21,21 @@ class Federation:
             user = require(db.execute('SELECT id,name FROM users WHERE id=?', (actor,)).fetchone())
             return self.identity.card(self.endpoint, dict(user))
 
-    def pair(self, actor, card):
+    def pair(self, actor, card, *, code):
+        """fix:pairing-code (federation-pull spec §2): an admin pairs a card only with the other side's code, typed off
+        that machine's screen. One check, here, after the admin check; the confirmation keeps the card's code, never
+        the typed text."""
         card = validate_card(card)
         if card['peer_id'] == self.identity.peer_id:
             raise Problem(400, 'Cannot pair this peer with itself')
         with self.store.transaction() as db:
             self.store._admin(db, actor)
+            expected, typed = pairing_code(card), typed_code(code)
+            if typed is None:
+                raise Problem(400, 'Type the pairing code shown on the other machine')
+            if typed != expected:
+                raise Problem(400, f"That code doesn't match this card. Its code is {show_code(expected)}; read the "
+                                   "other machine's screen again.")
             previous = db.execute('SELECT card FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()
             if previous:
                 prior = json.loads(previous['card'])
@@ -34,7 +43,10 @@ class Federation:
                     raise Problem(409, 'Known peer trust material cannot be replaced')
             db.execute('INSERT INTO peers VALUES(?,?,1) ON CONFLICT(peer_id) DO UPDATE SET paired=1', (card['peer_id'], encode(card)))
             db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?) ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name', ('remote_'+uid(), card['peer_id'],card['participant']['id'],card['participant']['name']))
-            return dict(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (card['peer_id'],card['participant']['id'])).fetchone())
+            contact = dict(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (card['peer_id'],card['participant']['id'])).fetchone())
+            db.execute('INSERT INTO pairing_confirmations VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET '
+                       'code=excluded.code, confirmed=excluded.confirmed', (contact['id'], expected, self.store.clock()))
+            return {**contact, 'pairing_code': show_code(expected), 'confirmed': True}
 
     def unpair(self, actor, contact_id):
         with self.store.transaction() as db:
@@ -46,9 +58,25 @@ class Federation:
         return {'ok':True}
 
     def connections(self, actor):
+        """Each contact with the card it was paired with: peers.card with the contact's own id and name, which is the
+        card last imported for it (pair()'s 409 fixes the rest), its code, and whether a typed code confirmed that
+        card. A confirmation counts only while its code is still the card's (fix:pairing-code, re-check SF1)."""
         with self.store.transaction() as db:
             self.store._admin(db, actor)
-            return [{**dict(r), 'card':{**json.loads(r['card']), 'participant':{'id':r['user_id'],'name':r['name']}}} for r in db.execute('SELECT remote_contacts.*,peers.card,peers.paired FROM remote_contacts JOIN peers USING(peer_id)')]
+            rows = db.execute('SELECT remote_contacts.*,peers.card,peers.paired,pairing_confirmations.code AS confirmed_code '
+                              'FROM remote_contacts JOIN peers USING(peer_id) '
+                              'LEFT JOIN pairing_confirmations ON contact_id=remote_contacts.id').fetchall()
+        listed = []
+        for r in rows:
+            fields = {k: r[k] for k in r.keys() if k != 'confirmed_code'}
+            card = {**json.loads(r['card']), 'participant': {'id': r['user_id'], 'name': r['name']}}
+            try:
+                code = pairing_code(card)
+            except Problem:  # a stored card that no longer validates has no code to show
+                code = None
+            listed.append({**fields, 'card': card, 'pairing_code': show_code(code) if code else None,
+                           'confirmed': code is not None and r['confirmed_code'] == code})
+        return listed
 
     def collect(self):
         with self.store.transaction() as db:
