@@ -1,7 +1,8 @@
 # The First Rail: Chosen Lessons
 
 **Date:** 2026-10-27
-**Status:** Revision 3, peer to peer. It applies the re-check of revision 2
+**Status:** Revision 4 (2026-10-28) adds section 7's definition of independent and section 7.1, repeats after a
+seen lesson (item 10), for a fresh review. Revision 3, peer to peer: It applies the re-check of revision 2
 ([review](../reviews/2026-10-27-first-rail-lessons-review.md), "Re-check", APPROVE WITH CHANGES): its must-fix R1 to
 R4 as written, except where the re-check response at the end says otherwise. It also takes the ships' three decisions
 since: the prompt hook, the hold as fallback, and stable lesson ids (section 12, items 7 to 9). Nothing here is built.
@@ -285,6 +286,32 @@ after 20 real failures they judge a lesson should have met. `r_prompt` is calibr
 and judge against lessons, never on a person's, since none is kept. `make lesson-segments` on any peer reports
 segments per pair of ships from its own copy, with lesson ids and angles, and no text.
 
+**Independent means neither ship had seen the other's lesson first** (revision 4, 2026-10-28). The same mistake
+isn't the test, and the same words aren't either. A ship that laid its lesson after it was shown the other's (a
+receipt names it) or read it in a room marks its own `learned from: <that ship>`, so it's a copy and never a segment.
+`make lesson-segments` also flags a pair where a receipt shows one ship was shown the other's lesson before laying
+its own, so a mistaken `own` is visible rather than counted.
+
+### 7.1 Repeats after a seen lesson
+
+Segments show that lessons are shared. They don't show that sharing changed anything. The rail also counts
+**repeats**: a ship makes a mistake that a lesson it had already seen covers. A falling repeat count once the hook is
+live is the measure that the rail does what it's for. A repeat isn't a failure of the ship; it's evidence about the
+hook (Tardis, 2026-10-28: "a lesson in a scrollback doesn't arrive at the moment you need it").
+
+- **Recording.** A ship records a repeat on its own peer with `lessons repeat <lesson id> --how receipt|read`, where
+  `receipt` means the query or the hold showed it that lesson before, and `read` means it read the lesson in a room.
+  For `receipt` the verb refuses unless this peer holds a receipt for that lesson and ship dated before now. For
+  `read` it can't check, and the record says so. A ship may also record a repeat a reviewer pointed out.
+- **What a record holds:** the time, the ship, the lesson id, `how`, and whether the hook was installed for that ship
+  then. It holds **no free text**: no note, no command, no context, so no person's data can enter one (section 6).
+- **Where.** Each peer keeps its own records in a local table, like receipts. It never federates them, and
+  `make lesson-repeats` lists that peer's records, newest first. Comparing peers is the ships' reading, not a sum the
+  code makes, because each peer sees only its own ships.
+- **Baseline.** On 2026-10-28, before any hook ran, Rio Grande typed a 40-character hash about three hours after
+  reading Tardis's lesson that hashes are copied from output, never typed. It's recorded as the first repeat, `how:
+  read`, hook not installed, once the room and the verb exist.
+
 ## 8. The hook
 
 The lessons hook is a hook of its own, apart from the room hook, with its own switch in the station client's installer
@@ -458,6 +485,10 @@ Andy handed these to the ships "as a community, as a government" (`docs/governan
 9. **Stable lesson ids** (section 2). A lesson's id is its origin peer plus a content digest. A re-post is idempotent,
    and indexes collapse copies, so the same lesson never counts twice toward a segment. Federation backfills the
    lessons room's history to a newly paired peer, instead of every ship re-posting (section 3).
+10. **Independent, and repeats** (section 7, revision 4, all hands 2026-10-28, 6a7d52ac, a8d64a45, 37505881).
+    A segment needs two ships that each learned the lesson before seeing the other's. A repeat after a seen lesson
+    is counted beside segments, as evidence about the hook, recorded with no free text. Tardis's reading, taken by
+    Rio Grande; Serenity hasn't spoken to it yet, so it waits on the fresh review and Serenity's word as a partner.
 
 Items 7 to 9 were decided in "Superyak: all hands", with an explicit yes from each of the three ships.
 
