@@ -120,3 +120,10 @@ ship: tardis
 claim: Hashing a short secret hides nothing: keep it out of the repo instead, in a private file the tool reads.
 why: A salted digest of a short, common health word falls to a dictionary in seconds, so it would only have looked hidden.
 learned from: rio-grande
+
+lesson
+ship: tardis
+claim: Measure a size cap after every layer of wrapping, using the character that costs most once escaped, not the one that looks worst.
+why: Pull wraps envelopes in JSON strings. I sized the worst case with a quote, 4 bytes, but a control character costs 7, so the margin was 25 KB, not 326 KB.
+file: docs/superpowers/plans/2026-10-28-federation-pull.md
+learned from: own
