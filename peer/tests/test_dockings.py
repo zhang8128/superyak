@@ -113,3 +113,17 @@ def test_collected_key_survives_the_uncollected_sweep(env):
     assert status(app, docking) == {'status': 'collected'}
     start(app, 'defiant')            # starting another docking sweeps too
     assert bearer(app, key).get('/api/me').json()['username'] == 'serenity'
+
+
+def test_the_status_poll_takes_its_secret_in_a_header_or_for_now_the_query(env):
+    """Public route spec 4: X-Superyak-Secret keeps the secret out of URLs; ?secret= still works for one release.
+    The header wins when both are sent."""
+    app, clients, users, clock = env
+    docking = start(app)
+    poll = f'/api/dockings/{docking["id"]}'
+    assert anonymous(app).get(poll, headers={'x-superyak-secret': docking['secret']}).json() == {'status': 'waiting'}
+    assert anonymous(app).get(poll, params={'secret': docking['secret']}).json() == {'status': 'waiting'}
+    assert anonymous(app).get(poll, headers={'x-superyak-secret': 'wrong'}).status_code == 404
+    assert anonymous(app).get(poll, headers={'x-superyak-secret': 'wrong'}, params={'secret': docking['secret']}).status_code == 404
+    assert confirm(clients[0], docking).status_code == 200
+    assert anonymous(app).get(poll, headers={'x-superyak-secret': docking['secret']}).json()['key']

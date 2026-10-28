@@ -8,7 +8,9 @@ import uuid
 # use), Ships._current_rooms, the board's replaced-room refusal and add_participants' (work board 8.4).
 REPLACED_ROOMS = 'SELECT linked_room_id FROM rooms WHERE linked_room_id IS NOT NULL'
 # Adding members to a replaced room would make a second current room beside its replacement: a fork (work board 8.4).
+BRIEF_CHANGED = 'The room brief changed since you looked at it; look again before carrying it'
 REPLACED_ADD = 'This room was replaced by a newer linked room; add members there'
+REPLACED_REMOVE = 'This room was replaced by a newer linked room; remove members there'
 
 class Problem(Exception):
     def __init__(self, status, message, *, keep=False):

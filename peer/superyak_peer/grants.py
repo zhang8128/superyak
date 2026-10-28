@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS budget_uses(grant_id TEXT NOT NULL REFERENCES grants(
 CREATE INDEX IF NOT EXISTS budget_uses_by_grant ON budget_uses(grant_id, created);
 '''
 HOUR, DAY = 3600, 86400
+MODERATE_ACTIONS = ('add_member', 'remove_member')  # room moderators (M1): the actions a moderate grant lists
 NOT_IN_ROOM = 'a room you are not in'  # G11: the title anyone outside a listed room sees
 MAX_LISTED = 20  # G8 steps 1 and 4: at most 20 rooms and 20 targets
 MAX_BUDGET = 500  # G8 step 6, spec A's bound
@@ -26,7 +27,17 @@ GRANTEE_IS_YOU = 'You cannot grant to yourself'
 TARGETS_SHAPE = 'targets is a list of 1 to 20 ship ids, each listed once'
 TARGET_NOT_YOURS = 'Each target must be a ship you own'
 BUDGET_RANGE = 'budget is a whole number from 1 to 500'
+ENDED = "{by} ended {name}'s moderation of this room."
 REASON_SHAPE = 'A reason is one line of at most 200 characters'
+
+
+def is_moderate(grant):
+    """M1: a grant row or dict whose `actions` JSON is a non-empty subset of MODERATE_ACTIONS. Such a grant never builds."""
+    try:
+        actions = json.loads(grant['actions'])
+    except (TypeError, ValueError):
+        return False
+    return isinstance(actions, list) and bool(actions) and all(a in MODERATE_ACTIONS for a in actions)
 
 
 def short_id(grant_id):
@@ -57,14 +68,14 @@ class Grants:
         return {'max_depth': 3, 'max_expiry_hours': 720, 'agent_grant_default_hours': 24, 'builds_per_ship_per_day': 20,
                 'delegable': ['direct'], 'grantees': None}
 
-    def _insert_grant(self, db, issuer_id, grantee_id, targets, rooms, hours, budget):
+    def _insert_grant(self, db, issuer_id, grantee_id, targets, rooms, hours, budget, actions=('direct',)):
         """A root `direct` grant, stored and signed in the caller's transaction; the caller has checked every field (G8).
-        Step 3 fixes actions, depth and confirm, and leaves parent_id, the charter columns and follow empty. The row holds
+        Only make_moderate_grant passes other actions. Step 3 fixes depth and confirm, and leaves parent_id, the charter columns and follow empty. The row holds
         an empty signature only until _sign_grant fills it, in this transaction (G12). Returns the grant's id."""
         key, now = uid(), self.clock()
         db.execute('INSERT INTO grants(id,issuer_id,grantee_id,actions,targets,rooms,expires,budget,depth,confirm,created,'
                    "signature) VALUES(?,?,?,?,?,?,?,?,0,'none',?,'')",
-                   (key, issuer_id, grantee_id, encode(['direct']), encode(targets), encode(rooms), now + hours * HOUR,
+                   (key, issuer_id, grantee_id, encode(list(actions)), encode(targets), encode(rooms), now + hours * HOUR,
                     budget, now))
         self._sign_grant(db, key)
         return key
@@ -82,9 +93,20 @@ class Grants:
         return chain
 
     def _budget_used(self, db, grant_id, now):
-        """Builds charged to a grant in the last 24 hours. A use exactly 24 hours old no longer counts (G9, test 6)."""
-        return db.execute('SELECT count(*) FROM budget_uses WHERE grant_id=? AND created>?',
-                          (grant_id, now - DAY)).fetchone()[0]
+        """Builds (budget_uses) plus member changes (member_changes) charged to a grant in the last 24 hours; a grant has
+        rows in only one. A use exactly 24 hours old no longer counts (G9, test 6)."""
+        return db.execute('SELECT (SELECT count(*) FROM budget_uses WHERE grant_id=? AND created>?)'
+                          ' + (SELECT count(*) FROM member_changes WHERE grant_id=? AND created>?)',
+                          (grant_id, now - DAY, grant_id, now - DAY)).fetchone()[0]
+
+    def _covered_room(self, db, grant):
+        """M4, ruling 7: the current room a moderate grant covers: the listed room while current, else the room it was
+        replaced by (_current_room). None for any other grant, and at a fork, which covers nothing."""
+        if not is_moderate(grant):
+            return None
+        listed = json.loads(grant['rooms'])[0]
+        replaced = db.execute(f'SELECT 1 WHERE ? IN ({REPLACED_ROOMS})', (listed,)).fetchone()
+        return self._current_room(db, listed) if replaced else listed
 
     def _ship_grant_builds(self, db, ship_id, now):
         """A ship's grant build tickets in the last 24 hours, under every grant: G11's ship_builds_left and G15's per-ship
@@ -112,14 +134,36 @@ class Grants:
             if len(chain) > policy['max_depth'] or (policy['grantees'] is not None and link['grantee_id'] not in policy['grantees']):
                 return False, f"Grant {short} is no longer allowed by the station's policy"
             if budget and self._budget_used(db, link['id'], now) >= link['budget']:
-                builds = f'{link["budget"]} build' + ('' if link['budget'] == 1 else 's')
-                return False, f'Grant {short} has used its {builds} for the last 24 hours'
+                noun = 'change' if is_moderate(link) else 'build'
+                used = f'{link["budget"]} {noun}' + ('' if link['budget'] == 1 else 's')
+                return False, f'Grant {short} has used its {used} for the last 24 hours'
+            if is_moderate(link):
+                reason = self._moderate_pause(db, link)
+                if reason:
+                    return False, reason
+                continue
             for ship_id in json.loads(link['targets']):
                 ship = db.execute('SELECT name, owner_id FROM users WHERE id=?', (ship_id,)).fetchone()
                 if ship is None or ship['owner_id'] != root['issuer_id']:
                     issuer = db.execute('SELECT name FROM users WHERE id=?', (root['issuer_id'],)).fetchone()
                     return False, f'{safe_line(issuer["name"])} no longer owns {safe_line(ship["name"]) if ship else "a ship that is gone"}'
         return True, None
+
+    def _moderate_pause(self, db, link):
+        """M5 check 5 for a moderate grant: why it is paused now, or None. The covered room must exist and be owned by the
+        issuer, hold the grantee, and have no member on another station."""
+        covered = self._covered_room(db, link)
+        if covered is None:
+            return f'Grant {short_id(link["id"])} covers no current room'
+        room = db.execute('SELECT owner_id FROM rooms WHERE id=?', (covered,)).fetchone()
+        name = lambda user_id: safe_line((db.execute('SELECT name FROM users WHERE id=?', (user_id,)).fetchone() or {'name': 'Someone'})['name'], 40)
+        if room is None or room['owner_id'] != link['issuer_id']:
+            return f'{name(link["issuer_id"])} no longer owns this room'
+        if db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (covered, link['grantee_id'])).fetchone() is None:
+            return f'{name(link["grantee_id"])} is no longer in this room'
+        if db.execute('SELECT 1 FROM remote_room_members WHERE room_id=?', (covered,)).fetchone():
+            return 'This room now has a member on another station'
+        return None
 
     def _owns_a_target(self, db, actor, grant):
         ships = json.loads(grant['targets'])
@@ -202,13 +246,17 @@ class Grants:
                 listed.append(entry)
             rooms = listed
         valid, reason = self._grant_validity(db, grant)
+        origin = db.execute('SELECT made_via FROM grant_origins WHERE grant_id=?', (grant['id'],)).fetchone()
         view = {'id': grant['id'], 'short': short_id(grant['id']), 'issuer': person(grant['issuer_id']),
                 'grantee': person(grant['grantee_id']), 'targets': targets, 'rooms': rooms, 'expires': grant['expires'],
                 'budget': grant['budget'], 'budget_left': max(0, grant['budget'] - self._budget_used(db, grant['id'], now)),
                 'created': grant['created'], 'revoked': grant['revoked'], 'revoked_by': person(grant['revoked_by']),
-                'revoke_reason': grant['revoke_reason'], 'valid': valid}
+                'revoke_reason': grant['revoke_reason'], 'valid': valid, 'actions': json.loads(grant['actions']),
+                'made_via': origin['made_via'] if origin else None}
         if not valid:
             view['reason'] = reason
+        if is_moderate(grant) and actor == grant['issuer_id']:
+            view['changes'] = self._grant_changes(db, actor, grant)
         return view
 
     def list_grants(self, actor):
@@ -279,12 +327,25 @@ class Grants:
             if not _whole(budget, 1, MAX_BUDGET):
                 raise Problem(400, BUDGET_RANGE)
             key = self._insert_grant(db, actor, grantee, targets, rooms, hours, budget)
+            self._record_origin(db, key, 'browser')  # M20, ruling 16
             return self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (key,)).fetchone())
 
     def _may_revoke(self, db, actor, grant):
         """G10: the issuer, the issuer of any grant above it (none in step 3, but the walk is the same), or the owner of
         any target ship. Being an admin gives no power over other people's grants."""
         return any(link['issuer_id'] == actor for link in self._grant_chain(db, grant)) or self._owns_a_target(db, actor, grant)
+
+    def _revoke(self, db, actor, grant, reason):
+        """The revocation, signed (G12) in the caller's transaction. A moderate grant's end is announced in the room it
+        covers now (M19), under the revoker's display name."""
+        db.execute('UPDATE grants SET revoked=?, revoked_by=?, revoke_reason=? WHERE id=?',
+                   (self.clock(), actor, reason, grant['id']))
+        self._sign_revocation(db, grant['id'])
+        room = self._covered_room(db, grant)
+        if room is not None:
+            name = lambda user_id: safe_line(db.execute('SELECT name FROM users WHERE id=?', (user_id,)).fetchone()['name'], 40)
+            self._post_as_system(db, room, f'moderator-{grant["id"]}-revoked',
+                                 ENDED.format(by=name(actor), name=name(grant['grantee_id'])))
 
     def revoke_grant(self, actor, grant_id, reason=None):
         """G10: POST /api/grants/{id}/revoke. 404 for anyone G11 doesn't show the grant to, then 403 for one who sees it
@@ -300,7 +361,5 @@ class Grants:
                 raise Problem(403, 'Only its issuer or the owner of one of its ships can revoke this grant')
             if grant['revoked'] is not None:
                 raise Problem(409, f'Grant {short_id(grant["id"])} is already revoked')
-            db.execute('UPDATE grants SET revoked=?, revoked_by=?, revoke_reason=? WHERE id=?',
-                       (self.clock(), actor, reason, grant['id']))
-            self._sign_revocation(db, grant['id'])
+            self._revoke(db, actor, grant, reason)
             return self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (grant['id'],)).fetchone())
