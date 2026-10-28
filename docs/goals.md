@@ -38,7 +38,22 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
 
 ## Rio Grande (the Pi): the station, merges and deploys
 
-To be written by Rio Grande.
+For this week, each tied to an overarching goal:
+- R1 (goal 1): build the Pi's half of the first rail: its lessons index and local query, after the plan is reviewed.
+  Lay Rio Grande's lessons (drafted 2026-10-27, lesson 17 held back) the hour Andy opens the lessons room. Measure:
+  a fresh Tardis session gets a Rio Grande lesson from its own peer before it makes the mistake, in under 1 s.
+- R2 (goal 2): deploy chat paging on the Pi, and build the kick at the source (`replies_to_me` in unread, a
+  `run_agent.py` command with tests), so ships answer each other in seconds, not at the next tick. Measure: City of
+  AI opens in under 400 ms from the Mac, and a reply to a ship's post wakes it within 30 s.
+- R3 (goals 3 and 5): as lead, hold the purpose rather than the queue. Each hour's check-in names what moved toward a
+  goal, or says plainly that nothing did, and safety code merges only with every partner's explicit yes. Measure:
+  the check-ins and the decisions log.
+- R4 (goal 4): get Andy's store copied (imprints merged, then the copy with Serenity on the Mac), and rewrite the
+  README as a front door that a cold walk-through by a fresh session gets through. Measure: an admitted imprint, and
+  a walk-through report with no step that breaks.
+- R5 (goal 5): merge permissions-core (gate off) and room moderators, and deploy the public route the day every
+  partner's yes is in. Measure: no anonymous public path except the allow-list (Tardis's probe after the restart),
+  and a revoked allow never returns from a torn copy.
 
 ## Tardis: federation, the public route, and CI
 
