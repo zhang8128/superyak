@@ -57,6 +57,9 @@ class FakeStation:
         self.board = {}  # work board: room id -> its items, as GET /api/chats/{id}/board gives them
         self.board_missing = None  # a status (404 or 405): every board route answers {"detail": "Not Found"}, as a station without the board does
         self.board_refusal = None  # (status, error): what the count route answers instead, as an older or failing station
+        self.moderating = {}  # room id -> the station's `moderating` value, added to the room by listed()
+        self.member_refusal = None  # (status, error): what the member routes answer instead
+        self.member_extra = {}  # merged into the member routes' answers
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -131,7 +134,32 @@ class FakeStation:
                    if room['id'] in self.breakouts else {})}  # breakouts S6: only a breakout carries the key
 
     def listed(self, room):
-        return {k: v for k, v in self.view(room).items() if k not in ('messages', 'brief', 'brief_revision')}
+        listed = {k: v for k, v in self.view(room).items() if k not in ('messages', 'brief', 'brief_revision')}
+        if room['id'] in self.moderating:
+            listed['moderating'] = self.moderating[room['id']]
+        return listed
+
+    def member_route(self, me, room_id, method, member, payload):
+        """Room moderators: a ship's add makes a new room linked to the old one; a remove drops the user."""
+        room = self.rooms.get(room_id)
+        if room is None or me not in room['member_ids']:
+            return 404, b'{"error": "Not found"}'
+        if self.member_refusal is not None:
+            return self.member_refusal[0], json.dumps({'error': self.member_refusal[1]}).encode()
+        named = member if method == 'DELETE' else (payload or {}).get('member')
+        user = next((u for u in self.users.values() if u['username'] == named), None)
+        if user is None:
+            return 404, json.dumps({'error': f'{named} is not someone a moderator can add'}).encode()
+        if method == 'POST':
+            members = [self.users[i] for i in room['member_ids']] + [user]
+            new = self.room(room['title'], *members, linked_room_id=room_id)
+            answer = {**self.listed(self.rooms[new]), 'short': new[:6], 'added': [user], 'brief_carried': False,
+                      'board_carried': 0, 'bridged': False}
+        else:
+            room['member_ids'] = [i for i in room['member_ids'] if i != user['id']]
+            answer = {**self.listed(room), 'removed': user, 'earlier_rooms': 0, 'claims_released': 0,
+                      'grant_revoked': False, 'bridged': False}
+        return 200, json.dumps({**answer, **self.member_extra}).encode()
 
     def open_breakout(self, me, payload):
         """POST /api/ships/me/rooms, with step 1's checks in its order."""
@@ -403,6 +431,10 @@ class FakeStation:
             return self.end_breakout(me, segments[4], segments[5])
         if method == 'PUT' and segments[:4] == ['api', 'ships', 'me', 'rooms'] and len(segments) == 6 and segments[5] == 'brief':
             return self.ship_brief(me, segments[4], json.loads(data))
+        if (method in ('POST', 'DELETE') and segments[:4] == ['api', 'ships', 'me', 'rooms'] and segments[5:6] == ['members']
+                and len(segments) == (6 if method == 'POST' else 7)):
+            return self.member_route(me, segments[4], method, segments[6] if method == 'DELETE' else None,
+                                     json.loads(data) if data else {})
         if method == 'POST' and path == '/api/ships/me/unread/advance':
             payload = json.loads(data)
             name = payload.get('cursor') or 'default'

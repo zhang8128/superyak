@@ -279,7 +279,8 @@ def test_a_grant_shows_its_people_ships_rooms_budget_and_validity(env):
         'targets': [{'id': serenity['id'], 'name': 'Serenity', 'ship_builds_left': 18},
                     {'id': rio['id'], 'name': 'Rio Grande', 'ship_builds_left': 20}],
         'rooms': [{'id': ops['id'], 'title': 'Ops'}], 'expires': 1000000.0 + DAY, 'budget': 5, 'budget_left': 3,
-        'created': 1000000.0, 'revoked': None, 'revoked_by': None, 'revoke_reason': None, 'valid': True}
+        'created': 1000000.0, 'revoked': None, 'revoked_by': None, 'revoke_reason': None, 'valid': True,
+        'actions': ['direct'], 'made_via': None}
     assert views[other]['targets'] == [{'id': serenity['id'], 'name': 'Serenity', 'ship_builds_left': 18}]  # every grant's
     assert views[other]['rooms'] == '*' and views[other]['budget_left'] == 5
     charge(store, other, *range(1, 8))  # more uses than its budget (only by hand): none left, never fewer
@@ -483,7 +484,7 @@ def test_a_grant_made_in_the_browser_is_stored_signed_and_shown(station):
                     'targets': [{'id': s['serenity']['id'], 'name': 'Serenity', 'ship_builds_left': 20}],
                     'rooms': [{'id': s['shared']['id'], 'title': 'Ops'}], 'expires': 1000000.0 + 24 * 3600, 'budget': 5,
                     'budget_left': 5, 'created': 1000000.0, 'revoked': None, 'revoked_by': None, 'revoke_reason': None,
-                    'valid': True}
+                    'valid': True, 'actions': ['direct'], 'made_via': 'browser'}
     assert listed(client) == [view]  # the grant as G11 shows it
     row = grant_row(s['store'], view['id'])
     assert (row['actions'], row['depth'], row['confirm'], row['parent_id'], row['charter_layer_id'],

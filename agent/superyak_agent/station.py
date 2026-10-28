@@ -230,6 +230,13 @@ class StationClient:
         """Ship briefs S3: set or update a room's brief under this ship's own key; the station decides who may."""
         return self.request('PUT', f'/api/ships/me/rooms/{quote(room_id, safe="")}/brief', {'body': body, 'revision': revision})
 
+    def add_member(self, room_id, member):
+        """Room moderators: add one member to a room this ship moderates; the station makes the new room."""
+        return self.request('POST', f'/api/ships/me/rooms/{quote(room_id, safe="")}/members', {'member': member})
+
+    def remove_member(self, room_id, member):
+        return self.request('DELETE', f'/api/ships/me/rooms/{quote(room_id, safe="")}/members/{quote(member, safe="")}')
+
     def directory(self):
         return self.request('GET', '/api/ships/directory')
 

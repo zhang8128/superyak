@@ -122,7 +122,8 @@ def a_sibling_only_in_a_superseded_room(fleet):
     fleet.dock('defiant')
     lab = fleet.room(fleet.andy, 'Lab', ['serenity', 'defiant'])
     newer = fleet.andy.post(f'/api/chats/{lab}/participants', json={'member_ids': [fleet.users[1]['id']]}).json()['id']
-    assert fleet.andy.delete(f'/api/chats/{newer}/participants/{fleet.id("defiant")}').status_code == 200
+    with fleet.store.transaction() as db:  # a removal made before merge 1, which released nothing and left the earlier rooms
+        db.execute('DELETE FROM room_members WHERE room_id=? AND user_id=?', (newer, fleet.id('defiant')))
     return ['defiant']
 
 
