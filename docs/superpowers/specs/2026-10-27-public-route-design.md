@@ -53,7 +53,8 @@ and nothing else.
 - The door on 8443, which is unchanged.
 - **Federation.** Pull and its own listener are in the approved federation-pull spec on branch
   `tardis/federation-pull` (05c9ea7), not yet merged.
-  - Until that listener exists, `/federation/events` on the main app refuses public requests.
+  - Until that listener exists, `/federation/events` on the main app refuses anonymous public requests (a valid
+    session or ship key passes it, as any route, §2).
   - No live peer depends on it: federation has carried no live traffic.
 
 ## 1. Which requests are public (nits 1, 2)
