@@ -10,7 +10,6 @@ checklist and lesson entries. A lessons provider keeps its entries under `record
 import contextlib
 import errno
 import json
-import math
 import os
 import time
 from pathlib import Path
@@ -106,11 +105,13 @@ def open_record(path: Path, deadline: float, monotonic=time.monotonic):
     path = Path(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = _lock(path, deadline, monotonic)
-    record = RecordFile(fd, _read(fd))
+    record = None
     try:
+        record = RecordFile(fd, _read(fd))  # inside the try: a failed read must not leak the fd or keep the lock
         yield record
     finally:
-        record.close()
+        if record is not None:
+            record.close()
         os.close(fd)
 
 

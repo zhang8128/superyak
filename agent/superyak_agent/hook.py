@@ -285,7 +285,10 @@ def _prune(sessions_dir, keep, now):
             continue
         try:
             if path.suffix == '.holds':
-                _prune_holds(path, now)
+                try:
+                    _prune_holds(path, now)
+                except Exception:  # noqa: BLE001 - never the damaged-file unlink below: a live session may hold this name
+                    pass
                 continue
             try:
                 seen = read_json(path).get('seen')
