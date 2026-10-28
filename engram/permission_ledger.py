@@ -499,6 +499,9 @@ def ledger_path(engram_home: Path) -> Path:
     return Path(engram_home) / ".engram" / "permissions.db"
 
 
+# Copies of category_evolution's two helpers, not imports: that module brings engram's category machinery (categories,
+# category_compile, category_context), and the ledger, which the daemon loads for every gate, imports only permissions
+# and lighthouse_protocol.
 def _fsync_file(path: Path) -> None:
     with path.open("rb") as database:
         os.fsync(database.fileno())
@@ -507,7 +510,7 @@ def _fsync_file(path: Path) -> None:
 def _fsync_directory(path: Path) -> None:
     try:
         directory_fd = os.open(path, os.O_RDONLY)
-    except OSError:
+    except OSError:  # a folder that can't be opened to sync: the rename is still atomic, only its durability is lost
         return
     try:
         os.fsync(directory_fd)
@@ -1335,7 +1338,12 @@ class Ledger:
             new = None
             _fsync_file(tmp)
             os.replace(tmp, final)
+            # From here a complete ledger is at `final`. A folder sync that raises reports an error, and the cleanup
+            # below leaves the file where it is: its folder isn't empty, so the rmdir fails and is passed over.
             _fsync_directory(final.parent)
+            if made_dir:  # the new folders' own entries, so a power loss can't drop the whole copy either
+                _fsync_directory(Path(dest))
+                _fsync_directory(Path(dest).parent)
         except BaseException:
             if new is not None:
                 new.close()

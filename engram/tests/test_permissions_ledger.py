@@ -303,7 +303,8 @@ def pragmas(led):
 def test_a_rebuild_replays_unsynced_with_its_journal_in_memory_and_the_copy_opens_like_any_ledger(tmp_path,
                                                                                                 monkeypatch):
     """fix:ledger-rebuild-writes: the .rebuilding file is thrown away on any failure, so its rows need no fsync and
-    no journal file. A U24 rebuild wrote about 21 times the fixture's size; a 2,000-row log here, 4.4 times."""
+    no journal file. (Measured outside the suite: a U24 rebuild wrote about 21 times the fixture's size on the Pi, and
+    a 2,002-row log 4.4 times on Tardis, 1.0 after; 27408fb's message has the method.)"""
     led = small_ledger(tmp_path)
     seen = []
     real = Ledger._append
@@ -336,25 +337,46 @@ def test_a_torn_rebuilding_file_left_by_a_power_loss_is_removed_before_the_next_
     assert [p.name for p in final.parent.iterdir()] == ["permissions.db"]
 
 
-def test_a_rebuild_syncs_its_file_then_renames_it_then_syncs_the_folder(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fresh", [True, False])
+def test_a_rebuild_syncs_its_file_then_renames_it_then_syncs_the_folders(tmp_path, monkeypatch, fresh):
+    """The ledger's folder after the rename, and, when the rebuild made the folders, their own entries too (the fresh
+    Pi reviewer's nit), so a power loss can neither tear the copy nor drop it."""
     led = small_ledger(tmp_path)
+    dest = tmp_path / "copy"
+    if not fresh:
+        ledger_path(dest).parent.mkdir(parents=True)
     calls, real_replace = [], os.replace
     monkeypatch.setattr(permission_ledger, "_fsync_file", lambda path: calls.append(("file", path.name)))
-    monkeypatch.setattr(permission_ledger, "_fsync_directory", lambda path: calls.append(("folder", path)))
+    monkeypatch.setattr(permission_ledger, "_fsync_directory", lambda path: calls.append(("folder", Path(path))))
     monkeypatch.setattr(os, "replace", lambda a, b: (calls.append(("rename", Path(a).name, Path(b).name)),
                                                      real_replace(a, b))[1])
-    dest = led.rebuild(tmp_path / "copy")
+    led.rebuild(dest)
+    folders = [ledger_path(dest).parent] + ([dest, dest.parent] if fresh else [])
     assert calls == [("file", "permissions.db.rebuilding"), ("rename", "permissions.db.rebuilding", "permissions.db"),
-                     ("folder", ledger_path(dest).parent)]
+                     *[("folder", folder) for folder in folders]]
 
 
-def test_the_sync_helpers_fsync_the_file_and_the_folder(tmp_path, monkeypatch):
+def test_the_sync_helpers_fsync_the_file_and_the_folders(tmp_path, monkeypatch):
     led = small_ledger(tmp_path)
     synced, real_fsync = [], os.fsync
     monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(os.fstat(fd).st_ino), real_fsync(fd))[1])
     dest = led.rebuild(tmp_path / "copy")
     final = ledger_path(dest)
-    assert synced == [final.stat().st_ino, final.parent.stat().st_ino]  # rename keeps the inode
+    assert synced == [p.stat().st_ino for p in (final, final.parent, dest, tmp_path)]  # rename keeps the inode
+
+
+def test_a_folder_sync_that_fails_after_the_rename_raises_and_leaves_the_good_copy(tmp_path, monkeypatch):
+    led = small_ledger(tmp_path)
+
+    def broken(path):
+        raise OSError("sync failed")
+
+    monkeypatch.setattr(permission_ledger, "_fsync_directory", broken)
+    with pytest.raises(OSError, match="sync failed"):
+        led.rebuild(tmp_path / "copy")
+    monkeypatch.undo()
+    copy = Ledger.open(tmp_path / "copy")
+    assert copy.tables() == led.tables() and copy.verify() is None
 
 
 def test_state_reads_log_tables_and_meta_in_one_transaction(tmp_path):
