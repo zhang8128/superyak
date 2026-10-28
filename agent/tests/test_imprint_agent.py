@@ -3,9 +3,13 @@ import fcntl
 import hashlib
 import json
 import os
+import select
 import subprocess
 import sys
+import threading
+import time
 from collections import namedtuple
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -132,7 +136,8 @@ def built_home(tmp_path, parts=1):
 def sent_home(tmp_path):
     home = built_home(tmp_path)
     (home / 'imprints' / IMPRINT_ID / 'send.json').write_text(json.dumps(
-        {'request_id': REQUEST_ID, 'imprint_id': IMPRINT_ID, 'code': 'AB12CD34', 'expires': 5000, 'confirm_url': 'x'}))
+        {'request_id': REQUEST_ID, 'imprint_id': IMPRINT_ID, 'code': 'AB12CD34', 'expires': 5000,
+         'confirm_url': 'http://station/#imprint?code=AB12CD34'}))
     return home
 
 
@@ -155,7 +160,7 @@ def run_agent(argv, home):
 def test_nothing_of_the_package_leaves_before_the_yes(tmp_path):
     station, home = FakeStation(), built_home(tmp_path)
     assert Imprint(home, station.client()).send(PLAN) == 'waiting-for-you'
-    assert [c.method for c in station.calls] == ['POST', 'GET'] and not station.part_bodies
+    assert [c.method for c in station.calls] == ['POST'] and not station.part_bodies
     saved = json.loads((home / 'imprints' / IMPRINT_ID / 'send.json').read_text())
     assert saved['request_id'] == REQUEST_ID and saved['code'] == 'AB12CD34'
     assert station.calls[0].body == (home / 'imprints' / IMPRINT_ID / 'request.json').read_bytes()
@@ -166,6 +171,132 @@ def test_the_ids_the_code_and_the_link_are_printed(tmp_path):
     Imprint(built_home(tmp_path), FakeStation().client(), out=lines.append).send(PLAN)
     text = '\n'.join(lines)
     assert IMPRINT_ID[:4] in text and REQUEST_ID[:4] in text and 'AB12CD34' in text and '#imprint?code=AB12CD34' in text
+    assert 'the two short ids' in text and 'type your own station password' in text      # the review's nit
+    assert 'A session relays this link and never opens it' in text and 'choose your' not in text   # S5
+    assert "don't accept a password your browser suggests" in text.lower()                        # Serenity's note 2
+
+
+# ---- The confirm link reaches a session in time (the fresh review's M1) ----
+
+def test_the_first_run_returns_once_the_link_is_printed(tmp_path, monkeypatch):
+    def no_wait(seconds):
+        raise AssertionError('the run that makes the request polled')
+    monkeypatch.setattr(imprint_module.time, 'sleep', no_wait)
+    station, lines = FakeStation(), []
+    assert Imprint(built_home(tmp_path), station.client(), out=lines.append).send(PLAN) == 'waiting-for-you'
+    assert [c.method for c in station.calls] == ['POST']                           # it never polls
+    assert IMPRINT_ID[:4] in lines[0] and REQUEST_ID[:4] in lines[0] and '#imprint?code=AB12CD34' in lines[-1]
+
+
+def test_a_rerun_while_requested_prints_the_link_again(tmp_path):
+    station, lines = FakeStation(), []
+    assert Imprint(sent_home(tmp_path), station.client(), out=lines.append).send(PLAN) == 'waiting-for-you'
+    assert IMPRINT_ID[:4] in lines[0] and REQUEST_ID[:4] in lines[0] and 'AB12CD34' in lines[0]
+    assert '#imprint?code=AB12CD34' in lines[1] and len(lines) == 2
+    assert [c.method for c in station.calls][0] == 'GET' and 'POST' not in [c.method for c in station.calls]
+
+
+def expired_home(tmp_path):
+    home = sent_home(tmp_path)
+    send = home / 'imprints' / IMPRINT_ID / 'send.json'
+    send.write_text(json.dumps({**json.loads(send.read_text()), 'expires': NOW}))       # the station's own test: <= now
+    return home
+
+
+def test_an_expired_code_is_named_without_the_link(tmp_path):
+    lines = []
+    assert Imprint(expired_home(tmp_path), FakeStation().client(), out=lines.append).send(PLAN) == 'code-expired'
+    assert len(lines) == 1 and REQUEST_ID[:4] in lines[0] and 'expired' in lines[0]
+    assert 'hourly sweep' in lines[0] and 'plan again' in lines[0]
+    assert 'AB12CD34' not in lines[0] and '#imprint' not in lines[0]
+
+
+def test_an_expired_code_returns_without_polling(tmp_path, monkeypatch, capsys):     # the coordinator's follow-up
+    from superyak_agent import station as station_module
+    from superyak_agent.__main__ import main
+
+    def no_wait(seconds):
+        raise AssertionError('a run that found the code expired polled')
+    monkeypatch.setattr(imprint_module.time, 'sleep', no_wait)
+    station, home = FakeStation(), expired_home(tmp_path)
+    assert Imprint(home, station.client(), out=lambda line: None).send(PLAN) == 'code-expired'
+    assert [c.method for c in station.calls] == ['GET']
+    assert (home / 'imprints' / IMPRINT_ID / 'imprint.db').exists()      # the sweep ends it; a later run drops it
+    monkeypatch.setattr(station_module, 'client_for', lambda config, timeout=30: FakeStation().client())
+    assert main(['imprint', 'send', '--plan', PLAN, '--home', str(home)]) == 1
+    assert capsys.readouterr().out.rstrip().endswith('STATUS: code-expired')
+
+
+class PipedStation:
+    """A station over HTTP on the loopback: it takes the request and then says `requested`, as when nobody has said
+    yes yet."""
+    def __init__(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _reply(self, status, doc):
+                body = json.dumps(doc).encode()
+                self.send_response(status)
+                self.send_header('content-type', 'application/json')
+                self.send_header('content-length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                self._reply(200, {'status': 'requested', 'held': [], 'receipts': []})
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get('content-length') or 0))
+                self._reply(201, {'id': REQUEST_ID, 'code': 'AB12CD34', 'expires': 4_000_000_000,
+                                  'confirm_url': 'http://station/#imprint?code=AB12CD34'})
+
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.url = f'http://127.0.0.1:{self.server.server_address[1]}'
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def read_until(proc, needle, seconds):
+    """What the child has written to its piped stdout by the time `needle` appears, it closes, or `seconds` pass."""
+    seen, end = b'', time.monotonic() + seconds
+    while needle not in seen and time.monotonic() < end:
+        ready, _, _ = select.select([proc.stdout], [], [], max(0.0, end - time.monotonic()))
+        chunk = os.read(proc.stdout.fileno(), 4096) if ready else b''
+        if not chunk:
+            break
+        seen += chunk
+    return seen
+
+
+def test_the_link_reaches_a_pipe_before_the_send_ends(tmp_path):
+    """A session reads the command's stdout through a pipe, where print is block-buffered: each line is flushed."""
+    station, home = PipedStation(), built_home(tmp_path)
+    (home / 'station.json').write_text(json.dumps({'station': station.url, 'key': 'key'}))
+    env = {k: v for k, v in os.environ.items() if not k.lower().endswith('_proxy')} | {'HOME': str(tmp_path)}
+    argv = [sys.executable, str(Path(__file__).resolve().parents[1] / 'run_agent.py'), 'imprint', 'send', '--plan', PLAN,
+            '--home', str(home), '--wait', '30']
+    runs = []
+    try:
+        for _ in range(2):                  # the run that makes the request, then a rerun that polls
+            proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+            runs.append(proc)
+            seen = read_until(proc, b'#imprint?code=AB12CD34', 10)
+            assert b'#imprint?code=AB12CD34' in seen and REQUEST_ID[:4].encode() in seen, seen
+            if len(runs) == 1:              # the first run ends at once, at waiting-for-you, without polling
+                seen += read_until(proc, b'never-printed', 10)
+                assert proc.wait() == 3 and seen.endswith(b'STATUS: waiting-for-you\n'), seen
+            else:                           # the rerun shows the link while it is still waiting
+                assert proc.poll() is None
+    finally:
+        for proc in runs:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+        station.close()
 
 
 def test_after_the_yes_it_sends_the_manifest_then_the_missing_parts(tmp_path):
@@ -177,8 +308,9 @@ def test_after_the_yes_it_sends_the_manifest_then_the_missing_parts(tmp_path):
     assert station.part_bodies == {1: b'bbbb', 2: b'cccc'}
 
 
-def test_the_first_run_after_an_instant_yes_posts_then_uploads(tmp_path):
+def test_the_run_after_an_instant_yes_uploads(tmp_path):
     station, home = FakeStation(status='allowed'), built_home(tmp_path)
+    assert Imprint(home, station.client()).send(PLAN) == 'waiting-for-you'        # the first run only asks
     assert Imprint(home, station.client()).send(PLAN) == 'received'
     assert [c.method for c in station.calls][:2] == ['POST', 'GET'] and station.order() == ['manifest', 'part 0', 'complete']
 
@@ -390,6 +522,7 @@ def test_send_prints_the_code_the_link_and_a_deletion_reason_without_control_cha
     station, home = Hostile(status='deleted', reason='denied' + ESCAPES), built_home(tmp_path)
     lines = []
     Imprint(home, station.client(), out=lines.append).send(PLAN)
+    Imprint(home, station.client(), out=lines.append).send(PLAN)          # the rerun finds the deletion
     assert len(lines) == 3 and no_escapes(lines) and 'AB12' in lines[0]
 
 
@@ -440,7 +573,7 @@ def test_an_expired_request_is_final_and_drops_the_local_copy(tmp_path):       #
                                       '{"package": {"parts": ["a"], "part_bytes": 4, "bytes": null}}'])
 def test_a_malformed_manifest_is_a_clean_refusal_and_sends_nothing(tmp_path, manifest):     # review's Task 43a item
     from superyak_agent.imprint import ImprintRefused
-    station, home = FakeStation(status='allowed'), built_home(tmp_path)
+    station, home = FakeStation(status='allowed'), sent_home(tmp_path)          # the run after the yes
     (home / 'imprints' / IMPRINT_ID / 'manifest.json').write_text(manifest)
     with pytest.raises(ImprintRefused, match='manifest'):
         Imprint(home, station.client()).send(PLAN)

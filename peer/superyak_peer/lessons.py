@@ -22,7 +22,10 @@ LIMITS = {'ship': 32, 'claim': 160, 'why': 300, 'error': 120, 'command': 120, 'f
 BODY_BYTES = 4096
 VALUES_PER_KIND = 8
 LIVE_CAP = 32
-HOLD_BYTES = 6  # a command value this long may hold a command (section 8); a value this long matches at a prompt
+# Only a `command` value this long holds a command (section 8), so before a command only one this long matches (the
+# hold contract, review M2). It must equal the hook's own HOLD_BYTES (agent/superyak_agent/lessons_hold.py). At a
+# prompt, any value this long matches.
+HOLD_BYTES = 6
 RETRACT = re.compile(r'retract ([0-9a-f]{64}:[0-9a-f]{64})')
 FULL_ID = re.compile(r'[0-9a-f]{64}:[0-9a-f]{64}')
 SHORT = re.compile(r'[0-9a-f]{8}-[0-9a-f]{8}')
@@ -53,6 +56,7 @@ CARRIED = 'lesson-carry-'  # the client id of the backfill's copies (section 3),
 EMBED_BATCH = 8
 EMBED_SECONDS = 120.0
 INFO_SECONDS = 2.0
+BUSY_MS = 30_000  # SQLite's own wait for another connection's lock (db.py's timeout), which a budget only shortens
 RUNTIME_CONFIG = Path.home() / '.config' / 'superyak' / 'runtime.json'
 # Section 7.1: the only values a repeat record takes beside its ids and its time.
 REPEAT_HOW = ('receipt', 'read')
@@ -75,6 +79,7 @@ NOT_HERE = 'The lessons room takes no {what}'
 NO_IDENTITY = 'This peer has no identity.json yet, so its lessons have no peer id; federation makes it'
 NEW_LOCAL = 'The lessons room takes no new member from this station (first rail section 3)'
 UNLISTED = '{name} is on a peer that is not listed for the lessons room; list it with make station-lessons-room first'
+CHANGED = 'The room, its members or its peers changed since they were shown; run it again without CONFIRM'
 # Section 7.1's refusals: each names its rule and never echoes what was typed.
 REPEAT_HOW_RULE = 'Say how the ship had seen the lesson: --how receipt or --how read'
 REPEAT_HOOK_RULE = 'Declare whether the lessons hook was on: --hook on or --hook off'
@@ -117,6 +122,10 @@ class EmbedderTimeout(EmbedderUnavailable):
 
 class IndexUnreadable(Exception):
     """The index file exists but can't be read or parsed: a real failure (the query exits 1, nothing on stdout)."""
+
+
+class _Late(Exception):
+    """Step 4 found the hook's budget spent before writing: its transaction rolls back (review S1)."""
 
 
 def _value(number, key, value):
@@ -462,18 +471,25 @@ def write_index(path, value, vectors, read_at):
         raise
 
 
+def seen_ok(seen):
+    """Section 5's `seen`: at most SEEN_MAX lesson short ids, in a list (in process, also a tuple or a set). read_request
+    and could_hold share it, as they share `holding`, so could_hold refuses exactly the `seen` the query refuses."""
+    return (isinstance(seen, (list, tuple, set, frozenset)) and len(seen) <= SEEN_MAX
+            and all(isinstance(s, str) and SHORT.fullmatch(s) for s in seen))
+
+
 def read_request(raw):
     """Section 5's input, checked against its caps (the hook cuts before sending); ValueError for anything else."""
     value = json.loads(raw)
     if not isinstance(value, dict) or not isinstance(value.get('ship'), str) or len(value['ship']) > 32:
         raise ValueError('ship')
     seen = value.get('seen', [])
-    if not isinstance(seen, list) or len(seen) > SEEN_MAX or not all(isinstance(s, str) and SHORT.fullmatch(s) for s in seen):
+    if not seen_ok(seen):
         raise ValueError('seen')
     limit = value.get('limit', SHOWN)  # how many lesson slots the caller will render: 0 to 3
     if type(limit) is not int or not 0 <= limit <= SHOWN:
         raise ValueError('limit')
-    budget = value.get('budget_ms')  # the hook's time left, a ceiling on Near's own deadline
+    budget = value.get('budget_ms')  # the hook's time left: a ceiling on Near's own deadline, and step 4's (review S1)
     if budget is not None and (type(budget) is not int or budget < 0):
         raise ValueError('budget_ms')
     request = {'ship': value['ship'], 'seen': set(seen), 'limit': limit, 'budget_ms': budget}
@@ -580,15 +596,23 @@ def answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=tim
     return prompt_answer(request, index, age, socket_path, near, monotonic)
 
 
-def could_hold(command, ship, data_dir):
-    """Before a Bash command, in process (the signature agreed with Tardis, City of AI 2af70b05): whether the full query
-    could find a lesson that holds this command, so the hook runs it only then. True only when a lesson the asking ship
-    could be shown (the ship is a member at the index's last run, the lesson isn't its own, and its `learned from`
-    doesn't name it) has a `command` value of at least 6 bytes inside `command`, cut to 300 characters as the hook
-    cuts it. It reads this peer's index file and nothing else: no store, no database, no socket, no write. It ignores
-    the file's age, since the query's step 4 re-checks retractions and membership, so a stale index can only make it
-    say True too often, never miss a hold. No index, or one that can't be read, is False."""
-    if not isinstance(command, str) or not isinstance(ship, str):
+def holding(values, command):
+    """The `command` values found literally in `command` that can hold it: at least HOLD_BYTES each (section 8)."""
+    return [v for v in values if len(v.encode('utf-8')) >= HOLD_BYTES and v in command]
+
+
+def could_hold(command, ship, data_dir, seen=()):
+    """Before a Bash command, in process (the signature agreed with Tardis, City of AI 2af70b05, and `seen` since the
+    hold contract, review M2 and S1): whether the full query could find a lesson that holds this command, so the hook
+    runs it only then. True only when a lesson the asking ship could be shown (the ship is a member at the index's
+    last run, the lesson isn't its own, its `learned from` doesn't name it, and its short id isn't in `seen`) has a
+    `command` value of at least 6 bytes inside `command`, cut to 300 characters as the hook cuts it: exactly the
+    lessons the words-only query answers. `seen` is the ids the hook will send in the request, so a head whose only
+    such lesson was shown already asks no query. A `seen` the query would refuse (read_request) is False, since that
+    query answers nothing. It reads this peer's index file and nothing else: no store, no database, no socket, no
+    write. It ignores the file's age, since the query's step 4 re-checks retractions and membership, so a stale index
+    can only make it say True too often, never miss a hold. No index, or one that can't be read, is False."""
+    if not isinstance(command, str) or not isinstance(ship, str) or not seen_ok(seen):
         return False
     try:
         index = read_index(Path(data_dir) / INDEX_FILE)
@@ -597,22 +621,25 @@ def could_hold(command, ship, data_dir):
     asking = index and index['ships'].get(ship)
     if asking is None or not isinstance(asking, str):
         return False
-    command = command[:CAPS['command']]
-    return any(item['author'] != asking and item['learned_from'] != ship and len(value.encode('utf-8')) >= HOLD_BYTES
-               and value in command for item in index['lessons'] for value in item['command'])
+    command, seen = command[:CAPS['command']], set(seen)
+    return any(item['author'] != asking and item['learned_from'] != ship and holding(item['command'], command)
+               and short_lesson_id(item['id']) not in seen for item in index['lessons'])
 
 
 def words(item, request):
     """Section 5 step 1: (how many values match, the matched `command` value to show, or None). Before a command
-    (`words_only`) only `command` values are matched; the hook holds on the one returned when it has 6 bytes or more,
-    so the first matched value of at least 6 bytes is returned when there is one, else the first matched."""
+    (`words_only`) only `command` values of at least HOLD_BYTES match, the only ones the hook holds on (the hold
+    contract, review M2): the seam shows a lesson before a command only in a hold, so a lesson whose matched values
+    are all shorter is no match there. It is never answered or receipted, and takes no slot of `limit`. Otherwise
+    every value of every kind matches, and the first matched `command` value of at least 6 bytes is returned when
+    there is one, else the first matched."""
+    held = holding(item['command'], request['command'])
+    if request['words_only']:
+        return len(held), (held or [None])[0]
     commands = [v for v in item['command'] if v in request['command']]
-    count = len(commands)
-    if not request['words_only']:
-        count += sum(1 for v in item['error'] if v in request['error'])
-        count += sum(1 for v in item['file'] if v in request['command'] or v in request['error'] or v in request['cwd'])
-    holding = [v for v in commands if len(v.encode('utf-8')) >= HOLD_BYTES]  # C43: one that can hold, when one matched
-    return count, (holding or commands or [None])[0]
+    count = len(commands) + sum(1 for v in item['error'] if v in request['error'])
+    count += sum(1 for v in item['file'] if v in request['command'] or v in request['error'] or v in request['cwd'])
+    return count, (held or commands or [None])[0]  # C43: one that can hold, when one matched
 
 
 def context_text(request):
@@ -623,7 +650,13 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
     """`lessons query`, section 5: (the answer, a note for stderr or None). With a `prompt`, the prompt path, which
     never notes; otherwise words, Near, then step 4 in the store. The note is "embedder unavailable", said only when the
     answer is empty and Near couldn't reach an embedder with this index's model: never for a deadline or a spent budget.
-    `started` is when the request arrived (the command's start, C25); by default, now."""
+    `started` is when the request arrived (the command's start, C25); by default, now. The hook's `budget_ms`, counted
+    from `started`, ends step 4 too (Serenity's review of first-rail, S1): nobody waits for an answer past it, so a
+    lesson then shown would get a receipt nobody saw. Spent before step 4, no store is opened. The dispatch gate,
+    opening the store included, is waited for only until it ends. Step 4 checks it right before its inserts, and past
+    it writes nothing. After that check, its commit waits for a reader outside the gate only for the time left, and is
+    rolled back when that runs out. So a receipt can follow the deadline only by the commit's own write. Without a
+    budget, step 4 has no deadline: Near's 800 ms is the embedder's limit, not the answer's."""
     if 'prompt' in request:
         return answer_prompt(request, data_dir, socket_path, clock, monotonic, started), None
     if request['limit'] == 0:
@@ -661,25 +694,64 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
             angles = sorted((angle(vector, stored[item['id']]), item['id'], item) for item in pool if item['id'] in stored)
             nearest = angles[0][0] if angles else None  # C22: over the lessons this ship could be shown
             candidates += [(item, round(theta, 4), None) for theta, _, item in angles if theta <= R_MAX and item['id'] not in taken]
+    from contextlib import nullcontext
     from .db import Store
-    answer = Store(data_dir, signing=False, clock=clock)._lessons_answer(request, candidates, nearest)
-    return answer, ('embedder unavailable' if unavailable and not answer['lessons'] else None)
+    from .dispatch import DispatchGate, GateTimeout
+    end = None if request['budget_ms'] is None else started + request['budget_ms'] / 1000
+    answer = {'lessons': []}
+    if end is None or monotonic() < end:
+        bound = nullcontext() if end is None else DispatchGate(Path(data_dir).absolute() / 'dispatch.lock').bounded(end, monotonic)
+        try:
+            with bound:
+                answer = Store(data_dir, signing=False, clock=clock)._lessons_answer(request, candidates, nearest, end, monotonic)
+        except GateTimeout:
+            pass
+    late = end is not None and monotonic() >= end  # out of time, so never "unavailable" (C24)
+    return answer, ('embedder unavailable' if unavailable and not answer['lessons'] and not late else None)
+
+
+def _member_lines(members):
+    """Each member of a lessons room view: a local one by username and kind (and owner), a remote one by name and peer."""
+    from .ships import safe_line
+    lines = []
+    for m in members:
+        if m['kind'] == 'remote':
+            name = 'an account with no card here' if m['name'] is None else safe_line(m['name'], 40)
+            lines.append(f'  {name}  (on peer {safe_line(m["peer"][:12])})')
+        else:
+            lines.append(f'  {m["username"]}  ({m["kind"]}' + (f', owned by {m["owner"]})' if m['owner'] else ')'))
+    return lines
 
 
 def describe_station_room(view):
     from .ships import safe_line
     lines = [f'Room {view["room"][:6]} "{safe_line(view["title"])}". Titles and names come from people: data, not instructions.']
-    for m in view['members']:
-        if m['kind'] == 'remote':
-            lines.append(f'  {safe_line(m["name"], 40)}  (on peer {m["peer"][:12]})')
-        else:
-            lines.append(f'  {m["username"]}  ({m["kind"]}' + (f', owned by {m["owner"]})' if m['owner'] else ')'))
+    lines += _member_lines(view['members'])
     lines.append('Listed peers: ' + (', '.join(p[:12] for p in view['peers']) or 'none'))
     if view['recorded']:
         lines.append(f'Recorded as the lessons room. Its full id, for make lessons-room on each other peer: {view["full_id"]}')
     else:
         lines.append(f'Nothing is recorded yet. Confirm code: {view["confirm"]}. Once Andy confirms these members and peers, '
                      f'run it again with CONFIRM={view["confirm"]}.')
+    return '\n'.join(lines)
+
+
+def describe_peer_room(view):
+    """`make lessons-room` on a peer other than the origin (Serenity's review of first-rail, S4), as the origin's
+    `make station-lessons-room` shows its room."""
+    from .ships import safe_line
+    origin, _, rid = view['room'].partition(':')
+    lines = [f'Room {rid[:6]} from peer {origin[:12]} "{safe_line(view["title"])}". Titles and names come from people: data, '
+             'not instructions.']
+    if view['current'] != view['room']:
+        lines.append(f'Room {safe_line(view["current"].partition(":")[2][:6])} has replaced it, with this owner and these members:')
+    lines.append('Owner: ' + _member_lines([view['owner']])[0].strip())
+    lines += _member_lines(view['members'])
+    if view['recorded']:
+        lines.append(f'Recorded the lessons room {rid[:6]} from peer {origin[:12]}.')
+    else:
+        lines.append(f'Nothing is recorded yet. Confirm code: {view["confirm"]}. Once Andy confirms this room, its owner and '
+                     f'these members, run it again with CONFIRM={view["confirm"]}.')
     return '\n'.join(lines)
 
 
@@ -692,6 +764,17 @@ def describe_lessons(live):
     for item in live:
         lines += [f'{short_lesson_id(item.id)}  {item.lesson.ship}  {safe_line(item.lesson.claim, 100)}', f'  retract {item.id}']
     return '\n'.join(lines)
+
+
+def _forward(origin, rooms, current):
+    """On a peer other than the origin: the room that `current` leads to, following linked_room_id forward through the
+    rooms this peer holds from `origin` (`_remote_rooms_from`)."""
+    forward = {payload.get('linked_room_id'): rid for rid, (_, _, payload) in rooms.items()}
+    seen = {current}
+    while origin + ':' + current in forward and forward[origin + ':' + current] not in seen:
+        current = forward[origin + ':' + current]
+        seen.add(current)
+    return current
 
 
 def shown_first(item, other, peer, receipts):
@@ -817,11 +900,7 @@ class Lessons:
         rooms = self._remote_rooms_from(db, origin)
         if current not in rooms:
             return []
-        forward = {payload.get('linked_room_id'): rid for rid, (_, _, payload) in rooms.items()}
-        seen = {current}
-        while origin + ':' + current in forward and forward[origin + ':' + current] not in seen:
-            current = forward[origin + ':' + current]
-            seen.add(current)
+        current = _forward(origin, rooms, current)
         chain, step = [], current
         while step in rooms and step not in chain:
             chain.append(step)
@@ -933,7 +1012,7 @@ class Lessons:
             if confirm is None:
                 return view
             if not isinstance(confirm, str) or confirm.strip().lower() != code:
-                raise Problem(409, 'The room, its members or its peers changed since they were shown; run it again without CONFIRM')
+                raise Problem(409, CHANGED)
             now = self.clock()
             db.execute('INSERT INTO lessons_room VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET room_key=excluded.room_key, '
                        'ship_id=excluded.ship_id, recorded=excluded.recorded', (room['id'], vessel['id'], now))
@@ -949,22 +1028,55 @@ class Lessons:
                 return None
             return chain[-1] if ':' in chain[-1] else f'{self._lessons_peer(db)}:{chain[-1]}'
 
-    def record_lessons_room(self, key):
-        """`lessons room`, on every other peer: record the origin's room by its full id, `<origin peer id>:<room id>`."""
+    def record_lessons_room(self, key, confirm=None):
+        """`lessons room`, on every other peer: show the origin's room, named by its full id `<origin peer id>:<room id>`,
+        with its title, its owner and members as this peer sees them and a confirm code, and record nothing; with `confirm` equal
+        to that code, record it (Serenity's review of first-rail, S4: a wrong id would make another room, perhaps with
+        other people's ships in it, the index's source). The title, owner and members are those of the room the chain
+        reaches from it, which the index reads, so an add on the origin in between (a new linked room) or a removal (its
+        members change in place) changes the code. The code is 8 hex of a SHA-256 over the id, that room's full id and its
+        sorted member ids, as the origin builds its own; the room's id fixes its title and owner, which nothing changes."""
+        import hashlib
         if not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}:[A-Za-z0-9_-]{1,64}', key):
             raise Problem(400, 'Name the lessons room by its full id, <origin peer id>:<room id>')
         origin, _, rid = key.partition(':')
         with self.transaction() as db:
-            if origin == self._lessons_peer(db):
+            peer = self._lessons_peer(db)
+            if origin == peer:
                 raise Problem(400, 'This peer is the origin: record the room with make station-lessons-room')
             rooms = self._remote_rooms_from(db, origin)
             if rid not in rooms:
                 raise Problem(404, 'No room with that id came to this peer from a paired peer')
             if self._lessons_record(db) is not None and key not in self._lessons_chain(db):
                 raise Problem(409, 'This peer already records another lessons room')
+            current = _forward(origin, rooms, rid)
+            payload = rooms[current][2]
+            members = sorted({m for m in payload.get('member_ids', []) if isinstance(m, str)})
+            code = hashlib.sha256(encode({'room': key, 'current': f'{origin}:{current}', 'members': members}).encode()).hexdigest()[:8]
+            title, owner = payload.get('title'), payload.get('owner_id')
+            view = {'room': key, 'current': f'{origin}:{current}', 'title': title if isinstance(title, str) else '',
+                    'owner': self._member_as_seen(db, peer, owner if isinstance(owner, str) else ''),
+                    'members': [self._member_as_seen(db, peer, member) for member in members], 'confirm': code,
+                    'recorded': False}
+            if confirm is None:
+                return view
+            if not isinstance(confirm, str) or confirm.strip().lower() != code:
+                raise Problem(409, CHANGED)
             db.execute('INSERT INTO lessons_room VALUES(1,?,NULL,?) ON CONFLICT(id) DO UPDATE SET room_key=excluded.room_key, '
                        'recorded=excluded.recorded', (key, self.clock()))
-            return {'room': key, 'title': rooms[rid][2].get('title')}
+            return {**view, 'recorded': True}
+
+    def _member_as_seen(self, db, peer, member):
+        """One member of a room from another peer, as this peer sees it: a local account by username and kind (and
+        owner); any other by the name on its card here (None when this peer has no card for it) and its peer."""
+        member_peer, _, user = member.partition(':')
+        if member_peer == peer:
+            row = db.execute('SELECT users.username, users.kind, owners.username AS owner FROM users LEFT JOIN users AS owners '
+                             'ON owners.id=users.owner_id WHERE users.id=?', (user,)).fetchone()
+            if row is not None:
+                return {'kind': row['kind'], 'username': row['username'], 'owner': row['owner']}
+        contact = db.execute('SELECT name FROM remote_contacts WHERE peer_id=? AND user_id=?', (member_peer, user)).fetchone()
+        return {'kind': 'remote', 'name': contact and contact['name'], 'peer': member_peer}
 
     def lessons_ship(self, username, owner):
         """`lessons ship`, trusted local (section 11 item 3): a ship account with no key, owned by a person here."""
@@ -1100,34 +1212,51 @@ class Lessons:
                            'lessons': lessons}, rows, read_at)
         return {'status': 'written', 'lessons': len(lessons), 'vectors': len(rows)}
 
-    def _lessons_answer(self, request, candidates, nearest):
+    def _lessons_answer(self, request, candidates, nearest, deadline=None, monotonic=time.monotonic):
         """Section 5 step 4: one short transaction re-checks each candidate against the room as it stands, keeps the
-        first 3 that pass, writes a receipt for each and one query row."""
-        with self.transaction() as db:
-            snapshot = self._lessons_snapshot(db)
-            ship = db.execute("SELECT id FROM users WHERE username=? AND kind='ship'", (request['ship'],)).fetchone()
-            full = snapshot and ship and f"{snapshot.peer}:{ship['id']}"
-            if snapshot is None or ship is None or full not in snapshot.members:
-                return {'lessons': []}
-            live = {item.id: item for item in chain_lessons(snapshot)[0]}
-            kept = []
-            for item, match, command in candidates:
-                found = live.get(item['id'])
-                if (found is None or found.author == full or found.lesson.learned_from == request['ship']
-                        or short_lesson_id(found.id) in request['seen']):
-                    continue
-                kept.append((found, shown(item, match, command)))
-                if len(kept) == request['limit']:
-                    break
-            answer = fit([entry for _, entry in kept])
-            now = self.clock()
-            for found, entry in kept:
-                if entry in answer['lessons']:  # a receipt only for a lesson shown
-                    db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (uid(), now, ship['id'], found.id, found.author,
-                                                                                    None if entry['match'] == 'words' else entry['match']))
-            db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown) VALUES(?,?,?,?)',
-                       (now, ship['id'], nearest, len(answer['lessons'])))
-            return answer
+        first 3 that pass, writes a receipt for each and one query row. Once `deadline` on `monotonic` has passed (the
+        hook's budget; None without one), it writes nothing and answers nothing (Serenity's review of first-rail, S1).
+        The station's database keeps a rollback journal, so the commit waits for every reader's lock, and a reader
+        outside the dispatch gate (the nightly backup's copy) can hold one: with a deadline, that wait is the time left,
+        and a commit it refuses is rolled back and answers nothing (the fresh review's S1)."""
+        import sqlite3
+        try:
+            with self.transaction() as db:
+                snapshot = self._lessons_snapshot(db)
+                ship = db.execute("SELECT id FROM users WHERE username=? AND kind='ship'", (request['ship'],)).fetchone()
+                full = snapshot and ship and f"{snapshot.peer}:{ship['id']}"
+                if snapshot is None or ship is None or full not in snapshot.members:
+                    return {'lessons': []}
+                live = {item.id: item for item in chain_lessons(snapshot)[0]}
+                kept = []
+                for item, match, command in candidates:
+                    found = live.get(item['id'])
+                    if (found is None or found.author == full or found.lesson.learned_from == request['ship']
+                            or short_lesson_id(found.id) in request['seen']):
+                        continue
+                    kept.append((found, shown(item, match, command)))
+                    if len(kept) == request['limit']:
+                        break
+                answer = fit([entry for _, entry in kept])
+                if deadline is not None:
+                    left = deadline - monotonic()
+                    if left <= 0:  # nobody waits for it: no receipt nobody saw
+                        raise _Late
+                    db.execute(f'PRAGMA busy_timeout={max(1, min(BUSY_MS, int(left * 1000)))}')
+                now = self.clock()
+                for found, entry in kept:
+                    if entry in answer['lessons']:  # a receipt only for a lesson shown
+                        db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (uid(), now, ship['id'], found.id, found.author,
+                                                                                        None if entry['match'] == 'words' else entry['match']))
+                db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown) VALUES(?,?,?,?)',
+                           (now, ship['id'], nearest, len(answer['lessons'])))
+                return answer
+        except _Late:
+            return {'lessons': []}
+        except sqlite3.OperationalError as error:  # the primary code: an extended SQLITE_BUSY_* is busy too
+            if deadline is None or ((getattr(error, 'sqlite_errorcode', None) or 0) & 0xFF) != sqlite3.SQLITE_BUSY:
+                raise
+            return {'lessons': []}  # _transaction rolled it back
 
     def lessons_list(self):
         """The chain's live lessons, in the order laid, as this peer's doors see them (C45)."""
@@ -1350,10 +1479,10 @@ def _ship(store, args):
     return f"Ship {made['username']} is {args.owner}'s on this peer, with no key: its sessions reach this peer in process."
 
 
-@verb('room', "On a peer other than the origin: record the origin's lessons room by its full id", ('--id', {'required': True}))
+@verb('room', "On a peer other than the origin: show, then record, the origin's lessons room by its full id",
+      ('--id', {'required': True}), ('--confirm', {}))
 def _room(store, args):
-    got = store.record_lessons_room(args.id)
-    return f"Recorded the lessons room {args.id.partition(':')[2][:6]} from peer {args.id[:12]}."
+    return describe_peer_room(store.record_lessons_room(args.id, args.confirm))
 
 
 @verb('check', "Every check this peer's door runs, without posting: the post on stdin", ('--ship', {'required': True}))

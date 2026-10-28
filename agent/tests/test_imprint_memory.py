@@ -144,9 +144,14 @@ def built_home(tmp_path, nbytes):
     return home
 
 
-def agent_send_command(home, station):
+def agent_send_command(home, station, env):
+    """The argv of the run that uploads. The run that makes the request returns once it has printed the link (the
+    fresh review's M1), so it runs here first, unmeasured."""
     (home / 'station.json').write_text(json.dumps({'station': station.url, 'key': 'key'}))
-    return [sys.executable, str(RUN_AGENT), 'imprint', 'send', '--plan', PLAN, '--home', str(home)]
+    argv = [sys.executable, str(RUN_AGENT), 'imprint', 'send', '--plan', PLAN, '--home', str(home)]
+    asked = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
+    assert asked.returncode == 3 and 'STATUS: waiting-for-you' in asked.stdout, asked.stdout + asked.stderr
+    return argv
 
 
 def child_peak_rss(*, cmd, env=None):
@@ -163,7 +168,7 @@ def test_a_send_against_the_serving_station_puts_every_part(tmp_path):
     try:
         home = built_home(tmp_path, 3 * PART_BYTES + 5)
         env = {**os.environ, 'HOME': str(tmp_path)}
-        child_peak_rss(cmd=agent_send_command(home, station), env=env)
+        child_peak_rss(cmd=agent_send_command(home, station, env), env=env)
     finally:
         station.close()
     assert station.parts == {0, 1, 2, 3} and station.bytes == 3 * PART_BYTES + 5
@@ -176,7 +181,7 @@ def test_pi_send_holds_one_part_at_a_time(tmp_path):
     try:
         home = built_home(tmp_path, 512 * 2**20)                              # 128 parts
         env = {**os.environ, 'HOME': str(tmp_path)}
-        peak = child_peak_rss(cmd=agent_send_command(home, station), env=env)
+        peak = child_peak_rss(cmd=agent_send_command(home, station, env), env=env)
         paths = f'import sys; sys.path[:0] = [{str(RUN_AGENT.parent)!r}, {str(RUN_AGENT.parent.parent / "team")!r}]'
         base = child_peak_rss(cmd=[sys.executable, '-c', paths + '; import superyak_agent.__main__'], env=env)
     finally:

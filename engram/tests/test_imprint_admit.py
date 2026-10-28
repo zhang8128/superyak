@@ -35,7 +35,7 @@ def test_calibration_at_admission_is_content_free_and_leaves_no_copies(tmp_path)
     assert sorted(p.name for p in (root / iid_).iterdir()) == ["approved.json", "imprint.db", "imprint.json", "manifest.json", "permission.json"]
 
 
-def test_calibration_with_and_without_route_agree_where_they_must(tmp_path):
+def test_calibration_with_and_without_route_agree_where_they_must(tmp_path, route_open):
     a = admitted_report(tmp_path / "a", route=False, now=CAL_NOW); b = admitted_report(tmp_path / "b", route=True, now=CAL_NOW)
     for name in ("first_open", "persistence_scores", "cohesion", "persistence"):
         assert a["analyses"].get(name) == b["analyses"].get(name), name
@@ -117,7 +117,7 @@ def test_importing_imprint_loads_no_numpy():
 
 # ---- Counting R(I) (Task 35) ----
 
-def test_the_count_reaches_result_json_and_is_zero_without_route(tmp_path):
+def test_the_count_reaches_result_json_and_is_zero_without_route(tmp_path, route_open):
     for route, expected in ((True, 3), (False, 0)):
         root, iid_ = handed_off(tmp_path / str(route), built_package(tmp_path / str(route), route=route), route=route, valid_until=FAR)
         derive = counting_stub(3) if route else must_not_be_called
@@ -125,7 +125,7 @@ def test_the_count_reaches_result_json_and_is_zero_without_route(tmp_path):
         assert json.loads((root / f"{iid_}.state" / "result.json").read_text())["roads_and_trails"] == expected
 
 
-def test_admission_with_route_fails_closed_without_the_trail_functions(tmp_path, monkeypatch):
+def test_admission_with_route_fails_closed_without_the_trail_functions(tmp_path, monkeypatch, route_open):
     monkeypatch.setitem(sys.modules, "trails", None)
     root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True), route=True, valid_until=FAR)
     assert admit(iid_, root=root, verify_cmd=OK) == 1
@@ -133,14 +133,14 @@ def test_admission_with_route_fails_closed_without_the_trail_functions(tmp_path,
     assert (result["step"], result["message"]) == ("count", "roads and trails can't be counted: trails.py is not installed")
 
 
-def test_counting_reads_the_package_at_t1(tmp_path):
+def test_counting_reads_the_package_at_t1(tmp_path, route_open):
     seen = []
     root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, until=T1, lanes=("personal", "work")), route=True, valid_until=FAR)
     admit(iid_, root=root, verify_cmd=OK, derive=recording_stub(seen))
     assert sorted((s["lane"], s["as_of"]) for s in seen) == [("personal", T1), ("work", T1)]   # one call per lane
 
 
-def test_the_count_is_the_sum_of_the_trail_specs_lane_counts(tmp_path):     # R10; the check's S8
+def test_the_count_is_the_sum_of_the_trail_specs_lane_counts(tmp_path, route_open):     # R10; the check's S8
     root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, until=T1, lanes=("personal", "work")), route=True, valid_until=FAR)
     stub = per_lane_stub({"personal": 2, "work": 3}, too_large={"personal": 1, "work": 1})   # one session, seen in both lanes
     assert admit(iid_, root=root, verify_cmd=OK, derive=stub) == 0
@@ -149,7 +149,7 @@ def test_the_count_is_the_sum_of_the_trail_specs_lane_counts(tmp_path):     # R1
     assert not (root / f"{iid_}.state" / "scratch").exists()
 
 
-def test_admission_stays_inside_its_need(tmp_path):
+def test_admission_stays_inside_its_need(tmp_path, route_open):
     recorded = []
     root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True), route=True, valid_until=FAR)
     admit(iid_, root=root, verify_cmd=OK, derive=counting_stub(2), record_use=recorded.append)
@@ -159,7 +159,7 @@ def test_admission_stays_inside_its_need(tmp_path):
     assert all(decide_bulk(state, as_bulk(u, root, iid_), outside={"place:home/andy": ceiling}).allowed for u in recorded)
 
 
-def test_count_matches_the_trail_functions(tmp_path):
+def test_count_matches_the_trail_functions(tmp_path, route_open):
     trails = pytest.importorskip("trails", reason="trails.py comes with the trails plan (gate G13)")
     root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True, store=trail_rich_store, until=T1), route=True, valid_until=FAR)
     assert admit(iid_, root=root, verify_cmd=OK) == 0
@@ -201,7 +201,7 @@ def test_result_json_skips_name_kinds_and_lanes_never_a_memory_id(tmp_path):
     assert len(skipped) == len(named)
 
 
-def test_a_withdrawal_after_calibration_stops_admission_before_the_count(tmp_path):     # final review M7
+def test_a_withdrawal_after_calibration_stops_admission_before_the_count(tmp_path, route_open):     # final review M7
     seen = []
     root, iid_ = handed_off(tmp_path, built_package(tmp_path, route=True), route=True, valid_until=FAR)
 

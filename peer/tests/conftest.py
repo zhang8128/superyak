@@ -38,6 +38,29 @@ def peer_clients(env):
     return env[1][:3]
 
 
+_ROUTE_AS_SHIPPED = {}
+
+
+@pytest.fixture(autouse=True, scope='session')
+def route_open_as_for_trails():
+    """Route waits until trails ships (`imprints.ROUTE_OPEN`, Serenity's condition S1). Every test here runs with route
+    open unless it takes `route_closed`; production never does. So the route code stays tested for the day trails
+    lands. Opening it per test was weighed (Serenity's note 1): 96 test functions in 12 files need it, because the
+    shared `request_doc` asks with route, so the opening stays session-wide."""
+    from superyak_peer import imprints
+    _ROUTE_AS_SHIPPED['value'] = imprints.ROUTE_OPEN
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(imprints, 'ROUTE_OPEN', True)
+        yield
+
+
+@pytest.fixture
+def route_closed(monkeypatch):
+    """`imprints.ROUTE_OPEN` as it ships, put back for one test."""
+    from superyak_peer import imprints
+    monkeypatch.setattr(imprints, 'ROUTE_OPEN', _ROUTE_AS_SHIPPED['value'])
+
+
 # First rail (docs/superpowers/specs/2026-10-27-first-rail-lessons-design.md): one peer with a recorded lessons room,
 # two peers federated in process, and a fake shared embedder that speaks engram/embedder_service.py's protocol.
 LESSON_TIME = 1_800_000_000.0
@@ -118,6 +141,11 @@ def lesson_ship(store, owner_id, username):
         return store._new_ship(db, username, username.title(), owner_id)
 
 
+def confirm_lessons_room(store, key):
+    """`lessons room` on a peer other than the origin, in its two runs: the view, then the record on its code."""
+    return store.record_lessons_room(key, store.record_lessons_room(key)['confirm'])
+
+
 @pytest.fixture
 def lessons_station(tmp_path):
     """The origin: andy, his ships rio-grande and tardis (both local here, so one peer can lay as two ships), and a
@@ -162,5 +190,5 @@ def lessons_peers(tmp_path):
         return peers[src][1].sync_once(send=lambda card, prepare: peers[dst][1].receive(prepare()))
     deliver('pi', 'tardis')
     key = pi_fed.identity.peer_id + ':' + room
-    tardis.record_lessons_room(key)
+    confirm_lessons_room(tardis, key)
     return {'peers': peers, 'deliver': deliver, 'clock': clock, 'room': room, 'key': key}
