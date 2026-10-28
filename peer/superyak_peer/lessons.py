@@ -96,6 +96,10 @@ class IndexUnreadable(Exception):
     """The index file exists but can't be read or parsed: a real failure (the query exits 1, nothing on stdout)."""
 
 
+class _Late(Exception):
+    """Step 4 found the hook's budget spent before writing: its transaction rolls back (review S1)."""
+
+
 def _value(number, key, value):
     if not 1 <= len(value.encode('utf-8')) <= LIMITS[key]:
         raise LessonRefused(f'Line {number}: a {key} value is 1 to {LIMITS[key]} bytes')
@@ -430,7 +434,7 @@ def read_request(raw):
     limit = value.get('limit', SHOWN)  # how many lesson slots the caller will render: 0 to 3
     if type(limit) is not int or not 0 <= limit <= SHOWN:
         raise ValueError('limit')
-    budget = value.get('budget_ms')  # the hook's time left, a ceiling on Near's own deadline
+    budget = value.get('budget_ms')  # the hook's time left: a ceiling on Near's own deadline, and step 4's (review S1)
     if budget is not None and (type(budget) is not int or budget < 0):
         raise ValueError('budget_ms')
     request = {'ship': value['ship'], 'seen': set(seen), 'limit': limit, 'budget_ms': budget}
@@ -580,7 +584,11 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
     """`lessons query`, section 5: (the answer, a note for stderr or None). With a `prompt`, the prompt path, which
     never notes; otherwise words, Near, then step 4 in the store. The note is "embedder unavailable", said only when the
     answer is empty and Near couldn't reach an embedder with this index's model: never for a deadline or a spent budget.
-    `started` is when the request arrived (the command's start, C25); by default, now."""
+    `started` is when the request arrived (the command's start, C25); by default, now. The hook's `budget_ms`, counted
+    from `started`, ends step 4 too (Serenity's review of first-rail, S1): nobody waits for an answer past it, so a
+    lesson then shown would get a receipt nobody saw. Spent before step 4, no store is opened; the dispatch gate, opening
+    the store included, is waited for only until it ends; and step 4 writes nothing once it has. Without a budget, step
+    4 has no deadline: Near's 800 ms is the embedder's limit, not the answer's."""
     if 'prompt' in request:
         return answer_prompt(request, data_dir, socket_path, clock, monotonic, started), None
     if request['limit'] == 0:
@@ -618,9 +626,20 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
             angles = sorted((angle(vector, stored[item['id']]), item['id'], item) for item in pool if item['id'] in stored)
             nearest = angles[0][0] if angles else None  # C22: over the lessons this ship could be shown
             candidates += [(item, round(theta, 4), None) for theta, _, item in angles if theta <= R_MAX and item['id'] not in taken]
+    from contextlib import nullcontext
     from .db import Store
-    answer = Store(data_dir, signing=False, clock=clock)._lessons_answer(request, candidates, nearest)
-    return answer, ('embedder unavailable' if unavailable and not answer['lessons'] else None)
+    from .dispatch import DispatchGate, GateTimeout
+    end = None if request['budget_ms'] is None else started + request['budget_ms'] / 1000
+    answer = {'lessons': []}
+    if end is None or monotonic() < end:
+        bound = nullcontext() if end is None else DispatchGate(Path(data_dir).absolute() / 'dispatch.lock').bounded(end, monotonic)
+        try:
+            with bound:
+                answer = Store(data_dir, signing=False, clock=clock)._lessons_answer(request, candidates, nearest, end, monotonic)
+        except GateTimeout:
+            pass
+    late = end is not None and monotonic() >= end  # out of time, so never "unavailable" (C24)
+    return answer, ('embedder unavailable' if unavailable and not answer['lessons'] and not late else None)
 
 
 def describe_station_room(view):
@@ -1023,34 +1042,40 @@ class Lessons:
                            'lessons': lessons}, rows, read_at)
         return {'status': 'written', 'lessons': len(lessons), 'vectors': len(rows)}
 
-    def _lessons_answer(self, request, candidates, nearest):
+    def _lessons_answer(self, request, candidates, nearest, deadline=None, monotonic=time.monotonic):
         """Section 5 step 4: one short transaction re-checks each candidate against the room as it stands, keeps the
-        first 3 that pass, writes a receipt for each and one query row."""
-        with self.transaction() as db:
-            snapshot = self._lessons_snapshot(db)
-            ship = db.execute("SELECT id FROM users WHERE username=? AND kind='ship'", (request['ship'],)).fetchone()
-            full = snapshot and ship and f"{snapshot.peer}:{ship['id']}"
-            if snapshot is None or ship is None or full not in snapshot.members:
-                return {'lessons': []}
-            live = {item.id: item for item in chain_lessons(snapshot)[0]}
-            kept = []
-            for item, match, command in candidates:
-                found = live.get(item['id'])
-                if (found is None or found.author == full or found.lesson.learned_from == request['ship']
-                        or short_lesson_id(found.id) in request['seen']):
-                    continue
-                kept.append((found, shown(item, match, command)))
-                if len(kept) == request['limit']:
-                    break
-            answer = fit([entry for _, entry in kept])
-            now = self.clock()
-            for found, entry in kept:
-                if entry in answer['lessons']:  # a receipt only for a lesson shown
-                    db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (uid(), now, ship['id'], found.id, found.author,
-                                                                                    None if entry['match'] == 'words' else entry['match']))
-            db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown) VALUES(?,?,?,?)',
-                       (now, ship['id'], nearest, len(answer['lessons'])))
-            return answer
+        first 3 that pass, writes a receipt for each and one query row. Once `deadline` on `monotonic` has passed (the
+        hook's budget; None without one), it writes nothing and answers nothing (Serenity's review of first-rail, S1)."""
+        try:
+            with self.transaction() as db:
+                snapshot = self._lessons_snapshot(db)
+                ship = db.execute("SELECT id FROM users WHERE username=? AND kind='ship'", (request['ship'],)).fetchone()
+                full = snapshot and ship and f"{snapshot.peer}:{ship['id']}"
+                if snapshot is None or ship is None or full not in snapshot.members:
+                    return {'lessons': []}
+                live = {item.id: item for item in chain_lessons(snapshot)[0]}
+                kept = []
+                for item, match, command in candidates:
+                    found = live.get(item['id'])
+                    if (found is None or found.author == full or found.lesson.learned_from == request['ship']
+                            or short_lesson_id(found.id) in request['seen']):
+                        continue
+                    kept.append((found, shown(item, match, command)))
+                    if len(kept) == request['limit']:
+                        break
+                answer = fit([entry for _, entry in kept])
+                if deadline is not None and monotonic() >= deadline:  # nobody waits for it: no receipt nobody saw
+                    raise _Late
+                now = self.clock()
+                for found, entry in kept:
+                    if entry in answer['lessons']:  # a receipt only for a lesson shown
+                        db.execute('INSERT INTO lesson_receipts VALUES(?,?,?,?,?,?)', (uid(), now, ship['id'], found.id, found.author,
+                                                                                        None if entry['match'] == 'words' else entry['match']))
+                db.execute('INSERT INTO lesson_queries(created, ship_id, nearest, shown) VALUES(?,?,?,?)',
+                           (now, ship['id'], nearest, len(answer['lessons'])))
+                return answer
+        except _Late:
+            return {'lessons': []}
 
     def lessons_list(self):
         """The chain's live lessons, in the order laid, as this peer's doors see them (C45)."""
