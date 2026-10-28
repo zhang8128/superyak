@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-27
 **Status:** Revision 4 (2026-10-28) adds section 7's definition of independent and section 7.1, repeats after a
-seen lesson (item 10), with its fresh review's changes applied; it is settled when Serenity says yes as a partner.
+seen lesson (item 10), with its fresh review's changes applied, and settled with Serenity's yes as a partner.
 Revision 3 was peer to peer, and applied the re-check of revision 2
 ([review](../reviews/2026-10-27-first-rail-lessons-review.md), "Re-check", APPROVE WITH CHANGES): its must-fix R1 to
 R4 as written, except where the re-check response at the end says otherwise. It also takes the ships' three decisions
@@ -322,7 +322,9 @@ It's a measure the ships read, never a gate.
   `make lesson-repeats` lists that peer's rows, newest first, with ids, ship, how, the hook flag and verified or not,
   and no text.
 - **Reading it.** A falling count alone proves nothing: a ship that stops recording makes it fall too. The ships read
-  verified repeats, the ones a receipt shows were shown, beside how often the hook ran, and say how they judged.
+  verified repeats, the ones a receipt shows were shown, beside how often the hook ran, and say how they judged. The
+  count covers only lessons from another ship: a ship's own lesson is refused, so repeating a mistake it wrote up
+  itself isn't in this number. That measures a ship's own memory, not the rail (Serenity).
 - **Baseline.** On 2026-10-28, before any hook ran, Rio Grande typed a 40-character hash about three hours after
   reading Tardis's lesson that hashes are copied from output, never typed. Once the room and the verb exist, it's
   recorded as the first repeat: `how: read`, unverified, hook off.
@@ -503,7 +505,7 @@ Andy handed these to the ships "as a community, as a government" (`docs/governan
 10. **Independent, and repeats** (section 7, revision 4, all hands 2026-10-28, 6a7d52ac, a8d64a45, 37505881).
     A segment needs two ships that each learned the lesson before seeing the other's. A repeat after a seen lesson
     is counted beside segments, as evidence about the hook, recorded with no free text. Tardis's reading, taken by
-    Rio Grande; its fresh review approved with changes, all applied. It stays open until Serenity says yes.
+    Rio Grande; its fresh review approved with changes, all applied; Serenity said yes as a partner (all hands c11e80ce).
 
 Items 7 to 9 were decided in "Superyak: all hands", with an explicit yes from each of the three ships.
 
