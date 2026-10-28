@@ -87,7 +87,9 @@ def test_a_known_browser_confirm_counts_on_its_device_token(tmp_path):
         with st.store.transaction() as db:
             return db.execute('SELECT failures FROM login_devices WHERE token_hash=?', (token_hash(device),)).fetchone()[0]
     assert [confirm_from(browser, made, 'wrong-wrong-wrong').status_code for _ in range(3)] == [401] * 3
-    assert failures() == 3 and attempts(st.store) == before                    # the device counted, no hold did
+    known, after = attempts_key('known', 'sam'), attempts(st.store)
+    assert failures() == 3 and [r for r in after if r[0] != known] == before   # the device counted, no hold did
+    assert [r[1] for r in after if r[0] == known] == [3]                        # and so did the account's known browsers
     ok = confirm_from(browser, made)
     assert ok.status_code == 200 and 'set-cookie' not in ok.headers and failures() == 0
     assert devices() == browsers                                               # no new token, no extended one
@@ -101,12 +103,12 @@ BROWSER = 'a-known-browser-token'
 
 
 def counters(store):
-    """Every hold's counter, and the known browser's failures (not its expiry, which only a sign-in extends; a
-    sign-in's new browser token is not a counter, and the check makes none)."""
+    """Every hold's counter, and the known browser's failures and public attempts (not its expiry, which only a
+    sign-in extends; a sign-in's new browser token is not a counter, and the check makes none)."""
     with store.transaction() as db:
         return (sorted(tuple(r) for r in db.execute('SELECT key,count,reset FROM login_attempts')),
-                [tuple(r) for r in db.execute('SELECT failures,failure_reset FROM login_devices WHERE token_hash=?',
-                                              (token_hash(BROWSER),))])
+                [tuple(r) for r in db.execute('SELECT failures,failure_reset,attempts,attempt_reset FROM login_devices '
+                                              'WHERE token_hash=?', (token_hash(BROWSER),))])
 
 
 def outcome(call):
@@ -145,7 +147,10 @@ def test_check_password_attempt_counts_as_login_step_by_step(tmp_path, source, p
         assert counters(signs) == counters(checks), (n, counters(signs), counters(checks))
         answers.append(check)
         clock[0] += 7
-    assert answers == [401] * 3 + ['ok'] + [401] * 8 + [429, 429]
+    if public and device:   # a known browser's public tries count on its token, 8 in 5 minutes, successes included
+        assert answers == [401] * 3 + ['ok'] + [401] * 4 + [429] * 6
+    else:
+        assert answers == [401] * 3 + ['ok'] + [401] * 8 + [429, 429]
     with checks.transaction() as db:
         assert db.execute('SELECT count(*) FROM sessions').fetchone()[0] == 0
         assert db.execute('SELECT count(*) FROM login_devices').fetchone()[0] == (1 if device else 0)
