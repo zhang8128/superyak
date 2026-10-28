@@ -305,9 +305,11 @@ subtracts.
 The list itself is [`.superyak/checklists/imprint-act.md`](../.superyak/checklists/imprint-act.md)
 (`when: command make station-imprint-admit; command make station-imprint-delete; command make station-imprint-use;
 command make station-approve`). An IMPRINT item is approved with `make station-approve`, so the list fires at every
-approval, beside "A live station act", which fires at each of these too and keeps the approval's short-id item. A
+approval, beside "A live station act", which fires at each of these too and keeps the approval's short-id item. This
+list is for an IMPRINT item only: it is n/a at a docking or an access request. A
 read such as `make station-imprints` doesn't fire it, nor does `make -C <dir> station-approve`. Its long form:
 
+- At an approval that isn't an IMPRINT item (a docking or an access request), answer each item n/a.
 - killer: An `IMPRINT` item is a person's memories, copied from their machine to the station; it may hold memories
   about other people, and it shows their count. Andy approves no IMPRINT item whose count of other people's memories
   is above 0 until gate G18 is passed (CLAUDE.md, the final review's I1).
@@ -451,7 +453,9 @@ Why: each peer checks lessons in the room fully only once it has recorded the ro
       recorded, the room takes no new member from this station, so say so before Andy removes a ship (first-rail's
       CLAUDE.md). Rio Grande tells Andy the full id it prints and posts it in all hands.
 - [ ] Every other peer runs `make lessons-room ID=<origin peer id>:<room id> LESSONS_DATA=<that peer's data dir>` as
-      soon as the room first syncs there, before that peer's ship or Andy's account there posts in it.
+      soon as the room first syncs there, before that peer's ship or Andy's account there posts in it. The first run
+      records nothing: it shows the room's title, its owner, its members and a confirm code. The agent shows Andy all of
+      it, and only when he confirms that room, owner and members does it run again with `CONFIRM=<code>`.
 - [ ] After a deploy, an empty answer isn't judged until the index has run once. On the Pi its timer runs 60 s after
       each run ends; on the Mac, `federate` runs it as a step. A prompt gets nothing from an index more than 180 s old.
 

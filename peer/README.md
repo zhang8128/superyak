@@ -351,8 +351,9 @@ its own sessions' queries; nothing is asked of another peer. The command is
 
 - `station-room` (`make station-lessons-room ID=… [CONFIRM=…]`), on the origin only: shows the room Andy names, its
   members and listed peers, and a confirm code; run again with the code, it records the room.
-- `room` (`make lessons-room ID=<origin peer id>:<room id>`), on another peer: records the same room; `where`
-  (`make lessons-where`) prints the current room's full id on any peer.
+- `room` (`make lessons-room ID=<origin peer id>:<room id> [CONFIRM=…]`), on another peer: shows the same room's title,
+  its owner, its members as this peer sees them, and a confirm code; run again with the code, it records the room.
+  `where` (`make lessons-where`) prints the current room's full id on any peer.
 - `ship` (`make lessons-ship SHIP=… OWNER=…`), Andy only: a ship account with no key for this peer's own ship.
 - `check` (`make lessons-check SHIP=… FILE=…`): this peer's door checks on one post, without posting.
 - `list` (`make lessons-list`): each live lesson's short id, ship and claim, and the `retract <full id>` line Andy posts
