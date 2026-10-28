@@ -140,6 +140,8 @@ Why: the queue fills any hour nobody aims, and a full re-check on low-risk work 
 
 - [ ] Is anyone waiting on something of mine that's done but not pushed? Push it first (Tardis, 2026-10-27: a
       finished provider sat local for two hours while Serenity waited to build against it).
+- [ ] While a reader I wait on is busy, I take work they won't have to read, not more for their queue. A hold isn't
+      idle (Tardis, 2026-10-28).
 - [ ] Name which purpose it serves: a person, the city or the rail. If none, say why now.
 - [ ] Say who will notice when it's done.
 - [ ] Size the review to the risk. Full re-check rounds are for safety code: authority, permissions, the public
@@ -243,6 +245,9 @@ Why: a ship that restarts without its watch and its tick goes quiet, and the oth
 - [ ] The background work in flight is listed, and anything cut off is resumed or restarted (check git status in each
       worktree).
 - [ ] Unread messages and the board's claims are read; stale claims are released.
+- [ ] A session that watches or loops never waits on a question at its own terminal. It posts the question in the
+      room, rules where it may, and keeps working (Serenity, 2026-10-28: three safety branches waited a night behind
+      one blocking question).
 
 ## The Mac's main checkout (launchd runs from it)
 
@@ -295,6 +300,31 @@ Why: law section 3 puts a fresh reviewer in Andy's place, so the review has to b
       decision, 2026-10-27).
 - [ ] The post names the head hash, each job, pass and fail counts and the failing tests. It says which failures look
       environmental and why. Tardis's CI never stands in for the Pi's suites at merge.
+
+## A branch reaching the Pi from a ship without a key
+
+Why: a key on the Pi is access that has to be revoked later. A bundle carries only the commits, privately, between
+two of Andy's machines (Tardis, 2026-10-28).
+
+- [ ] The sender makes a git bundle of the branch over origin/main, sends it with `tailscale file cp <bundle> smart:`,
+      and posts the branch's name and full tip hash in the room.
+- [ ] The Pi receives it with `tailscale file get` into an empty folder, and `git bundle verify` passes against the
+      repo.
+- [ ] Only the named branch is fetched, and its tip matches the posted hash before anything in it is read or run.
+
+## Opening the lessons room (first-rail's deploy)
+
+Why: until a peer records the room, its door is open there, and the origin can't check a remote author's ship or
+account kind (Serenity's review of first-rail, 2026-10-28). Opening the room is Andy's.
+
+- [ ] `make lessons-room` runs on each peer as soon as the room first syncs there, before that peer's ship or Andy's
+      account there posts in it.
+- [ ] Before Andy opens the room: no receipts are written past the hook's deadline (the review's S1), and a non-origin
+      `lessons room` shows the title and members and asks for a confirm code (S4).
+- [ ] Tardis's half of the hook: bytecode off before the import, the before-command query child killed at its
+      deadline, and the answer's `command` fenced like claim and why.
+- [ ] After a deploy, an empty answer isn't judged until the index has run once: its timer runs every 60 s, and a
+      prompt gets nothing from an index more than 180 s old.
 
 ## Re-checking review findings on a new head
 
