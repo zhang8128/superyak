@@ -75,9 +75,10 @@ def _fence_follows(data, end, ship):
 
 def _hook_texts(record):
     """The texts of a transcript record that Claude Code writes from a hook's own output: a hook's added context at the
-    lessons hook's three events, and the hold's deny, in a tool result or toolUseResult. Nothing else is the hook's."""
+    lessons hook's three events, and the hold's deny, in a tool result or toolUseResult, in this session's own records,
+    not a subagent's sidechain. Nothing else is the hook's."""
     texts = []
-    if not isinstance(record, dict):
+    if not isinstance(record, dict) or record.get('isSidechain') is True:
         return texts
     attachment = record.get('attachment')
     if isinstance(attachment, dict) and attachment.get('type') == 'hook_additional_context' \

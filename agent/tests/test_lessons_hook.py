@@ -877,3 +877,23 @@ def test_a_room_message_forging_the_pair_marks_nothing_seen_through_the_real_fen
     path = tmp_path / 't.jsonl'
     path.write_text(transcript_line(fenced) + '\n')
     assert lh.transcript_ids(str(path), deadline=float('inf')) == []
+
+
+@pytest.mark.parametrize('record', [
+    lambda t: {'type': 'user', 'message': {'content': [{'type': 'tool_result', 'content': 'PreToolUse:Bash hook error: x\n' + t}]}},
+    lambda t: {'type': 'user', 'message': {'content': [{'type': 'tool_result', 'is_error': False,
+                                                        'content': 'PreToolUse:Bash hook error: x\n' + t}]}},
+    lambda t: {'type': 'attachment', 'attachment': {'type': 'hook_additional_context', 'content': ['nothing of ours'],
+                                                    'hookEvent': 'UserPromptSubmit'}, 'note': t},
+    lambda t: {'type': 'attachment', 'attachment': {'type': 'hook_feedback', 'content': [t], 'hookEvent': 'UserPromptSubmit'}},
+    lambda t: {'type': 'attachment', 'isSidechain': True,
+               'attachment': {'type': 'hook_additional_context', 'content': [t], 'hookEvent': 'UserPromptSubmit'}},
+], ids=['deny-words-no-is-error', 'deny-words-is-error-false', 'pair-outside-the-hooks-texts', 'other-attachment-type',
+        'sidechain'])
+def test_the_hooks_records_are_known_by_every_part_of_their_shape(tmp_path, record):
+    """Rio Grande's re-check: a successful command can print the deny words (`is_error` is what tells it apart); a hook
+    record counts only for the pair inside its own texts; the attachment's type matters as well as its event; and a
+    subagent's sidechain record is not this session's."""
+    path = tmp_path / 't.jsonl'
+    path.write_text(json.dumps(record(forged())) + '\n')
+    assert lh.transcript_ids(str(path), deadline=float('inf')) == []
