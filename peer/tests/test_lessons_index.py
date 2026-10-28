@@ -651,31 +651,80 @@ def test_the_commit_waits_for_a_reader_only_until_the_budget_ends(lessons_statio
     assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
 
 
-def test_a_reader_from_before_the_query_is_waited_for_only_until_the_budget_ends(lessons_station):
+def held_reader(store):
+    """A read-only connection holding SHARED, as the nightly backup's copy does, until it is closed."""
+    import sqlite3
+    reader = sqlite3.connect(store.db_path.as_uri() + '?mode=ro', uri=True, isolation_level=None)
+    reader.execute('BEGIN')
+    reader.execute('SELECT count(*) FROM users').fetchone()
+    return reader
+
+
+@pytest.mark.parametrize('words_only', [True, False], ids=['words only', 'with Near'])
+def test_a_reader_from_before_the_query_is_waited_for_only_until_the_budget_ends(lessons_station, words_only):
     """fix:lessons-query-open-and-budget-bounds: a reader that holds SHARED from before the query starts (the nightly
     backup's copy) made opening the store wait SQLite's 30 s and then raise "database is locked". Opening the store now
-    waits only what the budget leaves; then the answer is nothing and nothing is written. Once the reader is gone, the
-    same request writes."""
-    import sqlite3, time
+    waits what the budget leaves, no more and no less: the injected clock never reaches the deadline, so only SQLite's
+    real-time wait can end it (the review's S1). Then the answer is nothing, nothing is written, and a lock is never
+    reported as "embedder unavailable" (C24, the review's N4: with Near and no embedder too). Once the reader is gone,
+    the same request writes."""
+    import time
     store, clock, ids, room = lessons_station
     store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
     store.lessons_index(None)
-    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'words_only': True,
-                                               'budget_ms': 300}))
-    reader = sqlite3.connect(store.db_path.as_uri() + '?mode=ro', uri=True, isolation_level=None)
-    reader.execute('BEGIN')
-    reader.execute('SELECT count(*) FROM users').fetchone()   # SHARED, held from before the query
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x',
+                                               'words_only': words_only, 'budget_ms': 300}))
+    reader = held_reader(store)
     try:
         began = time.monotonic()
-        answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0])
+        answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: 0.0, started=0.0)
         waited = time.monotonic() - began
     finally:
         reader.execute('ROLLBACK')
         reader.close()
-    assert (answer, note) == ({'lessons': []}, None) and waited < 5   # the budget's 300 ms, never SQLite's 30 s
+    assert (answer, note) == ({'lessons': []}, None) and 0.25 < waited < 5   # the budget's 300 ms, never SQLite's 30 s
     assert counts(store) == (0, 0)
-    answer, _ = lessons.query(request, store.data_dir, None, clock=lambda: clock[0])
+    answer, _ = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: 0.0, started=0.0)
     assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
+
+
+def test_the_query_verb_answers_nothing_within_its_budget_beside_a_reader(lessons_station, tmp_path):
+    """The review's S3, through the process the hook runs: beside a held reader, `query` with budget_ms 300 exits 0
+    with {"lessons": []} well inside the hook's wait, and writes no receipt (before the fix: 30 s, then a traceback)."""
+    import time
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    config = tmp_path / 'runtime.json'
+    config.write_text(json.dumps({'embedder_socket': str(tmp_path / 'none.sock')}))
+    request = json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'words_only': True, 'budget_ms': 300})
+    reader = held_reader(store)
+    try:
+        began = time.monotonic()
+        done = run_lessons('query', '--data-dir', store.data_dir, '--runtime-config', config, stdin=request)
+        waited = time.monotonic() - began
+    finally:
+        reader.execute('ROLLBACK')
+        reader.close()
+    assert (done.returncode, done.stdout) == (0, '{"lessons": []}') and waited < 10, done.stderr   # room for start-up
+    assert counts(store) == (0, 0)
+
+
+def test_opening_the_store_fails_loudly_for_anything_but_a_lock(lessons_station, monkeypatch):
+    """The review's N1: only SQLITE_BUSY at open means "late". Any other database error there still raises."""
+    import sqlite3
+    from superyak_peer.db import Store
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)   # a lesson to match, so the query goes on to open the store
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'words_only': True,
+                                               'budget_ms': 300}))
+
+    def broken(self, *args, **kwargs):
+        raise sqlite3.OperationalError('disk I/O error')
+    monkeypatch.setattr(Store, '__init__', broken)
+    with pytest.raises(sqlite3.OperationalError, match='disk I/O error'):
+        lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: 0.0, started=0.0)
 
 
 @pytest.mark.parametrize('budget', [10 ** 309, 10 ** 400], ids=['1e309', '1e400'])
@@ -698,7 +747,8 @@ def test_a_budget_past_what_a_lock_can_wait_is_clamped_never_a_crash(lessons_sta
     store, clock, ids, room = lessons_station
     store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
     store.lessons_index(None)
-    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'budget_ms': 10 ** 13}))
+    request = {**lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x'})),
+               'budget_ms': 10 ** 13}   # past read_request's own clamp, so the gate's clamp is what this pins (review S2)
     answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0])
     assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
 

@@ -58,8 +58,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
 
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True, busy_until=None,
                  monotonic=time.monotonic):
-        """`busy_until`, a time on `monotonic`, bounds each transaction's wait for another connection's lock (the
-        lessons query passes its budget's end); without it, SQLite waits its 30 s."""
+        """`busy_until`, a time on `monotonic`, bounds the lock waits in each transaction (the lessons query passes its
+        budget's end): each statement waits at most the time left when its transaction connected, so a transaction
+        with several blocking statements can wait a few times that. Without it, SQLite waits its 30 s."""
         self.data_dir = Path(data_dir).absolute()
         self.clock = clock
         self._busy_until, self._monotonic = busy_until, monotonic

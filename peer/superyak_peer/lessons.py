@@ -702,7 +702,7 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
     from .db import Store
     from .dispatch import DispatchGate, GateTimeout
     end = None if request['budget_ms'] is None else started + request['budget_ms'] / 1000
-    answer = {'lessons': []}
+    answer, busy = {'lessons': []}, False
     if end is None or monotonic() < end:
         bound = nullcontext() if end is None else DispatchGate(Path(data_dir).absolute() / 'dispatch.lock').bounded(end, monotonic)
         try:
@@ -712,10 +712,11 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
                 answer = store._lessons_answer(request, candidates, nearest, end, monotonic)
         except GateTimeout:
             pass
-        except sqlite3.OperationalError as error:  # busy past the budget while opening: nobody waits, nothing written
+        except sqlite3.OperationalError as error:  # busy while opening, at most until `end` (or SQLite's 30 s): nothing written
             if end is None or ((getattr(error, 'sqlite_errorcode', None) or 0) & 0xFF) != sqlite3.SQLITE_BUSY:
                 raise
-    late = end is not None and monotonic() >= end  # out of time, so never "unavailable" (C24)
+            busy = True  # a lock, not the embedder, kept the answer: never "unavailable" (C24)
+    late = end is not None and (busy or monotonic() >= end)  # out of time, so never "unavailable" (C24)
     return answer, ('embedder unavailable' if unavailable and not answer['lessons'] and not late else None)
 
 
