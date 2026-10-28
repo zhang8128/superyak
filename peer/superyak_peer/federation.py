@@ -5,7 +5,8 @@ import json
 import re
 import sqlite3
 import threading
-from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse, pairing_code, show_code, typed_code
+from .identity import (PeerIdentity, validate_card, verify_envelope, verify_pull, pull_shape_ok, canonical, parse,
+                       pairing_code, show_code, typed_code)
 from .common import Problem, require, uid, encode, text, linked_room_ok
 
 class Obsolete(Exception):
@@ -19,6 +20,7 @@ class Local(Exception):
         self.error = error
 
 # Spec §7: the answers that are about the peer, not the row. Every other 4xx is the peer's answer about this row.
+PULL_ROWS, PULL_SECONDS = 200, 5.0  # spec §4: a pull examines at most 200 rows, for about 5 s
 PEER_SCOPED_STATUS = frozenset({401, 404, 408, 421, 425, 429})
 PEER_SCOPED_403 = frozenset({'Unknown or unpaired peer', 'Peer authentication failed', 'Unrecognized host',
                              'Same-origin request required', 'Federation requires HTTPS'})
@@ -65,6 +67,9 @@ class Federation:
         self.store, self.endpoint = store, endpoint
         self.identity = identity or PeerIdentity.load_or_create(store.data_dir)
         self._sync_lock = threading.Lock()
+        self._pull_locks, self._pull_guard = {}, threading.Lock()  # spec §4, check 7: one pull per origin at a time
+        self.pull_walk_seconds = PULL_SECONDS  # a test may shorten it (plan Task 6)
+        self._between_rows = lambda key: None  # a test hook between the walk's rows (plan Task 6, 8a and 8b)
 
     def card(self, actor):
         """A v1 card with this peer's endpoint, or a v2 card with none once its mode is pull (federation-pull spec §2)."""
@@ -206,72 +211,77 @@ class Federation:
 
     def _prepare(self, key):
         with self.store.transaction() as db:
-            row = require(db.execute('SELECT * FROM outbox WHERE id=?', (key,)).fetchone())
-            if row['status'] not in ('pending','failed'):
+            return self._prepare_in(db, key)
+
+    def _prepare_in(self, db, key):
+        """The checks and the one write behind an envelope, in the caller's transaction: the pull walk marks a row
+        withdrawn or refused in the transaction that decided it (federation-pull spec §4, step 4)."""
+        row = require(db.execute('SELECT * FROM outbox WHERE id=?', (key,)).fetchone())
+        if row['status'] not in ('pending','failed'):
+            raise Obsolete()
+        contact = db.execute(f'SELECT remote_contacts.*,peers.paired,EXISTS({HELD}) AS held FROM remote_contacts JOIN peers USING(peer_id) WHERE id=?', (row['contact_id'],)).fetchone()
+        if not contact or not contact['paired'] or contact['held']:  # a held contact gets nothing (SF3)
+            raise Obsolete()
+        action, revision, rid = row['action'], row['revision'], row['resource_id']
+        meta = json.loads(row['metadata'])
+        if action.startswith('layer.'):
+            layer = require(db.execute('SELECT * FROM layers WHERE id=?', (rid,)).fetchone())
+            if layer['resource_version'] != revision:
                 raise Obsolete()
-            contact = db.execute(f'SELECT remote_contacts.*,peers.paired,EXISTS({HELD}) AS held FROM remote_contacts JOIN peers USING(peer_id) WHERE id=?', (row['contact_id'],)).fetchone()
-            if not contact or not contact['paired'] or contact['held']:  # a held contact gets nothing (SF3)
-                raise Obsolete()
-            action, revision, rid = row['action'], row['revision'], row['resource_id']
-            meta = json.loads(row['metadata'])
-            if action.startswith('layer.'):
-                layer = require(db.execute('SELECT * FROM layers WHERE id=?', (rid,)).fetchone())
-                if layer['resource_version'] != revision:
-                    raise Obsolete()
-                actor = layer['owner_id']
-                payload = {}
-                if layer['active_revision']:
-                    snap = json.loads(db.execute('SELECT snapshot FROM layer_revisions WHERE layer_id=? AND revision=?', (rid,revision)).fetchone()[0])
-                    if contact['id'] in snap['audience_users']:
-                        action = 'layer.release'
-                        payload = {k:snap[k] for k in ('title','body','attachment_ids')}
-                        payload['files'] = [{**{k:f[k] for k in ('id','name','media_type','digest','size')}, 'content_base64':base64.b64encode(f['content']).decode()} for fid in snap['attachment_ids'] for f in [require(db.execute('SELECT * FROM files WHERE id=? AND owner_id=?', (fid,actor)).fetchone())]]
-                    else:
-                        action = 'layer.withdraw'
+            actor = layer['owner_id']
+            payload = {}
+            if layer['active_revision']:
+                snap = json.loads(db.execute('SELECT snapshot FROM layer_revisions WHERE layer_id=? AND revision=?', (rid,revision)).fetchone()[0])
+                if contact['id'] in snap['audience_users']:
+                    action = 'layer.release'
+                    payload = {k:snap[k] for k in ('title','body','attachment_ids')}
+                    payload['files'] = [{**{k:f[k] for k in ('id','name','media_type','digest','size')}, 'content_base64':base64.b64encode(f['content']).decode()} for fid in snap['attachment_ids'] for f in [require(db.execute('SELECT * FROM files WHERE id=? AND owner_id=?', (fid,actor)).fetchone())]]
                 else:
                     action = 'layer.withdraw'
-            elif action == 'room.reply':
-                try:
-                    inbox, room = self.store._remote_inbox(db, meta['actor'], contact['peer_id']+':'+rid, 'room')
-                except Problem as exc:
-                    if exc.status == 404:
-                        raise Obsolete() from None
-                    raise
-                if inbox['revision'] != revision:
-                    raise Obsolete()
-                actor = meta['actor']
-                payload = {k:meta[k] for k in ('body','client_message_id')}
             else:
-                room = require(db.execute('SELECT * FROM rooms WHERE id=?', (rid,)).fetchone())
-                if room['epoch'] != revision:
-                    raise Obsolete()
-                actor = room['owner_id']
-                member = db.execute('SELECT 1 FROM remote_room_members WHERE room_id=? AND contact_id=?', (rid,contact['id'])).fetchone()
-                if not member:
-                    action, payload = 'room.withdraw', {}
-                else:
-                    payload = self._room_snapshot(db, room)
-                    if action == 'room.message':
-                        message = db.execute('SELECT * FROM messages WHERE id=?', (meta.get('message_id'),)).fetchone()
-                        remote = False
-                        if message is None:
-                            message = db.execute('SELECT * FROM peer_messages WHERE id=?', (meta.get('message_id'),)).fetchone()
-                            remote = True
-                        if not message or message['epoch'] != revision:
-                            raise Obsolete()
-                        payload['message'] = {**dict(message), 'author_id':message['author_id'] if remote else self.identity.peer_id+':'+message['author_id']}
-            if row['envelope']:
-                envelope = parse(row['envelope'])
-                # A retry preserves the exact signed event. Current checks above
-                # must still pass and action must still be authorized.
-                if envelope['action'] != action:
-                    raise Obsolete()
+                action = 'layer.withdraw'
+        elif action == 'room.reply':
+            try:
+                inbox, room = self.store._remote_inbox(db, meta['actor'], contact['peer_id']+':'+rid, 'room')
+            except Problem as exc:
+                if exc.status == 404:
+                    raise Obsolete() from None
+                raise
+            if inbox['revision'] != revision:
+                raise Obsolete()
+            actor = meta['actor']
+            payload = {k:meta[k] for k in ('body','client_message_id')}
+        else:
+            room = require(db.execute('SELECT * FROM rooms WHERE id=?', (rid,)).fetchone())
+            if room['epoch'] != revision:
+                raise Obsolete()
+            actor = room['owner_id']
+            member = db.execute('SELECT 1 FROM remote_room_members WHERE room_id=? AND contact_id=?', (rid,contact['id'])).fetchone()
+            if not member:
+                action, payload = 'room.withdraw', {}
             else:
-                envelope = self.identity.envelope(destination=contact['peer_id'],actor=actor,resource_id=rid,revision=revision,action=action,recipients=[contact['user_id']],payload=payload,event_id=key)
-                if len(canonical(envelope)) > 6 * 1024 * 1024:
-                    raise Problem(413, 'Remote release is too large')
-                db.execute('UPDATE outbox SET envelope=? WHERE id=?', (canonical(envelope).decode(),key))
-            return canonical(envelope)
+                payload = self._room_snapshot(db, room)
+                if action == 'room.message':
+                    message = db.execute('SELECT * FROM messages WHERE id=?', (meta.get('message_id'),)).fetchone()
+                    remote = False
+                    if message is None:
+                        message = db.execute('SELECT * FROM peer_messages WHERE id=?', (meta.get('message_id'),)).fetchone()
+                        remote = True
+                    if not message or message['epoch'] != revision:
+                        raise Obsolete()
+                    payload['message'] = {**dict(message), 'author_id':message['author_id'] if remote else self.identity.peer_id+':'+message['author_id']}
+        if row['envelope']:
+            envelope = parse(row['envelope'])
+            # A retry preserves the exact signed event. Current checks above
+            # must still pass and action must still be authorized.
+            if envelope['action'] != action:
+                raise Obsolete()
+        else:
+            envelope = self.identity.envelope(destination=contact['peer_id'],actor=actor,resource_id=rid,revision=revision,action=action,recipients=[contact['user_id']],payload=payload,event_id=key)
+            if len(canonical(envelope)) > 6 * 1024 * 1024:
+                raise Problem(413, 'Remote release is too large')
+            db.execute('UPDATE outbox SET envelope=? WHERE id=?', (canonical(envelope).decode(),key))
+        return canonical(envelope)
 
     def _prepared(self, key):
         """The prepare callback: _prepare, its local exceptions wrapped as Local so classify knows them (spec §7)."""
@@ -351,6 +361,109 @@ class Federation:
             return result
         finally:
             self._sync_lock.release()
+
+    def serve_pull(self, raw):
+        """POST /federation/pull (spec §4), on federation-listen only. Checks, in order: the shape (400); the destination
+        (403, before any nonce is stored, so one listener can't replay a puller's request at another); a paired pull
+        peer as origin (403); its signature (403); `at` within 300 s (403); a fresh nonce, committed before the busy
+        check (409 "Replay"); one pull per origin at a time (409 "Busy"). Only a verified request can be busy."""
+        value = parse(raw)
+        if not pull_shape_ok(value):
+            raise Problem(400, 'Invalid pull request')
+        if value['destination'] != self.identity.peer_id:
+            raise Problem(403, 'Not addressed to this peer')
+        origin = value['origin']
+        with self.store.transaction() as db:
+            peer = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (origin,)).fetchone()
+        if not peer:
+            raise Problem(403, 'Unknown or unpaired peer')
+        card = json.loads(peer['card'])
+        if card.get('delivery') != 'pull':
+            raise Problem(403, 'Not a pull peer')
+        verify_pull(card, value)
+        now = self.store.clock()
+        if abs(value['at'] - now) > 300:
+            raise Problem(403, 'Clocks differ by more than 5 minutes')
+        with self.store.transaction() as db:
+            # pruned by the request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock
+            db.execute('DELETE FROM pull_nonces WHERE at<?', (now - 600,))
+            replay = db.execute('SELECT 1 FROM pull_nonces WHERE origin=? AND nonce=?', (origin, value['nonce'])).fetchone()
+            if not replay:
+                db.execute('INSERT INTO pull_nonces VALUES(?,?,?)', (origin, value['nonce'], value['at']))
+        if replay:
+            raise Problem(409, 'Replay')
+        with self._pull_guard:
+            busy = self._pull_locks.setdefault(origin, threading.Lock())
+        if not busy.acquire(blocking=False):
+            raise Problem(409, 'Busy')
+        try:
+            return self._serve_pull(origin, value, now)
+        finally:
+            busy.release()
+
+    def _serve_pull(self, origin, value, now):
+        """Spec §4's processing for a verified pull from `origin`: its acks and refusals, collect(), then a walk over
+        its own rows only (review MF2), each prepared under its own hold of the gate, never one across rows."""
+        import time
+        from .transport import PULL_CAP
+        theirs = 'contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?)'
+        with self.store.transaction() as db:
+            for key in value['ack']:
+                db.execute(f"UPDATE outbox SET status='delivered' WHERE id=? AND status IN ('pending','failed') AND {theirs}",
+                           (key, origin))
+            for refusal in value['refused']:
+                db.execute(f"UPDATE outbox SET status='refused', last_error=? WHERE id=? AND status IN ('pending','failed') "
+                           f"AND {theirs}", (str(refusal['code']), refusal['event_id'], origin))
+            db.execute('UPDATE peer_delivery SET last_pull=? WHERE peer_id=?', (now, origin))  # "last pulled from us"
+            self._peer_outcome(db, origin, 'reset', None, now)  # a verified pull it makes here resets it (spec §7)
+        self.collect()
+        envelopes, size, started = [], 0, time.monotonic()
+        if value['limit']:
+            with self.store.transaction() as db:
+                keys = [r[0] for r in db.execute(
+                    f"SELECT id FROM outbox WHERE status IN ('pending','failed') AND {theirs} ORDER BY event_seq, id LIMIT ?",
+                    (origin, PULL_ROWS))]
+            for key in keys:
+                if len(envelopes) >= value['limit'] or time.monotonic() - started >= self.pull_walk_seconds:
+                    break
+                self._between_rows(key)
+                try:
+                    with self.store.dispatch_gate, self.store.transaction() as db:
+                        body = self._walk_row(db, key, PULL_CAP)
+                        if body is None:
+                            continue
+                        encoded = len(json.dumps(body, ensure_ascii=False)) + 1
+                        if envelopes and size + encoded > value['budget']:
+                            break  # it waits for the next pull; one over the budget goes only alone
+                        db.execute('UPDATE outbox SET attempts=attempts+1, next_attempt=0 WHERE id=?', (key,))
+                except sqlite3.OperationalError:
+                    continue  # the row stays as it was: nothing is written in the transaction that raised (plan nit 24)
+                envelopes.append(body)
+                size += encoded
+        with self.store.transaction() as db:
+            left = db.execute(f"SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed') AND {theirs}",
+                              (origin,)).fetchone()[0]
+        return {'ok': True, 'envelopes': envelopes, 'more': left > len(envelopes)}
+
+    def _walk_row(self, db, key, cap):
+        """One row of the walk: its envelope text, or None when it was marked withdrawn or refused here, in the
+        transaction that decided it (check 3 SF6). A row too large to pull alone is refused where it waits (plan P5)."""
+        try:
+            body = self._prepare_in(db, key).decode()
+        except Obsolete:
+            db.execute("UPDATE outbox SET status='withdrawn' WHERE id=? AND status IN ('pending','failed')", (key,))
+            return None
+        except sqlite3.OperationalError:
+            raise
+        except Exception as error:  # noqa: BLE001 - a local fault refuses its row and never stops the walk (spec §4)
+            db.execute("UPDATE outbox SET status='refused', last_error=? WHERE id=? AND status IN ('pending','failed')",
+                       (classify(Local(error))[2], key))
+            return None
+        if len(json.dumps(body, ensure_ascii=False)) + 1 > cap - 1024:
+            db.execute("UPDATE outbox SET status='refused', last_error=? WHERE id=? AND status IN ('pending','failed')",
+                       ('413 Too large to pull', key))
+            return None
+        return body
 
     def _delivery_authority(self, db, row):
         """Resolve local controller and message correlation within action namespace."""

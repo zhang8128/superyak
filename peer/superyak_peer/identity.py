@@ -231,6 +231,34 @@ def verify_envelope(raw, card, destination):
     except (ValueError, TypeError, KeyError, InvalidSignature):
         raise Problem(403, 'Peer authentication failed') from None
 
+HEX32, HEX64 = re.compile(r'[0-9a-f]{32}'), re.compile(r'[0-9a-f]{64}')
+PULL_BUDGET = (64 * 1024, MAX_ENVELOPE)  # encoded response bytes a puller may ask for (spec §4, nit 2)
+
+def pull_shape_ok(request):
+    """Federation pull (spec §4, check 1): exactly PULL_KEYS, each of its type and range, so no envelope or record body
+    passes. `ack` and `refused` name the listener's own rows, whose ids uid() makes: 32 lowercase hex (plan nit 17)."""
+    def ints(value, low, high):
+        return type(value) is int and low <= value <= high
+    try:
+        if not isinstance(request, dict) or set(request) != PULL_KEYS:
+            return False
+        if not (ints(request['version'], 1, 1) and request['kind'] == 'pull' and type(request['at']) is int
+                and ints(request['limit'], 0, 20) and ints(request['budget'], *PULL_BUDGET)
+                and isinstance(request['signature'], str) and len(request['signature']) <= 128):
+            return False
+        if not all(isinstance(request[k], str) and HEX64.fullmatch(request[k]) for k in ('origin', 'destination')):
+            return False
+        if not (isinstance(request['nonce'], str) and HEX32.fullmatch(request['nonce'])):
+            return False
+        acks, refused = request['ack'], request['refused']
+        if not (isinstance(acks, list) and len(acks) <= 100 and all(isinstance(a, str) and HEX32.fullmatch(a) for a in acks)):
+            return False
+        return isinstance(refused, list) and len(refused) <= 100 and all(
+            isinstance(r, dict) and set(r) == {'event_id', 'code'} and isinstance(r['event_id'], str)
+            and HEX32.fullmatch(r['event_id']) and ints(r['code'], 400, 499) for r in refused)
+    except (TypeError, KeyError):
+        return False
+
 def verify_pull(card, request):
     """Federation pull (spec §4, check 4): a request with exactly PULL_KEYS, of kind `pull`, from the card's peer, signed
     by its key. Its other fields are check 1's, which runs first; anything wrong here is 403."""
