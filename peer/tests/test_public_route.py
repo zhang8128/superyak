@@ -327,7 +327,11 @@ def test_a_ship_key_reaches_every_station_client_route_over_the_public_route(env
              ('post_item', room, 'tidy', 'Tidy up', 'ops'), ('drop_item', room, 'tidy'),
              ('unread', None), ('advance', None, None), ('ticket', asked['id']), ('finish_ticket', 'no-such-ticket'),
              ('open_room', 'Side room', ['rio-grande']), ('directory',), ('instructions',),
-             ('draft_instructions', 'Draft', 'Be brief.'), ('mentions',), ('set_brief', room, 'The plan.', 0)]
+             ('draft_instructions', 'Draft', 'Be brief.'), ('mentions',), ('set_brief', room, 'The plan.', 0),
+             ('add_member', room, 'family'), ('remove_member', room, 'rio-grande')]
+    # every route the client calls is in the list, so a method added later can't skip this test
+    assert {name for name in vars(StationClient) if not name.startswith('_')} - {name for name, *_ in calls} == {
+        'request', 'board_request', 'close_room', 'leave_room', 'revoke_key'}
     outcomes, results = {}, {}
     for name, *args in calls:
         try:
@@ -348,6 +352,18 @@ def test_a_ship_key_reaches_every_station_client_route_over_the_public_route(env
     with pytest.raises(StationError) as revoked:
         station.me()
     assert (revoked.value.status, revoked.value.message) == (401, 'Sign in required')
+
+
+def test_the_whole_stack_behind_the_proxy_refuses_a_funnel_request_and_serves_the_same_request_without_it(env):
+    """Spec 6.2 end to end: uvicorn's ProxyHeadersMiddleware, as `serve` configures it, in front of the app. A
+    tailnet forwarded address plus the Funnel header is public, so starting a docking is refused; without it, served."""
+    app, clients, users, clock = env
+    stack = TestClient(ProxyHeadersMiddleware(app, trusted_hosts=TRUSTED_PROXY), base_url='http://testserver', client=PROXY,
+                       headers={'origin': 'http://testserver', 'x-forwarded-for': '100.70.202.124'})
+    docking = {'ship_name': 'rio-grande', 'machine': 'pi'}
+    assert refused(stack.post('/api/dockings', json=docking, headers={'tailscale-funnel-request': '?1'}))
+    served = stack.post('/api/dockings', json=docking)
+    assert served.status_code == 201, served.text
 
 
 def test_the_middleware_writes_nothing_for_a_ship_key(env):
