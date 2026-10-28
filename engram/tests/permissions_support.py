@@ -2135,6 +2135,25 @@ def raised_daemon(root, mode="enforce", house=None, placements=None):
     return _daemon_over(root, [pub]), HOUSE_NAME
 
 
+def wait_for_builds(daemon, timeout=60.0):
+    """Wait until `daemon` has no eligible set under way (P 12.2: a build outlives the frame that started it, which
+    waits only REBUILD_WAIT_S). Reads only `_builds` and `_build_threads`; fails with a message after `timeout`."""
+    import time
+    deadline = time.monotonic() + timeout
+    while True:
+        with daemon._cache_lock:
+            builds, threads = list(daemon._builds.values()), list(daemon._build_threads)
+        if not builds and not threads:
+            return
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise AssertionError(f"{len(builds)} eligible-set build(s) still under way after {timeout:g} s")
+        for build in builds:
+            build.done.wait(left)
+        for thread in threads:
+            thread.join(max(deadline - time.monotonic(), 0))
+
+
 def _plain_house(root, builder):
     """A house made by `builder(root, name)` (a path, closed) holding one commons placement of an episode."""
     import hashlib
