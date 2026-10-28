@@ -1118,6 +1118,14 @@ def verb(name, help, *arguments, store=True):
     return register
 
 
+def write_out(text):
+    """UTF-8 bytes on stdout whatever the locale (final review N1): an answer and a list carry lessons' own text, and
+    a locale that isn't UTF-8 would otherwise fail on the first character outside it."""
+    sys.stdout.flush()
+    sys.stdout.buffer.write(text.encode('utf-8'))
+    sys.stdout.buffer.flush()
+
+
 def main(argv=None):
     """`python -m superyak_peer.lessons <verb> --data-dir D ...`. Its own parser, not a superyak_peer subcommand:
     __main__.py imports the store at module level, and the query at a prompt imports none."""
@@ -1144,7 +1152,7 @@ def main(argv=None):
     except (Problem, IndexUnreadable, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')
     if said is not None:
-        print(said)
+        write_out(said + '\n')
 
 
 @verb('station-room', 'On the origin: show, then record, the lessons room Andy names by short id',
@@ -1197,7 +1205,7 @@ def _query(store, args):
     answer, note = query(request, args.data_dir, embedder_socket(args.runtime_config), started=args.started)
     if note:
         print(note, file=sys.stderr)
-    sys.stdout.write(dumps(answer))  # the whole answer at once, at the end: a failure before it writes nothing
+    write_out(dumps(answer))  # the whole answer at once, at the end, as UTF-8: a failure before it writes nothing
 
 
 @verb('list', "Each live lesson with its full id and the line that retracts it")

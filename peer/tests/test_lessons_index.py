@@ -335,6 +335,34 @@ def test_limit_keeps_at_most_that_many_and_writes_a_receipt_only_for_each(lesson
         assert db.execute('SELECT count(*) FROM lesson_receipts').fetchone()[0] == 1
 
 
+def test_the_query_and_the_list_write_utf8_whatever_the_locale(lessons_station):
+    """Final review N1: stdout gets UTF-8 bytes, so a locale that isn't UTF-8 can't crash the query, at a failure or at a
+    prompt, or make lessons-list, on a lesson that isn't ASCII. The C locale with Python's UTF-8 mode and its locale
+    coercion turned off gives an ASCII stdout (alone, a C or POSIX locale would turn UTF-8 mode on)."""
+    import subprocess
+    import sys
+    store, clock, ids, room = lessons_station
+    claim = 'Quote a glob in zsh \u2014 always.'
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim=claim))
+    store.lessons_index(None)
+    env = {**{k: v for k, v in os.environ.items() if k not in ('PYTHONIOENCODING', 'LANGUAGE') and not k.startswith('LC_')},
+           'LC_ALL': 'C', 'LANG': 'C', 'PYTHONUTF8': '0', 'PYTHONCOERCECLOCALE': '0', 'PYTHONDONTWRITEBYTECODE': '1'}
+    code = f'import time; time.time = lambda: {LESSON_TIME + 10!r}\nimport sys\nfrom superyak_peer.lessons import main\nmain(sys.argv[1:])'
+
+    def run(*args, request=None):
+        return subprocess.run([sys.executable, '-c', code, *args, '--data-dir', str(store.data_dir)],
+                              input=json.dumps(request or {}).encode(), capture_output=True, env=env, timeout=60)
+    probe = subprocess.run([sys.executable, '-c', 'import sys; print(sys.stdout.encoding)'], capture_output=True, env=env, text=True)
+    assert probe.stdout.strip().lower() in ('ascii', 'ansi_x3.4-1968')   # the locale this test needs
+    for request in ({'ship': 'rio-grande', 'command': 'grep --include=*.py x'},
+                    {'ship': 'rio-grande', 'prompt': 'why grep --include=* here', 'seen': []}):
+        done = run('query', '--runtime-config', '/nonexistent', request=request)
+        assert done.returncode == 0, done.stderr
+        assert [e['claim'] for e in json.loads(done.stdout.decode('utf-8'))['lessons']] == [claim], request
+    listed = run('list')
+    assert listed.returncode == 0 and claim in listed.stdout.decode('utf-8'), listed.stderr
+
+
 def test_query_stdout_keeps_to_the_agreed_contract(lessons_station, fake_embedder, tmp_path):
     """The output Tardis's hook is built against (the plan's Interfaces): exactly {"lessons": [...]}, each lesson exactly
     id, ship, claim, why and match, in that order; match "words" or a Kahan angle rounded to 4 places; words first, then
