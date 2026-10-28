@@ -1,5 +1,5 @@
 """The first rail's lessons (docs/superpowers/specs/2026-10-27-first-rail-lessons-design.md): the wire format and every
-door's checks, the lessons room's record, the backfill, the index, the query, receipts and segments.
+door's checks, the lessons room's record, the backfill, the index, the query, receipts, segments and repeats.
 
 Module-level imports stay light: the prompt path (`query` with a `prompt`) imports no store, no sqlite3 and nothing
 from ships.py, and opens no database. Anything heavier is imported inside the function that needs it."""
@@ -24,6 +24,7 @@ VALUES_PER_KIND = 8
 LIVE_CAP = 32
 HOLD_BYTES = 6  # a command value this long may hold a command (section 8); a value this long matches at a prompt
 RETRACT = re.compile(r'retract ([0-9a-f]{64}:[0-9a-f]{64})')
+FULL_ID = re.compile(r'[0-9a-f]{64}:[0-9a-f]{64}')
 SHORT = re.compile(r'[0-9a-f]{8}-[0-9a-f]{8}')
 # Section 6.
 EMAIL = re.compile(r'[^\s@]+@[^\s@]+\.[A-Za-z]{2,}')
@@ -46,12 +47,16 @@ PROMPT_WORDS = 4
 # Section 4.
 INDEX_FILE = 'lessons-index.bin'  # a JSON part, then float32 vectors (C17)
 PROMPT_NEAR_OFF = 'lessons-prompt-near-off'  # in the data directory: Near never runs at a prompt on this peer (C44)
-INDEX_MAGIC = b'superyak-lessons-index 1\n'
+INDEX_KIND = b'superyak-lessons-index '
+INDEX_MAGIC = INDEX_KIND + b'2\n'  # 2: each lesson's chain time (revision 4); any other version is rebuilt, never read
 CARRIED = 'lesson-carry-'  # the client id of the backfill's copies (section 3), which unread doesn't count as new
 EMBED_BATCH = 8
 EMBED_SECONDS = 120.0
 INFO_SECONDS = 2.0
 RUNTIME_CONFIG = Path.home() / '.config' / 'superyak' / 'runtime.json'
+# Section 7.1: the only values a repeat record takes beside its ids and its time.
+REPEAT_HOW = ('receipt', 'read')
+REPEAT_HOOK = ('on', 'off')
 
 NOT_A_LESSON = 'The lessons room takes only lessons and retractions, in the wire format of first rail section 2'
 PERSON = "A lesson can't name a person or hold an email address or phone number"
@@ -70,11 +75,29 @@ NOT_HERE = 'The lessons room takes no {what}'
 NO_IDENTITY = 'This peer has no identity.json yet, so its lessons have no peer id; federation makes it'
 NEW_LOCAL = 'The lessons room takes no new member from this station (first rail section 3)'
 UNLISTED = '{name} is on a peer that is not listed for the lessons room; list it with make station-lessons-room first'
+# Section 7.1's refusals: each names its rule and never echoes what was typed.
+REPEAT_HOW_RULE = 'Say how the ship had seen the lesson: --how receipt or --how read'
+REPEAT_HOOK_RULE = 'Declare whether the lessons hook was on: --hook on or --hook off'
+REPEAT_ID = 'Name the lesson by its full id (<64 hex>:<64 hex>) or its short form (<8 hex>-<8 hex>), in lowercase'
+REPEAT_NO_INDEX = ("A short form resolves only in this peer's lessons index, which isn't there or can't be read; name the "
+                   'lesson by its full id')
+REPEAT_NO_SHORT = "No lesson in this peer's index has that short form; a retracted lesson is named by its full id"
+REPEAT_AMBIGUOUS = "That short form names more than one lesson in this peer's index; name the lesson by its full id"
+REPEAT_RETRACTED = 'That lesson was retracted; a retracted lesson is named by its full id'
+REPEAT_UNKNOWN = "No lesson in this peer's lessons room has that id, live or retracted"
+REPEAT_NO_SHIP = ('No ship account on this peer is a member of the lessons room, so there is no ship to record a repeat '
+                  "for: the ship is this peer's one ship account in the room, never an argument")
+REPEAT_SHIPS = ('More than one ship account on this peer is a member of the lessons room, so the ship is unknown: the ship '
+                "is this peer's one ship account in the room, never an argument")
+REPEAT_NOT_MEMBER = "This peer's recorded ship is not a member of the lessons room, so it records no repeat here"
+REPEAT_OWN = "A ship's own lesson is never its repeat: the query never shows a ship its own lesson (section 5, step 3)"
+REPEAT_NO_RECEIPT = ("This peer holds no receipt of that lesson for this ship, so the repeat can't be verified; record it "
+                     'with --how read')
 
 Lesson = namedtuple('Lesson', 'ship claim why error command file learned_from')
 Retraction = namedtuple('Retraction', 'lesson_id')
-Post = namedtuple('Post', 'room id author body live_key skip')  # skip: the system's, or marked unverified
-Live = namedtuple('Live', 'id author lesson body')
+Post = namedtuple('Post', 'room id author body live_key skip created')  # skip: the system's, or marked unverified
+Live = namedtuple('Live', 'id author lesson body created')  # created: when its earliest accepted copy entered the chain
 Account = namedtuple('Account', 'username name kind')
 Snapshot = namedtuple('Snapshot', 'peer room epochs owner members posts accounts names ships')  # epochs: [room key, epoch] along the chain
 
@@ -301,6 +324,23 @@ def chain_lessons(snapshot):
     the system, one marked unverified, or one whose author isn't a member of the current room counts for nothing.
     A lesson's author is the author of its earliest accepted copy, never the poster of a refused one, so only that
     author or the room's owner retracts it."""
+    first, retracted = accepted_lessons(snapshot)
+    return capped(first, retracted), retracted
+
+
+def capped(first, retracted):
+    """The live lessons, in the order laid: each author's first 32 that aren't retracted."""
+    live, counts = [], {}
+    for item in first.values():
+        if item.id not in retracted and counts.get(item.author, 0) < LIVE_CAP:
+            counts[item.author] = counts.get(item.author, 0) + 1
+            live.append(item)
+    return live
+
+
+def accepted_lessons(snapshot):
+    """chain_lessons's first part: ({lesson id: its earliest accepted copy}, in the order laid, and the retracted ids),
+    before the cap. A retracted lesson keeps its author here, which section 7.1's verb reads."""
     first, retractions = {}, []
     for post in snapshot.posts:
         if post.skip or post.author not in snapshot.members:
@@ -314,14 +354,14 @@ def chain_lessons(snapshot):
             continue
         key = lesson_id(post.author.partition(':')[0], parsed)
         if key not in first and lesson_refusal(snapshot, post.author, parsed, post.body, post.live_key) is None:
-            first[key] = Live(key, post.author, parsed, post.body)
-    retracted = {key for who, key in retractions if key in first and who in (first[key].author, snapshot.owner)}
-    live, counts = [], {}
-    for item in first.values():
-        if item.id not in retracted and counts.get(item.author, 0) < LIVE_CAP:
-            counts[item.author] = counts.get(item.author, 0) + 1
-            live.append(item)
-    return live, retracted
+            first[key] = Live(key, post.author, parsed, post.body, post.created)
+    return first, {key for who, key in retractions if key in first and who in (first[key].author, snapshot.owner)}
+
+
+def chain_time(created):
+    """When a post entered the chain, as the index records it (section 4 step 4): its time on the peer that holds the
+    chain's posts (the origin's, for a copy elsewhere), or None for a time that isn't a finite number."""
+    return created if type(created) in (int, float) and math.isfinite(created) else None
 
 
 def watermark(snapshot):
@@ -331,7 +371,7 @@ def watermark(snapshot):
         'peer': snapshot.peer, 'room': snapshot.room, 'epochs': snapshot.epochs, 'owner': snapshot.owner,
         'members': sorted(snapshot.members),
         'posts': [[p.room, p.id, p.author, hashlib.sha256(p.body.encode('utf-8', 'surrogatepass')).hexdigest(),
-                   p.live_key, p.skip] for p in snapshot.posts],
+                   p.live_key, p.skip, chain_time(p.created)] for p in snapshot.posts],
         'accounts': sorted([key, *account] for key, account in snapshot.accounts.items())}).encode()).hexdigest()
 
 
@@ -346,6 +386,8 @@ def read_index(path):
         raise IndexUnreadable('the lessons index can\'t be read') from None
     value = _parse_index(data)
     if value is None:
+        if data.startswith(INDEX_KIND) and not data.startswith(INDEX_MAGIC):
+            raise IndexUnreadable('the lessons index is an older format; the next index run rebuilds it')
         raise IndexUnreadable('the lessons index is damaged; the next index run rebuilds it')
     return value
 
@@ -369,11 +411,12 @@ def _parse_index(data):
     rows = len(block) // (4 * dimension) if dimension else 0
     if len(block) != rows * 4 * (dimension or 0):
         return None
-    keys = {'id', 'author', 'ship', 'learned_from', 'claim', 'why', 'vector', *APPLIES}
+    keys = {'id', 'author', 'ship', 'learned_from', 'claim', 'why', 'chain_time', 'vector', *APPLIES}
     for item in lessons:
         if (not isinstance(item, dict) or set(item) != keys
                 or not all(isinstance(item[k], str) for k in ('id', 'author', 'ship', 'learned_from', 'claim', 'why'))
                 or not all(isinstance(item[k], list) and all(isinstance(v, str) for v in item[k]) for k in APPLIES)
+                or (item['chain_time'] is not None and chain_time(item['chain_time']) is None)
                 or not (item['vector'] is None or (type(item['vector']) is int and 0 <= item['vector'] < rows))):
             return None
     value['block'] = block
@@ -651,9 +694,20 @@ def describe_lessons(live):
     return '\n'.join(lines)
 
 
-def segments(index, within=SEGMENT_ANGLE):
+def shown_first(item, other, peer, receipts):
+    """Section 7's flag, for one side of a pair: whether this peer's receipts show that `item`'s ship, one of this
+    peer's, was shown `other` before `item` entered the chain. `receipts` maps (a ship's user id here, a lesson id) to
+    the earliest receipt's time. A ship on another peer, or a lesson with no chain time, can't be told."""
+    author_peer, _, user = item['author'].partition(':')
+    earliest = receipts.get((user, other['id'])) if author_peer == peer else None
+    return earliest is not None and item['chain_time'] is not None and earliest < item['chain_time']
+
+
+def segments(index, within=SEGMENT_ANGLE, receipts=None):
     """Section 7: pairs of lessons two ships laid on their own, on two peers: both `learned from: own`, different authors
-    on different peers, different embedded texts, vectors within `within`. Copies share an id and never pair."""
+    on different peers, different embedded texts, vectors within `within`. Copies share an id and never pair. Each
+    pair ends with the ships this peer can tell were shown the other's lesson before laying their own (the flag), from
+    `receipts` (see shown_first); none without them. The flag changes nothing in what counts."""
     stored = vectors_of(index) if index else {}
     own = [(item, stored[item['id']]) for item in (index or {}).get('lessons', []) if item['learned_from'] == 'own' and item['id'] in stored]
     found = []
@@ -664,20 +718,42 @@ def segments(index, within=SEGMENT_ANGLE):
                 theta = angle(va, vb)
                 if theta <= within:
                     first, second = sorted((a, b), key=lambda item: (item['ship'], item['id']))
-                    found.append((first['ship'], second['ship'], short_lesson_id(first['id']), short_lesson_id(second['id']), theta))
+                    flagged = tuple(x['ship'] for x, y in ((first, second), (second, first))
+                                    if shown_first(x, y, index['peer'], receipts or {}))
+                    found.append((first['ship'], second['ship'], short_lesson_id(first['id']), short_lesson_id(second['id']),
+                                  theta, flagged))
     return sorted(found)
 
 
 def describe_segments(found):
+    """`make lesson-segments`: per pair of ships, each segment's lesson ids and angle, and the flag beside a pair this
+    peer can tell isn't independent; no text."""
     if not found:
         return 'No segments yet.'
     lines, pair = [], None
-    for a, b, first, second, theta in found:
+    for a, b, first, second, theta, flagged in found:
         if (a, b) != pair:
             pair = (a, b)
             count = sum(1 for f in found if f[:2] == pair)
             lines.append(f'{a} and {b}: {count} segment{"" if count == 1 else "s"}')
-        lines.append(f'  {first}  {second}  {theta:.4f} rad')
+        lines.append(f'  {first}  {second}  {theta:.4f} rad'
+                     + ''.join(f'  flagged: {ship} was shown the other lesson first' for ship in flagged))
+    if any(f[5] for f in found):
+        lines.append("Flagged: a receipt on this peer shows that ship was shown the other lesson before it laid its own. "
+                     "This peer can't tell for a ship on another peer, or for a show at a prompt (first rail section 7).")
+    return '\n'.join(lines)
+
+
+def describe_repeats(rows, counts):
+    """`make lesson-repeats` (section 7.1): newest first, each with its ids, ship, how, verified or not, and the hook
+    flag as declared; no text. Verified and unverified are counted apart, never added together."""
+    if not rows:
+        return 'No repeats recorded yet.'
+    lines = [f"{counts['verified']} verified, {counts['unverified']} unverified: read apart, never added together"]
+    for r in rows:
+        seen = f"verified by receipt {r['receipt_id']}" if r['how'] == 'receipt' else 'unverified'
+        lines.append(f"{time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(r['created']))}  {r['id']}  {r['ship']}  "
+                     f"{short_lesson_id(r['lesson_id'])}  how {r['how']}  {seen}  hook {r['hook']} (declared)")
     return '\n'.join(lines)
 
 
@@ -780,7 +856,7 @@ class Lessons:
                 rows += [(r['id'], r['author_id'], r['body'], r['created'], False)
                          for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created, rowid', (key,))]
                 rows.sort(key=lambda r: r[3])  # stable, as get_room orders them
-                posts += [Post(key, i, a, b, self._live_ship_key_in(db, b), s) for i, a, b, _, s in rows]
+                posts += [Post(key, i, a, b, self._live_ship_key_in(db, b), s, c) for i, a, b, c, s in rows]
             room = db.execute('SELECT owner_id FROM rooms WHERE id=?', (current,)).fetchone()
             owner = f"{peer}:{room['owner_id']}"
             members = {f'{peer}:{r[0]}' for r in db.execute('SELECT user_id FROM room_members WHERE room_id=?', (current,))}
@@ -797,7 +873,7 @@ class Lessons:
                 for m in self._remote_room(db, recipient, key)['messages']:
                     if m.get('id') in stored:
                         posts.append(Post(key, m['id'], m['author_id'], m['body'], self._live_ship_key_in(db, m['body']),
-                                          bool(m.get('unverified'))))
+                                          bool(m.get('unverified')), m['created']))
             payload = rooms[current.partition(':')[2]][2]
             owner = payload.get('owner_id')
             members = {m for m in payload.get('member_ids', []) if isinstance(m, str)}
@@ -1016,7 +1092,8 @@ class Lessons:
                 rows.append(vectors[item.id])
             lessons.append({'id': item.id, 'author': item.author, 'ship': item.lesson.ship, 'learned_from': item.lesson.learned_from,
                             'error': list(item.lesson.error), 'command': list(item.lesson.command), 'file': list(item.lesson.file),
-                            'claim': item.lesson.claim, 'why': item.lesson.why, 'vector': row})
+                            'claim': item.lesson.claim, 'why': item.lesson.why, 'chain_time': chain_time(item.created),
+                            'vector': row})
         complete = keep_model is not None and len(rows) == len(lessons)
         write_index(path, {'peer': snapshot.peer, 'room': snapshot.room, 'watermark': mark, 'model': keep_model,
                            'dimension': dimension if rows else None, 'complete': complete, 'ships': snapshot.ships,
@@ -1063,6 +1140,82 @@ class Lessons:
             return [dict(r) for r in db.execute('SELECT lesson_receipts.*, users.username AS ship FROM lesson_receipts JOIN users '
                                                 'ON users.id=lesson_receipts.ship_id ORDER BY lesson_receipts.created DESC, lesson_receipts.rowid DESC LIMIT ?',
                                                 (min(500, max(1, limit)),))]
+
+    def lesson_receipt_firsts(self):
+        """Section 7's flag: {(a ship's user id here, a lesson id): the time of this peer's earliest receipt for them}."""
+        with self.transaction() as db:
+            return {(r[0], r[1]): r[2] for r in db.execute(
+                'SELECT ship_id, lesson_id, MIN(created) FROM lesson_receipts GROUP BY ship_id, lesson_id')}
+
+    def lesson_repeat(self, lesson, how, hook):
+        """`lessons repeat`, section 7.1: record that this peer's ship made a mistake a lesson it had seen covers. The
+        ship is never an argument: on the origin it is C28's recorded ship; where the record names none (every other
+        peer), it is the one ship account on this peer that is a member of the current lessons room, and none or more
+        than one is refused. Either way it must be a member of the current room. `lesson` is a full id, or a short form that resolves to exactly one lesson in
+        this peer's index; a retracted lesson by full id only. `how` is receipt (this peer's newest receipt of that lesson
+        for that ship, whose id the record keeps: verified) or read (unverified); `hook` is on or off, as declared. Each
+        refusal names its rule, never the value, and writes nothing. No text reaches the record."""
+        if how not in REPEAT_HOW:
+            raise Problem(400, REPEAT_HOW_RULE)
+        if hook not in REPEAT_HOOK:
+            raise Problem(400, REPEAT_HOOK_RULE)
+        if not isinstance(lesson, str) or not (FULL_ID.fullmatch(lesson) or SHORT.fullmatch(lesson)):
+            raise Problem(400, REPEAT_ID)
+        named = lesson
+        if SHORT.fullmatch(lesson):
+            try:
+                index = read_index(self.data_dir / INDEX_FILE)
+            except IndexUnreadable:
+                index = None
+            if index is None:
+                raise Problem(409, REPEAT_NO_INDEX)
+            matches = [item['id'] for item in index['lessons'] if short_lesson_id(item['id']) == lesson]
+            if len(matches) != 1:
+                raise Problem(409, REPEAT_AMBIGUOUS) if matches else Problem(404, REPEAT_NO_SHORT)
+            named = matches[0]
+        with self.transaction() as db:
+            record = self._lessons_record(db)
+            snapshot = self._lessons_snapshot(db)
+            if record is None or snapshot is None:
+                raise Problem(404, 'No lessons room is recorded on this peer')
+            ship = record['ship_id']
+            if ship is None:  # not the origin: derived from what this peer holds (snapshot.ships: its ship members)
+                here = [full.partition(':')[2] for full in snapshot.ships.values()]
+                if len(here) != 1:
+                    raise Problem(409, REPEAT_SHIPS if here else REPEAT_NO_SHIP)
+                ship = here[0]
+            elif f'{snapshot.peer}:{ship}' not in snapshot.members:
+                raise Problem(409, REPEAT_NOT_MEMBER)
+            first, retracted = accepted_lessons(snapshot)
+            if named in retracted:
+                if named != lesson:  # resolved from the index, which hasn't dropped it yet
+                    raise Problem(409, REPEAT_RETRACTED)
+            elif named not in {item.id for item in capped(first, retracted)}:
+                raise Problem(404, REPEAT_UNKNOWN)
+            if first[named].author == f'{snapshot.peer}:{ship}':
+                raise Problem(409, REPEAT_OWN)
+            receipt = None
+            if how == 'receipt':
+                row = db.execute('SELECT id FROM lesson_receipts WHERE ship_id=? AND lesson_id=? ORDER BY created DESC, '
+                                 'rowid DESC LIMIT 1', (ship, named)).fetchone()
+                if row is None:
+                    raise Problem(409, REPEAT_NO_RECEIPT)
+                receipt = row['id']
+            key, now = uid(), self.clock()
+            db.execute('INSERT INTO lesson_repeats VALUES(?,?,?,?,?,?,?)', (key, now, ship, named, how, receipt, hook))
+            username = db.execute('SELECT username FROM users WHERE id=?', (ship,)).fetchone()['username']
+            return {'id': key, 'created': now, 'ship': username, 'lesson_id': named, 'short': short_lesson_id(named),
+                    'how': how, 'receipt_id': receipt, 'hook': hook, 'verified': receipt is not None}
+
+    def lesson_repeats(self, limit=50):
+        """`make lesson-repeats`: (this peer's repeat records, newest first, each with its ship's username; how many are
+        verified and how many unverified, which are never added together)."""
+        with self.transaction() as db:
+            rows = [dict(r) for r in db.execute(
+                'SELECT lesson_repeats.*, users.username AS ship FROM lesson_repeats JOIN users ON users.id=lesson_repeats.ship_id '
+                'ORDER BY lesson_repeats.created DESC, lesson_repeats.rowid DESC LIMIT ?', (min(500, max(1, limit)),))]
+            counts = dict(db.execute("SELECT how, count(*) FROM lesson_repeats GROUP BY how").fetchall())
+        return rows, {'verified': counts.get('receipt', 0), 'unverified': counts.get('read', 0)}
 
     def _lessons_add_gate(self, db, key, new_ids):
         """Section 3, at the origin: no new local member in any room of the chain, and a remote one only from a listed
@@ -1115,6 +1268,10 @@ CREATE TABLE IF NOT EXISTS lessons_peers(peer_id TEXT PRIMARY KEY REFERENCES pee
 CREATE TABLE IF NOT EXISTS lesson_receipts(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), lesson_id TEXT NOT NULL, author_id TEXT NOT NULL, angle REAL);
 CREATE INDEX IF NOT EXISTS lesson_receipts_by_created ON lesson_receipts(created);
 CREATE TABLE IF NOT EXISTS lesson_queries(id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), nearest REAL, shown INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS lesson_repeats(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id),
+    lesson_id TEXT NOT NULL CHECK(length(lesson_id)=129 AND substr(lesson_id,65,1)=':' AND substr(lesson_id,1,64) NOT GLOB '*[^0-9a-f]*' AND substr(lesson_id,66) NOT GLOB '*[^0-9a-f]*'),
+    how TEXT NOT NULL CHECK(how IN ('receipt','read')), receipt_id TEXT REFERENCES lesson_receipts(id), hook TEXT NOT NULL CHECK(hook IN ('on','off')),
+    CHECK((how='receipt') = (receipt_id IS NOT NULL)));
 '''
 
 
@@ -1153,7 +1310,11 @@ def main(argv=None):
         sub.add_argument('--data-dir', type=Path, required=True)
         for flag, options in arguments:
             sub.add_argument(flag, **options)
-    args = parser.parse_args(argv)
+    args, extra = parser.parse_known_args(argv)
+    if extra:
+        if args.verb == 'repeat':  # section 7.1: no other input, and a refusal never echoes what was typed
+            parser.exit(2, 'lessons repeat takes one lesson id, --how and --hook, and nothing else\n')
+        parser.error('unrecognized arguments: ' + ' '.join(extra))
     args.started = started
     _, _, run, opens = VERBS[args.verb]
     try:
@@ -1237,10 +1398,24 @@ def _receipts(store, args):
     return describe_receipts(store.lesson_receipts(args.limit), index)
 
 
-@verb('segments', "Section 7: segments per pair of ships, from this peer's index", ('--within', {'type': float, 'default': SEGMENT_ANGLE}),
-      store=False)
+@verb('segments', "Section 7: segments per pair of ships, from this peer's index, flagged where its receipts tell",
+      ('--within', {'type': float, 'default': SEGMENT_ANGLE}))
 def _segments(store, args):
-    return describe_segments(segments(read_index(args.data_dir / INDEX_FILE), args.within))
+    return describe_segments(segments(read_index(args.data_dir / INDEX_FILE), args.within, store.lesson_receipt_firsts()))
+
+
+@verb('repeat', "Section 7.1: record a repeat after a seen lesson, for this peer's recorded ship",
+      ('lesson', {'help': "a full lesson id, or a short form in this peer's index"}),
+      ('--how', {'required': True, 'help': 'receipt or read'}), ('--hook', {'required': True, 'help': 'on or off, as declared'}))
+def _repeat(store, args):
+    made = store.lesson_repeat(args.lesson, args.how, args.hook)
+    seen = f"verified by receipt {made['receipt_id']}" if made['verified'] else 'unverified'
+    return f"Recorded repeat {made['id']}: {made['ship']}, lesson {made['short']}, how {made['how']}, {seen}, hook {made['hook']} (declared)."
+
+
+@verb('repeats', "Section 7.1: this peer's repeat records, newest first", ('--limit', {'type': int, 'default': 50}))
+def _repeats(store, args):
+    return describe_repeats(*store.lesson_repeats(args.limit))
 
 
 if __name__ == '__main__':
