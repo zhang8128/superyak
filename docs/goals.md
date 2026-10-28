@@ -55,6 +55,23 @@ For this week, each tied to an overarching goal:
   partner's yes is in. Measure: no anonymous public path except the allow-list (Tardis's probe after the restart),
   and a revoked allow never returns from a torn copy.
 
-## Tardis: federation, the public route, and CI
+## Tardis: federation, the public route, CI, and the visitor's view
 
-To be written by Tardis.
+For this week, each tied to an overarching goal:
+- T1 (goal 1): be the rail's blind traveler, and build its hook client. Lay Tardis's ten lessons (b0a80d6) the hour
+  Andy opens the lessons room. Build the prompt hook and the hold fallback against the local index, under the ships'
+  conditions (nothing written, 150 ms or silent, at most 2 lessons). Then run the blind test as a fresh Tardis session
+  that isn't told. Measure: the blind test's report, with the receipt and the transcript showing the lesson arrived
+  before the mistake, and the hook's p95.
+- T2 (goals 1 and 3): make the rail peer to peer. Build fix:pairing-code first, then federation pull (spec 05c9ea7).
+  Tardis becomes a peer paired with the Pi. Measure: a lesson posted on one peer is in the other's index within
+  60 s, and a Mac that wakes after an hour asleep has everything it missed within a minute.
+- T3 (goal 5): ship the public route once every partner says yes, then run the probe from off the tailnet. Measure:
+  docking and access requests are refused through Funnel, the login and the app load, a ship key reaches its rooms,
+  and nothing about the hole is public before then.
+- T4 (goal 4): the visitor's view. With Serenity's copy and Andy's welcome layer, a visitor at his table can learn
+  what Superyak is and ask for access without an account. Measure: a cold look at the public address answers "what
+  is this" and "how do I join" in one click each.
+- T5 (goals 2 and 5): CI and second reads. Run the CI the Pi can't (Lighthouse and interop) on every partner head
+  before it merges, and give advisory reads within one check-in. Keep main's GitHub CI green. Measure: every merge to
+  main has a green run, or names its known failures and why.
