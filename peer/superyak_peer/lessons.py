@@ -195,3 +195,79 @@ def holds_person_data(text, pattern):
     return bool((pattern is not None and pattern.search(text.casefold()))
                 or any(EMAIL.search(token) for token in text.split() if '@' in token)
                 or any(phone.search(text) for phone in PHONES))
+
+
+def unit(vector):
+    norm = math.hypot(*vector)
+    return [x / norm for x in vector] if norm and math.isfinite(norm) else None
+
+
+def angle(a, b):
+    """Trails R4, Kahan's form, for unit vectors: 2·atan2(‖a − b‖, ‖a + b‖), in [0, π]."""
+    return 2 * math.atan2(math.dist(a, b), math.dist(a, [-x for x in b]))
+
+
+def embedder_socket(runtime_config=None):
+    """Section 1: the machine's shared embedder, named by `embedder_socket` in runtime.json; None without one."""
+    try:
+        value = json.loads(Path(runtime_config or RUNTIME_CONFIG).read_text()).get('embedder_socket')
+    except (OSError, ValueError, AttributeError):
+        return None
+    return Path(value) if isinstance(value, str) and os.path.isabs(value) else None
+
+
+def _recv(sock, size, remaining):
+    chunks = bytearray()
+    while len(chunks) < size:
+        sock.settimeout(remaining())
+        chunk = sock.recv(min(size - len(chunks), 1 << 20))
+        if not chunk:
+            raise ConnectionError('the embedder closed the connection')
+        chunks += chunk
+    return bytes(chunks)
+
+
+def _call(socket_path, request, deadline, clock):
+    """One request over engram/embedder_service.py's protocol (a 4-byte big-endian length, then UTF-8 JSON), finished by
+    `deadline` on `clock`. Never loads a model (trails R19)."""
+    def remaining():
+        left = deadline - clock()
+        if left <= 0:
+            raise TimeoutError('past the deadline')
+        return left
+    data = json.dumps(request, separators=(',', ':')).encode('utf-8')
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(remaining())
+            sock.connect(str(socket_path))
+            sock.settimeout(remaining())
+            sock.sendall(struct.pack('>I', len(data)) + data)
+            (size,) = struct.unpack('>I', _recv(sock, 4, remaining))
+            if size > 16 * 1024 * 1024:
+                raise ValueError('reply too large')
+            reply = json.loads(_recv(sock, size, remaining))
+    except TimeoutError:
+        raise EmbedderTimeout('past the deadline') from None
+    except (OSError, ValueError) as error:
+        raise EmbedderUnavailable(type(error).__name__) from None
+    if not isinstance(reply, dict) or reply.get('ok') is not True or not isinstance(reply.get('model'), str):
+        raise EmbedderUnavailable('the embedder refused')
+    return reply
+
+
+def embedder_model(socket_path, deadline, clock=time.monotonic):
+    return _call(socket_path, {'op': 'info'}, deadline, clock)['model']
+
+
+def embed(socket_path, texts, prefix, deadline, clock=time.monotonic):
+    """(model, unit vectors), one per text, or EmbedderUnavailable."""
+    reply = _call(socket_path, {'op': 'embed', 'texts': list(texts), 'prefix': prefix}, deadline, clock)
+    vectors, dimension = reply.get('vectors'), reply.get('dimension')
+    if (type(dimension) is not int or dimension < 1 or not isinstance(vectors, list) or len(vectors) != len(texts)
+            or any(not isinstance(v, list) or len(v) != dimension
+                   or any(type(x) not in (int, float) or not math.isfinite(x) for x in v) for v in vectors)):
+        raise EmbedderUnavailable('malformed vectors')
+    units = [unit(v) for v in vectors]
+    if any(v is None for v in units):
+        raise EmbedderUnavailable('a zero vector')
+    return reply['model'], units

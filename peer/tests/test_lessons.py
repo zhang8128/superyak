@@ -103,3 +103,52 @@ def test_names_fold_case_short_ones_are_ignored_and_field_names_are_never_read()
     lesson = lessons.parse_post(lesson_body(file=('peer/README.md',)))
     assert 'file' not in lessons.lesson_values(lesson).split('\n')
     assert not lessons.holds_person_data(lessons.lesson_values(lesson), lessons.names_pattern(['file', 'error']))
+
+
+# Task 3: angles and the embedder
+def test_kahans_angle_is_symmetric_bounded_exact_at_the_ends_and_keeps_the_triangle_inequality():
+    rnd = random.Random(42)
+    def sample():
+        return lessons.unit([rnd.gauss(0, 1) for _ in range(768)])
+    for _ in range(300):
+        a, b, c = sample(), sample(), sample()
+        assert lessons.angle(a, a) == 0.0
+        assert abs(lessons.angle(a, b) - lessons.angle(b, a)) < 1e-12
+        assert 0 <= lessons.angle(a, b) <= math.pi
+        assert lessons.angle(a, c) <= lessons.angle(a, b) + lessons.angle(b, c) + 1e-12
+    a = sample()
+    assert 0 < lessons.angle(a, lessons.unit([x + 1e-9 * (i % 3) for i, x in enumerate(a)])) < 1e-6
+    assert abs(lessons.angle(a, [-x for x in a]) - math.pi) < 1e-12
+    assert lessons.unit([0.0, 0.0]) is None
+
+
+def test_embed_speaks_the_protocol_and_returns_unit_vectors(fake_embedder):
+    fake_embedder.vectors['x'] = [3.0, 4.0, 0.0, 0.0]
+    assert lessons.embed(fake_embedder.path, ['x'], 'search_query', 105.0, lambda: 100.0) == ('fake-model', [[0.6, 0.8, 0.0, 0.0]])
+    assert fake_embedder.requests[-1]['prefix'] == 'search_query' and fake_embedder.requests[-1]['texts'] == ['x']
+    assert lessons.embedder_model(fake_embedder.path, 105.0, lambda: 100.0) == 'fake-model'
+
+
+def test_embed_is_unavailable_past_its_deadline_without_a_socket_or_with_bad_vectors(fake_embedder):
+    with pytest.raises(lessons.EmbedderUnavailable):
+        lessons.embed(fake_embedder.path, ['x'], 'search_query', 100.0, lambda: 100.0)
+    with pytest.raises(lessons.EmbedderUnavailable):
+        lessons.embed(fake_embedder.path.with_name('missing'), ['x'], 'search_query', 105.0, lambda: 100.0)
+    fake_embedder.delay = 0.5  # answers after the socket's 0.2 s: the query never waits past its deadline
+    with pytest.raises(lessons.EmbedderUnavailable):
+        lessons.embed(fake_embedder.path, ['x'], 'search_query', 100.2, lambda: 100.0)
+    fake_embedder.delay, fake_embedder.dimension = 0.0, 3  # the vectors don't have the dimension it claims
+    with pytest.raises(lessons.EmbedderUnavailable):
+        lessons.embed(fake_embedder.path, ['x'], 'search_query', 105.0, lambda: 100.0)
+
+
+def test_runtime_json_names_the_socket(tmp_path):
+    config = tmp_path / 'runtime.json'
+    assert lessons.embedder_socket(config) is None
+    config.write_text(json.dumps({'embedder_socket': '/run/user/1000/superyak/embedder.sock', 'memory_home': '/m'}))
+    assert lessons.embedder_socket(config) == Path('/run/user/1000/superyak/embedder.sock')
+    for value in ('relative.sock', 7, None):
+        config.write_text(json.dumps({'embedder_socket': value}))
+        assert lessons.embedder_socket(config) is None
+    config.write_text('{not json')
+    assert lessons.embedder_socket(config) is None

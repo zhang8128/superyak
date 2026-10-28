@@ -57,3 +57,51 @@ def run_lessons(*args, stdin='', now=LESSON_TIME):
     code = f'import time; time.time = lambda: {now!r}\nimport sys\nfrom superyak_peer.lessons import main\nmain(sys.argv[1:])'
     return subprocess.run([sys.executable, '-c', code, *map(str, args)], input=stdin, capture_output=True, text=True,
                           env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+
+
+class FakeEmbedder:
+    """A Unix socket that answers engram/embedder_service.py's protocol. `vectors` maps a text to its vector; any other
+    text gets `default`. It records every request, and whether a station transaction was open when it came."""
+    def __init__(self, path, model='fake-model', dimension=4):
+        import socketserver, threading
+        from superyak_peer import lessons
+        self.path, self.model, self.dimension = path, model, dimension
+        self.vectors, self.default, self.requests, self.delay, self.down = {}, [0.0, 0.0, 0.0, 1.0][:dimension], [], 0.0, False
+        self.in_transaction = threading.Event()
+        fake = self
+
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(self):
+                import json, struct, time
+                size = struct.unpack('>I', self.request.recv(4))[0]
+                data = b''
+                while len(data) < size:
+                    data += self.request.recv(size - len(data))
+                request = json.loads(data)
+                fake.requests.append({**request, 'in_transaction': fake.in_transaction.is_set()})
+                time.sleep(fake.delay)
+                reply = {'ok': True, 'model': fake.model, 'dimension': fake.dimension}
+                if request['op'] == 'embed':
+                    reply['vectors'] = [fake.vectors.get(t, fake.default) for t in request['texts']]
+                body = json.dumps(reply).encode()
+                self.request.sendall(struct.pack('>I', len(body)) + body)
+
+        class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+            daemon_threads = True
+        self.server = Server(str(path), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def fake_embedder():
+    import shutil, tempfile
+    from pathlib import Path
+    folder = Path(tempfile.mkdtemp(prefix='emb'))  # a Unix socket path must stay under 108 bytes
+    embedder = FakeEmbedder(folder / 's')
+    yield embedder
+    embedder.close()
+    shutil.rmtree(folder, ignore_errors=True)
