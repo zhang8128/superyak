@@ -1,11 +1,11 @@
 """superyak-agent: dock this machine's ship, serve its station tools, watch its mentions."""
-import argparse
 import sys
 from pathlib import Path
-from .station import CONFIG, HOME
 
 
 def build_parser():
+    import argparse  # here, not at the top: the hold path never loads it (Ruling 44)
+    from .station import CONFIG, HOME
     parser = argparse.ArgumentParser(prog='superyak-agent')
     commands = parser.add_subparsers(dest='command', required=True)
     mcp = commands.add_parser('mcp', help='Station tools over stdio (MCP)')
@@ -22,6 +22,9 @@ def build_parser():
     hook.add_argument('--config', type=Path, default=CONFIG)
     lessons = commands.add_parser('lessons-hook', help="Claude Code hook: lessons from Andy's ships (first rail)")
     lessons.add_argument('--settings', type=Path, help='The hook\'s own settings (default ~/.superyak/lessons-hook.json)')
+    held = commands.add_parser('hold', help='Claude Code PreToolUse hook on Bash: checklists and lessons hold a '
+                               'command once (dispatched before this parser, which only describes it)')
+    held.add_argument('--config', type=Path, default=CONFIG)
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
     dock.add_argument('--station', required=True)
     dock.add_argument('--door')
@@ -80,9 +83,14 @@ def _hook(parser, argv):
         import os
         from . import hook
         args, _ = parser.parse_known_args(argv)
-        session_id, cwd, mode = (None, None, None) if sys.stdin.isatty() else hook.hook_fields(sys.stdin)
-        event = {'session-start': 'session-start', 'session-end': 'session-end'}.get(os.environ.get('SUPERYAK_HOOK_EVENT'), 'prompt')
-        text = hook.run(args.config, session_id=session_id, cwd=cwd, mode=mode, event=event,
+        got = hook.HookInput(None, None, None, None, None) if sys.stdin.isatty() else hook.read_hook_input(sys.stdin)
+        if got.event:  # Ruling 6: Claude Code's own name for the event decides; any other value prints nothing
+            if got.event not in hook.EVENTS:
+                return 0
+            event = hook.EVENTS[got.event]
+        else:
+            event = {'session-start': 'session-start', 'session-end': 'session-end'}.get(os.environ.get('SUPERYAK_HOOK_EVENT'), 'prompt')
+        text = hook.run(args.config, session_id=got.session, cwd=got.cwd, mode=got.mode, event=event, source=got.source,
                         messages=os.environ.get('SUPERYAK_HOOK_MESSAGES') != '0')
         if text:
             print(text)
@@ -122,9 +130,12 @@ def _dock_project(args, fields):
 
 
 def main(argv=None):
-    parser = build_parser()
     if argv is None:
         argv = sys.argv[1:]
+    if argv[:1] == ['hold']:  # before any station import: the hold stays light (N8)
+        from .hold import main as hold
+        return hold(argv[1:])
+    parser = build_parser()
     if argv[:1] == ['hook']:
         return _hook(parser, argv)
     if argv[:1] == ['lessons-hook']:  # run_agent.py takes this path before importing this module

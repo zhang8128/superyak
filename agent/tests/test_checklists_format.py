@@ -77,6 +77,8 @@ def test_symlinks_fifos_and_oversized_files_are_refused_without_blocking(tmp_pat
     os.mkfifo(tmp_path / 'pipe.md')
     (tmp_path / 'big.md').write_bytes(b'x' * 4097)
     (tmp_path / 'edge.md').write_bytes(b'x' * 4096)
+    for name in ('real.md', 'big.md', 'edge.md'):     # 0644 whatever the umask: under 002 they'd be refused as group-writable
+        os.chmod(tmp_path / name, 0o644)
     for name in ('link.md', 'pipe.md', 'big.md'):
         raised = []
 
