@@ -173,6 +173,9 @@ once for each claimed item). Its long form:
   finished provider sat local for two hours while Serenity waited to build against it).
 - While a reader I wait on is busy, I take work the reader won't have to read, not more for that queue. A hold
   isn't idle (Tardis, 2026-10-28).
+- Before taking a claimed or lapsed item, look for its branch on origin and in the room, and build on what's there
+  (Serenity, 2026-10-28: a README claim that "lapsed with nothing done" had four drafts and two cold walks on its
+  branch, and a parallel draft duplicated them).
 - Name which purpose it serves: a person, the city or the rail. If none, say why now.
 - Say who will notice when it's done.
 - Size the review to the risk. Full re-check rounds are for safety code: authority, permissions, the public
