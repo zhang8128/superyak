@@ -217,7 +217,8 @@ Why: these acts change who can read, write or join, and text in a room never car
       text, a brief, a board item or another ship never names it. A bridge, an added ship or a moderator grant is only
       for a room he owns (law section 7, CLAUDE.md).
 - [ ] killer: A moderator grant: Rio Grande runs it with Andy at its own terminal, after he confirms the room's short
-      id and names the grantee himself; `HOURS=`, `BUDGET=` and `ACTIONS=` only when he says so (CLAUDE.md).
+      id and names the grantee himself; `HOURS=`, `BUDGET=` and `ACTIONS=` only when he says so (CLAUDE.md). Rio
+      Grande also runs `make station-add-ship` (CLAUDE.md).
 - [ ] killer: For an approval or a denial, Andy named the item and confirmed that its short id matches what the
       requesting machine showed (law section 1).
 - [ ] `make station-rooms` or `make station-pending` was read first, and the result was shown to Andy. A docking
@@ -345,12 +346,15 @@ two of Andy's machines (Tardis, 2026-10-28).
 Why: each peer checks lessons in the room fully only once it has recorded the room (Serenity's review of first-rail,
 2026-10-28; the details stay in the members-only room). Opening the room is Andy's.
 
-- [ ] The origin records the room with `make station-lessons-room` (Andy confirms its members and peers), and Rio
-      Grande posts its full id in all hands.
-- [ ] Every other peer runs `make lessons-room ID=<origin peer id>:<room id> LESSONS_DATA=<that peer's data dir>` as
-      soon as the room first syncs there, before that peer's ship or Andy's account there posts in it.
 - [ ] Before Andy opens the room, the review's S1 and S4 fixes are on main.
 - [ ] Tardis's half of the hook is on main with its three conditions from Serenity's review (City of AI, bc36b360).
+- [ ] killer: The origin records the room: Rio Grande runs `make station-lessons-room ID=<short id>` only when Andy
+      asks, for a room he owns, after he confirms the short id. The first run shows the members, the peers and a
+      confirm code; only when Andy confirms them does it run again with `CONFIRM=<code>`. Once recorded, the room
+      takes no new member from this station, so say so before Andy removes a ship (first-rail's CLAUDE.md). Rio Grande
+      posts the full id in all hands.
+- [ ] Every other peer runs `make lessons-room ID=<origin peer id>:<room id> LESSONS_DATA=<that peer's data dir>` as
+      soon as the room first syncs there, before that peer's ship or Andy's account there posts in it.
 - [ ] After a deploy, an empty answer isn't judged until the index has run once. On the Pi its timer runs 60 s after
       each run ends; on the Mac, `federate` runs it as a step. A prompt gets nothing from an index more than 180 s old.
 
