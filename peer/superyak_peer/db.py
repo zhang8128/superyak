@@ -54,9 +54,15 @@ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEX
 '''
 
 class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints):
-    def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True):
+    _busy_until, _monotonic = None, staticmethod(time.monotonic)
+
+    def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True, busy_until=None,
+                 monotonic=time.monotonic):
+        """`busy_until`, a time on `monotonic`, bounds each transaction's wait for another connection's lock (the
+        lessons query passes its budget's end); without it, SQLite waits its 30 s."""
         self.data_dir = Path(data_dir).absolute()
         self.clock = clock
+        self._busy_until, self._monotonic = busy_until, monotonic
         self.share_link_file = Path(share_link_file) if share_link_file else None
         self._check_paths()
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -119,7 +125,8 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
     @contextmanager
     def _transaction(self):
         self._check_paths()
-        db = sqlite3.connect(self.db_path, timeout=30)
+        wait = 30 if self._busy_until is None else max(0.001, min(30, self._busy_until - self._monotonic()))
+        db = sqlite3.connect(self.db_path, timeout=wait)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA foreign_keys=ON')
         try:

@@ -651,6 +651,47 @@ def test_the_commit_waits_for_a_reader_only_until_the_budget_ends(lessons_statio
     assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
 
 
+def test_a_reader_from_before_the_query_is_waited_for_only_until_the_budget_ends(lessons_station):
+    """fix:lessons-query-open-and-budget-bounds: a reader that holds SHARED from before the query starts (the nightly
+    backup's copy) made opening the store wait SQLite's 30 s and then raise "database is locked". Opening the store now
+    waits only what the budget leaves; then the answer is nothing and nothing is written. Once the reader is gone, the
+    same request writes."""
+    import sqlite3, time
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'words_only': True,
+                                               'budget_ms': 300}))
+    reader = sqlite3.connect(store.db_path.as_uri() + '?mode=ro', uri=True, isolation_level=None)
+    reader.execute('BEGIN')
+    reader.execute('SELECT count(*) FROM users').fetchone()   # SHARED, held from before the query
+    try:
+        began = time.monotonic()
+        answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0])
+        waited = time.monotonic() - began
+    finally:
+        reader.execute('ROLLBACK')
+        reader.close()
+    assert (answer, note) == ({'lessons': []}, None) and waited < 5   # the budget's 300 ms, never SQLite's 30 s
+    assert counts(store) == (0, 0)
+    answer, _ = lessons.query(request, store.data_dir, None, clock=lambda: clock[0])
+    assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
+
+
+@pytest.mark.parametrize('budget', [10 ** 309, 10 ** 400], ids=['1e309', '1e400'])
+def test_a_budget_too_large_for_a_float_is_clamped_never_a_crash(lessons_station, budget):
+    """fix:lessons-query-open-and-budget-bounds: JSON gives Python an integer of any size, and 10**309 ms is past what a
+    float holds, so the query crashed with OverflowError. read_request clamps budget_ms to BUDGET_CAP_MS (an hour:
+    no hook waits that long), and the query answers as it would without one."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'budget_ms': budget}))
+    assert request['budget_ms'] == lessons.BUDGET_CAP_MS == 3_600_000
+    answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0])
+    assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
+
+
 def test_a_budget_past_what_a_lock_can_wait_is_clamped_never_a_crash(lessons_station):
     """The fresh review's N1: budget_ms has no upper bound, and 10**13 ms is past threading.TIMEOUT_MAX seconds. The
     bounded wait clamps to it (and SQLite's commit wait to its own 30 s), so the query answers as it would without one."""
