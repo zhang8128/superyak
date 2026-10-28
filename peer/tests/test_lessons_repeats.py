@@ -6,7 +6,7 @@ from contextlib import closing
 import pytest
 from superyak_peer import lessons
 from superyak_peer.common import Problem
-from conftest import LESSON_TIME, lesson_body, run_lessons
+from conftest import LESSON_TIME, lesson_body, paired, run_lessons
 
 COLUMNS = ['id', 'created', 'ship_id', 'lesson_id', 'how', 'receipt_id', 'hook']
 NOTE = 'zq-a-note-of-free-text'   # a value no refusal may echo
@@ -313,7 +313,7 @@ def test_on_another_peer_the_ship_is_its_one_ship_account_in_the_room(lessons_pe
 
     second = tardis.lessons_ship('defiant', 'andy')['id']   # a ship account here, not in the room: no change
     assert tardis.lesson_repeat(key, 'read', 'off')['ship'] == 'tardis'
-    contact = pi_fed.pair(pids['andy'], tardis_fed.card(second))['id']
+    contact = paired(pi_fed, pids['andy'], tardis_fed.card(second))['id']
     pi.add_participants(pids['andy'], lessons_peers['room'], [contact])
     deliver('pi', 'tardis')
     before = repeats(tardis)

@@ -34,6 +34,8 @@ const state = {
   chatDialog: null,
   profileDialog: false,
   pairPreview: null,
+  pairCode: "",  // what the person typed in the pair box, kept through a re-render, never filled in by the page
+  myCode: null,  // this account's own pairing code, shown apart from its card
   invitation: null,
   flash: null,
   transitionNote: null,
@@ -104,8 +106,8 @@ function identityKey(user) {
 
 function clearAccountAdministration() {
   state.accounts = []; state.accessRequests = []; state.roleChanges = []; state.invitation = null;
-  state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null;
-  state.ships = []; state.docking = null;
+  state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null; state.pairCode = "";
+  state.myCode = null; state.ships = []; state.docking = null;
   state.imprints = null; state.imprintCode = null; state.imprint = null; state.imprintAsk = null;
 }
 
@@ -950,10 +952,16 @@ function chatsView() {
     <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong><span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
 }
 
+function contactState(contact) {
+  // a code shows only for a contact confirmed by typing: any other could be copied into a re-pair (fix:pairing-code)
+  if (contact.held) return "Held until its own code is typed";
+  return contact.confirmed ? "Confirmed by typing" : "No typed code on record";
+}
+
 function connectionGroup(connection) {
   const peers = state.connections.filter((item) => item.peer_id === connection.peer_id);
   if (peers[0]?.id !== connection.id) return "";
-  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3><p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p><p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
+  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3><p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p><p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><ul class="meta">${peers.map((item) => `<li><span>${escapeHtml(item.name)}</span> <span>${item.pairing_code ? `Pairing code: ${escapeHtml(item.pairing_code)}` : "No code shown"}</span> <span>${contactState(item)}</span></li>`).join("")}</ul>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
 }
 
 function deliveryDescription(delivery) {
@@ -1187,10 +1195,11 @@ function accountRoleDialog() {
 
 function connectionsView() {
   const statuses = state.sync.deliveries || [];
-  return `<header class="page-head"><div><p class="eyebrow">Explicit peer exchange</p><h1>Connections</h1><p class="lede">Review a peer’s address, participant, and certificate fingerprint before pairing. Pairing alone shares nothing.</p></div><div class="button-row"><button class="button secondary" data-action="show-card">Show my peer card</button><button class="button" data-action="sync">Check delivery now</button></div></header>
-    <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and compare its fingerprint before connecting.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
+  return `<header class="page-head"><div><p class="eyebrow">Explicit peer exchange</p><h1>Connections</h1><p class="lede">Pair a peer by typing the code its own screen shows. Pairing alone shares nothing.</p></div><div class="button-row"><button class="button secondary" data-action="show-card">Show my peer card</button><button class="button" data-action="sync">Check delivery now</button></div></header>
+    ${state.myCode ? `<p class="notice" data-testid="my-pairing-code"><strong>Your pairing code:</strong> <code>${escapeHtml(state.myCode)}</code>. Type this on the other machine. Never send it with the card.</p>` : ""}
+    <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and type the code the other machine shows.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
-    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card, preview it, and compare the fingerprint outside Superyak before confirming.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${escapeHtml(state.pairPreview.endpoint)}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><button class="button" data-action="confirm-pair">Fingerprint matches — pair this peer</button></div>` : ""}</section>` : ""}
+    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${escapeHtml(state.pairPreview.endpoint)}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form"><div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
     ${shipsSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
 }
 
@@ -1838,6 +1847,7 @@ async function logout() {
 async function showCard() {
   try {
     const card = await api("/api/connections/card");
+    state.myCode = (await api("/api/connections/code")).code;  // shown apart: never inside the copyable card
     setFlash(JSON.stringify(card, null, 2));
   } catch (error) {
     setFlash(error.message, true);
@@ -1849,11 +1859,28 @@ async function previewPair(form) {
   try {
     const card = JSON.parse(form.elements.card.value);
     state.pairPreview = await api("/api/connections/preview", { method: "POST", json: { card } });
+    state.pairCode = "";
     state.flash = null;
   } catch (error) {
     setFlash(error instanceof SyntaxError ? "Peer card is not valid JSON" : error.message, true);
   }
   render();
+}
+
+async function confirmPair(form) {
+  // fix:pairing-code: the person types the other machine's code; the server checks it. After a code that doesn't
+  // match, the preview is cleared, so copying the code the message names is a deliberate step, not a reflex.
+  const typed = form.elements.code.value;
+  const wellFormed = /^[0-9a-f]{32}$/.test(typed.replace(/[\s-]/g, "").toLowerCase());  // what the server would check
+  try {
+    await api("/api/connections/pair", { method: "POST", json: { card: state.pairPreview, code: typed } });
+    state.pairPreview = null; state.pairCode = "";
+    await refresh("Peer paired. Nothing has been shared automatically.");
+  } catch (error) {
+    if (wellFormed && error.status === 400) { state.pairPreview = null; state.pairCode = ""; }  // a code that didn't match
+    setFlash(error.message, true);
+    render();
+  }
 }
 
 function isDemoAccount(username) {
@@ -1978,6 +2005,7 @@ document.addEventListener("submit", async (event) => {
   if (form.id === "board-done-form") await boardWrite("/board/done", { key: form.dataset.key, outcome: form.elements.outcome.value }, "Marked done.", { focusKey: form.dataset.key });
   if (form.id === "message-form") await sendMessage(form);
   if (form.id === "pair-preview-form") await previewPair(form);
+  if (form.id === "pair-confirm-form") await confirmPair(form);
   if (form.id === "profile-form") {
     const oldName = state.me.name;
     try {
@@ -2246,13 +2274,6 @@ document.addEventListener("click", async (event) => {
     try { await api(`/api/sync/${pathPart(target.dataset.id)}/retry`, { method: "POST", json: {} }); await refresh("Delivery queued again"); }
     catch (error) { setFlash(error.message, true); render(); }
   }
-  if (action === "confirm-pair") {
-    try {
-      await api("/api/connections/pair", { method: "POST", json: { card: state.pairPreview, fingerprint: state.pairPreview.fingerprint } });
-      state.pairPreview = null;
-      await refresh("Peer paired. Nothing has been shared automatically.");
-    } catch (error) { setFlash(error.message, true); render(); }
-  }
   if (action === "unpair") {
     try { await api(`/api/connections/${pathPart(target.dataset.id)}`, { method: "DELETE", json: {} }); await refresh("The peer and all of its contacts are disconnected"); }
     catch (error) { setFlash(error.message, true); render(); }
@@ -2271,6 +2292,7 @@ document.addEventListener("input", (event) => {
     state.boardPost = { roomId: state.room.id, key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
   }
   if (event.target.id === "board-outcome" && state.boardDone) state.boardDone.outcome = event.target.value;
+  if (event.target.id === "pair-code") state.pairCode = event.target.value;  // kept through a re-render
   if (event.target.closest("#grant-form")) state.grantForm = readGrantForm(event.target.form);  // kept through a re-render
   if (event.target.id === "grant-reason" && state.grantAsk) state.grantAsk.reason = event.target.value;
   if (event.target.id === "assistant-request" && selectedLayer() && !editorSwitching()) {
