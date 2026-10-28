@@ -471,13 +471,20 @@ def write_index(path, value, vectors, read_at):
         raise
 
 
+def seen_ok(seen):
+    """Section 5's `seen`: at most SEEN_MAX lesson short ids, in a list (in process, also a tuple or a set). read_request
+    and could_hold share it, as they share `holding`, so could_hold refuses exactly the `seen` the query refuses."""
+    return (isinstance(seen, (list, tuple, set, frozenset)) and len(seen) <= SEEN_MAX
+            and all(isinstance(s, str) and SHORT.fullmatch(s) for s in seen))
+
+
 def read_request(raw):
     """Section 5's input, checked against its caps (the hook cuts before sending); ValueError for anything else."""
     value = json.loads(raw)
     if not isinstance(value, dict) or not isinstance(value.get('ship'), str) or len(value['ship']) > 32:
         raise ValueError('ship')
     seen = value.get('seen', [])
-    if not isinstance(seen, list) or len(seen) > SEEN_MAX or not all(isinstance(s, str) and SHORT.fullmatch(s) for s in seen):
+    if not seen_ok(seen):
         raise ValueError('seen')
     limit = value.get('limit', SHOWN)  # how many lesson slots the caller will render: 0 to 3
     if type(limit) is not int or not 0 <= limit <= SHOWN:
@@ -605,8 +612,7 @@ def could_hold(command, ship, data_dir, seen=()):
     query answers nothing. It reads this peer's index file and nothing else: no store, no database, no socket, no
     write. It ignores the file's age, since the query's step 4 re-checks retractions and membership, so a stale index
     can only make it say True too often, never miss a hold. No index, or one that can't be read, is False."""
-    if (not isinstance(command, str) or not isinstance(ship, str) or not isinstance(seen, (list, tuple, set, frozenset))
-            or len(seen) > SEEN_MAX or not all(isinstance(s, str) and SHORT.fullmatch(s) for s in seen)):
+    if not isinstance(command, str) or not isinstance(ship, str) or not seen_ok(seen):
         return False
     try:
         index = read_index(Path(data_dir) / INDEX_FILE)

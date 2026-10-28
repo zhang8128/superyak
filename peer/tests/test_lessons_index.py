@@ -455,6 +455,8 @@ def test_a_words_match_shows_a_command_value_that_can_hold(lessons_station):
     store.lessons_index(None)
     held, _ = ask(store, clock, command='make check -j4', words_only=True)
     assert [(e['claim'], e['command']) for e in held['lessons']] == [('Both.', 'make check')]   # not 'make': it can't hold
+    failed, _ = ask(store, clock, command='make check -j4', error='make: *** [check] Error 2')
+    assert [(e['claim'], e['command']) for e in failed['lessons']] == [('Both.', 'make check')]   # C43 after a failure too
 
 
 # The hold contract, the query's side (section 2 review of tardis/rail-lessons-hook, M2 and S1)
@@ -485,16 +487,20 @@ def test_before_a_command_a_lesson_matches_only_on_a_command_value_that_can_hold
 
 
 def test_before_a_command_only_values_that_can_hold_count_toward_the_order(lessons_station):
-    """A short value is no match before a command, so it doesn't count toward section 5's order there either. After a
-    failure it still does."""
+    """A short value is no match before a command, so it doesn't count toward section 5's order there either; after a
+    failure it still does. The lesson with fewer values that can hold has the lower id, so only the count puts the
+    other first: a count of one per lesson would fall to the id and answer it (the review's mutant M3)."""
     store, clock, ids, room = lessons_station
-    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Many short.', command=('make', 'zz', 'make check')))
-    store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Two long.', command=('make check', 'check -j4')))
+    fewer = lesson_body(claim='Fewer hold.', command=('make', 'zz', 'make check'))
+    two = lesson_body(claim='Two long.', command=('make check', 'check -j4'))
+    store.send_message(ids['tardis'], room, 'c1', fewer)
+    store.send_message(ids['tardis'], room, 'c2', two)
     store.lessons_index(None)
+    assert store.check_lesson(ids['tardis'], fewer)['lesson_id'] < store.check_lesson(ids['tardis'], two)['lesson_id']
     held, _ = ask(store, clock, command='make check -j4 zz', words_only=True, limit=1)
     assert [e['claim'] for e in held['lessons']] == ['Two long.']   # 2 values that can hold, against 1
     failed, _ = ask(store, clock, command='make check -j4 zz', error='Error 2', limit=1)
-    assert [e['claim'] for e in failed['lessons']] == ['Many short.']   # 3 values, against 2
+    assert [e['claim'] for e in failed['lessons']] == ['Fewer hold.']   # 3 values, against 2
 
 
 def test_the_hold_contract_leaves_a_failure_a_session_start_and_a_prompt_as_they_were(lessons_station):
@@ -771,7 +777,9 @@ def test_could_hold_skips_a_lesson_in_seen_and_one_whose_matched_values_are_all_
     assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir, (long_, other)) is False   # any collection of ids
     assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir, frozenset({long_})) is True
     for bad in (None, 3, long_, [None], ['nope'], [long_.upper()], {long_: 1}, [short] * (lessons.SEEN_MAX + 1)):
-        assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir, bad) is False, bad   # the query refuses these
+        assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir, bad) is False, bad
+        with pytest.raises(ValueError, match='seen'):   # the query refuses every one: one rule, seen_ok
+            lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': PROBE, 'words_only': True, 'seen': bad}))
     assert lessons.could_hold(PROBE, 'rio-grande', store.data_dir, [short] * lessons.SEEN_MAX) is True
 
 
