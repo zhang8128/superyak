@@ -101,6 +101,23 @@ CAP_BYTES = 512 * 2**20
 HARD_DATA_LIMIT = CAP_BYTES          # the units' LimitDATA=512M: what holds where MemoryMax is ignored (review I4)
 
 
+_USER_SCOPE = []
+
+
+def user_scope_runs():
+    """True when `systemd-run --user --scope` runs here: a user manager answers. A CI runner has the binary but no user
+    session ("Failed to connect to bus"), so there the child runs without the scope, under its data limit and
+    wall-clock kill, as where systemd-run is missing. Asked once per process."""
+    if not _USER_SCOPE:
+        try:
+            ran = subprocess.run(['systemd-run', '--user', '--scope', '--quiet', 'true'],
+                                 capture_output=True, timeout=30)
+            _USER_SCOPE.append(ran.returncode == 0)
+        except (OSError, subprocess.TimeoutExpired):
+            _USER_SCOPE.append(False)
+    return _USER_SCOPE[0]
+
+
 def memory_cap_enforced(controllers=None):
     """True when `systemd-run --user --scope -p MemoryMax=…` is applied here: the user manager must hold `memory`."""
     if controllers is None:
@@ -115,7 +132,7 @@ def memory_cap_enforced(controllers=None):
 def capped(argv, env):
     """`argv` under the 512M scope where systemd-run exists, with the hard data limit and a wall-clock kill in the
     launcher either way; warns when the cap itself is not applied."""
-    if shutil.which('systemd-run'):
+    if shutil.which('systemd-run') and user_scope_runs():
         argv = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=512M', '-p', 'MemorySwapMax=0'] + argv
         if not memory_cap_enforced():
             warnings.warn('MemoryMax=512M is not applied here (the user manager has no memory controller); '
