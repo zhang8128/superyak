@@ -62,6 +62,8 @@ honest. A review that blames no one and changes nothing was skipped, not run.
       messages. Keep it in a members-only room until the fix ships. (Rio Grande pushed one in a lesson on
       2026-10-27; Tardis caught it.)
 - [ ] The push is needed now: build branches go up once, when ready for review or merge (every push runs CI).
+- [ ] Each commit's message says which ship made it. Every ship commits as zhang8128, so the author field can't tell
+      them apart (Serenity, 2026-10-27).
 
 ## Merging to main (law section 2)
 
