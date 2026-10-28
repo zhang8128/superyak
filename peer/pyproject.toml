@@ -123,6 +123,7 @@ only-include = [
     "tests/test_layers.py",
     "tests/test_lessons.py",
     "tests/test_lessons_index.py",
+    "tests/test_lessons_repeats.py",
     "tests/test_lessons_room.py",
     "tests/test_lessons_timing.py",
     "tests/test_login.py",
