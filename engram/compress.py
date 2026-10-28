@@ -250,6 +250,8 @@ class Compressor:
 
         Returns: {clusters: [{episodes, centroid, match, action}], compress_id}
         """
+        if auto not in ("all", "used", "none"):  # before any reset: a bad value must not wipe semantics first
+            raise ValueError(f"auto must be 'all', 'used' or 'none', not {auto!r}")
         if scope == "full":
             self._reset_all()
         elif scope == "refine":

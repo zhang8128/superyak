@@ -1997,6 +1997,25 @@ def test_auto_compress_text_never_contains_used_auto_text(tmp_db, compressor, em
     assert tmp_db.get_active_semantics()
     for sem in tmp_db.get_active_semantics():
         assert auto_text not in sem["content"]
+    # MMR may pick only the remembered three, so the text check alone can pass with the rule reverted: the capture
+    # itself must stay out of compression and out of every semantic's sources.
+    assert tmp_db.get_episode(auto_id)["compressed"] == 0
+    assert tmp_db.conn.execute(
+        "SELECT COUNT(*) FROM semantic_sources WHERE episode_id = ?", (auto_id,)
+    ).fetchone()[0] == 0
+
+
+def test_auto_compress_never_copies_a_lone_used_capture(tmp_db, compressor, embedder):
+    """A used capture alone at its own vector: with the rule reverted it becomes a 1-episode semantic equal to the
+    prompt, word for word."""
+    auto_text = "a lone used captured prompt"
+    auto_id = _add_sourced(tmp_db, embedder, auto_text, "auto", _unit(11))
+    _log_recall(tmp_db, [auto_id], "used")
+
+    compressor.auto_compress()
+
+    assert all(sem["content"] != auto_text for sem in tmp_db.get_active_semantics())
+    assert tmp_db.get_episode(auto_id)["compressed"] == 0
 
 
 def _offered_ids(compressor, **kw):

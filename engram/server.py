@@ -2991,7 +2991,9 @@ def status() -> dict:
 @_server_tool()
 def compress(scope: str | None = None) -> dict:
     """Phase 1: Cluster uncompressed episodes for summarization.
-    Returns clusters and compress_id for commit step."""
+    Returns clusters and compress_id for commit step. Each episode carries its
+    source: "auto" marks a person's raw prompt the nudge hook captured, offered
+    only because a used recall returned it. Summarize it; never copy it."""
     _init()
     logger.info("Tool called: compress(scope=%s)", scope)
 
