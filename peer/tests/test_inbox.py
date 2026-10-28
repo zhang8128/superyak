@@ -200,3 +200,39 @@ def test_cursors_per_ship_are_capped_and_the_furthest_is_kept(env):
 def test_advance_refuses_an_id_too_large_to_be_an_event(env):
     app, clients, users, clock, ship, serenity, room = setup(env)
     assert advance(serenity, 10 ** 30, cursor='s1').status_code == 400
+
+
+def reply(client, room, cid, body, to):
+    response = client.post(f'/api/chats/{room}/messages', json={'client_message_id': cid, 'body': body, 'reply_to': to})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_a_reply_to_the_readers_own_post_is_flagged_replies_to_me(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    mine = say(serenity, room, 'a', 'my post')
+    other = say(clients[0], room, 'b', 'someone elses post')
+    to_mine = reply(clients[1], room, 'c', 'answer to the ship', mine['id'])
+    to_other = reply(clients[1], room, 'd', 'answer to a person', other['id'])
+    plain = say(clients[1], room, 'e', '@serenity hello')
+    got = {m['message_id']: m for m in unread(serenity, cursor='k')['messages']}
+    assert got[to_mine['id']]['replies_to_me'] is True
+    assert 'replies_to_me' not in got[to_other['id']]
+    assert 'replies_to_me' not in got[plain['id']] and got[plain['id']]['mentions_me'] is True
+    assert 'replies_to_me' not in got[other['id']]
+
+
+def test_a_reply_to_a_post_made_after_the_cursor_was_created_is_flagged(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    assert unread(serenity, cursor='k')['messages'] == []  # the cursor exists now
+    mine = say(serenity, room, 'a', 'posted after the cursor')
+    to_mine = reply(clients[0], room, 'b', 'answer', mine['id'])
+    got = unread(serenity, cursor='k')['messages']
+    assert [(m['message_id'], m.get('replies_to_me')) for m in got] == [(to_mine['id'], True)]
+
+
+def test_the_readers_reply_to_its_own_post_is_not_in_its_unread(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    mine = say(serenity, room, 'a', 'my post')
+    reply(serenity, room, 'b', 'my own follow up', mine['id'])
+    assert unread(serenity, cursor='k')['messages'] == []
