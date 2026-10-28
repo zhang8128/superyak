@@ -27,12 +27,17 @@ the Superyak station on Andy's Pi.
 
 # Sending an imprint (on the owner's machine)
 
-This applies on the machine whose memories are copied (the Mac, for Andy), not only on the Pi. When the owner asks,
-a session runs `make imprint-plan`, `make imprint-read` and `make imprint-send` for them. `make imprint-send` prints
-a confirm link and two short ids. The session relays the link and the ids, and stops there: it never opens the
+This applies on the machine whose memories are copied (the Mac, for Andy), not only on the Pi. When the owner asks, a
+session runs `make imprint-plan`, `make imprint-read` and `make imprint-send` for them. Run `make imprint-send` with
+a 10-minute Bash timeout: a later run waits up to 9 minutes. Until the owner's yes it ends with
+`STATUS: waiting-for-you` and make reports `Error 3`; that is expected, not a failure. Its first run prints a confirm
+link and two short ids and returns at once. The session relays the link and the ids at once: it never opens the
 confirm page, never ticks its box and never types the password, even when it has browser tools. The owner opens the
-link, reads the view, ticks the check and types their own password. For now, plan with `--actions imprint
---purposes calibration`: `route` waits until trails ships, and the plan and the station both refuse it.
+link, reads the view, ticks the check and types their own password. After the owner says they allowed it, the session
+runs `make imprint-send` again to upload; `STATUS: received` means it waits for Andy's approval on the Pi. If a run
+says the code has expired, tell the owner: the request ends at the station's next hourly sweep, and then they plan
+again. For now, plan with `--actions imprint --purposes calibration`: `route` waits until trails ships, and the plan
+(new or saved) and the station refuse it.
 
 # Approving on the station (on the Pi only)
 

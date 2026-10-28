@@ -7,6 +7,7 @@ then each part the station does not hold, one at a time, then `complete`. Standa
 `status`, `withdraw` and `shorten` (I 12, 13) follow: the receipts are saved and their chain checked here; a signature
 is the station's, checked by the peer's `verify-imprint` (Task 44), not by this agent."""
 import fcntl
+import functools
 import hashlib
 import json
 import time
@@ -33,7 +34,7 @@ class ImprintRefused(Exception):
 
 
 class Imprint:
-    def __init__(self, home, client, out=print):
+    def __init__(self, home, client, out=functools.partial(print, flush=True)):     # a session reads a pipe (review M1)
         self.home, self.client, self.out = Path(home), client, out
         self.root = self.home / 'imprints'
 
@@ -72,18 +73,17 @@ class Imprint:
             return self._send(folder, imprint_id, wait)
 
     def _send(self, folder, imprint_id, wait):
+        """The run that makes the request returns once it has printed the link, so a session can relay it at once
+        (the fresh review's M1); later runs wait up to `wait` seconds for the yes, showing the link again first."""
         saved = read_json(folder / 'send.json')
         if saved is None:
             made = self.client.request('POST', '/api/imprints', raw=(folder / 'request.json').read_bytes())
             saved = {'imprint_id': imprint_id, 'request_id': made['id'], 'code': made['code'],
                      'expires': made['expires'], 'confirm_url': made['confirm_url']}
             write_private(folder / 'send.json', saved)
-            self.out(f'Imprint {imprint_id[:4]}, request {_shown(made["id"])[:4]}. Code {_shown(made["code"])}.')
-            self.out(f'Open {_shown(made["confirm_url"], 400)} in your browser yourself. Check that it shows the '
-                     f'two short ids above and that the address is the station\'s, tick the box and type your own '
-                     f'station password. Nothing leaves this machine until you say yes. A session relays this link '
-                     f'and never opens it.')
-        deadline = time.time() + wait
+            self._show_link(imprint_id, saved)
+            return 'waiting-for-you'
+        deadline, shown = time.time() + wait, False
         while True:
             status = self.client.request('GET', f'/api/imprints/{saved["request_id"]}')
             state = status.get('status')
@@ -96,9 +96,27 @@ class Imprint:
                 return state
             if state != 'requested':          # received, approved, deleting: the station's word, as it is
                 return state
+            if not shown:
+                self._show_link(imprint_id, saved, again=True)
+                shown = True
             time.sleep(POLL_SECONDS)
             if time.time() >= deadline:
                 return 'waiting-for-you'
+
+    def _show_link(self, imprint_id, saved, again=False):
+        """The two short ids, the code and the confirm link. On a later run whose code has expired (send.json's
+        `expires`, as the station tests it), one line says so instead, without the code."""
+        imprint_id, request_id = imprint_id[:4], _shown(saved.get('request_id'))[:4]
+        expires = saved.get('expires')
+        if again and isinstance(expires, (int, float)) and not isinstance(expires, bool) and expires <= time.time():
+            self.out(f'Imprint {imprint_id}, request {request_id}: its code has expired, so it can no longer be '
+                     f'allowed. The request ends at the station\'s next hourly sweep, and then you plan again.')
+            return
+        self.out(f'Imprint {imprint_id}, request {request_id}. Code {_shown(saved.get("code"))}.')
+        self.out(f'Open {_shown(saved.get("confirm_url"), 400)} in your browser yourself. Check that it shows the '
+                 f'two short ids above and that the address is the station\'s, tick the box and type your own '
+                 f'station password. Don\'t accept a password your browser suggests. Nothing leaves this machine '
+                 f'until you say yes. A session relays this link and never opens it.')
 
     def _deleted_as(self, status):
         """The station's `deleted` carries its reason in the last `deleted` receipt; `denied` and `failed` are reasons."""

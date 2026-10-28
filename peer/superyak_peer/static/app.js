@@ -1094,7 +1094,7 @@ function imprintDialog() {
     <label class="choice"><input type="checkbox" id="imprint-attest"><span class="choice-copy"><strong>${e(p.check)}</strong></span></label>
     ${p.check_advice ? `<p class="meta">${e(p.check_advice)}</p>` : ""}
     <p>${e(p.closing)}</p>
-    <div class="field"><label for="imprint-password">Password</label><input class="input" id="imprint-password" type="password" autocomplete="new-password"></div>
+    <div class="field"><label for="imprint-password">Password</label><input class="input" id="imprint-password" type="password" autocomplete="new-password" aria-describedby="imprint-password-hint"><p class="meta" id="imprint-password-hint">Type your own station password. Don't accept a password your browser suggests.</p></div>
     <p class="meta" id="imprint-error" role="alert"></p>
     <div class="button-row"><button class="button" data-action="allow-imprint">Allow</button><button class="button secondary" data-action="decline-imprint">Decline</button></div></div></dialog>`;
 }

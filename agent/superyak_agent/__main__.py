@@ -159,12 +159,12 @@ def _imprint(args):
             return 0
         status = imprint.send(args.plan, wait=args.wait)
     except ImprintRefused as error:
-        print(error)
+        print(error, flush=True)
         return error.code
     except (StationError, OSError) as error:
-        print(f'imprint: {label(str(error), 300)}')     # a station's message is data: one printable line (review I2)
+        print(f'imprint: {label(str(error), 300)}', flush=True)     # a station's message is data: one printable line (review I2)
         return 1
-    print(f'STATUS: {label(status)}')
+    print(f'STATUS: {label(status)}', flush=True)
     return 3 if status == 'waiting-for-you' else 0
 
 

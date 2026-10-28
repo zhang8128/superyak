@@ -77,6 +77,8 @@ def test_the_confirm_view_needs_the_check_and_the_password(imprint_browser):
     expect(page.get_by_text('the whole 64-character digest is sent')).to_be_visible()
     expect(page.get_by_text('when either was last recalled')).to_be_visible()
     expect(page.get_by_label('Password')).to_have_attribute('autocomplete', 'new-password')   # S5: typed, never filled
+    expect(page.get_by_text("Type your own station password. Don't accept a password your browser suggests.")
+           ).to_be_visible()                                            # Serenity's note 2, the review's N4
     page.get_by_label('Password').fill(SAM_PASSWORD); page.get_by_role('button', name='Allow').click()
     expect(page.get_by_text('Tick the box')).to_be_visible()
     page.get_by_label(CHECK_TEXT).check(); page.get_by_role('button', name='Allow').click()

@@ -1528,6 +1528,9 @@ plus what the station knows itself:
 - "This store is about you. Allow sends this copy to Deep Space 9. Andy then decides whether the station takes it.
   You can withdraw it at any time, and it is deleted on the end date."
 
+Beside the password field it says "Type your own station password. Don't accept a password your browser suggests."
+The field is `autocomplete="new-password"`, so a saved password isn't filled in (S5; Serenity's note 2).
+
 **Lifecycle.**
 
 | Status | On the station | Next |
@@ -2289,7 +2292,7 @@ the second limit. Encrypted imprints (step 7) narrow the first.
 make imprint-plan IMPRINT_ARGS='--lanes work --layers episode,semantic --since 2026-01-01 \
     --audience place:home/andy --actions imprint --purposes calibration --days 90'
 make imprint-read PLAN=7c41                 # optional: read what would leave
-make imprint-send PLAN=7c41                 # build, print and send the request, wait for the browser yes, upload
+make imprint-send PLAN=7c41                 # build, send the request and print the link; after the yes: upload
 make imprint-status [ID=c0a8]
 make imprint-withdraw ID=c0a8
 make imprint-shorten ID=c0a8 DAYS=30
@@ -2323,15 +2326,22 @@ refuses a store of more than 100,000 memories
 `make imprint-send` behaves like `make dock`:
 
 - It builds the package, prints the request in words with the ancestry and what the station keeps (7.1), sends it,
-  prints the imprint's short id (`c0a8`), the request's short id (`4f1c`, which Andy confirms at approval), the code
-  and the confirm link, and waits up to 9 minutes per run.
-- While it waits, it ends with `STATUS: waiting-for-you` and make reports `Error 3`. That is expected.
-- After the yes it sends the manifest and the parts with progress, and ends with `STATUS: received` (waiting for
-  Andy).
+  and prints the imprint's short id (`c0a8`), the request's short id (`4f1c`, which Andy confirms at approval), the
+  code and the confirm link. The first run returns once it has printed the link, so a session can relay it at once
+  (the fresh review's M1, 2026-10-28): the code lives 10 minutes, and a session sees a command's output only when it
+  ends. Every line is flushed.
+- Later runs wait up to 9 minutes per run. One that finds the request still `requested` prints the link and the two
+  short ids again first. Once the code has expired it says so in one line instead, without the code: the request
+  ends at the station's next hourly sweep, and then the owner plans again.
+- A run that ends before the yes ends with `STATUS: waiting-for-you` and make reports `Error 3`. That is expected.
+- After the yes, the next run sends the manifest and the parts with progress, and ends with `STATUS: received`
+  (waiting for Andy).
 - Rerunning it resumes. Later runs report `STATUS: admitted`, or `declined`, `denied`, `failed` or `deleted` with the
   reason.
-- Claude relays the link. The owner opens it, reads the view, ticks the check about other people, and types their own
-  password. Claude never types the password and never ticks the check.
+- Claude relays the link and the two short ids at once. The owner opens it, reads the view, ticks the check about
+  other people, and types their own password, not one the browser suggests. After the owner says they allowed it,
+  Claude runs `make imprint-send` again to upload. Claude never opens the confirm page, never types the password and
+  never ticks the check.
 
 **On the Pi** (Andy, or Claude when he asks):
 
