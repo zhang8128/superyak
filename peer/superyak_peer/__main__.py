@@ -235,6 +235,89 @@ def new_identity_for(data_dir, endpoint=None):
     return '\n'.join([*said, NEW_IDENTITY.format(path=path, peer=identity.peer_id)])
 
 
+# fix:pairing-code (federation-pull spec §2): pairing is a person's act, and the code is theirs to type
+
+PAIR_PROMPT = 'Type the code shown on the other machine: '
+NO_TERMINAL = ('pairing needs a person at a terminal: the code is typed there, never piped, passed or read from a file. '
+               'A Claude session, its ! prompt included, has no terminal; use an ordinary shell or a tmux pane.')
+
+
+def admin_account(store, username):
+    """The admin a pair or connections command acts as, checked before anything else (_admin: an admin, not pending
+    activation); a username, resolved as `card` does."""
+    with store.transaction() as db:
+        row = db.execute("SELECT id FROM users WHERE username=? AND kind!='system'", (username,)).fetchone()
+        if not row:
+            raise ValueError('Unknown local account')
+        store._admin(db, row['id'])
+    return row['id']
+
+
+def federation_here(store):
+    """A Federation that never makes an identity: card --endpoint does that, naming its host (SF2)."""
+    from .federation import Federation, NO_IDENTITY
+    from .identity import PeerIdentity
+    identity = PeerIdentity.load_or_create(store.data_dir) if (store.data_dir / 'identity.json').is_file() else NO_IDENTITY
+    return Federation(store, endpoint=None, identity=identity)
+
+
+def controlling_terminal():
+    """The controlling terminal, opened directly, or None: never stdin, an argument or the environment. None too when
+    this process isn't in its foreground group, so a backgrounded pair refuses instead of stopping on SIGTTIN."""
+    try:
+        fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return None
+    try:
+        if os.tcgetpgrp(fd) == os.getpgrp():
+            return fd
+    except OSError:
+        pass
+    os.close(fd)
+    return None
+
+
+def pair_command(data_dir, card_path, username, terminal=controlling_terminal):
+    """The exit status: 0 paired, 1 refused, 2 no person at a terminal. The account is checked before the terminal is
+    opened (plan review MF2d); the card's names reach the terminal as safe lines (SF3)."""
+    from .identity import validate_card
+    store = Store(data_dir)
+    actor = admin_account(store, username)
+    card = validate_card(json.loads(Path(card_path).read_text()))
+    fd = terminal()
+    if fd is None:
+        print(NO_TERMINAL, file=sys.stderr)
+        return 2
+    try:  # raw reads and writes: a terminal isn't seekable, so no read-write text stream over it
+        say = lambda text: os.write(fd, text.encode('utf-8'))  # noqa: E731
+        say(f"Pairing {safe_line(card['participant']['name'])} ({safe_line(card['participant']['id'])}) "
+            f"at {safe_line(card['endpoint'], 200)}\n{PAIR_PROMPT}")
+        typed = b''
+        while not typed.endswith(b'\n') and len(typed) < 1024:  # a canonical-mode terminal hands over whole lines
+            chunk = os.read(fd, 1024)
+            if not chunk:
+                break
+            typed += chunk
+        try:
+            contact = federation_here(store).pair(actor, card, code=typed.decode('utf-8', 'replace'))
+        except Problem as exc:
+            say(f'{exc.message}\n')
+            return 1
+        say(f"Paired {safe_line(contact['name'])}: code {contact['pairing_code']}, confirmed by typing.\n")
+        return 0
+    finally:
+        os.close(fd)
+
+
+def describe_connections(listed):
+    if not listed:
+        return 'No paired peers.'
+    return '\n'.join(f"{safe_line(c['name'])} ({safe_line(c['user_id'])}) at {safe_line(c['card']['endpoint'], 200)}: "
+                     f"code {c['pairing_code'] or 'none'}, "
+                     f"{'confirmed by typing' if c['confirmed'] else 'not confirmed by typing'}"
+                     f"{'' if c['paired'] else ', unpaired'}" for c in listed)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='superyak-peer')
     commands = parser.add_subparsers(dest='command', required=True)
@@ -255,6 +338,14 @@ def main(argv=None):
     card.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     card.add_argument('--username', required=True)
     card.add_argument('--endpoint', required=True)
+    pair = commands.add_parser('pair', help="Pair another peer's card; a person types its code, read off that machine's "
+                               'screen, at this terminal')
+    pair.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    pair.add_argument('--card', type=Path, required=True, help='the card file the other machine exported')
+    pair.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
+    connections = commands.add_parser('connections', help='The paired peers, with their codes')
+    connections.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    connections.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
     new_identity = commands.add_parser('station-new-identity', help='Trusted local, with the lighthouse stopped: a new station '
                                        'identity on purpose, when identity.json is truly lost; every old signature stops verifying')
     new_identity.add_argument('--data-dir', type=Path, required=True)  # no default: never a key in the wrong place
@@ -465,7 +556,17 @@ def main(argv=None):
                     raise ValueError('Unknown local account')
             host = urlsplit(args.endpoint).hostname
             identity = PeerIdentity.load_or_create(store.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
-            print(json.dumps(Federation(store, endpoint=args.endpoint, identity=identity).card(user[0]), indent=2))
+            exported = Federation(store, endpoint=args.endpoint, identity=identity).card(user[0])
+            print(json.dumps(exported, indent=2))
+            from .identity import pairing_code, show_code
+            print(f'Pairing code: {show_code(pairing_code(exported))}', file=sys.stderr)  # stdout stays exactly a card
+        elif args.command == 'pair':
+            status = pair_command(args.data_dir, args.card, args.as_user)
+            if status:
+                parser.exit(status)
+        elif args.command == 'connections':
+            store = Store(args.data_dir)
+            print(describe_connections(federation_here(store).connections(admin_account(store, args.as_user))))
         elif args.command == 'station-new-identity':
             print(new_identity_for(args.data_dir, args.endpoint))
         elif args.command == 'demo':

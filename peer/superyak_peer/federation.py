@@ -10,6 +10,17 @@ from .common import Problem, require, uid, encode, text, linked_room_ok
 class Obsolete(Exception):
     pass
 
+class _NoIdentity:
+    """A peer with no identity yet, for the CLI's pair and connections, which never make one (fix:pairing-code SF2):
+    `card --endpoint` makes it, naming its host. Truthy, so Federation keeps it; any use raises."""
+    def __bool__(self):
+        return True
+
+    def __getattr__(self, name):
+        raise RuntimeError('This peer has no identity yet; card --endpoint makes one')
+
+NO_IDENTITY = _NoIdentity()
+
 class Federation:
     def __init__(self, store, *, endpoint, identity=None):
         self.store, self.endpoint = store, endpoint
@@ -26,7 +37,7 @@ class Federation:
         that machine's screen. One check, here, after the admin check; the confirmation keeps the card's code, never
         the typed text."""
         card = validate_card(card)
-        if card['peer_id'] == self.identity.peer_id:
+        if self.identity is not NO_IDENTITY and card['peer_id'] == self.identity.peer_id:  # no identity: no card of ours
             raise Problem(400, 'Cannot pair this peer with itself')
         with self.store.transaction() as db:
             self.store._admin(db, actor)
