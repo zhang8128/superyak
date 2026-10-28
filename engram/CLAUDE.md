@@ -257,9 +257,13 @@ their `runtime.json` and the `superyak-embedder` unit running, so the model is n
 the plan's gate G0).
 
 Agents never run, for the person, any `engram-permissions` command that writes, such as `sign`, `allow`, `grant`, `migrate` or `gate`. Each needs the person's own terminal yes.
-`engram-permissions verify` writes nothing, so an agent may run it. It checks the log's hash chain, that no
-table names a seq past the log's last row, and that the row's change is in the tables: a cut tail (a copy of
-the file taken mid-write without its journal), which every reader and the gate refuse.
+`engram-permissions verify` writes nothing, so an agent may run it. It runs SQLite's integrity check and checks
+the log's hash chain, that no table names a seq past the log's last row, and that each seq column the row sets
+holds its seq, reading every table past its indexes. Every reader makes the same tail checks and refuses a
+ledger that fails them, and the gate reads `closed` when the head is not the log's last row. The checks catch a
+cut tail (a copy of the file taken mid-write without its journal) that tore one row per column. A tear across
+several rows of one column, or a torn index page, can still read whole to a reader; the projection digest (a
+follow-up, before any house runs `enforce`) closes the class.
 
 An agent asks through the `permit` tool (a proposal the owner signs, unless a grant covers it) and reads through
 `permissions`. Memory: each process peaks under 512 MB on the Pi (spec 15); on the Pi the daemon needs `ENGRAM_EMBEDDER_SOCKET`, or it loads a second model.

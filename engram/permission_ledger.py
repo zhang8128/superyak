@@ -121,7 +121,10 @@ _HOT = ("This ledger has a hot journal from a writer that stopped mid-commit, wh
         "such as `engram-permissions sweep`.")
 # Every column that holds the seq of the log row that wrote it (P 5.6). A file copy taken mid-commit without its
 # journal (a torn restore) can keep a log row's projection and lose the row: that seq is then past the log's last.
-# Or it can keep the row and lose its projection: a column the last row sets then does not hold the row's seq.
+# Or it can keep the row and lose its projection: a column the last row sets then does not hold the row's seq, unless
+# the row set that column on several rows and the tear kept one of them, which then reads whole (Serenity's
+# re-check, N1): these columns catch a tear of one row per column, and the projection digest, a follow-up before any
+# house runs `enforce`, closes the class.
 _SEQ_COLUMNS = {t: cs for t, cs in ((t, tuple(c for c in cols if c == "seq" or c.endswith("_seq")))
                                     for t, cols in _COLUMNS.items()) if cs}
 # the seq columns an update sets on an older row; every other one is set only when its row is inserted
@@ -769,8 +772,13 @@ class Ledger:
     def _tail_problems(self, top: int, meta: Mapping, loaded: Mapping | None = None) -> list[str]:
         """P 5.6: the tables are the log's projection, so no seq column names a seq past the log's last row,
         `meta.head`, when the ledger keeps one, is that row, and each seq column that row sets to its own seq holds
-        that seq (a tear can keep the row and its head and lose the page that held its change). Each way this
-        fails, in words; none for a whole tail. Read inside the caller's read transaction."""
+        that seq at its highest (a tear can keep the row and its head and lose the page that held its change). Each
+        way this fails, in words. Read inside the caller's read transaction.
+
+        An empty list is not proof of a whole tail. These checks catch a tear of one row per column; a tear across
+        several rows of one column (an act that set the column on several rows, the tear keeping one) or a torn
+        index page that a partial-index or newest-row read trusts can still read whole. The projection digest, a
+        follow-up before any house runs `enforce`, closes the class (Serenity's re-check, N1)."""
         out = []
         cut = self._head_problem(top, meta)
         if cut:
@@ -793,7 +801,8 @@ class Ledger:
         in words). SQLite's own check of the file (`PRAGMA integrity_check`, which also holds every index against
         its table), the hash chain from the first row, `meta.head`, and every seq column of every row. Each table
         is read past its indexes (`NOT INDEXED`; `ledger_log` has none, its seq is the rowid), so a torn index page
-        can neither hide a row nor invent one."""
+        can neither hide a row nor invent one. No problem is not proof of a whole tail: a tear across several rows
+        of one column can still read whole (`_tail_problems`) until the projection digest lands."""
         self.conn.execute("BEGIN")
         try:
             checked = [str(r[0]) for r in self.conn.execute("PRAGMA integrity_check")]

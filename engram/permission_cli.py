@@ -721,13 +721,17 @@ def _rebuild(a) -> int:
 
 def _verify(a) -> int:
     """P 5.6: SQLite's integrity check of the file, the log's hash chain, `meta.head`, every table's seqs against
-    the log's last row, and that row's change in the tables, each table read past its indexes (`Ledger.integrity`).
-    It writes nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does not."""
+    the log's last row, and that each seq column the row sets holds its seq, each table read past its indexes
+    (`Ledger.integrity`). It writes nothing, so an agent may run it. 0 when the ledger verifies, 1 when it does not.
+    The tail checks catch a tear of one row per column, not every tear, and the output says so."""
     with _ledger(read_only=True) as led:
         top, problems = led.integrity()
     if not problems:
         print(f"The ledger verifies: {top} log rows, SQLite's integrity check of the file is ok, the hash chain is "
-              f"whole, no table names a seq past the log's last row, and that row's change is in the tables.")
+              f"whole, no table names a seq past the log's last row, and each seq column that row sets holds its "
+              f"seq. These tail checks catch a tear of one row per column; a tear across several rows of one "
+              f"column, or, for a reader, a torn index page, can still read whole until the projection digest (a "
+              f"follow-up, before any house runs enforce) closes the class.")
         return 0
     print(f"The ledger does not verify ({top} log rows):")
     print("\n".join(f"  - {p}" for p in problems))

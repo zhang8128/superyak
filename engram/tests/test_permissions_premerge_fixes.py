@@ -7,7 +7,7 @@ import pytest
 
 from permission_cli import main as cli_main
 from permission_ledger import Ledger, LedgerUnreadable, ledger_path
-from tests.permissions_support import ANDY, do, e1_county_ledger, make_house, raise_gate
+from tests.permissions_support import ANDY, M2, M3, MEDICAL, do, e1_county_ledger, make_house, raise_gate
 from tests.test_permissions_recheck_fixes import _cut_last_row_and_head
 from tests.test_permissions_serenity_fixes import _revoked_r1, _sql, _state
 
@@ -184,3 +184,33 @@ def test_n5_a_changed_head_is_never_served_the_old_parse(tmp_path, monkeypatch):
         _state(revoked)
     assert len(parsed) == 2
     assert _state(gated).seq == seq and len(parsed) == 2            # the gate act's parse is still kept
+
+
+# ---------------------------------------------------------------- the claims: a tear of one row per column
+
+def test_claims_verify_says_its_tail_checks_catch_a_tear_of_one_row_per_column(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
+    _revoked_r1(tmp_path)
+    assert cli_main(["verify"]) == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "catch a tear of one row per column" in out and "a tear across several rows of one column" in out
+    assert "projection digest" in out and "that row's change is in the tables" not in out
+
+
+@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception,
+                   reason="N1: a tear across several rows of one column reads whole until the projection digest")
+def test_claims_a_tear_across_two_rows_of_one_column_still_reads_whole(tmp_path):
+    """Andy uncollects m2 and m3 in one act; a tear keeps m3's removal and loses m2's. The column's highest is still
+    the act's seq, so the tail checks pass and m2 reads as a member again. Once the projection digest refuses it,
+    this passes and its xfail mark goes."""
+    led = e1_county_ledger(tmp_path)
+    seq = do(led, ANDY, "uncollect", collection=MEDICAL, objects=[M2, M3], now="2026-11-02").seq
+    led.close()
+    _sql(tmp_path, "UPDATE collection_members SET removed_seq = NULL, removed_by = NULL "
+                   f"WHERE removed_seq = {seq} AND object = '{M2}'")
+    try:
+        state = _state(tmp_path)
+    except LedgerUnreadable:
+        return
+    assert M2 in {r.object for r in state.collection_members.get(MEDICAL) if r.removed_seq is None}
+    pytest.fail("a tear across two rows of one column read whole: m2 is a member again")
