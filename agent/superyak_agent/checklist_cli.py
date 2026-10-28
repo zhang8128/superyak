@@ -59,7 +59,7 @@ def _list(args, out) -> int:
         for loaded in found.overridden:
             if loaded.directory == directory:
                 out(f'  {loaded.key} overridden by a nearer {loaded.checklist.id}')
-    for notice in found.notices:
+    for notice in cl.notice_lines(found):
         out(notice)
     return 0
 

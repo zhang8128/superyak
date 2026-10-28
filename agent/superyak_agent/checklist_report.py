@@ -3,11 +3,11 @@
 Standard library only.
 """
 import json
-import re
 from pathlib import Path
+
+from .checklists import _clean
 from typing import NamedTuple
 
-LAW = re.compile(r'law §\d+')
 KILLER = 'killer:'
 NEVER = 'never retires'
 
@@ -43,7 +43,7 @@ def _time(line: dict) -> float:
 
 
 def _same(line: dict, other: dict) -> bool:
-    return (line.get('session') == other.get('session') and line.get('key') == other.get('key')
+    return (isinstance(line.get('session'), str) and line.get('session') == other.get('session') and line.get('key') == other.get('key')
             and line.get('version') == other.get('version'))
 
 
@@ -71,14 +71,7 @@ def _reasons(answers: list[dict]) -> str:
     groups: dict[str, int] = {}
     for a in answers:
         reason = a.get('reason')
-        if not isinstance(reason, str) or not reason:
-            name = 'no reason'
-        elif LAW.fullmatch(reason):
-            name = reason
-        elif reason == 'person':
-            name = 'person'
-        else:
-            name = reason
+        name = _clean(reason) if isinstance(reason, str) and reason else 'no reason'
         groups[name] = groups.get(name, 0) + 1
     return '; '.join(f'{name} ({n})' for name, n in groups.items())
 
@@ -99,7 +92,7 @@ def report(fired: list[dict], runs: list[dict], last: int = 10, texts: dict | No
             if texts is not None:
                 listed = texts.get((key, version)) or []
                 item_text = listed[index] if index < len(listed) else None
-            killer = bool(item_text) and item_text.startswith(KILLER)
+            killer = bool(item_text) and item_text.lstrip().lower().startswith(KILLER)
             never = bool(item_text) and NEVER in item_text.lower()
             given = [_answer(r, index) for r in group]
             recent_given = [a.get('answer') for a in (_answer(r, index) for r in recent)]
@@ -112,7 +105,8 @@ def report(fired: list[dict], runs: list[dict], last: int = 10, texts: dict | No
                 else:
                     detail = f'rung: remembered (a rail lesson); evidence: {evidence}'
                 proposals.append(Proposal('retire', key, version, number, detail, killer))
-            if len(recent) >= last and all(a == 'n/a' for a in recent_given):
+            guarded = texts is not None and (killer or never)   # Ruling 47: no count removes these
+            if len(recent) >= last and all(a == 'n/a' for a in recent_given) and not guarded:
                 proposals.append(Proposal('drop', key, version, number, f'n/a in {last} of the last {last} runs', killer))
             caught = [a for a in given if a.get('answer') == 'caught']
             if caught:
@@ -138,9 +132,9 @@ def render_report(proposals: list[Proposal], misses: int) -> str:
     ordered = sorted(proposals, key=lambda p: not (p.kind == 'why' and p.killer))
     lines = []
     for p in ordered:
-        where = f'{p.key} v{p.version}' + (f' item {p.item}' if p.item is not None else '')
+        where = f'{_clean(p.key)} v{p.version}' + (f' item {p.item}' if p.item is not None else '')
         mark = ' (killer)' if p.killer else ''
-        lines.append(f'{p.kind}: {where}{mark}: {p.detail}')
+        lines.append(f'{p.kind}: {where}{mark}: {_clean(p.detail)}')
     if not lines:
         lines.append('Nothing to propose.')
     if misses:

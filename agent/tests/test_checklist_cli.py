@@ -143,3 +143,66 @@ def test_the_rendered_report_lists_killer_skips_first():
     lines = [line for line in render_report(proposals, 0).splitlines() if 'skipped' in line]
     assert 'item 2' in lines[0] and 'item 1' in lines[1] and 'item 3' in lines[2]
 
+
+
+def _runs_of(answer, n=10, items=1, **kw):
+    return [run_log([answer] * items, time=float(i), **kw) for i in range(n)]
+
+
+def test_drop_is_withheld_from_never_retires_and_killer_items_but_not_ordinary_ones():
+    texts = {(K, 2): ['Crisis: a person never retires.', 'killer: Keys.', 'Ordinary.']}
+    drops = {p.item for p in report([], _runs_of('n/a', items=3), texts=texts) if p.kind == 'drop'}
+    assert drops == {3}
+    assert {p.item for p in report([], _runs_of('n/a', items=3)) if p.kind == 'drop'} == {1, 2, 3}
+
+
+def test_a_killer_item_is_recognised_after_spaces_and_in_any_case():
+    texts = {(K, 2): ['  Killer: Keys.']}
+    retire = [p for p in report([], _runs_of('done-before-asked'), texts=texts) if p.kind == 'retire']
+    assert 'held by a script or test' in retire[0].detail and 'stays killer' in retire[0].detail
+    assert not [p for p in report([], _runs_of('n/a'), texts=texts) if p.kind == 'drop']
+
+
+def test_report_cleans_keys_and_reasons_from_the_log():
+    runs = [run_log([{'answer': 'caught', 'reason': 'bad\x1b[31m'}], time=float(n), key='aaaaaaaa/x\x07y') for n in range(2)]
+    out = cli_render(runs)
+    assert '\x1b' not in out and '\x07' not in out
+
+
+def cli_render(runs):
+    from superyak_agent.checklist_report import render_report
+    return render_report(report([], runs), 0)
+
+
+def test_unrun_needs_a_session_on_both_lines():
+    fired = [{'time': 1.0, 'key': K, 'version': 2, 'moment': 'every'}]
+    runs = [{'time': 2.0, 'key': K, 'version': 2, 'moment': 'every', 'answers': [{'answer': 'done'}]}]
+    assert unrun(fired, runs) == [(fired[0], None)]
+
+
+def test_report_through_the_cli_marks_a_killer_item(capsys, monkeypatch):
+    home = Path.home() / '.superyak'
+    top = checkout(Path.home() / 'Projects' / 'superyak', ('guard', {'title': 'Guard', 'items': ('killer: Keys stay out.',)}))
+    trust_dirs(home / 'checklists', top / '.superyak' / 'checklists')
+    key = cl.list_key(top / '.superyak' / 'checklists', 'guard')
+    (home / 'checklists' / 'runs.jsonl').write_text(
+        ''.join(json.dumps(run_log(['done-before-asked'], time=float(n), key=key, version=1)) + '\n' for n in range(10)))
+    monkeypatch.chdir(top)
+    assert cli.main(['checklists', 'report']) == 0
+    out = capsys.readouterr().out
+    assert 'held by a script or test' in out and 'stays killer' in out
+
+
+def test_list_takes_a_home(capsys, tmp_path):
+    other = tmp_path / 'ship'
+    write_list(other / 'checklists', 'mine', items=('One.',))
+    assert cli.main(['checklists', 'list', '--cwd', str(tmp_path), '--home', str(other)]) == 0
+    assert 'mine v1' in capsys.readouterr().out
+
+
+def test_list_shows_the_notice_lines_the_hook_shows(capsys):
+    top = checkout(Path.home() / 'Projects' / 'superyak', ('mine', {}))
+    stranger = top / 'vendor'
+    write_list(stranger / '.superyak' / 'checklists', 'evil')
+    assert cli.main(['checklists', 'list', '--cwd', str(stranger)]) == 0
+    assert "Don't trust them yourself." in capsys.readouterr().out
