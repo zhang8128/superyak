@@ -338,8 +338,8 @@ def controlling_terminal():
     return None
 
 
-NO_TERMINAL_CODE = ('Pairing code: not shown here, since this has no terminal. Andy reads it by running `card` in a '
-                    'terminal on this machine, or in the browser under "Show my peer card".')
+NO_TERMINAL_CODE = ('This has no terminal, so the pairing code is not shown here. The person pairing reads it by running '
+                    '`card` in a terminal on this machine, or in the browser under "Show my peer card".')
 
 
 def show_card_code(card):
