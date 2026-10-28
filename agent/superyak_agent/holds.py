@@ -10,6 +10,7 @@ checklist and lesson entries. A lessons provider keeps its entries under `record
 import contextlib
 import errno
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -41,24 +42,32 @@ class RecordFile:
         self.fd = fd
         self.data = data
 
+    def close(self) -> None:
+        """Called on leaving the `with`: the descriptor may be reused, so `save` must never touch it again."""
+        self.fd = -1
+
     def save(self) -> None:
+        """One write at offset 0 to the same inode, then a truncate to its length: a failed write leaves the old
+        record readable (Ruling 41). A short write is an error."""
+        if self.fd < 0:
+            raise OSError(errno.EBADF, 'the session record is closed')
         payload = json.dumps(self.data).encode('utf-8')
-        os.lseek(self.fd, 0, os.SEEK_SET)
-        os.ftruncate(self.fd, 0)
-        if os.write(self.fd, payload) != len(payload):
+        if os.pwrite(self.fd, payload, 0) != len(payload):
             raise OSError(errno.EIO, 'short write to the session record')
+        os.ftruncate(self.fd, len(payload))
 
 
 def _read(fd: int) -> dict:
     chunks = []
-    os.lseek(fd, 0, os.SEEK_SET)
+    offset = 0
     while True:
-        chunk = os.read(fd, 1 << 16)
+        chunk = os.pread(fd, 1 << 16, offset)
         if not chunk:
             break
         chunks.append(chunk)
-    try:
-        data = json.loads(b''.join(chunks).decode('utf-8'))
+        offset += len(chunk)
+    try:   # raw_decode: a stale tail after a shorter payload is ignored
+        data, _ = json.JSONDecoder().raw_decode(b''.join(chunks).decode('utf-8').lstrip())
     except (ValueError, RecursionError):   # UnicodeDecodeError and JSONDecodeError are ValueErrors
         return {}
     return data if isinstance(data, dict) else {}
@@ -79,7 +88,7 @@ def _lock(path: Path, deadline: float, monotonic) -> int:
                         raise
                 if monotonic() >= deadline:
                     raise TimeoutError(f'{path.name} stayed locked past the deadline')
-                time.sleep(POLL_SECONDS)
+                time.sleep(max(0.0, min(POLL_SECONDS, deadline - monotonic())))
             if os.fstat(fd).st_nlink == 0:
                 os.close(fd)
                 fd = -1
@@ -97,9 +106,11 @@ def open_record(path: Path, deadline: float, monotonic=time.monotonic):
     path = Path(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = _lock(path, deadline, monotonic)
+    record = RecordFile(fd, _read(fd))
     try:
-        yield RecordFile(fd, _read(fd))
+        yield record
     finally:
+        record.close()
         os.close(fd)
 
 
@@ -114,7 +125,7 @@ def append_line(path: Path, line: dict) -> None:
     """One whole JSON line in one `os.write` under O_APPEND, private, in a folder made 0700."""
     path = Path(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    data = (json.dumps(line) + '\n').encode('utf-8')
+    data = (json.dumps(line, allow_nan=False) + '\n').encode('utf-8')
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         if os.write(fd, data) != len(data):

@@ -158,6 +158,7 @@ def test_a_record_unlinked_while_waiting_for_its_lock_is_reopened(tmp_path):    
 
 WRITER = ('import sys, time\nfrom pathlib import Path\nfrom superyak_agent import holds\n'
           'with holds.open_record(Path(sys.argv[1]), time.monotonic() + 10) as r:\n'
+          '    time.sleep(0.005)\n'
           '    r.data.setdefault("passed", {}).setdefault("k", []).append(sys.argv[2])\n'
           '    r.data["holds"] = r.data.get("holds", 0) + 1\n'
           '    r.save()\n')
@@ -218,3 +219,131 @@ def test_the_wheel_names_the_new_modules():
     text = (AGENT / 'pyproject.toml').read_text()
     for name in ('holds', 'checklist_firing'):
         assert f'"superyak_agent/{name}.py"' in text
+
+
+# Fix round 1 (Rulings 41, 42)
+
+def test_a_closed_record_refuses_save_and_writes_nothing_to_a_reused_fd(tmp_path):
+    path = holds.record_path(tmp_path, 'abc')
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        rec.data['a'] = 1
+        rec.save()
+    other = tmp_path / 'other'
+    fd = os.open(other, os.O_RDWR | os.O_CREAT, 0o600)      # likely reuses the closed number
+    rec.data['b'] = 2
+    with pytest.raises(OSError):
+        rec.save()
+    os.close(fd)
+    assert other.read_bytes() == b'' and json.loads(path.read_text()) == {'a': 1}
+
+
+@pytest.mark.parametrize('bad', [{'fired': []}, {'fired': {'x': 1}}, {'passed': []}, {'passed': {'k': 'x'}},
+                                 {'items': 'x'}, {'told': {}}, {'first': 'x'}, {'fired': None}])
+def test_a_wrong_typed_section_reads_as_empty_and_heals_on_write(bad):
+    event, command, claim = loaded('e', 'every 1h'), loaded('c', 'command git push'), loaded('k', 'claim')
+    fp.due_at_event([event], dict(bad), None, 9e9)
+    fp.due_at_command([command], dict(bad), 'git push', 1.0)
+    fp.due_at_claim([claim], dict(bad), 'i', 1.0)
+    fp.begin(dict(bad), 'clear')
+    assert fp.told(dict(bad), 'n') is False
+    record = dict(bad)
+    fp.mark_fired(record, [(command, ('command',))], 1.0, digest='d', item='i')
+    fp.mark_told(record, ['n'])
+    assert record['fired'][command.key]['last'] == 1.0 and record['passed'][command.key] == ['d']
+    assert record['items'][command.key] == ['i'] and fp.told(record, 'n')
+
+
+@pytest.mark.parametrize('first', [float('nan'), float('inf'), True, 'x'])
+def test_a_wait_counts_only_from_a_finite_number(first):
+    record = {'first': first}
+    assert fp.due_at_event([loaded('e', 'every 1h')], record, None, 0.5 * H) == []
+    assert fp.due_at_event([loaded('e', 'every 1h')], record, None, 1 * H + 1) == []     # counted from now
+
+
+def test_a_nan_last_falls_back_to_first():
+    lst = loaded('e', 'every 1h')
+    record = {'first': 0.0, 'fired': {lst.key: {'last': float('nan')}}}
+    assert fp.due_at_event([lst], record, None, 100 * H) != [] and fp.due_at_event([lst], record, None, 0.5 * H) == []
+
+
+def test_a_failed_save_leaves_the_old_record_and_a_shorter_one_reads_whole(tmp_path, monkeypatch):
+    path = holds.record_path(tmp_path, 'abc')
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        rec.data['pad'] = 'x' * 500
+        rec.save()
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        rec.data['pad'] = 'y' * 500
+        monkeypatch.setattr(os, 'pwrite', lambda *a: (_ for _ in ()).throw(OSError(28, 'full')))
+        with pytest.raises(OSError):
+            rec.save()
+        monkeypatch.undo()
+    assert json.loads(path.read_text())['pad'] == 'x' * 500
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        rec.data = {'short': 1}
+        rec.save()
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        assert rec.data == {'short': 1}
+    assert json.loads(path.read_text()) == {'short': 1}
+
+
+def test_a_stale_tail_after_a_shorter_payload_is_ignored(tmp_path):
+    path = holds.record_path(tmp_path, 'abc')
+    path.write_text('{"a": 1}{"stale": 2}')
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        assert rec.data == {'a': 1}
+
+
+def test_prune_skips_a_busy_holds_file_and_rechecks_seen_under_the_lock(tmp_path):    # probe_c_prune case 2
+    folder = tmp_path / 'sessions'
+    path = holds.record_path(folder, 'resumed')
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        holds.touch(rec.data, time.time() - 20 * 86400, '/old')
+        rec.save()
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        hook._prune(folder, None, time.time())                     # busy: skipped
+        holds.touch(rec.data, time.time(), '/new')
+        rec.save()
+    assert json.loads(path.read_text())['cwd'] == '/new'
+    other = holds.record_path(folder, 'old')
+    with holds.open_record(other, time.monotonic() + 1) as rec:
+        holds.touch(rec.data, time.time() - 20 * 86400, None)
+        rec.save()
+    hook._prune(folder, None, time.time())
+    assert not other.exists() and path.exists()
+
+
+def test_the_lock_wait_never_sleeps_past_the_deadline(tmp_path):
+    path = holds.record_path(tmp_path, 'abc')
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        with holds.open_record(path, started + 0.001):
+            pass
+    os.close(fd)
+    assert time.monotonic() - started < 0.1
+
+
+def test_a_nan_in_a_log_line_raises_rather_than_writing_invalid_json(tmp_path):
+    path = tmp_path / 'checklists' / 'fired.jsonl'
+    with pytest.raises(ValueError):
+        holds.append_line(path, fp.fired_line(float('nan'), 's', 'k', 1, 'start'))
+    assert not path.exists() or path.read_bytes() == b''
+
+
+CAPPER = ('import sys, time\nfrom pathlib import Path\nfrom superyak_agent import holds\n'
+          'with holds.open_record(Path(sys.argv[1]), time.monotonic() + 30) as r:\n'
+          '    holds.touch(r.data, time.time(), None)\n'
+          '    n = r.data.get("holds", 0)\n    time.sleep(0.01)\n'
+          '    r.data.setdefault("other", {})[sys.argv[2]] = "x" * 3000\n'
+          '    if n < holds.HOLDS_PER_SESSION:\n'
+          '        r.data["holds"] = n + 1\n        r.data.setdefault("winners", []).append(sys.argv[2])\n'
+          '    r.save()\n')
+
+
+def test_parallel_deciders_never_make_a_fourth_hold_or_lose_a_field(tmp_path):
+    path = holds.record_path(tmp_path, 'abc')
+    procs = [subprocess.Popen([sys.executable, '-c', CAPPER, str(path), f'w{n}'], cwd=AGENT) for n in range(12)]
+    assert [p.wait(60) for p in procs] == [0] * 12
+    record = json.loads(path.read_text())
+    assert record['holds'] == 3 and len(record['winners']) == 3 and len(record['other']) == 12

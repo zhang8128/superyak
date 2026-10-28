@@ -274,19 +274,24 @@ def _read_session(path):
 
 
 def _prune(sessions_dir, keep, now):
-    """Session files (state `.json`, `.watch`, `.prompted`) whose `seen` is more than STATE_DAYS old, or missing or not
-    a number, are deleted, except a `.watch` without a usable `seen`: it ages by its file's mtime instead, since the hook
-    reads an unreadable choice as "off". The current session's files (`keep`'s key) are never touched."""
+    """Session files (state `.json`, `.watch`, `.prompted`, `.holds`) whose `seen` is more than STATE_DAYS old, or
+    missing or not a number, are deleted, except a `.watch` or `.holds` without a usable `seen`: it ages by its file's
+    mtime instead, since the hook reads an unreadable choice as "off" and a record may be mid-write. A `.holds` file is
+    deleted only holding its `flock` (taken without waiting; a busy file is skipped) and after `seen` is read again
+    under it, so a resumed session's save is never raced. The current session's files (`keep`'s key) are never touched."""
     keep_key = Path(keep).name[:16] if keep else None
     for path in Path(sessions_dir).iterdir():
         if not STATE_NAME.fullmatch(path.name) or path.name[:16] == keep_key:
             continue
         try:
+            if path.suffix == '.holds':
+                _prune_holds(path, now)
+                continue
             try:
                 seen = read_json(path).get('seen')
             except Exception:  # noqa: BLE001 - unreadable
                 seen = None
-            if not (type(seen) in (int, float) and math.isfinite(seen)) and path.suffix in ('.watch', '.holds'):
+            if not (type(seen) in (int, float) and math.isfinite(seen)) and path.suffix == '.watch':
                 seen = path.lstat().st_mtime  # N1: the hook reads an unreadable choice as "off"; age it, don't undo it
             if not (type(seen) in (int, float) and math.isfinite(seen)) or seen < now - STATE_DAYS * 86400:
                 path.unlink()
@@ -295,6 +300,26 @@ def _prune(sessions_dir, keep, now):
                 path.unlink()
             except OSError:
                 pass
+
+
+def _prune_holds(path, now):
+    import fcntl
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return  # busy: its session is using it
+        try:
+            seen = json.loads(os.pread(fd, 1 << 24, 0).decode('utf-8')).get('seen')
+        except Exception:  # noqa: BLE001 - unreadable
+            seen = None
+        if not (type(seen) in (int, float) and math.isfinite(seen)):
+            seen = os.fstat(fd).st_mtime
+        if seen < now - STATE_DAYS * 86400:
+            path.unlink()
+    finally:
+        os.close(fd)
 
 
 def _header(layer):

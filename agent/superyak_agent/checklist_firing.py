@@ -3,6 +3,7 @@
 Standard library only: the hold imports this module. The functions work on the record's plain dict.
 """
 import hashlib
+import math
 
 from superyak_agent.checklists import Loaded, command_matches, enter_applies
 
@@ -19,21 +20,43 @@ def begin(record: dict, source: str | None) -> None:
     if source in START_SOURCES:
         record['fresh'] = True
     if source == 'clear':
-        for entry in record.get('fired', {}).values():
+        for entry in _section(record, 'fired', dict).values():
             if isinstance(entry, dict):
                 entry.pop('start', None)
 
 
-def _entry(record: dict, loaded: Loaded) -> dict:
-    entry = record.get('fired', {}).get(loaded.key)
-    return entry if isinstance(entry, dict) else {}
+def _section(record: dict, name: str, kind: type, create: bool = False):
+    """A section of the record. One of the wrong type reads as empty, and is replaced when `create` is set, so a
+    damaged record heals on its next write instead of wedging."""
+    value = record.get(name)
+    if isinstance(value, kind):
+        return value
+    if create:
+        value = record[name] = kind()
+        return value
+    return kind()
+
+
+def _entry(record: dict, loaded: Loaded, create: bool = False) -> dict:
+    fired = _section(record, 'fired', dict, create)
+    entry = fired.get(loaded.key)
+    if isinstance(entry, dict):
+        return entry
+    if create:
+        entry = fired[loaded.key] = {}
+        return entry
+    return {}
+
+
+def _number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _wait(record: dict, loaded: Loaded, now: float) -> float:
     last = _entry(record, loaded).get('last')
-    if not isinstance(last, (int, float)):
+    if not _number(last):
         last = record.get('first')
-    if not isinstance(last, (int, float)):
+    if not _number(last):
         last = now
     return now - last
 
@@ -67,7 +90,7 @@ def command_digest(command: str) -> str:
 
 
 def _listed(record: dict, section: str, loaded: Loaded) -> list:
-    value = record.get(section, {}).get(loaded.key)
+    value = _section(record, section, dict).get(loaded.key)
     return value if isinstance(value, list) else []
 
 
@@ -97,14 +120,17 @@ def due_at_claim(lists, record: dict, item: str, now: float) -> list[Due]:
 
 
 def _add(record: dict, section: str, key: str, value: str) -> None:
-    values = record.setdefault(section, {}).setdefault(key, [])
+    sect = _section(record, section, dict, True)
+    values = sect.get(key)
+    if not isinstance(values, list):
+        values = sect[key] = []
     if value not in values:
         values.append(value)
 
 
 def mark_fired(record: dict, shown, now: float, *, digest: str | None = None, item: str | None = None) -> None:
     for loaded, kinds in shown:
-        entry = record.setdefault('fired', {}).setdefault(loaded.key, {})
+        entry = _entry(record, loaded, True)
         entry['last'] = now
         entry['version'] = loaded.checklist.version
         for kind in kinds:
@@ -121,12 +147,12 @@ def mark_passed(record: dict, deferred, digest: str) -> None:
 
 
 def told(record: dict, notice: str) -> bool:
-    return command_digest(notice) in record.get('told', [])
+    return command_digest(notice) in _section(record, 'told', list)
 
 
 def mark_told(record: dict, notices) -> None:
     """Record only the notices actually shown (plan nit N5)."""
-    seen = record.setdefault('told', [])
+    seen = _section(record, 'told', list, True)
     for notice in notices:
         digest = command_digest(notice)
         if digest not in seen:
