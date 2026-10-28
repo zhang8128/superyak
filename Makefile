@@ -41,6 +41,15 @@ GRANT ?=
 HOURS = 720
 BUDGET = 10
 ACTIONS = add,remove
+# First rail (docs/superpowers/specs/2026-10-27-first-rail-lessons-design.md): the peer a lessons target reads (the
+# station's on the Pi; each other peer passes its own), the ship the origin's record names, and the lessons command.
+LESSONS_DATA ?= $(STATION_DATA)
+LESSONS_SHIP ?= rio-grande
+CONFIRM ?=
+OWNER ?=
+FILE ?=
+LESSONS_UNITS := superyak-lessons-index.service superyak-lessons-index.timer
+LESSONS = uv run --locked --project peer python -m superyak_peer.lessons
 # Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
 # and any project ship's watcher on this machine (a later one gets it when make station-units runs again).
 STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-alert@.service
@@ -53,7 +62,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-lessons-room station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -76,6 +85,7 @@ help:
 	@echo "make station-restore-reconcile DB=… [REPLACED=…] [UNPAIR='id …']  On the Pi: runbook step 5 (docs/station-restore.md)"
 	@echo "make station-alerts     On the Pi: show the alert queue and what is held back"
 	@echo "make station-units      On the Pi: install the backup timers and the alert drop-ins; make station-units-remove undoes it"
+	@echo "make station-lessons-room ID=… [CONFIRM=…]  On the Pi: show, then record, the lessons room (first rail)"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
 	@echo "make wormhole-key KEY_FILE=…  On the Pi: authorize Stanley's sync key (a .pub file) for the station vault only"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
@@ -251,6 +261,10 @@ station-restore-reconcile:
 
 station-alerts:
 	uv run --locked --project peer python -m superyak_peer station-alerts --data-dir "$(STATION_DATA)"
+
+station-lessons-room:
+	@test -n "$(ID)" || { echo 'Usage: make station-lessons-room ID=<short id from make station-rooms> [CONFIRM=<the code it showed>] [LESSONS_SHIP=rio-grande] [APPROVER=andy]'; exit 2; }
+	$(LESSONS) station-room --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --ship "$(LESSONS_SHIP)"$(if $(CONFIRM), --confirm "$(CONFIRM)")
 
 station-units:
 	@test -f "$(STATION_DATA)/peer.sqlite3" || { echo 'No station database at $(STATION_DATA)/peer.sqlite3: make station-units runs on the station host only'; exit 2; }

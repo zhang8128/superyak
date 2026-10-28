@@ -92,7 +92,7 @@ def test_fresh_extraction_builds_static_wheel_and_starts_without_parent_repo(arc
     python = installed / 'bin/python'
     state = tmp_path / 'private-demo'
     seeded = command(python, '-m', 'superyak_peer', 'demo', '--data-dir', state, cwd=tmp_path)
-    command(python, '-I', '-c', 'import superyak_peer.lessons', cwd=tmp_path)  # first rail: the module is in the wheel
+    assert 'station-room' in command(python, '-I', '-m', 'superyak_peer.lessons', '--help', cwd=tmp_path).stdout  # first rail: in the wheel
     credentials = json.loads((state / 'demo-credentials.json').read_text())
     assert all(c['password'] not in seeded.stdout for c in credentials)
     with socket.socket() as sock:

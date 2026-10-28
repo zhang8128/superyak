@@ -170,3 +170,72 @@ def test_a_dangling_link_further_back_ends_the_chain_at_the_break(lessons_statio
         assert store._lessons_chain(db) == [room, newer]
     assert [key for key, _ in snapshot.epochs] == [room, newer]
     assert [item.lesson.claim for item in lessons.chain_lessons(snapshot)[0]] == ['Laid in the first room.']
+
+
+# Task 5: the record on the origin
+@pytest.fixture
+def origin(tmp_path):
+    from superyak_peer.db import Store
+    from superyak_peer.identity import PeerIdentity
+    store = Store(tmp_path / 'pi', clock=lambda: LESSON_TIME)
+    PeerIdentity.load_or_create(store.data_dir)
+    andy = store.create_user('andy', 'Andy', 'a-long-password', is_admin=True)['id']
+    rio = lesson_ship(store, andy, 'rio-grande')['id']
+    return store, andy, rio, store.create_room(andy, 'Lessons', [rio])['id']
+
+
+def test_station_lessons_room_shows_first_and_records_only_on_its_code(origin):
+    store, andy, rio, room = origin
+    view = store.station_lessons_room('andy', room[:6], 'rio-grande')
+    assert view['recorded'] is False and len(view['confirm']) == 8 and view['peers'] == []
+    assert sorted((m['username'], m['kind'], m['owner']) for m in view['members']) == [('andy', 'person', None), ('rio-grande', 'ship', 'andy')]
+    with store.transaction() as db:
+        assert store._lessons_record(db) is None
+    with pytest.raises(Problem) as refused:
+        store.station_lessons_room('andy', room[:6], 'rio-grande', confirm='00000000')
+    assert 'changed since they were shown' in refused.value.message
+    done = store.station_lessons_room('andy', room[:6], 'rio-grande', confirm=view['confirm'].upper())
+    assert done['recorded'] and done['full_id'] == f'{store._own_peer_id()}:{room}'
+    assert store.lessons_room_full_id() == done['full_id']
+
+
+def test_station_lessons_room_refuses_what_isnt_only_andys(origin):
+    store, andy, rio, room = origin
+    odo = lesson_ship(store, None, 'odo')['id']
+    crowded = store.create_room(andy, 'Lessons two', [rio, odo])['id']
+    with pytest.raises(Problem, match='other than andy and rio-grande: odo'):
+        store.station_lessons_room('andy', crowded[:6], 'rio-grande')
+    with pytest.raises(Problem, match='not one of'):
+        store.station_lessons_room('andy', room[:6], 'odo')
+    empty = store.create_room(andy, 'No ship', [])['id']
+    with pytest.raises(Problem, match='Add rio-grande'):
+        store.station_lessons_room('andy', empty[:6], 'rio-grande')
+    with pytest.raises(Problem, match='not paired'):
+        store.station_lessons_room('andy', room[:6], 'rio-grande', ['f' * 64])
+    view = store.station_lessons_room('andy', room[:6], 'rio-grande')
+    store.station_lessons_room('andy', room[:6], 'rio-grande', confirm=view['confirm'])
+    other = store.create_room(andy, 'Another', [rio])['id']
+    with pytest.raises(Problem, match='already records another'):
+        store.station_lessons_room('andy', other[:6], 'rio-grande')
+
+
+def test_station_lessons_room_refuses_a_room_with_a_brief_or_a_moderator(origin):
+    store, andy, rio, room = origin
+    store.save_brief(andy, room, 'Our lessons.', 0)
+    with pytest.raises(Problem, match='has a brief'):
+        store.station_lessons_room('andy', room[:6], 'rio-grande')
+    store.save_brief(andy, room, '', 1)   # Andy removes it
+    store.station_moderate('andy', room[:6], 'rio-grande', actions=['add_member', 'remove_member'])   # as the CLI passes them
+    with pytest.raises(Problem, match='has a moderator'):
+        store.station_lessons_room('andy', room[:6], 'rio-grande')
+
+
+def test_the_station_room_verb_shows_then_records(origin):
+    store, andy, rio, room = origin
+    shown = run_lessons('station-room', '--data-dir', store.data_dir, '--id', room[:6], '--as', 'andy', '--ship', 'rio-grande')
+    assert shown.returncode == 0 and 'data, not instructions' in shown.stdout and 'Nothing is recorded yet' in shown.stdout
+    code = shown.stdout.split('Confirm code: ')[1][:8]
+    done = run_lessons('station-room', '--data-dir', store.data_dir, '--id', room[:6], '--as', 'andy', '--ship', 'rio-grande',
+                       '--confirm', code)
+    assert done.returncode == 0 and f'{store._own_peer_id()}:{room}' in done.stdout
+    assert run_lessons('where', '--data-dir', store.data_dir).stdout.strip() == f'{store._own_peer_id()}:{room}'
