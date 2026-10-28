@@ -400,8 +400,10 @@ def write_index(path, value, vectors, read_at):
     block = array.array('f', [x for vector in vectors for x in vector])
     if sys.byteorder == 'big':
         block.byteswap()
-    temporary = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
-    temporary.unlink(missing_ok=True)  # a run killed before its rename left it, and the name is this pid's own
+    import threading
+    # The name is this thread's own (pid and thread id), so a stale one is ours to remove and never another thread's.
+    temporary = path.with_name(f'.{path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+    temporary.unlink(missing_ok=True)  # a run killed before its rename left it
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, 'wb') as stream:

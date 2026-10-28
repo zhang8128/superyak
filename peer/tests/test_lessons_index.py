@@ -107,14 +107,43 @@ def test_the_live_index_never_shows_a_time_fresher_than_step_1s_read(lessons_sta
 
 
 def test_a_stale_temporary_file_with_this_pids_name_doesnt_stop_the_run(lessons_station):
-    """A run killed between its open and its rename leaves `.lessons-index.bin.<pid>.tmp`. A later run that gets the same
-    pid removes it (the name is that pid's own) instead of failing on the exclusive open."""
+    """A run killed between its open and its rename leaves `.lessons-index.bin.<pid>.<thread>.tmp`. A later run that gets
+    the same pid and thread id removes it (the name is that thread's own) instead of failing on the exclusive open."""
+    import threading
     store, clock, ids, room = lessons_station
     store.send_message(ids['tardis'], room, 'c1', lesson_body())
-    stale = store.data_dir / f'.{lessons.INDEX_FILE}.{os.getpid()}.tmp'
+    stale = store.data_dir / f'.{lessons.INDEX_FILE}.{os.getpid()}.{threading.get_ident()}.tmp'
     stale.write_bytes(b'half an index')
     assert store.lessons_index(None) == {'status': 'written', 'lessons': 1, 'vectors': 0}
     assert not stale.exists() and len(lessons.read_index(store.data_dir / lessons.INDEX_FILE)['lessons']) == 1
+
+
+def test_two_threads_of_one_process_write_the_index_at_once(tmp_path, monkeypatch):
+    """Final review concern 4: the temporary name holds the thread's id beside the pid, so one thread's unlink of a stale
+    temp can never remove another's while it is being written. Both threads are held at their fsync until both have
+    opened and written their temp; then each renames its own, and the file is one whole index."""
+    import threading
+    barrier, fsync, errors = threading.Barrier(2, timeout=5), os.fsync, []
+
+    def together(fd):
+        barrier.wait()
+        fsync(fd)
+    monkeypatch.setattr(lessons.os, 'fsync', together)
+    path = tmp_path / lessons.INDEX_FILE
+
+    def write(n):
+        try:
+            lessons.write_index(path, {'peer': 'p', 'room': 'r', 'watermark': f'w{n}', 'model': None, 'dimension': None,
+                                       'complete': False, 'ships': {}, 'lessons': []}, [], LESSON_TIME)
+        except Exception as error:   # noqa: BLE001 - the test reports it
+            errors.append(error)
+    threads = [threading.Thread(target=write, args=(n,)) for n in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert errors == [] and lessons.read_index(path)['watermark'] in ('w0', 'w1')
+    assert [p.name for p in tmp_path.iterdir()] == [lessons.INDEX_FILE]   # no temp left behind
 
 
 # Task 10: the prompt path
