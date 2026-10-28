@@ -48,6 +48,8 @@ LESSONS_SHIP ?= rio-grande
 CONFIRM ?=
 OWNER ?=
 FILE ?=
+NEAR ?=
+RESTART ?=
 LESSONS_UNITS := superyak-lessons-index.service superyak-lessons-index.timer
 LESSONS = uv run --locked --project peer python -m superyak_peer.lessons
 # Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
@@ -62,7 +64,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove lessons-units lessons-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove lessons-units lessons-units-remove lessons-prompt-near lessons-timing wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -93,6 +95,8 @@ help:
 	@echo "make lessons-list       Each live lesson with its full id and the line that retracts it"
 	@echo "make lesson-receipts / lesson-segments  This peer's receipts, newest first / its segments per pair of ships"
 	@echo "make lessons-units      Install the lessons index timer for LESSONS_DATA; make lessons-units-remove undoes it"
+	@echo "make lessons-prompt-near NEAR=on|off  Let Near run at a prompt on this peer, or not (make lessons-timing says which)"
+	@echo "make lessons-timing [RESTART=1]  Section 5's measure at the bound, through this machine's embedder"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
 	@echo "make wormhole-key KEY_FILE=…  On the Pi: authorize Stanley's sync key (a .pub file) for the station vault only"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
@@ -316,6 +320,13 @@ lessons-units-remove:
 	for unit in $(LESSONS_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
 	rm -f "$(HOME)/.config/superyak/lessons.env"
 	systemctl --user daemon-reload
+
+lessons-prompt-near:
+	@test "$(NEAR)" = on || test "$(NEAR)" = off || { echo 'Usage: make lessons-prompt-near NEAR=on|off [LESSONS_DATA=…]'; exit 2; }
+	if [ "$(NEAR)" = off ]; then install -m 600 /dev/null "$(LESSONS_DATA)/lessons-prompt-near-off"; else rm -f "$(LESSONS_DATA)/lessons-prompt-near-off"; fi
+
+lessons-timing:
+	cd peer && .venv/bin/python -I scripts/lessons_timing.py$(if $(RESTART), --restart-unit superyak-embedder)
 
 station-units:
 	@test -f "$(STATION_DATA)/peer.sqlite3" || { echo 'No station database at $(STATION_DATA)/peer.sqlite3: make station-units runs on the station host only'; exit 2; }

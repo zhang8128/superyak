@@ -147,6 +147,8 @@ def test_standard_build_excludes_private_state_and_unlisted_package_source(archi
         assert any(name == 'LICENSE' or name.endswith('/LICENSE') for name in files)
         assert any(name == 'NOTICE' or name.endswith('/NOTICE') for name in files)
     assert {'scripts/source_bundle.py', 'scripts/two_peer_check.py', 'uv.lock', 'tests/test_packaging.py'} <= sdist.keys()
+    assert {'scripts/lessons_timing.py', 'systemd/superyak-lessons-index.service', 'systemd/superyak-lessons-index.timer',
+            'tests/test_lessons.py', 'tests/test_lessons_index.py', 'tests/test_lessons_room.py', 'tests/test_lessons_timing.py'} <= sdist.keys()
     forbidden = [sentinel.encode(), *(c['password'].encode() for c in credentials)]
     leaks = {kind: [name for name, content in files.items() if any(part.startswith('.') for part in Path(name).parts) or any(marker in content for marker in forbidden) or name in injected] for kind, files in [('sdist', sdist), ('wheel', wheel_files), ('direct_wheel', direct_wheel_files)]}
     assert leaks == {'sdist': [], 'wheel': [], 'direct_wheel': []}, leaks

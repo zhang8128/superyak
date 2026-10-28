@@ -281,3 +281,21 @@ def test_lessons_targets_run_the_lessons_command(tmp_path, target, variables, ve
     assert command == ['uv', 'run', '--locked', '--project', 'peer', 'python', '-m', 'superyak_peer.lessons', *expected]
     default = subprocess.run(['make', '-n', '-s', 'lessons-where', f'STATION_DATA={station}'], cwd=REPO, capture_output=True, text=True)
     assert shlex.split(default.stdout.strip().splitlines()[-1])[-2:] == ['--data-dir', str(station)]   # on the Pi, the station's
+
+
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
+def test_lessons_prompt_near_switches_near_at_a_prompt_and_timing_can_restart_the_embedder(tmp_path):
+    """C44: NEAR=off leaves the switch file (0600) the prompt path looks for, NEAR=on removes it, anything else is
+    refused; RESTART=1 makes the timing check restart the embedder after it builds its fixture (review S4)."""
+    from superyak_peer.lessons import PROMPT_NEAR_OFF
+    data = tmp_path / 'peer data'
+    data.mkdir()
+
+    def make(near):
+        return subprocess.run(['make', '-s', 'lessons-prompt-near', f'NEAR={near}', f'LESSONS_DATA={data}'], cwd=REPO,
+                              capture_output=True, text=True, timeout=60)
+    assert make('maybe').returncode != 0 and not (data / PROMPT_NEAR_OFF).exists()
+    assert make('off').returncode == 0 and stat.S_IMODE((data / PROMPT_NEAR_OFF).stat().st_mode) == 0o600
+    assert make('on').returncode == 0 and not (data / PROMPT_NEAR_OFF).exists()
+    timing = subprocess.run(['make', '-n', '-s', 'lessons-timing', 'RESTART=1'], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert timing.stdout.strip().endswith('scripts/lessons_timing.py --restart-unit superyak-embedder')
