@@ -252,6 +252,7 @@ def test_a_watchers_cursor_never_sets_where_a_new_session_starts(env):
 
 
 def test_a_ship_with_only_a_watchers_cursor_still_starts_new_sessions_without_replaying_history(env):
+    """Passes on the old code too: it guards the fallback, failing if a watcher-only ship started at the epoch."""
     app, clients, users, clock, ship, serenity, room = setup(env)
     for n in range(3):
         say(clients[0], room, f'old{n}', f'old {n}')

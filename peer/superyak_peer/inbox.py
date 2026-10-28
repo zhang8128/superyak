@@ -114,7 +114,8 @@ class Inbox:
         furthest = db.execute('SELECT name, position FROM read_cursors WHERE ship_id=? ORDER BY position DESC, updated DESC LIMIT 1',
                               (actor,)).fetchone()
         # A watcher (the kick's `<ship>-kick`) reads ahead of every session, so a new session starts where the ship's
-        # sessions read furthest; only a ship with no other cursor starts at the watcher's, so it never replays history
+        # sessions read furthest; only a ship with no other cursor starts at the watcher's, so it never replays history.
+        # So a new session sees everything since the furthest session read, which after a long quiet spell can be a lot.
         session = db.execute('SELECT name, position FROM read_cursors WHERE ship_id=? AND name NOT LIKE ? ORDER BY position DESC, updated DESC LIMIT 1',
                              (actor, '%' + WATCHER_SUFFIX)).fetchone()
         furthest = session or furthest
