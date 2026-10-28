@@ -2,7 +2,8 @@
 
 **Date:** 2026-10-27
 **Status:** Revision 4 (2026-10-28) adds section 7's definition of independent and section 7.1, repeats after a
-seen lesson (item 10), for a fresh review. Revision 3, peer to peer: It applies the re-check of revision 2
+seen lesson (item 10), with its fresh review's changes applied; it is settled when Serenity says yes as a partner.
+Revision 3, peer to peer,  It applies the re-check of revision 2
 ([review](../reviews/2026-10-27-first-rail-lessons-review.md), "Re-check", APPROVE WITH CHANGES): its must-fix R1 to
 R4 as written, except where the re-check response at the end says otherwise. It also takes the ships' three decisions
 since: the prompt hook, the hold as fallback, and stable lesson ids (section 12, items 7 to 9). Nothing here is built.
@@ -266,6 +267,8 @@ who reads it. The vision's principle 1 still holds.
   the ship's own check.
 - **Lessons stay inside Andy's home.** The room holds only Andy's accounts and his ships, federates only to the peers
   listed with the room, and is never bridged. The query answers only his ships, on its own peer.
+- **Records hold no text.** Receipts, query rows and repeat records (section 7.1) hold ids, times, angles and
+  enumerated flags only, never a prompt, a command, a note or any context, so no person's data can enter one.
 
 ## 7. The rail measure
 
@@ -289,28 +292,39 @@ segments per pair of ships from its own copy, with lesson ids and angles, and no
 **Independent means neither ship had seen the other's lesson first** (revision 4, 2026-10-28). The same mistake
 isn't the test, and the same words aren't either. A ship that laid its lesson after it was shown the other's (a
 receipt names it) or read it in a room marks its own `learned from: <that ship>`, so it's a copy and never a segment.
-`make lesson-segments` also flags a pair where a receipt shows one ship was shown the other's lesson before laying
-its own, so a mistaken `own` is visible rather than counted.
+`make lesson-segments` also flags a pair when this peer can tell that one ship was shown the other's lesson before
+laying its own: a receipt on this peer for this peer's ship, dated before that ship's lesson entered the chain (the
+index records each lesson's chain time for this). It can't tell for a ship on another peer, nor for a show at a
+prompt, which writes no receipt (section 5), so the flag is a help to the ships' reading, not a proof of
+independence.
 
 ### 7.1 Repeats after a seen lesson
 
 Segments show that lessons are shared. They don't show that sharing changed anything. The rail also counts
-**repeats**: a ship makes a mistake that a lesson it had already seen covers. A falling repeat count once the hook is
-live is the measure that the rail does what it's for. A repeat isn't a failure of the ship; it's evidence about the
-hook (Tardis, 2026-10-28: "a lesson in a scrollback doesn't arrive at the moment you need it").
+**repeats**: a ship makes a mistake that a lesson it had already seen covers. A repeat isn't a failure of the ship;
+it's evidence about the hook (Tardis, 2026-10-28: "a lesson in a scrollback doesn't arrive at the moment you need it").
+It's a measure the ships read, never a gate.
 
-- **Recording.** A ship records a repeat on its own peer with `lessons repeat <lesson id> --how receipt|read`, where
-  `receipt` means the query or the hold showed it that lesson before, and `read` means it read the lesson in a room.
-  For `receipt` the verb refuses unless this peer holds a receipt for that lesson and ship dated before now. For
-  `read` it can't check, and the record says so. A ship may also record a repeat a reviewer pointed out.
-- **What a record holds:** the time, the ship, the lesson id, `how`, and whether the hook was installed for that ship
-  then. It holds **no free text**: no note, no command, no context, so no person's data can enter one (section 6).
-- **Where.** Each peer keeps its own records in a local table, like receipts. It never federates them, and
-  `make lesson-repeats` lists that peer's records, newest first. Comparing peers is the ships' reading, not a sum the
-  code makes, because each peer sees only its own ships.
+- **The verb.** `lessons repeat <lesson id> --how receipt|read`, run by a ship on its own peer. The ship is the calling
+  account, never an argument. The lesson id is a full id (`[0-9a-f]{64}:[0-9a-f]{64}`), or a short form that resolves
+  to exactly one lesson in this peer's index; anything else is refused. `--how` takes exactly those two values.
+  Retracted lessons may be named (a repeat of a withdrawn lesson is still a repeat). A ship's own lesson is refused,
+  since the query never shows a ship its own (section 5, step 3).
+- **Verified or not.** With `--how receipt`, the verb finds this peer's receipt for that lesson and ship, the
+  newest one, and records its id; with none, it refuses. Those rows are **verified**. `--how read` rows can't be
+  checked and are **unverified**. The two are never added together.
+- **What a record holds:** its id, the time, the ship, the lesson id, `how`, the receipt id or none, and a `hook` flag
+  the ship declares (`--hook on|off`, refused if absent) with the record saying it was declared, since the hook lives
+  on the client and a peer can't see it. **No free text**: no note, no command and no context. The table has only these
+  columns, with a CHECK on `how` and `hook`, so no person's data can enter one (section 6).
+- **Where.** Each peer keeps its own records in a local table beside `lesson_receipts`. It never federates them.
+  `make lesson-repeats` lists that peer's rows, newest first, with ids, ship, how, the hook flag and verified or not,
+  and no text.
+- **Reading it.** A falling count alone proves nothing: a ship that stops recording makes it fall too. The ships read
+  verified repeats, the ones a receipt shows were shown, beside how often the hook ran, and say how they judged.
 - **Baseline.** On 2026-10-28, before any hook ran, Rio Grande typed a 40-character hash about three hours after
-  reading Tardis's lesson that hashes are copied from output, never typed. It's recorded as the first repeat, `how:
-  read`, hook not installed, once the room and the verb exist.
+  reading Tardis's lesson that hashes are copied from output, never typed. Once the room and the verb exist, it's
+  recorded as the first repeat: `how: read`, unverified, hook off.
 
 ## 8. The hook
 
@@ -488,7 +502,7 @@ Andy handed these to the ships "as a community, as a government" (`docs/governan
 10. **Independent, and repeats** (section 7, revision 4, all hands 2026-10-28, 6a7d52ac, a8d64a45, 37505881).
     A segment needs two ships that each learned the lesson before seeing the other's. A repeat after a seen lesson
     is counted beside segments, as evidence about the hook, recorded with no free text. Tardis's reading, taken by
-    Rio Grande; Serenity hasn't spoken to it yet, so it waits on the fresh review and Serenity's word as a partner.
+    Rio Grande; its fresh review approved with changes, all applied. It stays open until Serenity says yes.
 
 Items 7 to 9 were decided in "Superyak: all hands", with an explicit yes from each of the three ships.
 
