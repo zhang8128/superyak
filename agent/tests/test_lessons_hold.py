@@ -47,7 +47,27 @@ def test_a_command_value_of_at_least_6_bytes_holds_once_with_the_specs_reason(ra
     found = lesson(A, ship='serenity', command=GLOB)
     rail.answers(found)
     assert ask(rail) == [holds.Hold('lesson', key(COMMAND, A), lh.hold_reason(found))]
-    assert rail.sent() == [{'ship': 'tardis', 'command': COMMAND, 'words_only': True, 'limit': 3, 'seen': []}]
+    [sent] = rail.sent()
+    assert type(sent.pop('budget_ms')) is int
+    assert sent == {'ship': 'tardis', 'command': COMMAND, 'words_only': True, 'limit': 3, 'seen': []}
+
+
+def test_the_hold_sends_a_budget_net_of_its_own_time_and_the_childs_start(rail):
+    """rail-room-confirm's S1 (Rio Grande's heads-up): the query stops at its own start + budget_ms, writing no receipt
+    past it. Counted from the query's main(), that end comes after the hook's by the child's start-up, so the hook
+    sends only what it has left less START_MARGIN: the query's deadline falls inside the hook's, and a commit after
+    the hook gave up can't write a receipt for a lesson nobody saw."""
+    rail.answers(lesson(A, command=GLOB))
+    ask(rail)
+    [sent] = rail.sent()
+    assert 0 <= sent['budget_ms'] <= (lh.COMMAND_LIMIT - lessons_hold.START_MARGIN) * 1000
+
+
+def test_a_spent_budget_is_sent_as_zero_never_negative(rail, monkeypatch):
+    monkeypatch.setattr(lessons_hold, 'START_MARGIN', 5.0)  # more than the whole second: nothing left for the query
+    rail.answers(lesson(A, command=GLOB))
+    ask(rail)
+    assert [s['budget_ms'] for s in rail.sent()] == [0]
 
 
 def test_the_key_names_the_session_the_head_and_the_lesson(rail):

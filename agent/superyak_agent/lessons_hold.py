@@ -25,6 +25,9 @@ from . import holds as hs, lessons_hook as lh
 KIND = 'lesson'
 HOLD_BYTES = 6  # only a `command` value of at least 6 bytes holds a command (section 8)
 HEADS_MAX = 256  # a session's distinct heads; the oldest go first
+# The query counts budget_ms from its own main(), so it is sent net of the child's start-up: the query's deadline then
+# falls inside the hook's, and past it the query writes no receipt (rail-room-confirm's S1).
+START_MARGIN = 0.15
 
 
 def head_digest(command):
@@ -105,7 +108,7 @@ def _candidates(command, record, limit, settings_path, env, monotonic, could_hol
         return []  # a transcript not read to its end holds nothing
     seen = lh.seen_list(own, sorted(shown_there), held_ids)
     request ={'ship': settings['ship'], 'command': cut, 'words_only': True, 'limit': limit,
-               'seen': seen[-lh.SEEN_MAX:]}
+               'seen': seen[-lh.SEEN_MAX:], 'budget_ms': max(0, int((deadline - monotonic() - START_MARGIN) * 1000))}
     answer = lh.ask(settings, request, deadline, monotonic)
     if answer is None:
         return []  # late or failing: the head may ask again
