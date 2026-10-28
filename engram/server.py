@@ -1077,7 +1077,7 @@ def _startup_auto_compress(maint) -> None:
     tool call for minutes. Queued feeds are dropped and counted in the
     maintenance report; tool-driven compress_commit() still feeds the graph.
     """
-    uncompressed = _storage.get_uncompressed_episodes()
+    uncompressed = _storage.get_uncompressed_episodes(auto="none")
     if not uncompressed:
         return
     logger.info("Auto-compressing %d uncompressed episodes on init", len(uncompressed))
@@ -3004,7 +3004,7 @@ def compress(scope: str | None = None) -> dict:
         clusters_out.append({
             "episode_count": len(c.get("episodes", [])),
             "episodes": [
-                {"id": ep["id"], "content": ep["content"]}
+                {"id": ep["id"], "content": ep["content"], "source": ep.get("source")}
                 for ep in c.get("episodes", [])
             ],
             "action": c.get("action", "new"),

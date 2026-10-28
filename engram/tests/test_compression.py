@@ -1911,3 +1911,202 @@ def test_multi_link_respects_lanes(tmp_db, compressor, embedder):
         "SELECT 1 FROM semantic_sources WHERE semantic_id = ? AND episode_id = ?",
         (sem_id, eid)).fetchone()
     assert links is None
+
+
+# ---------------------------------------------------------------------------
+# Compression never promotes unused prompt captures
+# (docs/superpowers/specs/2026-10-27-compress-no-auto-promotion-design.md)
+# ---------------------------------------------------------------------------
+
+
+def _unit(i: int) -> list[float]:
+    vec = [0.0] * 768
+    vec[i] = 1.0
+    return vec
+
+
+def _add_sourced(storage, embedder, text, source, vec=None) -> str:
+    """Add an episode with a given source (None leaves it NULL)."""
+    if vec is not None:
+        embedder.override_map[text] = vec
+    eid = _add_episode(storage, text, embedder.embed([text])[0])
+    if source is not None:
+        storage.conn.execute("UPDATE episodes SET source = ? WHERE id = ?", (source, eid))
+        storage.conn.commit()
+    return eid
+
+
+def _log_recall(storage, ids, outcome, event_type="recall"):
+    storage.add_log_entry(
+        id=str(uuid.uuid4()), event_type=event_type, layer="episode",
+        target_ids=list(ids), outcome=outcome,
+    )
+
+
+def test_auto_compress_skips_auto_episodes(tmp_db, compressor, embedder):
+    kept = [
+        _add_sourced(tmp_db, embedder, f"remembered fact {i}", "remember", _unit(0))
+        for i in range(2)
+    ]
+    autos = [
+        _add_sourced(tmp_db, embedder, f"captured prompt {i}", "auto", _unit(1))
+        for i in range(3)
+    ]
+
+    stats = compressor.auto_compress()
+
+    assert stats["episodes_processed"] == 2
+    contents = [s["content"] for s in tmp_db.get_active_semantics()]
+    assert contents and all(c.startswith("remembered fact") for c in contents)
+    for eid in kept:
+        assert tmp_db.get_episode(eid)["compressed"] == 1
+    for eid in autos:
+        assert tmp_db.get_episode(eid)["compressed"] == 0
+
+
+def test_auto_compress_never_creates_or_reinforces_from_used_auto(tmp_db, compressor, embedder):
+    text = "a used captured prompt"
+    auto_id = _add_sourced(tmp_db, embedder, text, "auto", _unit(5))
+    _log_recall(tmp_db, [auto_id], "used: auto: cited")
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content="existing", kind="fact", confidence=0.6,
+        embedding=_unit(5), source_episode_ids=[],
+    )
+
+    stats = compressor.auto_compress()
+
+    assert stats["semantics_created"] == 0
+    assert stats["semantics_reinforced"] == 0
+    assert tmp_db.get_semantic(sem_id)["confidence"] == pytest.approx(0.6)
+    assert tmp_db.get_episode(auto_id)["compressed"] == 0
+    assert tmp_db.conn.execute(
+        "SELECT COUNT(*) FROM semantic_sources WHERE episode_id = ?", (auto_id,)
+    ).fetchone()[0] == 0
+
+
+def test_auto_compress_text_never_contains_used_auto_text(tmp_db, compressor, embedder):
+    for i in range(3):
+        _add_sourced(tmp_db, embedder, f"remembered near {i}", "remember", _unit(7))
+    auto_text = "private captured prompt text"
+    auto_id = _add_sourced(tmp_db, embedder, auto_text, "auto", _unit(7))
+    _log_recall(tmp_db, [auto_id], "used")
+
+    compressor.auto_compress()
+
+    assert tmp_db.get_active_semantics()
+    for sem in tmp_db.get_active_semantics():
+        assert auto_text not in sem["content"]
+
+
+def _offered_ids(compressor, **kw):
+    result = compressor.cluster_episodes(**kw)
+    return {ep["id"] for c in result["clusters"] for ep in c["episodes"]}
+
+
+def test_cluster_episodes_offers_auto_only_after_used_recall(tmp_db, compressor, embedder):
+    auto_id = _add_sourced(tmp_db, embedder, "unused capture", "auto", _unit(3))
+    _add_sourced(tmp_db, embedder, "a remembered one", "remember", _unit(4))
+    assert auto_id not in _offered_ids(compressor)
+
+    _log_recall(tmp_db, [auto_id], "used")
+    assert auto_id in _offered_ids(compressor)
+
+
+@pytest.mark.parametrize("outcome", ["not_used", None])
+def test_cluster_episodes_leaves_out_auto_without_used_outcome(tmp_db, compressor, embedder, outcome):
+    auto_id = _add_sourced(tmp_db, embedder, "capture, no evidence", "auto", _unit(3))
+    _log_recall(tmp_db, [auto_id], outcome)
+    assert auto_id not in _offered_ids(compressor)
+
+
+def test_cluster_episodes_leaves_out_auto_for_non_recall_row_or_other_id(tmp_db, compressor, embedder):
+    auto_id = _add_sourced(tmp_db, embedder, "capture, wrong evidence", "auto", _unit(3))
+    other = _add_sourced(tmp_db, embedder, "some other episode", "remember", _unit(4))
+    _log_recall(tmp_db, [auto_id], "used", event_type="outcome")
+    _log_recall(tmp_db, [other], "used")
+    assert auto_id not in _offered_ids(compressor)
+
+
+@pytest.mark.parametrize("outcome", ["used: it helped", "used: auto: cited"])
+def test_cluster_episodes_admits_auto_for_used_variants(tmp_db, compressor, embedder, outcome):
+    auto_id = _add_sourced(tmp_db, embedder, "capture, used variant", "auto", _unit(3))
+    _log_recall(tmp_db, [auto_id], outcome)
+    assert auto_id in _offered_ids(compressor)
+
+
+def test_null_source_episodes_cluster_on_both_paths(tmp_db, compressor, embedder):
+    ids = [_add_sourced(tmp_db, embedder, f"no source {i}", None, _unit(9)) for i in range(2)]
+    assert set(ids) <= _offered_ids(compressor)
+    # offered clusters are pending only; auto_compress commits them
+    stats = compressor.auto_compress()
+    assert stats["episodes_processed"] == 2
+    for eid in ids:
+        assert tmp_db.get_episode(eid)["compressed"] == 1
+
+
+def test_scope_full_keeps_unused_captures_uncompressed(tmp_db, compressor, embedder):
+    unused = _add_sourced(tmp_db, embedder, "full: unused capture", "auto", _unit(3))
+    used = _add_sourced(tmp_db, embedder, "full: used capture", "auto", _unit(4))
+    kept = _add_sourced(tmp_db, embedder, "full: remembered", "remember", _unit(5))
+    tmp_db.mark_episodes_compressed([unused, used, kept])
+    _log_recall(tmp_db, [used], "used")
+
+    offered = _offered_ids(compressor, scope="full")
+
+    assert offered == {used, kept}
+    assert tmp_db.get_episode(unused)["compressed"] == 0
+
+
+def test_promote_singletons_skips_core_capture(tmp_db, embedder):
+    emb = embedder.embed(["a core captured prompt"])[0]
+    tmp_db.add_episode("ep-auto-core", None, "a core captured prompt", embedding=emb)
+    tmp_db.conn.execute("UPDATE episodes SET core = 1, source = 'auto' WHERE id = 'ep-auto-core'")
+    tmp_db.conn.commit()
+
+    assert Compressor(tmp_db, embedder)._promote_singletons() == 0
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0] == 0
+
+
+class _RecordingGraph:
+    def __init__(self):
+        self.feeds = []
+
+    def feed(self, episodes, semantic_content=None):
+        self.feeds.append((episodes, semantic_content))
+
+
+def test_knowledge_feed_excludes_captures_and_skips_capture_only_clusters(tmp_db, embedder):
+    graph = _RecordingGraph()
+    compressor = Compressor(tmp_db, embedder, config=None, knowledge_graph=graph)
+    mixed_auto = _add_sourced(tmp_db, embedder, "mixed: used capture", "auto", _unit(1))
+    mixed_kept = _add_sourced(tmp_db, embedder, "mixed: remembered", "remember", _unit(1))
+    only_auto = _add_sourced(tmp_db, embedder, "only: used capture", "auto", _unit(2))
+    _log_recall(tmp_db, [mixed_auto, only_auto], "used")
+
+    result = compressor.cluster_episodes()
+    assert len(result["clusters"]) == 2
+    summaries = [{"content": "summary", "kind": "fact", "action": "new"}] * 2
+    compressor.commit(result["compress_id"], summaries)
+
+    assert len(graph.feeds) == 1
+    fed_ids = [ep["id"] for ep in graph.feeds[0][0]]
+    assert fed_ids == [mixed_kept]
+    assert tmp_db.get_episode(only_auto)["compressed"] == 1
+
+
+def test_knowledge_feeds_queued_does_not_count_capture_only_cluster(tmp_db, embedder):
+    graph = _RecordingGraph()
+    compressor = Compressor(tmp_db, embedder, config=None, knowledge_graph=graph)
+    compressor.background_knowledge_feeds = True
+    graph.feed_background = graph.feed
+    only_auto = _add_sourced(tmp_db, embedder, "queued: used capture", "auto", _unit(2))
+    _log_recall(tmp_db, [only_auto], "used")
+
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(
+        result["compress_id"], [{"content": "s", "kind": "fact", "action": "new"}],
+    )
+
+    assert stats["knowledge_feeds_queued"] == 0
+    assert graph.feeds == []
