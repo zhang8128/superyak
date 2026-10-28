@@ -142,10 +142,10 @@ def parse(name: str, data: bytes, own: bool) -> Checklist:
         key, sep, value = line.partition(': ')
         if not sep or not value or not key.isascii() or not key.isidentifier():
             raise ParseError('a front matter line is not "key: value"')
-        if not value.isprintable():
-            raise ParseError(f'{key} has a control character')
+        if not value.isprintable():   # never the key's own text: a notice shows this outside any fence (section 2's S1)
+            raise ParseError('a front matter value has a control character')
         if value[0] in '"\'':
-            raise ParseError(f'{key} is quoted')
+            raise ParseError('a front matter value is quoted')
         keys.append(key)
         values[key] = value
     if tuple(keys[:5]) != REQUIRED:
@@ -370,8 +370,9 @@ def _load_dir(directory: Path, location: Path | None, own: bool, order: int, not
         return []
     good = [n for n in names if ID.fullmatch(n[:-3])]
     odd = [n for n in names if not ID.fullmatch(n[:-3])]
-    for name in odd[:DIR_FILES]:
-        notices.append(f'Checklist {shown}/{_clean(name)} was skipped: the file name is not an id and .md.')
+    if odd:   # counted, never named: a name is text from the directory, shown outside any fence (section 2's S1)
+        files, verb = ('1 file', "isn't a list") if len(odd) == 1 else (f'{len(odd)} files', "aren't lists")
+        notices.append(f"{files} in {shown} {verb}: a list's file name is an id and .md.")
     loaded: list[Loaded] = []
     for name in good[:DIR_FILES]:
         try:

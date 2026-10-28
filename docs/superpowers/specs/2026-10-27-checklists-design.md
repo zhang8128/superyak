@@ -10,6 +10,10 @@ Revision 4, 2026-10-28. Serenity (the Mac). Asked for by Andy.
   was held.
 - the report lists every skip of a `killer:` item first, at any count, with its reason, and `checklist_propose`'s
   default says a `killer:` item climbs only to automation.
+- a notice counts files whose names aren't ids and never names a front matter key, since it stands outside any fence;
+  dock's trust is of the checkout's working tree on whatever branch, `checklists list` shows that branch, and dock says
+  when the checkout has no lists; the terminal check is named a speed bump; a `post:` room id is named as shown
+  outside the fence.
 
 **Revision 3** applies the re-check's R1 to R4 as written (APPROVE WITH CHANGES, no further round needed):
 - `unshown` is dropped;
@@ -128,7 +132,9 @@ see: docs/checklists.md#before-any-push
   starts with `- [ ] `.
 - `title` and `owner` are 1 to 80 bytes with no control characters. `version` is `[1-9][0-9]{0,5}`. `post` is a room
   id that `plain_id` accepts. `see` is 1 to 120 bytes with no spaces or control characters.
-- Anything else is a parse error. The agent is told once a session for each file, and the file is skipped.
+- Anything else is a parse error. The agent is told once a session for each file, and the file is skipped. A notice
+  stands outside any fence, so it never repeats a file's text: a `.md` file whose name isn't an id is counted, never
+  named ("3 files in <dir> aren't lists"), and a front matter error never names its key (revision 4).
 
 ### Where checklists are found
 
@@ -213,9 +219,9 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
 <fence_external closes>
 ```
 
-- The list key, version and path stand outside the fence. The title, owner, `see` and items are inside it, exactly as
-  written. The fence is the station client's `fence_external`, as the rail's, so a list holding three backticks can't
-  close it.
+- The list key, version and path, and a `post:` room id, stand outside the fence. The title, owner, `see` and items
+  are inside it, exactly as written. The fence is the station client's `fence_external`, as the rail's, so a list
+  holding three backticks can't close it.
 - **The budget.** Lists go after the law and the version line, and before the board lines, within the hook's
   `TOTAL_CHARS`. At a prompt they go after the law and the room messages. A list is shown whole or not at all. One
   that doesn't fit is named in the "N more" line ("1 more due: reflect. It shows at the next event.") and isn't marked
@@ -328,15 +334,22 @@ directories:
 - The ship's own directory, `<ship home>/checklists/`.
 - Trust is per directory: the realpath of one `.superyak/checklists/` directory, never its subdirectories or parents,
   recorded in `<ship home>/checklists/trusted.json`. `make dock` trusts `<CHECKOUT>/.superyak/checklists`
-  (`station.py:21`) only, so a worktree inside it isn't trusted. It gets the checkout's accepted lists through the
-  parent walk, and a branch's edits take effect when they merge.
+  (`station.py:21`) only, so a worktree inside it isn't trusted. It gets the checkout's lists through the parent
+  walk, and a branch's edits in a worktree take effect when they merge. The trust is of the checkout's working tree,
+  on whatever branch it has checked out, so an edit there, or another branch checked out there, loads at once.
+  `checklists list` shows that branch beside each trusted directory in a git checkout (revision 4).
 - `superyak-agent checklists trust <path>` runs only from an interactive terminal (stdin and stdout are TTYs) and asks
-  the person to type the path back. It refuses a directory, or a file in it, that another user owns or that is group-
-  or world-writable, and a directory holding a symlink or a non-regular file.
+  the person to type the path back. That is a speed bump against an agent trusting by mistake, not a lock: a program
+  that runs a pseudo-terminal passes it. It refuses a directory, or a file in it, that another user owns or that is
+  group- or world-writable, and a directory holding a symlink or a non-regular file. `make dock` says so in one line
+  when its checkout has no `.superyak/checklists` to trust.
 - From an untrusted directory the hook shows one line and none of the lists' text: "This directory has 3 checklists
   that aren't trusted on this machine. Tell the person you work with. Don't trust them yourself." An untrusted list
   that is byte for byte a trusted list with the same id is passed over silently, so in a worktree the line counts only
   a branch's edits (D15).
+- A trusted list's `post:` room id is shown outside the fence, in the header's "Post your answers in room <id>". It
+  is a plain id (at most 200 of `A-Z`, `a-z`, `0-9` and `:_.-`, no spaces), so it can name only a room, but it is the
+  list's own text all the same (revision 4).
 - Even a trusted list is quoted data. It can ask an agent to check or do only what the law and its permissions already
   allow, and a hold never runs anything.
 - This narrows mistakes, not malice: an agent that can write `~/.superyak` can still change what loads.

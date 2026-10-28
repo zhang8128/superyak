@@ -1,5 +1,7 @@
 """Checklists: `superyak-agent checklists list | trust | report` (spec, Where checklists are found; Trust; Renegotiation)."""
 import os
+import re
+import stat
 import sys
 from pathlib import Path
 
@@ -30,6 +32,44 @@ def _count(directory) -> int:
         return 0
 
 
+def _small(path) -> str:
+    """A small regular file's text, read without blocking (a FIFO or a device is refused)."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError('not a regular file')
+        return os.read(fd, 4096).decode('utf-8').strip()
+    finally:
+        os.close(fd)
+
+
+def _branch(holder) -> str:
+    """' (on branch <name>)' or ' (detached at <hash>)' for the git checkout holding `holder`, from git's own files, so
+    a trusted directory shows which branch its lists load from (dock trusts the working tree, section 2's S5). Best
+    effort: '' outside a checkout or on any trouble, and it never fails the command."""
+    try:
+        current = os.path.realpath(holder)
+        while not os.path.lexists(os.path.join(current, '.git')):
+            if os.path.dirname(current) == current:
+                return ''
+            current = os.path.dirname(current)
+        dot = os.path.join(current, '.git')
+        gitdir = dot
+        if not os.path.isdir(dot):   # a linked worktree's .git file names its git directory
+            line = _small(dot)
+            if not line.startswith('gitdir: '):
+                return ''
+            gitdir = os.path.join(current, line[len('gitdir: '):])
+        head = _small(os.path.join(gitdir, 'HEAD'))
+    except Exception:  # noqa: BLE001 - best effort: no branch shown
+        return ''
+    if head.startswith('ref: refs/heads/'):
+        return f' (on branch {cl._clean(head[len("ref: refs/heads/"):])})'
+    if re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', head):
+        return f' (detached at {head[:8]})'
+    return ''
+
+
 def _list(args, out) -> int:
     cwd = os.path.realpath(args.cwd or os.getcwd())
     home = Path(args.home) if args.home else acting_home(cwd)
@@ -38,12 +78,12 @@ def _list(args, out) -> int:
     own_real = os.path.realpath(own_dir)
     found = cl.find(cwd, own_dir)
     fired = read_lines(own_dir / 'fired.jsonl')
-    for directory, _ in cl.search_dirs(cwd, own_dir):
+    for directory, holder in cl.search_dirs(cwd, own_dir):
         shown = cl._clean(directory)
         if str(directory) == own_real:
             out(f"{shown}: the ship's own")
         elif str(directory) in allowed:
-            out(f'{shown}: trusted')
+            out(f'{shown}: trusted{_branch(holder) if holder is not None else ""}')
         else:
             n = _count(directory)
             out(f'{shown}: not trusted ({n} list{"" if n == 1 else "s"})')

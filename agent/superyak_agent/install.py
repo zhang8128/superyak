@@ -402,6 +402,7 @@ def trust_checkout(home, out, checkout=None):
     directory = Path(checkout if checkout is not None else AGENT_DIR.parent) / '.superyak' / 'checklists'
     try:
         if not directory.is_dir():
+            out(f'This checkout has no checklists to trust: {directory} is missing. Dock again once it has them.')
             return False
         reason = checklists.trust_refusal(directory)
         if reason:

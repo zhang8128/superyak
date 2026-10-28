@@ -13,8 +13,15 @@ items never are, and where a skip is logged.
   same command later is held again; at most 3 holds a session, then the list comes with the command's result). The
   ship runs it out loud and records the run with `checklist_run`.
 - The law comes first, then the person at the terminal, then a checklist.
-- `make dock` trusts this checkout's lists. `python3 agent/run_agent.py checklists list` shows what loads from where,
-  and `checklists report` what the runs suggest; the report proposes and never changes a list.
+- `make dock` trusts this checkout's lists: its working tree, on whatever branch is checked out, so an edit there, or
+  another branch checked out there, loads at once. A worktree under it isn't trusted; it gets the checkout's lists
+  through the parent walk. `python3 agent/run_agent.py checklists list` shows what loads from where, with each
+  trusted checkout's branch, and `checklists report` what the runs suggest; the report proposes and never changes a
+  list.
+- `checklists trust <path>` trusts another directory. It asks a person at a terminal to type the path back: a speed
+  bump against an agent trusting by mistake, not a lock (a program that runs a pseudo-terminal passes it). Trust
+  narrows mistakes, not malice. A trusted list's `post:` room id is shown outside the fence, in the line that says
+  where to post the answers.
 - A change is proposed with `checklist_propose`, and accepted as a branch merged to main under law section 2. The
   sections below keep each list's why and long form; the file holds the short items the ships see.
 

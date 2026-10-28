@@ -206,6 +206,29 @@ def test_report_through_the_cli_marks_a_killer_item(capsys, monkeypatch):
     assert 'held by a script or test' in out and 'stays killer' in out
 
 
+def test_list_shows_the_branch_of_a_trusted_checkout(capsys, monkeypatch, tmp_path):       # section 2's S5
+    from ships_fakes import git
+    isolate_git(monkeypatch, tmp_path)
+    repo = make_repo(tmp_path / 'proj', worktree=tmp_path / 'wt')
+    wt = Path(os.path.realpath(tmp_path / 'wt'))
+    for top in (repo, wt):
+        write_list(top / '.superyak' / 'checklists', 'mine')
+    trust_dirs(Path.home() / '.superyak' / 'checklists', repo / '.superyak' / 'checklists', wt / '.superyak' / 'checklists')
+    git('checkout', '-q', '-b', 'feature-x', cwd=repo)
+
+    def listed(cwd):
+        assert cli.main(['checklists', 'list', '--cwd', str(cwd)]) == 0
+        return capsys.readouterr().out
+    assert f"{repo / '.superyak' / 'checklists'}: trusted (on branch feature-x)" in listed(repo)
+    assert f"{wt / '.superyak' / 'checklists'}: trusted (on branch side)" in listed(wt)       # a linked worktree
+    git('checkout', '-q', '--detach', cwd=repo)
+    head = git('rev-parse', 'HEAD', cwd=repo).strip()
+    assert f"{repo / '.superyak' / 'checklists'}: trusted (detached at {head[:8]})" in listed(repo)
+    (repo / '.git' / 'HEAD').unlink()
+    os.mkfifo(repo / '.git' / 'HEAD')                     # best effort: an odd HEAD neither blocks nor fails the list
+    assert f"{repo / '.superyak' / 'checklists'}: trusted\n" in listed(repo)
+
+
 def test_list_takes_a_home(capsys, tmp_path):
     other = tmp_path / 'ship'
     write_list(other / 'checklists', 'mine', items=('One.',))

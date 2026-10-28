@@ -79,9 +79,12 @@ def test_dock_says_why_it_cannot_trust_a_group_writable_checkout(tmp_path):
     assert len(said) == 1 and 'chmod -R go-w' in said[0] and not (tmp_path / 'home' / 'checklists' / 'trusted.json').exists()
 
 
-def test_a_checkout_without_lists_is_skipped_silently(tmp_path):
+def test_a_checkout_without_lists_says_so_in_one_line(tmp_path):                       # section 2's S5
     said = []
-    assert install.trust_checkout(tmp_path / 'home', said.append, checkout=tmp_path / 'old-checkout') is False and said == []
+    assert install.trust_checkout(tmp_path / 'home', said.append, checkout=tmp_path / 'old-checkout') is False
+    assert said == [f"This checkout has no checklists to trust: {tmp_path / 'old-checkout' / '.superyak' / 'checklists'} "
+                    'is missing. Dock again once it has them.']
+    assert not (tmp_path / 'home' / 'checklists').exists()
 
 
 def test_trust_checkout_never_raises(tmp_path, monkeypatch):                           # plan review S7
