@@ -18,6 +18,14 @@ def build_parser():
     watch.add_argument('--resident', action='store_true', help='Station resident: always read-only; answers one-person rooms')
     watch.add_argument('--model')
     watch.add_argument('--once', action='store_true')
+    kick = commands.add_parser('kick', help='Print one line per mention of this ship or reply to its post (run under a Monitor)')
+    kick.add_argument('--config', type=Path, default=CONFIG)
+    route = commands.add_parser('route-watch', help="Check the station's public route once from here, read-only; post "
+                                'to a room when a check changes (run by a timer)')
+    route.add_argument('--config', type=Path, default=CONFIG)
+    route.add_argument('--room', help='The room that gets the lines (not needed with --dry-run)')
+    route.add_argument('--state', type=Path, default=HOME / 'route-watch.json')
+    route.add_argument('--dry-run', action='store_true', help='Print each check; post nothing and write no state')
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
     held = commands.add_parser('hold', help='Claude Code PreToolUse hook on Bash: checklists and lessons hold a '
@@ -163,6 +171,25 @@ def main(argv=None):
             if args.once:
                 return 0
             time.sleep(POLL_SECONDS)
+    if args.command == 'kick':
+        from .kick import Kick
+        from .station import client_for, load_config
+        config = load_config(args.config)
+        try:
+            Kick(client_for(config, timeout=40), config.get('ship') or '').run()
+        except KeyboardInterrupt:
+            return 0
+        except ValueError as error:  # a config naming no ship
+            print(f'superyak kick: {error}', file=sys.stderr)
+            return 2
+    if args.command == 'route-watch':
+        from .route_watch import run_once
+        from .station import client_for, load_config
+        if not (args.room or args.dry_run):
+            parser.error('route-watch needs --room, or --dry-run')
+        config = load_config(args.config)
+        run_once(config, args.room, args.state, None if args.dry_run else client_for(config), dry_run=args.dry_run)
+        return 0
     if args.command == 'dock':
         from .claims import Refused, check_mode
         from .dock import Dock

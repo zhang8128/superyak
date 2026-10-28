@@ -7,6 +7,7 @@ from superyak_peer.common import uid
 from superyak_peer.db import Store
 from superyak_peer.__main__ import main as cli
 from test_federation import deliver, two_peers  # noqa: F401 - two_peers is a fixture
+from test_station_cli import race
 from test_presence import HEADERS, docked, say, ship_client
 
 DAY = 86400
@@ -728,8 +729,8 @@ def test_claims_mark_board_items(env):
 def test_adding_members_carries_open_items_and_leaves_the_record(env):
     """5.x: the new room holds the open items with their ids, keys, posters, created times and links; add_participants
     answers board_carried and the carry posts nothing. A taken item stays taken there by the same holder until the same
-    expiry, through the same claim row; the old room holds no active claim on its key, and the holder's count is
-    unchanged. Done and dropped items stay as the record. A claim whose holder isn't in the new room stays behind."""
+    expiry, through the same claim row; the old room holds no active claim on its key (Defiant's removal released its
+    `build:left` claim, M8), and the holder's count is unchanged. Done and dropped items stay as the record."""
     s = Station(env)
     serenity, rio, defiant = s.ship('serenity'), s.ship('rio-grande'), s.ship('defiant')
     for key in ('build:waiting', 'build:taken', 'build:done', 'build:dropped', 'build:left'):
@@ -739,14 +740,14 @@ def test_adding_members_carries_open_items_and_leaves_the_record(env):
     assert claim(rio, s.room, 'build:taken', note='on it', minutes=60).status_code == 201
     assert done(serenity, s.room, 'build:done').status_code == 200 and drop(serenity, s.room, 'build:dropped').status_code == 200
     assert claim(defiant, s.room, 'build:left').status_code == 201
-    assert s.andy.delete(f'/api/chats/{s.room}/participants/{s.id("defiant")}').status_code == 200
+    assert s.andy.delete(f'/api/chats/{s.room}/participants/{s.id("defiant")}').status_code == 200  # M8 releases its `build:left` claim
     was = {i['key']: i for i in board(s.andy, s.room).json()}
     rio_holds = s.rows('SELECT count(*) FROM claims WHERE holder_id=? AND released IS NULL', s.id('rio-grande'))
     messages = s.rows('SELECT count(*) FROM messages')
     added = s.andy.post(f'/api/chats/{s.room}/participants', json={'member_ids': [s.users[3]['id']]})
     assert added.status_code == 201 and added.json()['board_carried'] == 3
     new = added.json()['id']
-    assert s.rows('SELECT count(*) FROM messages') == messages
+    assert s.rows('SELECT count(*) FROM messages') == [(messages[0][0] + 1,)]  # the one member- notice; the carry posts nothing
     moved = {i['key']: i for i in board(s.andy, new).json()}
     assert list(moved) == ['build:waiting', 'build:taken', 'build:left']
     same = ('id', 'key', 'title', 'kind', 'posted_by', 'created', 'links')
@@ -758,7 +759,7 @@ def test_adding_members_carries_open_items_and_leaves_the_record(env):
     assert (taken['id'], taken['room_id'], taken['holder_id'], taken['note'], taken['expires']) == (
         held['id'], new, s.id('rio-grande'), 'on it', held['expires'])
     assert s.rows('SELECT count(*) FROM claims WHERE holder_id=? AND released IS NULL', s.id('rio-grande')) == rio_holds
-    assert [c['key'] for c in claims(s.andy, s.room)] == ['build:left']
+    assert claims(s.andy, s.room) == []
     assert {i['key']: i['state'] for i in board(s.andy, s.room).json()} == {'build:done': 'done', 'build:dropped': 'dropped'}
 
 
@@ -769,7 +770,8 @@ def test_a_holder_removed_and_added_back_in_the_add_keeps_its_claim(env):
     s = Station(env)
     insert_item(s, s.room, 'build:back')
     assert claim(s.ship('defiant'), s.room, 'build:back').status_code == 201
-    assert s.andy.delete(f'/api/chats/{s.room}/participants/{s.id("defiant")}').status_code == 200
+    with s.store.transaction() as db:  # a removal made before merge 1, which released nothing and left the earlier rooms
+        db.execute('DELETE FROM room_members WHERE room_id=? AND user_id=?', (s.room, s.id('defiant')))
     added = s.andy.post(f'/api/chats/{s.room}/participants', json={'member_ids': [s.users[3]['id'], s.id('defiant')]})
     assert added.status_code == 201, added.text
     moved = board(s.andy, added.json()['id']).json()[0]['claim']
@@ -880,7 +882,7 @@ def test_adding_members_to_a_replaced_room_is_refused(env):
     """Final review (Serenity F2): once an add has replaced a room, adding members to it again gets 409 before anything
     is written, so the replacement chain never forks. Without it a second add would make a second current room beside
     the first, and `fix:x`, carried to the first, could be posted again in the second. The 409 comes after the 404 for a
-    non-member and the owner's 403, so only the owner learns the room was replaced."""
+    non-member and before the 403 (section 2's order, ruling 9), so any member learns the room was replaced."""
     s = Station(env)
     assert post(s.ship('serenity'), s.room, 'fix:x').status_code == 201
     first = add_member(s, s.room)
@@ -892,31 +894,27 @@ def test_adding_members_to_a_replaced_room_is_refused(env):
         return client.post(f'/api/chats/{s.room}/participants', json={'member_ids': [s.users[2]['id']]})
     assert refused(add(s.andy)) == (409, 'This room was replaced by a newer linked room; add members there')
     assert refused(add(s.outsider)) == (404, 'Not found')
-    assert refused(add(s.doctor)) == (403, 'Room owner required')
+    assert refused(add(s.doctor)) == (409, 'This room was replaced by a newer linked room; add members there')
     assert (s.snapshot(), {t: s.rows(f'SELECT * FROM {t} ORDER BY rowid') for t in tables}) == before
 
 
 def test_a_bridge_that_meets_a_replaced_room_says_so(tmp_path, capsys, monkeypatch):
-    """Final review (Serenity F2): station-bridge picks a current room in one transaction and adds the wormhole in the
-    next. If an add replaces the room in between, the bridge prints add_participants' 409 for a replaced room, not the
-    brief's message, also when the room has a brief to carry. A replaced room's short id names no room at all."""
+    """Final review (Serenity F2): station-bridge picks a current room and adds the wormhole in one transaction now, so
+    the only place left for an add to replace the room is right after the read. The bridge prints the 409 for a replaced
+    room, not the brief's message, also when the room has a brief to carry. A replaced room's short id names no room at all."""
     store = Store(tmp_path / 'station')
     andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     family = store.create_user('family', 'Family', 'long-password-family')
     store.create_station_ship('wormhole', 'Wormhole')
     room = store.create_room(andy['id'], 'Gamma Quadrant', [])['id']
     store.save_brief(andy['id'], room, 'Keep the lights on.', 0)
-    real = Store.add_participants
-
-    def someone_adds_first(self, actor, key, member_ids, carry_brief=None):
-        real(self, actor, key, [family['id']], carry_brief)  # another add lands between the bridge's read and its add
-        return real(self, actor, key, member_ids, carry_brief)
-    monkeypatch.setattr(Store, 'add_participants', someone_adds_first)
+    race(monkeypatch, lambda store, db, found: store._add_members(db, found['owner_id'], found, [family['id']], None, found['owner_id']))
     with pytest.raises(SystemExit) as stopped:
         cli(['station-bridge', '--data-dir', str(store.data_dir), '--id', room[:6], '--as', 'andy'])
     assert stopped.value.code == 1
     assert capsys.readouterr().err == 'This room was replaced by a newer linked room; add members there\n'
     monkeypatch.undo()
+    store.add_participants(andy['id'], room, [family['id']])  # now a real add replaces the room
     with pytest.raises(SystemExit):
         cli(['station-bridge', '--data-dir', str(store.data_dir), '--id', room[:6], '--as', 'andy'])
     assert capsys.readouterr().err == f'No room you own starts with {room[:6]}\n'

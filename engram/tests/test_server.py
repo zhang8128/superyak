@@ -495,6 +495,43 @@ class TestCompress:
         assert commit_result["episodes_processed"] >= 2
         assert commit_result["semantics_created"] >= 1
 
+    def test_compress_offers_capture_only_after_used_recall(self, server_env):
+        """A nudge-hook capture reaches the compress tool only via a used recall."""
+        srv = server_env["server"]
+        store = server_env["storage"]
+        emb = server_env["embeddings"]
+        for text in (
+            "Rotate the staging deploy key every quarter",
+            "The staging deploy key lives in the vault",
+            "Staging deploys run from the release branch",
+        ):
+            srv.remember(content=text, work=True)
+        capture = "how do we rotate the staging deploy key again, i forgot the steps"
+        store.add_episode(
+            id="capture-1", session_id="s", content=capture,
+            embedding=emb.embed([capture])[0], lane="work",
+        )
+        store.conn.execute("UPDATE episodes SET source = 'auto' WHERE id = 'capture-1'")
+        store.conn.commit()
+
+        recall = srv.recall(query=capture, lane="work", uninvited=0)
+        returned = {r.get("id") for r in recall["results"]}
+        assert "capture-1" in returned
+
+        def offered():
+            result = srv.compress()
+            eps = [ep for c in result["clusters"] for ep in c["episodes"]]
+            return {ep["id"]: ep for ep in eps}
+
+        before = offered()
+        assert "capture-1" not in before
+        assert before and all(ep["source"] != "auto" for ep in before.values())
+
+        assert srv.log_outcome(recall_id=recall["recall_id"], used=True)["logged"] is True
+
+        after = offered()
+        assert after["capture-1"]["source"] == "auto"
+
     def test_compress_empty(self, server_env):
         """No episodes -> null compress_id."""
         srv = server_env["server"]
@@ -644,7 +681,7 @@ class TestAutoCompress:
         )
 
         # Verify it's uncompressed
-        uncompressed = store.get_uncompressed_episodes()
+        uncompressed = store.get_uncompressed_episodes(auto="all")
         assert len(uncompressed) == 1
 
         # Now set up server globals to trigger _init logic
@@ -659,7 +696,7 @@ class TestAutoCompress:
         assert result["episodes_processed"] >= 1
 
         # Verify episode is now compressed
-        uncompressed_after = store.get_uncompressed_episodes()
+        uncompressed_after = store.get_uncompressed_episodes(auto="all")
         assert len(uncompressed_after) == 0
 
         store.close()

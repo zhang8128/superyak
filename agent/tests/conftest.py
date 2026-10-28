@@ -1,4 +1,5 @@
 import json
+import re
 from urllib.parse import parse_qs, unquote, urlsplit
 import pytest
 
@@ -56,7 +57,12 @@ class FakeStation:
         self.breakouts = {}  # breakouts: room id -> {creator, created, closed}, as step 1's station keeps them
         self.board = {}  # work board: room id -> its items, as GET /api/chats/{id}/board gives them
         self.board_missing = None  # a status (404 or 405): every board route answers {"detail": "Not Found"}, as a station without the board does
+        self.pages = True  # False: an older station, whose room GET ignores paging parameters
+        self.seqs = {}  # message id -> the station-wide counter when it was appended (the real events id is global)
         self.board_refusal = None  # (status, error): what the count route answers instead, as an older or failing station
+        self.moderating = {}  # room id -> the station's `moderating` value, added to the room by listed()
+        self.member_refusal = None  # (status, error): what the member routes answer instead
+        self.member_extra = {}  # merged into the member routes' answers
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -98,6 +104,7 @@ class FakeStation:
         self.clock += 1
         message = {'id': f'm{self.counter}', 'room_id': room_id, 'author_id': author['id'], 'client_message_id': cid, 'body': body, 'created': self.clock}
         room['messages'].append(message)
+        self.seqs[message['id']] = self.counter
         for word in body.replace(',', ' ').split():
             name = word[1:].rstrip('.!?:;)').lower() if word.startswith('@') else None
             target = next((u for u in self.users.values() if u['username'] == name and u['id'] in room['member_ids']), None)
@@ -130,8 +137,88 @@ class FakeStation:
                 **({'breakout': {'creator': self.breakouts[room['id']]['creator'], 'closed': self.closed(room['id'])}}
                    if room['id'] in self.breakouts else {})}  # breakouts S6: only a breakout carries the key
 
+    def _page(self, room, query):
+        """GET /api/chats/{id} with paging parameters, as the station answers it: (status, body)."""
+        page = {}
+        for name in ('limit', 'before', 'at', 'since'):
+            if name in query:
+                if not re.fullmatch(r'[0-9]{1,15}', query[name][0]):
+                    return 400, f'{name} must be a whole number, 0 or more'
+                page[name] = int(query[name][0])
+        for name in ('start', 'after'):
+            if name in query:
+                if not 0 < len(query[name][0]) <= 100:
+                    return 400, f'{name} is the id of a message'
+                page[name] = query[name][0]
+        if sum(name in page for name in ('before', 'at', 'start', 'after', 'since')) > 1:
+            return 400, 'Give at most one of before, at, start, after and since'
+        if 'limit' in page and not 1 <= page['limit'] <= 500:
+            return 400, 'limit must be between 1 and 500'
+        limit = page.setdefault('limit', 100)
+        view = self.view(room)
+        messages = view['messages']
+        total = len(messages)
+        newest = max([self.seqs.get(m['id'], 0) for m in messages], default=0)
+        extra = {}
+        if 'since' in page:
+            fresh = [m for m in messages if self.seqs.get(m['id'], 0) > page['since']]
+            oldest = sorted(fresh, key=lambda m: self.seqs.get(m['id'], 0))[:limit]
+            more = len(fresh) > limit
+            picked = [m for m in messages if m in oldest]
+            begin = messages.index(picked[0]) if picked else total
+            extra = {'more': more}
+            seq = self.seqs.get(oldest[-1]['id'], 0) if more else newest
+        else:
+            seq = newest
+            if 'before' in page:
+                if not 0 <= page['before'] <= total:
+                    return 400, f'before must be between 0 and {total}'
+                begin = max(0, page['before'] - limit)
+                picked = messages[begin:page['before']]
+            elif 'at' in page:
+                if not 0 <= page['at'] < max(total, 1):
+                    return 400, f'at must be between 0 and {total - 1}'
+                begin = page['at']
+                picked = messages[begin:begin + limit]
+            elif 'start' in page or 'after' in page:
+                wanted = page.get('start', page.get('after'))
+                found = next((i for i, m in enumerate(messages) if m['id'] == wanted), None)
+                if found is None:
+                    return 404, 'No message in this room'
+                begin = found + ('after' in page)
+                picked = messages[begin:begin + limit]
+            else:
+                begin = max(0, total - limit)
+                picked = messages[begin:]
+        return 200, dict(view, messages=picked, paged=True, total=total, first_position=begin, seq=seq, **extra)
+
     def listed(self, room):
-        return {k: v for k, v in self.view(room).items() if k not in ('messages', 'brief', 'brief_revision')}
+        listed = {k: v for k, v in self.view(room).items() if k not in ('messages', 'brief', 'brief_revision')}
+        if room['id'] in self.moderating:
+            listed['moderating'] = self.moderating[room['id']]
+        return listed
+
+    def member_route(self, me, room_id, method, member, payload):
+        """Room moderators: a ship's add makes a new room linked to the old one; a remove drops the user."""
+        room = self.rooms.get(room_id)
+        if room is None or me not in room['member_ids']:
+            return 404, b'{"error": "Not found"}'
+        if self.member_refusal is not None:
+            return self.member_refusal[0], json.dumps({'error': self.member_refusal[1]}).encode()
+        named = member if method == 'DELETE' else (payload or {}).get('member')
+        user = next((u for u in self.users.values() if u['username'] == named), None)
+        if user is None:
+            return 404, json.dumps({'error': f'{named} is not someone a moderator can add'}).encode()
+        if method == 'POST':
+            members = [self.users[i] for i in room['member_ids']] + [user]
+            new = self.room(room['title'], *members, linked_room_id=room_id)
+            answer = {**self.listed(self.rooms[new]), 'short': new[:6], 'added': [user], 'brief_carried': False,
+                      'board_carried': 0, 'bridged': False}
+        else:
+            room['member_ids'] = [i for i in room['member_ids'] if i != user['id']]
+            answer = {**self.listed(room), 'removed': user, 'earlier_rooms': 0, 'claims_released': 0,
+                      'grant_revoked': False, 'bridged': False}
+        return 200, json.dumps({**answer, **self.member_extra}).encode()
 
     def open_breakout(self, me, payload):
         """POST /api/ships/me/rooms, with step 1's checks in its order."""
@@ -327,6 +414,9 @@ class FakeStation:
             if room is None or me not in room['member_ids']:
                 return 404, b'{"error": "Not found"}'
             if method == 'GET' and len(segments) == 3:
+                if query and self.pages and ':' not in room['id']:  # the station does not page a paired peer's room
+                    status, body = self._page(room, query)
+                    return ok(body) if status == 200 else (status, json.dumps({'error': body}).encode())
                 return ok(self.view(room))
             if segments[3:4] == ['board']:  # work board 5.1
                 return self.board_route(me, room, method, segments[4:], json.loads(data) if data else {})
@@ -403,6 +493,10 @@ class FakeStation:
             return self.end_breakout(me, segments[4], segments[5])
         if method == 'PUT' and segments[:4] == ['api', 'ships', 'me', 'rooms'] and len(segments) == 6 and segments[5] == 'brief':
             return self.ship_brief(me, segments[4], json.loads(data))
+        if (method in ('POST', 'DELETE') and segments[:4] == ['api', 'ships', 'me', 'rooms'] and segments[5:6] == ['members']
+                and len(segments) == (6 if method == 'POST' else 7)):
+            return self.member_route(me, segments[4], method, segments[6] if method == 'DELETE' else None,
+                                     json.loads(data) if data else {})
         if method == 'POST' and path == '/api/ships/me/unread/advance':
             payload = json.loads(data)
             name = payload.get('cursor') or 'default'

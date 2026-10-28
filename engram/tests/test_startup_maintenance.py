@@ -129,7 +129,7 @@ def test_startup_auto_compress_skips_knowledge_feeds(engram_server_env, monkeypa
     from maintenance import MaintenanceReport
 
     server._init()
-    monkeypatch.setattr(server._storage, "get_uncompressed_episodes", lambda: [{"id": "x"}])
+    monkeypatch.setattr(server._storage, "get_uncompressed_episodes", lambda **_: [{"id": "x"}])
 
     seen = []
 
@@ -162,3 +162,29 @@ def test_startup_auto_compress_skips_knowledge_feeds(engram_server_env, monkeypa
     assert report.steps[0]["pending"] == 1
     assert report.steps[0]["knowledge_feeds_skipped"] == 2
     assert report.ok
+
+
+def test_startup_with_only_auto_episodes_runs_no_compression(engram_server_env, monkeypatch):
+    from maintenance import MaintenanceReport
+
+    server._init()
+    store = server._storage
+    store.add_episode(
+        id="cap-1", session_id="s", content="an unused captured prompt",
+        embedding=server._embeddings.embed(["an unused captured prompt"])[0], lane="work",
+    )
+    store.conn.execute("UPDATE episodes SET source = 'auto' WHERE id = 'cap-1'")
+    store.conn.commit()
+
+    class StubCompressor:
+        def auto_compress(self):
+            raise AssertionError("auto_compress must not run for captures only")
+
+    monkeypatch.setattr(server, "_compressor", StubCompressor())
+
+    report = MaintenanceReport()
+    with report.step("auto-compress"):
+        server._startup_auto_compress(report)
+
+    assert "pending" not in report.steps[0]
+    assert store.get_episode("cap-1")["compressed"] == 0
