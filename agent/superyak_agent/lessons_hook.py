@@ -150,10 +150,13 @@ def render(lessons):
     return '\n'.join([HEADING] + [f'Lesson {l["id"]} from {l["ship"]}\n{_fenced(l)}' for l in lessons])
 
 
-def hold_reason(lesson):
-    """Section 8's reason for holding a command once on one lesson. It says it is a lesson, not a refusal."""
-    return (f'Held once: lesson {lesson["id"]} from {lesson["ship"]} applies.\n{HEADING}\n{_fenced(lesson)}\n'
-            'Re-run the same command if you still want it.')
+def hold_reason(lesson, first=True):
+    """One lesson's block in the shared hold entry's deny (section 8; the seam's Ruling 35). The deny's first block
+    starts with section 8's `Held once` line, which says it is a lesson, not a refusal; a lesson after a checklist or
+    another lesson has its own `Lesson <id> from <ship>` line instead. The entry ends the deny with its re-run line."""
+    if first:
+        return f'Held once: lesson {lesson["id"]} from {lesson["ship"]} applies.\n{HEADING}\n{_fenced(lesson)}'
+    return f'{HEADING}\nLesson {lesson["id"]} from {lesson["ship"]}\n{_fenced(lesson)}'
 
 
 def transcript_ids(path, deadline, window=WINDOW, monotonic=time.monotonic):

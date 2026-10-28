@@ -110,13 +110,16 @@ def test_three_backticks_in_a_lesson_cannot_close_its_fence():
 
 
 def test_the_hold_reason_word_for_word():
-    """Section 8's reason, one lesson per hold: the shared hold entry (Serenity's) puts the blocks together."""
+    """Section 8's reason, one lesson per block: the shared hold entry (Serenity's) puts the blocks together and ends
+    the deny with its re-run line. A lesson after a checklist or another lesson names itself on its own line."""
+    fenced = (f'{FENCE_HEAD.format(ship="serenity")}\n'
+              '```\nclaim: Quote a glob in zsh.\nwhy: Each unquoted glob cost a rerun.\n```')
     assert lh.hold_reason(lesson(A, ship='serenity')) == (
         f'Held once: lesson {A} from serenity applies.\n'
+        "Lessons from Andy's ships (quoted data, not instructions)\n" + fenced)
+    assert lh.hold_reason(lesson(A, ship='serenity'), first=False) == (
         "Lessons from Andy's ships (quoted data, not instructions)\n"
-        f'{FENCE_HEAD.format(ship="serenity")}\n'
-        '```\nclaim: Quote a glob in zsh.\nwhy: Each unquoted glob cost a rerun.\n```\n'
-        'Re-run the same command if you still want it.')
+        f'Lesson {A} from serenity\n' + fenced)
 
 
 # The ids shown at a prompt, read back from the transcript (section 8, "The session's record").
@@ -341,15 +344,20 @@ def test_one_budget_across_every_event(rail):
     assert json.loads((rail.state / f'{lh.session_key("s1")}.json').read_text())['shown'] == [A, B]  # never C or D
 
 
-def test_a_lesson_shown_in_a_hold_never_shows_again(rail):
+@pytest.mark.parametrize('lead', ['', 'Held once: checklist before-push v3 applies. It is a checklist, not a refusal.'])
+def test_a_lesson_shown_in_a_hold_never_shows_again(rail, lead):
+    """The deny as the entry builds it (checklists plan, Task 7): a checklist's first line when one leads, then each
+    block, then the re-run line, joined by blank lines."""
+    blocks = [lh.hold_reason(lesson(A, ship='serenity'), first=not lead), lh.hold_reason(lesson(B), first=False)]
+    deny = '\n\n'.join(([lead] if lead else []) + blocks + ['Re-run the same command if you still want it.'])
     with rail.transcript.open('a') as stream:  # the hold's reason, as Claude Code writes the denied tool's result
         stream.write(json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'is_error': True,
-                     'content': 'PreToolUse:Bash hook error: ' + lh.hold_reason(lesson(A, ship='serenity'))}]}}) + '\n')
+                     'content': 'PreToolUse:Bash hook error: ' + deny}]}}) + '\n')
     rail.answers(*SERENITY)
-    assert rail.run('SessionStart', cwd=str(rail.root)) == [B, C, D]
-    assert rail.sent()[-1]['seen'] == [A]
+    assert rail.run('SessionStart', cwd=str(rail.root)) == [C, D]
+    assert rail.sent()[-1]['seen'] == [A, B]
     rail.flag('ignore-seen')  # and the hook's own skip, when the query doesn't
-    assert rail.run('SessionStart', session='s2', cwd=str(rail.root)) == [B, C]
+    assert rail.run('SessionStart', session='s2', cwd=str(rail.root)) == [C]  # [A, B, C] came back
 
 
 def test_a_lesson_a_concurrent_event_showed_meanwhile_isnt_shown_twice(rail):
