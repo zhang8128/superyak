@@ -285,16 +285,71 @@ def test_a_short_form_needs_this_peers_index_and_a_full_id_does_not(lessons_stat
     assert store.lesson_repeat(key, 'read', 'on')['verified'] is False
 
 
-def test_a_peer_whose_record_names_no_ship_records_no_repeat(lessons_peers):
-    """C28: only the origin's record names this machine's ship; on another peer there is no ship to record."""
-    pi, pi_fed, _ = lessons_peers['peers']['pi']
-    tardis, _, _ = lessons_peers['peers']['tardis']
-    pi.send_message(lessons_peers['peers']['pi'][2]['rio-grande'], lessons_peers['room'], 'p1', lesson_body(ship='rio-grande'))
+RIO = lesson_body(ship='rio-grande', claim='Copy a hash from the output; never type one.', command=('git show',))
+
+
+def test_on_another_peer_the_ship_is_its_one_ship_account_in_the_room(lessons_peers):
+    """7.1, "run by a ship on its own peer": where the record names no ship (every peer but the origin, C28), the ship is
+    the one ship account on this peer that is a member of the current lessons room. It is derived, never an argument:
+    a ship account outside the room changes nothing, and a second one in the room leaves the ship unknown."""
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    tardis, tardis_fed, tids = lessons_peers['peers']['tardis']
+    clock, deliver = lessons_peers['clock'], lessons_peers['deliver']
+    pi.send_message(pids['rio-grande'], lessons_peers['room'], 'p1', RIO)
+    tardis.send_message(tids['tardis'], lessons_peers['key'], 't1', GLOBS)
+    deliver('tardis', 'pi')
+    deliver('pi', 'tardis')
+    tardis.lessons_index(None)
+    key = lessons.lesson_id(pi_fed.identity.peer_id, lessons.parse_post(RIO))
+    own = lessons.lesson_id(tardis_fed.identity.peer_id, lessons.parse_post(GLOBS))
+    assert [e['ship'] for e in shown_to(tardis, clock, 'tardis', 'git show 1a2b')['lessons']] == ['rio-grande']
+    made = tardis.lesson_repeat(lessons.short_lesson_id(key), 'receipt', 'on')
+    assert made['ship'] == 'tardis' and made['verified'] is True
+    assert repeats(tardis) == [(made['id'], LESSON_TIME, tids['tardis'], key, 'receipt', receipts(tardis)[0], 'on')]
+    with pytest.raises(Problem, match='own lesson'):   # the derived ship's own lesson, as on the origin
+        tardis.lesson_repeat(own, 'read', 'on')
+    done = run_lessons('repeat', '--data-dir', tardis.data_dir, key, '--how', 'read', '--hook', 'off')
+    assert done.returncode == 0 and 'tardis, lesson' in done.stdout, done.stderr
+
+    second = tardis.lessons_ship('defiant', 'andy')['id']   # a ship account here, not in the room: no change
+    assert tardis.lesson_repeat(key, 'read', 'off')['ship'] == 'tardis'
+    contact = pi_fed.pair(pids['andy'], tardis_fed.card(second))['id']
+    pi.add_participants(pids['andy'], lessons_peers['room'], [contact])
+    deliver('pi', 'tardis')
+    before = repeats(tardis)
+    for args in ((key, 'read', 'on'), (key, 'receipt', 'on')):
+        with pytest.raises(Problem, match='More than one ship account'):
+            tardis.lesson_repeat(*args)
+    refused = run_lessons('repeat', '--data-dir', tardis.data_dir, key, '--how', 'read', '--hook', 'off')
+    assert refused.returncode == 1 and 'More than one ship account' in refused.stderr and key not in refused.stderr
+    assert repeats(tardis) == before and len(before) == 3
+
+
+def test_the_recorded_ship_must_be_a_member_of_the_current_room(lessons_station):
+    """On the origin, C28's record names the ship; once it leaves the lessons room, it records no repeat there."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', HASHES)
+    key = full_id(store, HASHES)
+    assert store.lesson_repeat(key, 'read', 'on')['ship'] == 'rio-grande'
+    store.remove_participant(ids['andy'], room, ids['rio-grande'])
+    with pytest.raises(Problem, match='not a member'):
+        store.lesson_repeat(key, 'read', 'on')
+    assert len(repeats(store)) == 1
+
+
+def test_a_derived_ship_must_be_a_member_of_the_current_room(lessons_peers):
+    """On another peer, a ship removed from the lessons room leaves no ship account in it, so nothing is recorded."""
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    tardis, _, tids = lessons_peers['peers']['tardis']
+    pi.send_message(pids['rio-grande'], lessons_peers['room'], 'p1', RIO)
     lessons_peers['deliver']('pi', 'tardis')
-    key = lessons.lesson_id(pi_fed.identity.peer_id, lessons.parse_post(lesson_body(ship='rio-grande')))
-    with pytest.raises(Problem, match='names no ship'):
+    key = lessons.lesson_id(pi_fed.identity.peer_id, lessons.parse_post(RIO))
+    assert tardis.lesson_repeat(key, 'read', 'on')['ship'] == 'tardis'
+    pi.remove_participant(pids['andy'], lessons_peers['room'], pids['contact'])
+    lessons_peers['deliver']('pi', 'tardis')
+    with pytest.raises(Problem, match='No ship account on this peer is a member'):
         tardis.lesson_repeat(key, 'read', 'on')
-    assert repeats(tardis) == []
+    assert len(repeats(tardis)) == 1
 
 
 # 5. The list

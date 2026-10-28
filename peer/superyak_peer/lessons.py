@@ -85,8 +85,11 @@ REPEAT_NO_SHORT = "No lesson in this peer's index has that short form; a retract
 REPEAT_AMBIGUOUS = "That short form names more than one lesson in this peer's index; name the lesson by its full id"
 REPEAT_RETRACTED = 'That lesson was retracted; a retracted lesson is named by its full id'
 REPEAT_UNKNOWN = "No lesson in this peer's lessons room has that id, live or retracted"
-REPEAT_NO_SHIP = ("This peer's lessons room record names no ship, so there is no ship to record a repeat for (the ship is "
-                  'never an argument)')
+REPEAT_NO_SHIP = ('No ship account on this peer is a member of the lessons room, so there is no ship to record a repeat '
+                  "for: the ship is this peer's one ship account in the room, never an argument")
+REPEAT_SHIPS = ('More than one ship account on this peer is a member of the lessons room, so the ship is unknown: the ship '
+                "is this peer's one ship account in the room, never an argument")
+REPEAT_NOT_MEMBER = "This peer's recorded ship is not a member of the lessons room, so it records no repeat here"
 REPEAT_OWN = "A ship's own lesson is never its repeat: the query never shows a ship its own lesson (section 5, step 3)"
 REPEAT_NO_RECEIPT = ("This peer holds no receipt of that lesson for this ship, so the repeat can't be verified; record it "
                      'with --how read')
@@ -1145,8 +1148,10 @@ class Lessons:
                 'SELECT ship_id, lesson_id, MIN(created) FROM lesson_receipts GROUP BY ship_id, lesson_id')}
 
     def lesson_repeat(self, lesson, how, hook):
-        """`lessons repeat`, section 7.1: record that this peer's recorded ship (C28's, never an argument) made a
-        mistake a lesson it had seen covers. `lesson` is a full id, or a short form that resolves to exactly one lesson in
+        """`lessons repeat`, section 7.1: record that this peer's ship made a mistake a lesson it had seen covers. The
+        ship is never an argument: on the origin it is C28's recorded ship; where the record names none (every other
+        peer), it is the one ship account on this peer that is a member of the current lessons room, and none or more
+        than one is refused. Either way it must be a member of the current room. `lesson` is a full id, or a short form that resolves to exactly one lesson in
         this peer's index; a retracted lesson by full id only. `how` is receipt (this peer's newest receipt of that lesson
         for that ship, whose id the record keeps: verified) or read (unverified); `hook` is on or off, as declared. Each
         refusal names its rule, never the value, and writes nothing. No text reaches the record."""
@@ -1174,8 +1179,13 @@ class Lessons:
             if record is None or snapshot is None:
                 raise Problem(404, 'No lessons room is recorded on this peer')
             ship = record['ship_id']
-            if ship is None:
-                raise Problem(409, REPEAT_NO_SHIP)
+            if ship is None:  # not the origin: derived from what this peer holds (snapshot.ships: its ship members)
+                here = [full.partition(':')[2] for full in snapshot.ships.values()]
+                if len(here) != 1:
+                    raise Problem(409, REPEAT_SHIPS if here else REPEAT_NO_SHIP)
+                ship = here[0]
+            elif f'{snapshot.peer}:{ship}' not in snapshot.members:
+                raise Problem(409, REPEAT_NOT_MEMBER)
             first, retracted = accepted_lessons(snapshot)
             if named in retracted:
                 if named != lesson:  # resolved from the index, which hasn't dropped it yet
