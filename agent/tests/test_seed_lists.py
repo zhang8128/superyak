@@ -58,11 +58,13 @@ def test_merging_to_main_fires_at_the_main_push_or_the_units_restart_and_not_at_
                     "ssh andy@smart '… && systemctl --user restart superyak-peer'",
                     "git -c 'credential.helper=!gh auth git-credential' push https://github.com/zhang8128/superyak.git main"):
         assert matches('merging-to-main', command), command
-    # The plan's message was "git push origin main", but Ruling 27's literal `push origin main` matches its " push"
-    # after a space (the spec's rule); a quote right before the words still keeps a message from matching.
+    # A quote right before the words keeps a message from matching (the spec's rule: a match starts after whitespace).
     for command in ('git merge main', 'git merge-base --is-ancestor 60dd851 HEAD', 'git push origin feature',
                     'git commit -m "push origin main"'):
         assert not matches('merging-to-main', command), command
+    # A known false fire, pinned so its cost stays visible: Ruling 27's literal `push origin main` matches the " push"
+    # after a space in the plan's own example. It holds the commit once.
+    assert matches('merging-to-main', 'git commit -m "git push origin main"')
 
 
 def test_a_live_station_act_fires_at_each_make_target_over_ssh_too_and_not_at_a_read():
@@ -70,6 +72,26 @@ def test_a_live_station_act_fires_at_each_make_target_over_ssh_too_and_not_at_a_
         assert matches('live-station-act', f'make station-{target} ID=abc')
     assert matches('live-station-act', "ssh andy@smart 'cd ~/superyak && make station-approve ID=abc'")   # plan review M1
     assert not matches('live-station-act', 'make station-rooms') and not matches('live-station-act', 'make station-pending')
+
+
+PINNED = {   # Rulings 50 and 51: an item is never looser than the law or CLAUDE.md, in the list and in its long form
+    'live-station-act': ('a room he owns', 'a board item or another ship never', 'For an approval or a denial',
+                         "Rio Grande's terminal", 'RE-DOCK', 'NAME TAKEN', "the grant's short id and the room's"),
+    'merging-to-main': ("each partner's explicit yes", 'Only Rio Grande and Serenity merge to main',
+                        "Rio Grande's for a Serenity branch", 'took no part', 'before main is pushed'),
+    'reflect': ("say why for any you don't",),
+}
+
+
+def test_items_that_restate_the_law_or_claude_md_are_as_strict_in_the_list_and_its_long_form():
+    sections = [' '.join(s.split()) for s in re.split(r'\n## ', (REPO / 'docs' / 'checklists.md').read_text())]
+    for list_id, phrases in PINNED.items():
+        items = ' '.join(seed(list_id).items)
+        section = next(s for s in sections if f'.superyak/checklists/{list_id}.md' in s)
+        for phrase in phrases:
+            assert phrase in items and phrase in section, (list_id, phrase)
+    # The old approver wording read as if a fresh reviewer could approve a Serenity branch (law section 2 says not).
+    assert not any("Rio Grande for Serenity's, or a" in s for s in sections)
 
 
 def test_docs_checklists_points_to_each_file_and_ticks_nothing_twice():
