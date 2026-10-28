@@ -170,3 +170,64 @@ def test_two_claim_lists_at_most_and_the_rest_named(ship):
     ship.fake.board[room] = [board_item('build:a', room_id=room)]
     text = call(ship.tools, 'station_claim', room=room, key='build:a')[0]
     assert text.count('\nChecklist ') == 2 and cl.more_line(['before-work']) in text
+
+
+# --- fix round 1 ---
+
+def test_a_failed_fired_log_write_never_hides_the_list(ship):
+    ship.fired.mkdir(parents=True)                                    # every append to it fails
+    room = ship.fake.room('Ops', ship.andy, ship.serenity)
+    ship.fake.board[room] = [board_item('build:a', room_id=room)]
+    assert '- [ ] Name the purpose.' in call(ship.tools, 'station_claim', room=room, key='build:a')[0]
+    assert 'Checklist ' not in call(ship.tools, 'station_claim', room=room, key='build:a')[0]
+    with holds.open_record(holds.record_path(ship.home / 'sessions', 's1'), time.monotonic() + 1) as rec:
+        assert rec.data['items'][key(ship, 'before-work')]
+
+
+def test_a_locked_record_shows_no_list_and_no_error_and_the_renewal_shows_it(ship):
+    import fcntl
+    room = ship.fake.room('Ops', ship.andy, ship.serenity)
+    ship.fake.board[room] = [board_item('build:a', room_id=room)]
+    fd = holds._lock(holds.record_path(ship.home / 'sessions', 's1'), time.monotonic() + 1, time.monotonic)
+    try:
+        started = time.monotonic()
+        text, error = call(ship.tools, 'station_claim', room=room, key='build:a')
+        assert not error and 'You hold' in text and 'Checklist ' not in text and time.monotonic() - started < 3
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        import os
+        os.close(fd)
+    assert '- [ ] Name the purpose.' in call(ship.tools, 'station_claim', room=room, key='build:a')[0]
+
+
+def test_propose_counts_the_answers_of_the_last_runs_per_item(ship):
+    run(ship, [{'answer': 'done'}, {'answer': 'caught', 'reason': 'old base'}])
+    run(ship, [{'answer': 'done'}, {'answer': 'n/a'}])
+    text = call(ship.tools, 'checklist_propose', key=key(ship, 'before-work'), change='Drop item 2.', reason='Rarely useful.')[0]
+    assert 'Runs: last 2 runs; item 1: done 2; item 2: caught 1, n/a 1' in text
+
+
+@pytest.mark.parametrize('how', ['act', 'raises'])
+def test_a_guard_refusal_with_an_unexplained_verdict_is_recorded_as_unknown(ship, monkeypatch, how):
+    from superyak_agent import acting
+    if how == 'raises':
+        def boom(*args):
+            raise RuntimeError('x')
+        monkeypatch.setattr(acting, 'verdict', boom)
+    tools = Tools(ship.client, guard=lambda: 'refused', home=ship.home, clock=lambda: 1000.0)
+    assert run(ship, [], tools=tools)[1]
+    assert lines(ship.runs)[-1]['refused'] == 'unknown'
+
+
+def test_a_hook_run_is_not_a_run_for_the_refusal_record(ship, monkeypatch):
+    monkeypatch.setenv('SUPERYAK_RUN', 'hook')
+    tools = Tools(ship.client, guard=lambda: 'refused', home=ship.home, clock=lambda: 1000.0)
+    run(ship, [], tools=tools)
+    assert lines(ship.runs)[-1]['refused'] != 'run'
+
+
+def test_the_checklist_tools_refuse_without_a_home(ship):
+    tools = Tools(ship.client)
+    for text, error in (run(ship, [], tools=tools),
+                        call(tools, 'checklist_propose', key=key(ship, 'reflect'), change='x', reason='y')):
+        assert error and 'no ship home' in text

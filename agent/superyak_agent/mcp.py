@@ -521,10 +521,13 @@ class Tools:
         session_id = os.environ.get('CLAUDE_CODE_SESSION_ID')
         return acting.session_key(session_id) if session_id else self.salt
 
-    def _own_dir(self):
+    def _home(self):
         if self.home is None:
             raise ValueError('Checklists are not available to this server: it has no ship home.')
-        return self.home / 'checklists'
+        return self.home
+
+    def _own_dir(self):
+        return self._home() / 'checklists'
 
     def _fallback_cwd(self):
         try:
@@ -537,10 +540,14 @@ class Tools:
         session_id = os.environ.get('CLAUDE_CODE_SESSION_ID')
         if session_id and self.home is not None:
             try:
-                data = json.loads(holds.record_path(self.home / 'sessions', session_id).read_text())
-                if isinstance(data, dict) and isinstance(data.get('cwd'), str) and data['cwd']:
+                fd = os.open(holds.record_path(self.home / 'sessions', session_id), os.O_RDONLY)
+                try:
+                    data = holds._read(fd)   # as the hook reads it: a stale tail after a shorter payload is ignored
+                finally:
+                    os.close(fd)
+                if isinstance(data.get('cwd'), str) and data['cwd']:
                     return data['cwd']
-            except (OSError, ValueError):
+            except OSError:
                 pass
         return self._fallback_cwd()
 
@@ -559,25 +566,28 @@ class Tools:
             now, item = self.clock(), firing.item_key(room_id, key)
             session_id = os.environ.get('CLAUDE_CODE_SESSION_ID')
             if session_id:
+                lists = self._find(self._record_cwd()).lists   # before the lock: the hook and the hold wait less
                 with holds.open_record(holds.record_path(self.home / 'sessions', session_id), time.monotonic() + 1.0) as rec:
-                    return self._claim_text(rec.data, rec.save, now, item)
-            return self._claim_text(self.memory, lambda: None, now, item)
+                    return self._claim_text(lists, rec.data, rec.save, now, item)
+            return self._claim_text(self._find(self._fallback_cwd()).lists, self.memory, lambda: None, now, item)
         except Exception:  # noqa: BLE001
             return ''
 
-    def _claim_text(self, record, save, now, item):
-        cwd = record.get('cwd') if isinstance(record.get('cwd'), str) and record.get('cwd') else self._fallback_cwd()
-        due = firing.due_at_claim(self._find(cwd).lists, record, item, now)
+    def _claim_text(self, lists, record, save, now, item):
+        due = firing.due_at_claim(lists, record, item, now)
         blocks = [((loaded, kinds), loaded.checklist.id, checklists.render(loaded)) for loaded, kinds in due]
         shown, _, text = checklists.fit(blocks, 0, holds.OUTPUT_CHARS, cap=firing.LISTS_PER_EVENT)
         if not shown:
-            return ''
+            return text    # a lone list too big to fit is named, not fired: it is due again at the renewal
         holds.touch(record, now, None)
         firing.mark_fired(record, shown, now, item=item)
         save()
         session = self._session()
         for loaded, kinds in shown:
-            self._log('fired.jsonl', firing.fired_line(now, session, loaded.key, loaded.checklist.version, 'claim'))
+            try:
+                self._log('fired.jsonl', firing.fired_line(now, session, loaded.key, loaded.checklist.version, 'claim'))
+            except OSError:    # a failed write drops the line, never the list (as the hook does)
+                pass
         return text
 
     def _checked_run(self, args):
@@ -622,34 +632,23 @@ class Tools:
     def refused_run(self, args):
         """The guard refused checklist_run: record why (Ruling 22). Arguments that don't validate record nothing."""
         key, version, moment, _ = self._checked_run(args if isinstance(args, dict) else {})
-        if os.environ.get('SUPERYAK_RUN'):
+        if claims.inside_run():
             kind = 'run'
         else:
             try:
-                project = os.environ.get('CLAUDE_PROJECT_DIR')
-                if not project:
-                    try:
-                        project = os.getcwd()
-                    except OSError:
-                        project = None
-                kind = acting.verdict(self._home(), project)[0]
+                kind = acting.verdict(self._home(), session_project_dir())[0]
             except Exception:  # noqa: BLE001
                 kind = 'unknown'
             if kind not in ('unreadable', 'claimed', 'stale', 'elsewhere', 'unclaimed'):
                 kind = 'unknown'
         self._log('runs.jsonl', firing.refused_line(self.clock(), self._session(), key, version, moment, kind))
 
-    def _home(self):
-        if self.home is None:
-            raise ValueError('no ship home')
-        return self.home
-
     def checklist_propose(self, args):
         key, change, reason = args.get('key'), args.get('change'), args.get('reason')
         if not isinstance(key, str) or not key:
             raise ValueError('key must be the list key shown with the checklist.')
         if not (isinstance(change, str) and change and firing.screen_reason(change, 300)):
-            raise ValueError(firing.REASON_REFUSED.replace('200', '300'))
+            raise ValueError('A change is one line of at most 300 bytes, with no email address, phone number or key-like token. Reword it.')
         if not (isinstance(reason, str) and reason and firing.screen_reason(reason)):
             raise ValueError(firing.REASON_REFUSED)
         loaded = next((l for l in self._find(self._record_cwd()).lists if l.key == key), None)
@@ -990,19 +989,26 @@ def _refusal(tools):
         return f'The station tools refuse: this ship\'s claims could not be checked ({type(exc).__name__}).'
 
 
+def session_project_dir():
+    """The session's project: CLAUDE_PROJECT_DIR, else this server's own cwd (only when needed: a deleted start folder,
+    a removed worktree, can't be read). None means no project: the machine ship acts as before D7, a project ship
+    refuses."""
+    project = os.environ.get('CLAUDE_PROJECT_DIR')
+    if not project:
+        try:
+            project = os.getcwd()
+        except OSError:
+            project = None
+    return project
+
+
 def claim_guard(config_path):
     """S7, R18: on every call, the session's project (CLAUDE_PROJECT_DIR, else this server's own cwd, where Claude Code
     and Codex start it, M8) against the claims registry, read afresh."""
     home = Path(config_path).parent
 
     def guard():
-        project = os.environ.get('CLAUDE_PROJECT_DIR')
-        if not project:          # the cwd only when needed: a deleted start folder (a removed worktree) can't be read
-            try:
-                project = os.getcwd()
-            except OSError:
-                project = None   # no project: the machine ship acts as before D7, a project ship refuses
-        return claims.refusal(home, project)
+        return claims.refusal(home, session_project_dir())
     return guard
 
 
