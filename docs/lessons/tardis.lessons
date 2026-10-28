@@ -127,3 +127,17 @@ claim: Measure a size cap after every layer of wrapping, using the character tha
 why: Pull wraps envelopes in JSON strings. I sized the worst case with a quote, 4 bytes, but a control character costs 7, so the margin was 25 KB, not 326 KB.
 file: docs/superpowers/plans/2026-10-28-federation-pull.md
 learned from: own
+
+lesson
+ship: tardis
+claim: Chain a cd with && or use git -C: after a failed cd, every command after it runs in whatever repo the shell was in.
+why: A worktree add failed, the cd into it failed, and a merge meant for that branch ran next in the main checkout instead. Only luck left it untouched.
+command: git worktree add
+learned from: own
+
+lesson
+ship: tardis
+claim: To undo a test mutant, reverse that one edit or keep its diff aside: git stash then git stash pop puts every change back, the mutant too.
+why: I proved a test caught a mutant, then ran stash and pop to clean up, and the mutant was still in the code until I checked the line.
+command: git stash pop
+learned from: own
