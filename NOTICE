@@ -1,0 +1,9 @@
+Superyak
+Copyright 2026 Superyak contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Exceptions:
+- lighthouse/fixtures/adna-upstream/ is a fixture from Lat Labs under the MIT License; its own LICENSE file applies.
+
+Dependencies keep their own licenses and notices; see each package's distribution metadata.

@@ -127,9 +127,29 @@ and are revoked on logout. The cookie is HttpOnly, SameSite=Strict and Secure fo
 HTTPS or explicit secure-cookie mode. Every authenticated write sends
 `X-CSRF-Token` from login or `/api/me`; login/redeem require Origin without CSRF.
 No public registration or password reset route exists. Passwords use scrypt with
-random salts (`n=16384,r=8,p=1,dklen=32`). Failed logins share a generic response and
-are limited to eight per username / forty per source per five minutes; success
-clears the username failure counter. One-use invitation redemption is atomic.
+random salts (`n=16384,r=8,p=1,dklen=32`). Failed logins share a generic response
+(401 alike for unknown and known names; 429 when held). Each attempt is counted before
+its hash, and a held attempt is refused without one. The holds: eight failures per
+username from one source and forty per source in five minutes, and thirty public
+failures per username in an hour, which hold public sign-ins to it. A public source is
+its IPv6 /64 or full IPv4 address, a tailnet source its full address. A success deletes
+the username-and-source counter and gives back its other reservations; a tailnet success
+also clears the username's public hold. A success sets `superyak_device` (random, HttpOnly,
+Secure, SameSite=Strict, 180 days, stored hashed, one row per browser, at most 20 per user,
+kept at logout): presented on a sign-in to its own username, it exempts that browser from
+the three holds, and its failures hold only its own token (eight in five minutes). Sign-ins
+run in worker lanes of their own: public 2 at a time with 8 waiting, tailnet 1 with 4,
+known browsers 1 with 4; a full lane answers 429. One-use invitation redemption is atomic.
+
+**Public requests.** A request is public when it carries `Tailscale-Funnel-Request`, or
+when its client (after `--proxy-headers`, which trusts 127.0.0.1 only) is neither loopback
+nor a tailnet address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) or isn't an IP address. A
+public request reaches only `GET`/`HEAD` `/`, `/public/` and `/assets/*`, `GET /api/health`,
+`POST /api/login`, `POST /api/invitations/redeem` and the two `/public/layers/...` routes,
+unless it carries a valid session or ship key; the route's own check still decides. Anything
+else gets 401 `{"error":"Sign in required"}` under `/api/` and 404 elsewhere. Dockings,
+access requests and `/federation/*` therefore need the tailnet. A failure while checking
+answers 503 `{"error":"Try again shortly"}`. Tailnet requests are handled as before.
 Name corrections append their actual old/new values, acting account ID and time.
 The self-only history begins with the first correction recorded by this schema;
 existing account names do not create fabricated earlier entries. No administrative
@@ -318,6 +338,7 @@ Every `/api/grants` route takes a person session (CSRF on writes), and a ship ke
 | Method/path | Body | Behavior |
 |---|---|---|
 | POST `/api/grants` | `{grantee, targets, rooms, hours, budget}` | 201 with the grant as `GET /api/grants` shows it; the caller is the issuer |
+| POST `/api/grants/moderate` | `{grantee, room, hours?, budget?, actions?}` | 201 with the moderate grant as `GET /api/grants` shows it; the caller, the room's owner, is the issuer |
 | GET `/api/grants` | — | The grants the caller issued, holds, or that cover their ships, newest first |
 | POST `/api/grants/{id}/revoke` | `{reason?}` | The revoked grant; for its issuer, an issuer above it, or a target ship's owner |
 | GET `/api/grants/{id}/signed` | — | `{station, record, signature}`, plus `revocation` once revoked (see Signed records) |
@@ -341,6 +362,31 @@ unrestricted grantee set. Every check reads it there, so a narrower policy takes
 
 `true`, `24.0` and `"24"` are not integers. The grant is stored with `actions` `["direct"]`, `depth` 0 and `confirm`
 `none`, and signed in the same transaction.
+
+**Moderate grants.** `POST /api/grants/moderate` lets one person in a room, or one of the caller's own ships in it, add
+and remove its members (room moderators, M1 to M3). A person session only; a ship key gets 403 `Ship keys cannot use
+this route`. No `depth` is read: the grant is depth 0, `delegable` stays `["direct"]`, `targets` is `[]` and `rooms`
+lists the one room. Checked in this order; the first failure answers and nothing is written:
+
+1. `room` is a room the caller is in: not a remote id, not a breakout (404 `The room must be a room you are in`); the
+   caller owns it (403 `Only the room's owner can let someone moderate it`); it is current (400 `The room was replaced by
+   a newer linked room; name the current one`); no member is on another station (400 `A room with a member on another
+   station can't have moderators`).
+2. `grantee` is not the caller (400 `You cannot grant to yourself`), and is an active person in the room or a ship of the
+   caller's in it (400 `A moderator is a person in this room or one of your own ships in it`).
+3. `hours`, default 720, a JSON integer from 1 to `max_expiry_hours` (400 `hours is a whole number from 1 to 720`).
+4. `budget`, default 10, a JSON integer from 1 to 50 (400 `budget is a whole number from 1 to 50`).
+5. `actions`, default both, a non-empty list of `add_member` and `remove_member`, each at most once (400 `actions is a
+   list of add_member and remove_member, each at most once`).
+
+Making it posts, as the system author in the room, `<owner> made <name> a moderator of this room, to add and remove
+members, until 2026-11-26 14:00 UTC.` (client id `moderator-<grant id>`; `add members` or `remove members` for one
+action). The grant's budget counts member changes in the last 24 hours instead of builds ("Grant #a1b2 has used its 10
+changes for the last 24 hours"), and check 5 of Validity is that the covered room is owned by the issuer, holds the
+grantee and has no member on another station. Revoking a moderate grant (see Revoking) posts `<name> ended <grantee>'s
+moderation of this room.` (client id `moderator-<grant id>-revoked`) in the room it covers now. Every grant view has
+`actions` (`["direct"]`, or the moderate list) and `made_via` (`browser` or `cli`; null for a grant made before room
+moderators).
 
 **Validity.** Checked in this order; the first that fails is the `reason`: not revoked ("Grant #a1b2 was revoked by
 Andy"; "Grant #a1b2 was revoked" when the restore revoked it); not expired (from its `expires` instant on: "Grant #a1b2
@@ -368,7 +414,9 @@ the same transaction.
 
 **Restoring.** `station-restore-reconcile` revokes, in the staged copy, each grant revoked in the replaced file (with
 its time, person and reason) and each grant the replaced file lacks (reason `restored`), and adds the replaced file's
-budget uses for grants in both files, matched on `(grant_id, ticket_id)`. Without a usable replaced file it revokes
+budget uses for grants in both files, matched on `(grant_id, ticket_id)`, and the replaced file's act log
+(`member_changes`): each row this file lacks, whose grant (if any) is in both files and whose room, new room and
+actor (if any) are here, so a moderator's budget and the owner's removals survive. Without a usable replaced file it revokes
 every grant with reason `restored` and no person. The report lists each revoked grant by short id, issuer and grantee,
 and why. The station signs those revocations at its next start. A grant made after the copy is gone; its issuer makes
 it again.
@@ -400,10 +448,10 @@ allows someone else to retrieve bytes; withdrawal immediately closes those route
 | Method/path | Request | Response |
 |---|---|---|
 | GET/POST `/api/chats` | POST `{title,member_ids:[]}` | Accessible summaries / created room, 201 |
-| GET `/api/chats/{id}` | — | Room plus `messages`, `members`, `brief` and `brief_revision` |
+| GET `/api/chats/{id}` | — | Room plus `messages`, `members`, `brief` and `brief_revision`, and `moderators` (`[{id,name}]`, one per holder of an unrevoked, unexpired covering moderate grant who is in the room; `[]` for a received room). `GET /api/chats` adds `moderating` (`{grant:"#abcd",actions,budget_left}`) to a room the caller moderates: the caller's oldest covering grant that is valid apart from its budget, so `budget_left` can read 0. A moderate grant's view on `GET /api/grants` carries `changes` for its issuer only: `[{member:{id,name},change,room:{id,title},created}]`, newest first, at most 50 |
 | POST `/api/chats/{id}/messages` | `{client_message_id,body}` | Message, 201 |
-| POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null}` | New linked room plus `board_carried`, 201; owner only; 409 for a replaced room |
-| DELETE `/api/chats/{id}/participants/{user_id}` | — | Updated room; owner only |
+| POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null,grant_id:null}` | New linked room plus `short`, `added` (`{id,username,name}` each), `brief_carried`, `board_carried`, `bridged`, 201; the room's owner, or a moderator holding a valid moderate grant with `add_member` (spent as the oldest such grant unless `grant_id` names one; `carry_brief` is ignored, the brief comes at the revision read; exactly one member, else 400 `A moderator changes one member at a time`; refusals in order: 400 `Name the member to add`, 403 wormhole (only the owner bridges), 404 `{x} is not someone a moderator can add` for no account, the system author, a pending account or a remote contact, 403 an ownerless station ship, 403 `{name} is not one of {owner}'s ships`, 403 `{owner} removed {name} from this room; only he can add them back`, 409 `{name} is already a member of room {short}; nothing changed`; a grant that is revoked, expired, spent or lacks the action gets 403 with its reason, no grant 403 below); 404 for a non-member or a breakout, 409 `This room was replaced by a newer linked room; add members there` before 403 `Only the room's owner or one of its moderators can change its members`, 409 `Everyone named is already a member of room {short}; nothing changed` when no one named is new |
+| DELETE `/api/chats/{id}/participants/{user_id}` | — | The room's view plus `removed` (`{id,username,name}`), `earlier_rooms`, `claims_released`, `grant_revoked`, `bridged`; the room's owner, or a moderator holding a valid moderate grant with `remove_member` (spent as the oldest such grant unless `?grant_id=` names one), or any moderator removing itself (a covering moderate grant valid apart from its budget, either action); a moderator's refusals in order: 404 `{x} is not a member of this room`, 403 `A moderator can't remove the room's owner`, 403 wormhole (`Removing wormhole unbridges the room; only the room's owner does that (make station-unbridge)`), 403 `{name} is on another station; only {owner} manages them`, 403 an ownerless station ship, 403 `{name} moderates this room too; only {owner} can remove a moderator`; optional `?grant_id=`; 404 for a non-member or a breakout, 409 `This room was replaced by a newer linked room; remove members there` before 403 `Only the room's owner or one of its moderators can change its members`, 400 `Cannot remove the room owner` for the owner himself, 404 `{x} is not a member of this room` for someone in no room of the chain |
 | PUT `/api/chats/{id}/brief` | `{body,revision}` | The brief, or null once removed; owner only (a person, with CSRF) |
 | GET `/api/chats/{id}/brief/revisions` | — | The brief's history, newest first; the room's owner only |
 
@@ -422,10 +470,19 @@ personal room; one additional member a direct room; more members a group.
 Creator is always a member. Account/organization admin status gives no read/send
 permission. The first slice reserves audience changes to the room creator, who
 cannot remove themselves. Adding participants creates a linked, message-free room with
-old and added participants; old messages stay in the old room; its open board items move to the new room with their claims when the holder is in the new room (work board 5.x). `linked_room_id`
+old and added participants; old messages stay in the old room; the new room holds one station notice, `member-<log row id>`, saying who added whom and which room it continues (with a note when the room is bridged to the lattice), and each added member has a row in `member_changes`; its open board items move to the new room with their claims when the holder is in the new room (work board 5.x). `linked_room_id`
 may refer to an inaccessible room; it grants no ability to fetch it. A room that a linked room already replaced takes no
-more participants: 409 `This room was replaced by a newer linked room; add members there`, after the 404 and the
-owner's 403, so a room's chain never forks (work board 8.4).
+more participants: 409 `This room was replaced by a newer linked room; add members there`, after the 404 for a non-member and before
+the 403, so a room's chain never forks (work board 8.4).
+
+**Removing a member (M8)** is one transaction for every path (the participants route and `make station-unbridge`): the member
+leaves the room and every earlier room of its chain that the same owner owns and they are still in, each room's epoch
+rising by one with a `chat.membership` event; each of their unrevoked moderate grants covering the room is revoked
+(`removed from the room`) and signed; their deferrals in those rooms are dropped; their active claims there are released
+silently (no claim line); one `remove` row goes to `member_changes`; and the current room gets one station notice,
+`member-<log row id>`, naming who removed whom and from where (earlier rooms get none), with the revoked grant and the
+released claims mentioned, and a note when the room is still bridged to the lattice. A removal is refused with 409 in a
+replaced room (the member is removed in the current one), so the chain never forks.
 
 Message: `{id,room_id,author_id,client_message_id,body,epoch,created,source,reply_to}`. A post may
 name the message it answers with `reply_to`: a message in the same local room (a local post or a
@@ -528,7 +585,8 @@ Browser route methods mirror their resource domain and take trusted `actor` firs
 create_user(username, name, password, *, is_admin=False) -> user [trusted CLI only]
 rename_user(actor, name) -> user
 account_corrections(actor) -> ordered actual self-correction records
-login(username, password, source) -> {user,csrf_token,token}
+login(username, password, source, *, public=True, device=None) -> {user,csrf_token,token,device}
+session_is_valid(token); ship_key_is_valid(key); device_is_valid(device, username) -> bool, writing nothing
 session(token) -> user+csrf_token; logout(token) -> None
 accounts(actor); invite(actor, expires_in=86400); redeem(token,username,name,password)
 contacts(actor) -> [{id,name}]
@@ -882,6 +940,8 @@ the station's `Origin` for writes. A key reaches exactly these routes; every oth
 | POST `/api/ships/me/rooms/{id}/leave` | Leave a breakout → `{room_id, left, closed}`; the owner leaving closes it |
 | POST `/api/ships/me/rooms/{id}/close` | The owner closes its breakout → the room; closing again changes nothing |
 | PUT `/api/ships/me/rooms/{id}/brief` | `{body, revision}` → the brief; the owner's own ships, in his current rooms (see Room briefs below) |
+| POST `/api/ships/me/rooms/{id}/members` | `{member, grant_id?}` (a username, read as people write it: stripped, one leading `@` dropped, lower-cased) → 201, the new linked room as the person route returns it; a ship moderator's add through its moderate grant, same refusals and texts as the person route (400 `Name the member to add` for a blank or non-string `member`) |
+| DELETE `/api/ships/me/rooms/{id}/members/{member}` | optional `?grant_id=` → the room's view plus `removed`, `earlier_rooms`, `claims_released`, `grant_revoked`, `bridged`; a ship moderator's removal by username (or its own, which needs no budget), same refusals as the person route |
 
 `GET /api/chats/{id}` also returns `members`: `{id,username,name,kind,owner_id}` for each local
 member, so clients can name authors and show the ship banner.
@@ -971,10 +1031,10 @@ goes only to the script.
 
 | Method/path | Who | Behavior |
 |---|---|---|
-| POST `/api/dockings` | Any client | `{ship_name,machine}` → `{id,code,secret,expires,confirm_url}`. The 8-character code (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`) is single-use and lasts 600 s; 20 dockings an hour station-wide (429) |
+| POST `/api/dockings` | Any tailnet client (a public request gets 401) | `{ship_name,machine}` → `{id,code,secret,expires,confirm_url}`. The 8-character code (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`) is single-use and lasts 600 s; 20 dockings an hour station-wide (429) |
 | GET `/api/dockings/code/{code}` | Signed-in person | `{id,ship_name,machine,expires,redock}` for the web app's `/#dock?code=` confirm view |
 | POST `/api/dockings/{id}/confirm` | Signed-in person, CSRF | `{code}`; creates the ship owned by that person, or re-keys their existing ship of that name (earlier keys are revoked). 409 if the name is taken |
-| GET `/api/dockings/{id}?secret=` | Docking script | `{status}` (`waiting`, `confirmed`, `collected`, `expired`); once confirmed it adds `key` and `ship` exactly once. A key not collected within 3,600 s is revoked |
+| GET `/api/dockings/{id}` | Docking script, tailnet | The secret in `X-Superyak-Secret` (`?secret=` is still accepted for one release). `{status}` (`waiting`, `confirmed`, `collected`, `expired`); once confirmed it adds `key` and `ship` exactly once. A key not collected within 3,600 s is revoked |
 
 **Ships list.** `GET /api/ships` (a signed-in person) returns the ships they own, or every ship for
 an admin, each with `owner_name`, `machine`, `last_used` and `active_keys`.

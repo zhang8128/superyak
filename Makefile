@@ -36,6 +36,11 @@ BACKUP ?=
 DB ?=
 REPLACED ?=
 UNPAIR ?=
+GRANTEE ?=
+GRANT ?=
+HOURS = 720
+BUDGET = 10
+ACTIONS = add,remove
 # Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
 # and any project ship's watcher on this machine (a later one gets it when make station-units runs again).
 STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-alert@.service
@@ -48,7 +53,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: dock station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -63,6 +68,9 @@ help:
 	@echo "make station-approve ID=… On the Pi: approve one (APPROVER=andy); make station-deny ID=… refuses it"
 	@echo "make station-rooms     On the Pi: list the rooms you own (APPROVER=andy) by short id, and which are bridged"
 	@echo "make station-bridge ID=… On the Pi: bridge a room to Stanley's aDNA lattice (adds Wormhole); make station-unbridge ID=… stops"
+	@echo "make station-add-ship ID=… SHIP=…  On the Pi: add one of your own ships to a room you own (APPROVER=andy)"
+	@echo "make station-moderate ID=… GRANTEE=…  On the Pi: let someone moderate a room you own (APPROVER=andy)"
+	@echo "make station-unmoderate GRANT=…  On the Pi: end a moderate grant by its short id"
 	@echo "make station-backup [OUTPUT=…]  On the Pi: a checked copy of the station database (the rotation, or OUTPUT)"
 	@echo "make station-restore-test [BACKUP=…]  On the Pi: boot a throwaway station from the newest copy (or BACKUP)"
 	@echo "make station-restore-reconcile DB=… [REPLACED=…] [UNPAIR='id …']  On the Pi: runbook step 5 (docs/station-restore.md)"
@@ -180,6 +188,10 @@ check-team:
 setup-agent:
 	cd agent && uv sync --locked --extra dev --python "$(PYTHON_VERSION)"
 
+# Print one line per mention of this ship or reply to its post; run it under Claude Code's Monitor.
+kick:
+	@$(AGENT_PYTHON) -u agent/run_agent.py kick
+
 check-agent:
 	cd agent && uv run --locked --extra dev python -m pytest -q -ra --tb=short
 
@@ -214,6 +226,18 @@ station-rooms:
 station-bridge station-unbridge:
 	@test -n "$(ID)" || { echo 'Usage: make $@ ID=<short id from make station-rooms> [APPROVER=andy]'; exit 2; }
 	uv run --locked --project peer python -m superyak_peer $@ --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)"
+
+station-add-ship:
+	@test -n "$(ID)" && test -n "$(SHIP)" || { echo 'Usage: make station-add-ship ID=<short id from make station-rooms> SHIP=<ship username> [APPROVER=andy]'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer station-add-ship --data-dir "$(STATION_DATA)" --id "$(ID)" --ship "$(SHIP)" --as "$(APPROVER)"
+
+station-moderate:
+	@test -n "$(ID)" && test -n "$(GRANTEE)" || { echo 'Usage: make station-moderate ID=<short id from make station-rooms> GRANTEE=<username> [HOURS=720] [BUDGET=10] [ACTIONS=add,remove] [APPROVER=andy]'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer station-moderate --data-dir "$(STATION_DATA)" --id "$(ID)" --grantee "$(GRANTEE)" --hours "$(HOURS)" --budget "$(BUDGET)" --actions "$(ACTIONS)" --as "$(APPROVER)"
+
+station-unmoderate:
+	@test -n "$(GRANT)" || { echo 'Usage: make station-unmoderate GRANT=<grant short id> [APPROVER=andy]'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer station-unmoderate --data-dir "$(STATION_DATA)" --grant "$(GRANT)" --as "$(APPROVER)"
 
 station-backup:
 	uv run --locked --project peer python -m superyak_peer station-backup --data-dir "$(STATION_DATA)" --backup-dir "$(STATION_BACKUPS)"$(if $(OUTPUT), --output "$(OUTPUT)")
