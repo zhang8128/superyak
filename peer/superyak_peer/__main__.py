@@ -463,6 +463,11 @@ def main(argv=None):
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
     door.add_argument('--port', type=int, default=7436)
+    listen = commands.add_parser('federation-listen', help="A push peer's federation listener: events and pulls, on "
+                                 'loopback, behind its own certificate (federation pull)')
+    listen.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    listen.add_argument('--host', default='127.0.0.1')
+    listen.add_argument('--port', type=int, default=7437)
     ship = commands.add_parser('create-ship', help='Trusted local: create the station ship (no owner) and write its private agent config')
     ship.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     ship.add_argument('--username', required=True)
@@ -654,6 +659,32 @@ def main(argv=None):
                 password = args.password_file.read_text().rstrip('\r\n') if args.password_file else getpass.getpass('Owner password (12+ characters): ')
                 store._create_user(db, args.username, args.name, password, True)
             print(f'Superyak owner created in {args.data_dir}')
+        elif args.command == 'federation-listen':
+            # plan P9 and nit 18: nothing is created in a directory that isn't a peer's, and nothing serves a pull peer
+            if not (args.data_dir / 'peer.sqlite3').is_file():
+                raise ValueError(f'No peer database at {args.data_dir / "peer.sqlite3"}: federation-listen starts nothing there')
+            try:
+                loopback = ipaddress.ip_address(args.host).is_loopback
+            except ValueError:
+                loopback = False
+            if not loopback:
+                raise ValueError('federation-listen binds to loopback; tailscale serve publishes it')
+            from .identity import PeerIdentity
+            from .signatures import refuse_a_lost_identity_before_the_store
+            refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b
+            store = Store(args.data_dir)
+            if store.federation_mode() != 'push':
+                raise ValueError(f'federation-listen serves a push peer only, and this peer delivers by '
+                                 f'{store.federation_mode() or "neither yet"}')
+            if not (store.data_dir / 'identity.json').is_file():
+                raise ValueError('identity.json is missing, and federation-listen never makes one')
+            identity = PeerIdentity.load_or_create(store.data_dir)
+            from .federation import Federation
+            from .listener import create_listener
+            import uvicorn
+            app = create_listener(None, federation=Federation(store, endpoint=None, identity=identity))
+            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(identity.cert_path),
+                        ssl_keyfile=str(identity.key_path), access_log=False)
         elif args.command == 'door':
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback
