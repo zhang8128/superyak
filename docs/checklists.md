@@ -362,6 +362,10 @@ Why: a finding marked fixed without a re-run is a guess that ships as a fact.
       of a 600 s code).
 - [ ] A gate checked in-process is also checked where the code runs as a child process: Pi measurements, units,
       hooks. A test fixture can't reach a child (the same review's M2).
+- [ ] A shell expression is checked where it will run: under `sh -c`, with the system binary, on each OS it runs on.
+      In Claude Code's Bash, `find` and other commands can be shell functions (`type find`), so a check typed there
+      can test a different tool (Serenity, 2026-10-28: macOS's find rejects `-perm /077`, the hook swallowed the
+      error, and a 0644 terms file passed).
 
 ## Shell commands (zsh)
 
