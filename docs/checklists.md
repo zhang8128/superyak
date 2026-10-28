@@ -148,7 +148,10 @@ Why: the queue fills any hour nobody aims, and a full re-check on low-risk work 
 ## Before any push
 
 - [ ] The branch's base is on the rewritten history: `git merge-base --is-ancestor 60dd851 HEAD` (main after the
-      2026-10-27 scrub). A branch built on the old history brings the scrubbed files back.
+      2026-10-27 scrub). A branch built on the old history brings the scrubbed files back. `make install-hooks`
+      installs a pre-push hook that refuses such a push to the public repo (with the scrubbed terms in a private
+      0600 file, ~/.superyak/scrub-terms, never in the repo); this item retires on each machine
+      once its clone runs the hook (`git config core.hooksPath` prints its scripts/git-hooks).
 - [ ] killer: Nothing in the diff names a person with health, contact or identity details, or holds a key or token
       (gitleaks, plus a read of every new doc). Once pushed, it can't be pulled back: clones and caches keep what a
       history rewrite removes.
