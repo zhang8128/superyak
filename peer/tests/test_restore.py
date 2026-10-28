@@ -1394,7 +1394,8 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
     'inbox_received', 'receipts', 'peer_messages', 'federation_cursor', 'layer_revisions',
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
-    'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries'}  # first rail: coordination; the add gate also needs a paired peer
+    'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries',  # first rail: coordination; the add gate also needs a paired peer
+    'lesson_repeats'}  # first rail 7.1: a local record beside the receipts, never federated
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):
