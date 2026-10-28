@@ -244,6 +244,16 @@ it too, since the words are a literal piece of the command. Its long form:
   same hash on both machines proves byte-identity without a CI run (Tardis, permissions-core, 2026-10-27).
 - The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named
   (the 3 Kuzu tests).
+- Several branches may merge as a train, each with its own section 2 verdict from the approver the law names and,
+  where it changes safety code, each partner's yes. Each reviewed head is merged `--no-ff`, in order, on a branch
+  from main, and each merge is clean: no conflict and no hand edit. A branch whose merge stops leaves the train,
+  merges main in, and goes back to its approver. Every Pi suite that any member touches runs once at the train's
+  tip, alone on the Pi; main fast-forwards to that tip and is pushed once, and the tip's GitHub CI is read after that
+  push, under the revert rule. A member that touches what only GitHub CI runs (the Lighthouse and interoperability
+  job) has its reviewed head's CI read green first, or merges on its own. "Main is merged into the branch, and the
+  merge commit is the one the verdict names" is answered with each reviewed head beside its train merge in the post.
+  A security fix in a train still merges, restarts and is probed on the Pi before main is pushed (Rio Grande and
+  Tardis, 2026-10-28: three peer runs, each made stale by the merge before it, became one).
 - GitHub CI's result is read, including the jobs the Pi can't run.
 - The `only-include` lists name every new module and test file, and the package builds and imports in a clean
   venv. The Pi's editable checkout hides a missing one. Peer's modules and test files and agent's modules are held
@@ -487,11 +497,32 @@ it, not only as its diff reads.
       imprints-live-conditions, M1, and Serenity's lesson from it, 2026-10-28: imprints' confirm link reached a
       session after 540 s of a 600 s code).
 - [ ] A gate checked in-process is also checked where the code runs as a child process: Pi measurements, units,
-      hooks. A test fixture can't reach a child (that review's M2).
+      hooks. A test fixture can't reach a child (that review's M2). A time limit is tested through the real process
+      that enforces it, not the part alone: a child in its own session outlives a parent that exits (Serenity's and
+      Rio Grande's readers on Tardis's lessons hook, 2026-10-28: the hold's query outlived the hold entry).
 - [ ] A shell expression is checked where it will run: under `sh -c`, with the system binary, on each OS it runs on.
       In Claude Code's Bash, `find` and other commands can be shell functions (`type find`), so a check typed there
       can test a different tool (Serenity, 2026-10-28: macOS's find rejects `-perm /077`, the hook swallowed the
       error, and a 0644 terms file passed).
+- [ ] A check on what text says to a reader (a fence, a mention, a person-data screen) judges the text as read:
+      normalised (NFKC, case folded), with invisible and blank-rendering characters dropped. A byte pattern alone is
+      a must-fix (Serenity's lesson, 2026-10-28, from the fence fix's fresh Pi review, which found a disguise only
+      the reader's view catches).
+      It never flags a line for holding letters outside ASCII, which flags everyone who writes in another language;
+      it folds only the letters it looks for (Rio Grande's reader and Tardis, 2026-10-28: a rule marked 35 of 48
+      ordinary non-English lines).
+- [ ] Where one side filters what another side answered, and that side acts on its answer (a receipt, a spend, a
+      count), it filters on exactly what that side was told, never a superset (Rio Grande's reader on Tardis's
+      lessons hook, 2026-10-28: a lesson past 128 seen ids was receipted by the query and dropped by the hook).
+- [ ] Where two branches each carry half of a contract, the pair is tested together through the real parts, with a
+      control that swaps one half for main's; each branch's own suite can't show the other half is needed (Tardis,
+      2026-10-28: the lessons hold passed 5 of 5 with both halves, and failed 3 of 5 with main's lessons.py).
+- [ ] Nothing a test calls in-process can end the test run itself: a watchdog, signal handler or `os._exit` is
+      disarmed by a fixture in the test process (never by the code checking whether a test runs it) and tested in a
+      subprocess. A suite that can stop early with exit 0 reports green when it stalls (Serenity's reader, 2026-10-28:
+      the lessons hook's watchdog could end pytest with exit 0 before a failing test ran). What the fixture disarms
+      is still checked by one test that undoes it: a mutant that drops the disarm must fail (Rio Grande's reader,
+      2026-10-28: the fixture made the disarm check always true).
 
 ## Shell commands (zsh)
 
