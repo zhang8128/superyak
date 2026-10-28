@@ -609,11 +609,33 @@ class Storage:
         self._commit()
         return cur.rowcount
 
-    def get_uncompressed_episodes(self) -> list[dict]:
-        """Return all episodes that have not been compressed."""
-        rows = self.conn.execute(
-            "SELECT * FROM episodes WHERE compressed = 0"
-        ).fetchall()
+    def get_uncompressed_episodes(self, auto: str = "all") -> list[dict]:
+        """Return episodes that have not been compressed.
+
+        ``auto`` decides what happens to prompt captures (source 'auto'):
+        "all" returns every uncompressed episode; "none" leaves captures out
+        (NULL sources count as non-auto); "used" also admits captures that a
+        recall logged ``used...`` returned.
+        """
+        if auto == "all":
+            rows = self.conn.execute(
+                "SELECT * FROM episodes WHERE compressed = 0"
+            ).fetchall()
+        elif auto == "none":
+            rows = self.conn.execute(
+                "SELECT * FROM episodes WHERE compressed = 0 "
+                "AND coalesce(source, '') <> 'auto'"
+            ).fetchall()
+        elif auto == "used":
+            rows = self.conn.execute(
+                "SELECT * FROM episodes WHERE compressed = 0 AND ("
+                "coalesce(source, '') <> 'auto' OR id IN ("
+                "SELECT j.value FROM memory_log m, json_each(m.target_ids) j "
+                "WHERE m.event_type = 'recall' AND m.outcome LIKE 'used%' "
+                "AND json_valid(m.target_ids)))"
+            ).fetchall()
+        else:
+            raise ValueError(f"auto must be 'all', 'used' or 'none', not {auto!r}")
         return [dict(r) for r in rows]
 
     def get_episode(self, id: str) -> dict | None:
