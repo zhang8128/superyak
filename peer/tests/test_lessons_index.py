@@ -689,15 +689,17 @@ def test_a_reader_from_before_the_query_is_waited_for_only_until_the_budget_ends
 
 
 def test_the_query_verb_answers_nothing_within_its_budget_beside_a_reader(lessons_station, tmp_path):
-    """The review's S3, through the process the hook runs: beside a held reader, `query` with budget_ms 300 exits 0
-    with {"lessons": []} well inside the hook's wait, and writes no receipt (before the fix: 30 s, then a traceback)."""
+    """The review's S3, through the process the hook runs: beside a held reader, `query` with budget_ms 3000 exits 0
+    with {"lessons": []} inside its budget, and writes no receipt (before the fix: 30 s, then a traceback). The budget
+    is 3 s because importing the store alone takes about 0.35 s on the Pi: a smaller one is spent before the store is
+    opened, and the test would pass without opening it (the re-check's S3)."""
     import time
     store, clock, ids, room = lessons_station
     store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
     store.lessons_index(None)
     config = tmp_path / 'runtime.json'
     config.write_text(json.dumps({'embedder_socket': str(tmp_path / 'none.sock')}))
-    request = json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'words_only': True, 'budget_ms': 300})
+    request = json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'words_only': True, 'budget_ms': 3000})
     reader = held_reader(store)
     try:
         began = time.monotonic()
