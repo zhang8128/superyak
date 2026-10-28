@@ -503,7 +503,7 @@ def prompt_answer(request, index, age, socket_path, deadline, monotonic):
             model, (vector,) = embed(socket_path, [prompt], 'search_query', deadline, monotonic)
         except EmbedderUnavailable:
             model = None
-        if model == index['model']:
+        if model == index['model'] and len(vector) == index['dimension']:  # another size is another model's (N2)
             stored = vectors_of(index)
             near = sorted((theta, item['id'], item) for item in pool if item['id'] not in taken and item['id'] in stored
                           for theta in [angle(vector, stored[item['id']])] if theta <= R_PROMPT)
@@ -515,7 +515,10 @@ def answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=tim
     """The prompt path's one entry: this peer's index file, its age, and the answer. The hook may call it in process
     (this module imports only the standard library and superyak_peer.common), saving a second interpreter. `budget_ms`
     bounds the whole answer (C49): spent before the words, it answers nothing; spent during Near, words only, since the
-    embedder's socket never waits past it. Near also stops at 100 ms, and never runs where PROMPT_NEAR_OFF is (C44)."""
+    embedder's socket never waits past it. Near also stops at 100 ms, and never runs where PROMPT_NEAR_OFF is (C44).
+    It raises IndexUnreadable when the index file exists but can't be read or parsed, and nothing else: a hook calling
+    it in process catches that one. An embedder that can't be reached, or answers with another model or with vectors
+    of another size, leaves the answer to words alone."""
     start = monotonic() if started is None else started
     end = None if request['budget_ms'] is None else start + request['budget_ms'] / 1000
     if end is not None and monotonic() >= end:
@@ -605,8 +608,8 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
                 model = None
             except EmbedderUnavailable:
                 unavailable = True
-            else:
-                unavailable = model != index['model']
+            else:  # vectors of another size are another model's, whatever the name says (final review N2)
+                unavailable = model != index['model'] or len(vector) != index['dimension']
         if model is not None and not unavailable:
             taken = {item['id'] for item, _, _ in candidates}
             stored = vectors_of(index)

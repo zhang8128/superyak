@@ -240,6 +240,23 @@ def test_words_first_then_near_with_a_receipt_each_and_one_query_row(lessons_sta
     assert 'grep' not in json.dumps([dict(r) for r in receipts] + [dict(row)])   # no context in any record
 
 
+def test_a_vector_of_another_size_is_near_unavailable_never_a_crash(lessons_station, fake_embedder):
+    """Final review N2: an embedder that answers with the index's model name but vectors of another size gives Near
+    nothing to measure. At a failure the query answers words alone, and "embedder unavailable" when that leaves it empty
+    (C24, as another model); at a prompt answer_prompt answers words alone, so the only error a hook calling it in
+    process catches is IndexUnreadable. Before, math.dist raised ValueError in both."""
+    store, clock, ids, room = lessons_station
+    two_lessons(store, ids, room, fake_embedder)   # indexed at 4 dimensions
+    fake_embedder.dimension, fake_embedder.default = 3, [0.0, 0.0, 1.0]
+    fake_embedder.vectors.clear()
+    answer, note = ask(store, clock, fake_embedder.path, command='grep --include=*.py x')
+    assert [(e['claim'], e['match']) for e in answer['lessons']] == [('Words.', 'words')] and note is None
+    assert ask(store, clock, fake_embedder.path, command='nothing here') == ({'lessons': []}, 'embedder unavailable')
+    at_prompt = prompt(store, clock, 'why does grep --include=* skip it', fake_embedder.path)
+    assert [(e['claim'], e['match']) for e in at_prompt['lessons']] == [('Words.', 'words')]
+    assert fake_embedder.requests[-1]['texts'] == ['why does grep --include=* skip it']   # Near was asked, and its answer set aside
+
+
 def test_seen_the_asking_ships_own_and_its_learned_from_are_skipped(lessons_station, fake_embedder):
     store, clock, ids, room = lessons_station
     two_lessons(store, ids, room, fake_embedder)
