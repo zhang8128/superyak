@@ -5,10 +5,12 @@ The Pi tests run only with ENGRAM_PI_BUDGET=1. Each starts its command in a fres
 (``VmHWM``, read as ``ru_maxrss`` of that one child) under ``PEAK_BUDGET``. The fixtures are built once under
 ``/var/tmp/imprint-cap-<uid>/`` and reused.
 """
+import json
 import os
 import shlex
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -71,6 +73,27 @@ def test_pi_the_use_parent_with_a_sleeping_child(tmp_path):                  # I
     peak = child_peak_rss(cmd=use_command(tmp_path, trails_cmd=[sys.executable, "-c", "import time; time.sleep(2)"]))
     assert peak < 64 * 2**20, mib(peak)
     print("use parent", mib(peak), "MiB, base", mib(base_peak("use")), "MiB")
+
+
+def test_a_route_measurement_opens_route_in_its_child_alone(tmp_path):            # the fresh review's M2
+    """A pytest fixture can't reach a child. imprint.py as it ships refuses route there, and the measurements' wrapper
+    on the stub ``PYTHONPATH`` opens it for that child alone."""
+    from tests.imprint_support import ENGRAM_DIR, _stub_trails_dir, imprint_argv, plan_context, write_context
+    store, *_ = plan_args(tmp_path, owner="andy")
+    env = {**os.environ, "PYTHONPATH": str(_stub_trails_dir(tmp_path)), "PYTHONDONTWRITEBYTECODE": "1"}
+    env.pop("ENGRAM_HOME", None)
+    ran = {}
+    for route in (False, True):
+        home = tmp_path / f"home-{route}"
+        write_context(home, plan_context("andy"))
+        ran[route] = subprocess.run(
+            [*imprint_argv(route=route), "plan", "--store", str(store), "--lanes", "work", "--layers",
+             "episode,semantic", "--until", "2026-10-25T18:00:00Z", "--audience", "place:home/andy", "--actions",
+             "imprint,route", "--superyak-home", str(home), "--engram-home", str(tmp_path / "eh2"), "--json"],
+            env=env, cwd=ENGRAM_DIR, capture_output=True, text=True, timeout=600)
+    assert ran[False].returncode == 2 and "route waits until trails ships" in ran[False].stderr
+    assert ran[True].returncode == 0, ran[True].stderr[-2000:]
+    assert json.loads(ran[True].stdout)["terms"]["actions"] == ["imprint", "route"]
 
 
 def test_plan_build_and_admission_read_no_whole_table(tmp_path, monkeypatch, route_open):

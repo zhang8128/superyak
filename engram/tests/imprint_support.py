@@ -2421,11 +2421,46 @@ def roads_and_trails(conn, *, lane, as_of, counts):
 '''
 
 
-def _stub_trails_dir() -> Path:
-    path = CAP_ROOT / "stubs"
+ROUTE_OPEN_MODULE = "imprint_route_open"
+_ROUTE_OPEN_WRAPPER = '''"""Test-only: imprint.py with route open in this one process (the fresh review's M2).
+
+Route waits until trails ships (``imprint_filter.ROUTE_OPEN``); a pytest fixture can't reach a child, so the Pi
+measurements of what route does run their route children as ``python -m imprint_route_open <imprint.py arguments>``.
+Nothing that ships opens route: this file lives only in the measurements' stub directory."""
+import sys
+
+import imprint_filter
+
+imprint_filter.ROUTE_OPEN = True
+
+import imprint  # noqa: E402
+
+sys.exit(imprint.main())
+'''
+
+
+def _write_stub(path: Path, text: str) -> None:
+    """Whole or absent: several sessions may write the same stub at once."""
+    if path.is_file() and path.read_text() == text:
+        return
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def _stub_trails_dir(root: Path = CAP_ROOT) -> Path:
+    """The stub directory on the measurements' ``PYTHONPATH``: the stand-in ``trails.py`` and the route-open wrapper."""
+    path = root / "stubs"
     path.mkdir(parents=True, exist_ok=True)
-    (path / "trails.py").write_text(_STUB_TRAILS)
+    _write_stub(path / "trails.py", _STUB_TRAILS)
+    _write_stub(path / f"{ROUTE_OPEN_MODULE}.py", _ROUTE_OPEN_WRAPPER)
     return path
+
+
+def imprint_argv(*, route: bool) -> list[str]:
+    """How a measurement starts imprint.py: as it ships, or with route open in that child alone (run from
+    ``ENGRAM_DIR`` with the stub directory on ``PYTHONPATH``, as ``world.env`` and ``_run`` do)."""
+    return [sys.executable, "-m", ROUTE_OPEN_MODULE] if route else [sys.executable, IMPRINT_PY]
 
 
 @dataclass
@@ -2619,7 +2654,7 @@ def build_bounds_store(tmp_path: Path) -> CapWorld:
 
 
 def _plan_command(world: CapWorld, home: Path, *, route: bool) -> list[str]:
-    return [sys.executable, IMPRINT_PY, "plan", "--store", str(world.store), "--lanes", "personal,work",
+    return [*imprint_argv(route=route), "plan", "--store", str(world.store), "--lanes", "personal,work",
             "--layers", "episode,semantic", "--until", CAP_UNTIL, "--audience", "place:home/andy",
             "--actions", "imprint,route" if route else "imprint", "--superyak-home", str(home),
             "--engram-home", str(world.engram_home), "--json"]
@@ -2636,13 +2671,17 @@ def _run(cmd, env, cwd=None) -> str:
     return out.stdout
 
 
+STAGE_VERSION = "v2"      # stages kept from before route waited for trails (2026-10-28) are made again (review M2)
+
+
 def _staged(world: CapWorld, name: str, *, route: bool, built: bool) -> Path:
     """A home holding a plan (and its built package) made once, unmeasured, beside the fixture; copied to the test.
-    The built package of a plan with ``route`` is the planned stage built, so one plan serves both."""
-    stage = CAP_ROOT / world.kind / f"stage-{name}"
+    On the cap fixture the built package is the planned stage built, so one plan serves both. A stage with ``route``
+    plans and builds with route open in those children alone (``imprint_argv``)."""
+    stage = CAP_ROOT / world.kind / f"stage-{STAGE_VERSION}-{name}"
     if not (stage / ".ready").is_file():
-        if built and route and name != "built-bounds-route":
-            _staged(world, "planned-route", route=True, built=False)
+        if built and world.kind == "cap":
+            _staged(world, "planned-route" if route else "planned", route=route, built=False)
             shutil.rmtree(stage, ignore_errors=True)
             shutil.copytree(world.home, stage, symlinks=True)
             shutil.rmtree(world.home)
@@ -2654,7 +2693,7 @@ def _staged(world: CapWorld, name: str, *, route: bool, built: bool) -> Path:
             plan_id = plan["id"]
             (stage / "plan.id").write_text(plan_id)
         if built:
-            _run([sys.executable, IMPRINT_PY, "build", "--plan", plan_id, "--superyak-home", stage,
+            _run([*imprint_argv(route=route), "build", "--plan", plan_id, "--superyak-home", stage,
                   "--engram-home", world.engram_home], world.env)
         (stage / ".ready").write_text("ok")
     shutil.copytree(stage, world.home, symlinks=True)
@@ -2675,15 +2714,17 @@ def _handed_off_from(world: CapWorld, *, route: bool) -> tuple[Path, str]:
 
 def cap_command(world: CapWorld, step: str) -> list[str]:
     """The argv of one process of I 16's "Every process at its bounds" run on the cap fixture. What it needs made
-    first (a plan, a built package, a handed-off root) is made unmeasured and kept, then copied to ``world.work``."""
+    first (a plan, a built package, a handed-off root) is made unmeasured and kept, then copied to ``world.work``.
+    Plan, read and build are measured as they ship, without route (it waits until trails ships; the fresh review's
+    M2). ``count`` needs a package with route, so its stage is made with route open in those children alone."""
     if step == "plan":
-        return _plan_command(world, _context_home(world, world.home), route=True)
+        return _plan_command(world, _context_home(world, world.home), route=False)
     if step == "read":
-        _staged(world, "planned-route", route=True, built=False)
+        _staged(world, "planned", route=False, built=False)
         return [sys.executable, IMPRINT_PY, "read", "--plan", _plan_id(world), "--start", "45000", "--limit", "1000",
                 "--superyak-home", world.home, "--engram-home", world.engram_home]
     if step == "build":
-        _staged(world, "planned-route", route=True, built=False)
+        _staged(world, "planned", route=False, built=False)
         return [sys.executable, IMPRINT_PY, "build", "--plan", _plan_id(world), "--superyak-home", world.home,
                 "--engram-home", world.engram_home]
     if step == "admit":                                         # a package without route: a count needs trails.py
@@ -2711,7 +2752,8 @@ def cap_command(world: CapWorld, step: str) -> list[str]:
 
 def admit_command(world: CapWorld, *, derive: str) -> list[str]:
     """``imprint.py admit`` on the bounds fixture, with ``route`` and, for ``derive="stub"``, the stand-in trail
-    count on ``PYTHONPATH`` (``world.env``), so the whole command runs as the unit would."""
+    count on ``PYTHONPATH`` (``world.env``), so the whole command runs as the unit would. Its package is planned and
+    built with route open in those children alone; admission itself doesn't consult ``ROUTE_OPEN``."""
     assert derive == "stub"
     _staged(world, "built-bounds-route", route=True, built=True)
     root, imprint_id = _handed_off_from(world, route=True)
