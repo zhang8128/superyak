@@ -526,6 +526,9 @@ it, not only as its diff reads.
 - [ ] A test that hands made-up pids, ports or paths to code that asks the system about them also stands in for the
       asking function, in every case, so its answer is the test's, never the runner's (Tardis, 2026-10-28: a lane
       test's made-up pids met a real `os.kill` and turned macOS CI red whenever a runner process held one).
+- [ ] A guarantee the code or its comments claim ("X can't do Y") lists every source its input comes from (a person,
+      a model, a tool's output, a file, a room message, another hook) and has a test per source (Tardis, 2026-10-28:
+      an id line said quoted text "can't" mark a lesson seen; one source was tested, and four others could).
 - [ ] A test that takes its cases from the code it tests (a table, a list of names) also pins literal cases, so a
       dropped entry fails a test instead of dropping its own (Rio Grande's reader, 2026-10-28: a look-alike table's
       per-entry test passed with an entry removed).
