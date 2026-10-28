@@ -39,7 +39,7 @@ def request_and_package(tmp_path: Path):
     return request_for(plan, IMPRINT_ID, package_bytes=pkg.stat().st_size), pkg
 
 
-def test_the_request_has_exactly_the_section_7_1_keys(tmp_path):
+def test_the_request_has_exactly_the_section_7_1_keys(tmp_path, route_open):
     req = request_for(make_plan(*plan_args(tmp_path, route=True)), IMPRINT_ID, package_bytes=43_188_224)
     assert key_tree(req) == REQUEST_KEYS and req["package"] == {"bytes": 43_188_224, "parts": 11}
     assert set(req["contents"]) <= set(DIGEST_TABLES) and all(v >= 1 for v in req["contents"].values())

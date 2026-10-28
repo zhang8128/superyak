@@ -43,9 +43,10 @@ _ROUTE_AS_SHIPPED = {}
 
 @pytest.fixture(autouse=True, scope='session')
 def route_open_as_for_trails():
-    """Route waits until trails ships (`imprints.ROUTE_OPEN`, Serenity's condition S1). The tests of what route does
-    open it, so that code stays tested for the day trails lands; a test that takes `route_closed` gets the value that
-    ships."""
+    """Route waits until trails ships (`imprints.ROUTE_OPEN`, Serenity's condition S1). Every test here runs with route
+    open unless it takes `route_closed`; production never does. So the route code stays tested for the day trails
+    lands. Opening it per test was weighed (Serenity's note 1): 96 test functions in 12 files need it, because the
+    shared `request_doc` asks with route, so the opening stays session-wide."""
     from superyak_peer import imprints
     _ROUTE_AS_SHIPPED['value'] = imprints.ROUTE_OPEN
     with pytest.MonkeyPatch.context() as patch:

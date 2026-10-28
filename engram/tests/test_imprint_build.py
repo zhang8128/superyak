@@ -225,7 +225,7 @@ def test_build_refuses_when_a_memory_changed_since_the_plan(tmp_path):
     assert imprint_dirs(tmp_path) == [] and "imprint_id" not in plan_file(tmp_path, plan)
 
 
-def test_a_recall_and_a_log_outcome_after_the_plan_change_nothing_but_a_late_outcome_on_a_kept_row_does(tmp_path):
+def test_a_recall_and_a_log_outcome_after_the_plan_change_nothing_but_a_late_outcome_on_a_kept_row_does(tmp_path, route_open):
     def recall_now(root):
         late_sql(root, "INSERT INTO memory_log (id, timestamp, event_type, layer, target_ids, context, outcome) "
                        "VALUES ('late', '2026-10-25T19:00:00+00:00', 'recall', 'episode', '[\"e1\"]', "
@@ -251,7 +251,7 @@ def test_a_co_subjects_no_between_plan_and_build_refuses_the_build(tmp_path):   
         run_build(tmp_path, plan)
 
 
-def test_plan_list_equals_the_package_rows(tmp_path):
+def test_plan_list_equals_the_package_rows(tmp_path, route_open):
     listing = tmp_path / "list.jsonl"
     plan = make_plan(*plan_args(tmp_path, route=True), list_to=listing)
     built = run_build(tmp_path, plan)
@@ -267,7 +267,7 @@ def test_plan_list_equals_the_package_rows(tmp_path):
     assert listed == sorted(read) and listed
 
 
-def test_plan_digest_from_the_definitions(tmp_path):
+def test_plan_digest_from_the_definitions(tmp_path, route_open):
     built = run_build(tmp_path, make_plan(*plan_args(tmp_path, route=True, every_table=True)))
     assert digest_written_from_section_5_4(built.dir / "imprint.db", built.request["scope"]) == built.request["plan_digest"]
 
@@ -287,7 +287,7 @@ def test_cross_references_stop_the_build_until_excluded(tmp_path):
     assert l1_values(conn, stay) == l2_fts(conn, two / "l2") == l3_vec0(conn, None) == l4_raw(built.dir / "imprint.db", stay) == []
 
 
-def test_no_footpath_without_route(tmp_path):
+def test_no_footpath_without_route(tmp_path, route_open):
     without = run_build(tmp_path, make_plan(*plan_args(tmp_path, store=walker_store, route=False)))
     r = tmp_path / "r"
     with_route = run_build(r, make_plan(*plan_args(r, store=walker_store, route=True)))

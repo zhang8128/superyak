@@ -68,7 +68,7 @@ def test_plan_file_is_private_and_never_holds_content(tmp_path):
     assert saved["digest"] == plan.digest and saved["terms"]["audience"] == "place:home/andy"
 
 
-def test_the_dry_run_says_what_leaves_and_what_stays(tmp_path):
+def test_the_dry_run_says_what_leaves_and_what_stays(tmp_path, route_open):
     text = render_dry_run(make_plan(*plan_args(tmp_path, route=True)), CONTEXT)
     for line in ("Imprint plan", "(nothing has left this machine)", "Store id", "lineage complete",
                  "as ship voyager (owner sam)", "Session ids",
@@ -225,7 +225,7 @@ def test_read_shows_a_semantic_as_the_package_holds_it(tmp_path):
     assert [m["contradicted_by"] for m in seen if m["layer"] == "semantic"] == [None]
 
 
-def test_read_shows_the_session_where_the_package_keeps_it(tmp_path):
+def test_read_shows_the_session_where_the_package_keeps_it(tmp_path, route_open):
     plan = make_plan(*plan_args(tmp_path, route=True))
     seen = read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path), limit=99)
     sessions = {m["id"]: m["session_id"] for m in seen if m["layer"] == "episode"}

@@ -73,7 +73,7 @@ def test_pi_the_use_parent_with_a_sleeping_child(tmp_path):                  # I
     print("use parent", mib(peak), "MiB, base", mib(base_peak("use")), "MiB")
 
 
-def test_plan_build_and_admission_read_no_whole_table(tmp_path, monkeypatch):
+def test_plan_build_and_admission_read_no_whole_table(tmp_path, monkeypatch, route_open):
     args = plan_args(tmp_path, owner="andy", route=True, cosubjects={"e1": "person:jenn"})
     guard, guarded = refusing_fetchall(GROWING_TABLES), []
 

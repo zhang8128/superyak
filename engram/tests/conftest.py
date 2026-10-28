@@ -126,24 +126,20 @@ def _enforce_raised_as_before():
         yield
 
 
-_ROUTE_AS_SHIPPED = {}
-
-
-@pytest.fixture(autouse=True, scope="session")
-def _route_open_as_for_trails():
+@pytest.fixture
+def route_open(monkeypatch):
     """Route waits until trails ships (`imprint_filter.ROUTE_OPEN`, Serenity's
-    condition S1). The tests of what route does open it, so that code stays
-    tested for the day trails lands; a test that takes `route_closed` gets the
-    value that ships. Session-wide, like `_enforce_raised_as_before`."""
+    condition S1). Every test here runs with the value that ships unless it
+    takes this fixture; production never opens it. The tests of what route
+    does take it (24 functions when it was made opt-in, Serenity's note 1), so
+    that code stays tested for the day trails lands. A child process doesn't
+    see it: the Pi measurements open route in their route children alone with
+    `imprint_route_open` (tests/imprint_support.py)."""
     import imprint_filter
-    _ROUTE_AS_SHIPPED["value"] = imprint_filter.ROUTE_OPEN
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(imprint_filter, "ROUTE_OPEN", True)
-        yield
+    monkeypatch.setattr(imprint_filter, "ROUTE_OPEN", True)
 
 
 @pytest.fixture
-def route_closed(monkeypatch):
-    """`imprint_filter.ROUTE_OPEN` as it ships, put back for one test."""
-    import imprint_filter
-    monkeypatch.setattr(imprint_filter, "ROUTE_OPEN", _ROUTE_AS_SHIPPED["value"])
+def route_closed():
+    """`imprint_filter.ROUTE_OPEN` as it ships: what every test here has unless
+    it takes `route_open`. Named by the tests that depend on it."""
