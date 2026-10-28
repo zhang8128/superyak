@@ -972,6 +972,8 @@ def test_prepare_installs_before_first_turn_and_only_from_menu(env, monkeypatch)
     assert r["state"] == "preparing"
     assert run_until(team, lambda: w["state"] in ("running", "idle"))
     assert (Path(w["path"]) / "node_modules" / ".installed").exists()
+    # the state can flip before the mock agent writes its exec line (flaky on macOS CI): wait for the line itself
+    assert run_until(team, lambda: "exec" in env["log"].read_text())
     log = env["log"].read_text()
     assert log.index("ci --no-audit --no-fund --ignore-scripts") < log.index("exec")   # install first, no scripts
     for bad in ("rm -rf /", "npm install evil", "make"):
