@@ -10,6 +10,9 @@ SHARE_LINK_PREFIX = 'https://login.tailscale.com/'
 # Behind `tailscale serve` every client shares one source, so the budget is global.
 HOURLY_LIMIT = 20
 PENDING_LIMIT = 50
+# How long a decided or expired request keeps its contact, note, token and share link (visitor access spec §1,
+# fix:door-request-retention). The number is Andy's to set (D2); its name, status and decision stay for the record.
+REQUEST_RETENTION = 30 * 86400
 
 ACCESS_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS access_requests(id TEXT PRIMARY KEY, name TEXT NOT NULL, contact TEXT NOT NULL, note TEXT NOT NULL, secret_hash TEXT NOT NULL, status TEXT NOT NULL, token TEXT, created REAL NOT NULL, expires REAL NOT NULL, decided_by TEXT REFERENCES users(id), decided REAL);
@@ -89,6 +92,18 @@ class AccessRequests:
                 ('approved' if approve else 'denied', token, share_url, share_status, actor, now, key),
             )
             return public_request(db.execute('SELECT * FROM access_requests WHERE id=?', (key,)).fetchone(), now)
+
+    def sweep_access_requests(self):
+        """The door's retention (visitor access spec §1, fix:door-request-retention), run daily by station-door-sweep:
+        a request decided, or expired, more than REQUEST_RETENTION ago loses its contact, note, token and share link.
+        Its name, status and decision stay, for the station's record. A request still waiting keeps everything.
+        Returns how many it cleared."""
+        cutoff = self.clock() - REQUEST_RETENTION
+        with self.transaction() as db:
+            return db.execute(
+                "UPDATE access_requests SET contact='', note='', token=NULL, share_url=NULL "
+                "WHERE (contact!='' OR note!='' OR token IS NOT NULL OR share_url IS NOT NULL) "
+                "AND ((status!='pending' AND decided<?) OR (status='pending' AND expires<?))", (cutoff, cutoff)).rowcount
 
     def pending_access_requests(self):
         """Trusted local workers only; no HTTP route exposes this."""

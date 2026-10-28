@@ -1,0 +1,14 @@
+[Unit]
+Description=Superyak door sweep: decided or expired access requests lose their contact and note past the retention
+After=superyak-lighthouse.service
+OnFailure=superyak-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/superyak/peer
+ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer station-door-sweep --data-dir %h/.local/share/superyak/lighthouse
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=5min
+MemoryMax=256M
+LimitDATA=256M

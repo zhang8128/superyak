@@ -15,7 +15,7 @@ DATA = '%h/.local/share/superyak/lighthouse'
 ROTATION = '%h/.local/share/superyak/backups/station'
 INSTALLED = ['superyak-backup.service', 'superyak-backup.timer', 'superyak-restore-test.service',
              'superyak-restore-test.timer', 'superyak-imprint-sweep.service', 'superyak-imprint-sweep.timer',
-             'superyak-alert@.service']
+             'superyak-door-sweep.service', 'superyak-door-sweep.timer', 'superyak-alert@.service']
 LESSONS_UNITS = ['superyak-lessons-index.service', 'superyak-lessons-index.timer']  # make lessons-units, on the Pi and Tardis
 EXPECTED = {
     'superyak-backup.service': {
@@ -52,6 +52,18 @@ EXPECTED = {
     'superyak-imprint-sweep.timer': {
         'Unit': {},
         'Timer': {'OnCalendar': 'hourly', 'Persistent': 'true'},
+        'Install': {'WantedBy': 'timers.target'},
+    },
+    'superyak-door-sweep.service': {  # visitor access spec §1, fix:door-request-retention: daily, small
+        'Unit': {'After': 'superyak-lighthouse.service', 'OnFailure': 'superyak-alert@%n.service'},
+        'Service': {'Type': 'oneshot', 'WorkingDirectory': '%h/superyak/peer',
+                    'ExecStart': f'{PYTHON} station-door-sweep --data-dir {DATA}',
+                    'Nice': '10', 'IOSchedulingClass': 'idle', 'TimeoutStartSec': '5min', 'MemoryMax': '256M',
+                    'LimitDATA': '256M'},
+    },
+    'superyak-door-sweep.timer': {
+        'Unit': {},
+        'Timer': {'OnCalendar': 'daily', 'RandomizedDelaySec': '30min', 'Persistent': 'true'},
         'Install': {'WantedBy': 'timers.target'},
     },
     'superyak-alert@.service': {
@@ -154,7 +166,7 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     assert stat.S_IMODE(andys.parent.stat().st_mode) == 0o700
     assert {path: path.read_bytes() for path in contents} == contents      # R16: no existing unit or drop-in is edited
     assert calls.read_text().splitlines() == ['--user daemon-reload',
-                                              '--user enable --now superyak-backup.timer superyak-restore-test.timer superyak-imprint-sweep.timer']
+                                              '--user enable --now superyak-backup.timer superyak-restore-test.timer superyak-imprint-sweep.timer superyak-door-sweep.timer']
     calls.unlink()
     removed = make('station-units-remove')
     assert removed.returncode == 0, removed.stderr
@@ -163,9 +175,9 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     assert andys.read_text() == '[Service]\nNice=5\n'
     assert stray.read_text() == '[Service]\nNice=7\n'
     assert calls.read_text().splitlines() == [
-        '--user disable --now superyak-backup.timer superyak-restore-test.timer superyak-imprint-sweep.timer',
-        '--user stop superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service',
-        '--user reset-failed superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service superyak-alert@*',
+        '--user disable --now superyak-backup.timer superyak-restore-test.timer superyak-imprint-sweep.timer superyak-door-sweep.timer',
+        '--user stop superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service superyak-door-sweep.service',
+        '--user reset-failed superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service superyak-door-sweep.service superyak-alert@*',
         '--user daemon-reload']
     assert not (home / '.config').exists()
 

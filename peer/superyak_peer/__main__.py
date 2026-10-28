@@ -477,6 +477,9 @@ def main(argv=None):
     sweep = commands.add_parser('station-imprint-sweep', help='Trusted local: end, expire, retry, reconcile after a restore and remove what the retention ended (hourly)')
     sweep.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     sweep.add_argument('--imprints-dir', type=Path, required=True, help='The imprints root this station was started with')
+    door_sweep = commands.add_parser('station-door-sweep', help="Trusted local: clear decided or expired access requests' "
+                                     'contact, note, token and share link past their retention (daily)')
+    door_sweep.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     listing = commands.add_parser('station-imprints', help='Trusted local: list the imprints and what admission found')
     listing.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     listing.add_argument('--as', dest='person', help='The operator (accepted so make passes one line)')
@@ -617,6 +620,9 @@ def main(argv=None):
                   f'{result["purged"]} rows past their retention removed.')
             if result['errors']:
                 parser.exit(1, f'station-imprint-sweep: these steps failed (see the log): {", ".join(result["errors"])}\n')
+        elif args.command == 'station-door-sweep':
+            cleared = Store(args.data_dir, signing=False).sweep_access_requests()
+            print(f'Cleared the contact and note of {cleared} access requests past their retention.')
         elif args.command == 'station-imprints':
             store = Store(args.data_dir, signing=False)
             if args.resolve is not None:

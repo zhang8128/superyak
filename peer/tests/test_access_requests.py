@@ -133,3 +133,45 @@ def test_missing_or_invalid_share_link_is_reported_and_announced(tmp_path, link)
     assert status['share'] == 'missing' and 'share_url' not in status and status['token']
     assert admin.get('/api/access-requests').json()[0]['share_status'] == 'missing'
     assert [n['id'] for n in app.state.store.station_notices()] == [f'share-{request["id"]}']
+
+
+def test_a_decided_or_expired_request_keeps_its_name_but_not_its_contact_after_the_retention(env):
+    """fix:door-request-retention (visitor access spec §1): a decided request's contact, note, token and share link
+    are cleared REQUEST_RETENTION after its decision, and an expired one's that long after it expired. Its name, status
+    and decision stay, for the station's record. A request still waiting keeps everything."""
+    from superyak_peer.access_requests import REQUEST_LIFETIME, REQUEST_RETENTION
+    app, clients, _, clock = env
+    store, guest, admin = app.state.store, anonymous(app), clients[2]
+    approved = submit(guest, name='Ann', contact='ann@example.org').json()
+    denied = submit(guest, name='Dee', contact='dee@example.org').json()
+    submit(guest, name='Wes', contact='wes@example.org')
+    admin.post(f'/api/access-requests/{approved["id"]}/approve', json={})
+    admin.post(f'/api/access-requests/{denied["id"]}/deny', json={})
+
+    def rows():
+        with store.transaction() as db:
+            return {r['name']: dict(r) for r in db.execute('SELECT * FROM access_requests')}
+    assert rows()['Ann']['token']                       # approved, its token not yet picked up
+    clock[0] += REQUEST_RETENTION - 1
+    assert store.sweep_access_requests() == 0
+    clock[0] += 2
+    assert store.sweep_access_requests() == 2
+    kept = rows()
+    for name, status in (('Ann', 'approved'), ('Dee', 'denied')):
+        assert (kept[name]['contact'], kept[name]['note'], kept[name]['token'], kept[name]['status']) == ('', '', None, status)
+        assert kept[name]['decided_by'] and kept[name]['decided']
+    assert kept['Wes']['contact'] == 'wes@example.org'  # expired at 7 days, kept until 7 days + the retention
+    clock[0] += REQUEST_LIFETIME
+    assert store.sweep_access_requests() == 1 and rows()['Wes'] | {'contact': '', 'note': ''} == rows()['Wes']
+    assert store.sweep_access_requests() == 0           # a second sweep finds nothing left to clear
+
+
+def test_the_door_sweep_command_says_how_many_it_cleared(tmp_path):
+    import subprocess
+    import sys
+    from superyak_peer.db import Store
+    Store(tmp_path / 'peer')
+    done = subprocess.run([sys.executable, '-m', 'superyak_peer', 'station-door-sweep', '--data-dir', str(tmp_path / 'peer')],
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == 'Cleared the contact and note of 0 access requests past their retention.'
