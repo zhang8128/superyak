@@ -76,3 +76,30 @@ def test_a_retraction_names_the_full_id():
 def test_one_text_on_one_peer_is_one_id_whatever_learned_from_says():
     own, owner = lessons.parse_post(lesson_body(learned='own')), lessons.parse_post(lesson_body(learned='owner'))
     assert lessons.lesson_id(PEER, own) == lessons.lesson_id(PEER, owner) != lessons.lesson_id('c' * 64, own)
+
+
+# Task 2: person data
+NAMES = lessons.names_pattern(['test', 'Test Account', 'andy', 'Andy Example'])
+
+
+@pytest.mark.parametrize('value', ['2026-10-27', '2026-10-27T10:30:45Z', 'v1.62.0', 'Python 3.11.2', '192.168.1.10',
+                                   '100.64.0.1:7437', 'port 7435', 'pid 48213', 'pytest -k test_cli', '~/superyak/peer',
+                                   'GitHub over SSH', 'x' * 120 + ' ' + 'y' * 300])
+def test_dates_versions_addresses_ports_and_pids_pass(value):
+    assert not lessons.holds_person_data(value, NAMES)
+
+
+@pytest.mark.parametrize('value', ['git@github.com', 'mail a@b.org', '+1 415 555 0100', '(415) 555-0100', '415.555.0100',
+                                   'make test', 'ask Andy', 'ANDY EXAMPLE said', 'andy\texample', '/home/andy/superyak'])
+def test_an_account_name_an_email_or_a_phone_number_refuses(value):
+    assert lessons.holds_person_data(value, NAMES)
+
+
+def test_names_fold_case_short_ones_are_ignored_and_field_names_are_never_read():
+    pattern = lessons.names_pattern(['José Ruiz', 'al', None, 'file'])
+    assert lessons.holds_person_data('JOSÉ RUIZ wrote it', pattern)
+    assert not lessons.holds_person_data('al fresco', pattern)
+    assert lessons.names_pattern(['ab']) is None
+    lesson = lessons.parse_post(lesson_body(file=('peer/README.md',)))
+    assert 'file' not in lessons.lesson_values(lesson).split('\n')
+    assert not lessons.holds_person_data(lessons.lesson_values(lesson), lessons.names_pattern(['file', 'error']))

@@ -170,3 +170,28 @@ def lesson_id(peer, lesson):
 def short_lesson_id(key):
     peer, _, digest = key.partition(':')
     return f'{peer[:8]}-{digest[:8]}'
+
+
+def names_pattern(names):
+    """Section 6: one pattern for every account name that refuses a lesson: each username or display name, case-folded,
+    of at least 3 characters, as a whole word (a display name's words in order, any whitespace between). None when no
+    name qualifies."""
+    folded = {' '.join(name.casefold().split()) for name in names if isinstance(name, str)}
+    words = sorted((name for name in folded if len(name) >= 3), key=len, reverse=True)
+    if not words:
+        return None
+    return re.compile(r'(?<!\w)(?:' + '|'.join(r'\s+'.join(map(re.escape, w.split(' '))) for w in words) + r')(?!\w)')
+
+
+def lesson_values(lesson):
+    """What section 6 reads: the lesson's values, never its field names, so an account named `file` refuses nothing."""
+    return '\n'.join((lesson.ship, lesson.claim, lesson.why, *lesson.error, *lesson.command, *lesson.file,
+                      lesson.learned_from))
+
+
+def holds_person_data(text, pattern):
+    # EMAIL runs only on the whitespace-free tokens that hold an @ (every match lies inside one): on a long run with no
+    # @, its [^\s@]+ backtracks quadratically.
+    return bool((pattern is not None and pattern.search(text.casefold()))
+                or any(EMAIL.search(token) for token in text.split() if '@' in token)
+                or any(phone.search(text) for phone in PHONES))
