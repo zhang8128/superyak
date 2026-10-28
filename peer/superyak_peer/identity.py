@@ -71,6 +71,21 @@ def validate_card(card):
     except (ValueError, TypeError, KeyError, AttributeError):
         raise Problem(400, 'Invalid peer card') from None
 
+def pairing_code(card):
+    """fix:pairing-code (federation-pull spec §2): the first 32 hex of the whole card's canonical SHA-256. A person
+    types it, read off the exporting machine's own screen, so the card in hand is compared with that screen."""
+    return hashlib.sha256(canonical(validate_card(card))).hexdigest()[:32]
+
+def show_code(code):
+    return ' '.join(code[i:i + 4] for i in range(0, len(code), 4))
+
+def typed_code(typed):
+    """A typed code without its spaces and hyphens, lowercased: 32 ASCII hex, or None."""
+    if not isinstance(typed, str):
+        return None
+    code = re.sub(r'[\s-]', '', typed).lower()
+    return code if re.fullmatch(r'[0-9a-f]{32}', code, re.ASCII) else None
+
 # Spec A step 3 (G3, G12): a signed record has exactly its kind's keys and names its station, so no record passes
 # as another kind, as a federation envelope (which has no record kind), or as another station's.
 RECORD_KEYS = {
