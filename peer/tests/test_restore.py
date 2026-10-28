@@ -1388,7 +1388,7 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
-    'account_role_changes', 'room_briefs', 'grants', 'budget_uses', 'member_changes'}
+    'account_role_changes', 'room_briefs', 'grants', 'budget_uses', 'member_changes', 'imprint_requests', 'imprint_receipts'}
 COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
     'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'login_devices', 'files', 'room_activity',
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',

@@ -1,0 +1,57 @@
+#!/bin/sh
+# Refuse to push to the public repo what the 2026-10-27 history scrub removed. A pushed commit must be built on the
+# rewritten history, and no commit new to the remote may touch a scrubbed path or hold the scrubbed text. Installed by
+# `make install-hooks`; it holds "the branch's base is on the rewritten history" from docs/checklists.md.
+SCRUBBED_BASE=60dd85175a1709627be63a4678694029c5721b74  # main right after the scrub
+# Tests point this at a throwaway repo's commit; a person who sets it could as well push with --no-verify.
+SCRUBBED_BASE="${SUPERYAK_PREPUSH_BASE:-$SCRUBBED_BASE}"
+case "$2" in  # the private archive keeps the old history on purpose; only its exact URLs are skipped
+    git@github.com:zhang8128/superyak-archive|git@github.com:zhang8128/superyak-archive.git|\
+    https://github.com/zhang8128/superyak-archive|https://github.com/zhang8128/superyak-archive.git) exit 0 ;;
+esac
+zero=0000000000000000000000000000000000000000
+tmp=$(mktemp -d) && trap 'rm -rf "$tmp"' EXIT
+terms_file="${SUPERYAK_SCRUB_TERMS:-$HOME/.superyak/scrub-terms}"
+if [ ! -r "$terms_file" ] || [ -n "$(find "$terms_file" -perm /077 2>/dev/null)" ]; then
+    echo "pre-push: $terms_file is missing, unreadable, or readable by others (it must be 0600), so the scrubbed-text" >&2
+    echo "pre-push: check can't run and nothing was pushed. Ask Andy for the file; only a person skips this check." >&2
+    exit 1
+fi
+terms=$(grep -v -e '^#' -e '^$' "$terms_file" | paste -sd '|' -)
+[ -n "$terms" ] || { echo "pre-push: $terms_file holds no terms, so nothing was pushed." >&2; exit 1; }
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue  # a delete pushes no history
+    if ! git merge-base --is-ancestor "$SCRUBBED_BASE" "$local_sha" 2>/dev/null; then
+        echo "pre-push: $local_ref isn't built on the rewritten history (no ${SCRUBBED_BASE%"${SCRUBBED_BASE#????????}"} in its ancestry)." >&2
+        status=1
+        continue
+    fi
+    # Commits new to this remote that neither descend from the base nor are its ancestors: old history, whatever it
+    # touched, even when a merge hides it (Serenity, 2026-10-28).
+    # Only the base is excluded, never remote-tracking refs: a stale one left from before the scrub would vouch for old
+    # commits the remote no longer has (Serenity, 2026-10-28).
+    git rev-list "$local_sha" --not "$SCRUBBED_BASE" | sort > "$tmp/new"
+    git rev-list --ancestry-path "$SCRUBBED_BASE..$local_sha" | sort > "$tmp/after"
+    old=$(comm -23 "$tmp/new" "$tmp/after" | head -5 | cut -c1-8 | tr '\n' ' ')
+    if [ -n "$old" ]; then
+        echo "pre-push: $local_ref carries commits from the old history: $old" >&2
+        status=1
+        continue
+    fi
+    # Commits new to this remote that touch a scrubbed path, every side of a merge included (--full-history).
+    touched=$(git log --full-history --format=%h "$local_sha" --not --remotes="$1" -- \
+        ':(glob)**/docs/sessions/**' ':(glob)**/fieldtests-2026-08-02/**' \
+        ':(glob)**/research-fieldtest-results-2026-08-02.md' ':(glob)**/reports/2026-09-sharing-tests.md' \
+        ':(glob)**/research-structural-prosody-in-llm-generation.md' | head -5)
+    # ...or that add the scrubbed text. The terms are never in this repo, which would republish them: they live in a
+    # private file outside it, one extended regex per line, and a push fails closed without it.
+    held=$(git log --format=%h -i -E -G "$terms" "$local_sha" --not --remotes="$1" | head -5)
+    if [ -n "$touched$held" ]; then
+        echo "pre-push: $local_ref carries what the scrub removed: ${touched:+paths in $touched} ${held:+text in $held}" | tr '\n' ' ' >&2
+        echo >&2
+        status=1
+    fi
+done
+[ $status -ne 0 ] && echo "pre-push: nothing was pushed. Rebuild the branch on main without it (docs/checklists.md, Before any push)." >&2
+exit $status
