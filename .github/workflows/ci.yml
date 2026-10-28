@@ -21,8 +21,13 @@ jobs:
           version: "0.8.3"
           python-version: "3.13"
           enable-cache: true
-          cache-dependency-glob: peer/uv.lock
+          cache-dependency-glob: |
+            peer/uv.lock
+            engram/uv.lock
       - run: make setup-peer
+      # The imprint end-to-end and throwaway tests drive engram's own CLI, which needs its dev extras: without them
+      # they fail here as in any fresh worktree. They're the imprint path end to end, so they run, not skip.
+      - run: make setup-engram
       - run: uv run --locked --project peer playwright install --with-deps chromium
       - run: make check-peer
 
