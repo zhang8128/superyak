@@ -138,7 +138,8 @@ def test_load_reads_a_real_checkout_and_says_it_is_on(history_repo, capsys):
     repo, c = history_repo
     history = load(repo / 'peer' / 'superyak_peer' / 'agent_version.py')
     assert history == AgentHistory(c['C'][:12], frozenset({c['P'][:12], c['O'][:12]}))
-    assert capsys.readouterr().err == f'superyak: version check on: {c["C"][:12]}, 2 behind\n'
+    assert capsys.readouterr().err == (f'superyak: version check on: {c["C"][:12]} (ships on any of 2 older agent '
+                                       'versions are told to update)\n')
 
 
 def test_load_turns_off_with_one_line_when_reading_raises(history_repo, monkeypatch, capsys):
