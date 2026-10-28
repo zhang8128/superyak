@@ -1,0 +1,996 @@
+{
+ "name": "e1_uses_1_to_4",
+ "tables": {
+  "persons": [
+   {
+    "id": "person:andy",
+    "home": "place:home/andy",
+    "is_admin": 1,
+    "created_seq": 1
+   },
+   {
+    "id": "person:jenn",
+    "home": "place:home/jenn",
+    "is_admin": 0,
+    "created_seq": 2
+   },
+   {
+    "id": "person:county-steward",
+    "home": "place:home/county-steward",
+    "is_admin": 0,
+    "created_seq": 3
+   },
+   {
+    "id": "person:ph-steward",
+    "home": "place:home/ph-steward",
+    "is_admin": 0,
+    "created_seq": 4
+   },
+   {
+    "id": "person:pr-steward",
+    "home": "place:home/pr-steward",
+    "is_admin": 0,
+    "created_seq": 5
+   },
+   {
+    "id": "person:sw-steward",
+    "home": "place:home/sw-steward",
+    "is_admin": 0,
+    "created_seq": 6
+   }
+  ],
+  "places": [
+   {
+    "id": "place:home/andy",
+    "is_root": 1,
+    "created_seq": 1,
+    "pseudonym_salt": "b4b313d444bdda16228931716d39f301"
+   },
+   {
+    "id": "place:home/jenn",
+    "is_root": 1,
+    "created_seq": 2,
+    "pseudonym_salt": "3e3320d02044c6ca84500ac78e69eef1"
+   },
+   {
+    "id": "place:home/county-steward",
+    "is_root": 1,
+    "created_seq": 3,
+    "pseudonym_salt": "34dc8e5748ae5c1d3b9d5842eb493fac"
+   },
+   {
+    "id": "place:home/ph-steward",
+    "is_root": 1,
+    "created_seq": 4,
+    "pseudonym_salt": "3be7c438141e7c63d33d971f7ba7b311"
+   },
+   {
+    "id": "place:home/pr-steward",
+    "is_root": 1,
+    "created_seq": 5,
+    "pseudonym_salt": "8967ce2d6ddd2d0f9e58485ab9e8a690"
+   },
+   {
+    "id": "place:home/sw-steward",
+    "is_root": 1,
+    "created_seq": 6,
+    "pseudonym_salt": "c95ccc32b1202bc34deb9e3a668b17cb"
+   },
+   {
+    "id": "place:la-county",
+    "is_root": 1,
+    "created_seq": 7,
+    "pseudonym_salt": "1c819699a3ede1f05e27bb12bb6e1ade"
+   },
+   {
+    "id": "place:la-county/public-health",
+    "is_root": 0,
+    "created_seq": 8,
+    "pseudonym_salt": "1402d3fc60743e4f56eb10fe93f390de"
+   },
+   {
+    "id": "place:la-county/parks-and-rec",
+    "is_root": 0,
+    "created_seq": 9,
+    "pseudonym_salt": "ed25480f7d85c19490afc6a1cef84224"
+   },
+   {
+    "id": "place:la-county/public-health/clinic-3",
+    "is_root": 0,
+    "created_seq": 10,
+    "pseudonym_salt": "127f9590ca2f544f19e45dd3602d1afb"
+   },
+   {
+    "id": "place:la-county/summer-wellness",
+    "is_root": 0,
+    "created_seq": 11,
+    "pseudonym_salt": "d1753e70c3a2d42124fc06e97e9dc117"
+   }
+  ],
+  "place_stewards": [
+   {
+    "place": "place:home/andy",
+    "person": "person:andy",
+    "added_seq": 1
+   },
+   {
+    "place": "place:home/jenn",
+    "person": "person:jenn",
+    "added_seq": 2
+   },
+   {
+    "place": "place:home/county-steward",
+    "person": "person:county-steward",
+    "added_seq": 3
+   },
+   {
+    "place": "place:home/ph-steward",
+    "person": "person:ph-steward",
+    "added_seq": 4
+   },
+   {
+    "place": "place:home/pr-steward",
+    "person": "person:pr-steward",
+    "added_seq": 5
+   },
+   {
+    "place": "place:home/sw-steward",
+    "person": "person:sw-steward",
+    "added_seq": 6
+   },
+   {
+    "place": "place:la-county",
+    "person": "person:county-steward",
+    "added_seq": 7
+   },
+   {
+    "place": "place:la-county/public-health",
+    "person": "person:ph-steward",
+    "added_seq": 8
+   },
+   {
+    "place": "place:la-county/parks-and-rec",
+    "person": "person:pr-steward",
+    "added_seq": 9
+   },
+   {
+    "place": "place:la-county/public-health/clinic-3",
+    "person": "person:ph-steward",
+    "added_seq": 10
+   },
+   {
+    "place": "place:la-county/summer-wellness",
+    "person": "person:sw-steward",
+    "added_seq": 11
+   }
+  ],
+  "place_parents": [
+   {
+    "place": "place:la-county/public-health",
+    "parent": "place:la-county",
+    "added_seq": 8
+   },
+   {
+    "place": "place:la-county/parks-and-rec",
+    "parent": "place:la-county",
+    "added_seq": 9
+   },
+   {
+    "place": "place:la-county/public-health/clinic-3",
+    "parent": "place:la-county/public-health",
+    "added_seq": 10
+   },
+   {
+    "place": "place:la-county/summer-wellness",
+    "parent": "place:la-county/public-health",
+    "added_seq": 11
+   },
+   {
+    "place": "place:la-county/summer-wellness",
+    "parent": "place:la-county/parks-and-rec",
+    "added_seq": 11
+   }
+  ],
+  "agents": [
+   {
+    "id": "agent:rio-grande",
+    "acts_for": "place:home/andy",
+    "created_seq": 12
+   },
+   {
+    "id": "agent:ph-coordinator",
+    "acts_for": "place:la-county/public-health/clinic-3",
+    "created_seq": 13
+   },
+   {
+    "id": "agent:parks-planner",
+    "acts_for": "place:la-county/parks-and-rec",
+    "created_seq": 14
+   },
+   {
+    "id": "agent:sw-helper",
+    "acts_for": "place:la-county/summer-wellness",
+    "created_seq": 15
+   }
+  ],
+  "agent_places": [
+   {
+    "agent": "agent:rio-grande",
+    "place": "place:home/andy",
+    "added_seq": 12
+   },
+   {
+    "agent": "agent:ph-coordinator",
+    "place": "place:la-county/public-health/clinic-3",
+    "added_seq": 13
+   },
+   {
+    "agent": "agent:parks-planner",
+    "place": "place:la-county/parks-and-rec",
+    "added_seq": 14
+   },
+   {
+    "agent": "agent:sw-helper",
+    "place": "place:la-county/summer-wellness",
+    "added_seq": 15
+   }
+  ],
+  "collections": [
+   {
+    "id": "collection:andy/medical-history",
+    "owner": "person:andy",
+    "created_seq": 16
+   }
+  ],
+  "collection_members": [
+   {
+    "collection": "collection:andy/medical-history",
+    "object": "mem:S/episode/m1",
+    "backing": "person",
+    "added_seq": 16,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/medical-history",
+    "object": "mem:S/episode/m2",
+    "backing": "person",
+    "added_seq": 16,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/medical-history",
+    "object": "mem:S/episode/m3",
+    "backing": "person",
+    "added_seq": 16,
+    "added_by": "person:andy"
+   }
+  ],
+  "stores": [
+   {
+    "instance_id": "S",
+    "name": "engram",
+    "owner": "person:andy",
+    "place": "place:home/andy",
+    "imprint_of": null,
+    "created_seq": 17
+   },
+   {
+    "instance_id": "house",
+    "name": "engram",
+    "owner": "person:andy",
+    "place": "place:home/andy",
+    "imprint_of": null,
+    "created_seq": 18
+   }
+  ],
+  "subjects": [
+   {
+    "object": "mem:S/episode/m3",
+    "subject": "person:jenn",
+    "added_seq": 19,
+    "added_by": "person:andy",
+    "self_claimed": 0
+   }
+  ],
+  "records": [
+   {
+    "id": "C1",
+    "layer": "place:la-county",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"inject_context\",\"read\",\"recall\",\"route\"],\"audience\":[\"place:la-county\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\",\"road\",\"trail\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":[\"care-coordination\",\"program-operations\"],\"requesters\":\"*\"}",
+    "valid_from": 1790812800,
+    "valid_until": 1830211200,
+    "anchor": 1790812800,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1790812800,
+    "created_seq": 20
+   },
+   {
+    "id": "H1",
+    "layer": "place:la-county/public-health",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"inject_context\",\"read\",\"recall\"],\"audience\":[\"place:la-county/public-health\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\",\"road\",\"trail\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":[\"care-coordination\"],\"requesters\":\"*\"}",
+    "valid_from": 1790812800,
+    "valid_until": null,
+    "anchor": 1790812800,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1790812800,
+    "created_seq": 21
+   },
+   {
+    "id": "H2",
+    "layer": "place:la-county/public-health",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"recall\"],\"audience\":[\"place:la-county/summer-wellness\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\",\"road\",\"trail\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":[\"program-operations\"],\"requesters\":\"*\"}",
+    "valid_from": 1790812800,
+    "valid_until": null,
+    "anchor": 1790812800,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1790812800,
+    "created_seq": 22
+   },
+   {
+    "id": "K1",
+    "layer": "place:la-county/parks-and-rec",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"inject_context\",\"read\",\"recall\",\"route\"],\"audience\":[\"place:la-county/parks-and-rec\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\",\"road\",\"trail\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":[\"program-operations\"],\"requesters\":\"*\"}",
+    "valid_from": 1790812800,
+    "valid_until": null,
+    "anchor": 1790812800,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1790812800,
+    "created_seq": 23
+   },
+   {
+    "id": "K2",
+    "layer": "place:la-county/parks-and-rec",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"read\",\"recall\"],\"audience\":[\"place:la-county/summer-wellness\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\",\"road\",\"trail\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":[\"program-operations\"],\"requesters\":\"*\"}",
+    "valid_from": 1790812800,
+    "valid_until": null,
+    "anchor": 1790812800,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1790812800,
+    "created_seq": 24
+   },
+   {
+    "id": "W1",
+    "layer": "place:la-county/summer-wellness",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"read\",\"recall\"],\"audience\":[\"place:la-county/summer-wellness\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\",\"road\",\"trail\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":[\"program-operations\"],\"requesters\":\"*\"}",
+    "valid_from": 1790812800,
+    "valid_until": null,
+    "anchor": 1790812800,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1790812800,
+    "created_seq": 25
+   },
+   {
+    "id": "L1",
+    "layer": "place:la-county/public-health/clinic-3",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"inject_context\",\"read\",\"recall\"],\"audience\":[\"place:la-county/public-health/clinic-3\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\",\"road\",\"trail\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":[\"care-coordination\"],\"requesters\":\"*\"}",
+    "valid_from": 1790812800,
+    "valid_until": null,
+    "anchor": 1790812800,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1790812800,
+    "created_seq": 26
+   },
+   {
+    "id": "R1",
+    "layer": "place:home/andy",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"inject_context\",\"read\",\"recall\"],\"audience\":[\"place:la-county/public-health\"],\"objects\":{\"collections\":[\"collection:andy/medical-history\"],\"kinds\":[\"memory\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":[\"care-coordination\"],\"requesters\":\"*\"}",
+    "valid_from": 1793491200,
+    "valid_until": 1801353600,
+    "anchor": 1793491200,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1793491200,
+    "created_seq": 27
+   }
+  ],
+  "permission_grants": [
+   {
+    "id": "G1",
+    "issuer": "person:andy",
+    "grantee": "agent:rio-grande",
+    "layer": "place:home/andy",
+    "parent_id": null,
+    "ops": [
+     "share",
+     "withdraw",
+     "shorten",
+     "narrow",
+     "collect",
+     "uncollect"
+    ],
+    "envelope": "{\"actions\":[\"inject_context\",\"read\",\"recall\"],\"audience\":[\"place:la-county/public-health\"],\"objects\":{\"collections\":[\"collection:andy/medical-history\"],\"kinds\":[\"memory\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":\"*\",\"stores\":\"*\"},\"purposes\":[\"care-coordination\"],\"requesters\":\"*\"}",
+    "max_days": 120,
+    "depth": 0,
+    "expires": 1795996800,
+    "created": 1793491200,
+    "created_seq": 28
+   }
+  ]
+ },
+ "seq": 28,
+ "seq_at": {
+  "1": 1793491200,
+  "2": 1793491200,
+  "3": 1793491200,
+  "4": 1793491200,
+  "5": 1793491200,
+  "6": 1793491200,
+  "7": 1793491200,
+  "8": 1793491200,
+  "9": 1793491200,
+  "10": 1793491200,
+  "11": 1793491200,
+  "12": 1793491200,
+  "13": 1793491200,
+  "14": 1793491200,
+  "15": 1793491200,
+  "16": 1790812800,
+  "17": 1793491200,
+  "18": 1793491200,
+  "19": 1793491200,
+  "20": 1790812800,
+  "21": 1790812800,
+  "22": 1790812800,
+  "23": 1790812800,
+  "24": 1790812800,
+  "25": 1790812800,
+  "26": 1790812800,
+  "27": 1793491200,
+  "28": 1793491200
+ },
+ "meta": {
+  "ledger_id": "ledger-test",
+  "schema_version": "1",
+  "owner": "person:andy",
+  "admins": "person:andy"
+ },
+ "names": {
+  "place:la-county": "LA County",
+  "place:la-county/public-health": "Public Health",
+  "place:la-county/parks-and-rec": "Parks and Recreation",
+  "place:la-county/summer-wellness": "Summer Wellness"
+ },
+ "cases": [
+  {
+   "note": "use 1: ph-coordinator is delivered m1; R1, C1, H1 and L1 each allow all three actions; the legacy layers allow",
+   "use": {
+    "requester": "agent:ph-coordinator",
+    "place": "place:la-county/public-health/clinic-3",
+    "obj": "mem:S/episode/m1",
+    "copy": "store:house",
+    "action": "inject_context",
+    "purpose": "care-coordination",
+    "at": 1793577600,
+    "names": [],
+    "shows": []
+   },
+   "legacy": [
+    {
+     "name": "publisher",
+     "allows": [
+      "recall",
+      "read",
+      "inject_context"
+     ]
+    },
+    {
+     "name": "receiver",
+     "allows": [
+      "recall",
+      "read",
+      "inject_context"
+     ]
+    }
+   ],
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "R1",
+      "version": 28
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "record": "R1",
+      "version": 28
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": "R1",
+      "version": 28
+     },
+     {
+      "layer": "place:la-county",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "C1",
+      "version": 20
+     },
+     {
+      "layer": "place:la-county",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "record": "C1",
+      "version": 20
+     },
+     {
+      "layer": "place:la-county",
+      "kind": "consent",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": "C1",
+      "version": 20
+     },
+     {
+      "layer": "place:la-county/public-health",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "H1",
+      "version": 22
+     },
+     {
+      "layer": "place:la-county/public-health",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "record": "H1",
+      "version": 22
+     },
+     {
+      "layer": "place:la-county/public-health",
+      "kind": "consent",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": "H1",
+      "version": 22
+     },
+     {
+      "layer": "place:la-county/public-health/clinic-3",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "L1",
+      "version": 26
+     },
+     {
+      "layer": "place:la-county/public-health/clinic-3",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "record": "L1",
+      "version": 26
+     },
+     {
+      "layer": "place:la-county/public-health/clinic-3",
+      "kind": "consent",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": "L1",
+      "version": 26
+     },
+     {
+      "layer": "publisher",
+      "kind": "legacy",
+      "action": "recall",
+      "verdict": "allow",
+      "record": null,
+      "version": null
+     },
+     {
+      "layer": "publisher",
+      "kind": "legacy",
+      "action": "read",
+      "verdict": "allow",
+      "record": null,
+      "version": null
+     },
+     {
+      "layer": "publisher",
+      "kind": "legacy",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": null,
+      "version": null
+     },
+     {
+      "layer": "receiver",
+      "kind": "legacy",
+      "action": "recall",
+      "verdict": "allow",
+      "record": null,
+      "version": null
+     },
+     {
+      "layer": "receiver",
+      "kind": "legacy",
+      "action": "read",
+      "verdict": "allow",
+      "record": null,
+      "version": null
+     },
+     {
+      "layer": "receiver",
+      "kind": "legacy",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": null,
+      "version": null
+     },
+     {
+      "layer": "agent:ph-coordinator",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "record": null,
+      "version": 13
+     },
+     {
+      "layer": "agent:ph-coordinator",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "record": null,
+      "version": 13
+     },
+     {
+      "layer": "agent:ph-coordinator",
+      "kind": "restriction",
+      "action": "inject_context",
+      "verdict": "silent",
+      "record": null,
+      "version": 13
+     }
+    ],
+    "refusal": null,
+    "until": 1801353600,
+    "horizon": 1801353600
+   }
+  },
+  {
+   "note": "use 2: m3 has Jenn as co-subject; Jenn's home layer is empty, so NO_ALLOW at place:home/jenn",
+   "use": {
+    "requester": "agent:ph-coordinator",
+    "place": "place:la-county/public-health/clinic-3",
+    "obj": "mem:S/episode/m3",
+    "copy": "store:house",
+    "action": "inject_context",
+    "purpose": "care-coordination",
+    "at": 1793577600,
+    "names": [],
+    "shows": []
+   },
+   "expected": {
+    "allowed": false,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "R1",
+      "version": 28
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "record": "R1",
+      "version": 28
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": "R1",
+      "version": 28
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "silent",
+      "record": null,
+      "version": 2
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "silent",
+      "record": null,
+      "version": 2
+     },
+     {
+      "layer": "place:home/jenn",
+      "kind": "consent",
+      "action": "inject_context",
+      "verdict": "silent",
+      "record": null,
+      "version": 2
+     },
+     {
+      "layer": "place:la-county",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "C1",
+      "version": 20
+     },
+     {
+      "layer": "place:la-county",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "record": "C1",
+      "version": 20
+     },
+     {
+      "layer": "place:la-county",
+      "kind": "consent",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": "C1",
+      "version": 20
+     },
+     {
+      "layer": "place:la-county/public-health",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "H1",
+      "version": 22
+     },
+     {
+      "layer": "place:la-county/public-health",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "record": "H1",
+      "version": 22
+     },
+     {
+      "layer": "place:la-county/public-health",
+      "kind": "consent",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": "H1",
+      "version": 22
+     },
+     {
+      "layer": "place:la-county/public-health/clinic-3",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "L1",
+      "version": 26
+     },
+     {
+      "layer": "place:la-county/public-health/clinic-3",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "record": "L1",
+      "version": 26
+     },
+     {
+      "layer": "place:la-county/public-health/clinic-3",
+      "kind": "consent",
+      "action": "inject_context",
+      "verdict": "allow",
+      "record": "L1",
+      "version": 26
+     },
+     {
+      "layer": "agent:ph-coordinator",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "record": null,
+      "version": 13
+     },
+     {
+      "layer": "agent:ph-coordinator",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "record": null,
+      "version": 13
+     },
+     {
+      "layer": "agent:ph-coordinator",
+      "kind": "restriction",
+      "action": "inject_context",
+      "verdict": "silent",
+      "record": null,
+      "version": 13
+     }
+    ],
+    "refusal": {
+     "code": "NO_ALLOW",
+     "layer": "place:home/jenn",
+     "action": "recall"
+    },
+    "until": 1801353600,
+    "horizon": 1801353600
+   }
+  },
+  {
+   "note": "use 3: R1 does not reach parks-and-rec, which public health does not dominate",
+   "use": {
+    "requester": "agent:parks-planner",
+    "place": "place:la-county/parks-and-rec",
+    "obj": "mem:S/episode/m1",
+    "copy": "store:house",
+    "action": "recall",
+    "purpose": "program-operations",
+    "at": 1793577600,
+    "names": [],
+    "shows": []
+   },
+   "expected": {
+    "allowed": false,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "silent",
+      "record": null,
+      "version": 28
+     },
+     {
+      "layer": "place:la-county",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "C1",
+      "version": 20
+     },
+     {
+      "layer": "place:la-county/parks-and-rec",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "K1",
+      "version": 24
+     },
+     {
+      "layer": "agent:parks-planner",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "record": null,
+      "version": 14
+     }
+    ],
+    "refusal": {
+     "code": "NO_ALLOW",
+     "layer": "place:home/andy",
+     "action": "recall"
+    },
+    "until": 1830211200,
+    "horizon": 1801353600
+   }
+  },
+  {
+   "note": "use 4: summer-wellness has a path to the county through parks, so public health does not dominate it; H2 does not help a layer that does not allow",
+   "use": {
+    "requester": "agent:sw-helper",
+    "place": "place:la-county/summer-wellness",
+    "obj": "mem:S/episode/m1",
+    "copy": "store:house",
+    "action": "recall",
+    "purpose": "program-operations",
+    "at": 1793577600,
+    "names": [],
+    "shows": []
+   },
+   "expected": {
+    "allowed": false,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "silent",
+      "record": null,
+      "version": 28
+     },
+     {
+      "layer": "place:la-county",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "C1",
+      "version": 20
+     },
+     {
+      "layer": "place:la-county/parks-and-rec",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "K2",
+      "version": 24
+     },
+     {
+      "layer": "place:la-county/public-health",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "H2",
+      "version": 22
+     },
+     {
+      "layer": "place:la-county/summer-wellness",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "record": "W1",
+      "version": 25
+     },
+     {
+      "layer": "agent:sw-helper",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "record": null,
+      "version": 15
+     }
+    ],
+    "refusal": {
+     "code": "NO_ALLOW",
+     "layer": "place:home/andy",
+     "action": "recall"
+    },
+    "until": 1830211200,
+    "horizon": 1801353600
+   }
+  }
+ ]
+}

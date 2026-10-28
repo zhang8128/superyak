@@ -1,0 +1,362 @@
+"""Task P0: every field of every decision stays equal to the frozen reference of a083a96 (P 6.5, 17 F1).
+
+tests/permissions_reference.py is a copy of a083a96's decision code, never edited again. For random worlds, the F1
+fixtures and bulk uses under small bounds, `decide`, `decide_bulk` (named and counted, grouped and not) and
+`eligible_set` must give the reference's `to_json()`, versions, `processed` and `failed_need`, or the same refusal
+error, on a whole State and on a lazy State written to a ledger by SQL. The worlds are a083a96's (`nested=False`).
+Two changes are on purpose. Tardis's T1 reads the expiry of the grant behind every grant-backed membership of a
+needed object, so a horizon may move earlier, to one of those expiries (`t1_terms`). Tardis's T6 gives an object in a
+store with no `stores` row no subject, so a decision that needs one may become a `NO_LAYER` refusal at that object
+(`unregistered`); an eligible set is then compared with the reference's for its other placements."""
+import dataclasses
+import hashlib
+import json
+import random
+import shutil
+
+import pytest
+
+import permissions
+import tests.permissions_reference as ref
+from permissions import (BulkUse, LegacyLayer, Placement, RuleError, _COLUMNS, decide, decide_bulk, eligible_set,
+                         parse_object_ref, selector_json)
+from tests.permissions_support import Bulk, T, derived_trails, generated_world, random_world, sample_uses, touches
+from tests.permissions_support import AGENT, COPY, PLACE
+from tests.test_permissions_f1 import FIXTURES, load_state, run_case
+
+CASES = 40
+USES = 30
+
+
+def legacy_for(seed):
+    def allows(use, action, seed=seed):
+        return hashlib.sha256(f"{seed}|{use.obj}|{action}".encode()).digest()[0] % 7 != 0
+    return (LegacyLayer("publisher", allows), LegacyLayer("receiver", lambda u, x: True))
+
+
+def fields(d):
+    """Every field of a decision that a caller can see."""
+    if isinstance(d, Exception):
+        return {"error": f"{type(d).__name__}: {d}"}
+    return {"d": d.to_json(), "versions": dict(sorted(d.versions.items())), "processed": d.processed,
+            "failed": d.failed_need}
+
+
+def guard(fn):
+    try:
+        return fn()
+    except RuleError as e:
+        return e
+
+
+T1_CHANGED = []          # the decisions whose horizon Tardis's T1 moved earlier, by label
+
+
+def t1_terms(s, objs, t):
+    """Tardis's T1, read from the State apart from the code under test: the expiry after t of every grant in the
+    chain behind every grant-backed membership of the objects (and of the memories a road or trail names)."""
+    out = []
+    for o in objs:
+        for m in s.member_of.get(o, ()):
+            gid = m.backing[len("grant:"):] if m.backing.startswith("grant:") else None
+            while gid is not None and gid in s.grants:
+                g = s.grants[gid]
+                if g.expires > t:
+                    out.append(g.expires)
+                gid = g.parent_id
+    return out
+
+
+T6_CHANGED = []          # the decisions Tardis's T6 made a NO_LAYER refusal at an object in an unregistered store
+NO_SUBJECT = {"code": "NO_LAYER", "layer": None, "action": None}
+
+
+def unregistered(s, refs):
+    """Tardis's T6, read from the State apart from the code under test: the refs whose store has no `stores` row."""
+    out = set()
+    for r in refs:
+        try:
+            iid = parse_object_ref(r).instance_id
+        except RuleError:
+            continue
+        if iid not in s.stores:
+            out.add(r)
+    return out
+
+
+def same(label, live, old, t1=(), t6=False):
+    """Equal decisions, except that T1 may move the horizon earlier, to one of `t1`, the times `t1_terms` reads; and,
+    for a use that needs an object in an unregistered store (`t6`), T6 may make it a NO_LAYER refusal there."""
+    a, b = fields(live), fields(old)
+    if t6 and "d" in a and a != b:
+        assert not a["d"]["allowed"] and a["d"]["refusal"] == NO_SUBJECT, label
+        T6_CHANGED.append(label)
+        return
+    if "d" in a and "d" in b and a["d"]["horizon"] != b["d"]["horizon"]:
+        h, before = a["d"]["horizon"], b["d"]["horizon"]
+        assert h in t1 and (before is None or h < before), label
+        T1_CHANGED.append(label)
+        a = dict(a, d=dict(a["d"], horizon=before))
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True), label
+
+
+M2_CHANGED = []          # the eligible sets whose horizon the final review's M2 moved earlier, by label
+M2_COMPARED = []         # every eligible-set comparison, by label
+WORLDS_RUN = set()       # (test, case): the random worlds checked in this session
+
+
+def m2_terms(s, placements, requester, t):
+    """The final review's M2, read from the State apart from the code under test: every time after t at which a
+    row an eligible set reads by its log time comes into or goes out of force. The requester's places and group
+    memberships; each placed object's memberships, subject rows (up its `copies` chain) and lane notes; and the
+    re-review's term, the anchor of every unrevoked record whose anchor is after t."""
+    def later(added, removed):
+        lo = s.seq_at[added]
+        hi = None if removed is None or removed > s.seq else s.seq_at[removed]
+        return [x for x in (lo, hi) if x is not None and x > t]
+    out = []
+    for r in s.agent_places.get(requester, ()):
+        out += later(r.added_seq, r.removed_seq)
+    for rows in s.group_members.values():
+        out += [x for r in rows if r.agent == requester for x in later(r.added_seq, r.removed_seq)]
+    for o in {p.obj for p in placements if p.obj is not None}:
+        out += [x for m in s.member_of.get(o, ()) for x in later(m.added_seq, m.removed_seq)]
+        cur, seen = o, set()
+        for _ in range(permissions.MAX_COPY_CHAIN + 1):
+            if cur is None or cur in seen:
+                break
+            seen.add(cur)
+            out += [x for r in s.subjects.get(cur, ()) for x in later(r.added_seq, r.removed_seq)]
+            cur = s.copies.get(cur)
+        out += [n.at for n in s.lane_notes.get(o, ()) if n.at > t]
+    out += [r.anchor for r in s.records.values()
+            if r.anchor > t and (r.revoked_seq is None or r.revoked_seq > s.seq)]
+    return out
+
+
+def same_set(label, live, old, m2=(), t1=None, t6=frozenset(), full=None):
+    """Equal eligible sets, except that M2 (the final review) may move the horizon earlier: to the earliest of the
+    reference's horizon and `m2`, the times `m2_terms` reads; and T1 may move it earlier still, to one of the
+    times `t1_terms` reads of a placed object (`t1`, by object). `old` was made without the placements whose objects
+    are in `t6`, those in unregistered stores: each of those is a NO_LAYER refusal, so its memory is not eligible,
+    unless the decision was refused before any object, as the reference's set over every placement (`full`) says."""
+    M2_COMPARED.append(label)
+    if isinstance(live, Exception) or isinstance(old, Exception):
+        assert fields(live) == fields(old), label
+        return
+    for o in t6:
+        got = live.decisions[o]
+        if json.dumps(fields(got), sort_keys=True) == json.dumps(fields(full.decisions[o]), sort_keys=True):
+            continue
+        assert got.refusal is not None and got.refusal.to_json() == NO_SUBJECT, label
+        T6_CHANGED.append(f"{label}/{o}")
+    live = dataclasses.replace(live, decisions={k: v for k, v in live.decisions.items() if k not in t6})
+    t1 = t1 or {}
+    terms = list(m2) + ([] if old.horizon is None else [old.horizon])
+    expected = min(terms) if terms else None
+    if expected != old.horizon:
+        M2_CHANGED.append(label)
+    horizon = live.horizon
+    if horizon != expected and any(horizon in v for v in t1.values()) and (expected is None or horizon < expected):
+        T1_CHANGED.append(label)
+        horizon = expected
+    assert (sorted(live.memory_ids), horizon) == (sorted(old.memory_ids), expected), label
+    assert sorted(live.decisions) == sorted(old.decisions), label
+    for k in sorted(live.decisions):
+        same(f"{label}/{k}", live.decisions[k], old.decisions[k], t1.get(k, ()))
+
+
+def lazy_state(w, home):
+    """The World's tables written into a ledger under `home` by SQL, then read back as a lazy State."""
+    from lighthouse_protocol import canonical_json
+    from permission_ledger import ZERO, Ledger, _digest
+    shutil.rmtree(home, ignore_errors=True)
+    home.mkdir(parents=True)
+    led = Ledger._blank(home, "reference-ledger")
+    conn = led.conn
+    conn.execute("BEGIN")
+    conn.executemany("INSERT INTO meta VALUES(?,?)", [("owner", w.owner), ("admins", w.owner)])
+    for table, cols in _COLUMNS.items():
+        def cell(c, r, table=table):
+            v = r.get(c)
+            if table == "records" and c == "selector":
+                return selector_json(v)
+            if table == "permission_grants" and c in ("ops", "envelope") and not isinstance(v, str):
+                return canonical_json(v)
+            return v
+        conn.executemany(f"INSERT INTO {table}({', '.join(cols)}) VALUES({', '.join('?' * len(cols))})",
+                         ([cell(c, r) for c in cols] for r in w.rows.get(table, [])))
+    prev = ZERO
+    for seq in range(1, w.seq + 1):
+        entry = {"seq": seq, "at": w.seq_at[seq], "kind": "filler", "ref": "none", "actor": w.owner,
+                 "channel": "terminal", "under_grant": None, "proposal_id": None, "body": "{}"}
+        dg = _digest(prev, entry)
+        conn.execute("INSERT INTO ledger_log VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                     (seq, entry["at"], "filler", "none", w.owner, "terminal", None, None, "{}", prev, dg))
+        prev = dg
+    conn.execute("COMMIT")
+    led.close()
+    led = Ledger.open_read_only(home)
+    s = led.state()
+    led.close()
+    return s
+
+
+def check_world(tag, w, s, rng, n_uses, when=None):
+    """With `when`, each sampled use (a bulk use's every part) is moved to the time `when()` draws."""
+    roads = getattr(w.cfg, "roads", {}) if w.cfg else {}
+    for i, u in enumerate(sample_uses(rng, w, n_uses)):
+        if when is not None:
+            at = when()
+            u = (Bulk(tuple(dataclasses.replace(x, at=at) for x in u.uses)) if isinstance(u, Bulk)
+                 else dataclasses.replace(u, at=at))
+        leg = legacy_for(f"{tag}-{i}")
+        if isinstance(u, Bulk):
+            first = u.uses[0]
+            objs = tuple(x.obj for x in u.uses)
+            for named in (True, False):
+                b = BulkUse(requester=first.requester, place=first.place, objects=objs, copy=first.copy,
+                            action=first.action, purpose=first.purpose, at=first.at, named=named,
+                            names=lambda o: roads.get(o, ()))
+                needed = list(objs) + [m for o in objs for m in roads.get(o, ())]
+                t1, t6 = t1_terms(s, needed, first.at), bool(unregistered(s, needed))
+                for group in (True, False):
+                    same(f"{tag}/{i}/bulk/{named}/{group}", guard(lambda: decide_bulk(s, b, group=group)),
+                         guard(lambda: ref.decide_bulk(s, b, group=group)), t1, t6)
+                same(f"{tag}/{i}/bulk-legacy/{named}", guard(lambda: decide_bulk(s, b, legacy=leg)),
+                     guard(lambda: ref.decide_bulk(s, b, legacy=leg)), t1, t6)
+            for j, x in enumerate(u.uses):
+                same(f"{tag}/{i}/sub/{j}", guard(lambda: decide(s, x)), guard(lambda: ref.decide(s, x)),
+                     t1_terms(s, (x.obj, *x.names), x.at), bool(unregistered(s, (x.obj, *x.names))))
+            continue
+        t1, t6 = t1_terms(s, (u.obj, *u.names), u.at), bool(unregistered(s, (u.obj, *u.names)))
+        same(f"{tag}/{i}", guard(lambda: decide(s, u)), guard(lambda: ref.decide(s, u)), t1, t6)
+        same(f"{tag}/{i}/legacy", guard(lambda: decide(s, u, legacy=leg)), guard(lambda: ref.decide(s, u, legacy=leg)),
+             t1, t6)
+        objs = list(getattr(w.cfg, "objects", [])) + [None]
+        placements = [Placement(f"id{k}", o, u.copy) for k, o in enumerate(objs)]
+        placements += [Placement(f"dup{k}", o, u.copy) for k, o in enumerate(objs[:3])]
+        kw = dict(requester=u.requester, place=u.place, purpose=u.purpose, action=u.action, at=u.at)
+        t6 = frozenset(unregistered(s, [o for o in objs if o is not None]))
+        same_set(f"{tag}/{i}/es", guard(lambda: eligible_set(s, placements, **kw)),
+                 guard(lambda: ref.eligible_set(s, [p for p in placements if p.obj not in t6], **kw)),
+                 m2=m2_terms(s, placements, u.requester, u.at),
+                 t1={o: t1_terms(s, (o,), u.at) for o in objs if o is not None}, t6=t6,
+                 full=guard(lambda: ref.eligible_set(s, placements, **kw)) if t6 else None)
+        for k, o in enumerate(objs[:-1]):
+            x = dataclasses.replace(u, obj=o, names=roads.get(o, ()), shows=frozenset())
+            same(f"{tag}/{i}/each/{k}", guard(lambda: decide(s, x)), guard(lambda: ref.decide(s, x)),
+                 t1_terms(s, (o, *x.names), u.at), bool(unregistered(s, (o, *x.names))))
+
+
+@pytest.mark.parametrize("case", range(CASES))
+def test_random_world_decisions_equal_the_reference(case, tmp_path):
+    WORLDS_RUN.add(("from-t0", case))
+    w = random_world(random.Random(f"perf-diff-{case}"), nested=False)
+    check_world(f"rw{case}", w, w.state(), random.Random(f"perf-diff-uses-{case}"), USES)
+    if case % 6 == 0:
+        check_world(f"rw{case}-lazy", w, lazy_state(w, tmp_path / "ledger"),
+                    random.Random(f"perf-diff-uses-{case}"), USES // 2)
+
+
+@pytest.mark.parametrize("case", range(CASES))
+def test_uses_drawn_before_a_records_anchor_equal_the_reference(case, tmp_path):
+    """The re-review's M2: a random world draws no use before every record exists (its `t0`), so no record's anchor
+    is ever after t there. These uses are drawn before t0, from a day before the first anchor, or a second either
+    side of an anchor: every decision must still equal the reference, and an eligible set's horizon may move only
+    to `m2_terms`, whose last term is then the earliest anchor after t."""
+    WORLDS_RUN.add(("before-t0", case))
+    w = random_world(random.Random(f"perf-diff-{case}"), nested=False)
+    s = w.state()
+    anchors = sorted({r.anchor for r in s.records.values()})
+    rng = random.Random(f"perf-diff-before-{case}")
+
+    def when():
+        if rng.random() < 0.5:
+            return rng.randint(anchors[0] - 86_400, w.cfg.t0 - 1)
+        return rng.choice(anchors) + rng.choice([-1, 0, 1])
+    check_world(f"rw{case}-before", w, s, random.Random(f"perf-diff-uses-{case}"), USES // 2, when)
+    if case % 6 == 0:
+        check_world(f"rw{case}-before-lazy", w, lazy_state(w, tmp_path / "ledger"),
+                    random.Random(f"perf-diff-uses-{case}"), USES // 2, when)
+
+
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_f1_decisions_equal_the_reference(path, monkeypatch):
+    doc = json.loads(path.read_text())
+    st = load_state(doc)
+    for n, case in enumerate(doc["cases"]):
+        live = guard(lambda: run_case(st, case))
+        monkeypatch.setattr("tests.test_permissions_f1.decide", ref.decide)
+        monkeypatch.setattr("tests.test_permissions_f1.decide_bulk", ref.decide_bulk)
+        old = guard(lambda: run_case(st, case))
+        monkeypatch.undo()
+        same(f"{path.stem}/{n}", live, old)
+
+
+@pytest.fixture(scope="module")
+def trails_world():
+    return generated_world(placements=0, layers=43, records_per_layer=256, universe=800, trails=12)[0]
+
+
+@pytest.mark.parametrize("cap", [3, 50])
+def test_bulk_bound_equals_the_reference(cap, trails_world, monkeypatch):
+    monkeypatch.setattr(permissions, "MAX_BULK_MEMORIES", cap)
+    for group in (True, False):
+        b = BulkUse(requester=AGENT, place=PLACE, objects=derived_trails(12), copy=COPY, action="imprint",
+                    purpose="trail-evaluation", at=T("2026-11-02"), named=False,
+                    names=lambda t: touches(t, 8, universe=800))
+        same(f"gen/{cap}/{group}", guard(lambda: decide_bulk(trails_world, b, group=group)),
+             guard(lambda: ref.decide_bulk(trails_world, b, group=group)))
+    for case in range(0, CASES, 3):
+        w = random_world(random.Random(f"perf-diff-{case}"), nested=False)
+        st, roads = w.state(), getattr(w.cfg, "roads", {})
+        for i, u in enumerate(sample_uses(random.Random(f"tight-{case}"), w, 25)):
+            if not isinstance(u, Bulk):
+                continue
+            first = u.uses[0]
+            bb = BulkUse(requester=first.requester, place=first.place,
+                         objects=tuple(x.obj for x in u.uses) + tuple(roads), copy=first.copy, action=first.action,
+                         purpose=first.purpose, at=first.at, named=False, names=lambda o: roads.get(o, ()))
+            needed = list(bb.objects) + [m for o in bb.objects for m in roads.get(o, ())]
+            same(f"rw{case}/{i}/{cap}", guard(lambda: decide_bulk(st, bb, group=False)),
+                 guard(lambda: ref.decide_bulk(st, bb, group=False)), t1_terms(st, needed, bb.at),
+                 bool(unregistered(st, needed)))
+
+
+def test_the_comparison_notices_one_changed_cited_id():
+    """Step 1(c): mutate one cited id in a copy of a decision; `same` must fail."""
+    doc = json.loads(FIXTURES[0].read_text())
+    st = load_state(doc)
+    d = next(x for x in (guard(lambda: run_case(st, c)) for c in doc["cases"])
+             if not isinstance(x, Exception) and x.cited and x.cited[0].records)
+    same("unmutated", d, d)
+
+    class Mutated:
+        versions, processed, failed_need = d.versions, d.processed, d.failed_need
+
+        @staticmethod
+        def to_json():
+            j = json.loads(json.dumps(d.to_json()))
+            j["cited"][0]["records"][0] += "-mutated"
+            return j
+    with pytest.raises(AssertionError):
+        same("mutated", Mutated, d)
+
+
+def test_the_random_worlds_keep_exercising_m2(tmp_path, capsys):
+    """The re-review's Minor 3: the random worlds must keep moving some eligible-set horizons by M2's terms, both
+    the uses drawn from t0 on and those drawn before it, or `same_set`'s M2 allowance would go untested. Prints
+    the counts. Runs first the worlds that a selection (`-k`) left out, so the counts are always all of them."""
+    for case in range(CASES):
+        if ("from-t0", case) not in WORLDS_RUN:
+            test_random_world_decisions_equal_the_reference(case, tmp_path / f"from-t0-{case}")
+        if ("before-t0", case) not in WORLDS_RUN:
+            test_uses_drawn_before_a_records_anchor_equal_the_reference(case, tmp_path / f"before-t0-{case}")
+    before = [x for x in M2_CHANGED if "-before" in x]
+    with capsys.disabled():
+        print(f"\nM2 moved {len(M2_CHANGED)} of {len(M2_COMPARED)} eligible-set horizons, {len(before)} of them in "
+              f"uses drawn before t0; Tardis's T1 moved {len(T1_CHANGED)} horizons and T6 refused "
+              f"{len(T6_CHANGED)} decisions with NO_LAYER")
+    assert len(M2_CHANGED) - len(before) > 0 and len(before) > 0
+    assert T1_CHANGED and T6_CHANGED       # T1's and T6's allowances are exercised too

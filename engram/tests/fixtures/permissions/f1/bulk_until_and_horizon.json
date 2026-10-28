@@ -1,0 +1,572 @@
+{
+ "name": "bulk_until_and_horizon",
+ "tables": {
+  "persons": [
+   {
+    "id": "person:andy",
+    "home": "place:home/andy",
+    "is_admin": 1,
+    "created_seq": 1
+   },
+   {
+    "id": "person:jenn",
+    "home": "place:home/jenn",
+    "is_admin": 0,
+    "created_seq": 2
+   },
+   {
+    "id": "person:county-steward",
+    "home": "place:home/county-steward",
+    "is_admin": 0,
+    "created_seq": 3
+   },
+   {
+    "id": "person:ph-steward",
+    "home": "place:home/ph-steward",
+    "is_admin": 0,
+    "created_seq": 4
+   },
+   {
+    "id": "person:pr-steward",
+    "home": "place:home/pr-steward",
+    "is_admin": 0,
+    "created_seq": 5
+   },
+   {
+    "id": "person:sw-steward",
+    "home": "place:home/sw-steward",
+    "is_admin": 0,
+    "created_seq": 6
+   }
+  ],
+  "places": [
+   {
+    "id": "place:home/andy",
+    "is_root": 1,
+    "created_seq": 1,
+    "pseudonym_salt": "b4b313d444bdda16228931716d39f301"
+   },
+   {
+    "id": "place:home/jenn",
+    "is_root": 1,
+    "created_seq": 2,
+    "pseudonym_salt": "3e3320d02044c6ca84500ac78e69eef1"
+   },
+   {
+    "id": "place:home/county-steward",
+    "is_root": 1,
+    "created_seq": 3,
+    "pseudonym_salt": "34dc8e5748ae5c1d3b9d5842eb493fac"
+   },
+   {
+    "id": "place:home/ph-steward",
+    "is_root": 1,
+    "created_seq": 4,
+    "pseudonym_salt": "3be7c438141e7c63d33d971f7ba7b311"
+   },
+   {
+    "id": "place:home/pr-steward",
+    "is_root": 1,
+    "created_seq": 5,
+    "pseudonym_salt": "8967ce2d6ddd2d0f9e58485ab9e8a690"
+   },
+   {
+    "id": "place:home/sw-steward",
+    "is_root": 1,
+    "created_seq": 6,
+    "pseudonym_salt": "c95ccc32b1202bc34deb9e3a668b17cb"
+   },
+   {
+    "id": "place:la-county",
+    "is_root": 1,
+    "created_seq": 7,
+    "pseudonym_salt": "1c819699a3ede1f05e27bb12bb6e1ade"
+   },
+   {
+    "id": "place:la-county/public-health",
+    "is_root": 0,
+    "created_seq": 8,
+    "pseudonym_salt": "1402d3fc60743e4f56eb10fe93f390de"
+   },
+   {
+    "id": "place:la-county/parks-and-rec",
+    "is_root": 0,
+    "created_seq": 9,
+    "pseudonym_salt": "ed25480f7d85c19490afc6a1cef84224"
+   },
+   {
+    "id": "place:la-county/public-health/clinic-3",
+    "is_root": 0,
+    "created_seq": 10,
+    "pseudonym_salt": "127f9590ca2f544f19e45dd3602d1afb"
+   },
+   {
+    "id": "place:la-county/summer-wellness",
+    "is_root": 0,
+    "created_seq": 11,
+    "pseudonym_salt": "d1753e70c3a2d42124fc06e97e9dc117"
+   }
+  ],
+  "place_stewards": [
+   {
+    "place": "place:home/andy",
+    "person": "person:andy",
+    "added_seq": 1
+   },
+   {
+    "place": "place:home/jenn",
+    "person": "person:jenn",
+    "added_seq": 2
+   },
+   {
+    "place": "place:home/county-steward",
+    "person": "person:county-steward",
+    "added_seq": 3
+   },
+   {
+    "place": "place:home/ph-steward",
+    "person": "person:ph-steward",
+    "added_seq": 4
+   },
+   {
+    "place": "place:home/pr-steward",
+    "person": "person:pr-steward",
+    "added_seq": 5
+   },
+   {
+    "place": "place:home/sw-steward",
+    "person": "person:sw-steward",
+    "added_seq": 6
+   },
+   {
+    "place": "place:la-county",
+    "person": "person:county-steward",
+    "added_seq": 7
+   },
+   {
+    "place": "place:la-county/public-health",
+    "person": "person:ph-steward",
+    "added_seq": 8
+   },
+   {
+    "place": "place:la-county/parks-and-rec",
+    "person": "person:pr-steward",
+    "added_seq": 9
+   },
+   {
+    "place": "place:la-county/public-health/clinic-3",
+    "person": "person:ph-steward",
+    "added_seq": 10
+   },
+   {
+    "place": "place:la-county/summer-wellness",
+    "person": "person:sw-steward",
+    "added_seq": 11
+   }
+  ],
+  "place_parents": [
+   {
+    "place": "place:la-county/public-health",
+    "parent": "place:la-county",
+    "added_seq": 8
+   },
+   {
+    "place": "place:la-county/parks-and-rec",
+    "parent": "place:la-county",
+    "added_seq": 9
+   },
+   {
+    "place": "place:la-county/public-health/clinic-3",
+    "parent": "place:la-county/public-health",
+    "added_seq": 10
+   },
+   {
+    "place": "place:la-county/summer-wellness",
+    "parent": "place:la-county/public-health",
+    "added_seq": 11
+   },
+   {
+    "place": "place:la-county/summer-wellness",
+    "parent": "place:la-county/parks-and-rec",
+    "added_seq": 11
+   }
+  ],
+  "agents": [
+   {
+    "id": "agent:rio-grande",
+    "acts_for": "place:home/andy",
+    "created_seq": 12
+   },
+   {
+    "id": "agent:ph-coordinator",
+    "acts_for": "place:la-county/public-health/clinic-3",
+    "created_seq": 13
+   },
+   {
+    "id": "agent:parks-planner",
+    "acts_for": "place:la-county/parks-and-rec",
+    "created_seq": 14
+   },
+   {
+    "id": "agent:sw-helper",
+    "acts_for": "place:la-county/summer-wellness",
+    "created_seq": 15
+   }
+  ],
+  "agent_places": [
+   {
+    "agent": "agent:rio-grande",
+    "place": "place:home/andy",
+    "added_seq": 12
+   },
+   {
+    "agent": "agent:ph-coordinator",
+    "place": "place:la-county/public-health/clinic-3",
+    "added_seq": 13
+   },
+   {
+    "agent": "agent:parks-planner",
+    "place": "place:la-county/parks-and-rec",
+    "added_seq": 14
+   },
+   {
+    "agent": "agent:sw-helper",
+    "place": "place:la-county/summer-wellness",
+    "added_seq": 15
+   }
+  ],
+  "collections": [
+   {
+    "id": "collection:andy/medical-history",
+    "owner": "person:andy",
+    "created_seq": 16
+   }
+  ],
+  "collection_members": [
+   {
+    "collection": "collection:andy/medical-history",
+    "object": "mem:S/episode/m1",
+    "backing": "person",
+    "added_seq": 16,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/medical-history",
+    "object": "mem:S/episode/m2",
+    "backing": "person",
+    "added_seq": 16,
+    "added_by": "person:andy"
+   },
+   {
+    "collection": "collection:andy/medical-history",
+    "object": "mem:S/episode/m3",
+    "backing": "person",
+    "added_seq": 16,
+    "added_by": "person:andy"
+   }
+  ],
+  "stores": [
+   {
+    "instance_id": "S",
+    "name": "engram",
+    "owner": "person:andy",
+    "place": "place:home/andy",
+    "imprint_of": null,
+    "created_seq": 17
+   },
+   {
+    "instance_id": "house",
+    "name": "engram",
+    "owner": "person:andy",
+    "place": "place:home/andy",
+    "imprint_of": null,
+    "created_seq": 18
+   }
+  ],
+  "records": [
+   {
+    "id": "C1",
+    "layer": "place:home/andy",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"read\",\"recall\"],\"audience\":[\"self\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":[\"mem:S/episode/m1\",\"mem:S/episode/m2\"],\"stores\":\"*\"},\"purposes\":\"*\",\"requesters\":\"*\"}",
+    "valid_from": 1793491200,
+    "valid_until": 1796083200,
+    "anchor": 1793491200,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1793491200,
+    "created_seq": 19
+   },
+   {
+    "id": "C2",
+    "layer": "place:home/andy",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"read\",\"recall\"],\"audience\":[\"self\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":[\"mem:S/episode/m3\"],\"stores\":\"*\"},\"purposes\":\"*\",\"requesters\":\"*\"}",
+    "valid_from": 1793491200,
+    "valid_until": 1795132800,
+    "anchor": 1793491200,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1793491200,
+    "created_seq": 20
+   },
+   {
+    "id": "C3",
+    "layer": "place:home/andy",
+    "effect": "allow",
+    "selector": "{\"actions\":[\"read\",\"recall\"],\"audience\":[\"self\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":[\"mem:S/episode/m5\"],\"stores\":\"*\"},\"purposes\":\"*\",\"requesters\":\"*\"}",
+    "valid_from": 1793491200,
+    "valid_until": null,
+    "anchor": 1793491200,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1793491200,
+    "created_seq": 21
+   },
+   {
+    "id": "CD",
+    "layer": "place:home/andy",
+    "effect": "deny",
+    "selector": "{\"actions\":[\"recall\"],\"audience\":[\"self\"],\"objects\":{\"collections\":\"*\",\"kinds\":[\"memory\"],\"lanes\":\"*\",\"layers\":\"*\",\"memories\":[\"mem:S/episode/m2\"],\"stores\":\"*\"},\"purposes\":\"*\",\"requesters\":\"*\"}",
+    "valid_from": 1794700800,
+    "valid_until": null,
+    "anchor": 1793491200,
+    "backing": "person",
+    "set_by": "person:andy",
+    "channel": "terminal",
+    "reason": "test",
+    "created": 1793491200,
+    "created_seq": 22
+   }
+  ]
+ },
+ "seq": 22,
+ "seq_at": {
+  "1": 1793491200,
+  "2": 1793491200,
+  "3": 1793491200,
+  "4": 1793491200,
+  "5": 1793491200,
+  "6": 1793491200,
+  "7": 1793491200,
+  "8": 1793491200,
+  "9": 1793491200,
+  "10": 1793491200,
+  "11": 1793491200,
+  "12": 1793491200,
+  "13": 1793491200,
+  "14": 1793491200,
+  "15": 1793491200,
+  "16": 1790812800,
+  "17": 1793491200,
+  "18": 1793491200,
+  "19": 1793491200,
+  "20": 1793491200,
+  "21": 1793491200,
+  "22": 1793491200
+ },
+ "meta": {
+  "ledger_id": "ledger-test",
+  "schema_version": "1",
+  "owner": "person:andy",
+  "admins": "person:andy"
+ },
+ "names": {
+  "place:la-county": "LA County",
+  "place:la-county/public-health": "Public Health",
+  "place:la-county/parks-and-rec": "Parks and Recreation",
+  "place:la-county/summer-wellness": "Summer Wellness"
+ },
+ "cases": [
+  {
+   "note": "bulk read of m1 and m3: until is the earliest cited end (C2, 11-20); the horizon is CD's start",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m1",
+     "mem:S/episode/m3"
+    ],
+    "copy": "store:house",
+    "action": "read",
+    "purpose": "care-coordination",
+    "at": 1793577600,
+    "named": true,
+    "names": {}
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "C1",
+       "C2"
+      ],
+      "version": 22
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "C1",
+       "C2"
+      ],
+      "version": 22
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 12
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 12
+     }
+    ],
+    "refusal": null,
+    "until": 1795132800,
+    "horizon": 1794700800
+   }
+  },
+  {
+   "note": "bulk read of m1 and m2: CD would match m2 from 11-15, so until is 11-15",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m1",
+     "mem:S/episode/m2"
+    ],
+    "copy": "store:house",
+    "action": "read",
+    "purpose": "care-coordination",
+    "at": 1793577600,
+    "named": true,
+    "names": {}
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "C1"
+      ],
+      "version": 22
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "C1"
+      ],
+      "version": 22
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 12
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 12
+     }
+    ],
+    "refusal": null,
+    "until": 1794700800,
+    "horizon": 1794700800
+   }
+  },
+  {
+   "note": "bulk read of m5 alone: nothing cited ends, yet the horizon still sees CD",
+   "bulk": {
+    "requester": "agent:rio-grande",
+    "place": "place:home/andy",
+    "objects": [
+     "mem:S/episode/m5"
+    ],
+    "copy": "store:house",
+    "action": "read",
+    "purpose": "care-coordination",
+    "at": 1793577600,
+    "named": true,
+    "names": {}
+   },
+   "expected": {
+    "allowed": true,
+    "cited": [
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "recall",
+      "verdict": "allow",
+      "records": [
+       "C3"
+      ],
+      "version": 22
+     },
+     {
+      "layer": "place:home/andy",
+      "kind": "consent",
+      "action": "read",
+      "verdict": "allow",
+      "records": [
+       "C3"
+      ],
+      "version": 22
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "recall",
+      "verdict": "silent",
+      "records": [],
+      "version": 12
+     },
+     {
+      "layer": "agent:rio-grande",
+      "kind": "restriction",
+      "action": "read",
+      "verdict": "silent",
+      "records": [],
+      "version": 12
+     }
+    ],
+    "refusal": null,
+    "until": null,
+    "horizon": 1794700800
+   }
+  }
+ ]
+}
