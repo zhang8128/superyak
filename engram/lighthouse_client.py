@@ -283,6 +283,23 @@ def validate_trace(
     }
 
 
+_PERMISSION_KEYS = {"laid_by", "allowed_by", "until", "receipt"}
+
+
+def _permission(value, code: str) -> dict:
+    """P 11's object, checked to its types and copied; any other member is refused."""
+    _require(isinstance(value, dict) and set(value) == _PERMISSION_KEYS, code)
+    _require(_text(value["laid_by"]) and _text(value["receipt"]), code)
+    _require(value["until"] is None or _text(value["until"]), code)
+    allowed = value["allowed_by"]
+    _require(isinstance(allowed, list), code)
+    for entry in allowed:
+        _require(isinstance(entry, dict) and set(entry) == {"place", "records"} and _text(entry["place"])
+                 and isinstance(entry["records"], list) and all(_text(r) for r in entry["records"]), code)
+    return {"laid_by": value["laid_by"], "until": value["until"], "receipt": value["receipt"],
+            "allowed_by": [{"place": e["place"], "records": list(e["records"])} for e in allowed]}
+
+
 def validate_read(reply: dict, *, selected: list[dict]) -> list[dict]:
     """Deliver only selected, intact shares still allowed by the publisher."""
     code = "INVALID_READ"
@@ -312,12 +329,13 @@ def validate_read(reply: dict, *, selected: list[dict]) -> list[dict]:
     seen = set()
     verified = []
     for item in reply["items"]:
-        _require(set(item) == {"memoryId", "content", "audiences", "decision"}, code)
+        _require(isinstance(item, dict) and set(item) - {"permission"} == {"memoryId", "content", "audiences", "decision"}, code)
         memory_id = item["memoryId"]
         _require(_text(memory_id), code)
         _require(memory_id in by_id and memory_id not in seen, code)
         seen.add(memory_id)
         decision = _decision(item["decision"], code)
+        permission = _permission(item["permission"], code) if "permission" in item else None
         audiences = _audiences(item["audiences"], code, allow_empty=True)
         content = item["content"]
         _require(content is None or isinstance(content, str), code)
@@ -332,7 +350,10 @@ def validate_read(reply: dict, *, selected: list[dict]) -> list[dict]:
             raise NeighborUnavailable(code) from exc
         _require(size <= MAX_CONTENT_BYTES, "CONTENT_TOO_LARGE")
         _require(content_digest(content) == entry["contentDigest"], "CONTENT_DIGEST_MISMATCH")
-        verified.append({**entry, "content": content, "audiences": audiences, "decision": decision})
+        kept = {**entry, "content": content, "audiences": audiences, "decision": decision}
+        if permission is not None:
+            kept["permission"] = permission
+        verified.append(kept)
     return verified
 
 

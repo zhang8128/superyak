@@ -263,21 +263,35 @@ def _episode_matrix(conn, semantic_id: str):
     return ids, X
 
 
-def measure_all(storage, cfg) -> list[dict]:
-    """Energy for every semantic with enough provenance. Read-only."""
+def measure_each(storage, cfg, *, max_episodes: int | None = None, skips: list | None = None):
+    """Yield one semantic's energy at a time, in the order the ``GROUP BY`` reads them.
+
+    With ``max_episodes``, a semantic with more sources than that is not
+    measured (never sampled): its ``n x n`` matrices are what ``cohesion_energy``
+    would build. It is named in ``skips`` as ``cohesion:<id>``.
+    """
     sem_rows = storage.conn.execute(
         "SELECT semantic_id, COUNT(*) AS n FROM semantic_sources"
-        " GROUP BY semantic_id HAVING n >= ?", (cfg.min_episodes,)).fetchall()
-    out = []
+        " GROUP BY semantic_id HAVING n >= ?", (cfg.min_episodes,))
     for r in sem_rows:
+        if max_episodes is not None and r[1] > max_episodes:
+            if skips is not None:
+                skips.append({"set": f"cohesion:{r[0]}", "n": r[1], "bound": max_episodes})
+            continue
         ids, X = _episode_matrix(storage.conn, r[0])
         if len(ids) < cfg.min_episodes:
             continue  # episodes lacking vectors shrink the neighbourhood
         ls = build_local_sheaf(r[0], ids, X, cfg.variance_threshold,
                                cfg.max_subspace_dim)
         res = cohesion_energy(ls)
-        out.append({"semantic_id": r[0], "energy": res["energy"], "n": len(ids),
-                    "worst_edges": res["worst_edges"][:3]})
+        yield {"semantic_id": r[0], "energy": res["energy"], "n": len(ids),
+               "worst_edges": res["worst_edges"][:3]}
+
+
+def measure_all(storage, cfg, *, max_episodes: int | None = None,
+                skips: list | None = None) -> list[dict]:
+    """Energy for every semantic with enough provenance, hottest first. Read-only."""
+    out = list(measure_each(storage, cfg, max_episodes=max_episodes, skips=skips))
     out.sort(key=lambda d: d["energy"], reverse=True)
     return out
 

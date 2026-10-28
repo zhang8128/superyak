@@ -18,6 +18,7 @@ const state = {
   corrections: [],
   connections: [],
   ships: [], dockCode: null, docking: null,
+  imprints: null, imprintCode: null, imprint: null, imprintAsk: null,
   activeLayers: {},
   activeLayerErrors: {},
   revisions: [],
@@ -105,6 +106,7 @@ function clearAccountAdministration() {
   state.accounts = []; state.accessRequests = []; state.roleChanges = []; state.invitation = null;
   state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null;
   state.ships = []; state.docking = null;
+  state.imprints = null; state.imprintCode = null; state.imprint = null; state.imprintAsk = null;
 }
 
 function bindEditorIdentity(user) {
@@ -139,7 +141,7 @@ async function api(path, options = {}) {
 function routeParts() {
   const raw = location.hash.replace(/^#\/?/, "") || "home";
   const [route, id] = raw.split("/");
-  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
+  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections", "accounts"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
 }
 
 function navLink(route, label, icon) {
@@ -168,6 +170,7 @@ function layout(content) {
         ${navLink("spaces", "Circles & projects", "◎")}
         ${navLink("research", "Research & data", "⌕")}
         ${navLink("connections", "Connections", "↔")}
+        ${state.imprints ? navLink("accounts", "Accounts", "☺") : ""}
       </nav>
       <div class="sidebar-foot">Private work stays on this peer until you choose an audience.</div>
     </aside>
@@ -191,7 +194,7 @@ function layout(content) {
         ${content}
       </main>
     </div>
-    ${spaceDialog()}${profileDialog()}${Dashboard.dialogs()}${reauthDialog()}${accountRoleDialog()}${dockingDialog()}
+    ${spaceDialog()}${profileDialog()}${Dashboard.dialogs()}${reauthDialog()}${accountRoleDialog()}${dockingDialog()}${imprintDialog()}${imprintAskDialog()}
   </div>`;
 }
 
@@ -521,6 +524,61 @@ function sourceLabel(message) {
 // The server's mark for words a room's host attributes to someone on this station that this station never sent.
 const UNVERIFIED_AUTHOR = "Unverified: the room's host says this is from someone on this station";
 
+// Chat paging: a room opens on its newest page and reads on from there. A room the station does not page (a paired
+// peer's, or an older station) answers without `paged` and is the whole room, as it always was.
+const ROOM_PAGE = 100;
+const roomPath = (id) => `/api/chats/${pathPart(id)}`;
+const withoutRepeats = (older, newer) => { const seen = new Set(older.map((message) => message.id)); return newer.filter((message) => !seen.has(message.id)); };
+
+function loadRoom(id) { return api(`${roomPath(id)}?limit=${ROOM_PAGE}`); }
+
+// The room as it is now: the messages already shown stay, what arrived since is appended, and every other field
+// (brief, claims, members, ...) is the answer's. A message the answer carries replaces the shown copy and takes its
+// place (the sender's own message is shown from the POST before the answer has it). `room` is the room being
+// refreshed; the copy on screen is the base, read again after the answers so a "Load earlier" that finished meanwhile stays.
+async function refreshRoom(room) {
+  const shown = state.room?.id === room.id ? state.room : room;
+  if (!shown.paged) return api(roomPath(room.id));
+  let fresh = [], seq = shown.seq, answer;
+  do {
+    answer = await api(`${roomPath(room.id)}?since=${encodeURIComponent(seq)}&limit=${ROOM_PAGE}`);
+    if (!answer.paged) return answer;  // the station stopped paging this room: take it whole
+    fresh = [...fresh, ...(answer.messages || [])];
+    seq = answer.seq;
+  } while (answer.more);
+  const current = state.room?.id === room.id ? state.room : shown;
+  const arrived = new Set(fresh.map((message) => message.id));
+  const messages = [...(current.messages || []).filter((message) => !arrived.has(message.id)), ...fresh];
+  // A fresh message that sorts at or before the first one shown (a peer row with an older `created`) belongs above
+  // the window, so the window's real start is that many positions later. Counting a tie is safe: `before` then
+  // overlaps what is shown, and withoutRepeats absorbs it; counting too few would skip a message.
+  const start = Math.min(shown.first_position, current.first_position), top = (current.messages || [])[0];
+  const shownIds = new Set((current.messages || []).map((message) => message.id));
+  const above = top && start > 0 ? fresh.filter((message) => !shownIds.has(message.id) && message.created <= top.created).length : 0;
+  return { ...answer, messages, more: undefined, first_position: Math.min(start + above, answer.total) };
+}
+
+// Earlier messages go in front of the shown ones; the page keeps the line the reader was on.
+async function loadEarlier() {
+  const room = state.room;
+  if (!room?.paged || !(room.first_position > 0) || state.earlierLoading) return;
+  state.earlierLoading = true;
+  try {
+    const answer = await api(`${roomPath(room.id)}?before=${room.first_position}&limit=${ROOM_PAGE}`);
+    if (state.room?.id !== room.id) return;
+    const scroller = document.scrollingElement, height = scroller.scrollHeight, top = scroller.scrollTop;
+    const messages = [...withoutRepeats(state.room.messages, answer.messages || []), ...state.room.messages];
+    state.room = { ...state.room, messages, first_position: answer.first_position, total: answer.total };
+    render();
+    scroller.scrollTop = top + scroller.scrollHeight - height;
+  } catch (error) {
+    setFlash(error.message, true);
+    render();
+  } finally {
+    state.earlierLoading = false;
+  }
+}
+
 function messageMarkup(message, room) {
   const mine = isSelf(message.author_id);
   const system = room?.system_author;  // the station's own author, known by id, never by display name (R31)
@@ -822,7 +880,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
   } finally {
     state.boardSaving = false;
     if (state.me && state.room?.id === room.id) {
-      try { const latest = await api(`/api/chats/${pathPart(room.id)}`); if (state.room?.id === room.id) state.room = latest; } catch (_) { /* the board below still reads */ }
+      try { const latest = await refreshRoom(room); if (state.room?.id === room.id) state.room = latest; } catch (_) { /* the board below still reads */ }
       if (state.room?.id === room.id) await loadBoard(state.room);
     }
     render();
@@ -872,7 +930,7 @@ function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members (409)
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
@@ -965,6 +1023,148 @@ async function loadDocking() {
   }
 }
 
+// Store copies (imprints): the owner's confirm view and Accounts, Imprints. The code in the link is taken out of the
+// address bar at once, as a docking code is. Every string from a request is escaped; the password is read from the
+// field and never kept in state, and an error is written into the dialog without a re-render that would clear it.
+function takeImprintCode() {
+  if (!location.hash.startsWith('#imprint?')) return false;
+  state.imprintCode = new URLSearchParams(location.hash.slice('#imprint?'.length)).get('code') || null;
+  history.replaceState(null, '', location.pathname + location.search);
+  return !!state.imprintCode;
+}
+
+async function loadImprintPreview() {
+  if (!state.imprintCode || state.imprint) return;
+  try {
+    state.imprint = await api(`/api/imprints/code/${pathPart(state.imprintCode)}`);
+  } catch (error) {
+    state.imprintCode = null;
+    if (error.status === 401) throw error;
+    setFlash(error.status === 404 ? "That imprint request is not yours, has ended or has already been answered." : error.message, true);
+  }
+}
+
+async function loadImprints() {
+  let list;
+  try { list = (await api("/api/imprints")).imprints; }
+  catch (error) {
+    if (error.status === 401) throw error;
+    return error.status === 404 ? null : state.imprints;  // R8: no imprint routes, no section
+  }
+  return Promise.all(list.map(async (row, index) => {
+    if (index >= 20) return { ...row, detail: null };
+    try { return { ...row, detail: await api(`/api/imprints/${pathPart(row.id)}`) }; }
+    catch (error) { if (error.status === 401) throw error; return { ...row, detail: null }; }
+  }));
+}
+
+function imprintDialog() {
+  const p = state.imprint;
+  if (!p) return "";
+  const e = escapeHtml, list = (items) => (items || []).map(e).join(", ") || "none";
+  const scope = p.scope, counts = p.counts, store = p.store;
+  // Every count the request carries is shown (D26, "Early bytes"); a key with no words here shows by its own name.
+  const countLabels = { episodes: "episodes", semantics: "semantic memories", episode_vectors: "episode vectors", semantic_vectors: "semantic vectors", semantic_sources: "semantic sources", resonances: "resonances", semantic_peers: "semantic peers", subdivision_events: "subdivision events", memory_log: "recall log entries", operation_log: "citing actions", imprint_subjects: "co-subject rows" };
+  const countKeys = [...Object.keys(countLabels).filter(key => key in counts), ...Object.keys(counts).filter(key => !(key in countLabels)).sort()];
+  const countWords = countKeys.map(key => `${e(counts[key])} ${e(countLabels[key] || key.replaceAll("_", " "))}`).join(", ") || "none";
+  return `<dialog aria-labelledby="imprint-title"><div class="dialog-content imprint-view"><h2 id="imprint-title">Copy of ${e(p.ship)}’s memories (imprint ${e(p.imprint_short)}, request ${e(p.request_short)})</h2>
+    <p>Asked by <strong>${e(p.ship)}</strong>${p.machine ? ` on <strong>${e(p.machine)}</strong>` : ""}. Allow only if you just asked for this copy there.</p>
+    <h3>What leaves</h3>
+    <dl class="imprint-facts">
+      <dt>Store</dt><dd>${e(store.id)}; ${e(store.lineage)}${store.copied_from.length ? ` (${list(store.copied_from)})` : ""}</dd>
+      <dt>Lanes</dt><dd>${list(scope.lanes)}</dd>
+      <dt>Layers</dt><dd>${list(scope.layers)}</dd>
+      <dt>Window</dt><dd>${e(scope.since || "the start")} to ${e(scope.until || "now")}</dd>
+      <dt>Shared with</dt><dd>${scope.shared_with ? e(JSON.stringify(scope.shared_with)) : "nobody in particular"}</dd>
+      <dt>Semantic memories with no source</dt><dd>${scope.unsourced_semantics ? "included" : "left behind"}</dd>
+      <dt>Contents</dt><dd>${countWords}</dd>
+      <dt>Size</dt><dd>${e(p.size)}</dd>
+      <dt>Plan digest</dt><dd>${e(p.digest)}</dd>
+    </dl>
+    <h3>Other people</h3><p>${e(p.others)}</p>
+    <h3>What it may be used for</h3>
+    <dl class="imprint-facts">
+      <dt>Used by</dt><dd>${e(p.audience)}</dd>
+      <dt>Actions</dt><dd>${e(p.actions)}</dd>
+      <dt>Purposes</dt><dd>${list(p.purposes)}</dd>
+      <dt>Ends</dt><dd>${e(p.ends)} (${e(p.days)} days)</dd>
+    </dl>
+    <h3>Times</h3><p>${e(p.times)}</p>
+    <h3>What the station keeps</h3><p>${e(p.keeps)}</p>
+    <label class="choice"><input type="checkbox" id="imprint-attest"><span class="choice-copy"><strong>${e(p.check)}</strong></span></label>
+    ${p.check_advice ? `<p class="meta">${e(p.check_advice)}</p>` : ""}
+    <p>${e(p.closing)}</p>
+    <div class="field"><label for="imprint-password">Password</label><input class="input" id="imprint-password" type="password" autocomplete="current-password"></div>
+    <p class="meta" id="imprint-error" role="alert"></p>
+    <div class="button-row"><button class="button" data-action="allow-imprint">Allow</button><button class="button secondary" data-action="decline-imprint">Decline</button></div></div></dialog>`;
+}
+
+function imprintAskDialog() {
+  const ask = state.imprintAsk;
+  if (!ask) return "";
+  const e = escapeHtml, short = e(ask.imprint_id.slice(0, 4));
+  if (ask.mode === "withdraw") {
+    return `<dialog aria-labelledby="imprint-ask-title"><div class="dialog-content"><h2 id="imprint-ask-title">Withdraw ${short}?</h2><p>The station stops using this copy at once and removes its files. This cannot be undone; a new copy needs a new request and a new yes.</p><p class="meta" id="imprint-error" role="alert"></p><div class="button-row"><button class="button danger" data-action="confirm-imprint-withdraw">Yes, withdraw</button><button class="button secondary" data-action="close-dialog">Keep it</button></div></div></dialog>`;
+  }
+  return `<dialog aria-labelledby="imprint-ask-title"><div class="dialog-content"><h2 id="imprint-ask-title">Shorten ${short}</h2><p>Move the end earlier. A later end needs a new request and a new yes.</p><div class="field"><label for="imprint-end">New end date</label><input class="input" id="imprint-end" type="date" max="${e(ask.max)}"></div><p class="meta" id="imprint-error" role="alert"></p><div class="button-row"><button class="button" data-action="confirm-imprint-shorten">Shorten</button><button class="button secondary" data-action="close-dialog">Cancel</button></div></div></dialog>`;
+}
+
+function imprintEnd(row) {
+  if (["deleted", "declined", "expired"].includes(row.status)) return row.ended_at;
+  const permission = row.detail?.permission?.record;
+  if (!permission) return null;
+  const ends = permission.records.map(record => record.valid_until);
+  for (const receipt of row.detail.receipts) if (receipt.record.event === "shortened") ends.push(receipt.record.detail.valid_until);
+  return Math.min(...ends);
+}
+
+const IMPRINT_EVENTS = { deleted: "files removed", "use-started": "a use began", "use-finished": "a use ended", "delete-failed": "removal failed" };
+
+function imprintLast(row) {
+  const receipts = row.detail?.receipts || [];
+  if (receipts.length) {
+    const last = receipts[receipts.length - 1].record;
+    return `${IMPRINT_EVENTS[last.event] || last.event} ${formatDate(last.at)}`;
+  }
+  return `${row.status} ${formatDate(row.ended_at || row.decided_at || row.created)}`;
+}
+
+function imprintRow(row) {
+  const e = escapeHtml, end = imprintEnd(row);
+  const over = ["deleted", "declined", "expired"].includes(row.status);
+  const canShorten = !over && row.status !== "deleting" && row.detail?.permission && end && end * 1000 > Date.now();
+  return `<div class="item"><span class="item-main"><strong>${e(row.imprint_id.slice(0, 4))} · ${e(row.ship)}</strong><span>${over ? "Ended" : "Ends"} ${end ? formatDate(end) : "when it is answered"} · last: ${e(imprintLast(row))}</span></span><span class="badge">${e(row.status)}</span>${over ? "" : `<div class="button-row">${canShorten ? `<button class="button secondary" data-action="ask-imprint-shorten" data-id="${e(row.id)}">Shorten</button>` : ""}<button class="button danger secondary" data-action="ask-imprint-withdraw" data-id="${e(row.id)}">Withdraw</button></div>`}</div>`;
+}
+
+function imprintsSection() {
+  if (!state.imprints) return "";
+  const rows = state.imprints.length ? state.imprints.map(imprintRow).join("") : `<p class="meta">No copies yet. A ship asks for one with <code>make imprint</code> on its machine, and you answer the link it shows.</p>`;
+  return `<section class="section"><div class="section-head"><div><h2>Imprints</h2><p class="meta">An imprint is a copy of part of a ship’s memory store, sent to the station only on your yes. Withdraw ends one at once and removes its files; Shorten moves its end earlier.</p></div></div><div class="item-list">${rows}</div></section>`;
+}
+
+function accountsView() {
+  return `<header class="page-head"><div><p class="eyebrow">Your account</p><h1>Accounts</h1></div></header>${imprintsSection()}`;
+}
+
+// The notice is a status region, so it is announced as it appears; the shared announcer would say it twice.
+function noteImprint(message) {
+  state.flash = { message, error: false };
+}
+
+async function imprintCall(action, path, json, failure) {
+  const identity = identityKey(state.me), error = document.querySelector("#imprint-error");
+  try {
+    const result = await api(path, { method: "POST", json });
+    if (identityKey(state.me) !== identity) return null;
+    return result;
+  } catch (problem) {
+    if (identityKey(state.me) !== identity) return null;
+    if (problem.status === 401 && !/password/i.test(problem.message)) throw problem;
+    if (error) error.textContent = problem.message || failure;
+    return null;
+  }
+}
+
 function roleLabel(role) {
   return { participant: 'Participant', admin: 'Admin', super_admin: 'Super admin' }[role] || 'Not assigned';
 }
@@ -1036,7 +1236,7 @@ async function loadData() {
     ]);
     if (!valid()) return false;
     if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
-    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList, ships] = await Promise.all([
+    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList, ships, imprints] = await Promise.all([
       api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
       api("/api/sources").catch(() => null),
       Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
@@ -1048,6 +1248,7 @@ async function loadData() {
       home.user.is_super_admin ? api("/api/account-role-changes") : [],
       home.user.is_admin ? api("/api/access-requests") : [],
       api("/api/ships"),
+      loadImprints(),
     ]);
     if (!valid()) return false;
     const previousActive = state.activeLayers;
@@ -1056,7 +1257,7 @@ async function loadData() {
       return active ? [[result.id, active]] : [];
     }));
     const activeLayerErrors = Object.fromEntries(activePairs.flatMap(result => result.error ? [[result.id, result.error.message]] : []));
-    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges, ships });
+    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges, ships, imprints });
     return true;
   } catch (error) { if (!valid()) return false; throw error; }
 }
@@ -1081,7 +1282,11 @@ async function loadRoute() {
   if (route === "chats") {
     state.selectedChatId = id || state.selectedChatId || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
-      try { state.room = await api(`/api/chats/${pathPart(state.selectedChatId)}`); await loadBoard(state.room); }
+      try {
+        const paged = state.room?.id === state.selectedChatId && state.room.paged;  // keep the earlier messages the reader loaded
+        state.room = paged ? await refreshRoom(state.room) : await loadRoom(state.selectedChatId);
+        await loadBoard(state.room);
+      }
       catch (_) { state.room = null; }
     } else {
       state.room = null;
@@ -1098,6 +1303,7 @@ async function loadRoute() {
     state.home.shared_layers = releases;
     if (!releases.some(layer => layer.id === state.selectedSharedId)) state.selectedSharedId = null;
   }
+  if (route === "accounts") state.imprints = await loadImprints();
   if (route === "research") await Research.load(id);
   if (route === "spaces") await Dashboard.loadSpace(id);
   if (routeParts().route === route && routeParts().id === id) state.currentSpaceId = route === "spaces" && id ? id : "all";
@@ -1106,7 +1312,7 @@ async function loadRoute() {
 let dialogReturn = null;
 function closeDialogs() {
   state.accountRolePreview = null;
-  state.docking = null; state.dockCode = null;
+  state.docking = null; state.dockCode = null; state.imprint = null; state.imprintCode = null; state.imprintAsk = null;
   state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.chatPicked = null; state.chatError = null; state.profileDialog = false; state.spaceDialog = false; state.reauth = false; Research.close(); Dashboard.close();
   render();
 }
@@ -1114,7 +1320,7 @@ function closeDialogs() {
 function render() {
   if (!state.me || !state.home) return;
   const route = routeParts().route;
-  const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView }[route]();
+  const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView, accounts: accountsView }[route]();
   const focused = document.activeElement;
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
@@ -1134,7 +1340,7 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
-  document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections" }[route]} · Superyak`;
+  document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", accounts: "Accounts" }[route]} · Superyak`;
 }
 
 async function refresh(message = null) {
@@ -1142,6 +1348,7 @@ async function refresh(message = null) {
     if (!await loadData()) return;
     await loadRoute();
     await loadDocking();
+    await loadImprintPreview();
     if (message) setFlash(message);
     render();
   } catch (error) {
@@ -1389,7 +1596,7 @@ async function confirmWithdraw() {
 
 async function openChat(id) {
   state.selectedChatId = id;
-  state.room = await api(`/api/chats/${pathPart(id)}`);
+  state.room = await loadRoom(id);
   await loadBoard(state.room);
   location.hash = `chats/${pathPart(id)}`;
   state.flash = null;
@@ -1413,7 +1620,7 @@ async function createChat(form) {
     state.chatDialog = null; state.chatPicked = null; state.chatError = null;
     await loadData();
     state.selectedChatId = room.id;
-    state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    state.room = await loadRoom(room.id);
     await loadBoard(state.room);
     history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
     render();
@@ -1429,7 +1636,7 @@ async function createChat(form) {
       state.chatPicked = members;
       state.chatError = "The room brief changed since you opened this. The newer brief is shown below; tick the box again to carry it.";
       try {
-        state.room = await api(`/api/chats/${pathPart(state.room.id)}`);
+        state.room = await refreshRoom(state.room);
       } catch (_) {
         state.chatError = "The room brief changed since you opened this. Close this and open the room again to see the newer brief.";
       }
@@ -1461,7 +1668,7 @@ async function saveBrief(form) {
     if (error.status === 409) {
       message = "A newer brief was saved while you were editing. It is shown above, and your text is still here. Save again to replace it.";
       try {
-        const latest = await api(`/api/chats/${pathPart(room.id)}`);
+        const latest = await refreshRoom(room);
         if (state.room?.id === room.id) state.room = latest;
         edit.revision = latest.brief_revision;
       } catch (_) {
@@ -1476,7 +1683,7 @@ async function saveBrief(form) {
   }
   if (state.briefEdit === edit) state.briefEdit = null;  // only this editor closes: one opened since then stays
   try {
-    const latest = await api(`/api/chats/${pathPart(room.id)}`);
+    const latest = await refreshRoom(room);
     if (state.room?.id === room.id) state.room = latest;
   } catch (_) { /* the save stands; the next refresh shows it */ }
   if (state.briefHistory?.roomId === room.id) await openBriefHistory(room);  // the saved revision joins the list
@@ -1532,7 +1739,7 @@ async function removeParticipant(id) {
   }
   try {
     await loadData();
-    if (state.room?.id === room.id) state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    if (state.room?.id === room.id) state.room = await refreshRoom(room);
     render();
   } catch (error) {
     if (error.status === 401) {
@@ -1577,7 +1784,7 @@ async function sendMessage(form) {
   }
   try {
     const [latestRoom, latestSync] = await Promise.all([
-      api(`/api/chats/${pathPart(room.id)}`),
+      refreshRoom(room),
       api("/api/sync"),
     ]);
     if (state.room?.id === room.id) state.room = latestRoom;
@@ -1663,6 +1870,7 @@ async function bootstrap() {
     state.dockCode = new URLSearchParams(location.hash.slice('#dock?'.length)).get('code') || null;
     history.replaceState(null, '', location.pathname + location.search);
   }
+  takeImprintCode();
   if (location.hash.startsWith('#activate?')) {
     const fields = new URLSearchParams(location.hash.slice('#activate?'.length));
     state.activation = Object.fromEntries(['token', 'username', 'name'].map(key => [key, fields.get(key) || '']));
@@ -1894,6 +2102,7 @@ document.addEventListener("click", async (event) => {
     document.querySelector("#brief-body")?.focus();
   }
   if (action === "cancel-brief") { state.briefEdit = null; if (state.briefHistory) state.briefHistory.ask = null; render(); }
+  if (action === "load-earlier") await loadEarlier();
   if (action === "brief-history" && state.room) await openBriefHistory(state.room);
   if (action === "hide-brief-history") { state.briefHistory = null; render(); }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
@@ -1910,6 +2119,56 @@ document.addEventListener("click", async (event) => {
     }
     catch (error) { if (identityKey(state.me) !== identity) return; setFlash(error.message, true); }
     render();
+  }
+  if (action === "decline-imprint") {
+    if (target.disabled || !state.imprint) return;
+    const id = state.imprint.id;
+    target.disabled = true;
+    const result = await imprintCall("decline", `/api/imprints/${pathPart(id)}/decline`, {});
+    target.disabled = false;
+    if (result) { state.imprint = null; state.imprintCode = null; noteImprint("Declined. Nothing was sent."); await refresh(); }
+    return;
+  }
+  if (action === "allow-imprint") {
+    if (target.disabled || !state.imprint) return;
+    const error = document.querySelector("#imprint-error");
+    const password = document.querySelector("#imprint-password").value;
+    if (!document.querySelector("#imprint-attest").checked) { error.textContent = "Tick the box to confirm."; return; }
+    if (!password) { error.textContent = "Enter your password to allow."; return; }
+    target.disabled = true;
+    const result = await imprintCall("allow", `/api/imprints/${pathPart(state.imprint.id)}/confirm`, { code: state.imprintCode, password, attest: true });
+    target.disabled = false;
+    if (result) { state.imprint = null; state.imprintCode = null; noteImprint("Allowed. The ship can now send the copy."); await refresh(); }
+    else document.querySelector("#imprint-password").value = "";
+    return;
+  }
+  if (action === "ask-imprint-withdraw" || action === "ask-imprint-shorten") {
+    const row = (state.imprints || []).find(item => item.id === target.dataset.id);
+    if (!row) return;
+    const end = imprintEnd(row);
+    state.imprintAsk = { id: row.id, imprint_id: row.imprint_id, mode: action === "ask-imprint-withdraw" ? "withdraw" : "shorten", max: end ? new Date(end * 1000).toISOString().slice(0, 10) : "" };
+    render();
+    return;
+  }
+  if (action === "confirm-imprint-withdraw") {
+    if (target.disabled || !state.imprintAsk) return;
+    target.disabled = true;
+    const result = await imprintCall("withdraw", `/api/imprints/${pathPart(state.imprintAsk.id)}/withdraw`, {});
+    target.disabled = false;
+    if (result) { state.imprintAsk = null; noteImprint("Withdrawn. The station has stopped using this copy and removed its files."); await refresh(); }
+    return;
+  }
+  if (action === "confirm-imprint-shorten") {
+    if (target.disabled || !state.imprintAsk) return;
+    const error = document.querySelector("#imprint-error"), value = document.querySelector("#imprint-end").value;
+    const [year, month, day] = value.split("-").map(Number);
+    if (!year) { error.textContent = "Choose the new end date."; return; }
+    target.disabled = true;
+    const until = Math.floor(new Date(year, month - 1, day, 23, 59, 59).getTime() / 1000);
+    const result = await imprintCall("shorten", `/api/imprints/${pathPart(state.imprintAsk.id)}/shorten`, { valid_until: until });
+    target.disabled = false;
+    if (result) { state.imprintAsk = null; noteImprint("Shortened. The new end is in the list."); await refresh(); }
+    return;
   }
   if (action === "cancel-docking") { state.docking = null; state.dockCode = null; render(); return; }
   if (action === "confirm-docking") {
@@ -2050,6 +2309,7 @@ document.addEventListener("change", async (event) => {
 
 window.addEventListener("hashchange", async () => {
   if (!state.me) return;
+  if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;
   try { await loadRoute(); render(); }

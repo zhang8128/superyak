@@ -127,9 +127,29 @@ and are revoked on logout. The cookie is HttpOnly, SameSite=Strict and Secure fo
 HTTPS or explicit secure-cookie mode. Every authenticated write sends
 `X-CSRF-Token` from login or `/api/me`; login/redeem require Origin without CSRF.
 No public registration or password reset route exists. Passwords use scrypt with
-random salts (`n=16384,r=8,p=1,dklen=32`). Failed logins share a generic response and
-are limited to eight per username / forty per source per five minutes; success
-clears the username failure counter. One-use invitation redemption is atomic.
+random salts (`n=16384,r=8,p=1,dklen=32`). Failed logins share a generic response
+(401 alike for unknown and known names; 429 when held). Each attempt is counted before
+its hash, and a held attempt is refused without one. The holds: eight failures per
+username from one source and forty per source in five minutes, and thirty public
+failures per username in an hour, which hold public sign-ins to it. A public source is
+its IPv6 /64 or full IPv4 address, a tailnet source its full address. A success deletes
+the username-and-source counter and gives back its other reservations; a tailnet success
+also clears the username's public hold. A success sets `superyak_device` (random, HttpOnly,
+Secure, SameSite=Strict, 180 days, stored hashed, one row per browser, at most 20 per user,
+kept at logout): presented on a sign-in to its own username, it exempts that browser from
+the three holds, and its failures hold only its own token (eight in five minutes). Sign-ins
+run in worker lanes of their own: public 2 at a time with 8 waiting, tailnet 1 with 4,
+known browsers 1 with 4; a full lane answers 429. One-use invitation redemption is atomic.
+
+**Public requests.** A request is public when it carries `Tailscale-Funnel-Request`, or
+when its client (after `--proxy-headers`, which trusts 127.0.0.1 only) is neither loopback
+nor a tailnet address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) or isn't an IP address. A
+public request reaches only `GET`/`HEAD` `/`, `/public/` and `/assets/*`, `GET /api/health`,
+`POST /api/login`, `POST /api/invitations/redeem` and the two `/public/layers/...` routes,
+unless it carries a valid session or ship key; the route's own check still decides. Anything
+else gets 401 `{"error":"Sign in required"}` under `/api/` and 404 elsewhere. Dockings,
+access requests and `/federation/*` therefore need the tailnet. A failure while checking
+answers 503 `{"error":"Try again shortly"}`. Tailnet requests are handled as before.
 Name corrections append their actual old/new values, acting account ID and time.
 The self-only history begins with the first correction recorded by this schema;
 existing account names do not create fabricated earlier entries. No administrative
@@ -306,6 +326,40 @@ lighthouse stopped, is the one way to a new key: it refuses while the file exist
 `peer-key.pem` aside with a dated suffix, creates the identity (naming the endpoint's host) and changes nothing in the
 database. Every signature made with the lost key then stops verifying, the station's peer id changes so every paired
 peer pairs again, and replies it already sent into remote rooms show as unverified.
+
+## Imprints
+
+A store copy (an imprint, spec `engram/docs/superpowers/specs/2026-10-25-store-imprint-design.md`, I 9) goes from a
+ship to the station only with its owner's yes. These routes exist only when the station runs with an imprints directory.
+
+- `POST /api/imprints` (ship key): the request, at most 64 KiB, which carries only what the confirm view shows. Returns
+  201 `{id, code, expires, confirm_url}`. The code is for the owner, not for the ship.
+- `GET /api/imprints` (person): the person's own imprints. With a ship key it returns that ship's context.
+- `GET /api/imprints/code/{code}` (person): the confirm view's content, to the ship's owner only. Anyone else gets 404.
+- `POST /api/imprints/{id}/confirm` (person, CSRF): `{code, password, attest}`. The owner enters the password again and
+  acknowledges what leaves. That includes memories that name other people, which are copied with those people carried
+  as co-subjects, and at n = 0 that no one but the owner is recorded on them. A ship key gets 403. The password is
+  counted as `/api/login` counts it, with the request's own public or tailnet source and known browser, in a sign-in
+  lane; a wrong one is 401 and a held one 429.
+- `POST /api/imprints/{id}/decline` (person): the owner says no.
+- `PUT /api/imprints/{id}/manifest`, `PUT /api/imprints/{id}/parts/{n}` and `POST /api/imprints/{id}/complete` (ship
+  key): the upload, after the owner's yes.
+- An imprint goes over the tailnet only (I 9): the request, manifest, parts and complete routes answer a public (Funnel)
+  request 403 `Imprints go to the station over the tailnet only`, even with a valid ship key.
+- `POST /api/imprints/{id}/withdraw` (the owner or the ship; anyone else gets 404) and
+  `POST /api/imprints/{id}/shorten` (person, `{valid_until}`): the owner or the ship narrows the station's ceiling. Neither
+  changes the owner's own records.
+- `GET /api/imprints/{id}` (person): one imprint's status and receipts.
+
+Two signed record kinds (see Signed records) are new. `imprint-permission` is the permissions-spec records the owner's
+yes created, signed by the station; `imprint-receipt` is one hash-chained event, holding no content. Receipts from
+station commands that hold no key (`station-approve`, `station-imprint-admit`, `station-imprint-use`) are written
+unsigned and signed by the lighthouse, the running station, within 60 seconds, and at its start.
+
+The `admitted` receipt's detail is `{checks, report_sha256, skipped, roads_and_trails, sessions_too_large}`.
+`roads_and_trails` is R(I), as the permissions spec's `Need` names it, at `as_of` = t1 (the time of the yes) over the
+scope's lanes. A use's own evaluation runs one lane with no `--as-of`, so N, the count admission made, can exceed what
+one evaluation derives (YN1). `sessions_too_large` is the number of sessions left out of that count for their size.
 
 ## Grants
 
@@ -565,7 +619,8 @@ Browser route methods mirror their resource domain and take trusted `actor` firs
 create_user(username, name, password, *, is_admin=False) -> user [trusted CLI only]
 rename_user(actor, name) -> user
 account_corrections(actor) -> ordered actual self-correction records
-login(username, password, source) -> {user,csrf_token,token}
+login(username, password, source, *, public=True, device=None) -> {user,csrf_token,token,device}
+session_is_valid(token); ship_key_is_valid(key); device_is_valid(device, username) -> bool, writing nothing
 session(token) -> user+csrf_token; logout(token) -> None
 accounts(actor); invite(actor, expires_in=86400); redeem(token,username,name,password)
 contacts(actor) -> [{id,name}]
@@ -1010,10 +1065,10 @@ goes only to the script.
 
 | Method/path | Who | Behavior |
 |---|---|---|
-| POST `/api/dockings` | Any client | `{ship_name,machine}` → `{id,code,secret,expires,confirm_url}`. The 8-character code (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`) is single-use and lasts 600 s; 20 dockings an hour station-wide (429) |
+| POST `/api/dockings` | Any tailnet client (a public request gets 401) | `{ship_name,machine}` → `{id,code,secret,expires,confirm_url}`. The 8-character code (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`) is single-use and lasts 600 s; 20 dockings an hour station-wide (429) |
 | GET `/api/dockings/code/{code}` | Signed-in person | `{id,ship_name,machine,expires,redock}` for the web app's `/#dock?code=` confirm view |
 | POST `/api/dockings/{id}/confirm` | Signed-in person, CSRF | `{code}`; creates the ship owned by that person, or re-keys their existing ship of that name (earlier keys are revoked). 409 if the name is taken |
-| GET `/api/dockings/{id}?secret=` | Docking script | `{status}` (`waiting`, `confirmed`, `collected`, `expired`); once confirmed it adds `key` and `ship` exactly once. A key not collected within 3,600 s is revoked |
+| GET `/api/dockings/{id}` | Docking script, tailnet | The secret in `X-Superyak-Secret` (`?secret=` is still accepted for one release). `{status}` (`waiting`, `confirmed`, `collected`, `expired`); once confirmed it adds `key` and `ship` exactly once. A key not collected within 3,600 s is revoked |
 
 **Ships list.** `GET /api/ships` (a signed-in person) returns the ships they own, or every ship for
 an admin, each with `owner_name`, `machine`, `last_used` and `active_keys`.

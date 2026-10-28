@@ -1,25 +1,70 @@
 """Same-origin browser API; additional peer routers attach to this factory."""
 import asyncio
+import functools
 import hmac
+import re
 import ipaddress
+import logging
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
+import anyio
 from fastapi import FastAPI, Request
+from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
+from starlette.routing import Match, Mount
+from starlette.websockets import WebSocketClose
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from .agent_version import agent_update
+from .auth import DEVICE_LIFETIME
 from .common import Problem, valid_utf8
 from .db import Store
 from .inbox import breakout_filter, wait_seconds, with_earlier_noise
 from .presence import parse_presence
 
 MAX_REQUEST = 6 * 1024 * 1024
+MAX_IMPRINT_REQUEST = 64 * 1024  # I 14: the largest request body
 COOKIE = 'superyak_session'
+DEVICE_COOKIE = 'superyak_device'  # public route spec 3: the known-device cookie, kept at logout
 DEFAULT_ORIGINS = ('http://127.0.0.1:7435', 'http://localhost:7435')
 STATIC_DIR = Path(__file__).with_name('static')
+# Public route spec 1: loopback and these tailnet ranges are tailnet; every other client is public. `serve` trusts
+# forwarded headers from TRUSTED_PROXY only (tailscale serve), so an internet client can't pass as a tailnet address.
+TAILNET = (ipaddress.ip_network('100.64.0.0/10'), ipaddress.ip_network('fd7a:115c:a1e0::/48'))
+TRUSTED_PROXY = '127.0.0.1'
+SECURITY_HEADERS = [
+    (b'x-content-type-options', b'nosniff'),
+    (b'cache-control', b'no-store'),
+    (b'content-security-policy', b"default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
+    (b'referrer-policy', b'no-referrer'),
+]
+# Public route spec 2: what a public request reaches with no valid session or ship key, named by the template of the
+# route object the router dispatches it to, never by path prefix: the app shell and its assets, health, the login,
+# an invitation link and the layers their owners published. A route added later starts closed.
+PUBLIC_ROUTES = {
+    '/': {'GET', 'HEAD'}, '/public/': {'GET', 'HEAD'}, '/assets': {'GET', 'HEAD'}, '/api/health': {'GET'},
+    '/api/login': {'POST'}, '/api/invitations/redeem': {'POST'},
+    '/public/layers/{key}': {'GET'}, '/public/layers/{layer_id}/files/{key}': {'GET'},
+}
+
+
+def is_public(scope):
+    """Public route spec 1: a Funnel request (the Tailscale-Funnel-Request header with any value: Tailscale sets it
+    and strips it from what clients send, so a forged one only restricts), a client that isn't an IP address (or no
+    client), or a client neither loopback nor on the tailnet. scope['client'] is what uvicorn's ProxyHeadersMiddleware
+    left there. A request from 127.0.0.1 with no forwarded header is tailnet: a local process, trusted by design."""
+    if any(name.lower() == b'tailscale-funnel-request' for name, _ in scope.get('headers', ())):
+        return True
+    try:
+        address = ipaddress.ip_address(scope['client'][0])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return True
+    if address.version == 6 and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return not (address.is_loopback or any(address in network for network in TAILNET))
 
 class BrowserBoundary:
     """Bound input before JSON parsing; check origins for browser writes."""
@@ -60,14 +105,85 @@ class BrowserBoundary:
             return await receive()
         async def secure_send(message):
             if message['type'] == 'http.response.start':
-                message.setdefault('headers', []).extend([
-                    (b'x-content-type-options', b'nosniff'),
-                    (b'cache-control', b'no-store'),
-                    (b'content-security-policy', b"default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
-                    (b'referrer-policy', b'no-referrer'),
-                ])
+                message.setdefault('headers', []).extend(SECURITY_HEADERS)
             await send(message)
         await self.app(scope, bounded_receive, secure_send)
+
+class PublicRoute:
+    """Public route spec 2: default deny for public (Funnel) requests. Outermost, so it runs before the body is read.
+    A public request passes to an allow-listed route, or with a valid session or ship key (checked, not just present;
+    the route's own check still decides). Anything else gets 401 under /api/, which app.js acts on, and 404 elsewhere.
+    Tailnet requests pass untouched."""
+    def __init__(self, app, *, store, router):
+        self.app, self.store, self.router = app, store, router
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] not in ('http', 'websocket'):
+            return await self.app(scope, receive, send)
+        try:  # only the classification and the lookup: 401 would tell the dock client its key was revoked
+            refusal = await self.refusal(scope)
+        except Exception as error:  # noqa: BLE001
+            logging.getLogger(__name__).warning('Public route check failed: %s', type(error).__name__)
+            refusal = (503, 'Try again shortly')
+        if refusal is None:
+            return await self.app(scope, receive, send)  # outside the guard: route errors reach the 500 handler
+        if scope['type'] == 'websocket':
+            return await WebSocketClose()(scope, receive, send)
+        response = JSONResponse({'error': refusal[1]}, refusal[0])
+        response.raw_headers.extend(SECURITY_HEADERS)
+        await response(scope, receive, send)
+
+    async def refusal(self, scope):
+        """None lets the request through; otherwise the (status, message) that refuses it."""
+        if not is_public(scope):
+            return None
+        if scope['type'] == 'websocket':
+            return (403, 'No route takes a public websocket')  # none exists; __call__ closes the socket
+        if self.allowed(scope):  # before any lookup: a browser sends its session cookie with every asset
+            return None
+        request = Request(scope)  # Starlette's cookie parser and bearer_key, so this sees what the route will
+        key, token = bearer_key(request), request.cookies.get(COOKIE)
+        if (key is not None or token is not None) and await run_in_threadpool(self.valid, key, token):
+            return None
+        return (401, 'Sign in required') if scope['path'].startswith('/api/') else (404, 'Not found')
+
+    def valid(self, key, token):
+        """In a worker, as the inbox wait's store calls are: the store gate is a blocking flock."""
+        return bool(key is not None and self.store.ship_key_is_valid(key)
+                    or token is not None and self.store.session_is_valid(token))
+
+    def allowed(self, scope):
+        """Whether the route the router dispatches this request to is on the allow-list, for this method. The router
+        (FastAPI's APIRouter.app) takes the first full match, else the first partial one (a 405)."""
+        probe, partial = dict(scope), None  # a router's matches() may note itself in the scope it is given
+        for route in self.router.routes:
+            match, _ = route.matches(probe)
+            if match == Match.FULL:
+                return self.listed(route, scope['method'])
+            if match == Match.PARTIAL and partial is None:
+                partial = route
+        return partial is not None and self.listed(partial, scope['method'])
+
+    @staticmethod
+    def listed(route, method):
+        return isinstance(route, (APIRoute, Mount)) and method in PUBLIC_ROUTES.get(route.path, ())
+
+class SignInLane:
+    """Public route spec 3: all of Store.login runs in a worker under its lane's own limiter, so sign-ins never compete
+    with sync routes for anyio's shared threads. `size` sign-ins at a time with `queue` waiting; a full lane answers
+    429 without hashing or counting."""
+    def __init__(self, size, queue):
+        self.size, self.queue, self.inside = size, queue, 0
+        self.limiter = anyio.CapacityLimiter(size)
+
+    async def run(self, call, *args, **kwargs):
+        if self.inside >= self.size + self.queue:
+            raise Problem(429, 'Too many sign-ins at once; try again shortly')
+        self.inside += 1  # only the event loop changes it
+        try:
+            return await anyio.to_thread.run_sync(functools.partial(call, *args, **kwargs), limiter=self.limiter)
+        finally:
+            self.inside -= 1
 
 async def body(request):
     try:
@@ -111,10 +227,38 @@ def ship_member(request: Request):
 def actor(request):
     return current_user(request)['id']
 
+def tailnet_only(request):
+    """Store-copy spec I 9: an imprint reaches the station over the tailnet only. The public route lets a request with
+    a valid ship key through, so the request, manifest, parts and complete routes refuse a public (Funnel) one here,
+    before the ship is looked up (review S5)."""
+    if is_public(request.scope):
+        raise Problem(403, 'Imprints go to the station over the tailnet only')
+
+def paging(query):
+    """The paging query of GET /api/chats/{key}, validated; None when it has none (today's full read)."""
+    page = {}
+    for name in ('limit', 'before', 'at', 'since'):
+        if name in query:
+            if not re.fullmatch(r'[0-9]{1,15}', query[name]):
+                raise Problem(400, f'{name} must be a whole number, 0 or more')
+            page[name] = int(query[name])
+    for name in ('start', 'after'):
+        if name in query:
+            if not 0 < len(query[name]) <= 100:
+                raise Problem(400, f'{name} is the id of a message')
+            page[name] = query[name]
+    if sum(name in page for name in ('before', 'at', 'start', 'after', 'since')) > 1:
+        raise Problem(400, 'Give at most one of before, at, start, after and since')
+    if 'limit' in page and not 1 <= page['limit'] <= 500:
+        raise Problem(400, 'limit must be between 1 and 500')
+    if page and 'limit' not in page:
+        page['limit'] = 100
+    return page or None
+
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
-def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None):
+def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None, imprints_dir: Path | None = None):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
     demo_credentials = []
     if local_demo:
@@ -128,7 +272,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             if not loopback or parsed.scheme not in ('http', 'https'):
                 raise ValueError('Local demo requires loopback origins')
         demo_credentials = validate_demo(Path(data_dir))
-    from .peer_routes import federation_lifespan, install
+    from .peer_routes import federation_lifespan, install, sign_first
     from .federation import Federation
     if federation_endpoint and federation_endpoint not in allowed_origins:
         raise ValueError('Federation endpoint must be an explicitly allowed HTTPS origin')
@@ -139,6 +283,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.federation = Federation(store, endpoint=federation_endpoint)
     app.state.agent_history = agent_history  # version check V1: read once by `serve`; None means off
     app.state.sync_enabled = sync_enabled
+    app.state.imprints_dir = imprints_dir  # R8: None leaves the imprint routes out
+    # public route spec 3: public sign-ins, tailnet ones (public requests never enter) and known browsers' public ones
+    lanes = app.state.sign_in_lanes = SimpleNamespace(public=SignInLane(2, 8), tailnet=SignInLane(1, 4), known=SignInLane(1, 4))
     install(app)
     from .models import LocalGemma
     from .source_routes import install as install_sources
@@ -146,6 +293,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     install_sources(app)
     app.mount('/assets', StaticFiles(directory=STATIC_DIR), name='assets')
     app.add_middleware(BrowserBoundary, allowed_origins=allowed_origins)
+    app.add_middleware(PublicRoute, store=store, router=app.router)  # added last, so outermost (spec 2)
 
     @app.exception_handler(Problem)
     async def problem(request, exc):
@@ -176,17 +324,29 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             db.execute('SELECT 1 FROM system_meta').fetchone()
         return {'ok': True}
 
-    def login_response(request, username, password):
-        result = store.login(username, password, request.client.host if request.client else 'unknown')
-        token = result.pop('token')
+    async def sign_in_lane(request, username):
+        """Public route spec 3: the lane a sign-in runs in, and the `public` and `device` it counts with. /api/login and
+        the imprint confirm's password (R19) both take it, so a confirm is laned as a sign-in is (review S3)."""
+        public, device = is_public(request.scope), request.cookies.get(DEVICE_COOKIE)
+        lane = lanes.public if public else lanes.tailnet
+        if public and device is not None and await run_in_threadpool(store.device_is_valid, device, username):
+            lane = lanes.known  # the read writes nothing and runs before queueing; Store.login checks again
+        return lane, public, device
+
+    async def login_response(request, username, password):
+        lane, public, device = await sign_in_lane(request, username)
+        result = await lane.run(store.login, username, password, request.client.host if request.client else 'unknown',
+                                public=public, device=device)
+        token, device = result.pop('token'), result.pop('device')
         response = JSONResponse(result)
         response.set_cookie(COOKIE, token, httponly=True, samesite='strict', secure=secure_cookies or request.url.scheme == 'https', max_age=86400)
+        response.set_cookie(DEVICE_COOKIE, device, httponly=True, samesite='strict', secure=True, max_age=DEVICE_LIFETIME)
         return response
 
     @app.post('/api/login')
     async def login(request: Request):
         data = await body(request)
-        return login_response(request, data.get('username'), data.get('password'))
+        return await login_response(request, data.get('username'), data.get('password'))
 
     if local_demo:
         def require_local_client(request):
@@ -211,7 +371,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             credential = next((c for c in demo_credentials if c['username'] == data.get('username')), None)
             if credential is None:
                 raise Problem(400, 'Choose one of the demo accounts')
-            response = login_response(request, credential['username'], credential['password'])
+            response = await login_response(request, credential['username'], credential['password'])
             store.logout(request.cookies.get(COOKIE))
             return response
 
@@ -363,7 +523,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/invitations/redeem', status_code=201)
     async def redeem(request: Request):
         data = await body(request)
-        return store.redeem(data.get('token'), data.get('username'), data.get('name'), data.get('password'))
+        # off the event loop: under a held write lock, one forged token stalled the whole station (Serenity's read)
+        return await run_in_threadpool(store.redeem, data.get('token'), data.get('username'), data.get('name'), data.get('password'))
 
     @app.post('/api/access-requests', status_code=201)
     async def request_access(request: Request):
@@ -410,8 +571,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return store.confirm_docking(who, key, data.get('code'))
 
     @app.get('/api/dockings/{key}')
-    def docking_status(key: str, secret: str = ''):
-        return store.docking_status(key, secret)
+    def docking_status(key: str, request: Request, secret: str = ''):
+        # public route spec 4: the secret comes in X-Superyak-Secret, out of URLs; ?secret= is accepted for one release
+        return store.docking_status(key, request.headers.get('x-superyak-secret', secret))
 
     @app.get('/api/contacts')
     def contacts(request: Request):
@@ -568,7 +730,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.get('/api/chats/{key}')
     def chat_get(key: str, request: Request):
-        return store.get_room(member(request)['id'], key)
+        return store.get_room(member(request)['id'], key, None if ':' in key else paging(request.query_params))
 
     @app.post('/api/chats/{key}/messages', status_code=201)
     async def chat_send(key: str, request: Request):
@@ -634,6 +796,87 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.delete('/api/chats/{key}/participants/{user_id}')
     def chat_remove(key: str, user_id: str, request: Request, grant_id: str | None = None):
         return store.remove_participant(actor(request), key, user_id, grant_id)
+
+    if imprints_dir is not None:
+        # Review S3: every store call, hash, write and fsync of these async routes runs in a worker, never on the event
+        # loop; the confirm's in a sign-in lane. The sync routes below already run in FastAPI's threadpool.
+        @app.post('/api/imprints', status_code=201)
+        async def imprint_request(request: Request):
+            tailnet_only(request)
+            ship = await run_in_threadpool(ship_member, request)
+            raw = await request.body()
+            if len(raw) > MAX_IMPRINT_REQUEST:
+                raise Problem(413, 'Imprint request too large')
+            made = await run_in_threadpool(store.create_imprint_request, ship['id'], raw,
+                                           staging=store.data_dir / 'imprints', root=imprints_dir)
+            return {'id': made['id'], 'code': made['code'], 'expires': made['expires'],
+                    'confirm_url': str(request.base_url).rstrip('/') + f'/#imprint?code={made["code"]}'}
+
+        @app.get('/api/imprints')
+        def imprint_list(request: Request):
+            user = member(request)
+            sign_first(store)
+            if user['kind'] == 'ship':
+                return store.imprint_context(user['id'])
+            return {'imprints': store.list_imprints(user['id'])}
+
+        @app.get('/api/imprints/code/{code}')
+        def imprint_view(code: str, request: Request):
+            return store.imprint_preview(actor(request), code)  # the ship's owner only; anyone else gets 404
+
+        @app.post('/api/imprints/{request_id}/confirm')
+        async def imprint_confirm(request_id: str, request: Request):
+            user = await run_in_threadpool(current_user, request)  # a person with CSRF; a ship key gets 403
+            data = await body(request)
+            lane, public, device = await sign_in_lane(request, user['username'])  # counted as /api/login counts (S2)
+            return await lane.run(store.confirm_imprint, user['id'], request_id, code=data.get('code'),
+                                  password=data.get('password'), attest=data.get('attest'),
+                                  source=request.client.host if request.client else 'unknown',
+                                  public=public, device=device)
+
+        @app.post('/api/imprints/{request_id}/decline')
+        def imprint_decline(request_id: str, request: Request):
+            return store.decline_imprint(actor(request), request_id)
+
+        @app.put('/api/imprints/{request_id}/manifest')
+        async def imprint_manifest(request_id: str, request: Request):
+            tailnet_only(request)
+            ship = await run_in_threadpool(ship_member, request)
+            raw = await request.body()
+            return await run_in_threadpool(store.put_imprint_manifest, ship['id'], request_id, raw)
+
+        @app.put('/api/imprints/{request_id}/parts/{n}')
+        async def imprint_part(request_id: str, n: int, request: Request):
+            tailnet_only(request)
+            ship = await run_in_threadpool(ship_member, request)
+            data = await request.body()
+            return await run_in_threadpool(store.put_imprint_part, ship['id'], request_id, n, data)
+
+        @app.post('/api/imprints/{request_id}/complete')
+        def imprint_complete(request_id: str, request: Request):
+            tailnet_only(request)
+            return store.complete_imprint(ship_member(request)['id'], request_id)
+
+        @app.post('/api/imprints/{request_id}/withdraw')
+        def imprint_withdraw(request_id: str, request: Request):
+            return store.withdraw_imprint(member(request), request_id, root=imprints_dir)  # the owner or the ship; else 404
+
+        @app.post('/api/imprints/{request_id}/shorten')
+        async def imprint_shorten(request_id: str, request: Request):
+            who = await run_in_threadpool(member, request)
+            try:
+                body = await request.json()
+            except ValueError:
+                body = None
+            if not isinstance(body, dict) or set(body) != {'valid_until'}:
+                raise Problem(400, 'Send {"valid_until": seconds}')
+            return await run_in_threadpool(store.shorten_imprint, who, request_id, body['valid_until'], root=imprints_dir)
+
+        @app.get('/api/imprints/{request_id}')
+        def imprint_one(request_id: str, request: Request):
+            who = member(request)['id']
+            sign_first(store)
+            return store.imprint_status(who, request_id)
 
     @app.get('/api/mentions')
     def mentions(request: Request, after: int = 0, limit: int = 50):

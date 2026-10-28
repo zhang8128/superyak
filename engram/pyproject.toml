@@ -35,6 +35,7 @@ superyak-sessions = "session_cli:main"
 superyak-adna = "adna_cli:main"
 engram-read-store = "store_reader:main"
 engram-calibrate = "calibrate:main"
+engram-permissions = "permission_cli:main"
 
 [tool.setuptools]
 py-modules = [
@@ -76,6 +77,10 @@ py-modules = [
     "framing",
     "graph",
     "graphiti_local",
+    "imprint",
+    "imprint_checks",
+    "imprint_copies",
+    "imprint_filter",
     "indexer",
     "knowledge",
     "lighthouse_daemon",
@@ -98,6 +103,10 @@ py-modules = [
     "notepad",
     "operation_audit",
     "paths",
+    "permission_cli",
+    "permission_ledger",
+    "permission_uses",
+    "permissions",
     "persistence",
     "policy_gen",
     "reflection",
