@@ -51,7 +51,10 @@ def test_the_switch_installs_the_lessons_hook_beside_the_room_hook(monkeypatch, 
         [ours] = [e for e in entries(settings, event) if 'lessons-hook' in e['hooks'][0]['command']]
         assert ours == ({'matcher': matcher} if matcher else {}) | {'hooks': [{'type': 'command', 'command': wanted, 'timeout': 5}]}
     assert len(hook_commands(settings, 'SessionStart')) == 2 and len(hook_commands(settings, 'UserPromptSubmit')) == 2
-    assert 'PreToolUse' not in json.loads(settings.read_text())['hooks']  # the shared hold entry's, not this hook's
+    # PreToolUse belongs to the shared hold entry (`run_agent.py hold`, which checklists-feature installs); this hook
+    # adds none of its own there
+    assert not [c for c in hook_commands(settings, 'PreToolUse') if 'lessons-hook' in c]
+    assert all(' hold' in c for c in hook_commands(settings, 'PreToolUse'))
     assert any('lessons hook' in line for line in machine.out)
     assert install.is_lessons_hook(wanted) and not install.is_station_hook(wanted)
 
