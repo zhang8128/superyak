@@ -79,6 +79,26 @@ def test_the_re_run_spends_the_pass_so_the_same_command_later_is_held_again(ship
     assert not any(saved(ship).get('passed', {}).values())                               # every pass spent, and saved
 
 
+def test_a_re_run_held_by_a_lesson_keeps_the_checklists_pass_until_it_goes_through(ship):   # section 2's M1
+    digest = fp.command_digest('git push origin main')
+    offered = []
+
+    def lessons(command, record, now, limit):
+        if not offered:
+            return []
+        return [holds.Hold('lesson', f'lesson:{command}', 'Held once: lesson L1 from tardis applies.\n[the fenced lesson]')]
+    assert decide(ship, 'git push origin main', lessons=lessons)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert any(digest in values for values in saved(ship)['passed'].values())              # 1. the pass is recorded
+    offered.append(1)
+    held = decide(ship, 'git push origin main', now=11.0, lessons=lessons)['hookSpecificOutput']
+    assert held['permissionDecision'] == 'deny' and held['permissionDecisionReason'].startswith('Held once: lesson')
+    assert 'Checklist ' not in held['permissionDecisionReason']                           # 2. the lesson's deny...
+    assert any(digest in values for values in saved(ship)['passed'].values())              # ...and the pass is kept
+    offered.clear()
+    assert decide(ship, 'git push origin main', now=12.0, lessons=lessons) is None        # 3. it goes through
+    assert not any(saved(ship).get('passed', {}).values())                                 # ...and the pass is spent
+
+
 def test_past_the_cap_the_same_command_shows_its_lists_every_time(ship):                 # section 2's M1: spec :168
     assert decide(ship, 'git push origin main')['hookSpecificOutput']['permissionDecision'] == 'deny'
     assert decide(ship, 'git push origin main', now=11.0) is None
@@ -344,6 +364,29 @@ def test_the_session_is_in_the_record_before_any_provider_is_asked(ship):
     assert seen == [{'id': 's1', 'transcript': '/t/s1.jsonl'}] and saved(ship)['session'] == seen[0]
     decide(ship, 'git push origin y', now=11.0, lessons=lessons, transcript_path=7)
     assert seen[1] == {'id': 's1', 'transcript': None}
+
+
+def test_a_provider_that_noted_something_is_saved_though_nothing_prints(ship):       # the lessons-hook reviews' S2
+    """A provider that asked about a command and found nothing keeps its note, so the next call of that command doesn't
+    ask again: the entry saves when a provider changed its own entries, though nothing is held or spent."""
+    asked = []
+
+    def lessons(command, record, now, limit):
+        heads = record.setdefault('lessons', {}).setdefault('heads', [])
+        if command in heads:
+            return []
+        asked.append(command)
+        heads.append(command)
+        return []
+    assert decide(ship, 'npm test', lessons=lessons) is None
+    assert saved(ship)['lessons'] == {'heads': ['npm test']}
+    assert decide(ship, 'npm test', now=11.0, lessons=lessons) is None
+    assert asked == ['npm test']                                                  # asked once, not on every call
+
+
+def test_a_provider_that_changed_nothing_leaves_the_record_unwritten(ship):
+    assert decide(ship, 'npm test', lessons=lambda command, record, now, limit: []) is None
+    assert holds.record_path(ship.home / 'sessions', 's1').read_text() == ''     # nothing held, spent or noted
 
 
 BROKEN = ['raises', 'not holds', 'over its limit', 'over its bytes', 'empty text', 'SystemExit', 'KeyboardInterrupt',

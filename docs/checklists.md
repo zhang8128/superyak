@@ -305,9 +305,11 @@ subtracts.
 The list itself is [`.superyak/checklists/imprint-act.md`](../.superyak/checklists/imprint-act.md)
 (`when: command make station-imprint-admit; command make station-imprint-delete; command make station-imprint-use;
 command make station-approve`). An IMPRINT item is approved with `make station-approve`, so the list fires at every
-approval, beside "A live station act", which fires at each of these too and keeps the approval's short-id item. A
+approval, beside "A live station act", which fires at each of these too and keeps the approval's short-id item. This
+list is for an IMPRINT item only: it is n/a at a docking or an access request. A
 read such as `make station-imprints` doesn't fire it, nor does `make -C <dir> station-approve`. Its long form:
 
+- At an approval that isn't an IMPRINT item (a docking or an access request), answer each item n/a.
 - killer: An `IMPRINT` item is a person's memories, copied from their machine to the station; it may hold memories
   about other people, and it shows their count. Andy approves no IMPRINT item whose count of other people's memories
   is above 0 until gate G18 is passed (CLAUDE.md, the final review's I1).

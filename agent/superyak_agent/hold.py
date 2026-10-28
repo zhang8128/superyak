@@ -101,6 +101,7 @@ def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
         record['session'] = {'id': session, 'transcript': transcript}
         count = checklist_hold.held(record)   # before any provider: one can't move the cap (Ruling 44)
         left = count < holds.HOLDS_PER_SESSION
+        noted = json.dumps(record.get('lessons'), sort_keys=True)   # the provider's own entries, before it is asked
         lists = lists_here.candidates(command, record, now, fp.LISTS_PER_EVENT)
         got = _lessons(lessons or lessons_hold.candidates, command, record, now,
                        holds.HOLDS_PER_SESSION - len(lists)) if left else []
@@ -113,8 +114,8 @@ def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
             spent = lists_here.spend(command, record)
             if lists:   # past the cap: lists reach the model with the command's result; lessons don't (R2)
                 result = _output(additionalContext='\n\n'.join(h.text for h in lists))
-            elif spent:
-                result = None
+            elif spent or json.dumps(record.get('lessons'), sort_keys=True) != noted:
+                result = None   # saved though nothing prints: a pass spent, or what a provider noted (S2)
             else:
                 return
         with run.lock:
