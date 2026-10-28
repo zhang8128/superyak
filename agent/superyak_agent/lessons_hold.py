@@ -6,12 +6,18 @@ keeps the cap of 3 a session and saves the record only when it prints. This side
 first appearance, words only, the 1 s limit, SUPERYAK_RUN, unseen lessons only, a `command` value of at least 6 bytes
 and LESSON_BYTES a lesson. It writes no file.
 
+The query opens the store (about 360 ms at the bound), so it runs only when the peer's `lessons.could_hold` says some
+lesson's `command` value is in the command. That check reads only the index file, in process, as the prompt path does
+(Rio Grande's Task 10). It can't miss a hold, since the query's words step holds on exactly that; when it can't answer,
+nothing holds.
+
 `record` is the entry's per-session record (`holds.open_record(...).data`). The provider reads `record['session']`,
 which the entry sets: `id`, the Claude Code session's id, and `transcript`, where the lessons shown at a prompt are read
 back (section 8). Its own entries are under `record['lessons']` (Ruling 33: a provider records what it returns):
 - `heads`: the head_digest() of every command whose query answered;
 - `holds`: the keys of the lesson holds it returned."""
 import os
+import sys
 import time
 
 from . import holds as hs, lessons_hook as lh
@@ -47,17 +53,32 @@ def _held(keys):
     return heads, ids
 
 
-def candidates(command, record, now, limit, *, settings=None, env=None, monotonic=time.monotonic):
+def peer_could_hold(command, ship, data_dir):
+    """The peer checkout's `lessons.could_hold`, imported in process without writing bytecode; False when it can't
+    say (no peer lessons module yet, or it failed)."""
+    try:
+        sys.dont_write_bytecode = True
+        peer = str(lh.CHECKOUT / 'peer')
+        if peer not in sys.path:
+            sys.path.append(peer)
+        from superyak_peer import lessons
+        return lessons.could_hold(command, ship, data_dir) is True
+    except Exception:  # noqa: BLE001 - ImportError on a checkout without the rail, or anything it raises
+        return False
+
+
+def candidates(command, record, now, limit, *, settings=None, env=None, monotonic=time.monotonic, could_hold=None):
     """At most `limit` Hold('lesson', key, text) for this command, or [] whenever anything is missing, late or wrong.
     Limit 3 means no checklist leads this deny, so the first text starts with section 8's `Held once` line (Ruling 35).
     `now` is the entry's wall time; the second counts from this call."""
     try:
-        return _candidates(command, record, limit, settings, os.environ if env is None else env, monotonic)
+        return _candidates(command, record, limit, settings, os.environ if env is None else env, monotonic,
+                           could_hold or peer_could_hold)
     except Exception:  # noqa: BLE001 - a hold that can't be worked out is no hold; the command runs
         return []
 
 
-def _candidates(command, record, limit, settings_path, env, monotonic):
+def _candidates(command, record, limit, settings_path, env, monotonic, could_hold):
     deadline = monotonic() + lh.COMMAND_LIMIT
     if env.get('SUPERYAK_RUN') not in (None, '', 'hook'):
         return []  # a watcher or teamd run never queries (section 8)
@@ -75,13 +96,15 @@ def _candidates(command, record, limit, settings_path, env, monotonic):
     settings = lh.read_settings(settings_path or lh.default_settings())
     if settings is None:
         return []
+    cut = command[:lh.CUTS['command']]
+    if could_hold(cut, settings['ship'], settings['data_dir']) is not True:
+        return []  # no lesson's command value is in it: no query, no receipt, nothing recorded
     own = lh.strings(lh.read_state(lh.state_path(settings, session_id)), 'shown')
     shown_there = lh.transcript_ids(session.get('transcript'), deadline, monotonic=monotonic)
     if shown_there is None:
         return []  # a transcript not read to its end holds nothing
     seen = lh.seen_list(own, sorted(shown_there), held_ids)
-    cut = command[:lh.CUTS['command']]
-    request = {'ship': settings['ship'], 'command': cut, 'words_only': True, 'limit': limit,
+    request ={'ship': settings['ship'], 'command': cut, 'words_only': True, 'limit': limit,
                'seen': seen[-lh.SEEN_MAX:]}
     answer = lh.ask(settings, request, deadline, monotonic)
     if answer is None:

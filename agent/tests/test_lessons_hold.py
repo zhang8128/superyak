@@ -2,13 +2,17 @@
 is Serenity's (`run_agent.py hold`): it renders every Hold, keeps the cap of 3 a session and saves the record only when
 it prints. The provider is tested here alone, with a plain record dict and the stub query."""
 import json
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import pytest
 
 from superyak_agent import holds, lessons_hold, lessons_hook as lh
 from test_lessons_hook import A, B, C, D, Rail, lesson, transcript_line
 
+AGENT = Path(__file__).resolve().parents[1]
 GLOB = '--include=*'  # the spec's illustration: a command value of 11 bytes
 COMMAND = 'grep -rn --include=*.py TODO .'
 
@@ -25,9 +29,14 @@ def rail(tmp_path):
     return Rail(tmp_path)
 
 
-def ask(rail, command=COMMAND, limit=3, rec=None, **fields):
+def yes(command, ship, data_dir):
+    """A could_hold that always says some lesson's command value is in the command, so the stub query decides."""
+    return True
+
+
+def ask(rail, command=COMMAND, limit=3, rec=None, could_hold=yes, **fields):
     return lessons_hold.candidates(command, record(rail=rail, **fields) if rec is None else rec, time.time(), limit,
-                                   settings=rail.settings, env={})
+                                   settings=rail.settings, env={}, could_hold=could_hold)
 
 
 def key(command, id_, session='s1'):
@@ -141,8 +150,8 @@ def test_a_transcript_not_read_to_its_end_holds_nothing(rail):
 @pytest.mark.parametrize('value, holds', [('watch', False), ('teamd', False), ('hook', True), ('', True)])
 def test_superyak_run_other_than_hook_holds_nothing(rail, value, holds):
     rail.answers(lesson(A, command=GLOB))
-    got = lessons_hold.candidates(COMMAND, record(rail=rail), time.monotonic(), 3, settings=rail.settings,
-                                  env={'SUPERYAK_RUN': value})
+    got = lessons_hold.candidates(COMMAND, record(rail=rail), time.time(), 3, settings=rail.settings,
+                                  env={'SUPERYAK_RUN': value}, could_hold=yes)
     assert bool(got) is holds and len(rail.sent()) == int(holds)
 
 
@@ -150,7 +159,7 @@ def test_superyak_run_other_than_hook_holds_nothing(rail, value, holds):
                                  {'session': {'id': 7}}, {'session': {'transcript': None}}])
 def test_a_record_without_a_session_holds_nothing(rail, bad):
     rail.answers(lesson(A, command=GLOB))
-    assert lessons_hold.candidates(COMMAND, bad, time.monotonic(), 3, settings=rail.settings, env={}) == []
+    assert lessons_hold.candidates(COMMAND, bad, time.time(), 3, settings=rail.settings, env={}, could_hold=yes) == []
 
 
 @pytest.mark.parametrize('command', ['', '   ', 'FOO=1', None, 7])
@@ -213,3 +222,48 @@ def test_a_session_keeps_at_most_heads_max_heads(rail, monkeypatch):
     rec = record(rail=rail, heads=['h0', 'h1'])
     ask(rail, rec=rec)
     assert rec['lessons']['heads'] == ['h1', lessons_hold.head_digest(COMMAND)]
+
+
+def raises(command, ship, data_dir):
+    raise OSError('no index')
+
+
+@pytest.mark.parametrize('could_hold', [lambda *a: False, lambda *a: None, lambda *a: 'yes', lambda *a: 1, raises])
+def test_the_query_runs_only_when_could_hold_says_true(rail, could_hold):
+    """Rio Grande's could_hold: an `ls` costs an index read in process, never the store's 360 ms, and writes nothing."""
+    rail.answers(lesson(A, command=GLOB))
+    rec = record(rail=rail)
+    assert ask(rail, rec=rec, could_hold=could_hold) == [] and rail.sent() == [] and rec == record(rail=rail)
+
+
+def test_could_hold_gets_the_command_as_the_query_would_the_ship_and_the_data_dir(rail):
+    asked = []
+    rail.answers(lesson(A, command=GLOB))
+    long = COMMAND + ' ' + 'x' * 400
+    assert ask(rail, command=long, could_hold=lambda *a: asked.append(a) or True)
+    settings = json.loads(rail.settings.read_text())
+    assert asked == [(long[:lh.CUTS['command']], 'tardis', settings['data_dir'])]
+    assert rail.sent()[0]['command'] == long[:lh.CUTS['command']]
+
+
+@pytest.mark.parametrize('module, said', [
+    (None, ['False', 'False']),  # a checkout without the rail's lessons module
+    ('def could_hold(command, ship, data_dir):\n'
+     '    return command == "git push" and ship == "tardis" and data_dir == "/d"\n', ['True', 'False']),
+    ('def could_hold(command, ship, data_dir):\n    raise OSError("index")\n', ['False', 'False']),
+    ('def could_hold(command, ship, data_dir):\n    return "yes"\n', ['False', 'False']),
+])
+def test_peer_could_hold_is_the_checkouts_lessons_in_process_writing_no_bytecode(tmp_path, module, said):
+    package = tmp_path / 'peer' / 'superyak_peer'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    if module is not None:
+        (package / 'lessons.py').write_text(module)
+    code = ('import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); '
+            'from superyak_agent import lessons_hold, lessons_hook; lessons_hook.CHECKOUT = Path(sys.argv[2]); '
+            'print(lessons_hold.peer_could_hold("git push", "tardis", "/d"), '
+            'lessons_hold.peer_could_hold("ls", "tardis", "/d"))')
+    done = subprocess.run([sys.executable, '-I', '-c', code, str(AGENT), str(tmp_path)], capture_output=True, text=True,
+                          timeout=60)
+    assert done.stdout.split() == said, done.stderr
+    assert not list(tmp_path.rglob('__pycache__'))
