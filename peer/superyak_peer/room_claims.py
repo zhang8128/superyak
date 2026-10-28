@@ -60,7 +60,9 @@ class RoomClaims:
     def _post_claim(self, db, actor, room_id, body):
         """R17: the claim route's own message, posted as the claimant (or, for the work board's
         changes, as the actor) with kind `claim`, no mention rows and no reply_to.
-        It counts against a ship's post budget (ships.py:318-323)."""
+        It counts against a ship's post budget (ships.py:318-323). Never in the lessons room's chain (first rail section
+        2), so no board change or claim, whatever is there, posts into it."""
+        self._refuse_in_lessons_room(db, room_id, 'board item or claim')
         self._ship_post_budget(db, actor)
         epoch = db.execute('SELECT epoch FROM rooms WHERE id=?', (room_id,)).fetchone()['epoch']
         message_id = uid()

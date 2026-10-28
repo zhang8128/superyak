@@ -816,6 +816,10 @@ class Lessons:
                 raise Problem(409, f'Room {short} has a brief, and the lessons room takes none; Andy removes it first')
             if self._moderators(db, room['id']):  # C46: only Andy changes who is in it
                 raise Problem(409, f'Room {short} has a moderator; Andy ends that grant first (make station-unmoderate)')
+            if db.execute("SELECT 1 FROM board_items WHERE room_id=? AND state='open'", (room['id'],)).fetchone():  # section 2
+                raise Problem(409, f'Room {short} has open board items, and the lessons room takes none; Andy closes them first')
+            if self._active_claims(db, room['id']):
+                raise Problem(409, f'Room {short} has an active claim, and the lessons room takes none; Andy releases it first')
             vessel = db.execute("SELECT id, owner_id FROM users WHERE username=? AND kind='ship'", (ship,)).fetchone()
             if vessel is None or vessel['owner_id'] != owner:
                 raise Problem(403, f"{safe_line(ship)} is not one of {safe_line(username)}'s ships")

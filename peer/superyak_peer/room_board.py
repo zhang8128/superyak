@@ -153,7 +153,10 @@ class RoomBoard:
         transaction, with their ids, keys, posters, created times and links unchanged. Each takes its active claim along
         when the holder is a member of the new room, the same row with its holder, note and expiry: nothing is claimed
         anew and nothing is posted in anyone's name. Done and dropped items stay as the record. The new room is empty,
-        so UNIQUE(room_id, key) is the guard: a collision would roll the whole add back. Returns how many moved."""
+        so UNIQUE(room_id, key) is the guard: a collision would roll the whole add back. Returns how many moved. Nothing
+        moves into the lessons room's chain (first rail section 2): there the items and claims stay where they were."""
+        if self._in_lessons_chain(db, new):
+            return 0
         now = self.clock()
         members = {r[0] for r in db.execute('SELECT user_id FROM room_members WHERE room_id=?', (new,))}
         keys = [r[0] for r in db.execute("SELECT key FROM board_items WHERE room_id=? AND state='open'", (old,))]

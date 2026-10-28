@@ -230,6 +230,48 @@ def test_station_lessons_room_refuses_a_room_with_a_brief_or_a_moderator(origin)
         store.station_lessons_room('andy', room[:6], 'rio-grande')
 
 
+def test_station_lessons_room_refuses_a_room_with_an_open_board_item_or_an_active_claim(origin):
+    """Final review S1 (section 2: no board item and no claim), as C15 and C46 refuse a brief and a moderator: Andy
+    closes the room's open items, and its claims end, before it can be recorded."""
+    store, andy, rio, room = origin
+    store.post_item(andy, room, 'spec:d7', 'A title', 'spec')
+    with pytest.raises(Problem, match='has open board items'):
+        store.station_lessons_room('andy', room[:6], 'rio-grande')
+    store.drop_item(andy, room, 'spec:d7')
+    store.claim(rio, room, 'spec:d8')
+    with pytest.raises(Problem, match='has an active claim'):
+        store.station_lessons_room('andy', room[:6], 'rio-grande')
+    store.release(andy, room, 'spec:d8')   # the room's owner may release it
+    view = store.station_lessons_room('andy', room[:6], 'rio-grande')
+    assert store.station_lessons_room('andy', room[:6], 'rio-grande', confirm=view['confirm'])['recorded']
+
+
+def test_nothing_puts_a_claim_kind_post_into_the_chain_and_no_add_carries_the_board_into_it(lessons_station):
+    """Final review S1, from its probe: an open item and a claim written into the chain past every door (an older
+    station, a hand edit) still can't post there. Link, done, drop and release are refused, and an add carries neither
+    into the chain's new room: they stay with the room they were in."""
+    store, clock, ids, room = lessons_station
+    with store.transaction() as db:
+        db.execute('INSERT INTO board_items(id,room_id,key,title,kind,posted_by,created) VALUES(?,?,?,?,?,?,?)',
+                   (uid(), room, 'spec:d7', 'A title', 'spec', ids['andy'], clock[0]))
+        db.execute('INSERT INTO claims(id,room_id,key,holder_id,note,created,expires) VALUES(?,?,?,?,?,?,?)',
+                   (uid(), room, 'spec:d7', ids['tardis'], '', clock[0], clock[0] + 3600))
+    for act in (lambda: store.link_item(ids['andy'], room, 'spec:d7', 'branch:first-rail'),
+                lambda: store.release(ids['tardis'], room, 'spec:d7'),
+                lambda: store.release(ids['andy'], room, 'spec:d7'),
+                lambda: store.done_item(ids['andy'], room, 'spec:d7', 'branch:first-rail'),
+                lambda: store.drop_item(ids['andy'], room, 'spec:d7')):
+        with pytest.raises(Problem, match='no board item or claim'):
+            act()
+    with store.transaction() as db:
+        assert db.execute("SELECT count(*) FROM messages JOIN message_kinds ON message_kinds.message_id=messages.id "
+                          "WHERE messages.room_id=? AND message_kinds.kind='claim'", (room,)).fetchone()[0] == 0
+        newer = store._create_room(db, ids['andy'], 'Lessons', [ids['rio-grande'], ids['tardis']], room)['id']
+        assert store._lessons_chain(db) == [room, newer] and store._carry_board(db, room, newer) == 0
+        assert [r[0] for r in db.execute('SELECT room_id FROM board_items')] == [room]
+        assert [r[0] for r in db.execute('SELECT room_id FROM claims')] == [room]
+
+
 def test_the_station_room_verb_shows_then_records(origin):
     store, andy, rio, room = origin
     shown = run_lessons('station-room', '--data-dir', store.data_dir, '--id', room[:6], '--as', 'andy', '--ship', 'rio-grande')
