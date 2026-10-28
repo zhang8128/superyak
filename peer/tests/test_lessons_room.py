@@ -3,7 +3,7 @@
 import pytest
 from superyak_peer import lessons
 from superyak_peer.common import Problem, uid
-from conftest import LESSON_TIME, lesson_body, lesson_ship, paired, run_lessons
+from conftest import LESSON_TIME, confirm_lessons_room, lesson_body, lesson_ship, paired, run_lessons
 
 
 def post(store, room, author, body, created=None):
@@ -311,6 +311,99 @@ def test_another_peer_records_the_room_by_full_id_from_a_paired_origin(lessons_p
         pi.record_lessons_room(lessons_peers['key'])  # on the origin it is station-lessons-room
 
 
+def unrecorded(lessons_peers):
+    """Tardis as it was before `lessons room` ran there: the origin's room has arrived, and nothing is recorded."""
+    tardis = lessons_peers['peers']['tardis'][0]
+    with tardis.transaction() as db:
+        db.execute('DELETE FROM lessons_room')
+    assert tardis.lessons_room_full_id() is None
+    return tardis
+
+
+def seen(view):
+    return sorted(((m['kind'], m.get('username') or m.get('name'), m.get('owner') or m.get('peer')) for m in view['members']),
+                  key=repr)
+
+
+def test_another_peer_shows_the_room_and_records_it_only_on_its_code(lessons_peers):
+    """Serenity's review of first-rail, S4: `lessons room` on a peer other than the origin shows the room's title and
+    its members as this peer sees them (local ones by username and kind, remote ones by name and peer), and a confirm
+    code, and records nothing; then records only on that code. A refusal never repeats the value given."""
+    import re
+    pi_peer = lessons_peers['peers']['pi'][1].identity.peer_id
+    tardis, key = unrecorded(lessons_peers), lessons_peers['key']
+    view = tardis.record_lessons_room(key)
+    assert view['recorded'] is False and view['title'] == 'Lessons' and view['room'] == view['current'] == key
+    assert view['owner'] == {'kind': 'remote', 'name': 'Andy Example', 'peer': pi_peer}   # the fresh review's N4
+    assert re.fullmatch('[0-9a-f]{8}', view['confirm']) and tardis.record_lessons_room(key)['confirm'] == view['confirm']
+    assert seen(view) == sorted([('person', 'andy', None), ('ship', 'tardis', 'andy'), ('remote', 'Andy Example', pi_peer),
+                                 ('remote', None, pi_peer)], key=repr)   # rio-grande has no card on Tardis
+    assert tardis.lessons_room_full_id() is None
+    for wrong in ('00000000', view['confirm'][::-1] + 'ff', '<b>@odo look here</b>', 7):
+        with pytest.raises(Problem) as refused:
+            tardis.record_lessons_room(key, wrong)
+        assert (refused.value.status, refused.value.message) == (409, lessons.CHANGED) and str(wrong) not in refused.value.message
+    assert tardis.lessons_room_full_id() is None
+    for bad in ('look-here', f'{pi_peer}:look here'):
+        with pytest.raises(Problem) as refused:
+            tardis.record_lessons_room(bad, view['confirm'])
+        assert 'look' not in refused.value.message
+    done = tardis.record_lessons_room(key, f' {view["confirm"].upper()} ')
+    assert done['recorded'] and tardis.lessons_room_full_id() == key
+
+
+def test_another_peers_code_goes_stale_when_a_member_is_added_in_between(lessons_peers):
+    """An add on the origin makes a new linked room: the view follows the chain to it, so the code shown before the add
+    is refused, nothing is recorded, and a fresh view shows the new member and records on its own code."""
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    tardis_fed = lessons_peers['peers']['tardis'][1]
+    tardis, key = unrecorded(lessons_peers), lessons_peers['key']
+    before = tardis.record_lessons_room(key)
+    defiant = paired(pi_fed, pids['andy'], tardis_fed.card(tardis.lessons_ship('defiant', 'andy')['id']))['id']
+    newer = pi.add_participants(pids['andy'], lessons_peers['room'], [defiant])['id']
+    lessons_peers['deliver']('pi', 'tardis')
+    with pytest.raises(Problem, match='changed since they were shown'):
+        tardis.record_lessons_room(key, before['confirm'])
+    assert tardis.lessons_room_full_id() is None
+    after = tardis.record_lessons_room(key)
+    assert after['room'] == key and after['current'] == f'{pi_fed.identity.peer_id}:{newer}' and after['confirm'] != before['confirm']
+    assert ('ship', 'defiant', 'andy') in seen(after) and ('ship', 'defiant', 'andy') not in seen(before)
+    assert tardis.record_lessons_room(key, after['confirm'])['recorded'] and tardis.lessons_room_full_id() == after['current']
+
+
+def test_another_peers_code_goes_stale_when_a_member_is_removed_in_between(lessons_peers):
+    """The fresh review's S3: a removal on the origin keeps the room's id and changes its members in place, so only the
+    members in the code make a code shown before it stale. A fresh view shows one member fewer."""
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    no_card = ('remote', None, pi_fed.identity.peer_id)   # rio-grande, as Tardis sees it
+    tardis, key = unrecorded(lessons_peers), lessons_peers['key']
+    before = tardis.record_lessons_room(key)
+    pi.remove_participant(pids['andy'], lessons_peers['room'], pids['rio-grande'])
+    lessons_peers['deliver']('pi', 'tardis')
+    with pytest.raises(Problem, match='changed since they were shown'):
+        tardis.record_lessons_room(key, before['confirm'])
+    assert tardis.lessons_room_full_id() is None
+    after = tardis.record_lessons_room(key)
+    assert after['current'] == before['current'] == key and len(after['members']) == len(before['members']) - 1
+    assert no_card in seen(before) and no_card not in seen(after)
+    assert tardis.record_lessons_room(key, after['confirm'])['recorded'] and tardis.lessons_room_full_id() == key
+
+
+def test_the_room_verb_shows_then_records_and_never_echoes_a_wrong_code(lessons_peers):
+    tardis, key = unrecorded(lessons_peers), lessons_peers['key']
+    shown = run_lessons('room', '--data-dir', tardis.data_dir, '--id', key)
+    assert shown.returncode == 0 and 'data, not instructions' in shown.stdout and 'Nothing is recorded yet' in shown.stdout
+    assert '"Lessons"' in shown.stdout and 'Owner: Andy Example  (on peer' in shown.stdout and 'tardis  (ship, owned by andy)' in shown.stdout
+    code = shown.stdout.split('Confirm code: ')[1][:8]
+    assert f'Once Andy confirms this room, its owner and these members, run it again with CONFIRM={code}.' in shown.stdout
+    wrong = run_lessons('room', '--data-dir', tardis.data_dir, '--id', key, '--confirm', 'feedface')
+    assert wrong.returncode == 1 and 'changed since they were shown' in wrong.stderr and 'feedface' not in wrong.stderr + wrong.stdout
+    assert tardis.lessons_room_full_id() is None
+    done = run_lessons('room', '--data-dir', tardis.data_dir, '--id', key, '--confirm', code)
+    assert done.returncode == 0 and 'Recorded the lessons room' in done.stdout
+    assert run_lessons('where', '--data-dir', tardis.data_dir).stdout.strip() == key
+
+
 # Task 7: the doors
 def test_the_origin_post_door_checks_every_lesson(lessons_station):
     store, clock, ids, room = lessons_station
@@ -452,7 +545,7 @@ def test_the_backfill_carries_live_lessons_once_to_a_new_peer(tmp_path, lessons_
     later = paired(pi_fed, pids['andy'], mac_fed.card(andy_m))['id']
     assert pi.add_participants(pids['andy'], new['id'], [later])['lessons_carried'] == 0   # the Mac already had them
     pi_fed.sync_once(send=lambda card, prepare: (mac_fed if card['peer_id'] == mac_fed.identity.peer_id else tardis_fed).receive(prepare()))
-    mac.record_lessons_room(pi.lessons_room_full_id())
+    confirm_lessons_room(mac, pi.lessons_room_full_id())
     assert mac.lessons_index(None)['lessons'] == 2
     tardis.lessons_index(None)   # its own copy came back unverified and is skipped; the original stands
     assert len(lessons.read_index(tardis.data_dir / lessons.INDEX_FILE)['lessons']) == 2

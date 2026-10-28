@@ -101,7 +101,7 @@ help:
 	@echo "make station-alerts     On the Pi: show the alert queue and what is held back"
 	@echo "make station-units      On the Pi: install the backup timers and the alert drop-ins; make station-units-remove undoes it"
 	@echo "make station-lessons-room ID=… [CONFIRM=…]  On the Pi: show, then record, the lessons room (first rail)"
-	@echo "make lessons-room ID=…  On another peer: record the lessons room by its full id (LESSONS_DATA=this peer)"
+	@echo "make lessons-room ID=… [CONFIRM=…]  On another peer: show, then record, the lessons room by its full id (LESSONS_DATA=this peer)"
 	@echo "make lessons-where      This peer's lessons room, by its full id"
 	@echo "make lessons-ship SHIP=… OWNER=…  Andy only, on another peer: a ship account with no key"
 	@echo "make lessons-check SHIP=… FILE=…  Run this peer's checks on one lesson or retraction, without posting"
@@ -429,8 +429,8 @@ station-lessons-room:
 	$(LESSONS) station-room --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --ship "$(LESSONS_SHIP)"$(if $(CONFIRM), --confirm "$(CONFIRM)")
 
 lessons-room:
-	@test -n "$(ID)" || { echo 'Usage: make lessons-room ID=<origin peer id>:<room id> [LESSONS_DATA=<this peer data dir>]'; exit 2; }
-	$(LESSONS) room --data-dir "$(LESSONS_DATA)" --id "$(ID)"
+	@test -n "$(ID)" || { echo 'Usage: make lessons-room ID=<origin peer id>:<room id> [CONFIRM=<the code it showed>] [LESSONS_DATA=<this peer data dir>]'; exit 2; }
+	$(LESSONS) room --data-dir "$(LESSONS_DATA)" --id "$(ID)"$(if $(CONFIRM), --confirm "$(CONFIRM)")
 
 lessons-where:
 	$(LESSONS) where --data-dir "$(LESSONS_DATA)"
