@@ -630,9 +630,11 @@ class Storage:
             rows = self.conn.execute(
                 "SELECT * FROM episodes WHERE compressed = 0 AND ("
                 "coalesce(source, '') <> 'auto' OR id IN ("
-                "SELECT j.value FROM memory_log m, json_each(m.target_ids) j "
-                "WHERE m.event_type = 'recall' AND m.outcome LIKE 'used%' "
-                "AND json_valid(m.target_ids)))"
+                # json_each gets '[]' for a malformed row, so a bad target_ids can never raise, whatever order
+                # SQLite evaluates the WHERE terms in (it doesn't promise json_valid runs before json_each).
+                "SELECT j.value FROM memory_log m, "
+                "json_each(CASE WHEN json_valid(m.target_ids) THEN m.target_ids ELSE '[]' END) j "
+                "WHERE m.event_type = 'recall' AND m.outcome LIKE 'used%'))"
             ).fetchall()
         else:
             raise ValueError(f"auto must be 'all', 'used' or 'none', not {auto!r}")
