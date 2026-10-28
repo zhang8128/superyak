@@ -393,7 +393,7 @@ def vectors_of(index):
 def write_index(path, value, vectors, read_at):
     """Section 4 step 4: the magic line, the JSON part's length (4 bytes, big-endian), the JSON part, then each unit
     vector as little-endian float32, row by row. Written, then renamed over the old file; its modification time is when
-    step 1 read the chain."""
+    step 1 read the chain, set on the temporary file before the rename, so the live file never shows a fresher one."""
     import array
     path = Path(path)
     head = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
@@ -401,17 +401,18 @@ def write_index(path, value, vectors, read_at):
     if sys.byteorder == 'big':
         block.byteswap()
     temporary = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
+    temporary.unlink(missing_ok=True)  # a run killed before its rename left it, and the name is this pid's own
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, 'wb') as stream:
             stream.write(INDEX_MAGIC + struct.pack('>I', len(head)) + head + block.tobytes())
             stream.flush()
             os.fsync(stream.fileno())
+        os.utime(temporary, (read_at, read_at))  # before the rename: the rename keeps it
         os.replace(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
-    os.utime(path, (read_at, read_at))
 
 
 def describe_station_room(view):

@@ -85,3 +85,33 @@ def test_the_index_verb_without_a_room(tmp_path):
     Store(tmp_path / 'p', clock=lambda: LESSON_TIME)
     done = run_lessons('index', '--data-dir', tmp_path / 'p', '--runtime-config', tmp_path / 'none.json')
     assert done.returncode == 0 and json.loads(done.stdout) == {'status': 'no lessons room'}
+
+
+# Group B fix round: the index file's time and a stale temporary file
+def test_the_live_index_never_shows_a_time_fresher_than_step_1s_read(lessons_station, monkeypatch):
+    """The temporary file gets step 1's read time before it is renamed over the live one, so the moment the rename lands,
+    the live file already shows that time: no reader sees the write time, which would make the index look fresher than
+    the chain it was built from. The clock is pinned at LESSON_TIME, years from the real time the write happens at."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body())
+    path, renamed, seen = store.data_dir / lessons.INDEX_FILE, os.replace, []
+
+    def replace(source, target):
+        seen.append(('before', os.stat(source).st_mtime))
+        renamed(source, target)
+        seen.append(('after', os.stat(target).st_mtime))   # the first moment a reader can open the new file
+    monkeypatch.setattr(lessons.os, 'replace', replace)
+    assert store.lessons_index(None)['status'] == 'written'
+    assert seen == [('before', LESSON_TIME), ('after', LESSON_TIME)]
+    assert os.stat(path).st_mtime == LESSON_TIME
+
+
+def test_a_stale_temporary_file_with_this_pids_name_doesnt_stop_the_run(lessons_station):
+    """A run killed between its open and its rename leaves `.lessons-index.bin.<pid>.tmp`. A later run that gets the same
+    pid removes it (the name is that pid's own) instead of failing on the exclusive open."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body())
+    stale = store.data_dir / f'.{lessons.INDEX_FILE}.{os.getpid()}.tmp'
+    stale.write_bytes(b'half an index')
+    assert store.lessons_index(None) == {'status': 'written', 'lessons': 1, 'vectors': 0}
+    assert not stale.exists() and len(lessons.read_index(store.data_dir / lessons.INDEX_FILE)['lessons']) == 1
