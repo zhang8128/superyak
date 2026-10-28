@@ -354,7 +354,9 @@ Why: each peer checks lessons in the room fully only once it has recorded the ro
       recorded, the room takes no new member from this station, so say so before Andy removes a ship (first-rail's
       CLAUDE.md). Rio Grande tells Andy the full id it prints and posts it in all hands.
 - [ ] Every other peer runs `make lessons-room ID=<origin peer id>:<room id> LESSONS_DATA=<that peer's data dir>` as
-      soon as the room first syncs there, before that peer's ship or Andy's account there posts in it.
+      soon as the room first syncs there, before that peer's ship or Andy's account there posts in it. The first run
+      records nothing: it shows the room's title, its members and a confirm code. Check them against the all-hands post,
+      then run it again with `CONFIRM=<code>`.
 - [ ] After a deploy, an empty answer isn't judged until the index has run once. On the Pi its timer runs 60 s after
       each run ends; on the Mac, `federate` runs it as a step. A prompt gets nothing from an index more than 180 s old.
 
