@@ -42,7 +42,7 @@ not a central identity assertion.
 
 **The pairing code** is the first 32 lowercase hex characters of the SHA-256 of the
 whole canonical card, `participant` included, shown in groups of four. The exporting
-side shows it (`card` on stderr, `/api/connections/code`, "Show my peer card"); the
+side shows it (`card` on its terminal only, `/api/connections/code`, "Show my peer card"); the
 importing side never shows it before it is typed. Pairing takes the code **typed** by a
 person reading it off the exporting machine's own screen: in the browser's box, never
 pre-filled, or at `pair --as` on a real terminal. A wrong code is refused, and only then
@@ -50,8 +50,8 @@ names the card's code; a request carrying only the old `fingerprint` pairs nothi
 code proves the card in hand matches the card on that screen, the fingerprint
 included. It does not prove a person typed it: a pty wrapper or an admin session's own
 client could supply it, which is why typing it is a person's act by rule (CLAUDE.md),
-not by mechanism alone. `connections` lists each contact's code and whether a typed code
-confirmed that card. Pairing authorizes signed ingress from explicitly
+not by mechanism alone. `connections` says whether a typed code confirmed each contact's
+card, and lists the code only for a contact so confirmed. Pairing authorizes signed ingress from explicitly
 imported participants; it does not grant content access. Import each desired
 participant's card separately. Cards for a known peer cannot change its URL, key,
 certificate or fingerprint, even after unpairing. Name corrections preserve IDs.

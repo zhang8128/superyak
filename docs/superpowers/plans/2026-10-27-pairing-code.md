@@ -13,8 +13,27 @@ read-only: `peers` has 0 rows, so nothing is paired today. Until this is live, n
 
 **This is safety code** (who a peer trusts). It gets a test-first build and each partner's explicit yes before it
 merges. Nothing in it touches the wire: v1 cards, envelopes and `/federation/events` stay byte-identical. **Rollback to
-main is safe.** The schema only gains a table, `pairing_confirmations`, which main never reads, and `remote_contacts`
-keeps its four columns (MF1).
+main is safe for the schema.** The schema only gains tables, `pairing_confirmations` and `contact_holds`, which main
+never reads, and `remote_contacts` keeps its four columns (MF1). **But main ignores holds** (Serenity's review SF3): a
+peer re-paired one participant at a time has its held contacts active again under main. Before rolling back, unpair
+any peer that has a held contact.
+
+**Serenity's review (2026-10-28) and what it changed.** Her fresh Mac reviewer gave YES WITH CONDITIONS, with two
+must-fix items, both shown by probe:
+- **MF1:** a restore copied the older copy's holds as they were, so a contact held on the live station came back. The
+  reconcile now holds, in the copy, every contact held in the replaced file (`_hold_like_replaced`), and reports it.
+  `contact_holds` and `pairing_confirmations` are reconciled tables.
+- **MF2:** re-pairing a peer unpaired without holds (main's unpair, or an old copy) revived its siblings. `pair()` now
+  holds every contact of a peer whose row says `paired=0` before it releases the typed one.
+
+Of the should-fix items:
+- **SF2 is applied:** `card` writes the code to the controlling terminal only, never stdout or stderr.
+- **SF3 is the paragraph above.**
+- **SF1 waits for another hand.** It gives the CLAUDE.md rule its own heading, "Pairing peers (every machine)", and
+  adds that a ship never repeats a code it sees in any output. The author's session classes edits to CLAUDE.md as
+  self-modification and refused it.
+
+Both nits are applied.
 
 ## Why
 
@@ -109,7 +128,7 @@ stdin (MF2a).
    - `connections()` adds `confirmed: true|false`. It's true only when a confirmation row exists **and** its code
      equals the code computed from the rebuilt card, so a row left stale by a re-pair under main never reads as
      confirmed (re-check SF1). The browser and the CLI show "confirmed by typing" or "paired before pairing codes".
-   - Main never reads the table, so rollback is safe.
+   - Main never reads the table, so rollback is safe for the schema; unpair a peer with held contacts first (review SF3).
    - `pair()`'s 201 returns the contact with `pairing_code` and `confirmed`, in the format `connections` uses (nit).
    - New CLI `connections --data-dir D --as USERNAME` (admin, `kind!='system'`) prints each contact's name and
      endpoint through `safe_line`, with its code and whether it was confirmed by typing.

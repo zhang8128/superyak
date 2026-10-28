@@ -123,7 +123,7 @@ See [API.md](API.md) for provisioning, routes, state, and audience semantics;
 [PROTOCOL.md](PROTOCOL.md) specifies the signed envelope/card schema, independent
 origins, receipts, bounded retry and revocation behavior. An operator pairs a card
 by typing its pairing code, read off the exporting machine's own screen (`card`
-prints it on stderr; `pair --as` reads it from a real terminal). There is no
+writes it to its terminal only; `pair --as` reads it from a real terminal). There is no
 automatic discovery, implicit account merge, or network-wide owner.
 
 ```sh

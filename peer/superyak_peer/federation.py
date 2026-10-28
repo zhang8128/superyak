@@ -49,7 +49,7 @@ class Federation:
             if typed != expected:
                 raise Problem(400, f"That code doesn't match this card. Its code is {show_code(expected)}; read the "
                                    "other machine's screen again.")
-            previous = db.execute('SELECT card FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()
+            previous = db.execute('SELECT card, paired FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()
             if previous:
                 prior = json.loads(previous['card'])
                 if any(prior[k] != card[k] for k in TRUST_KEYS):
@@ -59,6 +59,14 @@ class Federation:
             # review SF2).
             if pairing_code({**(prior if previous else card), 'participant': card['participant']}) != expected:
                 raise Problem(409, 'Known peer trust material cannot be replaced')
+            if previous and not previous['paired']:
+                # Serenity's review MF2: a peer unpaired with no holds (by main's unpair, before this branch or after a
+                # rollback, or in a copy restored from before holds) gets every contact held and unconfirmed first, so
+                # "unpaired" means "every contact held" whatever made it, and this pair releases the typed one only.
+                db.execute('INSERT OR IGNORE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?',
+                           (self.store.clock(), card['peer_id']))
+                db.execute('DELETE FROM pairing_confirmations WHERE contact_id IN '
+                           '(SELECT id FROM remote_contacts WHERE peer_id=?)', (card['peer_id'],))
             db.execute('INSERT INTO peers VALUES(?,?,1) ON CONFLICT(peer_id) DO UPDATE SET paired=1', (card['peer_id'], encode(card)))
             db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?) ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name', ('remote_'+uid(), card['peer_id'],card['participant']['id'],card['participant']['name']))
             contact = dict(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (card['peer_id'],card['participant']['id'])).fetchone())

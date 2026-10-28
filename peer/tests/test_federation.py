@@ -1297,3 +1297,43 @@ def test_the_confirmation_is_for_the_card_connections_rebuilds(two_peers, monkey
     assert refused.value.status == 409
     listed = {c['id']: c for c in a[2].connections(a[1])}[ca['id']]
     assert listed['card']['endpoint'] == 'https://localhost:7435' and listed['confirmed'] is True
+
+
+def main_s_unpair(store, peer_id):
+    """Main's Federation.unpair, which knows nothing of holds or confirmations: what an unpair made before this branch,
+    or after a rollback, leaves behind."""
+    with store.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (peer_id,))
+        db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?) "
+                   "AND status IN ('pending','failed')", (peer_id,))
+        db.execute('UPDATE inbox SET payload=NULL WHERE origin=?', (peer_id,))
+
+
+def test_pairing_one_participant_of_a_peer_unpaired_without_holds_reconnects_that_one_only(two_peers):
+    """Serenity's review MF2: an unpair made with no holds (main's, before this branch or after a rollback, or one in a
+    copy restored from before holds) must not let pair(A) revive B, nor leave B's old confirmation saying 'confirmed by
+    typing'. Pairing a peer whose row says paired=0 holds every contact of it first; then only A is released."""
+    a, b, ca, _ = two_peers
+    second = b[0].create_user('bob2', 'Bob Two', 'a-long-password')['id']
+    c2 = a[2].pair(a[1], b[2].card(second), code=pairing_code(b[2].card(second)))
+    main_s_unpair(a[0], b[2].identity.peer_id)
+    a[2].pair(a[1], b[2].card(b[1]), code=pairing_code(b[2].card(b[1])))
+    listed = {c['id']: c for c in a[2].connections(a[1])}
+    assert (listed[ca['id']]['held'], listed[ca['id']]['confirmed']) == (False, True)
+    assert (listed[c2['id']]['held'], listed[c2['id']]['confirmed'], listed[c2['id']]['pairing_code']) == (True, False, None)
+    assert [c['id'] for c in a[0].contacts(a[1]) if c.get('remote')] == [ca['id']]
+    event = b[2].identity.envelope(destination=a[2].identity.peer_id, actor=second, resource_id='layer-x', revision=1,
+                                   action='layer.release', recipients=[a[1]], payload={'body': 'from the held one'})
+    with pytest.raises(Problem, match='Unknown remote participant'):
+        a[2].receive(event)
+
+
+def test_re_pairing_a_paired_peer_leaves_its_other_contacts_as_they_were(two_peers):
+    """The hold-all runs only for a peer whose row says paired=0: a re-pair of a peer still paired (a renamed
+    participant, say) must not hold its siblings."""
+    a, b, ca, _ = two_peers
+    second = b[0].create_user('bob2', 'Bob Two', 'a-long-password')['id']
+    c2 = a[2].pair(a[1], b[2].card(second), code=pairing_code(b[2].card(second)))
+    a[2].pair(a[1], b[2].card(b[1]), code=pairing_code(b[2].card(b[1])))
+    listed = {c['id']: c for c in a[2].connections(a[1])}
+    assert (listed[c2['id']]['held'], listed[c2['id']]['confirmed']) == (False, True)

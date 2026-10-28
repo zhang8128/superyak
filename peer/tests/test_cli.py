@@ -192,7 +192,8 @@ def test_pending_super_admin_activation_can_be_renewed_without_replacing_identit
     assert store.login(current['username'], 'long-user-password', 'test')['user']['is_super_admin'] == 1
 
 
-# fix:pairing-code (plan Task 3): `pair` reads the code from the controlling terminal only; `card` shows it on stderr
+# fix:pairing-code (plan Task 3): `pair` reads the code from the controlling terminal only; `card` shows it there only
+# too (Serenity's review SF2), so a ship's transcript never holds one
 
 PROMPT = b'Type the code shown on the other machine:'
 
@@ -216,9 +217,10 @@ def contacts(store):
         return [tuple(r) for r in db.execute('SELECT user_id FROM remote_contacts')]
 
 
-def in_pty(args, typed=None, stdin=None, timeout=60):
+def in_pty(args, typed=None, stdin=None, timeout=60, stdout_path=None, stderr_path=None):
     """Run the CLI under a new pty, its controlling terminal. With `stdin`, fd 0 is a pipe holding that text instead,
-    so a read of stdin and a read of /dev/tty differ (plan review MF2). Types `typed` only after the prompt shows.
+    so a read of stdin and a read of /dev/tty differ (plan review MF2). With `stdout_path` and `stderr_path`, fds 1 and 2
+    are those files, so the terminal shows only what is written to /dev/tty. Types `typed` only after the prompt shows.
     (exit code, everything the terminal showed, whether the prompt showed)."""
     import pty
     import select
@@ -232,6 +234,11 @@ def in_pty(args, typed=None, stdin=None, timeout=60):
                 os.close(w)
                 os.dup2(r, 0)
                 os.close(r)
+            for path, target in ((stdout_path, 1), (stderr_path, 2)):
+                if path is not None:
+                    out = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    os.dup2(out, target)
+                    os.close(out)
             os.execv(sys.executable, [sys.executable, '-m', 'superyak_peer', *map(str, args)])
         finally:
             os._exit(127)
@@ -266,17 +273,35 @@ def pair_args(here, path, user='bob'):
     return ['pair', '--data-dir', here.data_dir, '--card', path, '--as', user]
 
 
-def test_card_prints_the_card_on_stdout_as_before_and_its_code_on_stderr(tmp_path, capsys):
-    from superyak_peer.__main__ import main
+def test_card_prints_the_card_on_stdout_as_before_and_without_a_terminal_no_code(tmp_path, capsys, monkeypatch):
+    """Serenity's review SF2: with no terminal (a ship's Bash), stderr says where the code is read, and holds none."""
+    from superyak_peer import __main__ as cli
+    from superyak_peer.db import Store
+    from superyak_peer.identity import pairing_code, show_code
+    monkeypatch.setattr(cli, 'controlling_terminal', lambda: None)
+    store = Store(tmp_path / 'state')
+    store.create_user('owner', 'Owner', 'long-password', is_admin=True)
+    cli.main(['card', '--data-dir', str(store.data_dir), '--username', 'owner', '--endpoint', 'https://localhost:7435'])
+    out, err = capsys.readouterr()
+    card = json.loads(out)
+    assert out == json.dumps(card, indent=2) + '\n'  # stdout stays exactly a card
+    assert err.startswith('Pairing code: not shown here')
+    assert pairing_code(card) not in err and show_code(pairing_code(card)) not in err
+
+
+def test_card_shows_its_code_on_its_terminal_only(tmp_path):
     from superyak_peer.db import Store
     from superyak_peer.identity import pairing_code, show_code
     store = Store(tmp_path / 'state')
     store.create_user('owner', 'Owner', 'long-password', is_admin=True)
-    main(['card', '--data-dir', str(store.data_dir), '--username', 'owner', '--endpoint', 'https://localhost:7435'])
-    out, err = capsys.readouterr()
-    card = json.loads(out)
-    assert out == json.dumps(card, indent=2) + '\n'  # stdout stays exactly a card
-    assert err == f'Pairing code: {show_code(pairing_code(card))}\n'
+    path, errors = tmp_path / 'card.json', tmp_path / 'stderr.txt'
+    code, shown, _ = in_pty(['card', '--data-dir', store.data_dir, '--username', 'owner', '--endpoint', 'https://localhost:7435'],
+                            stdout_path=path, stderr_path=errors)
+    assert code == 0, shown + errors.read_text()
+    card = json.loads(path.read_text())
+    assert f'Pairing code: {show_code(pairing_code(card))}' in shown  # written to /dev/tty: stdout and stderr are files
+    for stream in (path, errors):
+        assert show_code(pairing_code(card)) not in stream.read_text() and pairing_code(card) not in stream.read_text()
 
 
 def test_with_no_terminal_pair_refuses_even_with_the_right_code_on_stdin(tmp_path):
@@ -349,11 +374,12 @@ def test_both_sides_see_one_code(tmp_path):
     from superyak_peer.db import Store
     there = Store(tmp_path / 'there')
     there.create_user('alice', 'Alice', 'long-password', is_admin=True)
-    exported = run('card', '--data-dir', there.data_dir, '--username', 'alice', '--endpoint', 'https://localhost:7436')
-    assert exported.returncode == 0, exported.stderr
-    shown_there = exported.stderr.removeprefix('Pairing code: ').strip()
-    path = tmp_path / 'card.json'
-    path.write_text(exported.stdout)  # the card file exactly as `card` wrote it
+    path = tmp_path / 'card.json'  # the card file exactly as `card` wrote it, and its code read off its terminal
+    exported, terminal, _ = in_pty(['card', '--data-dir', there.data_dir, '--username', 'alice', '--endpoint', 'https://localhost:7436'],
+                                   stdout_path=path, stderr_path=tmp_path / 'stderr.txt')
+    assert exported == 0, terminal
+    import re
+    shown_there = re.search(r'Pairing code: ((?:[0-9a-f]{4} ){7}[0-9a-f]{4})', terminal).group(1)
     here = Store(tmp_path / 'here')
     here.create_user('bob', 'Bob', 'long-password', is_admin=True)
     code, shown, _ = in_pty(pair_args(here, path), typed=shown_there)

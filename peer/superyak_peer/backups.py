@@ -725,6 +725,33 @@ def _unpair_like_replaced(db, old, now, report):
             _unpair(db, old, peer, report)
 
 
+def _hold_like_replaced(db, old, now, report):
+    """fix:pairing-code, Serenity's review MF1: a contact held in the replaced file is held here too, when the copy has it.
+    Copying the older copy's holds as they are would replace the newer live ones: cut a peer off, pair one participant
+    again, restore an older copy, and every sibling would be active again with no code typed. So each is held as
+    Federation.unpair holds it: its confirmation gone, its pending and failed outbox rows withdrawn, and the received
+    payloads it authored cleared. It runs after _unpair_like_replaced, whose peers are already held whole. A replaced file
+    from before holds has none to compare. Only takes away."""
+    if not _usable(db, old, report, *PEER_NEEDS, 'remote_contacts.user_id', 'inbox.actor') \
+            or not _has(old, 'contact_holds.contact_id'):
+        return
+    held_there = {row[0] for row in old.execute('SELECT contact_id FROM contact_holds')}
+    db.execute('CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL)')
+    held_here = {row[0] for row in db.execute('SELECT contact_id FROM contact_holds')}
+    for contact in db.execute('SELECT id, peer_id, user_id, name FROM remote_contacts ORDER BY peer_id, name, id').fetchall():
+        if contact['id'] not in held_there or contact['id'] in held_here:
+            continue
+        db.execute('INSERT INTO contact_holds VALUES(?, ?)', (contact['id'], now))
+        if _has(db, 'pairing_confirmations.contact_id'):
+            db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (contact['id'],))
+        withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id=? AND status IN ('pending','failed')",
+                               (contact['id'],)).rowcount
+        nulled = db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND actor=? AND payload IS NOT NULL',
+                            (contact['peer_id'], contact['user_id'])).rowcount
+        report['held'].append((_shown(db, old, contact['peer_id']), contact['name']))
+        report['held_counts'] = [sum(pair) for pair in zip(report['held_counts'], (withdrawn, nulled))]
+
+
 def _unpair_named(db, old, named, report):
     """--unpair PEER (revision 4): the same, for the peers a person names (the only way without a usable replaced file)."""
     if not named:
@@ -915,7 +942,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     _refuse(db_path, live_data_dir)
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
-              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
+              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0],
+              'held': [], 'held_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
               'not_compared': [], 'grants': []}
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
@@ -952,7 +980,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
                              _add_member_changes_like_replaced,
-                             _unpair_like_replaced, _report_differences):
+                             _unpair_like_replaced, _hold_like_replaced, _report_differences):
                     step(db, old, now, report)
             _unpair_named(db, old, named, report)
             _write_mark(db, old, now, db_path)
@@ -1008,6 +1036,11 @@ def describe_reconcile(report):
     if report['unpaired']:
         withdrawn, cleared = report['unpaired_counts']
         lines.append('Unpaired again: ' + '; '.join(f'{peer} ({people(names)})' if names else peer for peer, names in report['unpaired'])
+                     + f'. Withdrew {withdrawn} pending and failed deliveries and cleared {cleared} received payloads.')
+    if report['held']:
+        withdrawn, cleared = report['held_counts']
+        lines.append('Held again, as in the replaced file, each until its own code is typed: '
+                     + '; '.join(f'{peer} ({safe_line(name)})' for peer, name in report['held'])
                      + f'. Withdrew {withdrawn} pending and failed deliveries and cleared {cleared} received payloads.')
     if report['passwords']:
         lines.append(f'Reported, not applied: these passwords differ from the replaced file: {people(report["passwords"])}. '
