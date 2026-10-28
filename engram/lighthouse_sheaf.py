@@ -266,7 +266,16 @@ def glue(hits: dict[str, np.ndarray],
 
 def _open(path):
     from storage import Storage
-    return Storage.open_read_only(path)
+    import store_identity
+    store = Storage.open_read_only(path)
+    try:
+        if store_identity.is_imprint(store.conn):
+            raise store_identity.ImprintRefused(
+                f"{path} is a store imprint; the sheaf does not read it")
+    except BaseException:
+        store.close()
+        raise
+    return store
 
 
 def _columns(conn, table: str) -> set[str]:
@@ -347,6 +356,34 @@ def store_hits(path, query, k: int = 10, lane: str = "work",
             "contents": contents}
 
 
+def independence(stores: dict[str, str | Path]) -> list[dict]:
+    """One entry per pair of stores, in name order: do they share a lineage?
+
+    ``independent`` is True, False, or "unknown" (a lineage is incomplete).
+    Pairs are flagged, never dropped.
+    """
+    import itertools
+    import store_identity
+    import store_reader
+    lineages = {}
+    for name, path in stores.items():
+        if store_identity.is_imprint(_probe := store_reader.connect(path)):
+            _probe.close()
+            raise store_identity.ImprintRefused(
+                f"{path} is a store imprint; the sheaf does not read it")
+        try:
+            lineages[name] = store_identity.lineage(_probe)
+        finally:
+            _probe.close()
+    out = []
+    for a, b in itertools.combinations(sorted(lineages), 2):
+        ind = store_identity.independent(lineages[a], lineages[b])
+        out.append({"a": a, "b": b,
+                    "independent": "unknown" if ind is None else ind,
+                    "evidence": "independent" if ind else "not independent evidence"})
+    return out
+
+
 def compare_stores(stores: dict[str, str | Path], query, k: int = 10,
                    lane: str = "work", layer: str = "episode",
                    trust: dict[str, float] | None = None,
@@ -366,6 +403,7 @@ def compare_stores(stores: dict[str, str | Path], query, k: int = 10,
                        for i, s, c in zip(v["ids"], v["scores"], v["contents"])]
                    for n, v in collected.items()}
     out["query"] = {"k": k, "lane": lane, "layer": layer, "min_score": min_score}
+    out["independence"] = independence(stores)
     return out
 
 
@@ -378,12 +416,17 @@ def _pair(text: str, sep: str, what: str) -> tuple[str, str]:
     return name, value
 
 
+def _independence_lines(out: dict) -> list[str]:
+    return [f"{p['a']} -- {p['b']}: {p['evidence']} (independent: {str(p['independent']).lower()})"
+            for p in out.get("independence", ()) if p["independent"] is not True]
+
+
 def _format(out: dict) -> str:
     lines = [f"covered:   {', '.join(out['covered']) or '-'}",
              f"uncovered: {', '.join(out['uncovered']) or '-'}"
              "  (no section over this topic; not counted as dissent)"]
     if not out["covered"]:
-        return "\n".join(lines)
+        return "\n".join(lines + _independence_lines(out))
     lines += [
         f"basis k={out['k']}  energy={out['energy']:.4f}"
         f"  (unweighted {out['energy_unweighted']:.4f})",
@@ -399,7 +442,7 @@ def _format(out: dict) -> str:
             lines.append(f"{e['residual']:8.4f}  {e['weight']:6.2f}  {e['a']} -- {e['b']}")
     for note in out["notes"]:
         lines.append(f"note: {note}")
-    return "\n".join(lines)
+    return "\n".join(lines + _independence_lines(out))
 
 
 def main(argv: list[str] | None = None) -> int:
