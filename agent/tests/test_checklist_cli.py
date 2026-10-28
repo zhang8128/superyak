@@ -144,6 +144,19 @@ def test_the_rendered_report_lists_killer_skips_first():
     assert 'item 2' in lines[0] and 'item 1' in lines[1] and 'item 3' in lines[2]
 
 
+def test_every_skip_of_a_killer_item_is_listed_first_with_its_reason_at_any_count():     # section 2's M2
+    runs = [run_log(['done', 'done', 'done-before-asked'], time=float(n)) for n in range(10)]
+    runs[4]['answers'][1] = {'answer': 'skipped', 'reason': 'the gate was down'}
+    runs[6]['answers'][0] = {'answer': 'skipped', 'reason': 'law §2'}            # an ordinary item's lone skip stays out
+    texts = {(K, 2): ['Ordinary one.', 'killer: Person data and keys.', 'Ordinary two.']}
+    proposals = report([], runs, texts=texts)
+    why = [p for p in proposals if p.kind == 'why']
+    assert [(p.item, p.killer) for p in why] == [(2, True)] and 'the gate was down' in why[0].detail
+    assert 'skipped in 1 of 10 runs' in why[0].detail
+    first = render_report(proposals, 0).splitlines()[0]
+    assert first.startswith('why: ') and 'item 2 (killer)' in first and 'the gate was down' in first
+
+
 
 def _runs_of(answer, n=10, items=1, **kw):
     return [run_log([answer] * items, time=float(i), **kw) for i in range(n)]

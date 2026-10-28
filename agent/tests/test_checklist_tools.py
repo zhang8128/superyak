@@ -119,6 +119,7 @@ def test_propose_drafts_a_post_for_the_lists_room_and_posts_nothing(ship):
     assert 'by 1970-01-01 00:30 UTC' in text and 'Three reviews this week' in text and 'no runs yet' in text
     text = call(ship.tools, 'checklist_propose', key=key(ship, 'before-work'), change='Drop item 2.', reason='It never caught anything.')[0]
     assert f'station_post room={cl.ALL_HANDS}' in text and 'explicit yes' in text
+    assert text.endswith('A killer: item climbs only to automation, never down to being remembered.')   # section 2's N4
 
 
 def test_claiming_an_open_board_item_fires_the_claim_lists_once_for_that_item(ship):

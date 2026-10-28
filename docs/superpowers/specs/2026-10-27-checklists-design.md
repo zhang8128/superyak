@@ -8,6 +8,8 @@ Revision 4, 2026-10-28. Serenity (the Mac). Asked for by Andy.
   second wins. A hold keeps the command's digest only until that command next goes through, so a later identical
   command is held again, or shown as context once the 3 holds are spent. Past the cap no digest is kept, since nothing
   was held.
+- the report lists every skip of a `killer:` item first, at any count, with its reason, and `checklist_propose`'s
+  default says a `killer:` item climbs only to automation.
 
 **Revision 3** applies the re-check's R1 to R4 as written (APPROVE WITH CHANGES, no further round needed):
 - `unshown` is dropped;
@@ -313,7 +315,8 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
   - **retire into a lesson:** items done before asked in every one of the last 10 runs;
   - **keep:** items that caught a mistake, with their reasons;
   - **drop or narrow the moment:** items answered n/a in every one of the last 10 runs;
-  - **look at why:** items skipped more than half the time, with their reasons, `law §N` and `person` apart;
+  - **look at why:** items skipped more than half the time, with their reasons, `law §N` and `person` apart, and
+    every skip of a `killer:` item at any count, listed first with its reason (revision 4);
   - **lists that fire but go unrun,** with a refusal's reason where there is one.
 
   The reflect list reads this report.

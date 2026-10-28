@@ -665,7 +665,8 @@ class Tools:
                 f'Runs: {self._runs_summary(key, c.version, len(c.items))}\n'
                 f'Default: adding an item or a moment is accepted if no one objects by {utc_time(deadline)}. Removing or '
                 'weakening anything needs an explicit yes: from a person, or from each ship when the list guards an '
-                'irreversible act; otherwise from one ship other than the proposer, or a person. Any person can veto.')
+                'irreversible act; otherwise from one ship other than the proposer, or a person. Any person can veto. '
+                'A killer: item climbs only to automation, never down to being remembered.')
 
     def _runs_summary(self, key, version, count):
         runs = []

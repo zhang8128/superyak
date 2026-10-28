@@ -113,7 +113,7 @@ def report(fired: list[dict], runs: list[dict], last: int = 10, texts: dict | No
                 proposals.append(Proposal('keep', key, version, number,
                                           f'caught {len(caught)} time(s): {_reasons(caught)}', killer))
             skipped = [a for a in given if a.get('answer') == 'skipped']
-            if len(skipped) * 2 > len(group):
+            if (killer and skipped) or len(skipped) * 2 > len(group):   # a killer skip at any count (section 2's M2)
                 proposals.append(Proposal('why', key, version, number,
                                           f'skipped in {len(skipped)} of {len(group)} runs: {_reasons(skipped)}', killer))
     counts: dict[tuple[str, int], list[str | None]] = {}

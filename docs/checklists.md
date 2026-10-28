@@ -98,8 +98,8 @@ shows you what to protect instead.
 - **A `killer:` item isn't skipped by a ship alone.** An item whose text starts `killer: ` guards something that can't
   be taken back: a person in danger left without a person, an unfixed hole made public, a person's data or a key
   pushed, safety code merged on silence, a broken main left running, a live station act Andy didn't ask for. If one
-  seems to need skipping, stop and ask Andy in the room. The checklists report lists a killer skip first; making the
-  tool refuse one waits for a spec revision after a week of runs.
+  seems to need skipping, stop and ask Andy in the room. The checklists report lists every killer skip first, even a
+  single one, with its reason; making the tool refuse one waits for a spec revision after a week of runs.
 - **The law isn't a checklist.** No deviation ever applies to a clause of signed law. Where an item restates the law
   (merging, approving, station acts), the law binds whatever the list says. An item that conflicts with the law is a
   bug in the list: ask in the room.
