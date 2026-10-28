@@ -670,3 +670,45 @@ def test_dock_over_the_public_route_says_refused_public_and_keeps_its_docking(do
     assert from_outside().run(wait=540, poll=15) == 3
     assert said[-1].startswith('STATUS: refused-public') and json.loads((home / 'docking.json').read_text()) == pending
     assert make('serenity').step() == 'docked'  # the key was still waiting for it
+
+
+def test_a_session_moderates_through_the_real_station_and_no_notice_crosses_the_bridge(env, tmp_path):
+    """T10, M21 and §7's first use, end to end: Rio Grande's session adds Tardis by the room's title through the real
+    station, in a bridged room; the appointment, add, end and removal notices name an account called @venus, are
+    stored as (at)venus, and the real Wormhole writes no memo for any of them, while a person's own @venus post does
+    cross."""
+    from superyak_agent.mcp import Tools
+    from superyak_agent.station import StationClient
+    from superyak_agent.vault import OUTBOUND, Vault
+    from superyak_agent.wormhole import Wormhole
+    from test_instructions import docked
+    app, clients, users, clock = env
+    store, patient, doctor = app.state.store, users[0], users[1]
+    rio, rio_key = docked(store, patient['id'], 'rio-grande')
+    docked(store, patient['id'], 'tardis')
+    wormhole = store.create_station_ship('wormhole', 'Wormhole')
+    room = store.create_room(patient['id'], 'Superyak: city of AI', [doctor['id'], rio['id'], wormhole['id']])
+    vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone')
+    bridge = Wormhole(StationClient('http://testserver', store.issue_ship_key(wormhole['id']), transport=transport_for(app)),
+                      vault, {'venus': {'persona': 'Venus', 'vault': 'Network.aDNA'}}, tmp_path / 'state.json',
+                      owners=('patient',), clock=lambda: clock[0])
+    assert bridge.cycle() == 0  # first sight: what came before is history
+    clock[0] += 1
+    store.rename_user(doctor['id'], '@venus')
+    grant = store.make_moderate_grant(patient['id'], doctor['id'], room['id'])['id']
+    store.make_moderate_grant(patient['id'], rio['id'], room['id'])
+    session = Tools(StationClient('http://testserver', rio_key, transport=transport_for(app)))
+    said = session.station_add_member({'room': 'Superyak: city of AI', 'member': 'tardis'})
+    assert said.startswith('Added Tardis to room ') and "bridged to Stanley's aDNA lattice" in said
+    current = next(r['id'] for r in store.list_rooms(patient['id']) if r['linked_room_id'] == room['id'])
+    store.revoke_grant(patient['id'], grant)
+    store.remove_participant(patient['id'], current, doctor['id'])
+    clock[0] += 1
+    assert bridge.cycle() == 0 and vault.files(OUTBOUND) == []
+    with store.transaction() as db:
+        system = store.system_author_id(db)
+        bodies = [r[0] for r in db.execute('SELECT body FROM messages WHERE author_id=?', (system,))]
+    assert len(bodies) == 5 and all('@' not in b for b in bodies) and sum('(at)venus' in b for b in bodies) == 3
+    store.send_message(patient['id'], current, 'ping', '@venus are you there?')
+    clock[0] += 1
+    assert bridge.cycle() == 1 and len(vault.files(OUTBOUND)) == 1  # the control: a person's own mention crosses

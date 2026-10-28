@@ -120,7 +120,7 @@ class RoomBoard:
     def _key_used(self, db, room_id, key):
         """4.2: the state of the item with this key in this room or any room up its linked_room_id chain, or None. A key
         names one piece of work for good, whatever its state, so a link to it always means the same thing. Walks the
-        chain with a seen set, as _earlier_bridged does."""
+        chain with a seen set, as _earlier_with does."""
         seen, at = set(), room_id
         while at is not None and at not in seen:
             seen.add(at)

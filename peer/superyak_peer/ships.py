@@ -3,7 +3,7 @@ import hmac
 import re
 import secrets
 from .auth import token_hash, public_user
-from .common import REPLACED_ADD, REPLACED_ROOMS, Problem, require, text, uid
+from .common import BRIEF_CHANGED, REPLACED_ROOMS, Problem, require, text, uid
 
 DOCKING_LIFETIME = 600
 DOCKING_HOURLY_LIMIT = 20
@@ -239,22 +239,9 @@ class Ships:
             for room in self._current_rooms(db, actor):
                 members = [r[0] for r in db.execute('SELECT users.username FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_id=? ORDER BY users.username', (room['id'],))]
                 bridged = wormhole is not None and db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (room['id'], wormhole)).fetchone() is not None
-                rooms.append({'id': room['id'], 'title': room['title'], 'members': members, 'bridged': bridged})
+                rooms.append({'id': room['id'], 'title': room['title'], 'members': members, 'bridged': bridged,
+                              'moderators': [f'{m["username"]} #{m["grant"][:4]}' for m in self._moderators(db, room['id'])]})
             return rooms
-
-    def _earlier_bridged(self, db, actor, room, wormhole):
-        """Rooms earlier in this room's linked chain, owned by the same person, that still have the wormhole ship:
-        a replaced room keeps its members, so once the current room loses Wormhole the bridge would take it as current."""
-        found, seen, key = [], set(), room['linked_room_id']
-        while key and key not in seen:
-            seen.add(key)
-            row = db.execute('SELECT owner_id,linked_room_id FROM rooms WHERE id=?', (key,)).fetchone()
-            if row is None:
-                break
-            if row['owner_id'] == actor and db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (key, wormhole)).fetchone():
-                found.append(key)
-            key = row['linked_room_id']
-        return found
 
     def _owned_room(self, db, actor, prefix):
         """The current room this person owns that a short id (from short_id) names, and the brief revision a member
@@ -268,14 +255,14 @@ class Ships:
         brief, revision = self._room_brief(db, room['id'])
         return room, (revision if brief else None)
 
-    def _station_add(self, actor, room, member_id, carry, doing, command):
-        """One member added by an operator command, which picked the room and read its brief (carry) in one transaction,
-        through the station's own rule (add_participants): a new linked room with the same title and members, the brief
-        at that revision, and the open board items with their claims. Returns the new room, saying whether the brief came."""
+    def _station_add(self, db, actor, room, member_id, carry, doing, command, mover_id=None, grant_id=None):
+        """One member added by an operator command, in the same transaction that picked the room and read its brief
+        (carry), through the station's own rule (_add_members): a new linked room with the same title and members, the
+        brief at that revision, and the open board items with their claims. Returns the new room, saying whether the brief came."""
         try:
-            new = self.add_participants(actor, room['id'], [member_id], carry)
+            new = self._add_members(db, actor, room, [member_id], carry, mover_id or actor, grant_id)
         except Problem as exc:
-            if exc.status == 409 and carry is not None and exc.message != REPLACED_ADD:  # the brief was saved between the read and the carry
+            if exc.status == 409 and exc.message == BRIEF_CHANGED:  # the brief was saved between the read and the carry
                 raise Problem(409, f'The room brief changed while {doing}; run {command} again') from exc
             raise
         return {**new, 'brief_carried': carry is not None}  # the operator tells Andy whether it came along
@@ -292,16 +279,13 @@ class Ships:
             if wormhole is None:
                 raise Problem(404, 'There is no wormhole ship on the station; create it first (create-ship --username wormhole)')
             room, carry = self._owned_room(db, actor, prefix)
-            earlier = [] if bridge else self._earlier_bridged(db, actor, room, wormhole)
-        if (wormhole in room['member_ids']) == bridge and not earlier:
-            return room, False
-        if bridge:
-            return self._station_add(actor, room, wormhole, carry, 'bridging', 'station-bridge'), True
-        for key in earlier:  # the earlier rooms first: if this stops halfway, the current room still shows bridged
-            self.remove_participant(actor, key, wormhole)
-        if wormhole in room['member_ids']:
-            room = self.remove_participant(actor, room['id'], wormhole)
-        return room, True
+            if bridge:  # the read and the add share this transaction
+                if wormhole in room['member_ids']:
+                    return room, False
+                return self._station_add(db, actor, room, wormhole, carry, 'bridging', 'station-bridge'), True
+            if wormhole not in room['member_ids'] and not self._earlier_with(db, actor, room, wormhole):
+                return room, False
+            return self._remove_member(db, room, wormhole, actor), True  # the one removal: the whole chain, announced
 
     def station_add_ship(self, username, prefix, ship):
         """Trusted local operator only: add one of the owner's own ships to a current room they own, named by a short
@@ -328,7 +312,7 @@ class Ships:
                 raise Problem(403, f"{said} is not one of {safe_line(username)}'s ships")
             if row['id'] in room['member_ids']:
                 raise Problem(409, f'{said} is already a member of room {room["id"][:6]}; nothing changed')
-        return self._station_add(actor, room, row['id'], carry, 'adding the ship', 'station-add-ship'), name
+            return self._station_add(db, actor, room, row['id'], carry, 'adding the ship', 'station-add-ship'), name
 
     def station_decide(self, username, prefix, approve):
         """Trusted local operator only: approve or refuse one pending item by a short id,

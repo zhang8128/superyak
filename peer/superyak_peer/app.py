@@ -431,6 +431,15 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = ship_member(request)['id'], await body(request)  # ship briefs S3: a ship key only; a person gets 403
         return store.save_ship_brief(who, key, data.get('body'), data.get('revision'))
 
+    @app.post('/api/ships/me/rooms/{key}/members', status_code=201)
+    async def ship_member_add(key: str, request: Request):
+        who, data = ship_member(request)['id'], await body(request)  # room moderators §6: a ship key only
+        return store.ship_add_member(who, key, data.get('member'), data.get('grant_id'))
+
+    @app.delete('/api/ships/me/rooms/{key}/members/{member}')
+    def ship_member_remove(key: str, member: str, request: Request, grant_id: str | None = None):
+        return store.ship_remove_member(ship_member(request)['id'], key, member, grant_id)
+
     @app.post('/api/ships/me/tickets/{key}/finish')
     def ticket_finish(key: str, request: Request):
         return store.finish_ticket(ship_member(request)['id'], key, app.state.federation.identity.peer_id)
@@ -620,6 +629,12 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return store.make_grant(who, data.get('grantee'), data.get('targets'), data.get('rooms'), data.get('hours'),
                                 data.get('budget'))
 
+    @app.post('/api/grants/moderate', status_code=201)
+    async def grant_moderate(request: Request):
+        who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403 (G14); no depth (M13)
+        return store.make_moderate_grant(who, data.get('grantee'), data.get('room'), data.get('hours'),
+                                         data.get('budget'), data.get('actions'))
+
     @app.get('/api/grants/people')
     def grant_people(request: Request):
         return store.grant_people(actor(request))
@@ -738,11 +753,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/chats/{key}/participants', status_code=201)
     async def chat_add(key: str, request: Request):
         who, data = actor(request), await body(request)
-        return store.add_participants(who, key, data.get('member_ids', []), data.get('carry_brief'))
+        return store.add_participants(who, key, data.get('member_ids', []), data.get('carry_brief'), data.get('grant_id'))
 
     @app.delete('/api/chats/{key}/participants/{user_id}')
-    def chat_remove(key: str, user_id: str, request: Request):
-        return store.remove_participant(actor(request), key, user_id)
+    def chat_remove(key: str, user_id: str, request: Request, grant_id: str | None = None):
+        return store.remove_participant(actor(request), key, user_id, grant_id)
 
     @app.get('/api/mentions')
     def mentions(request: Request, after: int = 0, limit: int = 50):
