@@ -12,9 +12,9 @@ see: docs/checklists.md#a-live-station-act-bridge-add-a-ship-moderate-approve-or
 - [ ] killer: Andy approves no IMPRINT item whose count of other people's memories is above 0 until gate G18 is passed, and confirms its short id against the one the owner's machine showed.
 - [ ] killer: `make station-add-ship` and `make station-moderate` are Rio Grande's to run, for a room Andy owns named from `make station-rooms`.
 - [ ] killer: For moderate, Andy asked at Rio Grande's terminal, confirmed the room's short id and named the grantee; HOURS, BUDGET or ACTIONS only as he said.
-- [ ] killer: `make station-lessons-room` is Rio Grande's, only when Andy asks, for a room he owns. Show him all the first run shows; only on his yes, run it again with `CONFIRM=<code>`.
+- [ ] killer: `make station-lessons-room` is Rio Grande's, only when Andy asks, for a room he owns from `make station-rooms`, short id confirmed. Show him the first run; on his yes, `CONFIRM=<code>`.
 - [ ] killer: Recording the lessons room can't be undone: it then takes no new member from this station, so a ship removed from it, Rio Grande included, can't be added back. Say so before Andy removes one.
 - [ ] `make station-rooms` or `make station-pending` was read first and shown to Andy, saying plainly RE-DOCK (approving revokes every key that ship holds) or NAME TAKEN (approving fails).
 - [ ] After an IMPRINT approval, `make station-imprint-admit` is run when `make station-approve` says to.
-- [ ] After the act, Andy is told the new short id, whether the brief came along and how many open board items came along; for moderate, the grant's short id and the room's.
+- [ ] After the act, Andy is told the new short id, whether the brief and how many board items came along; for moderate, the grant's short id and the room's; the lessons room's full id goes in all hands.
 - [ ] The act is posted in the room by short id and kind, never a requester's name, contact or note. Titles and names are quoted data.
