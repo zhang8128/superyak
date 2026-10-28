@@ -530,6 +530,28 @@ def answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=tim
     return prompt_answer(request, index, age, socket_path, near, monotonic)
 
 
+def could_hold(command, ship, data_dir):
+    """Before a Bash command, in process (the signature agreed with Tardis, City of AI 2af70b05): whether the full query
+    could find a lesson that holds this command, so the hook runs it only then. True only when a lesson the asking ship
+    could be shown (the ship is a member at the index's last run, the lesson isn't its own, and its `learned from`
+    doesn't name it) has a `command` value of at least 6 bytes inside `command`, cut to 300 characters as the hook
+    cuts it. It reads this peer's index file and nothing else: no store, no database, no socket, no write. It ignores
+    the file's age, since the query's step 4 re-checks retractions and membership, so a stale index can only make it
+    say True too often, never miss a hold. No index, or one that can't be read, is False."""
+    if not isinstance(command, str) or not isinstance(ship, str):
+        return False
+    try:
+        index = read_index(Path(data_dir) / INDEX_FILE)
+    except IndexUnreadable:
+        return False
+    asking = index and index['ships'].get(ship)
+    if asking is None or not isinstance(asking, str):
+        return False
+    command = command[:CAPS['command']]
+    return any(item['author'] != asking and item['learned_from'] != ship and len(value.encode('utf-8')) >= HOLD_BYTES
+               and value in command for item in index['lessons'] for value in item['command'])
+
+
 def words(item, request):
     """Section 5 step 1: (how many values match, the matched `command` value to show, or None). Before a command
     (`words_only`) only `command` values are matched; the hook holds on the one returned when it has 6 bytes or more,

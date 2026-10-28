@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import pytest
 from superyak_peer import lessons
-from conftest import LESSON_TIME, lesson_body, run_lessons
+from conftest import LESSON_TIME, lesson_body, lesson_ship, run_lessons
 
 
 def embedded(**fields):
@@ -431,3 +431,121 @@ def test_the_prompt_path_runs_on_the_standard_library_alone_and_writes_no_byteco
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout)['lessons'][0]['claim'] == 'Words.'
     assert not list(checkout.rglob('__pycache__'))
+
+
+# The Task 10 amendment: could_hold, Tardis's check before a Bash command, in process (City of AI 2af70b05)
+def test_could_hold_takes_a_command_value_of_6_bytes_and_never_one_of_5(lessons_station):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Six.', command=('sed -i',)))
+    store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Five.', command=('tar x',)))
+    store.send_message(ids['tardis'], room, 'c3', lesson_body(claim='Six bytes.', command=('ééé',)))   # 3 characters
+    store.send_message(ids['tardis'], room, 'c4', lesson_body(claim='Five bytes.', command=('ééx',)))
+    store.send_message(ids['tardis'], room, 'c5', lesson_body(claim='Error.', command=('qqqq',), error=('no matches found',),
+                                                              file=('Makefile',)))
+    store.lessons_index(None)
+
+    def hold(command):
+        return lessons.could_hold(command, 'rio-grande', store.data_dir)
+    assert hold('sed -i s/a/b/ notes.txt') is True
+    assert hold('tar xf a.tar') is False   # 5 bytes: it matches, but can't hold
+    assert hold('echo ééé') is True and hold('echo ééx') is False   # bytes, not characters
+    assert hold('ls -la') is False   # no match
+    assert hold('grep "no matches found" Makefile') is False   # an error or file value never holds a command
+    assert hold('x' * 294 + 'sed -i') is True and hold('x' * 295 + 'sed -i') is False   # cut to 300 characters, as the hook cuts
+
+
+def test_could_hold_skips_the_ships_own_lessons_its_learned_from_and_a_ship_outside_the_room(lessons_station):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Tardis.', command=('sed -i',)))
+    store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Taught.', command=('awk -F',), learned='rio-grande'))
+    lesson_ship(store, ids['andy'], 'defiant')   # a ship on this peer, never added to the room
+    store.lessons_index(None)
+    assert lessons.could_hold('sed -i s/a/b/ f', 'rio-grande', store.data_dir) is True
+    assert lessons.could_hold('sed -i s/a/b/ f', 'tardis', store.data_dir) is False   # its own
+    assert lessons.could_hold('awk -F: x f', 'rio-grande', store.data_dir) is False   # learned from it
+    for stranger in ('defiant', 'andy', 'odo'):   # a ship outside the room, a person, no account
+        assert lessons.could_hold('sed -i s/a/b/ f', stranger, store.data_dir) is False, stranger
+
+
+def test_could_hold_is_false_with_no_index_or_a_damaged_one_and_answers_from_a_stale_one(lessons_station, tmp_path):
+    """It ignores the index's age: the full query re-checks retractions and membership in step 4, so a stale index can
+    only make it say True too often (here, for a lesson retracted since the last run), never miss a hold."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Tardis.', command=('sed -i',)))
+    assert lessons.could_hold('sed -i s/a/b/ f', 'rio-grande', store.data_dir) is False   # no index run yet
+    assert lessons.could_hold('sed -i s/a/b/ f', 'rio-grande', tmp_path / 'no-such-peer') is False
+    store.lessons_index(None)
+    path = store.data_dir / lessons.INDEX_FILE
+    os.utime(path, (0, 0))   # decades old
+    assert lessons.could_hold('sed -i s/a/b/ f', 'rio-grande', store.data_dir) is True
+    key = store.check_lesson(ids['tardis'], lesson_body(claim='Tardis.', command=('sed -i',)))['lesson_id']
+    store.send_message(ids['andy'], room, 'r1', 'retract ' + key)
+    assert lessons.could_hold('sed -i s/a/b/ f', 'rio-grande', store.data_dir) is True   # until the next index run
+    assert ask(store, clock, command='sed -i s/a/b/ f', words_only=True)[0] == {'lessons': []}   # step 4 never names it
+    path.write_bytes(lessons.INDEX_MAGIC + b'\x00\x00\x00\x09{"lessons"')
+    assert lessons.could_hold('sed -i s/a/b/ f', 'rio-grande', store.data_dir) is False
+    (tmp_path / 'folder' / lessons.INDEX_FILE).mkdir(parents=True)   # can't be read at all
+    assert lessons.could_hold('sed -i s/a/b/ f', 'rio-grande', tmp_path / 'folder') is False
+
+
+def test_could_hold_runs_on_the_standard_library_alone_and_opens_only_the_index_to_read_it(lessons_station, tmp_path):
+    """The hook calls it in process before a Bash command, from the system python3 with no site-packages and bytecode
+    off. An audit hook sees every file it opens, and any socket, database or file change: only the index, read."""
+    import shutil, subprocess, sys
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Tardis.', command=('sed -i',)))
+    store.lessons_index(None)
+    package = Path(lessons.__file__).parent
+    checkout = tmp_path / 'checkout'
+    (checkout / 'superyak_peer').mkdir(parents=True)
+    for name in ('__init__.py', 'common.py', 'lessons.py'):
+        shutil.copy(package / name, checkout / 'superyak_peer' / name)
+    before = {p: (p.stat().st_mtime_ns, p.stat().st_size) for p in store.data_dir.rglob('*')}
+    code = (f'import json, sys; sys.dont_write_bytecode = True; sys.path.insert(0, {str(checkout)!r})\n'
+            'from superyak_peer import lessons\n'
+            'events = []\n'
+            'sys.addaudithook(lambda event, args: events.append([event, *map(str, args)]) if event == "open" or '
+            'event.partition(".")[0] in ("os", "shutil", "socket", "sqlite3", "subprocess") else None)\n'
+            f'got = [lessons.could_hold(c, "rio-grande", {str(store.data_dir)!r}) for c in ("sed -i s/a/b/ f", "ls -la")]\n'
+            'seen = list(events)\n'
+            'modules = sorted(m for m in sys.modules if m.startswith("superyak_peer") or "sqlite" in m)\n'
+            'print(json.dumps({"got": got, "events": seen, "modules": modules}))')
+    done = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', code], capture_output=True, text=True, cwd=tmp_path)
+    assert done.returncode == 0, done.stderr
+    got, index = json.loads(done.stdout), str(store.data_dir / lessons.INDEX_FILE)
+    assert got['got'] == [True, False]
+    assert [event[:3] for event in got['events']] == [['open', index, 'r']] * 2   # no other file, no socket, no database
+    writes = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+    assert all(int(event[3]) & writes == 0 for event in got['events'])   # opened to read, and nothing else
+    assert got['modules'] == ['superyak_peer', 'superyak_peer.common', 'superyak_peer.lessons']
+    assert not list(checkout.rglob('__pycache__'))
+    assert {p: (p.stat().st_mtime_ns, p.stat().st_size) for p in store.data_dir.rglob('*')} == before
+
+
+def test_could_hold_is_true_exactly_when_the_querys_words_step_returns_a_lesson_whose_command_can_hold(lessons_station):
+    """could_hold stands in for the full query before a Bash command (section 8's hold), so for every command of a
+    fixture and every asking ship it is True exactly when the query, words only, returns a lesson carrying a `command`
+    of at least 6 bytes: the value the hook holds on. The fixture matches at most 3 lessons per command, so the
+    query's limit never hides one (past 3 matches could_hold can only say True too often)."""
+    store, clock, ids, room = lessons_station
+    for n, (claim, command, error, learned) in enumerate((
+            ('Six.', ('sed -i',), (), 'own'), ('Five.', ('tar x',), (), 'own'), ('Short.', ('make', 'zz'), (), 'own'),
+            ('Both.', ('make', 'make check'), (), 'own'), ('Six bytes.', ('ééé',), (), 'own'),
+            ('Five bytes.', ('ééx',), (), 'own'), ('Error.', ('qqqq',), ('no matches found',), 'own'),
+            ('Taught.', ('awk -F',), (), 'rio-grande'))):
+        store.send_message(ids['tardis'], room, f't{n}', lesson_body(claim=claim, command=command, error=error, learned=learned))
+    store.send_message(ids['rio-grande'], room, 'r1', lesson_body(ship='rio-grande', claim='Rio.', command=('git rm',)))
+    store.lessons_index(None)
+    commands = ('sed -i s/a/b/ f', 'tar xf a.tar', 'make check -j4', 'make all', 'echo ééé', 'echo ééx',
+                'grep "no matches found" .', "awk -F: '{print $1}' f", 'git rm -r build', 'ls', '',
+                'x' * 294 + 'sed -i', 'x' * 295 + 'sed -i')
+    said = {}
+    for ship in ('rio-grande', 'tardis', 'odo'):
+        for command in commands:
+            answer, _ = ask(store, clock, command=command[:300], words_only=True, ship=ship)   # the hook cuts to 300
+            said[ship, command] = any(len(e['command'].encode('utf-8')) >= lessons.HOLD_BYTES for e in answer['lessons']
+                                      if 'command' in e)
+            assert lessons.could_hold(command, ship, store.data_dir) is said[ship, command], (ship, command)
+    assert sorted(key for key, holds in said.items() if holds) == sorted([
+        ('rio-grande', 'sed -i s/a/b/ f'), ('rio-grande', 'make check -j4'), ('rio-grande', 'echo ééé'),
+        ('rio-grande', 'x' * 294 + 'sed -i'), ('tardis', 'git rm -r build')])
