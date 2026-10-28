@@ -196,15 +196,35 @@ def test_a_rerun_while_requested_prints_the_link_again(tmp_path):
     assert [c.method for c in station.calls][0] == 'GET' and 'POST' not in [c.method for c in station.calls]
 
 
-def test_an_expired_code_is_named_without_the_link(tmp_path):
+def expired_home(tmp_path):
     home = sent_home(tmp_path)
     send = home / 'imprints' / IMPRINT_ID / 'send.json'
     send.write_text(json.dumps({**json.loads(send.read_text()), 'expires': NOW}))       # the station's own test: <= now
+    return home
+
+
+def test_an_expired_code_is_named_without_the_link(tmp_path):
     lines = []
-    assert Imprint(home, FakeStation().client(), out=lines.append).send(PLAN) == 'waiting-for-you'
+    assert Imprint(expired_home(tmp_path), FakeStation().client(), out=lines.append).send(PLAN) == 'code-expired'
     assert len(lines) == 1 and REQUEST_ID[:4] in lines[0] and 'expired' in lines[0]
     assert 'hourly sweep' in lines[0] and 'plan again' in lines[0]
     assert 'AB12CD34' not in lines[0] and '#imprint' not in lines[0]
+
+
+def test_an_expired_code_returns_without_polling(tmp_path, monkeypatch, capsys):     # the coordinator's follow-up
+    from superyak_agent import station as station_module
+    from superyak_agent.__main__ import main
+
+    def no_wait(seconds):
+        raise AssertionError('a run that found the code expired polled')
+    monkeypatch.setattr(imprint_module.time, 'sleep', no_wait)
+    station, home = FakeStation(), expired_home(tmp_path)
+    assert Imprint(home, station.client(), out=lambda line: None).send(PLAN) == 'code-expired'
+    assert [c.method for c in station.calls] == ['GET']
+    assert (home / 'imprints' / IMPRINT_ID / 'imprint.db').exists()      # the sweep ends it; a later run drops it
+    monkeypatch.setattr(station_module, 'client_for', lambda config, timeout=30: FakeStation().client())
+    assert main(['imprint', 'send', '--plan', PLAN, '--home', str(home)]) == 1
+    assert capsys.readouterr().out.rstrip().endswith('STATUS: code-expired')
 
 
 class PipedStation:

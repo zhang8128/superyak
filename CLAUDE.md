@@ -34,10 +34,11 @@ a 10-minute Bash timeout: a later run waits up to 9 minutes. Until the owner's y
 link and two short ids and returns at once. The session relays the link and the ids at once: it never opens the
 confirm page, never ticks its box and never types the password, even when it has browser tools. The owner opens the
 link, reads the view, ticks the check and types their own password. After the owner says they allowed it, the session
-runs `make imprint-send` again to upload; `STATUS: received` means it waits for Andy's approval on the Pi. If a run
-says the code has expired, tell the owner: the request ends at the station's next hourly sweep, and then they plan
-again. For now, plan with `--actions imprint --purposes calibration`: `route` waits until trails ships, and the plan
-(new or saved) and the station refuse it.
+runs `make imprint-send` again to upload; `STATUS: received` means it waits for Andy's approval on the Pi.
+`STATUS: code-expired` (make's `Error 1`) means nobody can allow that request any more: stop and tell the owner that
+it ends at the station's next hourly sweep, and that they plan again then. For now, plan with
+`--actions imprint --purposes calibration`: `route` waits until trails ships, and the plan (new or saved) and the
+station refuse it.
 
 # Approving on the station (on the Pi only)
 

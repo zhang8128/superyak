@@ -74,7 +74,8 @@ class Imprint:
 
     def _send(self, folder, imprint_id, wait):
         """The run that makes the request returns once it has printed the link, so a session can relay it at once
-        (the fresh review's M1); later runs wait up to `wait` seconds for the yes, showing the link again first."""
+        (the fresh review's M1); later runs wait up to `wait` seconds for the yes, showing the link again first. A run
+        that finds the code expired says so and returns `code-expired` at once: nobody can allow it any more."""
         saved = read_json(folder / 'send.json')
         if saved is None:
             made = self.client.request('POST', '/api/imprints', raw=(folder / 'request.json').read_bytes())
@@ -97,7 +98,8 @@ class Imprint:
             if state != 'requested':          # received, approved, deleting: the station's word, as it is
                 return state
             if not shown:
-                self._show_link(imprint_id, saved, again=True)
+                if self._show_link(imprint_id, saved, again=True) == 'code-expired':
+                    return 'code-expired'
                 shown = True
             time.sleep(POLL_SECONDS)
             if time.time() >= deadline:
@@ -105,13 +107,14 @@ class Imprint:
 
     def _show_link(self, imprint_id, saved, again=False):
         """The two short ids, the code and the confirm link. On a later run whose code has expired (send.json's
-        `expires`, as the station tests it), one line says so instead, without the code."""
+        `expires`, as the station tests it), one line says so instead, without the code, and it returns
+        `code-expired`."""
         imprint_id, request_id = imprint_id[:4], _shown(saved.get('request_id'))[:4]
         expires = saved.get('expires')
         if again and isinstance(expires, (int, float)) and not isinstance(expires, bool) and expires <= time.time():
             self.out(f'Imprint {imprint_id}, request {request_id}: its code has expired, so it can no longer be '
                      f'allowed. The request ends at the station\'s next hourly sweep, and then you plan again.')
-            return
+            return 'code-expired'
         self.out(f'Imprint {imprint_id}, request {request_id}. Code {_shown(saved.get("code"))}.')
         self.out(f'Open {_shown(saved.get("confirm_url"), 400)} in your browser yourself. Check that it shows the '
                  f'two short ids above and that the address is the station\'s, tick the box and type your own '

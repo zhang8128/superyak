@@ -2332,8 +2332,11 @@ refuses a store of more than 100,000 memories
   (the fresh review's M1, 2026-10-28): the code lives 10 minutes, and a session sees a command's output only when it
   ends. Every line is flushed.
 - Later runs wait up to 9 minutes per run. One that finds the request still `requested` prints the link and the two
-  short ids again first. Once the code has expired it says so in one line instead, without the code: the request
-  ends at the station's next hourly sweep, and then the owner plans again.
+  short ids again first.
+- A run that finds the code expired (send.json's `expires`, the station's own test) says so in one line, without the
+  code: the request ends at the station's next hourly sweep, and then the owner plans again. It returns at once,
+  without polling, with `STATUS: code-expired`, and make reports `Error 1`: nobody can allow that request any more.
+  A run after the sweep reports `STATUS: expired` and deletes the local `imprint.db` (D24).
 - A run that ends before the yes ends with `STATUS: waiting-for-you` and make reports `Error 3`. That is expected.
 - After the yes, the next run sends the manifest and the parts with progress, and ends with `STATUS: received`
   (waiting for Andy).
