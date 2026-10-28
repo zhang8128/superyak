@@ -226,7 +226,8 @@ class Federation:
             return canonical(envelope)
 
     def sync_once(self, *, send=None, limit=20):
-        from .transport import send_pinned
+        from .transport import send_pinned, PinMismatch, PeerAnswer
+        import http.client
         result = {'delivered':0, 'withdrawn':0, 'failed':0, 'pending':0}
         if not self._sync_lock.acquire(blocking=False):
             return {**result, 'busy':True}
@@ -244,8 +245,8 @@ class Federation:
                     status = 'delivered'
                 except Obsolete:
                     status = 'withdrawn'
-                except (OSError, ValueError, Problem):
-                    status = 'failed'
+                except (OSError, ValueError, Problem, PinMismatch, PeerAnswer, http.client.HTTPException):
+                    status = 'failed'  # Task 4 replaces this with spec §7's one outcome table
                 with self.store.transaction() as db:
                     db.execute("UPDATE outbox SET status=?,attempts=attempts+1,next_attempt=? WHERE id=? AND status IN ('pending','failed')", (status,self.store.clock()+min(300,2**(row['attempts']+1)),row['id']))
                     status = db.execute('SELECT status FROM outbox WHERE id=?', (row['id'],)).fetchone()[0]
