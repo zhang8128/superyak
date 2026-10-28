@@ -115,3 +115,74 @@ def test_a_stale_temporary_file_with_this_pids_name_doesnt_stop_the_run(lessons_
     stale.write_bytes(b'half an index')
     assert store.lessons_index(None) == {'status': 'written', 'lessons': 1, 'vectors': 0}
     assert not stale.exists() and len(lessons.read_index(store.data_dir / lessons.INDEX_FILE)['lessons']) == 1
+
+
+# Task 10: the prompt path
+def prompt(store, clock, text, socket=None, ship='rio-grande', seen=(), age=10, limit=3, budget=None):
+    fields = {'ship': ship, 'prompt': text, 'seen': list(seen), 'limit': limit, **({} if budget is None else {'budget_ms': budget})}
+    return lessons.answer_prompt(lessons.read_request(json.dumps(fields)), store.data_dir, socket, clock=lambda: clock[0] + age,
+                                 monotonic=lambda: 0.0)
+
+
+def test_at_a_prompt_6_byte_values_by_words_and_near_within_r_prompt(lessons_station, fake_embedder):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', error=('no matches found',), command=('ls',)))
+    store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Near.', command=('zzzz-never',)))
+    store.send_message(ids['tardis'], room, 'c3', lesson_body(claim='Far.', command=('yyyy-never',)))
+    fake_embedder.vectors[embedded(claim='Near.', command=('zzzz-never',))] = [1.0, 0.0, 0.0, 0.0]
+    fake_embedder.vectors[embedded(claim='Far.', command=('yyyy-never',))] = [0.0, 1.0, 0.0, 0.0]
+    question = 'why does ls say no matches found'
+    fake_embedder.vectors[question] = [0.8, 0.6, 0.0, 0.0]   # cos 0.8 to Near (inside r_prompt), 0.6 to Far (outside)
+    store.lessons_index(fake_embedder.path)
+    got = prompt(store, clock, question, fake_embedder.path)
+    assert [(e['claim'], e['match']) for e in got['lessons']] == [('Words.', 'words'), ('Near.', round(math.acos(0.8), 4))]
+    assert prompt(store, clock, 'ls', fake_embedder.path) == {'lessons': []}   # 'ls' is under 6 bytes
+    assert prompt(store, clock, 'zzzz', fake_embedder.path) == {'lessons': []}   # under 4 words: no Near
+    asked = len(fake_embedder.requests)
+    assert prompt(store, clock, question, fake_embedder.path, budget=0) == {'lessons': []}   # the hook has no time left
+    assert len(fake_embedder.requests) == asked
+    with store.transaction() as db:
+        assert db.execute('SELECT count(*) FROM lesson_receipts').fetchone()[0] == 0
+        assert db.execute('SELECT count(*) FROM lesson_queries').fetchone()[0] == 0
+
+
+def test_at_a_prompt_a_budget_spent_during_near_leaves_words_and_the_socket_waits_no_longer(lessons_station, fake_embedder, monkeypatch):
+    """Tardis's condition for the in-process path: the embedder's socket timeout is what the budget leaves, since a
+    blocked socket can't be interrupted in process; a budget spent during Near answers words only."""
+    import socket
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', error=('no matches found',)))
+    store.lessons_index(fake_embedder.path)
+    timeouts, settimeout = [], socket.socket.settimeout
+    monkeypatch.setattr(socket.socket, 'settimeout', lambda sock, value: (timeouts.append(value), settimeout(sock, value))[1])
+    fake_embedder.delay = 0.5   # it answers long after the 50 ms the hook has left
+    got = prompt(store, clock, 'why does it say no matches found', fake_embedder.path, budget=50)
+    assert [e['match'] for e in got['lessons']] == ['words'] and timeouts and max(timeouts) <= 0.05
+
+
+def test_where_the_switch_is_off_near_never_runs_at_a_prompt(lessons_station, fake_embedder):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Near.', command=('zzzz-never',)))
+    fake_embedder.vectors[embedded(claim='Near.', command=('zzzz-never',))] = [1.0, 0.0, 0.0, 0.0]
+    fake_embedder.vectors['tell me about the never thing'] = [1.0, 0.0, 0.0, 0.0]
+    store.lessons_index(fake_embedder.path)
+    assert [e['claim'] for e in prompt(store, clock, 'tell me about the never thing', fake_embedder.path)['lessons']] == ['Near.']
+    (store.data_dir / lessons.PROMPT_NEAR_OFF).touch()
+    asked = len(fake_embedder.requests)
+    assert prompt(store, clock, 'tell me about the never thing', fake_embedder.path) == {'lessons': []}
+    assert len(fake_embedder.requests) == asked
+
+
+def test_at_a_prompt_at_most_2_and_nothing_from_a_stale_or_missing_index(lessons_station):
+    store, clock, ids, room = lessons_station
+    assert prompt(store, clock, 'no matches found at all') == {'lessons': []}   # no index yet
+    for n in range(3):
+        store.send_message(ids['tardis'], room, f'c{n}', lesson_body(claim=f'Claim {n}.', error=('no matches found',)))
+    store.lessons_index(None)
+    assert len(prompt(store, clock, 'no matches found at all')['lessons']) == 2   # limit 3 can't raise the prompt's 2
+    assert len(prompt(store, clock, 'no matches found at all', limit=1)['lessons']) == 1
+    assert prompt(store, clock, 'no matches found at all', limit=0) == {'lessons': []}
+    assert prompt(store, clock, 'no matches found at all', age=181) == {'lessons': []}
+    assert prompt(store, clock, 'no matches found at all', ship='odo') == {'lessons': []}
+    shown = [e['id'] for e in prompt(store, clock, 'no matches found at all')['lessons']]
+    assert len(prompt(store, clock, 'no matches found at all', seen=shown)['lessons']) == 1
