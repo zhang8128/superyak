@@ -247,6 +247,21 @@ def test_the_pending_item_in_words_and_made_safe(tmp_path):
     assert "purposes calibration, trail-evaluation; ends 2027-" in " ".join(rest)
 
 
+def test_an_item_with_other_people_on_it_is_marked_hold_g18(tmp_path):
+    """Review N1: the line that counts other people says "hold: G18", as a docking line says RE-DOCK; Andy approves
+    none with that count above 0 until gate G18 is passed. At 0 there is no such line and no hold."""
+    st, made, _ = allowed_with_all_parts(tmp_path, ship="serenity", others={"memories": 37, "people": 3})
+    st.serenity.post(f"/api/imprints/{made['id']}/complete")
+    text = describe_pending(st.store.station_pending(), st.clock[0], "andy")
+    counted = [line for line in text.split("\n") if "have other people recorded on them" in line]
+    assert counted == ["      37 memories have other people recorded on them (3 people); copied in andy's home as "
+                       "co-subjects  hold: G18, approve none with this count above 0 until gate G18 is passed"]
+    assert text.count("G18") == 2
+    st0, made0, _ = allowed_with_all_parts(tmp_path / "none", ship="serenity")
+    st0.serenity.post(f"/api/imprints/{made0['id']}/complete")
+    assert "G18" not in describe_pending(st0.store.station_pending(), st0.clock[0], "andy")
+
+
 def test_complete_needs_the_manifest_and_every_part(tmp_path):
     st = station(tmp_path); made, data = requested_with_package(st, 2 * PART_BYTES)
     assert st.voyager.post(f"/api/imprints/{made['id']}/complete").status_code == 409        # not allowed

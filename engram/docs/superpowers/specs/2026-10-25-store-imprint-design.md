@@ -1579,8 +1579,10 @@ requests, read from its `request.json`:
 
 - Requester text goes through `safe_line` (`ships.py:33`), as for other items.
 - An imprint whose `others.memories` is above 0 (only Andy's own, D27) gains a line, so Andy sees it before he
-  approves: `      37 memories have other people recorded on them (3 people); copied in andy's home as co-subjects`.
-  Until gate "Other people inside the home" in section 18 is passed, he doesn't approve such an item.
+  approves: `      37 memories have other people recorded on them (3 people); copied in andy's home as co-subjects
+  hold: G18, approve none with this count above 0 until gate G18 is passed` (one line). Until gate "Other people inside
+  the home" in section 18 (the plan's G18) is passed, he doesn't approve such an item; the line marks it, as a docking
+  line marks `RE-DOCK`.
 - Odo's notices (`ships.py:380-393`) gain one line: "An imprint is waiting for Andy's review. He decides with make
   station-pending on the Pi." Ops is shared, and that someone is sharing their memories is about them (D25).
 - Andy approves with `make station-approve ID=4f1c` or refuses with `make station-deny ID=4f1c`, after confirming

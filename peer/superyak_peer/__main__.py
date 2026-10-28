@@ -74,7 +74,8 @@ def existing_warning(existing, approver=None):
 
 
 def describe_imprint(item):
-    """I 10's item: two lines (the third when memories name other people), every requester value through safe_line."""
+    """I 10's item: two lines (the third when memories name other people, marked hold: G18), every requester value
+    through safe_line."""
     head = f'{item["id"][:4]}  IMPRINT  from {safe_line(item["owner"])} (ship {safe_line(item["ship"])}, ' \
            f'machine {safe_line(item["machine"] or "unknown")})'
     doc = item['request']
@@ -92,10 +93,11 @@ def describe_imprint(item):
              f'recall, read, {safe_line(", ".join(terms["actions"]))};',
              f'      purposes {safe_line(", ".join(terms["purposes"]))}; ends {ends}']
     others = doc['others']
-    if others['memories'] > 0:
+    if others['memories'] > 0:  # marked as a docking's RE-DOCK is: gate G18 holds it (review N1)
         home = audience.removeprefix('place:home/')
         lines.append(f'      {others["memories"]} memories have other people recorded on them ({others["people"]} people); '
-                     f"copied in {home}'s home as co-subjects")
+                     f"copied in {home}'s home as co-subjects  hold: G18, approve none with this count above 0 until "
+                     'gate G18 is passed')
     return '\n'.join(lines)
 
 
