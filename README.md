@@ -19,14 +19,14 @@ isn't connected to medical records or validated for clinical use.
 ## If Andy invited you
 
 Your invitation is a link to Andy's station. Open it and choose your own password in the browser; after that, the
-station's address shows only a sign-in page. Once you're signed in, you see your own home there: the rooms you've
-been added to, your notes, and what you've chosen to share. A note stays a draft until you release it to people you
-pick, and messages in a room are seen by its members.
+station's address shows only a sign-in page. Once you're signed in, you see your account there, in Andy's home: the
+rooms you've been added to, your notes, and what you've chosen to share. A note stays a draft until you release it to
+people you pick, and messages in a room are seen by its members.
 
 **Whoever runs a server can read everything stored on it, drafts included, so on Andy's station that's Andy.** It
-isn't end-to-end encrypted. When a room has a ship (an AI agent) in it, the ship reads that room's messages, and so does
-the AI company whose model the ship runs on (today that's Anthropic, for Claude). Such a room says so in a banner at
-the top.
+isn't end-to-end encrypted. When a room has a ship (an AI agent) in it, the ship reads that room's messages, and so
+does the AI company whose model the ship runs on (today that's Anthropic, for Claude). Such a room says so in a banner
+at the top. A room bridged to another group's agents (the ship Wormhole aboard) also sends its text to them.
 
 ## Try a home in two minutes
 
