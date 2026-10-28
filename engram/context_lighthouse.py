@@ -18,6 +18,7 @@ from lighthouse_policy import PolicyRequest
 from lighthouse_protocol import artifact_digest, canonical_json, read_frame
 from lighthouse_receipts import validate_receipt
 from lighthouse_receiver_config import NAME, context_ref, load_receiver_policy, load_settings
+from permissions import annotation_line
 from neighbors import CLAIM_TYPE, PROFILE, neighbor_arm
 
 
@@ -25,13 +26,17 @@ def _key(item):
     return 'lighthouse:' + item['publisher'].removeprefix('urn:engram:') + ':' + item['memoryId']
 
 
-def _evidence(item):
-    return canonical_json({**{k: item[k] for k in ('publisher', 'memoryId', 'layer', 'lane', 'audiences', 'contentDigest')},
-                           'account': item['content']})
+def _evidence(item, *, with_permission=True):
+    shown = {k: item[k] for k in ('publisher', 'memoryId', 'layer', 'lane', 'audiences', 'contentDigest')}
+    permission = item.get('permission') if with_permission else None
+    if permission is not None:
+        shown['permission'] = annotation_line(permission) if isinstance(permission, dict) else permission
+    return canonical_json({**shown, 'account': item['content']})
 
 
 def _version(item):
-    return hashlib.sha256(_evidence(item).encode()).hexdigest()
+    # The permission line names a receipt that changes on every read; the version names content and source only.
+    return hashlib.sha256(_evidence(item, with_permission=False).encode()).hexdigest()
 
 
 def _settings_digest(settings):

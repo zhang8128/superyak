@@ -32,6 +32,9 @@ CREATE INDEX IF NOT EXISTS events_kind_room_id ON events(kind, resource_id, id);
 '''
 
 
+WATCHER_SUFFIX = '-kick'  # agent/superyak_agent/kick.py's cursor: it never sets where a new session starts
+
+
 def cursor_name(value):
     name = 'default' if value is None else value
     if not isinstance(name, str) or not CURSOR_NAME.fullmatch(name):
@@ -113,6 +116,12 @@ class Inbox:
         # idle for months, or one that made many names, never replays what it read (I4, R11).
         furthest = db.execute('SELECT name, position FROM read_cursors WHERE ship_id=? ORDER BY position DESC, updated DESC LIMIT 1',
                               (actor,)).fetchone()
+        # A watcher (the kick's `<ship>-kick`) reads ahead of every session, so a new session starts where the ship's
+        # sessions read furthest; only a ship with no other cursor starts at the watcher's, so it never replays history.
+        # So a new session sees everything since the furthest session read, which after a long quiet spell can be a lot.
+        session = db.execute('SELECT name, position FROM read_cursors WHERE ship_id=? AND name NOT LIKE ? ORDER BY position DESC, updated DESC LIMIT 1',
+                             (actor, '%' + WATCHER_SUFFIX)).fetchone()
+        furthest = session or furthest
         start = furthest['position'] if furthest else db.execute("SELECT value FROM inbox_meta WHERE key='epoch'").fetchone()[0]
         keep = furthest['name'] if furthest else None
         db.execute('DELETE FROM read_cursors WHERE ship_id=? AND updated<? AND name IS NOT ?', (actor, now - CURSOR_IDLE_DAYS * 86400, keep))
