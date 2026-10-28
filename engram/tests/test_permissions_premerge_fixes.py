@@ -1,10 +1,15 @@
 """Serenity's pre-merge items on permissions-core 6f7344a: each test names its item."""
+import shutil
 import sqlite3
+from collections import OrderedDict
+
+import pytest
 
 from permission_cli import main as cli_main
-from permission_ledger import Ledger, ledger_path
+from permission_ledger import Ledger, LedgerUnreadable, ledger_path
+from tests.permissions_support import ANDY, do, e1_county_ledger, make_house, raise_gate
 from tests.test_permissions_recheck_fixes import _cut_last_row_and_head
-from tests.test_permissions_serenity_fixes import _revoked_r1, _sql
+from tests.test_permissions_serenity_fixes import _revoked_r1, _sql, _state
 
 
 def _indexes(home) -> set:
@@ -115,3 +120,67 @@ def test_n2_verify_fails_on_any_answer_of_sqlites_check_but_ok(tmp_path, monkeyp
     assert cli_main(["verify"]) == 1
     out = capsys.readouterr().out
     assert "does not verify" in out and "records_layer" in out and "No reader runs SQLite's integrity check" in out
+
+
+# ---------------------------------------------------------------- N5: the last row's parse is kept by its head
+
+def _counting_parses(monkeypatch):
+    """A fresh `_LAST_SETS` and a list of each body `_seq_sets` parses."""
+    import permission_ledger
+    parsed, real = [], permission_ledger._seq_sets
+    monkeypatch.setattr(permission_ledger, "_LAST_SETS", OrderedDict())
+    monkeypatch.setattr(permission_ledger, "_seq_sets", lambda text: parsed.append(text) or real(text))
+    return parsed
+
+
+def _head_of(home) -> str:
+    led = Ledger.open_read_only(home)
+    try:
+        return led.meta()["head"]
+    finally:
+        led.close()
+
+
+def test_n5_a_read_whose_head_is_unchanged_parses_nothing(tmp_path, monkeypatch):
+    _revoked_r1(tmp_path)
+    parsed = _counting_parses(monkeypatch)
+    led = Ledger.open_read_only(tmp_path)
+    try:
+        led.state()
+        led.state()
+        assert led.integrity()[1] == []
+    finally:
+        led.close()
+    for _ in range(2):                        # a fresh open of the same ledger, as each daemon frame makes
+        _state(tmp_path)
+    assert len(parsed) == 1
+
+
+def test_n5_a_changed_head_is_never_served_the_old_parse(tmp_path, monkeypatch):
+    """Two copies of one ledger whose last rows share a seq: a gate act, which sets no seq column, and R1's revoke,
+    whose change a tear then loses from `records`. Read after the gate act's, the revoke's head parses its own body
+    and refuses; served the gate act's parse, it would read whole and R1's allow would come back."""
+    base, gated, revoked = tmp_path / "base", tmp_path / "gated", tmp_path / "revoked"
+    led = e1_county_ledger(base)
+    r1 = led.ids.R1
+    led.close()
+    for home in (gated, revoked):
+        (home / ".engram").mkdir(parents=True)
+        shutil.copy(ledger_path(base), ledger_path(home))
+    make_house(gated, "lighthouse")
+    led = Ledger.open(gated)
+    raise_gate(led, "shadow")
+    led.close()
+    led = Ledger.open(revoked)
+    seq = do(led, ANDY, "revoke", now="2026-11-02", record=r1, reason="no longer").seq
+    led.close()
+    assert _head_of(gated).split(":")[0] == _head_of(revoked).split(":")[0] == str(seq)
+    assert _head_of(gated) != _head_of(revoked)
+    parsed = _counting_parses(monkeypatch)
+    assert _state(gated).seq == seq and len(parsed) == 1
+    _sql(revoked, "UPDATE records SET revoked = NULL, revoked_by = NULL, revoke_reason = NULL, revoked_seq = NULL "
+                  f"WHERE revoked_seq = {seq}")
+    with pytest.raises(LedgerUnreadable, match=f"the log's last row, seq {seq}, sets records.revoked_seq"):
+        _state(revoked)
+    assert len(parsed) == 2
+    assert _state(gated).seq == seq and len(parsed) == 2            # the gate act's parse is still kept

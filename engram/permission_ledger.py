@@ -126,6 +126,12 @@ _SEQ_COLUMNS = {t: cs for t, cs in ((t, tuple(c for c in cols if c == "seq" or c
                                     for t, cols in _COLUMNS.items()) if cs}
 # the seq columns an update sets on an older row; every other one is set only when its row is inserted
 _SET_LATER = frozenset({"retired_seq", "removed_seq", "revoked_seq", "decided_seq"})
+# The seq columns a log row's body sets (`_seq_sets`), kept by the row's head, `<seq>:<digest>`, for the last few
+# heads read in this process (Serenity's pre-merge N5): the digest hashes the row with its body, so one head names
+# one body. A read whose head is unchanged parses nothing; a different head, even at the same seq, parses again.
+_LAST_SETS_KEPT = 8
+_LAST_SETS: "OrderedDict[str, frozenset]" = OrderedDict()
+_LAST_SETS_LOCK = threading.Lock()
 _CUT = ("The log's tail was cut, as by a copy or restore of the file taken mid-write without its journal, so the "
         "tables may hold a change, such as a revocation, that the log has lost, or lack one the log holds. Every "
         "reader refuses the ledger until it verifies (P 5.6): `engram-permissions verify` reports it. Restore the "
@@ -518,6 +524,15 @@ def _bad(why: str) -> RuleError:
     return RuleError(_RULE, why)
 
 
+def _seq_sets(text: str) -> frozenset:
+    """The seq columns, as (table, column), that a log row's body (its JSON text) sets to the row's own seq."""
+    body = json.loads(text)
+    sets = [(i["table"], i["row"]) for i in body.get("insert", ())]
+    sets += [(i["table"], i["set"]) for i in body.get("update", ())]
+    return frozenset((t, c) for t, values in sets for c, v in values.items()
+                     if v == "@seq" and c in _SEQ_COLUMNS.get(t, ()))
+
+
 class Ledger:
     def __init__(self, conn: sqlite3.Connection, path: Path, read_only: bool):
         self.conn, self.path, self.read_only = conn, path, read_only
@@ -725,20 +740,31 @@ class Ledger:
         row = self.conn.execute(sql).fetchone()
         return None if row is None else row[0]
 
-    def _last_sets(self, top: int) -> tuple[set, str | None]:
+    def _last_sets(self, top: int) -> tuple[frozenset, str | None]:
         """The seq columns, as (table, column), that the log's last row sets to its own seq ("@seq"), and why its
-        body cannot be read, if it cannot."""
+        body cannot be read, if it cannot. The parse is kept by the row's head (`_LAST_SETS`): a read whose head is
+        unchanged reads no body and parses nothing, and a different head always parses its own."""
+        head = self._head(top)
+        if head is None:
+            return frozenset(), None
+        with _LAST_SETS_LOCK:
+            sets = _LAST_SETS.get(head)
+            if sets is not None:
+                _LAST_SETS.move_to_end(head)
+                return sets, None
         row = self.conn.execute("SELECT body FROM ledger_log WHERE seq = ?", (top,)).fetchone()
         if row is None:
-            return set(), None
+            return frozenset(), None
         try:
-            body = json.loads(row[0])
-            sets = [(i["table"], i["row"]) for i in body.get("insert", ())]
-            sets += [(i["table"], i["set"]) for i in body.get("update", ())]
-            return {(t, c) for t, values in sets for c, v in values.items()
-                    if v == "@seq" and c in _SEQ_COLUMNS.get(t, ())}, None
+            sets = _seq_sets(row[0])
         except (ValueError, TypeError, KeyError, AttributeError) as e:
-            return set(), f"the body of the log's last row, seq {top}, cannot be read ({e!r})"
+            return frozenset(), f"the body of the log's last row, seq {top}, cannot be read ({e!r})"
+        with _LAST_SETS_LOCK:
+            _LAST_SETS[head] = sets
+            _LAST_SETS.move_to_end(head)
+            while len(_LAST_SETS) > _LAST_SETS_KEPT:
+                _LAST_SETS.popitem(last=False)
+        return sets, None
 
     def _tail_problems(self, top: int, meta: Mapping, loaded: Mapping | None = None) -> list[str]:
         """P 5.6: the tables are the log's projection, so no seq column names a seq past the log's last row,
