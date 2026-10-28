@@ -1,4 +1,5 @@
 """Register the station tools, the optional hook and the watcher service on this machine."""
+import errno
 import json
 import os
 from pathlib import Path
@@ -375,11 +376,19 @@ def hold_command(config_path):
     return shlex.join([sys.executable, str(RUN_AGENT), 'hold', '--config', str(config_path)])
 
 
+class TrustFileRefused(OSError):
+    """A trusted.json that is there but isn't a valid, safe list: add_trusted leaves it as it is (the final review's M7)."""
+
+
 def add_trusted(own_dir, path):
-    """Add the realpath of `path` to <own_dir>/trusted.json, written whole. False when it was already there."""
+    """Add the realpath of `path` to <own_dir>/trusted.json, written whole. False when it was already there. A
+    trusted.json that can't be read as a valid, safe list is never replaced: TrustFileRefused names it and why."""
     from . import checklists
     own_dir, real = Path(own_dir), os.path.realpath(path)
-    current = sorted(checklists.trusted(own_dir))
+    paths, problem = checklists.read_trusted(own_dir)
+    if problem:
+        raise TrustFileRefused(errno.EINVAL, f'{own_dir / "trusted.json"} {problem}, so it was left as it is')
+    current = sorted(paths)
     if real in current:
         return False
     write_private(own_dir / 'trusted.json', {'trusted': current + [real]})
@@ -400,11 +409,15 @@ def trust_checkout(home, out, checkout=None):
                 f'If the checkout was made under umask 002, run `chmod -R go-w {directory}` and dock again.')
             return False
         added = add_trusted(Path(home) / 'checklists', directory)
+    except TrustFileRefused as error:
+        out(f"Not trusting this checkout's checklists ({directory}): {error.strerror}. Fix it, then dock again.")
+        return False
     except (OSError, ValueError) as error:
         out(f"Couldn't trust this checkout's checklists ({directory}): {error}.")
         return False
     if added:
-        out(f"Trusted this checkout's checklists ({directory}).")
+        out(f"Trusted this checkout's checklists ({directory}); under umask 002, a list git rewrites is skipped until "
+            'you run `chmod -R go-w` on it.')
     return added
 
 
