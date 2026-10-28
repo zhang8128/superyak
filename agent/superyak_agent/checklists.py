@@ -59,9 +59,9 @@ def read_file(path: Path) -> bytes:
             raise ParseError('a symlink') from None
         raise
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise ParseError('not a regular file')
         info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ParseError('not a regular file')
         if info.st_uid != os.getuid():
             raise ParseError('owned by another user')
         if info.st_mode & 0o022:
@@ -239,8 +239,9 @@ def _under(path: str, root: str) -> bool:
 
 def search_dirs(cwd: str | None, own_dir: Path, home: Path | None = None) -> list[tuple[Path, Path | None]]:
     home_real = _real(home if home is not None else Path.home())
-    state = os.path.join(home_real, '.superyak')
+    state = _real(os.path.join(home_real, '.superyak'))
     found: list[tuple[Path, Path | None]] = []
+    taken: set[str] = set()
     if cwd:
         here = _real(cwd)
         chain = []
@@ -262,8 +263,9 @@ def search_dirs(cwd: str | None, own_dir: Path, home: Path | None = None) -> lis
             if not os.path.isdir(candidate):
                 continue
             real = _real(candidate)
-            if _under(real, state):
+            if _under(real, state) or real in taken:
                 continue
+            taken.add(real)
             found.append((Path(real), Path(holder)))
     own_real = _real(own_dir)
     found = [(d, h) for d, h in found if str(d) != own_real]
@@ -278,7 +280,8 @@ def trusted(own_dir: Path) -> frozenset[str]:
     except OSError:
         return frozenset()
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
             return frozenset()
         data = os.read(fd, 1 << 20)
     except OSError:
@@ -291,62 +294,58 @@ def trusted(own_dir: Path) -> frozenset[str]:
         if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
             return frozenset()
         return frozenset(paths)
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, RecursionError):
         return frozenset()
+
+
+def _dir_refusal(real: str) -> str | None:
+    """Why this directory itself can't be trusted (one lstat), else None."""
+    try:
+        info = os.lstat(real)
+    except OSError:
+        return 'the directory does not exist'
+    if not stat.S_ISDIR(info.st_mode):
+        return 'the directory is not a directory'
+    if info.st_uid != os.getuid():
+        return 'the directory belongs to another user'
+    if info.st_mode & 0o022:
+        return 'the directory is writable by its group or by others'
+    return None
+
+
+def _label(name: str) -> str:
+    if name in LOG_NAMES or (name.endswith('.md') and ID.fullmatch(name[:-3])):
+        return name
+    return 'an entry'
 
 
 def trust_refusal(path: Path) -> str | None:
     real = _real(path)
     if os.path.basename(real) != 'checklists' or os.path.basename(os.path.dirname(real)) != '.superyak':
         return 'it is not a checklists directory inside a .superyak directory'
-    uid = os.getuid()
-
-    def bad(full: str, what: str) -> str | None:
-        try:
-            st = os.lstat(full)
-        except OSError as error:
-            return f'{what} cannot be read ({error.strerror or "error"})'
-        if st.st_uid != uid:
-            return f'{what} belongs to another user'
-        if st.st_mode & 0o022:
-            return f'{what} is writable by its group or by others'
-        return None
-
-    try:
-        if not stat.S_ISDIR(os.lstat(real).st_mode):
-            return 'it is not a directory'
-    except OSError:
-        return 'it does not exist'
-    problem = bad(real, 'the directory')
+    problem = _dir_refusal(real)
     if problem:
         return problem
+    uid = os.getuid()
     try:
         names = sorted(os.listdir(real))
     except OSError:
         return 'the directory cannot be listed'
     for name in names:
-        full = os.path.join(real, name)
-        label = _clean(name)
+        label = _label(name)
         try:
-            mode = os.lstat(full).st_mode
+            info = os.lstat(os.path.join(real, name))
         except OSError:
             return f'{label} cannot be read'
-        if stat.S_ISLNK(mode):
+        if stat.S_ISLNK(info.st_mode):
             return f'{label} is a symlink'
-        if not stat.S_ISREG(mode):
+        if not stat.S_ISREG(info.st_mode):
             return f'{label} is not a regular file'
-        problem = bad(full, label)
-        if problem:
-            return problem
+        if info.st_uid != uid:
+            return f'{label} belongs to another user'
+        if info.st_mode & 0o022:
+            return f'{label} is writable by its group or by others'
     return None
-
-
-def _dir_safe(directory: Path) -> bool:
-    try:
-        info = os.lstat(directory)
-    except OSError:
-        return False
-    return stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o022
 
 
 def _load_dir(directory: Path, location: Path | None, own: bool, order: int, notices: list[str]) -> list[Loaded]:
@@ -378,7 +377,7 @@ def _load_dir(directory: Path, location: Path | None, own: bool, order: int, not
         loaded.append(Loaded(checklist, directory, list_key(directory, checklist.id), where, order))
     if len(good) > DIR_FILES:
         notices.append(f'{len(good) - DIR_FILES} more checklist files in {shown} were not read: at most {DIR_FILES} a directory.')
-    return sorted(loaded, key=lambda l: l.checklist.id)
+    return loaded
 
 
 def find(cwd: str | None, own_dir: Path, home: Path | None = None) -> Found:
@@ -392,8 +391,12 @@ def find(cwd: str | None, own_dir: Path, home: Path | None = None) -> Found:
     raws: dict[str, set[bytes]] = {}
     untrusted_dirs: list[Path] = []
     for order, (directory, location) in enumerate(dirs):
-        if str(directory) not in allowed or (str(directory) != own_real and not _dir_safe(directory)):
+        if str(directory) not in allowed:
             untrusted_dirs.append(directory)
+            continue
+        problem = None if str(directory) == own_real else _dir_refusal(str(directory))
+        if problem:
+            notices.append(f'Checklists in {_clean(directory)} were not read: {problem}.')
             continue
         for item in _load_dir(directory, location, str(directory) == own_real, order, notices):
             raws.setdefault(item.checklist.id, set()).add(item.checklist.raw)
