@@ -489,7 +489,7 @@ def test_get_uncompressed_episodes(tmp_db, fake_embedding):
     tmp_db.add_episode(id="ep-1", session_id="s1", content="a", embedding=fake_embedding())
     tmp_db.add_episode(id="ep-2", session_id="s1", content="b", embedding=fake_embedding())
     tmp_db.mark_episodes_compressed(["ep-1"])
-    uncompressed = tmp_db.get_uncompressed_episodes()
+    uncompressed = tmp_db.get_uncompressed_episodes(auto="all")
     assert len(uncompressed) == 1
     assert uncompressed[0]["id"] == "ep-2"
 
@@ -507,7 +507,8 @@ def _auto_fixture(tmp_db, fake_embedding):
 def test_get_uncompressed_episodes_auto_modes(tmp_db, fake_embedding):
     _auto_fixture(tmp_db, fake_embedding)
     ids = lambda **kw: sorted(e["id"] for e in tmp_db.get_uncompressed_episodes(**kw))
-    assert ids() == ["a-unused", "a-used", "n1", "r1"]
+    with pytest.raises(TypeError):  # every caller says which captures it wants; there is no default
+        tmp_db.get_uncompressed_episodes()
     assert ids(auto="all") == ["a-unused", "a-used", "n1", "r1"]
     assert ids(auto="none") == ["n1", "r1"]
     assert ids(auto="used") == ["a-used", "n1", "r1"]

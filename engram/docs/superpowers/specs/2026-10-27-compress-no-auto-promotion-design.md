@@ -102,7 +102,9 @@ out afterwards, a mixed cluster could still take a prompt as its centroid text. 
 
   Any other value raises `ValueError`. "Non-auto" is `coalesce(source,'') <> 'auto'`, because 646 of the Mac's
   1,046 episodes have no source. The `"used"` filter is SQL: the ids from `memory_log m, json_each(m.target_ids)`
-  where `m.event_type = 'recall' AND m.outcome LIKE 'used%' AND json_valid(m.target_ids)`. It takes 1 ms on the
+  where `m.event_type = 'recall' AND m.outcome LIKE 'used%'`, with `json_each` given
+  `CASE WHEN json_valid(m.target_ids) THEN m.target_ids ELSE '[]' END`, so a malformed row can never raise, whatever
+  order SQLite evaluates the WHERE terms in. It takes 1 ms on the
   Mac's 7,689 log rows, and `idx_memory_log_event_type` exists.
 - **Clustering.** `Compressor.cluster_episodes(scope="recent", *, auto="used")` passes `auto` to storage. The
   `compress` tool keeps calling it with no `auto`, so it gets `"used"`. `auto_compress()` calls

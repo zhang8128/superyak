@@ -150,7 +150,7 @@ def test_commit_creates_semantic(tmp_db, compressor, embedder):
     assert stats["semantics_created"] == 1
     assert stats["semantics_reinforced"] == 0
 
-    uncompressed = tmp_db.get_uncompressed_episodes()
+    uncompressed = tmp_db.get_uncompressed_episodes(auto="all")
     assert all(ep["id"] != ep_id for ep in uncompressed)
 
 
@@ -191,7 +191,7 @@ def test_commit_rejects_summary_count_mismatch_without_consuming_pending(
         compressor.commit(result["compress_id"], [])
 
     assert result["compress_id"] in compressor._pending
-    assert tmp_db.get_uncompressed_episodes()
+    assert tmp_db.get_uncompressed_episodes(auto="all")
 
 
 @pytest.mark.parametrize(
@@ -495,7 +495,7 @@ def test_auto_compress_uses_centroid_selection(tmp_db, compressor, embedder):
     assert stats["semantics_created"] >= 1
 
     # All episodes should be compressed now
-    assert len(tmp_db.get_uncompressed_episodes()) == 0
+    assert len(tmp_db.get_uncompressed_episodes(auto="all")) == 0
 
     # Auto-generated semantics should not contain " --- " for small clusters
     semantics = tmp_db.get_active_semantics()
@@ -2129,3 +2129,17 @@ def test_knowledge_feeds_queued_does_not_count_capture_only_cluster(tmp_db, embe
 
     assert stats["knowledge_feeds_queued"] == 0
     assert graph.feeds == []
+
+
+def test_a_bad_auto_with_scope_full_raises_before_any_reset(tmp_db, compressor, embedder):
+    """The check comes before `_reset_all()`, which deletes every semantic: a bad value must leave the store whole."""
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content="kept knowledge", kind="fact", confidence=0.7,
+        embedding=_unit(3), source_episode_ids=[],
+    )
+
+    with pytest.raises(ValueError):
+        compressor.cluster_episodes(scope="full", auto="bogus")
+
+    assert [s["id"] for s in tmp_db.get_active_semantics()] == [sem_id]

@@ -609,7 +609,7 @@ class Storage:
         self._commit()
         return cur.rowcount
 
-    def get_uncompressed_episodes(self, auto: str = "all") -> list[dict]:
+    def get_uncompressed_episodes(self, *, auto: str) -> list[dict]:
         """Return episodes that have not been compressed.
 
         ``auto`` decides what happens to prompt captures (source 'auto'):

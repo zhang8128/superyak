@@ -681,7 +681,7 @@ class TestAutoCompress:
         )
 
         # Verify it's uncompressed
-        uncompressed = store.get_uncompressed_episodes()
+        uncompressed = store.get_uncompressed_episodes(auto="all")
         assert len(uncompressed) == 1
 
         # Now set up server globals to trigger _init logic
@@ -696,7 +696,7 @@ class TestAutoCompress:
         assert result["episodes_processed"] >= 1
 
         # Verify episode is now compressed
-        uncompressed_after = store.get_uncompressed_episodes()
+        uncompressed_after = store.get_uncompressed_episodes(auto="all")
         assert len(uncompressed_after) == 0
 
         store.close()
