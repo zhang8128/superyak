@@ -277,6 +277,7 @@ def test_lessons_units_install_and_remove_only_their_own_files(tmp_path):
                                                              '--ship', 'rio-grande', '--confirm', '0f0f0f0f']),
     ('station-lessons-room', ['ID=ab12'], ['station-room', '--data-dir', 'S', '--id', 'ab12', '--as', 'andy', '--ship', 'rio-grande']),
     ('lessons-room', ['ID=x:y'], ['room', '--data-dir', 'L', '--id', 'x:y']),
+    ('lessons-room', ['ID=x:y', 'CONFIRM=0f0f0f0f'], ['room', '--data-dir', 'L', '--id', 'x:y', '--confirm', '0f0f0f0f']),
     ('lessons-where', [], ['where', '--data-dir', 'L']),
     ('lessons-list', [], ['list', '--data-dir', 'L']),
     ('lessons-ship', ['SHIP=tardis', 'OWNER=andy'], ['ship', '--data-dir', 'L', '--username', 'tardis', '--owner', 'andy']),
