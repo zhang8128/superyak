@@ -163,15 +163,38 @@ def test_rf1_no_receipt_no_content(tmp_path, caplog):
     assert s.read(M1_ITEM)["content"] and s.recall()["candidates"]    # shadow: the legacy path, with a warning
 
 
-def test_more_than_20000_placements_serve_nothing_under_enforce(tmp_path, caplog):   # P 12.2, "Bounds"
+def _serves_once_its_set_is_built(d, pub):
+    """A frame that finds the eligible set still building serves nothing, and rightly (P 12.2): the build goes on
+    in its own thread past the frame's wait. So ask once to start it, wait for it to finish, and ask again."""
+    from tests.permissions_support import wait_for_builds
+    d.handle_frame(recall(pub))
+    wait_for_builds(d)
+    return d.handle_frame(recall(pub))["candidates"]
+
+
+def _the_bound_cases(tmp_path, caplog):
     d, pub = raised_daemon(tmp_path / "over", mode="enforce", placements=MAX_PLACEMENTS + 1)
     assert d.handle_frame(recall(pub))["candidates"] == []
     assert all(i["content"] is None for i in d.handle_frame(read(pub, SHARED_ID))["items"])
     assert "20,000" in caplog.text and pub in caplog.text
+    assert "eligible set building" not in caplog.text        # the bound refused it, not a build still under way
+    assert not d._builds and not d._build_threads            # over the bound no set is ever built
     d, pub = raised_daemon(tmp_path / "at", mode="enforce", placements=MAX_PLACEMENTS)
-    assert d.handle_frame(recall(pub))["candidates"]                     # at the bound it still serves
+    assert _serves_once_its_set_is_built(d, pub)             # at the bound it still serves
     d, pub = raised_daemon(tmp_path / "shadow", mode="shadow", placements=MAX_PLACEMENTS + 1)
-    assert d.handle_frame(recall(pub))["candidates"]                     # shadow: the legacy path decides
+    assert d.handle_frame(recall(pub))["candidates"]         # shadow: the legacy path decides (no build is waited on)
+
+
+def test_more_than_20000_placements_serve_nothing_under_enforce(tmp_path, caplog):   # P 12.2, "Bounds"
+    _the_bound_cases(tmp_path, caplog)
+
+
+def test_the_bound_cases_hold_when_the_build_outlasts_the_frames_wait(tmp_path, monkeypatch, caplog):
+    """The Pi at load 5-8: the set at the bound takes longer than REBUILD_WAIT_S (1 s) to build, so a frame asked
+    at once serves nothing. The test waits for the build instead of assuming it is quick."""
+    from tests.test_permissions_daemon_cache import _slow_eligible_set
+    _slow_eligible_set(monkeypatch, delay=2.5)
+    _the_bound_cases(tmp_path, caplog)
 
 
 def _audience_refused(tmp_path, mode):

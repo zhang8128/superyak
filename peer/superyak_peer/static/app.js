@@ -214,7 +214,7 @@ function showLogin(message = "") {
       <section class="login-story">
         ${brand()}
         <div><h1>A home for the parts of your life you choose to share.</h1><p>Write privately, talk with people you trust, and turn on only the version you mean to share.</p></div>
-        <p class="login-note">Self-hosted on your Superyak peer.</p>
+        <p class="login-note">Self-hosted on your Superyak peer. A prototype, being built and tested: please don't put real patient information in it yet. <a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a></p>
       </section>
       <section class="login-panel" aria-labelledby="login-title">
         <p class="eyebrow">Personal home</p>

@@ -57,6 +57,7 @@ EMBED_BATCH = 8
 EMBED_SECONDS = 120.0
 INFO_SECONDS = 2.0
 BUSY_MS = 30_000  # SQLite's own wait for another connection's lock (db.py's timeout), which a budget only shortens
+BUDGET_CAP_MS = 3_600_000  # read_request's clamp on budget_ms: no hook waits an hour, and JSON's integers have no end
 RUNTIME_CONFIG = Path.home() / '.config' / 'superyak' / 'runtime.json'
 # Section 7.1: the only values a repeat record takes beside its ids and its time.
 REPEAT_HOW = ('receipt', 'read')
@@ -492,6 +493,8 @@ def read_request(raw):
     budget = value.get('budget_ms')  # the hook's time left: a ceiling on Near's own deadline, and step 4's (review S1)
     if budget is not None and (type(budget) is not int or budget < 0):
         raise ValueError('budget_ms')
+    if budget is not None:
+        budget = min(budget, BUDGET_CAP_MS)  # 10**309 is past a float, and the deadlines below are floats
     request = {'ship': value['ship'], 'seen': set(seen), 'limit': limit, 'budget_ms': budget}
     if 'prompt' in value:
         if not isinstance(value['prompt'], str) or len(value['prompt']) > PROMPT_CHARS:
@@ -695,18 +698,25 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
             nearest = angles[0][0] if angles else None  # C22: over the lessons this ship could be shown
             candidates += [(item, round(theta, 4), None) for theta, _, item in angles if theta <= R_MAX and item['id'] not in taken]
     from contextlib import nullcontext
+    import sqlite3
     from .db import Store
     from .dispatch import DispatchGate, GateTimeout
     end = None if request['budget_ms'] is None else started + request['budget_ms'] / 1000
-    answer = {'lessons': []}
+    answer, busy = {'lessons': []}, False
     if end is None or monotonic() < end:
         bound = nullcontext() if end is None else DispatchGate(Path(data_dir).absolute() / 'dispatch.lock').bounded(end, monotonic)
         try:
             with bound:
-                answer = Store(data_dir, signing=False, clock=clock)._lessons_answer(request, candidates, nearest, end, monotonic)
+                # Opening the store waits for another connection's lock only until `end` too (a backup's reader, say)
+                store = Store(data_dir, signing=False, clock=clock, busy_until=end, monotonic=monotonic)
+                answer = store._lessons_answer(request, candidates, nearest, end, monotonic)
         except GateTimeout:
             pass
-    late = end is not None and monotonic() >= end  # out of time, so never "unavailable" (C24)
+        except sqlite3.OperationalError as error:  # busy while opening, at most until `end` (or SQLite's 30 s): nothing written
+            if end is None or ((getattr(error, 'sqlite_errorcode', None) or 0) & 0xFF) != sqlite3.SQLITE_BUSY:
+                raise
+            busy = True  # a lock, not the embedder, kept the answer: never "unavailable" (C24)
+    late = end is not None and (busy or monotonic() >= end)  # out of time, so never "unavailable" (C24)
     return answer, ('embedder unavailable' if unavailable and not answer['lessons'] and not late else None)
 
 
