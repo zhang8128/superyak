@@ -92,6 +92,20 @@ def test_a_wrong_password_counts_toward_the_login_limits(tmp_path):
     assert anonymous.post("/api/login", json={"username": "sam", "password": SAM_PASSWORD}).status_code == 429
 
 
+def test_a_code_confirms_only_its_own_request_and_counts_nothing_otherwise(tmp_path):
+    """One request's code with another request's id is a 404 before the password is checked (review N3)."""
+    st = station(tmp_path); first, second = post(st, request_doc()).json(), post(st, request_doc()).json()
+    with st.store.transaction() as db:
+        before = sorted(tuple(r) for r in db.execute("SELECT * FROM login_attempts"))
+    crossed = st.sam.post(f"/api/imprints/{first['id']}/confirm",
+                          json={"code": second["code"], "password": "wrong-wrong-wrong", "attest": True})
+    assert crossed.status_code == 404
+    with st.store.transaction() as db:
+        assert sorted(tuple(r) for r in db.execute("SELECT * FROM login_attempts")) == before
+    assert row(st, first["id"])["status"] == row(st, second["id"])["status"] == "requested"
+    assert confirm(st.sam, second).status_code == 200 and row(st, first["id"])["status"] == "requested"
+
+
 def test_the_code_is_single_use_and_expires(tmp_path):
     st = station(tmp_path); made = post(st, request_doc()).json()
     assert confirm(st.sam, made).status_code == 200 and confirm(st.sam, made).status_code == 404

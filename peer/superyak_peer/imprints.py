@@ -932,8 +932,7 @@ class Imprints:
         `device` are the request's, as /api/login passes them); then, in one transaction, the permission is built,
         signed and stored and the request is `allowed`."""
         with self.transaction() as db:
-            self._owned_open_request(db, actor, code=code)
-            found = db.execute('SELECT id FROM imprint_requests WHERE code_hash=?', (token_hash(code),)).fetchone()
+            found = self._owned_open_request(db, actor, code=code)  # the row the code names
             if found['id'] != request_id:
                 raise Problem(404, 'No such imprint request')
             username = db.execute('SELECT username FROM users WHERE id=?', (actor,)).fetchone()['username']
