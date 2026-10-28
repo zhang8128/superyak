@@ -3,6 +3,9 @@ session start, changes and withdrawals at a prompt) and, at a prompt, the new ro
 After the law, session start may add the version line (spec 2026-10-14) and then the work board's count lines (work
 board 5.4), whose one call is capped in wall-clock time and in size: a board call that fails, is late or answers too
 much only leaves the lines out.
+Checklists due at the event (spec 2026-10-27) are read from disk before any station call, in a worker the hook waits for
+at most READ_SECONDS, and placed after the law, the messages and the version line, before the board lines, whole or not
+at all within TOTAL_CHARS; a firing is recorded before its list prints.
 It must never block or break a prompt, so every failure prints nothing."""
 import json
 import math
@@ -174,7 +177,8 @@ def _note_reachability(marker, link, now):
 
 def run(config_path, state_path=None, clock=time.time, transport=None, session_id=None,
         event='prompt', messages=True, sessions_dir=None, monotonic=time.monotonic, cwd=None, mode=None, source=None):
-    """The ship's instructions (session start; changes at a prompt), then the new room messages (prompt, when on).
+    """The ship's instructions (session start; changes at a prompt), then the new room messages (prompt, when on), then
+    the checklists due at this event (read first, shown whether or not the station answers; see _read_lists, _place).
     With a Claude Code session id the messages use that session's cursor on the station (station inbox spec, I8);
     without one they keep the machine-wide time cursor and no instruction notices are given.
     Network order: instructions first, then (session start only) the board counts, or (prompt) the watch declaration, then the
@@ -293,7 +297,6 @@ COMMIT_SECONDS = 0.1  # how long recording a firing may wait for the record's lo
 
 
 class Pending(NamedTuple):
-    due: list
     blocks: list
     notices: list
     record: Path
@@ -317,7 +320,7 @@ def _read_lists(home, sessions_dir, session_id, event, source, cwd, now, deadlin
     aren't lost (Ruling 3, 7)."""
     record = holds.record_path(sessions_dir, session_id)
     session, logs = record.stem, home / 'checklists' / 'fired.jsonl'
-    got = []
+    got, locked = [], []
 
     def work():
         found = checklists.find(cwd, home / 'checklists')
@@ -336,11 +339,13 @@ def _read_lists(home, sessions_dir, session_id, event, source, cwd, now, deadlin
             opened.save()
         if due or fresh:
             blocks = [(d, d[0].checklist.id, checklists.render(d[0])) for d in due]
-            got.append(Pending(due, blocks, fresh, record, session, now, logs))
+            got.append(Pending(blocks, fresh, record, session, now, logs))
 
     def guarded():
         try:
             work()
+        except TimeoutError:  # the record stayed locked past the budget: as late as a worker still running
+            locked.append(1)
         except Exception:  # noqa: BLE001 - a failed read shows nothing
             pass
     try:
@@ -349,7 +354,7 @@ def _read_lists(home, sessions_dir, session_id, event, source, cwd, now, deadlin
     except Exception:  # noqa: BLE001 - no thread to be had: no lists, and the law still shows
         return None
     worker.join(max(deadline - monotonic(), 0))
-    if not worker.is_alive():
+    if not worker.is_alive() and not locked:
         return got[0] if got else None
     _log(logs, firing.miss_line(now, session, 'time'))
     if event == 'session-start' and source in firing.START_SOURCES:
@@ -363,16 +368,6 @@ def _read_lists(home, sessions_dir, session_id, event, source, cwd, now, deadlin
     return None
 
 
-def _shown_notices(lines, text):
-    """How many of the notice lines checklists.fit_notices put in `text` (it keeps them whole and in order)."""
-    out, size = [], 0
-    for i, line in enumerate(lines, 1):
-        out.append(NOT_INSTRUCTIONS + line)
-        if '\n'.join(out) == text:
-            return i
-    return 0
-
-
 def _place(text, pending, monotonic=time.monotonic):
     """`text` with the due lists after it (whole or not at all), then the notices, never past TOTAL_CHARS; the law in
     `text` is never shortened. The firings are recorded before anything is printed: when that fails the text comes back
@@ -384,8 +379,9 @@ def _place(text, pending, monotonic=time.monotonic):
         if pending.blocks:
             shown, deferred, body = checklists.fit(pending.blocks, len(text), TOTAL_CHARS, firing.LISTS_PER_EVENT, NOT_INSTRUCTIONS)
         out = '\n\n'.join(t for t in (text, body) if t)
-        notice_text = checklists.fit_notices(pending.notices, len(out), TOTAL_CHARS, NOT_INSTRUCTIONS) if pending.notices else ''
-        told = pending.notices[:_shown_notices(pending.notices, notice_text)] if notice_text else []
+        count = checklists.notices_fitting(pending.notices, len(out), TOTAL_CHARS, NOT_INSTRUCTIONS)
+        told = pending.notices[:count]
+        notice_text = '\n'.join(NOT_INSTRUCTIONS + line for line in told)
         if shown or told:
             with holds.open_record(pending.record, monotonic() + COMMIT_SECONDS, monotonic) as record:
                 firing.mark_fired(record.data, shown, pending.now)
@@ -393,8 +389,9 @@ def _place(text, pending, monotonic=time.monotonic):
                 record.save()
         for loaded, kinds in shown:
             _log(pending.logs, firing.fired_line(pending.now, pending.session, loaded.key, loaded.checklist.version, kinds[0]))
+        # a list left out while fewer than the cap were shown before it did not fit (Ruling 23)
         for i, block in enumerate(pending.blocks):
-            if block[0] in deferred and i < firing.LISTS_PER_EVENT:
+            if block[0] in deferred and sum(b[0] in shown for b in pending.blocks[:i]) < firing.LISTS_PER_EVENT:
                 _log(pending.logs, firing.miss_line(pending.now, pending.session, 'space', block[0][0].key,
                                                     block[0][0].checklist.version))
         return '\n\n'.join(t for t in (out, notice_text) if t)

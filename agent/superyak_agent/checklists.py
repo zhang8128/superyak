@@ -515,15 +515,19 @@ def fit(blocks: Sequence[tuple[object, str, str]], used: int, budget: int, cap: 
     return shown, deferred, '\n\n'.join(parts)
 
 
-def fit_notices(lines: Sequence[str], used: int, budget: int, prefix: str = '') -> str:
-    """Notice lines, each whole and prefixed, in order while they fit; the rest are dropped (they are told again)."""
-    out: list[str] = []
+def notices_fitting(lines: Sequence[str], used: int, budget: int, prefix: str = '') -> int:
+    """How many leading notice lines, each whole and prefixed, fit after `used` characters within `budget`."""
     size = used + (2 if used > 0 else 0)
+    count = 0
     for line in lines:
-        text = prefix + line
-        add = len(text) + (1 if out else 0)
+        add = len(prefix) + len(line) + (1 if count else 0)
         if size + add > budget:
             break
-        out.append(text)
         size += add
-    return '\n'.join(out)
+        count += 1
+    return count
+
+
+def fit_notices(lines: Sequence[str], used: int, budget: int, prefix: str = '') -> str:
+    """Notice lines, each whole and prefixed, in order while they fit; the rest are dropped (they are told again)."""
+    return '\n'.join(prefix + line for line in lines[:notices_fitting(lines, used, budget, prefix)])

@@ -228,3 +228,47 @@ def test_a_record_caught_mid_rewrite_survives_prune(tmp_path):                  
     record.write_text('')                                     # empty: no seen, a fresh mtime
     hook._prune(tmp_path, tmp_path / ('b' * 16 + '.json'), time.time())
     assert record.exists()
+
+
+def test_a_locked_record_at_session_start_logs_one_miss_and_still_marks_the_session_fresh(world):   # Ruling 43
+    import fcntl
+    world.sessions.mkdir(parents=True, exist_ok=True)
+    path = holds.record_path(world.sessions, 's1')
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    release = threading.Timer(0.17, lambda: (fcntl.flock(fd, fcntl.LOCK_UN), os.close(fd)))
+    release.start()
+    try:
+        text = start(world)
+    finally:
+        release.join()
+    assert 'Run tests.' in text and WATCH not in text
+    assert [f['miss'] for f in fired(world) if 'miss' in f] == ['time']
+    assert WATCH in prompt(world)
+
+
+def test_lists_deferred_for_space_while_the_cap_had_room_each_log_a_space_miss(world):          # Ruling 43
+    directory = world.repo / '.superyak' / 'checklists'
+    (directory / 'session-start.md').unlink()
+    for list_id, items in (('a-big', tuple('y' * 200 for _ in range(12))), ('b-small', ('ok',)),
+                           ('c-big', tuple('y' * 200 for _ in range(12)))):
+        write_list(directory, list_id, when='start', items=items)
+    law(world.fake, world.serenity, [('L1', 1, 'House rules', 'z' * 7000)])
+    text = start(world)
+    assert '- [ ] ok' in text and 'y' * 200 not in text
+    assert sorted(f['key'].split('/')[1] for f in fired(world) if f.get('miss') == 'space') == ['a-big', 'c-big']
+
+
+def test_a_failed_commit_shows_no_list_and_records_no_firing(world, monkeypatch):               # Ruling 14
+    real, calls = holds.RecordFile.save, []
+
+    def save(self):
+        calls.append(1)
+        if len(calls) > 1:
+            raise OSError('disk full')
+        real(self)
+    monkeypatch.setattr(holds.RecordFile, 'save', save)
+    text = start(world)
+    assert 'Run tests.' in text and WATCH not in text and fired(world) == []
+    record = json.loads(holds.record_path(world.sessions, 's1').read_text())
+    assert not any('start' in e for e in record.get('fired', {}).values())
