@@ -1,4 +1,5 @@
 """Real TCP/TLS tests: generated independent certificates, no verification bypass."""
+from superyak_peer.identity import pairing_code
 from contextlib import contextmanager
 import socket
 import threading
@@ -44,8 +45,8 @@ def test_real_https_delivery_restart_and_pin_mismatch(tmp_path):
         b=app.state.federation
         bob=b.store.create_user('bob','Bob','long-password',is_admin=True)['id']
         bc=b.card(bob)
-        ca=a.pair(alice,bc)
-        b.pair(bob,a.card(alice))
+        ca=a.pair(alice,bc, code=pairing_code(bc))
+        b.pair(bob,a.card(alice), code=pairing_code(a.card(alice)))
         layer=a.store.create_layer(alice,{'body':'over verified TLS','audience_users':[ca['id']]})
         a.store.activate_layer(alice,layer['id'],1)
         assert a.sync_once()['delivered']==1
@@ -73,7 +74,7 @@ def test_offline_queue_stable_and_bounded(tmp_path):
     b=Federation(Store(tmp_path/'b'),endpoint='https://127.0.0.1:1')
     alice=a.store.create_user('alice','Alice','long-password',is_admin=True)['id']
     bob=b.store.create_user('bob','Bob','long-password',is_admin=True)['id']
-    contact=a.pair(alice,b.card(bob))
+    contact=a.pair(alice,b.card(bob), code=pairing_code(b.card(bob)))
     l=a.store.create_layer(alice,{'body':'offline','audience_users':[contact['id']]})
     a.store.activate_layer(alice,l['id'],1)
     start=time.monotonic()
@@ -99,8 +100,8 @@ def test_two_live_https_peers_exchange_rooms_and_final_dispatch_rechecks(tmp_pat
         a,b=aa.state.federation,bb.state.federation
         alice=a.store.create_user('alice','Alice','long-password',is_admin=True)['id']
         bob=b.store.create_user('bob','Bob','long-password',is_admin=True)['id']
-        ca=a.pair(alice,b.card(bob))
-        b.pair(bob,a.card(alice))
+        ca=a.pair(alice,b.card(bob), code=pairing_code(b.card(bob)))
+        b.pair(bob,a.card(alice), code=pairing_code(a.card(alice)))
         room=a.store.create_room(alice,'TLS chat',[ca['id']])
         a.store.send_message(alice,room['id'],'first','hello')
         assert a.sync_once()['delivered']==2
@@ -130,8 +131,8 @@ def test_exhausted_retry_keeps_event_id_and_rechecks_current_state(tmp_path):
     b=Federation(Store(tmp_path/'b'),endpoint='https://localhost:7436')
     alice=a.store.create_user('alice','Alice','long-password',is_admin=True)['id']
     bob=b.store.create_user('bob','Bob','long-password',is_admin=True)['id']
-    ca=a.pair(alice,b.card(bob))
-    b.pair(bob,a.card(alice))
+    ca=a.pair(alice,b.card(bob), code=pairing_code(b.card(bob)))
+    b.pair(bob,a.card(alice), code=pairing_code(a.card(alice)))
     layer=a.store.create_layer(alice,{'body':'one','audience_users':[ca['id']]})
     a.store.activate_layer(alice,layer['id'],1)
     a.collect()

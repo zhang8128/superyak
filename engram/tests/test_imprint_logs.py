@@ -64,6 +64,18 @@ def test_a_session_exactly_an_hour_before_t1_is_not_yet_closed(tmp_path):
     assert set(closed_sessions(s.conn, T1)) == {"ok"}
 
 
+def test_closed_sessions_runs_again_while_another_statement_is_open(tmp_path):
+    """GitHub CI on 7d46e2b6: a second closed_sessions on one connection redefined `inst`, and SQLite refuses to
+    redefine a function while any statement on that connection is active ("Error creating function"). It is
+    registered once per connection now, so a second run works however many statements are open."""
+    s = new_store(tmp_path, "s")
+    ep(s, "a", session="old", at="2026-10-25T16:00:00+00:00"); ep(s, "b", session="x", at="2026-10-25T16:30:00+00:00")
+    assert set(closed_sessions(s.conn, T1)) == {"old", "x"}
+    still_open = s.conn.execute("SELECT id FROM episodes")
+    still_open.fetchone()
+    assert set(closed_sessions(s.conn, T1)) == {"old", "x"}
+
+
 def test_session_ids_ship_only_with_route_and_only_for_closed_sessions(tmp_path):
     s = new_store(tmp_path, "s")
     ep(s, "w1", session="closed", at="2026-10-25T15:00:00+00:00"); ep(s, "w2", session="open", at="2026-10-25T17:30:00+00:00")
