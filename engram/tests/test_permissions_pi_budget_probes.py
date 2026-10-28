@@ -77,3 +77,12 @@ def test_the_daemon_probe_serves_eight_receivers_by_three_purposes():
     assert len(RECEIVERS) == 8 and len(PURPOSES) == 3          # 24 keys, at least the 19 that pass 96 MB (12.2)
     for fn in (ensure_reference, prepare):
         assert inspect.signature(fn).parameters["receivers"].default == 8
+
+
+def test_the_daemon_probe_counts_the_rebuilds_it_started_when_builds_outlast_the_frames_wait(base, monkeypatch):
+    """Under load a build takes longer than the frame's 1 s wait and the frame returns without it. The probe
+    must still wait for the builds before it reports `rebuilds` (and the cache it holds)."""
+    monkeypatch.setenv("PI_BUDGET_PROBE_SLOW_BUILD_S", "2.5")
+    home, extra = prepare(base, "daemon", **SMALL, trails=20, touches=16)
+    got = run_probe("daemon", home, extra, scope=False)["detail"]
+    assert got["frames"] == 6 and not got["errors"] and got["rebuilds"] == 6 and got["added_bytes"] > 0, got
