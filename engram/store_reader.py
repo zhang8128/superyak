@@ -4,8 +4,9 @@ For inspecting a store before it is ever opened normally, for example one
 ported from another machine. Normal opening runs migrations, genome/inbox
 sync and sleep maintenance (decay, prune, compression); nothing here does.
 
-Every connection uses SQLite ``mode=ro`` plus ``query_only`` and never loads
-extensions, so vec0 tables are listed but not queried. Column sets are
+Every connection uses SQLite ``mode=ro`` plus ``query_only``. It loads no
+extensions unless asked (``connect(..., vec=True)``), so vec0 tables are
+otherwise listed but not queried. Column sets are
 introspected, so stores written by older schemas are read as they are.
 
 ``--immutable`` additionally skips locking and side-file creation for an
@@ -41,8 +42,10 @@ _EPISODE_FIELDS = (
 )
 
 
-def connect(path: str | Path, immutable: bool = False) -> sqlite3.Connection:
-    """Open ``path`` read-only; refuse a missing file rather than create it."""
+def connect(path: str | Path, immutable: bool = False, vec: bool = False) -> sqlite3.Connection:
+    """Open ``path`` read-only; refuse a missing file rather than create it.
+
+    ``vec`` loads ``sqlite_vec`` as ``Storage.open_read_only`` does, so vec0 tables can be queried."""
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(str(p))
@@ -51,6 +54,12 @@ def connect(path: str | Path, immutable: bool = False) -> sqlite3.Connection:
         uri += "&immutable=1"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
+    if vec:
+        import sqlite_vec
+
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
     conn.execute("PRAGMA query_only=ON")
     return conn
 
