@@ -6,9 +6,9 @@ nits are applied here, each marked with its number (MF, SF or nit). The same rev
 items applied, and no new must-fix. Its three small should-fix items and two conditions are applied here too, marked
 "re-check". The Pi and Mac rows of the terminal table are the one open item, and they're recorded before the build.
 
-This is board item `fix:pairing-code` in City of AI. It implements §2 "Cards and pairing" of the approved federation-pull
-spec (`docs/superpowers/specs/2026-10-27-federation-pull-design.md` on `tardis/federation-pull`, revision 4) for today's
-v1 cards, ahead of the pull work. City of AI (c00dcc2d) put the key binding first. Rio Grande checked the live station
+This is board item `fix:pairing-code` in City of AI. It implements §2 "Cards and pairing" of the approved
+federation-pull spec (`docs/superpowers/specs/2026-10-27-federation-pull-design.md` on `tardis/federation-pull`,
+revision 4) for today's v1 cards, ahead of the pull work. City of AI (c00dcc2d) put the key binding first. Rio Grande checked the live station
 read-only: `peers` has 0 rows, so nothing is paired today. Until this is live, nobody pairs on the live station.
 
 **This is safety code** (who a peer trusts). It gets a test-first build and each partner's explicit yes before it
@@ -34,8 +34,13 @@ CLAUDE.md and the law, and the code makes the honest path one where the person c
 | machine | result |
 |---|---|
 | Tardis | `OSError: [Errno 6] No such device or address` (ENXIO); `tty` prints "not a tty" |
-| Rio Grande (Pi) | asked in City of AI; recorded here before the build |
+| Rio Grande (Pi) | `OSError: [Errno 6] No such device or address`; `tty` prints "not a tty" (Rio Grande, City of AI) |
 | Serenity (Mac) | asked in City of AI; recorded here before the build |
+
+The Pi's units (ship, odo and wormhole) run `run_agent.py` under systemd with no controlling terminal, and the Claude
+Code sessions a `watch` run spawns inherit none, so none of them can open `/dev/tty` either (Rio Grande). The crossed
+tests pin the property this rests on: `pair` refuses when `/dev/tty` can't be opened, even with the right code on
+stdin (MF2a).
 
 ## What changes
 
