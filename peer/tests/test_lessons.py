@@ -29,12 +29,23 @@ def test_the_spec_illustration_parses_and_its_id_is_the_digest_of_the_embedded_t
     assert lessons.short_lesson_id(f'{PEER}:{digest}') == f'aaaaaaaa-{digest[:8]}'
 
 
+def echoable(body):
+    """Everything in `body` a refusal must never echo: each field's value, and the key and value (or the whole) of a
+    line that is no field. The wire format's own words (the header `lesson`, learned from's `own` and `owner`) are
+    the rules' vocabulary, so a message may name them."""
+    found = []
+    for line in body.split('\n'):
+        key, sep, value = line.rstrip('\r').partition(': ')
+        found += [value] if sep and key in lessons.LIMITS else [key, value] if sep else [key]
+    return [v for v in found if v and v not in ('lesson', 'own', 'owner')]
+
+
 @pytest.mark.parametrize('body, says', [
     (lesson_body() + '\n', 'final newline'),
     (lesson_body().replace('\n', '\r\n'), '\\r'),
     (lesson_body().replace('lesson\n', 'Lesson\n', 1), 'only lessons and retractions'),
     (lesson_body(command=()), 'at least one error, command or file'),
-    (lesson_body(command=('x', 'x')), 'repeats a command value'),
+    (lesson_body(command=('dup-value', 'dup-value')), 'repeats a command value'),
     (lesson_body(command=tuple(f'c{i}' for i in range(9))), 'at most 8'),
     (lesson_body(claim='x' * 161), '1 to 160 bytes'),
     (lesson_body(why='é' * 151), '1 to 300 bytes'),
@@ -46,16 +57,20 @@ def test_the_spec_illustration_parses_and_its_id_is_the_digest_of_the_embedded_t
     (lesson_body(ship='Tardis'), 'ship: is a ship name'),
     (lesson_body(learned='Owner'), 'learned from: is own, owner'),
     (lesson_body().replace('\nwhy:', '\n\nwhy:'), 'blank line'),
-    ('lesson\nclaim: c\nship: tardis\nwhy: w\ncommand: x\nlearned from: own', 'out of order'),
-    ('lesson\nship: tardis\nclaim: c\nwhy: w\nfile: f\nerror: e\nlearned from: own', 'out of order'),
+    ('lesson\nclaim: Claim before ship.\nship: tardis\nwhy: Why third.\ncommand: cmd-x\nlearned from: own', 'out of order'),
+    ('lesson\nship: tardis\nclaim: File before error.\nwhy: Why third.\nfile: file-f\nerror: error-e\nlearned from: own',
+     'out of order'),
     (lesson_body() + '\nlearned from: own', 'out of order or repeated'),
-    ('lesson\nship: tardis\nclaim: c\nwhy: w\ncommand: x', 'one learned from line'),
+    ('lesson\nship: tardis\nclaim: Claim without a source.\nwhy: Why third.\ncommand: cmd-x', 'one learned from line'),
     ('x' * 4097, '4,096 bytes'),
+    (lesson_body(claim='lone \ud800 surrogate'), 'UTF-8'),
+    (lesson_body().replace('\nwhy:', '\nmood: Sunny today.\nwhy:'), 'not one of the fields'),
 ])
 def test_a_refusal_says_which_rule_and_never_the_value(body, says):
     with pytest.raises(lessons.LessonRefused) as refused:
         lessons.parse_post(body)
     assert says in refused.value.message and refused.value.status == 422
+    assert [value for value in echoable(body) if value in refused.value.message] == []
     assert 'padded' not in refused.value.message and 'tab' not in refused.value.message
 
 
@@ -69,8 +84,9 @@ def test_a_retraction_names_the_full_id():
     key = f'{PEER}:{"b" * 64}'
     assert lessons.parse_post('retract ' + key) == lessons.Retraction(key)
     for wrong in ('retract ' + lessons.short_lesson_id(key), 'retract ' + key + '\n', 'Retract ' + key):
-        with pytest.raises(lessons.LessonRefused):
+        with pytest.raises(lessons.LessonRefused) as refused:
             lessons.parse_post(wrong)
+        assert 'aaaaaaaa' not in refused.value.message and 'bbbbbbbb' not in refused.value.message  # nor any id
 
 
 def test_one_text_on_one_peer_is_one_id_whatever_learned_from_says():

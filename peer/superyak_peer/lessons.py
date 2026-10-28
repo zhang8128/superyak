@@ -346,7 +346,8 @@ class Lessons:
     def _lessons_chain(self, db):
         """The recorded room's chain on this peer, oldest first, ending with the current room; [] when none is recorded
         or this peer no longer holds it. A local room id on the origin, `<origin>:<room id>` elsewhere. Each peer
-        follows linked_room_id forward."""
+        follows linked_room_id forward, then back to the first room it doesn't hold, so the chain is every room up to
+        that break."""
         record = self._lessons_record(db)
         if record is None:
             return []
@@ -361,7 +362,12 @@ class Lessons:
                     break
                 key = row['id']
                 seen.add(key)
-            return list(reversed(self._rooms_back(db, key)))
+            chain = []
+            for room in self._rooms_back(db, key):
+                if db.execute('SELECT 1 FROM rooms WHERE id=?', (room,)).fetchone() is None:
+                    break  # a linked_room_id with no room (a hand edit with foreign keys off): the chain ends here
+                chain.append(room)
+            return chain[::-1]
         origin, _, current = key.partition(':')
         rooms = self._remote_rooms_from(db, origin)
         if current not in rooms:
