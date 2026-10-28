@@ -118,6 +118,11 @@ def lesson_ship(store, owner_id, username):
         return store._new_ship(db, username, username.title(), owner_id)
 
 
+def confirm_lessons_room(store, key):
+    """`lessons room` on a peer other than the origin, in its two runs: the view, then the record on its code."""
+    return store.record_lessons_room(key, store.record_lessons_room(key)['confirm'])
+
+
 @pytest.fixture
 def lessons_station(tmp_path):
     """The origin: andy, his ships rio-grande and tardis (both local here, so one peer can lay as two ships), and a
@@ -162,5 +167,5 @@ def lessons_peers(tmp_path):
         return peers[src][1].sync_once(send=lambda card, prepare: peers[dst][1].receive(prepare()))
     deliver('pi', 'tardis')
     key = pi_fed.identity.peer_id + ':' + room
-    tardis.record_lessons_room(key)
+    confirm_lessons_room(tardis, key)
     return {'peers': peers, 'deliver': deliver, 'clock': clock, 'room': room, 'key': key}

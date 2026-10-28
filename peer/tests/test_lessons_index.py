@@ -429,9 +429,10 @@ def test_query_stdout_keeps_to_the_agreed_contract(lessons_station, fake_embedde
     assert answer['lessons'][0]['command'] == '--include=*'   # the value exactly as the lesson holds it; Near carries none
     by_error = json.loads(run({'ship': 'rio-grande', 'error': 'zsh: no matches found'}).stdout)
     assert [(e['claim'], 'command' in e) for e in by_error['lessons']] == [('Error only.', False)]   # an error-only words match
-    spent = run({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'budget_ms': 0})
-    assert spent.returncode == 0 and [e['match'] for e in json.loads(spent.stdout)['lessons']] == ['words']   # words only
     nothing = '{"lessons": []}'
+    spent = run({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'budget_ms': 0})
+    assert (spent.returncode, spent.stdout) == (0, nothing)   # no time left: nobody sees it, so no receipt (review S1)
+    assert json.loads(run({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'budget_ms': 30000}).stdout)['lessons']
     for request in ({'ship': 'odo', 'command': 'grep --include=*.py x'}, {'ship': 'rio-grande', 'command': 'nothing'},
                     {'ship': 'rio-grande', 'prompt': 'why does it say --include=* here', 'seen': []}):
         quiet = run(request) if 'prompt' not in request else run_lessons(
@@ -463,6 +464,134 @@ def test_the_deadline_counts_from_the_request(lessons_station, fake_embedder):
     request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x'}))
     late, _ = lessons.query(request, store.data_dir, fake_embedder.path, clock=lambda: clock[0], monotonic=lambda: 0.9, started=0.0)
     assert [e['match'] for e in late['lessons']] == ['words'] and len(fake_embedder.requests) == asked   # 800 ms are gone
+
+
+def counts(store):
+    with store.transaction() as db:
+        return tuple(db.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in ('lesson_receipts', 'lesson_queries'))
+
+
+@pytest.mark.parametrize('spent', [True, False])
+def test_step_4_writes_nothing_once_the_hooks_budget_has_passed_inside_its_transaction(lessons_station, monkeypatch, spent):
+    """Serenity's review of first-rail, S1: step 4 counts the hook's budget_ms from the request. A budget that runs out
+    inside step 4's transaction (here while it reads the room) writes no receipt and no query row and answers nothing,
+    since nobody is waiting to see it; one with time left writes them as before."""
+    from superyak_peer.db import Store
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    now, read = [0.0], Store._lessons_snapshot
+
+    def slow_read(self, db):
+        now[0] = 0.6 if spent else 0.4   # the hook gave 500 ms
+        return read(self, db)
+    monkeypatch.setattr(Store, '_lessons_snapshot', slow_read)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'budget_ms': 500}))
+    answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: now[0], started=0.0)
+    monkeypatch.undo()
+    assert now[0] > 0 and note is None   # the room was read: the budget ran out inside the transaction
+    if spent:
+        assert answer == {'lessons': []} and counts(store) == (0, 0)
+    else:
+        assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
+
+
+def test_without_a_budget_step_4_has_no_deadline(lessons_station, monkeypatch):
+    """No budget_ms, no one gives up on the answer: step 4 writes however long the room took to read."""
+    from superyak_peer.db import Store
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    now, read = [0.0], Store._lessons_snapshot
+    monkeypatch.setattr(Store, '_lessons_snapshot', lambda self, db: (now.__setitem__(0, 60.0), read(self, db))[1])
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x'}))
+    answer, _ = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: now[0], started=0.0)
+    monkeypatch.undo()
+    assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
+
+
+@pytest.mark.parametrize('holder', ['another process', 'another thread'])
+def test_a_held_dispatch_gate_is_waited_for_only_until_the_budget_ends(lessons_station, holder):
+    """S1's waits: the dispatch gate (another thread's, or another process's file lock) is waited for only until the
+    hook's budget ends, opening the store included; then the answer is nothing and nothing is written. Unheld, the
+    same request answers and writes."""
+    import fcntl, threading, time
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'budget_ms': 200}))
+    held, release = threading.Event(), threading.Event()
+    if holder == 'another thread':
+        def hold():
+            with store.dispatch_gate:
+                held.set()
+                release.wait(30)
+        thread = threading.Thread(target=hold)
+        thread.start()
+        held.wait(30)
+    else:   # a second open file description: flock refuses it as it would another process
+        fd = os.open(store.data_dir / 'dispatch.lock', os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        began = time.monotonic()
+        answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0])
+        waited = time.monotonic() - began
+    finally:
+        if holder == 'another thread':
+            release.set()
+            thread.join(30)
+        else:
+            os.close(fd)
+    assert (answer, note) == ({'lessons': []}, None) and waited < 5
+    assert counts(store) == (0, 0)
+    answer, _ = lessons.query(request, store.data_dir, None, clock=lambda: clock[0])
+    assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
+
+
+def test_the_commit_waits_for_a_reader_only_until_the_budget_ends(lessons_station, monkeypatch):
+    """The fresh review's S1: the station's database keeps a rollback journal, so step 4's commit waits for every
+    reader's SHARED lock, and a reader outside the dispatch gate (the nightly backup's copy) can hold one past the
+    deadline check. Here a read-only connection takes SHARED while step 4 reads the room, and keeps it. The injected
+    clock never reaches the deadline, so only the commit's wait can end this: SQLite waits the 300 ms the budget leaves,
+    in real time, refuses the commit, and it is rolled back; the answer is nothing. Once the reader is gone, the same
+    request writes."""
+    import sqlite3, time
+    from superyak_peer.db import Store
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'words_only': True,
+                                               'budget_ms': 300}))
+    reader, read = sqlite3.connect(store.db_path.as_uri() + '?mode=ro', uri=True, isolation_level=None), Store._lessons_snapshot
+
+    def read_beside_a_reader(self, db):
+        reader.execute('BEGIN')
+        reader.execute('SELECT count(*) FROM users').fetchone()   # SHARED, held until the read transaction ends
+        return read(self, db)
+    monkeypatch.setattr(Store, '_lessons_snapshot', read_beside_a_reader)
+    try:
+        began = time.monotonic()
+        answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: 0.0, started=0.0)
+        waited = time.monotonic() - began
+    finally:
+        monkeypatch.undo()
+        reader.execute('ROLLBACK') if reader.in_transaction else None
+        reader.close()
+    assert (answer, note) == ({'lessons': []}, None) and 0.25 < waited < 5   # the budget's 300 ms, never SQLite's 30 s
+    assert counts(store) == (0, 0)
+    answer, _ = lessons.query(request, store.data_dir, None, clock=lambda: clock[0], monotonic=lambda: 0.0, started=0.0)
+    assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
+
+
+def test_a_budget_past_what_a_lock_can_wait_is_clamped_never_a_crash(lessons_station):
+    """The fresh review's N1: budget_ms has no upper bound, and 10**13 ms is past threading.TIMEOUT_MAX seconds. The
+    bounded wait clamps to it (and SQLite's commit wait to its own 30 s), so the query answers as it would without one."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    store.lessons_index(None)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x', 'budget_ms': 10 ** 13}))
+    answer, note = lessons.query(request, store.data_dir, None, clock=lambda: clock[0])
+    assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
 
 
 def test_a_stranger_costs_no_embedding_and_the_nearest_angle_counts_only_what_could_be_shown(lessons_station, fake_embedder):
