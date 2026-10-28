@@ -271,3 +271,166 @@ def embed(socket_path, texts, prefix, deadline, clock=time.monotonic):
     if any(v is None for v in units):
         raise EmbedderUnavailable('a zero vector')
     return reply['model'], units
+
+
+def lesson_refusal(snapshot, author, lesson, body, live_key):
+    """Sections 2, 3 and 6 for one lesson by `author` (a full `<peer>:<user>` id), against this peer's snapshot: the
+    refusal's message, or None. Every door and every index runs exactly this."""
+    from .ships import addressed_names
+    peer, _, user = author.partition(':')
+    if peer == snapshot.peer:
+        account = snapshot.accounts.get(user)
+        if account is None or account.kind != 'ship':
+            return SHIPS_ONLY
+        if lesson.ship != account.username:
+            return SHIP_IS_AUTHOR
+    if addressed_names(body):
+        return NO_MENTIONS
+    if holds_person_data(lesson_values(lesson), snapshot.names):
+        return PERSON
+    if live_key:
+        return LIVE_KEY
+    return None
+
+
+def chain_lessons(snapshot):
+    """Section 4 step 2, and every door's view of the chain: (the live lessons in the order laid, the retracted ids).
+    Copies collapse by lesson id and keep the earliest copy; each author keeps its first 32 live lessons. A post by
+    the system, one marked unverified, or one whose author isn't a member of the current room counts for nothing."""
+    first, authors, retractions = {}, {}, []
+    for post in snapshot.posts:
+        if post.skip or post.author not in snapshot.members:
+            continue
+        try:
+            parsed = parse_post(post.body)
+        except LessonRefused:
+            continue
+        if isinstance(parsed, Retraction):
+            retractions.append((post.author, parsed.lesson_id))
+            continue
+        key = lesson_id(post.author.partition(':')[0], parsed)
+        authors.setdefault(key, post.author)
+        if key not in first and lesson_refusal(snapshot, post.author, parsed, post.body, post.live_key) is None:
+            first[key] = Live(key, post.author, parsed, post.body)
+    retracted = {key for who, key in retractions if key in authors and who in (authors[key], snapshot.owner)}
+    live, counts = [], {}
+    for item in first.values():
+        if item.id not in retracted and counts.get(item.author, 0) < LIVE_CAP:
+            counts[item.author] = counts.get(item.author, 0) + 1
+            live.append(item)
+    return live, retracted
+
+
+class Lessons:
+    """The store's side: the room's record and chain, every door's checks, the backfill, the index run and step 4."""
+
+    def _lessons_record(self, db):
+        return db.execute('SELECT * FROM lessons_room WHERE id=1').fetchone()
+
+    def _lessons_peer(self, db):
+        if not (self.data_dir / 'identity.json').is_file():
+            raise Problem(409, NO_IDENTITY)
+        return self._own_peer_id(db)
+
+    def _remote_rooms_from(self, db, origin):
+        """{room id: (recipient, inbox revision, payload)} for every room this peer holds from a paired origin."""
+        rows = db.execute("SELECT inbox.resource_id, inbox.recipient, inbox.revision, inbox.payload FROM inbox JOIN peers "
+                          "ON peers.peer_id=inbox.origin WHERE inbox.origin=? AND inbox.kind='room' AND inbox.payload IS NOT "
+                          "NULL AND peers.paired=1 ORDER BY inbox.recipient", (origin,)).fetchall()
+        rooms = {}
+        for row in rows:
+            rooms.setdefault(row['resource_id'], (row['recipient'], row['revision'], json.loads(row['payload'])))
+        return rooms
+
+    def _lessons_chain(self, db):
+        """The recorded room's chain on this peer, oldest first, ending with the current room; [] when none is recorded.
+        A local room id on the origin, `<origin>:<room id>` elsewhere. Each peer follows linked_room_id forward."""
+        record = self._lessons_record(db)
+        if record is None:
+            return []
+        key = record['room_key']
+        if ':' not in key:
+            seen = {key}
+            while True:
+                row = db.execute('SELECT id FROM rooms WHERE linked_room_id=?', (key,)).fetchone()
+                if row is None or row['id'] in seen:
+                    break
+                key = row['id']
+                seen.add(key)
+            return list(reversed(self._rooms_back(db, key)))
+        origin, _, current = key.partition(':')
+        rooms = self._remote_rooms_from(db, origin)
+        if current not in rooms:
+            return []
+        forward = {payload.get('linked_room_id'): rid for rid, (_, _, payload) in rooms.items()}
+        seen = {current}
+        while origin + ':' + current in forward and forward[origin + ':' + current] not in seen:
+            current = forward[origin + ':' + current]
+            seen.add(current)
+        chain, step = [], current
+        while step in rooms and step not in chain:
+            chain.append(step)
+            linked = rooms[step][2].get('linked_room_id')
+            step = linked.partition(':')[2] if isinstance(linked, str) and linked.startswith(origin + ':') else None
+        return [origin + ':' + rid for rid in reversed(chain)]
+
+    def _in_lessons_chain(self, db, key):
+        return key in self._lessons_chain(db)
+
+    def _lessons_snapshot(self, db):
+        """Section 4 step 1, inside the caller's transaction: everything the checks and the index read. None when no room
+        is recorded or this peer no longer holds it."""
+        chain = self._lessons_chain(db)
+        if not chain:
+            return None
+        peer = self._lessons_peer(db)
+        system = self.system_author_id(db)
+        accounts = {r['id']: Account(r['username'], r['name'], r['kind'])
+                    for r in db.execute("SELECT id,username,name,kind FROM users WHERE kind!='system'")}
+        names = names_pattern([n for a in accounts.values() if a.kind == 'person' for n in (a.username, a.name)])
+        posts, epochs = [], []
+        current = chain[-1]
+        if ':' not in current:
+            for key in chain:
+                epochs.append([key, db.execute('SELECT epoch FROM rooms WHERE id=?', (key,)).fetchone()[0]])
+                notices = {r[0] for r in db.execute('SELECT message_kinds.message_id FROM message_kinds JOIN messages ON '
+                                                    'messages.id=message_kinds.message_id WHERE messages.room_id=?', (key,))}
+                rows = [(r['id'], r['author_id'] if r['author_id'] == system else f"{peer}:{r['author_id']}", r['body'],
+                         r['created'], r['author_id'] == system or r['id'] in notices)
+                        for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created, rowid', (key,))]
+                rows += [(r['id'], r['author_id'], r['body'], r['created'], False)
+                         for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created, rowid', (key,))]
+                rows.sort(key=lambda r: r[3])  # stable, as get_room orders them
+                posts += [Post(key, i, a, b, self._live_ship_key_in(db, b), s) for i, a, b, _, s in rows]
+            room = db.execute('SELECT owner_id FROM rooms WHERE id=?', (current,)).fetchone()
+            owner = f"{peer}:{room['owner_id']}"
+            members = {f'{peer}:{r[0]}' for r in db.execute('SELECT user_id FROM room_members WHERE room_id=?', (current,))}
+            members |= {f"{r['peer_id']}:{r['user_id']}" for r in db.execute(
+                'SELECT remote_contacts.peer_id, remote_contacts.user_id FROM remote_room_members JOIN remote_contacts '
+                'ON remote_contacts.id=remote_room_members.contact_id WHERE remote_room_members.room_id=?', (current,))}
+        else:
+            origin = current.partition(':')[0]
+            rooms = self._remote_rooms_from(db, origin)
+            for key in chain:
+                recipient, revision, payload = rooms[key.partition(':')[2]]
+                epochs.append([key, revision])
+                stored = {m.get('id') for m in payload.get('messages', []) if isinstance(m, dict)}
+                for m in self._remote_room(db, recipient, key)['messages']:
+                    if m.get('id') in stored:
+                        posts.append(Post(key, m['id'], m['author_id'], m['body'], self._live_ship_key_in(db, m['body']),
+                                          bool(m.get('unverified'))))
+            payload = rooms[current.partition(':')[2]][2]
+            owner = payload.get('owner_id')
+            members = {m for m in payload.get('member_ids', []) if isinstance(m, str)}
+        ships = {accounts[m.partition(':')[2]].username: m for m in members
+                 if m.startswith(peer + ':') and m.partition(':')[2] in accounts and accounts[m.partition(':')[2]].kind == 'ship'}
+        return Snapshot(peer, current, epochs, owner, members, posts, accounts, names, ships)
+
+
+LESSON_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS lessons_room(id INTEGER PRIMARY KEY CHECK(id=1), room_key TEXT NOT NULL, ship_id TEXT REFERENCES users(id), recorded REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS lessons_peers(peer_id TEXT PRIMARY KEY REFERENCES peers(peer_id), recorded REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS lesson_receipts(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), lesson_id TEXT NOT NULL, author_id TEXT NOT NULL, angle REAL);
+CREATE INDEX IF NOT EXISTS lesson_receipts_by_created ON lesson_receipts(created);
+CREATE TABLE IF NOT EXISTS lesson_queries(id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), nearest REAL, shown INTEGER NOT NULL);
+'''

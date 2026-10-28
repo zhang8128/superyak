@@ -105,3 +105,25 @@ def fake_embedder():
     yield embedder
     embedder.close()
     shutil.rmtree(folder, ignore_errors=True)
+
+
+def lesson_ship(store, owner_id, username):
+    with store.transaction() as db:
+        return store._new_ship(db, username, username.title(), owner_id)
+
+
+@pytest.fixture
+def lessons_station(tmp_path):
+    """The origin: andy, his ships rio-grande and tardis (both local here, so one peer can lay as two ships), and a
+    recorded lessons room holding all three. Returns (store, clock, ids, room id)."""
+    from superyak_peer.db import Store
+    from superyak_peer.identity import PeerIdentity
+    clock = [LESSON_TIME]
+    store = Store(tmp_path / 'pi', clock=lambda: clock[0])
+    PeerIdentity.load_or_create(store.data_dir)
+    andy = store.create_user('andy', 'Andy Example', 'a-long-password', is_admin=True)['id']
+    ids = {'andy': andy, 'rio-grande': lesson_ship(store, andy, 'rio-grande')['id'], 'tardis': lesson_ship(store, andy, 'tardis')['id']}
+    room = store.create_room(andy, 'Lessons', [ids['rio-grande'], ids['tardis']])['id']
+    with store.transaction() as db:
+        db.execute('INSERT INTO lessons_room VALUES(1,?,?,?)', (room, ids['rio-grande'], clock[0]))
+    return store, clock, ids, room
