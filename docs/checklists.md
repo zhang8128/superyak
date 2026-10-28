@@ -60,7 +60,8 @@ stays; it's for the ships.
 
 ## How lists serve intent (deviations, killer items, one log)
 
-Serenity proposed it, Rio Grande adapted it, and the three ships agreed (2026-10-27). A list exists to protect the
+Andy's Hyper Nimbus ship (the gtm lane) proposed it through Serenity's account, Rio Grande adapted it, and the three
+ships agreed (2026-10-27). A list exists to protect the
 why, so each item, or its list, says what it protects. When an item doesn't fit the case in front of you, that's what
 shows you what to protect instead.
 
@@ -69,10 +70,10 @@ shows you what to protect instead.
   still protects it. That is the one log: there's no second place for deviations, and the reason is screened like
   every reason.
 - **A `killer:` item isn't skipped by a ship alone.** An item whose text starts `killer: ` guards something that can't
-  be taken back: an unfixed hole made public, a person's data or a key pushed, safety code merged on silence, a broken
-  main left running, a live station act Andy didn't ask for. If one seems to need skipping, stop and ask Andy in the
-  room. The checklists report lists a killer skip first; making the tool refuse one waits for a spec revision after a
-  week of runs.
+  be taken back: a person in danger left without a person, an unfixed hole made public, a person's data or a key
+  pushed, safety code merged on silence, a broken main left running, a live station act Andy didn't ask for. If one
+  seems to need skipping, stop and ask Andy in the room. The checklists report lists a killer skip first; making the
+  tool refuse one waits for a spec revision after a week of runs.
 - **The law isn't a checklist.** No deviation ever applies to a clause of signed law. Where an item restates the law
   (merging, approving, station acts), the law binds whatever the list says. An item that conflicts with the law is a
   bug in the list: ask in the room.
@@ -80,10 +81,52 @@ shows you what to protect instead.
   - Ready, on `claim`: "Before starting a piece of work".
   - Build: "Before claiming a cause, a cost or a count" and "Shell commands", when they apply.
   - QA round, on `command git push` for a branch: "Before any push", with "Running CI" and "Re-checking review
-    findings".
+    findings". For a change a visitor sees, also docs/cold-walk.md: use it as the user, step by step.
   - Release: "Merging to main", "A live station act" and "Anything public".
   - Learn: "Reflect", every 3 hours.
   - Checkpoint: "Each day, a checkpoint for Andy", with the hourly check-in kept.
+
+## Retiring an item
+
+Andy, through his gtm ship (2026-10-27): every item is a failure point held by attention, the most expensive and least
+reliable way to hold one, so items are meant to retire. Each one climbs a ladder:
+
+1. Someone remembers it.
+2. It's written as a checklist item.
+3. A script, test or CI gate holds it.
+4. It's removed from the list, with a pointer to what holds it now.
+
+- An item retires only after its automation has run green on real work and been seen failing when it should (our
+  "prove the test can fail"). If the automation breaks, the item goes back on the list.
+- A `killer:` item never climbs back down to being remembered. It can climb only to automation, and it stays marked
+  `killer:`, so a red gate still needs a person to skip it.
+- The crisis item under "Anything about a person" never retires, at any rung: no habit or script replaces a person.
+- Once a day, at the first Reflect after the daily checkpoint, ask two things: which manual item is cheapest to
+  automate next, and which automation is flaky or slow, and how to make it cheaper.
+
+The first rungs (2026-10-27):
+
+- Retired: "the include lists name a new module" (under "Merging to main"). test_packaging holds it, and it failed
+  when it should on room-moderators.
+- Next: "the branch's base is on the rewritten history" as a pre-push hook (`git merge-base --is-ancestor 60dd851`).
+- Next: "person data and keys" as gitleaks in CI. It stays `killer:`.
+- Candidates from the gtm lane: the Pi suites, and the federation retries.
+
+## Anything about a person (first, before any work that touches people)
+
+Why: a person's safety outranks every task, and no ship can judge it fine. This comes before the county work, the
+connector, and cities for schools and hospitals.
+
+- [ ] killer: Any sign that someone we serve may be in danger or crisis, especially a child: stop, bring in a person,
+      and never optimise against them. Never retired (see "Retiring an item").
+
+What "bring in a person" means (Serenity, 2026-10-27):
+
+- Stop the automated work on that thread at once: no more posts, no outreach, no "finishing up first".
+- Tell a person now: Andy in his terminal, or the place's named responsible person when an org city has one. Say
+  plainly what was seen and where. Don't wait for the next check-in.
+- A ship never judges the danger to be fine. If it may be immediate, the person decides whether to contact emergency
+  services, and the ship's message says that this is the question.
 
 ## Before starting a piece of work
 
@@ -122,9 +165,9 @@ this list adds to it and never subtracts.
 - [ ] The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named
       (the 3 Kuzu tests).
 - [ ] GitHub CI's result is read, including the jobs the Pi can't run.
-- [ ] If the diff adds a module or test file to a package with explicit `only-include` lists (peer/pyproject.toml),
-      the lists name it, and the package builds and imports in a clean venv. The Pi's editable checkout hides a
-      missing module (room-moderators, 2026-10-27), so the whole suite with test_packaging is what shows it.
+- Retired to test_packaging (see "Retiring an item"): the `only-include` lists name every new module, and the package
+  builds and imports in a clean venv. The Pi's editable checkout hides a missing module, so the whole suite (the Pi
+  suites item above) is what shows it. If test_packaging breaks, this item comes back.
 - [ ] The station database is backed up (`make station-backup`), so a migration that goes wrong can be undone.
 - [ ] killer: Main is pushed once. The affected Pi services are restarted and checked, and the public route is probed
       from outside when the diff touches it; if a check fails, revert and restart.
