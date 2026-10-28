@@ -57,7 +57,7 @@ class Federation:
             here = db.execute("SELECT value FROM peer_meta WHERE key='federation_mode'").fetchone()
             if mode == 'pull' and here and here[0] == 'pull':
                 raise Problem(400, 'Two pull peers can never reach each other: pair a pull card on a peer that listens')
-            previous = db.execute('SELECT card FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()
+            previous = db.execute('SELECT card, paired FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()
             if previous:
                 prior = json.loads(previous['card'])
                 if prior.get('delivery', 'push') != mode:  # compared first, so a v1 prior meets a v2 card with no KeyError
@@ -69,6 +69,14 @@ class Federation:
             # review SF2).
             if pairing_code({**(prior if previous else card), 'participant': card['participant']}) != expected:
                 raise Problem(409, 'Known peer trust material cannot be replaced')
+            if previous and not previous['paired']:
+                # Serenity's review MF2: a peer unpaired with no holds (by main's unpair, before this branch or after a
+                # rollback, or in a copy restored from before holds) gets every contact held and unconfirmed first, so
+                # "unpaired" means "every contact held" whatever made it, and this pair releases the typed one only.
+                db.execute('INSERT OR IGNORE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?',
+                           (self.store.clock(), card['peer_id']))
+                db.execute('DELETE FROM pairing_confirmations WHERE contact_id IN '
+                           '(SELECT id FROM remote_contacts WHERE peer_id=?)', (card['peer_id'],))
             db.execute('INSERT INTO peers VALUES(?,?,1) ON CONFLICT(peer_id) DO UPDATE SET paired=1', (card['peer_id'], encode(card)))
             # spec §7 and plan P14: the mode from the card, on both paths; a person re-pairing makes the peer due again
             db.execute('INSERT INTO peer_delivery(peer_id, mode, failures) VALUES(?,?,0) ON CONFLICT(peer_id) DO UPDATE SET '

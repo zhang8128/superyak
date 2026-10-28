@@ -29,7 +29,8 @@ from urllib.request import Request, build_opener, HTTPCookieProcessor, HTTPSHand
 
 def pairing_code(card):
     """identity.pairing_code, standalone (this script imports nothing from the peer): the first 32 hex of the whole
-    canonical card's SHA-256. tests/test_packaging.py pins the two together. The person running this checker owns both
+    canonical card's SHA-256. tests/test_cli.py (test_the_two_peer_checker_s_code_is_the_peer_s) pins the two together.
+    The person running this checker owns both
     synthetic hosts and holds both cards this run just made, so computing the code here is that person's own act on
     their own machines. A ship never runs this checker against a station (CLAUDE.md: a ship never computes a code)."""
     canonical = json.dumps(card, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()

@@ -277,6 +277,24 @@ def controlling_terminal():
     return None
 
 
+NO_TERMINAL_CODE = ('Pairing code: not shown here, since this has no terminal. Andy reads it by running `card` in a '
+                    'terminal on this machine, or in the browser under "Show my peer card".')
+
+
+def show_card_code(card):
+    """Serenity's review SF2: the code goes to the controlling terminal only, never stdout or stderr, so a ship that runs
+    `card` (its Bash has no terminal) never holds a code it could relay. Without a terminal, stderr says where to read it."""
+    from .identity import pairing_code, show_code
+    terminal = controlling_terminal()
+    if terminal is None:
+        print(NO_TERMINAL_CODE, file=sys.stderr)
+        return
+    try:
+        os.write(terminal, f'Pairing code: {show_code(pairing_code(card))}\n'.encode())
+    finally:
+        os.close(terminal)
+
+
 def pair_command(data_dir, card_path, username, terminal=controlling_terminal):
     """The exit status: 0 paired, 1 refused, 2 no person at a terminal. The account is checked before the terminal is
     opened (plan review MF2d); the card's names reach the terminal as safe lines (SF3)."""
@@ -568,9 +586,8 @@ def main(argv=None):
             host = urlsplit(args.endpoint).hostname
             identity = PeerIdentity.load_or_create(store.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
             exported = Federation(store, endpoint=args.endpoint, identity=identity).card(user[0])
-            print(json.dumps(exported, indent=2))
-            from .identity import pairing_code, show_code
-            print(f'Pairing code: {show_code(pairing_code(exported))}', file=sys.stderr)  # stdout stays exactly a card
+            print(json.dumps(exported, indent=2))  # stdout stays exactly a card
+            show_card_code(exported)
         elif args.command == 'pair':
             status = pair_command(args.data_dir, args.card, args.as_user)
             if status:

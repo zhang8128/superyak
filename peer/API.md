@@ -652,7 +652,8 @@ uv run python -m superyak_peer card --data-dir /private/path/home --username own
 uv run python -m superyak_peer serve --data-dir /private/path/home --host 127.0.0.1 --port 7435 --peer-tls --origin https://localhost:7435 --federation-endpoint https://localhost:7435 --sync
 ```
 
-`card` prints `Pairing code: …` on stderr; stdout stays exactly the card. On the other
+`card` writes `Pairing code: …` to its controlling terminal only; stdout stays exactly the
+card, and with no terminal (a ship's Bash) stderr says where to read the code. On the other
 peer, a person pairs it at a real terminal, typing that code off the exporting screen:
 
 ```sh
