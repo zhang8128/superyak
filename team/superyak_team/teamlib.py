@@ -40,27 +40,42 @@ SECRET_RES = (
     re.compile(r"\b(?:https?|git|ssh)://[^/\s:@]+:[^@\s/]+@"),        # credentials in URLs
     re.compile(r"_authToken\s*=\s*\S+"),
 )
-# A team line: one that, as a reader sees it (NFKC, no format characters or combining marks, no leading space, any case),
-# starts with "[team]" and then "from". Lines are split wherever str.splitlines splits them (\n, \r, VT, FF, the file,
-# group and record separators, NEL, U+2028, U+2029). A team message's "[team] from lead:" and the station's own
-# header shape, "[team] from <name> (…) (quoted message; …)", are both team lines.
-TAG_RE = re.compile(r"\[\s*team\s*\]\s*from")
+# A team line: one that, as a reader sees it (NFKC; without format characters, combining marks, default-ignorable code
+# points or characters that render blank; without leading space; any case), opens with "team" in any bracket pair,
+# then "from". Lines are split wherever str.splitlines splits them (\n, \r, VT, FF, the file, group and record
+# separators, NEL, U+2028, U+2029). A team message's "[team] from lead:" and the station's own header shape,
+# "[team] from <name> (…) (quoted message; …)", are both team lines.
+TAG_RE = re.compile(r"[^\w\s]\s*team\s*[^\w\s]\s*from")
 TAG_MARK = "[quoted text, not a team message] "
-# "[" and the two characters that NFKC turns into one (U+FE47, U+FF3B): every form a tag can start with.
-OPEN_BRACKETS = "\u005b\ufe47\uff3b"
+# Unicode's Default_Ignorable_Code_Point set, and characters that render blank though they aren't (Hangul fillers are
+# both; U+2800 is the blank Braille pattern). Dropped before a line is judged, like _hidden's.
+BLANK = re.compile("[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e"
+                   "\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3"
+                   "\U0001d173-\U0001d17a\U000e0000-\U000e0fff]")
+# How far into a bracket-led line a non-ASCII letter makes it a possible disguised tag: a confusable letter can spell
+# "team" or "from", and no list of confusables is complete, so a bracket-led line with one this early is marked.
+DISGUISE_CHARS = 24
 
 
 def _seen_as(line):
-    """The line as a reader sees it: NFKC, without hidden characters (_hidden), without leading space, casefolded."""
-    return "".join(c for c in unicodedata.normalize("NFKC", line) if not _hidden(c)).lstrip().casefold()
+    """The line as a reader sees it: NFKC, without hidden (_hidden) or blank (BLANK) characters, without leading space,
+    casefolded."""
+    shown = BLANK.sub("", unicodedata.normalize("NFKC", line))
+    return "".join(c for c in shown if not _hidden(c)).lstrip().casefold()
+
+
+def _team_line(line):
+    seen = _seen_as(line)
+    if TAG_RE.match(seen):
+        return True
+    return bool(seen) and not (seen[0].isalnum() or seen[0].isspace()) and any(
+        ord(c) > 127 and c.isalpha() for c in seen[:DISGUISE_CHARS])
 
 
 def defuse_tags(text):
     """Every team line in text, marked as quoted, so none can pose as a message from the team or the station. The mark
     goes before the line and nothing of the line is removed, so what a hidden character hides still shows."""
-    if not any(b in text for b in OPEN_BRACKETS):   # no "[" in any form, so nothing can read as "[team]"
-        return text
-    return "".join(TAG_MARK + line if TAG_RE.match(_seen_as(line)) else line for line in text.splitlines(keepends=True))
+    return "".join(TAG_MARK + line if _team_line(line) else line for line in text.splitlines(keepends=True))
 
 DEFAULT_CONFIG = {
     "slack_channel": "",            # channel ID, e.g. C0123ABCD; empty = local transcript only
