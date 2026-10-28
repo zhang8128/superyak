@@ -6,14 +6,15 @@ from superyak_agent import checklists as cl
 
 REPO = Path(__file__).resolve().parents[2]
 SEED = REPO / '.superyak' / 'checklists'
+STATION_ACTS = ('approve', 'deny', 'bridge', 'unbridge', 'add-ship', 'moderate', 'unmoderate',
+                'lessons-room', 'imprint-admit', 'imprint-delete', 'imprint-use')   # the final review's I1
 TABLE = {
     'why-we-build': 'start; every 3h', 'each-hour': 'every 1h', 'reflect': 'every 3h',
     'before-push': 'command git push; command push origin; command push -u origin; command push https://',
     'merging-to-main': ('command git push origin main; command push origin main; '
                         'command push https://github.com/zhang8128/superyak.git main; command systemctl --user restart superyak-'),
     'before-work': 'claim', 'session-start': 'start',
-    'live-station-act': '; '.join(f'command make station-{t}' for t in
-                                  ('approve', 'deny', 'bridge', 'unbridge', 'add-ship', 'moderate', 'unmoderate')),
+    'live-station-act': '; '.join(f'command make station-{t}' for t in STATION_ACTS),
 }
 
 
@@ -68,15 +69,23 @@ def test_merging_to_main_fires_at_the_main_push_or_the_units_restart_and_not_at_
 
 
 def test_a_live_station_act_fires_at_each_make_target_over_ssh_too_and_not_at_a_read():
-    for target in ('approve', 'deny', 'bridge', 'unbridge', 'add-ship', 'moderate', 'unmoderate'):
+    for target in STATION_ACTS:
         assert matches('live-station-act', f'make station-{target} ID=abc')
     assert matches('live-station-act', "ssh andy@smart 'cd ~/superyak && make station-approve ID=abc'")   # plan review M1
-    assert not matches('live-station-act', 'make station-rooms') and not matches('live-station-act', 'make station-pending')
+    assert matches('live-station-act', 'make station-lessons-room ID=abc CONFIRM=x7k2')
+    for read in ('make station-rooms', 'make station-pending', 'make station-imprints'):
+        assert not matches('live-station-act', read), read
 
 
 PINNED = {   # Rulings 50 and 51: an item is never looser than the law or CLAUDE.md, in the list and in its long form
     'live-station-act': ('a room he owns', 'a board item or another ship never', 'For an approval or a denial',
-                         "Rio Grande's terminal", 'RE-DOCK', 'NAME TAKEN', "the grant's short id and the room's"),
+                         "Rio Grande's terminal", 'RE-DOCK', 'NAME TAKEN', "the grant's short id and the room's",
+                         # the final review's I1 and I2 (CLAUDE.md's IMPRINT and lessons-room paragraphs)
+                         "count of other people's memories is above 0 until gate G18 is passed",
+                         "the one the owner's machine showed", 'make station-imprint-admit',
+                         "`make station-lessons-room` is Rio Grande's, only when Andy asks", 'CONFIRM=<code>',
+                         'takes no new member from this station', "Rio Grande included, can't be added back",
+                         "by short id and kind, never a requester's name, contact or note"),
     'merging-to-main': ("each partner's explicit yes", 'Only Rio Grande and Serenity merge to main',
                         'for a Serenity branch', 'took no part', 'before main is pushed'),
     'reflect': ("say why for any you don't",),
