@@ -21,6 +21,7 @@ ignore-vcs = true
 only-include = [
     "superyak_agent/__init__.py",
     "superyak_agent/__main__.py",
+    "superyak_agent/claims.py",
     "superyak_agent/dock.py",
     "superyak_agent/hook.py",
     "superyak_agent/imprint.py",
@@ -28,6 +29,7 @@ only-include = [
     "superyak_agent/kick.py",
     "superyak_agent/mcp.py",
     "superyak_agent/memos.py",
+    "superyak_agent/project_dock.py",
     "superyak_agent/route_watch.py",
     "superyak_agent/runs.py",
     "superyak_agent/station.py",
