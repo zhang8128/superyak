@@ -93,6 +93,22 @@ def test_a_project_dock_wires_the_project_and_says_so(world):
         assert line in out, line
 
 
+def test_a_project_dock_trusts_only_this_checkout(world):
+    calls = []
+    world.monkeypatch.setattr(install, 'trust_checkout', lambda home, out, checkout=None: calls.append((home, checkout)) or True)
+    assert world.dock()[0] == 0
+    assert calls == [(claims.project_home(SHIP), None)]
+
+
+def test_a_failing_trust_never_undoes_a_project_dock(world):
+    def full(*a):
+        raise OSError(28, 'No space left on device')
+    world.monkeypatch.setattr(install, 'add_trusted', full)
+    code, out = world.dock()
+    assert code == 0, out
+    assert read_json(world.home / 'claim.json')
+
+
 def test_dock_writes_nothing_tracked(world):
     """R4, R6, R11: an existing settings.local.json is backed up into the ship's home, never beside it; afterwards git
     status is empty, and two docks leave each exclude line once."""

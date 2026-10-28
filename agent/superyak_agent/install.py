@@ -67,7 +67,7 @@ def _write_settings(settings_path, settings):
 
 def is_station_hook(command, wanted=None):
     """The hook this agent installs, whichever interpreter it was installed with: the same command, or any
-    command in which this checkout's run_agent.py is one word and the next word is `hook`."""
+    command in which this checkout's run_agent.py is one word and the next word is `hook` or `hold`."""
     if wanted is not None and command == wanted:
         return True
     if not isinstance(command, str):
@@ -76,12 +76,13 @@ def is_station_hook(command, wanted=None):
         words = shlex.split(command)
     except ValueError:
         return False
-    return any(word == str(RUN_AGENT) and following == 'hook' for word, following in zip(words, words[1:]))
+    return any(word == str(RUN_AGENT) and following in ('hook', 'hold') for word, following in zip(words, words[1:]))
 
 
 ENV_RUN = 'SUPERYAK_RUN=${SUPERYAK_RUN:-hook}'  # unquoted on purpose: the shell expands it
 GUARD = ' || true'  # python exits 2 when run_agent.py is gone, and a prompt hook's exit 2 blocks and erases the prompt
-HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit', 'SessionEnd')
+HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit', 'SessionEnd', 'PreToolUse')
+HOLD_TIMEOUT = 5  # seconds: the hold runs before every Bash call
 
 
 def _hook_words(command):
@@ -97,7 +98,9 @@ def _hook_commands(config_path, messages):
     base = hook_command(config_path)
     return {'SessionStart': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-start {base}{GUARD}',
             'UserPromptSubmit': f'{base}{GUARD}' if messages else f'{ENV_RUN} SUPERYAK_HOOK_MESSAGES=0 {base}{GUARD}',
-            'SessionEnd': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-end {base}{GUARD}'}
+            'SessionEnd': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-end {base}{GUARD}',
+            # exit 2 from a PreToolUse hook blocks the Bash call, and an older checkout rejects `hold` with exit 2
+            'PreToolUse': f'{hold_command(config_path)}{GUARD}'}
 
 
 def messages_installed(settings_path, config_path):
@@ -122,9 +125,18 @@ def _same_hook(command, wanted):
     A command without the guard is a different hook, so docking again upgrades it."""
     def kind(c):
         words = _hook_words(c)
-        return ('SUPERYAK_HOOK_EVENT=session-start' in words, 'SUPERYAK_HOOK_EVENT=session-end' in words,
+        return ('hold' in words, 'SUPERYAK_HOOK_EVENT=session-start' in words, 'SUPERYAK_HOOK_EVENT=session-end' in words,
                 'SUPERYAK_HOOK_MESSAGES=0' in words, words[-2:] == ['||', 'true'])
     return command == wanted or kind(command) == kind(wanted)
+
+
+def _hold_entry_current(entries):
+    """Whether every installed station hold sits in a Bash-matcher entry with the hold's timeout (N10)."""
+    for entry in entries:
+        for h in entry.get('hooks', []):
+            if is_station_hook(h.get('command')) and (entry.get('matcher') != 'Bash' or h.get('timeout') != HOLD_TIMEOUT):
+                return False
+    return True
 
 
 def install_hooks(settings_path, config_path, messages, backup=None):
@@ -138,7 +150,7 @@ def install_hooks(settings_path, config_path, messages, backup=None):
     for event, wanted in _hook_commands(config_path, messages).items():
         entries = settings.setdefault('hooks', {}).setdefault(event, [])
         ours = [h.get('command') for entry in entries for h in entry.get('hooks', []) if is_station_hook(h.get('command'), wanted)]
-        if len(ours) == 1 and _same_hook(ours[0], wanted):
+        if len(ours) == 1 and _same_hook(ours[0], wanted) and (event != 'PreToolUse' or _hold_entry_current(entries)):
             continue
         if event == 'UserPromptSubmit' and not messages and any('SUPERYAK_HOOK_MESSAGES=0' not in _hook_words(c) for c in ours):
             changes.append('messages-off')
@@ -147,7 +159,10 @@ def install_hooks(settings_path, config_path, messages, backup=None):
             hooks = [h for h in entry.get('hooks', []) if not is_station_hook(h.get('command'), wanted)]
             if hooks:
                 kept.append({**entry, 'hooks': hooks} if len(hooks) != len(entry.get('hooks', [])) else entry)
-        kept.append({'hooks': [{'type': 'command', 'command': wanted, 'timeout': 10}]})
+        if event == 'PreToolUse':
+            kept.append({'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': wanted, 'timeout': HOLD_TIMEOUT}]})
+        else:
+            kept.append({'hooks': [{'type': 'command', 'command': wanted, 'timeout': 10}]})
         settings['hooks'][event] = kept
         changes.append(event)
     if changes:
@@ -356,6 +371,43 @@ def hook_command(config_path):
     return shlex.join([sys.executable, str(RUN_AGENT), 'hook', '--config', str(config_path)])
 
 
+def hold_command(config_path):
+    return shlex.join([sys.executable, str(RUN_AGENT), 'hold', '--config', str(config_path)])
+
+
+def add_trusted(own_dir, path):
+    """Add the realpath of `path` to <own_dir>/trusted.json, written whole. False when it was already there."""
+    from . import checklists
+    own_dir, real = Path(own_dir), os.path.realpath(path)
+    current = sorted(checklists.trusted(own_dir))
+    if real in current:
+        return False
+    write_private(own_dir / 'trusted.json', {'trusted': current + [real]})
+    return True
+
+
+def trust_checkout(home, out, checkout=None):
+    """Dock's trust of <checkout>/.superyak/checklists for the ship whose home this is. Never raises: a failing
+    trust never undoes a dock."""
+    from . import checklists
+    directory = Path(checkout if checkout is not None else AGENT_DIR.parent) / '.superyak' / 'checklists'
+    try:
+        if not directory.is_dir():
+            return False
+        reason = checklists.trust_refusal(directory)
+        if reason:
+            out(f"Not trusting this checkout's checklists ({directory}): {reason}. "
+                f'If the checkout was made under umask 002, run `chmod -R go-w {directory}` and dock again.')
+            return False
+        added = add_trusted(Path(home) / 'checklists', directory)
+    except (OSError, ValueError) as error:
+        out(f"Couldn't trust this checkout's checklists ({directory}): {error}.")
+        return False
+    if added:
+        out(f"Trusted this checkout's checklists ({directory}).")
+    return added
+
+
 def start_at_newest_mention(config_path, state_path, client, out):
     """R22: a ship whose watcher state has no mention cursor would answer every mention since docking (the cursor
     starts at 0), so the first service install reads the mentions to the end and stores the newest. A ship that has a
@@ -409,6 +461,7 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print, 
             out('Room messages will no longer appear in Claude Code sessions (instructions still load).')
         elif changes:
             out('Added the station hooks: instructions load at the start of each Claude Code session.')
+    trust_checkout(home, out)
     if service and start_at_newest_mention(config_path, home / 'ship-state.json', client, out):
         install_service([sys.executable, str(RUN_AGENT), 'watch', '--config', str(config_path),
                          '--state', str(home / 'ship-state.json'), '--mcp-config', str(home / 'run-mcp.json')], out,
