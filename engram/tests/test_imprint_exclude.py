@@ -1,4 +1,5 @@
 """--exclude: every id must name a memory in the store, and what it names never leaves (section 2 review S4)."""
+import contextlib
 import json
 import sqlite3
 from dataclasses import replace
@@ -39,6 +40,7 @@ def refused(tmp_path, exclude):
 
 def test_a_typo_is_refused(tmp_path):
     text = refused(tmp_path, {"e9"})
+    assert text.startswith("1 id in --exclude names no memory in this store or its cold storage")
     assert "'e9'" in text and "nothing was planned" in text
 
 
@@ -119,6 +121,29 @@ def test_the_command_refuses_a_typo_and_writes_no_plan(tmp_path, monkeypatch, ca
     err = capsys.readouterr().err
     assert rc != 0 and "'e1-typo'" in err and "'e1'" not in err
     assert not list((home / "imprints" / "plans").glob("*.json"))
+
+
+def test_an_id_in_cold_storage_is_accepted_and_still_left_out_if_it_comes_back(tmp_path):
+    """A pruned episode moves to cold.db with its id and can be revived into the store. Its id is not a typo, and
+    refusing it would make the owner drop the line, so that a revival between plan and build would ship it."""
+    from tests.imprint_support import new_store, prune
+
+    def with_cold(tmp_path):
+        s = new_store(tmp_path, "src")
+        for i in range(3):
+            ep(s, f"e{i}", at=f"2026-10-25T10:0{i}:00+00:00")
+        ep(s, "pruned", at="2026-10-25T09:00:00+00:00")
+        prune(s, "pruned")
+        return s
+    args = plan_args(tmp_path, store=with_cold)
+    with contextlib.closing(sqlite3.connect(f"file:{args[0]}?mode=ro", uri=True)) as conn:
+        assert unmatched_exclude(conn, {"pruned"}) == ("pruned",)            # not in the store's own tables
+    plan = make_plan(*with_exclude(args, {"e1", "pruned"}))
+    assert plan.counts["exclude_ids"] == 2 and plan.counts["exclude_cold"] == 1 and plan.counts["excluded"] == 1
+    assert ("1 memory stays because --exclude names it; its 2 ids each name a memory in this store (1 in cold "
+            "storage, which never leaves).") in render_dry_run(plan, CONTEXT)
+    with pytest.raises(PlanRefused, match="'pruned-typo'"):
+        make_plan(*with_exclude(plan_args(tmp_path / "typo", store=with_cold), {"pruned-typo"}))
 
 
 # The section 2 probe: an owner's --exclude list holds end to end (plan, saved plan, build, package, request,

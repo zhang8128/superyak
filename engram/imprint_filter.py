@@ -298,31 +298,52 @@ def parse_selection(*, lanes: str | None, layers: str | None, since: str | None,
 EXCLUDE_SHOWN = 20              # the unmatched --exclude ids a refusal lists; it counts the rest
 
 
+def _ids_held(conn: sqlite3.Connection, tables: Iterable[str], wanted: Sequence[str]) -> set[str]:
+    """The ids of ``wanted`` that a row of ``tables`` holds, as stored; one batch of ids per query."""
+    found: set[str] = set()
+    for table in tables:
+        for batch in _batches(wanted):
+            marks = ", ".join("?" * len(batch))
+            found.update(r[0] for r in conn.execute(f"SELECT id FROM {table} WHERE id IN ({marks})", batch))
+    return found
+
+
 def unmatched_exclude(conn: sqlite3.Connection, exclude: Iterable[str]) -> tuple[str, ...]:
     """The ``exclude`` ids, sorted, that name no episode and no semantic in ``conn``, in any lane or time. A match is
     exact, compared in Python on the ids the store holds, so a typo, another case or a ``mem:`` ref never matches.
     Only the ``id`` columns are read."""
     wanted = sorted(set(exclude))
-    found: set[str] = set()
-    for table in _TABLES.values():
-        for batch in _batches(wanted):
-            marks = ", ".join("?" * len(batch))
-            found.update(r[0] for r in conn.execute(f"SELECT id FROM {table} WHERE id IN ({marks})", batch))
+    found = _ids_held(conn, _TABLES.values(), wanted)
     return tuple(i for i in wanted if i not in found)
 
 
-def refuse_unmatched_exclude(conn: sqlite3.Connection, sel: Selection) -> None:
-    """Refuses a plan whose ``--exclude`` holds an id that names no memory in the store (review S4). The refusal lists
-    the owner's own ids (at most ``EXCLUDE_SHOWN``, then a count), never a memory's content."""
+def refuse_unmatched_exclude(conn: sqlite3.Connection, sel: Selection, *, cold: str | Path | None = None) -> int:
+    """Refuses a plan whose ``--exclude`` holds an id that names no memory in the store (review S4). An id of an
+    episode pruned to ``cold`` (the store's ``cold.db``) is accepted: it is not a typo, it can be revived into the
+    store with that id, and the saved plan's exclude then still leaves it out. Returns how many ids matched only
+    there. The refusal lists the owner's own ids (at most ``EXCLUDE_SHOWN``, then a count), never a memory's
+    content."""
     missing = unmatched_exclude(conn, sel.exclude)
+    in_cold: set[str] = set()
+    if missing and cold is not None and Path(cold).is_file():
+        try:
+            cold_conn = store_reader.connect(cold, immutable=True)
+            try:
+                in_cold = _ids_held(cold_conn, ("episodes",), missing)
+            finally:
+                cold_conn.close()
+        except sqlite3.Error:                       # unreadable cold storage matches nothing: the plan refuses
+            in_cold = set()
+        missing = tuple(i for i in missing if i not in in_cold)
     if not missing:
-        return
+        return len(in_cold)
     shown = ", ".join(repr(i) for i in missing[:EXCLUDE_SHOWN])
     if len(missing) > EXCLUDE_SHOWN:
         shown += f" and {len(missing) - EXCLUDE_SHOWN:,} more"
-    raise PlanRefused(f"{len(missing):,} {'id' if len(missing) == 1 else 'ids'} in --exclude name no memory in this "
-                      f"store, so nothing was planned: {shown}. Each line must be one memory's id exactly as stored: "
-                      "case counts, and an id is not a mem: ref.")
+    one = len(missing) == 1
+    raise PlanRefused(f"{len(missing):,} {'id' if one else 'ids'} in --exclude {'names' if one else 'name'} no memory "
+                      f"in this store or its cold storage, so nothing was planned: {shown}. Each line must be one "
+                      "memory's id exactly as stored: case counts, and an id is not a mem: ref.")
 
 
 @dataclass(frozen=True)

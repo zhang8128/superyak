@@ -366,7 +366,7 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
         c = replace(ctx, scratch=scratch, terms=terms, now=now)
         conn = _connect(working, read_only=True, vec=True)
         conn.row_factory = sqlite3.Row
-        refuse_unmatched_exclude(conn, sel)             # every --exclude id names a memory here (review S4)
+        exclude_cold = refuse_unmatched_exclude(conn, sel, cold=Path(store).with_name("cold.db"))   # review S4
         pr = package_rows(conn, sel, terms, c)
         digest = plan_digest(scope_of(sel), pr.rows, scratch=scratch)
         contents = contents_of(pr.rows)
@@ -380,6 +380,8 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
                       source_semantics=conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0])
         if sel.exclude:                                 # the ids --exclude matched: all of them, or it refused
             counts.update(exclude_ids=len(sel.exclude), excluded=counts.get("excluded", 0))
+            if exclude_cold:
+                counts["exclude_cold"] = exclude_cold
         who = {reason: people(scratch, reason) for reason in PEOPLE_REASONS}
         cold = Path(store).with_name("cold.db")
         cold_conn = store_reader.connect(cold, immutable=True) if cold.is_file() else None
@@ -538,9 +540,10 @@ def render_dry_run(plan: Plan, context: Context, *, show_cross_references: bool 
     if not route:
         out.append("  " + WITHOUT_ROUTE_WORDS)
     if sel.exclude:
-        n, ids = c.get("excluded", 0), c.get("exclude_ids", len(sel.exclude))
+        n, ids, cold = c.get("excluded", 0), c.get("exclude_ids", len(sel.exclude)), c.get("exclude_cold", 0)
+        where = f" ({cold:,} in cold storage, which never leaves)" if cold else ""
         out.append(f"  {_n(n, 'memory stays', 'memories stay')} because --exclude names {'it' if n == 1 else 'them'}; "
-                   f"its {_n(ids, 'id names', 'ids each name')} a memory in this store.")
+                   f"its {_n(ids, 'id names', 'ids each name')} a memory in this store{where}.")
     if c.get("semantic_source_stays"):
         out.append(f"  {_n(c['semantic_source_stays'], 'semantic stays', 'semantics stay')} because a recorded source "
                    "episode stays.")

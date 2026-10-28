@@ -347,8 +347,9 @@ A selection is σ = (L, Λ, t₀, t₁, A, X, U):
 - A is an audience or ⊥ (`--shared-with`, optional). Its grammar is `sharing.validate_audience`
   (`sharing.py:41-46`).
 - X is a finite set of ids to leave out (`--exclude FILE`, one id per line). Each must be an episode's or a
-  semantic's id exactly as stored, in any lane or time: the plan refuses one that names no memory (a typo,
-  another case, a `mem:` ref) and lists it, and the dry run counts what X leaves out (section 2 review S4).
+  semantic's id exactly as stored, in any lane or time, or an episode's in the store's `cold.db` (a pruned
+  episode can be revived with its id, and X still leaves it out): the plan refuses one that names no memory (a
+  typo, another case, a `mem:` ref) and lists it, and the dry run counts what X leaves out (section 2 review S4).
 - U is true or false (`--include-unsourced-semantics`, default false).
 
 **Times.** For a row, τ is its stored time (`created_at`, or a log row's `timestamp`) read with ISO-8601 rules. A
