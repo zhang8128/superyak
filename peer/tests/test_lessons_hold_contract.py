@@ -4,7 +4,6 @@ and query, through the real provider and the real hold entry (hold-saves-provide
 pass; with main's lessons.py from before the contract, three of these failed (City of AI, 2026-10-28), so each half
 needs the other."""
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -14,10 +13,16 @@ from conftest import lesson_body, lesson_ship
 
 REPO = Path(__file__).resolve().parents[2]
 AGENT = REPO / 'agent'
-sys.path[:0] = [str(AGENT), str(AGENT.parent / 'team')]
 COMMAND = 'git push --force origin main'
 SHORT = lesson_body(claim='Short values.', command=('git', 'push'))
 LONG = lesson_body(claim='Long value.', command=('push --force',))
+
+
+@pytest.fixture(autouse=True)
+def agent_on_path(monkeypatch):
+    """The agent's package and team's, importable for these tests only (Rio Grande's nit), not the rest of the run."""
+    monkeypatch.syspath_prepend(str(AGENT.parent / 'team'))
+    monkeypatch.syspath_prepend(str(AGENT))
 
 
 @pytest.fixture
