@@ -11,9 +11,12 @@ Revision 4, 2026-10-28. Serenity (the Mac). Asked for by Andy.
 - the report lists every skip of a `killer:` item first, at any count, with its reason, and `checklist_propose`'s
   default says a `killer:` item climbs only to automation.
 - a notice counts files whose names aren't ids and never names a front matter key, since it stands outside any fence;
-  dock's trust is of the checkout's working tree on whatever branch, `checklists list` shows that branch, and dock says
-  when the checkout has no lists; the terminal check is named a speed bump; a `post:` room id is named as shown
-  outside the fence.
+  dock's trust is of the checkout's working tree on whatever branch, `checklists list` shows that branch (by name
+  only from a safe set), and dock says when the checkout has no lists; the terminal check is named a speed bump; a
+  `post:` room id is named as shown outside the fence; the hold logs no `time` miss, by design.
+- the seed: Merging to main's partners item is `killer:` and carries law section 7's "No ship pushes straight to
+  main"; Before any push's first item says to put the pushed ref in place of HEAD; a new list, An imprint act, takes
+  CLAUDE.md's IMPRINT rules out of A live station act, which gains its lessons-room clauses in their place.
 
 **Revision 3** applies the re-check's R1 to R4 as written (APPROVE WITH CHANGES, no further round needed):
 - `unshown` is dropped;
@@ -270,8 +273,9 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
 - It stays light. The hold path imports only the checklist module and the standard library, never `station`, `claims`
   or urllib, and `__main__` dispatches it before it imports `station`. It reads the claims registry for the acting-ship
   rule without them. It has 150 ms from its start to read files and at most 1 s in all, as the rail's hold. Past
-  either it prints nothing. The builder measures the time it adds to a Bash call on the Pi and posts it with the
-  branch.
+  either it prints nothing. Its main thread does no file I/O by design (a worker does it all), so a hold past its
+  time logs no `time` miss in `fired.jsonl`; the hook does. The builder measures the time it adds to a Bash call on
+  the Pi and posts it with the branch.
 - It never runs, expands or evaluates a list or anything in one.
 
 ### Running it out loud
@@ -377,7 +381,8 @@ linked by each file's `see:` key. docs/checklists.md then points to the files, s
 | Merging to main | Repository | `command git push origin main; command systemctl --user restart superyak-`. The Pi's units run from its main checkout, so the restart is where a merge goes live, and for a security fix the push comes after it (merge, restart, probe, then push: no unfixed hole is ever public). The list fires at whichever comes first in the session (D10). A push to main spelt another way (`git push` from main, `HEAD:main`) gets only Before any push. Its run is recorded after its last item, so the items after the push are answered then. A last item is added: "Reflect is run once the merge is announced." |
 | Before starting a piece of work | Repository | `claim`, once for each claimed item |
 | A session starting | Repository | `start` |
-| A live station act | Repository | `command make station-approve; command make station-deny; command make station-bridge; command make station-unbridge; command make station-add-ship; command make station-moderate; command make station-unmoderate` |
+| A live station act | Repository | `command make station-approve; command make station-deny; command make station-bridge; command make station-unbridge; command make station-add-ship; command make station-moderate; command make station-unmoderate; command make station-lessons-room; command make station-imprint-admit; command make station-imprint-delete; command make station-imprint-use` |
+| An imprint act | Repository | `command make station-imprint-admit; command make station-imprint-delete; command make station-imprint-use; command make station-approve`: CLAUDE.md's IMPRINT paragraph, moved out of A live station act (revision 4). An IMPRINT item is approved with `make station-approve`, so it fires at every approval, beside A live station act; no seed command matches three lists. |
 | The Mac's main checkout | The Mac's `~/.superyak/checklists/` | `enter /Users/kairos/Projects/superyak`. In the repository it would break its own first item untracked, and fire in every clone tracked. |
 | Shell commands (zsh) | The Mac's `~/.superyak/checklists/` | `command --include=*`. The Pi's shell may not be zsh. Tardis may copy it into its own lists. |
 | Copying a person's store | Not yet | Waits for the imprint commands to land on main, then `command` with their exact words. |
