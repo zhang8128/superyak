@@ -267,3 +267,42 @@ def test_peer_could_hold_is_the_checkouts_lessons_in_process_writing_no_bytecode
                           timeout=60)
     assert done.stdout.split() == said, done.stderr
     assert not list(tmp_path.rglob('__pycache__'))
+
+
+# Serenity's first-rail review, condition 2 (Tardis's hook half), pinned: a late query is killed at its deadline with
+# everything it started, and the answer's `command` value, which is lesson text, is never shown, in a fence or out.
+
+def gone(pid, within=2.0):
+    """True once `ps` no longer lists the process, or lists it as a zombie, within `within` seconds."""
+    until = time.monotonic() + within
+    while time.monotonic() < until:
+        stat = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
+        if not stat or stat.startswith('Z'):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_late_query_is_killed_at_its_deadline_with_everything_it_started(tmp_path):
+    pids, stub = tmp_path / 'pids', tmp_path / 'slow_query.py'
+    stub.write_text('import os, subprocess, sys, time\n'
+                    'child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])\n'
+                    f'open({str(pids)!r}, "w").write(f"{{os.getpid()}} {{child.pid}}")\n'
+                    'time.sleep(30)\n')
+    settings = {'ship': 'tardis', 'data_dir': str(tmp_path), 'query': [sys.executable, str(stub)], 'state_dir': tmp_path}
+    began = time.monotonic()
+    assert lh.ask(settings, {'ship': 'tardis', 'command': 'x'}, began + 1.0) is None
+    assert time.monotonic() - began < 2.0
+    query, started = map(int, pids.read_text().split())
+    assert gone(query) and gone(started)
+
+
+def test_the_answers_command_value_is_never_shown(rail):
+    """If the `command` value were shown it would be fenced like claim and why; it is never shown at all, since it only
+    decides whether a hold applies. A marker in the value is in no hold, render or record."""
+    value = '--include=MARKER7'
+    rail.answers(lesson(A, command=value))
+    rec = record(rail=rail)
+    [hold] = ask(rail, command=f'grep -rn {value} .', rec=rec)
+    assert 'MARKER7' not in hold.text and 'MARKER7' not in json.dumps(rec)
+    assert 'MARKER7' not in lh.render([lesson(A, command=value)])
