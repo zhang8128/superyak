@@ -108,11 +108,10 @@ reliable way to hold one, so items are meant to retire. Each one climbs a ladder
 
 The first rungs (2026-10-27):
 
-- Retired: "the include lists name every new module and test file" (under "Merging to main"), but only in a package
-  whose packaging test checks both: peer (modules, and test files once imprints merges) and agent (modules, once
-  agent-wheel-includes merges; its list names no tests). It had been retired for peer's modules alone, which held
-  neither agent's wheel (two modules missing) nor peer's test files (ten missing). A rung holds only the package
-  whose test exists, and only once that test is on main.
+- Retired for peer's modules only: "the include lists name every new module" (under "Merging to main"). Peer's test
+  files retire when imprints merges, and agent's modules when agent-wheel-includes merges (its list names no tests).
+  It had been retired for peer's modules alone, which held neither agent's wheel (two modules missing) nor peer's
+  test files (ten missing). A rung holds only the package whose test exists, and only once that test is on main.
 - Before retiring an item, name the test and the package it covers, and grep for every place the item applies
   (Tardis, 2026-10-28).
 - Next: "the branch's base is on the rewritten history" as a pre-push hook (`git merge-base --is-ancestor 60dd851`).
@@ -176,16 +175,18 @@ this list adds to it and never subtracts.
 - [ ] The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named
       (the 3 Kuzu tests).
 - [ ] GitHub CI's result is read, including the jobs the Pi can't run.
-- Retired to test_packaging (see "Retiring an item"): the `only-include` lists name every new module, and the package
-  builds and imports in a clean venv. The Pi's editable checkout hides a missing module, so the whole suite (the Pi
-  suites item above) is what shows it. If test_packaging breaks, this item comes back.
+- [ ] The `only-include` lists name every new module and test file, and the package builds and imports in a clean
+      venv. The Pi's editable checkout hides a missing one. Peer's modules are held by test_packaging (retired there,
+      see "Retiring an item"); until imprints and agent-wheel-includes are on main, check by hand that agent's list
+      names every module and peer's names every test file. Each part retires when its test is on main.
 - [ ] The station database is backed up (`make station-backup`), so a migration that goes wrong can be undone.
 - [ ] killer: Main is pushed once. The affected Pi services are restarted and checked, and the public route is probed
       from outside when the diff touches it; if a check fails, revert and restart. A security fix to a live route
       merges on the Pi, restarts and is probed before main is pushed, so its code is never public before the fix is
       live (the public route, 2026-10-27).
 - [ ] If it breaks at 3 a.m., what tells us, and who? Name the check: a dying unit alerts Odo in Ops; a running
-      route is watched by route-watch once its timer is installed; anything else, say that nothing watches it yet
+      route is watched by route-watch once its timer is installed (Tardis says so in the room; `systemctl --user
+      list-timers` on Tardis shows it); anything else, say that nothing watches it yet
       (learned_from: gtm, 2026-10-27).
 - [ ] The merge is announced in the room, and its board item is marked done.
 
