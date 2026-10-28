@@ -187,6 +187,37 @@ class _Embeddings:
         return out
 
 
+def _slow_builds_if_asked():
+    """Test seam: PI_BUDGET_PROBE_SLOW_BUILD_S=n makes every eligible-set build take n seconds longer, standing in
+    for a loaded Pi (a build then outlasts the frame's REBUILD_WAIT_S). Unset in every real run."""
+    delay = float(os.environ.get("PI_BUDGET_PROBE_SLOW_BUILD_S") or 0)
+    if not delay:
+        return
+    import permissions
+    real = permissions.eligible_set
+
+    def slow(*args, **kw):
+        time.sleep(delay)
+        return real(*args, **kw)
+    permissions.eligible_set = slow
+
+
+def _wait_for_builds(daemon, timeout=120.0):
+    """A frame waits only REBUILD_WAIT_S for its set; the build goes on in its own thread and counts itself in
+    `rebuilds` and puts its entry in the cache only when it ends. On a loaded Pi the workers can be done first, so
+    wait here for every build under way. This changes when the probe reads its counters, not the work it does."""
+    deadline = time.monotonic() + timeout
+    while True:
+        with daemon._cache_lock:
+            threads = list(daemon._build_threads)
+        if not threads:
+            return
+        for thread in threads:
+            thread.join(max(deadline - time.monotonic(), 0))
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"{len(threads)} eligible-set build(s) still running after {timeout:g} s")
+
+
 def op_daemon(home, a):
     import uuid
     from datetime import datetime, timezone
@@ -200,6 +231,7 @@ def op_daemon(home, a):
     daemon = PublisherDaemon({"why": pub}, root / "s.sock", _Embeddings(), engram_home=root,
                              clock=lambda: datetime.fromtimestamp(NOW, tz=timezone.utc))
     assert pub.open()
+    _slow_builds_if_asked()
     daemon._cache = _WatchedCache()
     pub.storage = _PerThreadStorage(pub.db_path)
     keys = [(f"rcv{k}", p) for k in range(a.receivers) for p in PURPOSES]
@@ -231,6 +263,7 @@ def op_daemon(home, a):
     threads = [threading.Thread(target=worker) for _ in range(3)]
     [t.start() for t in threads]
     [t.join() for t in threads]
+    _wait_for_builds(daemon)
     held = sum(e.estimate() for e in daemon._cache.values())
     return {"frames": served[0], "rebuilds": daemon.rebuilds, "cached_entries": len(daemon._cache),
             "cache_bytes": held, "added_bytes": daemon._cache.added_bytes, "evicted": daemon._cache.evicted, "cache_limit": lighthouse_daemon.CACHE_BYTES, "errors": errors[:3]}
