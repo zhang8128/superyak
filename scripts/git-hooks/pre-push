@@ -3,6 +3,8 @@
 # rewritten history, and no commit new to the remote may touch a scrubbed path or hold the scrubbed text. Installed by
 # `make install-hooks`; it holds "the branch's base is on the rewritten history" from docs/checklists.md.
 SCRUBBED_BASE=60dd85175a1709627be63a4678694029c5721b74  # main right after the scrub
+# Tests point this at a throwaway repo's commit; a person who sets it could as well push with --no-verify.
+SCRUBBED_BASE="${SUPERYAK_PREPUSH_BASE:-$SCRUBBED_BASE}"
 case "$2" in  # the private archive keeps the old history on purpose; only its exact URLs are skipped
     git@github.com:zhang8128/superyak-archive|git@github.com:zhang8128/superyak-archive.git|\
     https://github.com/zhang8128/superyak-archive|https://github.com/zhang8128/superyak-archive.git) exit 0 ;;
