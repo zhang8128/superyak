@@ -949,10 +949,16 @@ function chatsView() {
     <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong><span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
 }
 
+function contactState(contact) {
+  // a code shows only for a contact confirmed by typing: any other could be copied into a re-pair (fix:pairing-code)
+  if (contact.held) return "Held until its own code is typed";
+  return contact.confirmed ? "Confirmed by typing" : "No typed code on record";
+}
+
 function connectionGroup(connection) {
   const peers = state.connections.filter((item) => item.peer_id === connection.peer_id);
   if (peers[0]?.id !== connection.id) return "";
-  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3><p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p><p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><p class="meta">Pairing code: ${escapeHtml(connection.pairing_code || "none")}</p><p class="meta">${connection.confirmed ? "Confirmed by typing" : "Not confirmed by typing"}</p>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
+  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3><p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p><p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><ul class="meta">${peers.map((item) => `<li><span>${escapeHtml(item.name)}</span> <span>${item.pairing_code ? `Pairing code: ${escapeHtml(item.pairing_code)}` : "No code shown"}</span> <span>${contactState(item)}</span></li>`).join("")}</ul>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
 }
 
 function deliveryDescription(delivery) {
@@ -1716,12 +1722,14 @@ async function previewPair(form) {
 async function confirmPair(form) {
   // fix:pairing-code: the person types the other machine's code; the server checks it. After a code that doesn't
   // match, the preview is cleared, so copying the code the message names is a deliberate step, not a reflex.
+  const typed = form.elements.code.value;
+  const wellFormed = /^[0-9a-f]{32}$/.test(typed.replace(/[\s-]/g, "").toLowerCase());  // what the server would check
   try {
-    await api("/api/connections/pair", { method: "POST", json: { card: state.pairPreview, code: form.elements.code.value } });
+    await api("/api/connections/pair", { method: "POST", json: { card: state.pairPreview, code: typed } });
     state.pairPreview = null; state.pairCode = "";
     await refresh("Peer paired. Nothing has been shared automatically.");
   } catch (error) {
-    if (error.message.startsWith("That code doesn't match")) { state.pairPreview = null; state.pairCode = ""; }
+    if (wellFormed && error.status === 400) { state.pairPreview = null; state.pairCode = ""; }  // a code that didn't match
     setFlash(error.message, true);
     render();
   }

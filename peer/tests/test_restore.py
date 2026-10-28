@@ -1394,7 +1394,8 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
     'inbox_received', 'receipts', 'peer_messages', 'federation_cursor', 'layer_revisions',
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
-    'pairing_confirmations'}  # fix:pairing-code: a typed code's record; pairing itself is peers and remote_contacts
+    'pairing_confirmations',  # fix:pairing-code: a typed code's record; pairing itself is peers and remote_contacts
+    'contact_holds'}  # a contact waiting for its own code: it only takes away, so copying it as is is safe
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):
@@ -1499,3 +1500,30 @@ def test_a_hostile_room_title_prints_on_one_line_in_the_brief_report(tmp_path, c
     for bad in ('\x1b', '\u202e', '@'):
         assert bad not in out
     assert 'Ops' in line and 'Evil' in line
+
+
+@pytest.mark.parametrize('old_copy', [False, True])
+def test_the_reconcile_s_unpair_holds_every_contact_as_federation_unpair_does(tmp_path, old_copy):
+    """fix:pairing-code, review SF3: _unpair is exactly Federation.unpair, so the peer's contacts are held and lose their
+    confirmations; a copy from before contact holds gains the table, so the hold isn't lost on restore."""
+    from superyak_peer.federation import Federation
+    from superyak_peer.identity import pairing_code
+    here = Store(tmp_path / 'here')
+    admin = here.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    there = Store(tmp_path / 'there')
+    one, two = (there.create_user(n, n.title(), 'long-password', is_admin=True) for n in ('casey', 'drew'))
+    remote = Federation(there, endpoint='https://localhost:7436')
+    fed = Federation(here, endpoint='https://localhost:7435')
+    for user in (one, two):
+        card = remote.card(user['id'])
+        fed.pair(admin['id'], card, code=pairing_code(card))
+    with closing(sqlite3.connect(here.db_path)) as db:
+        if old_copy:
+            db.execute('DROP TABLE contact_holds')
+        report = {'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0]}
+        backups._unpair(db, None, remote.identity.peer_id, report)
+        db.commit()
+        held = {row[0] for row in db.execute('SELECT contact_id FROM contact_holds')}
+        contacts = {row[0] for row in db.execute('SELECT id FROM remote_contacts')}
+        confirmations = db.execute('SELECT COUNT(*) FROM pairing_confirmations').fetchone()[0]
+    assert held == contacts and len(contacts) == 2 and confirmations == 0

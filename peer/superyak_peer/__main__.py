@@ -293,11 +293,15 @@ def pair_command(data_dir, card_path, username, terminal=controlling_terminal):
         say(f"Pairing {safe_line(card['participant']['name'])} ({safe_line(card['participant']['id'])}) "
             f"at {safe_line(card['endpoint'], 200)}\n{PAIR_PROMPT}")
         typed = b''
-        while not typed.endswith(b'\n') and len(typed) < 1024:  # a canonical-mode terminal hands over whole lines
-            chunk = os.read(fd, 1024)
-            if not chunk:
-                break
-            typed += chunk
+        try:
+            while not typed.endswith(b'\n') and len(typed) < 1024:  # a canonical-mode terminal hands over whole lines
+                chunk = os.read(fd, 1024)
+                if not chunk:
+                    break
+                typed += chunk
+        except KeyboardInterrupt:
+            say('\nNothing was paired.\n')
+            return 130
         try:
             contact = federation_here(store).pair(actor, card, code=typed.decode('utf-8', 'replace'))
         except Problem as exc:
@@ -309,12 +313,19 @@ def pair_command(data_dir, card_path, username, terminal=controlling_terminal):
         os.close(fd)
 
 
+def contact_state(contact):
+    """One contact's standing, in the CLI's and the browser's words: held, confirmed, or neither."""
+    if contact['held']:
+        return 'held until its own code is typed'
+    return 'confirmed by typing' if contact['confirmed'] else 'no typed code on record'
+
+
 def describe_connections(listed):
+    """A code is listed only for a confirmed contact (connections() shows no other: it could be copied into a re-pair)."""
     if not listed:
         return 'No paired peers.'
     return '\n'.join(f"{safe_line(c['name'])} ({safe_line(c['user_id'])}) at {safe_line(c['card']['endpoint'], 200)}: "
-                     f"code {c['pairing_code'] or 'none'}, "
-                     f"{'confirmed by typing' if c['confirmed'] else 'not confirmed by typing'}"
+                     f"{('code ' + c['pairing_code']) if c['pairing_code'] else 'no code shown'}, {contact_state(c)}"
                      f"{'' if c['paired'] else ', unpaired'}" for c in listed)
 
 

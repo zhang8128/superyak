@@ -676,12 +676,12 @@ All origins used by browser/peer traffic must be repeated with `--origin`.
 
 | Method/path | Request | Response/authority |
 |---|---|---|
-| GET `/api/connections` | — | Array of `{id,peer_id,user_id,name,card,paired,pairing_code,confirmed}`; `confirmed` while a typed code confirmed that very card; local owner only |
+| GET `/api/connections` | — | Array of `{id,peer_id,user_id,name,card,paired,pairing_code,confirmed,held}`; `confirmed` while a typed code confirmed that very card, and `pairing_code` only then (null otherwise, so it can't be copied into a re-pair); `held` while the contact waits for its own code after a peer-wide disconnect; local owner only |
 | GET `/api/connections/card` | — | Current signed-in participant's public card |
 | GET `/api/connections/code` | — | `{code}`: that card's pairing code, grouped; any signed-in participant; 409 without an endpoint |
 | POST `/api/connections/preview` | `{card}` | Validated public card, never its code; local owner only; no pairing or network |
 | POST `/api/connections/pair` | `{card,code}` | Remote contact `{id,peer_id,user_id,name,pairing_code,confirmed}`, 201; local owner (403 first); a missing or malformed code, or the old `fingerprint` alone, 400; a wrong code, 400 naming the card's code |
-| DELETE `/api/connections/{contact_id}` | — | `{ok:true}`; local owner; unpairs entire peer and hides its received content |
+| DELETE `/api/connections/{contact_id}` | — | `{ok:true}`; local owner; unpairs entire peer and hides its received content. Every contact of the peer is then held and loses its confirmation: pairing one participant again reconnects that one only, and each other one stays out of audiences, gets no delivery and has its events refused until its own code is typed |
 | GET `/api/sync` | — | `{enabled,deliveries:[...]}` for current author only |
 | POST `/api/sync` | none | Runs one bounded pass, returns same author-filtered status |
 | POST `/api/sync/{delivery_id}/retry` | none | `{ok:true}`; authorized local delivery controller; resets failed attempt budget, preserves event ID; nonfailed returns 409 |

@@ -693,9 +693,16 @@ def _shown(db, old, peer):
 
 
 def _unpair(db, old, peer, report):
-    """Exactly Federation.unpair (federation.py:43-45) on the staged copy: paired=0, that peer's contacts' pending and
-    failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled."""
+    """Exactly Federation.unpair on the staged copy: every contact of the peer held and its confirmation gone, so
+    pairing one participant again reconnects that one only (fix:pairing-code, review SF3); paired=0, that peer's
+    contacts' pending and failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled. A
+    copy from before contact holds gains the table here, so the hold isn't lost on restore."""
     names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))]
+    db.execute('CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL)')
+    db.execute('INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?', (time.time(), peer))
+    if _has(db, 'pairing_confirmations.contact_id'):
+        db.execute('DELETE FROM pairing_confirmations WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?)',
+                   (peer,))
     db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (peer,))
     withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN "
                            "(SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (peer,)).rowcount

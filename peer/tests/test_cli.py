@@ -362,6 +362,49 @@ def test_both_sides_see_one_code(tmp_path):
     assert f'code {shown_there}' in listed.stdout and 'confirmed by typing' in listed.stdout
 
 
+def test_ctrl_c_at_the_prompt_pairs_nothing_and_says_so(tmp_path):
+    """Pairing review nit: no traceback. Ctrl-C on the terminal interrupts the read."""
+    import pty
+    import select
+    import time
+    here, card, path = peers(tmp_path)
+    pid, master = pty.fork()
+    if pid == 0:
+        try:
+            os.execv(sys.executable, [sys.executable, '-m', 'superyak_peer', *map(str, pair_args(here, path))])
+        finally:
+            os._exit(127)
+    shown, deadline = b'', time.monotonic() + 60
+    while PROMPT not in shown and time.monotonic() < deadline:
+        if select.select([master], [], [], 0.2)[0]:
+            shown += os.read(master, 4096)
+    os.write(master, b'\x03')  # the terminal's interrupt character
+    while time.monotonic() < deadline:
+        if select.select([master], [], [], 0.2)[0]:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            shown += chunk
+    _, status = os.waitpid(pid, 0)
+    os.close(master)
+    assert os.waitstatus_to_exitcode(status) == 130
+    assert b'Nothing was paired.' in shown and b'Traceback' not in shown
+    assert contacts(here) == []
+
+
+def test_the_two_peer_checker_s_code_is_the_peer_s(tmp_path):
+    """Pairing review SF1: scripts/two_peer_check.py computes the code standalone; it must be identity.pairing_code."""
+    import runpy
+    from pathlib import Path
+    from superyak_peer.identity import pairing_code
+    _, card, _ = peers(tmp_path, remote_name='Zoë Ünicode')
+    checker = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'scripts' / 'two_peer_check.py'), run_name='check')
+    assert checker['pairing_code'](card) == pairing_code(card)
+
+
 def test_connections_needs_an_admin(tmp_path):
     here, _, _ = peers(tmp_path)
     here.create_user('carol', 'Carol', 'long-password')
