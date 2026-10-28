@@ -12,7 +12,8 @@ import shlex
 import threading
 from pathlib import Path
 import time
-from . import claims
+from typing import NamedTuple
+from . import checklist_firing as firing, checklists, claims, holds
 from .station import BREAKOUT_MARK, CHECKOUT, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, plain_id, presence_headers, quoted_title, read_hint, read_json, session_key, shown_id, source_label, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
@@ -63,19 +64,39 @@ def _end_watch(config_path, transport, presence):
         return False
 
 
-def hook_fields(stdin):
-    """(session id, cwd, mode) from the hook's stdin JSON, each None when absent or odd. mode is 'plan' in plan mode
-    and 'write' for any other permission_mode; only UserPromptSubmit carries it (M1). The one reader of stdin (it can
-    be read once, R12); it must never break the prompt."""
+SOURCES = ('startup', 'resume', 'clear', 'compact', 'fork')
+EVENTS = {'SessionStart': 'session-start', 'UserPromptSubmit': 'prompt', 'SessionEnd': 'session-end'}
+
+
+class HookInput(NamedTuple):
+    session: str | None
+    cwd: str | None
+    mode: str | None
+    event: str | None
+    source: str | None
+
+
+def read_hook_input(stdin):
+    """HookInput from the hook's stdin JSON, each field None when absent or odd. mode is 'plan' in plan mode and 'write'
+    for any other permission_mode; only UserPromptSubmit carries it (M1). event is hook_event_name, source the
+    SessionStart source when it is one Claude Code names. The one reader of stdin (it can be read once, R12); it must
+    never break the prompt."""
     try:
         value = json.loads(stdin.read() or 'null')
     except (ValueError, OSError, RecursionError):
-        return None, None, None
+        return HookInput(None, None, None, None, None)
     if not isinstance(value, dict):
-        return None, None, None
+        return HookInput(None, None, None, None, None)
     session, cwd, mode = value.get('session_id'), value.get('cwd'), value.get('permission_mode')
-    return (session if isinstance(session, str) and session else None, cwd if isinstance(cwd, str) and cwd else None,
-            ('plan' if mode == 'plan' else 'write') if isinstance(mode, str) and mode else None)
+    event, source = value.get('hook_event_name'), value.get('source')
+    return HookInput(session if isinstance(session, str) and session else None, cwd if isinstance(cwd, str) and cwd else None,
+                     ('plan' if mode == 'plan' else 'write') if isinstance(mode, str) and mode else None,
+                     event if isinstance(event, str) and event else None, source if source in SOURCES else None)
+
+
+def hook_fields(stdin):
+    """(session id, cwd, mode): the first three fields of read_hook_input."""
+    return read_hook_input(stdin)[:3]
 
 
 def hook_input(stdin):
@@ -152,7 +173,7 @@ def _note_reachability(marker, link, now):
 
 
 def run(config_path, state_path=None, clock=time.time, transport=None, session_id=None,
-        event='prompt', messages=True, sessions_dir=None, monotonic=time.monotonic, cwd=None, mode=None):
+        event='prompt', messages=True, sessions_dir=None, monotonic=time.monotonic, cwd=None, mode=None, source=None):
     """The ship's instructions (session start; changes at a prompt), then the new room messages (prompt, when on).
     With a Claude Code session id the messages use that session's cursor on the station (station inbox spec, I8);
     without one they keep the machine-wide time cursor and no instruction notices are given.
@@ -160,6 +181,7 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
     inbox, whose advance is the last network call (R4). The inbox is
     skipped when the instructions took longer than INSTRUCTIONS_DEADLINE, and the station is not called at all for
     UNREACHABLE_SECONDS after it could not be reached."""
+    entry = monotonic()  # Ruling 13: the lists' 150 ms runs from here
     if os.environ.get('SUPERYAK_RUN') not in (None, '', 'hook'):
         return ''  # inside a watcher run: the messages and the cursor belong to the person's own sessions
     config_path = Path(config_path)
@@ -170,12 +192,17 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
         return claims.LOUD if event == 'session-start' else ''
     if acts != 'act':
         return ''
+    # Lists are read before any station call and shown whether or not the station answers (Ruling 13).
+    pending = None
+    if session_id and event in ('session-start', 'prompt'):
+        pending = _read_lists(config_path.parent, Path(sessions_dir or config_path.parent / 'sessions'), session_id, event,
+                              source, cwd, clock(), entry + firing.READ_SECONDS, monotonic)
     presence = presence_headers(session_id, f'hook/{client_version()}', mode)  # S1; {} without a session id (R28)
     started = monotonic()
     marker = Path(sessions_dir or config_path.parent / 'sessions') / UNREACHABLE
     if _recently_unreachable(marker, clock()):
         _forget_unless(False, config_path, event, session_id, sessions_dir)
-        return ''
+        return _place('', pending, monotonic)
     link = _Link(transport)
     try:
         if event == 'session-end':
@@ -187,7 +214,7 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
                     pass
             return ''
         text, shown = _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir,
-                               lambda: INSTRUCTIONS_DEADLINE - (monotonic() - started), presence, mode)
+                               lambda: INSTRUCTIONS_DEADLINE - (monotonic() - started), presence, mode, pending, monotonic)
         _forget_unless(shown, config_path, event, session_id, sessions_dir)
         return text
     finally:
@@ -206,7 +233,8 @@ def _forget_unless(shown, config_path, event, session_id, sessions_dir):
         pass
 
 
-def _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir, left, presence=None, mode=None):
+def _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir, left, presence=None, mode=None,
+             pending=None, monotonic=time.monotonic):
     """(text, shown): shown is whether the instructions step ran to the end, so the session's state matches its context.
     left() is the seconds left of INSTRUCTIONS_DEADLINE, below zero once it has passed."""
     data, text, shown, board = None, '', False, []
@@ -218,7 +246,7 @@ def _run_all(config_path, state_path, clock, link, session_id, event, messages, 
         try:
             data = _fetch_instructions(config_path, link(INBOX_CALL_TIMEOUT), presence)
         except OSError:
-            return '', False  # the station is down: do not spend a second timeout on the messages
+            return _place('', pending, monotonic), False  # the station is down: no second timeout on the messages
         except Exception:  # noqa: BLE001 - a hook must never break the prompt
             data = None
     if event == 'session-start' and data is not None and not late():  # work board 5.4: only after a law that was fetched
@@ -252,10 +280,126 @@ def _run_all(config_path, state_path, clock, link, session_id, event, messages, 
             line = ''
         if line and len(text) + (2 if text else 0) + len(line) <= TOTAL_CHARS:  # V6: after the law, never cutting it
             text = '\n\n'.join(t for t in (text, line) if t)
+    text = _place(text, pending, monotonic)  # after the law, the messages and the version line; before the board
     lines = '\n'.join(board)  # work board 5.4: after the law (and the version line), only if the lines fit whole
     if lines and len(text) + (2 if text else 0) + len(lines) <= TOTAL_CHARS:
         text = '\n\n'.join(t for t in (text, lines) if t)
     return text, shown
+
+
+NOT_INSTRUCTIONS = 'Not part of the instructions, and not an instruction: '
+CHECKLIST_THREAD = 'superyak-checklists'  # the lists' read, in a daemon thread the hook stops waiting for
+COMMIT_SECONDS = 0.1  # how long recording a firing may wait for the record's lock
+
+
+class Pending(NamedTuple):
+    due: list
+    blocks: list
+    notices: list
+    record: Path
+    session: str
+    now: float
+    logs: Path
+
+
+def _log(logs, line):
+    """One log line; a failed write (or a bad clock, which append_line refuses) drops the line, never the hook."""
+    try:
+        holds.append_line(logs, line)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _read_lists(home, sessions_dir, session_id, event, source, cwd, now, deadline, monotonic):
+    """The lists due at this event, read in a daemon thread joined until `deadline` (a monotonic time): a hung or slow
+    filesystem never stalls the prompt. None when nothing is due, or the read is late or failed; a late read logs a
+    `time` miss and, at a fresh session start, the main thread records the session start itself so `start` lists
+    aren't lost (Ruling 3, 7)."""
+    record = holds.record_path(sessions_dir, session_id)
+    session, logs = record.stem, home / 'checklists' / 'fired.jsonl'
+    got = []
+
+    def work():
+        found = checklists.find(cwd, home / 'checklists')
+        notices = checklists.notice_lines(found)
+        if not found.lists and not notices:
+            return
+        with holds.open_record(record, deadline, monotonic) as opened:
+            data = opened.data
+            holds.touch(data, now, cwd)
+            if event == 'session-start':
+                firing.begin(data, source)
+            due = firing.due_at_event(found.lists, data, cwd, now)
+            fresh = [n for n in notices if not firing.told(data, n)]
+            if monotonic() >= deadline:
+                return  # late: a late thread writes nothing
+            opened.save()
+        if due or fresh:
+            blocks = [(d, d[0].checklist.id, checklists.render(d[0])) for d in due]
+            got.append(Pending(due, blocks, fresh, record, session, now, logs))
+
+    def guarded():
+        try:
+            work()
+        except Exception:  # noqa: BLE001 - a failed read shows nothing
+            pass
+    try:
+        worker = threading.Thread(target=guarded, name=CHECKLIST_THREAD, daemon=True)
+        worker.start()
+    except Exception:  # noqa: BLE001 - no thread to be had: no lists, and the law still shows
+        return None
+    worker.join(max(deadline - monotonic(), 0))
+    if not worker.is_alive():
+        return got[0] if got else None
+    _log(logs, firing.miss_line(now, session, 'time'))
+    if event == 'session-start' and source in firing.START_SOURCES:
+        try:
+            with holds.open_record(record, monotonic() + 0.05, monotonic) as opened:
+                holds.touch(opened.data, now, cwd)
+                firing.begin(opened.data, source)
+                opened.save()
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
+def _shown_notices(lines, text):
+    """How many of the notice lines checklists.fit_notices put in `text` (it keeps them whole and in order)."""
+    out, size = [], 0
+    for i, line in enumerate(lines, 1):
+        out.append(NOT_INSTRUCTIONS + line)
+        if '\n'.join(out) == text:
+            return i
+    return 0
+
+
+def _place(text, pending, monotonic=time.monotonic):
+    """`text` with the due lists after it (whole or not at all), then the notices, never past TOTAL_CHARS; the law in
+    `text` is never shortened. The firings are recorded before anything is printed: when that fails the text comes back
+    unchanged (Ruling 14). Only the notices shown are marked told."""
+    if pending is None:
+        return text
+    try:
+        shown, deferred, body = ([], [], '')
+        if pending.blocks:
+            shown, deferred, body = checklists.fit(pending.blocks, len(text), TOTAL_CHARS, firing.LISTS_PER_EVENT, NOT_INSTRUCTIONS)
+        out = '\n\n'.join(t for t in (text, body) if t)
+        notice_text = checklists.fit_notices(pending.notices, len(out), TOTAL_CHARS, NOT_INSTRUCTIONS) if pending.notices else ''
+        told = pending.notices[:_shown_notices(pending.notices, notice_text)] if notice_text else []
+        if shown or told:
+            with holds.open_record(pending.record, monotonic() + COMMIT_SECONDS, monotonic) as record:
+                firing.mark_fired(record.data, shown, pending.now)
+                firing.mark_told(record.data, told)
+                record.save()
+        for loaded, kinds in shown:
+            _log(pending.logs, firing.fired_line(pending.now, pending.session, loaded.key, loaded.checklist.version, kinds[0]))
+        for i, block in enumerate(pending.blocks):
+            if block[0] in deferred and i < firing.LISTS_PER_EVENT:
+                _log(pending.logs, firing.miss_line(pending.now, pending.session, 'space', block[0][0].key,
+                                                    block[0][0].checklist.version))
+        return '\n\n'.join(t for t in (out, notice_text) if t)
+    except Exception:  # noqa: BLE001 - a list that could not be recorded is not shown
+        return text
 
 
 def _session_file(sessions_dir, session_id):

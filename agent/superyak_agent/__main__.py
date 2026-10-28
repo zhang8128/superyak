@@ -76,9 +76,14 @@ def _hook(parser, argv):
         import os
         from . import hook
         args, _ = parser.parse_known_args(argv)
-        session_id, cwd, mode = (None, None, None) if sys.stdin.isatty() else hook.hook_fields(sys.stdin)
-        event = {'session-start': 'session-start', 'session-end': 'session-end'}.get(os.environ.get('SUPERYAK_HOOK_EVENT'), 'prompt')
-        text = hook.run(args.config, session_id=session_id, cwd=cwd, mode=mode, event=event,
+        got = hook.HookInput(None, None, None, None, None) if sys.stdin.isatty() else hook.read_hook_input(sys.stdin)
+        if got.event:  # Ruling 6: Claude Code's own name for the event decides; any other value prints nothing
+            if got.event not in hook.EVENTS:
+                return 0
+            event = hook.EVENTS[got.event]
+        else:
+            event = {'session-start': 'session-start', 'session-end': 'session-end'}.get(os.environ.get('SUPERYAK_HOOK_EVENT'), 'prompt')
+        text = hook.run(args.config, session_id=got.session, cwd=got.cwd, mode=got.mode, event=event, source=got.source,
                         messages=os.environ.get('SUPERYAK_HOOK_MESSAGES') != '0')
         if text:
             print(text)
