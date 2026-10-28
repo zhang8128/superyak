@@ -242,7 +242,7 @@ def test_every_change_posts_one_notice_and_a_carry_posts_none(env):
     assert changed
     for new in (carried, bridged['id']):
         assert brief_of(clients[0], new)['body'] == 'Carry this.'
-        assert clients[0].get(f'/api/chats/{new}').json()['messages'] == []
+        assert [m for m in notices(clients[0], new) if m['client_message_id'].startswith('brief-')] == []  # the add's own member- notice is not a brief's
 
 
 def test_the_brief_notice_text_is_exactly_the_template(env):
@@ -302,8 +302,8 @@ def test_a_brief_notice_never_wakes_answers_or_federates(env, two_peers):
     assert [m['body'] for m in b[0].get_room(b[1], remote['id'])['messages']] == ['an ordinary message']
 
 
-def test_only_two_notices_are_written_by_the_system_author(env):
-    """R18: _post_as_system has exactly two callers, the deferral notice and the brief notice, and every message the
+def test_only_these_notices_are_written_by_the_system_author(env):
+    """R18: _post_as_system has exactly these callers: the deferral notice, the brief notice, the appointment, the end notice and a member add, a member removal, and every message the
     system author writes carries one of their client ids. The deferral's is notice-<ship id>-<mention id>, as before,
     so a retry across the deploy still finds its notice."""
     callers = set()
@@ -313,7 +313,8 @@ def test_only_two_notices_are_written_by_the_system_author(env):
                 for node in ast.walk(function):
                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == '_post_as_system':
                         callers.add((path.name, function.name))
-    assert callers == {('tickets.py', '_post_notice'), ('briefs.py', '_write_brief')}
+    assert callers == {('tickets.py', '_post_notice'), ('briefs.py', '_write_brief'), ('moderators.py', '_make_moderate'),
+                       ('grants.py', '_revoke'), ('members.py', '_add_members'), ('members.py', '_remove_member')}
     app, clients, users, clock = env
     store = app.state.store
     ship, key = docked(store, users[0]['id'], 'serenity')
@@ -432,7 +433,7 @@ def test_who_may_write_through_the_ship_route(env, case):
     assert (refused.status_code, refused.json()['error']) == (status, error)
     with app.state.store.transaction() as db:
         assert db.execute('SELECT (SELECT count(*) FROM room_briefs) + (SELECT count(*) FROM room_brief_revisions)').fetchone()[0] == 0
-        assert db.execute('SELECT count(*) FROM messages').fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM messages WHERE client_message_id NOT LIKE 'member-%'").fetchone()[0] == 0  # the add that replaced the room posted its member- notice
 
 
 def test_the_person_route_still_refuses_ship_keys(env):
@@ -596,7 +597,7 @@ def test_ship_brief_saves_are_limited_to_ten_an_hour(env):
     assert ship_put(rio, again, 'Save 10.', 1).status_code == 200
     refused = ship_put(rio, bridged['id'], 'Save 11.', 1)
     assert (refused.status_code, refused.json()['error']) == (429, TOO_FAST)
-    assert brief_of(clients[0], bridged['id'])['revision'] == 1 and notices(clients[0], bridged['id']) == []
+    assert brief_of(clients[0], bridged['id'])['revision'] == 1 and [m for m in notices(clients[0], bridged['id']) if m['client_message_id'].startswith('brief-')] == []
     clock[0] = started + 3600  # save 1 leaves the hour
     assert ship_put(rio, bridged['id'], 'Save 11, an hour on.', 1).status_code == 200
     late = ship_put(rio, again, 'Save 12.', 2)  # saves 2-11 fill the hour again

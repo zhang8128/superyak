@@ -2324,7 +2324,8 @@ def test_a_carry_refused_for_a_newer_brief_shows_it_and_carries_it_on_a_second_t
 def test_a_replaced_room_offers_no_add_and_a_stale_add_says_why(browser_peer):
     """Work board 8.4 (final review): a room another add replaced takes no more members. A page opened before that add
     gets the station's 409 in the dialog, not the brief's message, and nothing is added. After a reload the replaced
-    room offers no "Change participants" (its other controls stay), and its replacement does."""
+    room offers neither "Change participants" nor Remove (both answer 409 there, the moderators plan's ruling 7), and its
+    replacement does."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
     patient, doctor = users["patient"]["id"], users["doctor"]["id"]
     room = store.create_room(patient, "City of AI", [users["family"]["id"]])
@@ -2344,7 +2345,7 @@ def test_a_replaced_room_offers_no_add_and_a_stale_add_says_why(browser_peer):
             assert store.list_rooms(doctor) == []
             dialog.get_by_role("button", name="Cancel").click()
             page.reload()
-            expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_be_visible()
+            expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_have_count(0)  # removal answers 409 REPLACED_REMOVE (ruling 7)
             expect(page.get_by_role("button", name="Change participants")).to_have_count(0)
             page.goto(f"{base}/#chats/{replacement['id']}")
             page.reload()
