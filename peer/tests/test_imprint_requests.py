@@ -38,6 +38,16 @@ def test_each_format_refuses_a_bad_value(tmp_path, change):
     assert st.voyager.post("/api/imprints", content=canonical(request_doc(**change))).status_code == 400
 
 
+def test_route_waits_for_trails(tmp_path, route_closed):
+    """S1: no trails module ships yet, so a request with route is refused before anything is staged."""
+    assert imprints.ROUTE_OPEN is False
+    st = station(tmp_path)
+    refused = post(st, request_doc())
+    assert refused.status_code == 400 and "terms.actions" in refused.json()["error"]
+    assert not (tmp_path / "peer" / "imprints").exists() or not any((tmp_path / "peer" / "imprints").iterdir())
+    assert post(st, request_doc(route=False)).status_code == 201
+
+
 def test_a_duplicate_imprint_id_and_the_limits(tmp_path, monkeypatch):
     st = station(tmp_path); doc = request_doc()
     assert post(st, doc).status_code == 201 and post(st, doc).status_code == 409

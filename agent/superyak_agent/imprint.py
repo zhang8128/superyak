@@ -79,8 +79,10 @@ class Imprint:
                      'expires': made['expires'], 'confirm_url': made['confirm_url']}
             write_private(folder / 'send.json', saved)
             self.out(f'Imprint {imprint_id[:4]}, request {_shown(made["id"])[:4]}. Code {_shown(made["code"])}.')
-            self.out(f'Open {_shown(made["confirm_url"], 400)} in your browser, check the code matches, choose your '
-                     f'station password and tick the box. Nothing leaves this machine until you say yes.')
+            self.out(f'Open {_shown(made["confirm_url"], 400)} in your browser yourself. Check that it shows the '
+                     f'two short ids above and that the address is the station\'s, tick the box and type your own '
+                     f'station password. Nothing leaves this machine until you say yes. A session relays this link '
+                     f'and never opens it.')
         deadline = time.time() + wait
         while True:
             status = self.client.request('GET', f'/api/imprints/{saved["request_id"]}')

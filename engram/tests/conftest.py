@@ -124,3 +124,26 @@ def _enforce_raised_as_before():
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(permission_ledger, "ENFORCE_WAITS", None)
         yield
+
+
+_ROUTE_AS_SHIPPED = {}
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _route_open_as_for_trails():
+    """Route waits until trails ships (`imprint_filter.ROUTE_OPEN`, Serenity's
+    condition S1). The tests of what route does open it, so that code stays
+    tested for the day trails lands; a test that takes `route_closed` gets the
+    value that ships. Session-wide, like `_enforce_raised_as_before`."""
+    import imprint_filter
+    _ROUTE_AS_SHIPPED["value"] = imprint_filter.ROUTE_OPEN
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(imprint_filter, "ROUTE_OPEN", True)
+        yield
+
+
+@pytest.fixture
+def route_closed(monkeypatch):
+    """`imprint_filter.ROUTE_OPEN` as it ships, put back for one test."""
+    import imprint_filter
+    monkeypatch.setattr(imprint_filter, "ROUTE_OPEN", _ROUTE_AS_SHIPPED["value"])

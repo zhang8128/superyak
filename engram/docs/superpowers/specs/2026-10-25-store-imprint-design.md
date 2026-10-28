@@ -2287,7 +2287,7 @@ the second limit. Encrypted imprints (step 7) narrow the first.
 
 ```
 make imprint-plan IMPRINT_ARGS='--lanes work --layers episode,semantic --since 2026-01-01 \
-    --audience place:home/andy --actions imprint,route --purposes calibration,trail-evaluation --days 90'
+    --audience place:home/andy --actions imprint --purposes calibration --days 90'
 make imprint-read PLAN=7c41                 # optional: read what would leave
 make imprint-send PLAN=7c41                 # build, print and send the request, wait for the browser yes, upload
 make imprint-status [ID=c0a8]
@@ -2304,9 +2304,13 @@ start, and semantics with no recorded source:
 
 ```
 make imprint-plan IMPRINT_ARGS='--store <his graph.db> --lanes personal,work --layers episode,semantic \
-    --include-unsourced-semantics --audience place:home/andy --actions imprint,route \
-    --purposes calibration,trail-evaluation --days 90'
+    --include-unsourced-semantics --audience place:home/andy --actions imprint --purposes calibration --days 90'
 ```
+
+`route` waits until trails ships (the safety review's S1, 2026-10-28). Without `trails.py`, admission of a route
+imprint fails at step `count`, after its session ids and recall and operation logs have reached the station. So
+`imprint_filter.ROUTE_OPEN` and the station's `imprints.ROUTE_OPEN` are false: the plan refuses `--actions
+imprint,route`, and the station refuses such a request before staging it. Trails opens both.
 
 Even then, instincts, dream residue, task contexts, the knowledge graph and the other files of 6.3 stay home (D8,
 the permissions spec's 5.2), as do memories whose text names something that stays (D23), those whose lane change

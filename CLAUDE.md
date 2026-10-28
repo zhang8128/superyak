@@ -25,6 +25,15 @@ the Superyak station on Andy's Pi.
   relay its message; running `make dock` again won't help until the cause it names is fixed. Never ask for or type their password;
   they choose it in the browser.
 
+# Sending an imprint (on the owner's machine)
+
+This applies on the machine whose memories are copied (the Mac, for Andy), not only on the Pi. When the owner asks,
+a session runs `make imprint-plan`, `make imprint-read` and `make imprint-send` for them. `make imprint-send` prints
+a confirm link and two short ids. The session relays the link and the ids, and stops there: it never opens the
+confirm page, never ticks its box and never types the password, even when it has browser tools. The owner opens the
+link, reads the view, ticks the check and types their own password. For now, plan with `--actions imprint
+--purposes calibration`: `route` waits until trails ships, and the plan and the station both refuse it.
+
 # Approving on the station (on the Pi only)
 
 On the station host (the Pi `smart`), when Andy asks to check or approve dockings or access

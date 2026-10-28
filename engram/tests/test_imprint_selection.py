@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import imprint_filter
 import store_reader
 from imprint_filter import (IdSet, People, PlanRefused, Refusals, Scratch, ScratchMap, Shipped, base, check_owner,
                             check_source, cosubject_rows, cosubjects_of, parse_instant, parse_selection,
@@ -65,6 +66,14 @@ def test_terms_accept_only_step_one_values():
                 dict(days=366), dict(days=0), dict(operator="andy.b", audience="place:home/andy.b")]:
         with pytest.raises(PlanRefused):
             parse_terms(**{**ROUTE_TERMS, **bad})
+
+
+def test_route_waits_for_trails(route_closed):
+    """S1: no trails module ships yet, so route is refused at the plan, before anything is built or sent."""
+    assert imprint_filter.ROUTE_OPEN is False
+    with pytest.raises(PlanRefused, match="route waits until trails ships"):
+        parse_terms(**ROUTE_TERMS)
+    assert not parse_terms(**{**ROUTE_TERMS, "actions": "imprint", "purposes": "calibration"}).route
 
 
 def test_terms_without_route_and_their_other_refusals():

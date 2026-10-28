@@ -166,6 +166,8 @@ def test_the_ids_the_code_and_the_link_are_printed(tmp_path):
     Imprint(built_home(tmp_path), FakeStation().client(), out=lines.append).send(PLAN)
     text = '\n'.join(lines)
     assert IMPRINT_ID[:4] in text and REQUEST_ID[:4] in text and 'AB12CD34' in text and '#imprint?code=AB12CD34' in text
+    assert 'the two short ids' in text and 'type your own station password' in text      # the review's nit
+    assert 'A session relays this link and never opens it' in text and 'choose your' not in text   # S5
 
 
 def test_after_the_yes_it_sends_the_manifest_then_the_missing_parts(tmp_path):

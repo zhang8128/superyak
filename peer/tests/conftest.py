@@ -36,3 +36,25 @@ def env(tmp_path):
 @pytest.fixture
 def peer_clients(env):
     return env[1][:3]
+
+
+_ROUTE_AS_SHIPPED = {}
+
+
+@pytest.fixture(autouse=True, scope='session')
+def route_open_as_for_trails():
+    """Route waits until trails ships (`imprints.ROUTE_OPEN`, Serenity's condition S1). The tests of what route does
+    open it, so that code stays tested for the day trails lands; a test that takes `route_closed` gets the value that
+    ships."""
+    from superyak_peer import imprints
+    _ROUTE_AS_SHIPPED['value'] = imprints.ROUTE_OPEN
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(imprints, 'ROUTE_OPEN', True)
+        yield
+
+
+@pytest.fixture
+def route_closed(monkeypatch):
+    """`imprints.ROUTE_OPEN` as it ships, put back for one test."""
+    from superyak_peer import imprints
+    monkeypatch.setattr(imprints, 'ROUTE_OPEN', _ROUTE_AS_SHIPPED['value'])
