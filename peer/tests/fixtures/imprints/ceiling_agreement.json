@@ -1,0 +1,987 @@
+{
+ "imprints": {
+  "andy-a1": {
+   "permission": {
+    "attestation": "others-copied-at-home-v1",
+    "created": 1792951950,
+    "id": "017f5e6bf2adaa631dee5077570f8a94",
+    "imprint_id": "a1a1a1a1",
+    "kind": "imprint-permission",
+    "owner": "person:andy",
+    "owner_id": "u-andy",
+    "plan_digest": "595cb5a356fed2f4",
+    "records": [
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-196d4ab2b85f75c718d9f3f058afab95",
+      "layer": "place:home/andy",
+      "proposal_id": null,
+      "reason": "imprint a1a1 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": [
+         "collection:andy/imprint-a1a1a1a1"
+        ],
+        "kinds": [
+         "memory"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "bbbb2222"
+        ]
+       },
+       "purposes": [
+        "calibration"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:andy",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     }
+    ],
+    "request_sha256": "226e41cc18088b66beecb888d01ec6193288de4f44c49042978355d4aeb484e2",
+    "ship_id": "s-andy",
+    "source_instance_id": "bbbb2222",
+    "station": "station-fixture"
+   },
+   "receipts": [],
+   "status": "approved"
+  },
+  "andy-b2": {
+   "permission": {
+    "attestation": "others-copied-at-home-v1",
+    "created": 1792951950,
+    "id": "d2316d39ba52bd7c0cb813fa7ad0b6d8",
+    "imprint_id": "b2b2b2b2",
+    "kind": "imprint-permission",
+    "owner": "person:andy",
+    "owner_id": "u-andy",
+    "plan_digest": "d8e698ef524101b7",
+    "records": [
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-812ace72017af9f9bb4f9bc5cbca532c",
+      "layer": "place:home/andy",
+      "proposal_id": null,
+      "reason": "imprint b2b2 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": [
+         "collection:andy/imprint-b2b2b2b2"
+        ],
+        "kinds": [
+         "memory"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "cccc3333"
+        ]
+       },
+       "purposes": [
+        "calibration",
+        "trail-evaluation"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:andy",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     },
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-2bece7e8fa30206d678fb65064153f61",
+      "layer": "place:home/andy",
+      "proposal_id": null,
+      "reason": "imprint b2b2 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall",
+        "route"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": "*",
+        "kinds": [
+         "road",
+         "trail"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "cccc3333"
+        ]
+       },
+       "purposes": [
+        "trail-evaluation"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:andy",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     }
+    ],
+    "request_sha256": "9e7af950c4686372c01477adb6844c3e0960114c4d2cfbc8067f747eac677a43",
+    "ship_id": "s-andy",
+    "source_instance_id": "cccc3333",
+    "station": "station-fixture"
+   },
+   "receipts": [
+    {
+     "actor_id": null,
+     "at": 1792952010,
+     "detail": {},
+     "event": "approved",
+     "id": "8cc244f0244d5208e17fd9a10ac1b91e",
+     "kind": "imprint-receipt",
+     "permission": "d2316d39ba52bd7c0cb813fa7ad0b6d8",
+     "previous": "b8ea3209aada55124334f5ab92d399779e6fbc4cce3e52772ac679319e10c98e",
+     "station": "station-fixture"
+    },
+    {
+     "actor_id": "s-andy",
+     "at": 1793051950,
+     "detail": {
+      "valid_until": 1793151950
+     },
+     "event": "shortened",
+     "id": "7403bc0ff7fb562b775e37aa2f4c084a",
+     "kind": "imprint-receipt",
+     "permission": "d2316d39ba52bd7c0cb813fa7ad0b6d8",
+     "previous": "622a4b7b8b175b3721c369cdcd26385e6f80acd17d5466e777157685fd35604a",
+     "station": "station-fixture"
+    }
+   ],
+   "status": "approved"
+  },
+  "andy-gone": {
+   "permission": {
+    "attestation": "others-copied-at-home-v1",
+    "created": 1792951950,
+    "id": "87978e0702fda483e22c148cf5f06824",
+    "imprint_id": "e5e5e5e5",
+    "kind": "imprint-permission",
+    "owner": "person:andy",
+    "owner_id": "u-andy",
+    "plan_digest": "140e335baa912a7d",
+    "records": [
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-e0727ca73c823ed4b2f27d3318845c40",
+      "layer": "place:home/andy",
+      "proposal_id": null,
+      "reason": "imprint e5e5 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": [
+         "collection:andy/imprint-e5e5e5e5"
+        ],
+        "kinds": [
+         "memory"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "eeee5555"
+        ]
+       },
+       "purposes": [
+        "calibration",
+        "trail-evaluation"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:andy",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     },
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-48fcd2fbdd73a3057d7d9d9b305bd623",
+      "layer": "place:home/andy",
+      "proposal_id": null,
+      "reason": "imprint e5e5 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall",
+        "route"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": "*",
+        "kinds": [
+         "road",
+         "trail"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "eeee5555"
+        ]
+       },
+       "purposes": [
+        "trail-evaluation"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:andy",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     }
+    ],
+    "request_sha256": "3eb4a38a8dc9fbafb90c6be977c2dd557fc6de30ca5906d6ce5c5f675c16e429",
+    "ship_id": "s-andy",
+    "source_instance_id": "eeee5555",
+    "station": "station-fixture"
+   },
+   "receipts": [
+    {
+     "actor_id": null,
+     "at": 1792952010,
+     "detail": {},
+     "event": "approved",
+     "id": "853f6c2a6fd988041241dedebe257eca",
+     "kind": "imprint-receipt",
+     "permission": "87978e0702fda483e22c148cf5f06824",
+     "previous": "57bf8eeea8151a80dc4c77820f5a79550956bae6e023c9e6d0885842db1845b2",
+     "station": "station-fixture"
+    },
+    {
+     "actor_id": null,
+     "at": 1792952550,
+     "detail": {
+      "checks": 13,
+      "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "roads_and_trails": 3,
+      "sessions_too_large": 0,
+      "skipped": []
+     },
+     "event": "admitted",
+     "id": "f63d0fed4a6c5b29465303062866350c",
+     "kind": "imprint-receipt",
+     "permission": "87978e0702fda483e22c148cf5f06824",
+     "previous": "15efde781e227c7d76c5353552ab93e2b83b1dabc3f6e03860621d798d7fa9a3",
+     "station": "station-fixture"
+    },
+    {
+     "actor_id": "u-andy",
+     "at": 1792956950,
+     "detail": {},
+     "event": "withdrawn",
+     "id": "1499375e15f6466a61e47ddcb1f2f532",
+     "kind": "imprint-receipt",
+     "permission": "87978e0702fda483e22c148cf5f06824",
+     "previous": "b5452822d194d9f3a43d257e26209fb11fb4724a5e5923da4639aa5e0b0801d5",
+     "station": "station-fixture"
+    }
+   ],
+   "status": "admitted"
+  },
+  "sam-c0a8": {
+   "permission": {
+    "attestation": "no-unconsented-others-v1",
+    "created": 1792951950,
+    "id": "544676a91638f7731be816f6b567d435",
+    "imprint_id": "c0a8f5e2",
+    "kind": "imprint-permission",
+    "owner": "person:sam",
+    "owner_id": "u-sam",
+    "plan_digest": "7f06a66def503ef2",
+    "records": [
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-ee1863370e98e6a7f86432153edc63db",
+      "layer": "place:home/sam",
+      "proposal_id": null,
+      "reason": "imprint c0a8 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": [
+         "collection:sam/imprint-c0a8f5e2"
+        ],
+        "kinds": [
+         "memory"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "aaaa1111"
+        ]
+       },
+       "purposes": [
+        "calibration",
+        "trail-evaluation"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:sam",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     },
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-b3199360309eae058a4b0690382f9b25",
+      "layer": "place:home/sam",
+      "proposal_id": null,
+      "reason": "imprint c0a8 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall",
+        "route"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": "*",
+        "kinds": [
+         "road",
+         "trail"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "aaaa1111"
+        ]
+       },
+       "purposes": [
+        "trail-evaluation"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:sam",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     }
+    ],
+    "request_sha256": "966e7f87d54cb7e2e10490fe5bc6b66ac2f7f06b987abaf3db0dffed38d68d0c",
+    "ship_id": "s-sam",
+    "source_instance_id": "aaaa1111",
+    "station": "station-fixture"
+   },
+   "receipts": [
+    {
+     "actor_id": null,
+     "at": 1792952010,
+     "detail": {},
+     "event": "approved",
+     "id": "7ee54a9226680105abaa521cb89e47d2",
+     "kind": "imprint-receipt",
+     "permission": "544676a91638f7731be816f6b567d435",
+     "previous": "e42584264f2f98a6ba9392004c635b06e3d859d86bbca092657b2797d8d41e18",
+     "station": "station-fixture"
+    },
+    {
+     "actor_id": null,
+     "at": 1792952550,
+     "detail": {
+      "checks": 13,
+      "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "roads_and_trails": 3,
+      "sessions_too_large": 0,
+      "skipped": []
+     },
+     "event": "admitted",
+     "id": "38106fe5ef64913ae4087fe5d36ee495",
+     "kind": "imprint-receipt",
+     "permission": "544676a91638f7731be816f6b567d435",
+     "previous": "17d4c7bf99103ff5b60717fa2e01c692ef0d7015e11f6b1b33369e827ddc4c66",
+     "station": "station-fixture"
+    },
+    {
+     "actor_id": "s-sam",
+     "at": 1793051950,
+     "detail": {
+      "valid_until": 1793351950
+     },
+     "event": "shortened",
+     "id": "25e6ffc2d32e073c148b46f38d9b4989",
+     "kind": "imprint-receipt",
+     "permission": "544676a91638f7731be816f6b567d435",
+     "previous": "31a3d2dd7974c826c6472d949adce9068b56fc1c843d691c9203cd306fe1d9da",
+     "station": "station-fixture"
+    },
+    {
+     "actor_id": "u-sam",
+     "at": 1793071950,
+     "detail": {
+      "valid_until": 1793251950
+     },
+     "event": "shortened",
+     "id": "f185128cc8443053e7ec0241fa6a8782",
+     "kind": "imprint-receipt",
+     "permission": "544676a91638f7731be816f6b567d435",
+     "previous": "1bba10cd1c34954b75d9de48877639eb13422ac3d19aed8a2b3d42f3d32e5503",
+     "station": "station-fixture"
+    }
+   ],
+   "status": "admitted"
+  },
+  "sam-copy-1": {
+   "permission": {
+    "attestation": "no-unconsented-others-v1",
+    "created": 1792951950,
+    "id": "10989a0b9777304ee64bc04a35ce754c",
+    "imprint_id": "c1c1c1c1",
+    "kind": "imprint-permission",
+    "owner": "person:sam",
+    "owner_id": "u-sam",
+    "plan_digest": "6f7c5e227a842fc6",
+    "records": [
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-bb866fc7be74109e4ab79d369c44ce7f",
+      "layer": "place:home/sam",
+      "proposal_id": null,
+      "reason": "imprint c1c1 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": [
+         "collection:sam/imprint-c1c1c1c1"
+        ],
+        "kinds": [
+         "memory"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "3f2a9c1e"
+        ]
+       },
+       "purposes": [
+        "calibration",
+        "trail-evaluation"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:sam",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     },
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-a212081c852bedfc7f6ab4dcde6a36ae",
+      "layer": "place:home/sam",
+      "proposal_id": null,
+      "reason": "imprint c1c1 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall",
+        "route"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": "*",
+        "kinds": [
+         "road",
+         "trail"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "3f2a9c1e"
+        ]
+       },
+       "purposes": [
+        "trail-evaluation"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:sam",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     }
+    ],
+    "request_sha256": "0043e51ac6087e1cb5ff515b108a2d56f2dfd62ce412279fae0bff197a40157f",
+    "ship_id": "s-sam",
+    "source_instance_id": "3f2a9c1e",
+    "station": "station-fixture"
+   },
+   "receipts": [
+    {
+     "actor_id": null,
+     "at": 1792952010,
+     "detail": {},
+     "event": "approved",
+     "id": "c710f4a5713ca7b115ae2dfe4871e8c2",
+     "kind": "imprint-receipt",
+     "permission": "10989a0b9777304ee64bc04a35ce754c",
+     "previous": "549d7c72c868c20cd0257f5845f87e0bd2080222a40b228630540ed1b338aba3",
+     "station": "station-fixture"
+    },
+    {
+     "actor_id": null,
+     "at": 1792952550,
+     "detail": {
+      "checks": 13,
+      "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "roads_and_trails": 3,
+      "sessions_too_large": 0,
+      "skipped": []
+     },
+     "event": "admitted",
+     "id": "8fbfb53bb75a570a978982fe2b8647b5",
+     "kind": "imprint-receipt",
+     "permission": "10989a0b9777304ee64bc04a35ce754c",
+     "previous": "28c2fda2f1d74d127272f4aadedff76e985b125581ff1903b08f0697b289b085",
+     "station": "station-fixture"
+    },
+    {
+     "actor_id": "s-sam",
+     "at": 1793038350,
+     "detail": {},
+     "event": "withdrawn",
+     "id": "b22a91ce8f038f1a3d98ec7901b5d301",
+     "kind": "imprint-receipt",
+     "permission": "10989a0b9777304ee64bc04a35ce754c",
+     "previous": "820c3793db04a3cb015469c7e69e6dc8f884258d99d8acc6cbacfb722d4f05ec",
+     "station": "station-fixture"
+    }
+   ],
+   "status": "admitted"
+  },
+  "sam-copy-2": {
+   "permission": {
+    "attestation": "no-unconsented-others-v1",
+    "created": 1793041950,
+    "id": "c547a9abfc57d31d468d83b8e948a918",
+    "imprint_id": "c2c2c2c2",
+    "kind": "imprint-permission",
+    "owner": "person:sam",
+    "owner_id": "u-sam",
+    "plan_digest": "dcda05d0a9a5a6d9",
+    "records": [
+     {
+      "anchor": 1793041950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1793041950,
+      "effect": "allow",
+      "id": "r-21423a691859210b108337727e3af18e",
+      "layer": "place:home/sam",
+      "proposal_id": null,
+      "reason": "imprint c2c2 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall"
+       ],
+       "audience": [
+        "place:home/andy"
+       ],
+       "objects": {
+        "collections": [
+         "collection:sam/imprint-c2c2c2c2"
+        ],
+        "kinds": [
+         "memory"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "3f2a9c1e"
+        ]
+       },
+       "purposes": [
+        "calibration"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:sam",
+      "under_grant": null,
+      "valid_from": 1793041950,
+      "valid_until": 1793301150
+     }
+    ],
+    "request_sha256": "47c3cab4fed9bb7796cea795c18fe779b72ef1fe6600d9d2b3472456f00251fe",
+    "ship_id": "s-sam",
+    "source_instance_id": "3f2a9c1e",
+    "station": "station-fixture"
+   },
+   "receipts": [
+    {
+     "actor_id": null,
+     "at": 1793042010,
+     "detail": {},
+     "event": "approved",
+     "id": "23fe3a90c3746049d2a1b0afaff0a6a8",
+     "kind": "imprint-receipt",
+     "permission": "c547a9abfc57d31d468d83b8e948a918",
+     "previous": "4f2c202a8f76c0fb6203748fa0ab231321ec607e804dbc995c06473bb3d60140",
+     "station": "station-fixture"
+    },
+    {
+     "actor_id": null,
+     "at": 1793042550,
+     "detail": {
+      "checks": 13,
+      "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "roads_and_trails": 3,
+      "sessions_too_large": 0,
+      "skipped": []
+     },
+     "event": "admitted",
+     "id": "c8d432b807a711b878f91457397a4c4c",
+     "kind": "imprint-receipt",
+     "permission": "c547a9abfc57d31d468d83b8e948a918",
+     "previous": "98cc30bc89f999a6f637068ab522ec5f9ad12b7474ae9b2d4b63d140df8acb6e",
+     "station": "station-fixture"
+    }
+   ],
+   "status": "admitted"
+  },
+  "sam-home": {
+   "permission": {
+    "attestation": "others-copied-at-home-v1",
+    "created": 1792951950,
+    "id": "f2cfed97c6df85d4217bf89b2149b8b3",
+    "imprint_id": "d0d0d0d0",
+    "kind": "imprint-permission",
+    "owner": "person:sam",
+    "owner_id": "u-sam",
+    "plan_digest": "48d4fd04fd96cc2c",
+    "records": [
+     {
+      "anchor": 1792951950,
+      "backing": "person",
+      "channel": "browser",
+      "created": 1792951950,
+      "effect": "allow",
+      "id": "r-559558f1d4e11696fc81aa3257670440",
+      "layer": "place:home/sam",
+      "proposal_id": null,
+      "reason": "imprint d0d0 at Deep Space 9",
+      "replaces": null,
+      "selector": {
+       "actions": [
+        "imprint",
+        "read",
+        "recall"
+       ],
+       "audience": [
+        "place:home/sam"
+       ],
+       "objects": {
+        "collections": [
+         "collection:sam/imprint-d0d0d0d0"
+        ],
+        "kinds": [
+         "memory"
+        ],
+        "lanes": "*",
+        "layers": "*",
+        "memories": "*",
+        "stores": [
+         "dddd4444"
+        ]
+       },
+       "purposes": [
+        "calibration"
+       ],
+       "requesters": [
+        "agent:station-imprints"
+       ]
+      },
+      "set_by": "person:sam",
+      "under_grant": null,
+      "valid_from": 1792951950,
+      "valid_until": 1793556750
+     }
+    ],
+    "request_sha256": "37175296aade7cc6234e840f609674ea3d032dfa3c39cd1d3bf6e3e32b16aa13",
+    "ship_id": "s-sam",
+    "source_instance_id": "dddd4444",
+    "station": "station-fixture"
+   },
+   "receipts": [],
+   "status": "approved"
+  }
+ },
+ "now": 1793101950,
+ "operator": "andy",
+ "uses": [
+  {
+   "expected": true,
+   "expected_term": null,
+   "imprint": "sam-copy-1",
+   "kind": "trail-evaluation",
+   "name": "copy1-trail-eval-before-ship-withdrawal",
+   "t": 1793038349
+  },
+  {
+   "expected": false,
+   "expected_term": "withdrawal",
+   "imprint": "sam-copy-1",
+   "kind": "trail-evaluation",
+   "name": "copy1-trail-eval-at-ship-withdrawal",
+   "t": 1793038350
+  },
+  {
+   "expected": false,
+   "expected_term": "status",
+   "imprint": "sam-copy-1",
+   "kind": "admission",
+   "name": "copy1-admission-wrong-status",
+   "t": 1792955550
+  },
+  {
+   "expected": true,
+   "expected_term": null,
+   "imprint": "sam-copy-1",
+   "kind": "admission",
+   "name": "copy1-admission-with-route",
+   "status": "approved",
+   "t": 1792955550
+  },
+  {
+   "expected": false,
+   "expected_term": "ceiling",
+   "imprint": "sam-copy-2",
+   "kind": "trail-evaluation",
+   "name": "copy2-trail-eval-one-ceiling-per-copy",
+   "t": 1793101950
+  },
+  {
+   "expected": true,
+   "expected_term": null,
+   "imprint": "sam-copy-2",
+   "kind": "admission",
+   "name": "copy2-admission-no-route",
+   "status": "approved",
+   "t": 1793101950
+  },
+  {
+   "expected": false,
+   "expected_term": "end",
+   "imprint": "sam-copy-2",
+   "kind": "admission",
+   "name": "copy2-admission-past-its-end",
+   "status": "approved",
+   "t": 1793301150
+  },
+  {
+   "expected": true,
+   "expected_term": null,
+   "imprint": "sam-c0a8",
+   "kind": "trail-evaluation",
+   "name": "c0a8-trail-eval-before-owner-shortening",
+   "t": 1793251949
+  },
+  {
+   "expected": false,
+   "expected_term": "end",
+   "imprint": "sam-c0a8",
+   "kind": "trail-evaluation",
+   "name": "c0a8-trail-eval-at-owner-shortening",
+   "t": 1793251950
+  },
+  {
+   "expected": false,
+   "expected_term": "audience",
+   "imprint": "sam-home",
+   "kind": "admission",
+   "name": "sam-home-admission-from-other-operator",
+   "t": 1792955550
+  },
+  {
+   "expected": true,
+   "expected_term": null,
+   "imprint": "andy-a1",
+   "kind": "admission",
+   "name": "andy-a1-admission-no-route",
+   "t": 1792955550
+  },
+  {
+   "expected": false,
+   "expected_term": "action",
+   "imprint": "andy-a1",
+   "kind": "trail-evaluation",
+   "name": "andy-a1-trail-eval-has-no-route",
+   "status": "admitted",
+   "t": 1792955550
+  },
+  {
+   "expected": true,
+   "expected_term": null,
+   "imprint": "andy-b2",
+   "kind": "admission",
+   "name": "andy-b2-admission-with-route",
+   "t": 1792955550
+  },
+  {
+   "expected": false,
+   "expected_term": "valid_from",
+   "imprint": "andy-b2",
+   "kind": "admission",
+   "name": "andy-b2-admission-not-yet",
+   "t": 1792951949
+  },
+  {
+   "expected": true,
+   "expected_term": null,
+   "imprint": "andy-b2",
+   "kind": "admission",
+   "name": "andy-b2-admission-before-ship-shortening",
+   "t": 1793151949
+  },
+  {
+   "expected": false,
+   "expected_term": "end",
+   "imprint": "andy-b2",
+   "kind": "admission",
+   "name": "andy-b2-admission-at-ship-shortening",
+   "t": 1793151950
+  },
+  {
+   "expected": false,
+   "expected_term": "withdrawal",
+   "imprint": "andy-gone",
+   "kind": "trail-evaluation",
+   "name": "andy-gone-trail-eval-after-owner-withdrawal",
+   "t": 1792956950
+  }
+ ]
+}

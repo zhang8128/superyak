@@ -461,6 +461,65 @@ def _expire_waiting(db, old, now, report):
             report['counts'][label] = db.execute(f'UPDATE {table} SET expires=? WHERE status=? AND expires>?', (now, status, now)).rowcount
 
 
+IMPRINT_NEEDS = ('imprint_requests.id', 'imprint_requests.imprint_id', 'imprint_requests.status',
+                 'imprint_requests.imprints_root', 'imprint_requests.ended_at', 'imprint_requests.delete_reason',
+                 'imprint_receipts.id', 'imprint_receipts.request_id', 'imprint_receipts.record',
+                 'imprint_receipts.signature')
+
+
+def _tombstone_receipts(root, imprint_id):
+    """The receipts a tombstone holds, or None when the root records none or no tombstone exists. A tombstone that
+    cannot be read still counts: its existence is what stops a restore, so it returns an empty list."""
+    if not root:
+        return None
+    path = Path(root) / 'tombstones' / f'{imprint_id}.json'
+    if not os.path.lexists(path):
+        return None
+    try:
+        held = json.loads(path.read_bytes())['receipts']
+        return [r for r in held if isinstance(r, dict) and isinstance(r.get('record'), dict) and isinstance(r['record'].get('id'), str)]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def _hold_imprints(db, old, now, report):
+    """Step 6, imprints (D15): a withdrawn or deleted imprint never comes back from a backup. A row the copy still holds
+    live closes to what the replaced file says (`deleting`, `deleted`, `declined` or `expired`), and to `deleted` when a
+    tombstone exists under the root the row records. The receipts the copy lacks, the replaced file's and the
+    tombstone's, are added so the reason is in the chain. The sweep removes any files and finishes a `deleting` row."""
+    if not _usable(db, None, report, *IMPRINT_NEEDS):
+        return
+    comparing = old is not None and _has(old, *IMPRINT_NEEDS)
+    held = 0
+    rows = db.execute("SELECT id, imprint_id, imprints_root FROM imprint_requests "
+                      "WHERE status NOT IN ('deleted', 'declined', 'expired')").fetchall()
+    for row in rows:
+        target, receipts, ended, reason = None, [], None, None
+        if comparing:
+            there = old.execute('SELECT status, ended_at, delete_reason FROM imprint_requests WHERE id=?', (row['id'],)).fetchone()
+            if there is not None and there[0] in ('deleting', 'deleted', 'declined', 'expired'):
+                target, ended, reason = there[0], there[1], there[2]
+                receipts = [{'record': json.loads(r[0]), 'signature': r[1]} for r in old.execute(
+                    'SELECT record, signature FROM imprint_receipts WHERE request_id=? ORDER BY seq', (row['id'],))]
+        tombstoned = _tombstone_receipts(row['imprints_root'], row['imprint_id'])
+        if tombstoned is not None:
+            target = 'deleted'
+            receipts += tombstoned
+        if target is None:
+            continue
+        have = {r[0] for r in db.execute('SELECT id FROM imprint_receipts WHERE request_id=?', (row['id'],))}
+        for receipt in receipts:
+            if receipt['record']['id'] not in have:
+                have.add(receipt['record']['id'])
+                db.execute('INSERT INTO imprint_receipts(id, request_id, record, signature) VALUES(?,?,?,?)',
+                           (receipt['record']['id'], row['id'], json.dumps(receipt['record'], sort_keys=True, separators=(',', ':'), ensure_ascii=False),
+                            receipt.get('signature')))
+        db.execute('UPDATE imprint_requests SET status=?, ended_at=COALESCE(?, ended_at, ?), delete_reason=COALESCE(?, delete_reason) '
+                   'WHERE id=?', (target, ended, int(now), reason, row['id']))
+        held += 1
+    report['counts']['imprints kept deleted'] = held
+
+
 def _sequence(db, table):
     row = db.execute('SELECT seq FROM sqlite_sequence WHERE name=?', (table,)).fetchone() if _has(db, 'sqlite_sequence') else None
     return max(row[0] if row else 0, db.execute(f'SELECT COALESCE(MAX(rowid), 0) FROM "{table}"').fetchone()[0])
@@ -971,7 +1030,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
         db.execute('BEGIN IMMEDIATE')
         try:
             now = clock()
-            for step in (_end_sessions, _use_invitations, _revoke_held_keys, _clear_uncollected, _expire_waiting, _raise_sequences):
+            for step in (_end_sessions, _use_invitations, _revoke_held_keys, _clear_uncollected, _expire_waiting, _raise_sequences,
+                         _hold_imprints):
                 step(db, old, now, report)
             if old is None:
                 _revoke_owned_ship_keys(db, old, now, report)
