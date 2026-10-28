@@ -18,8 +18,10 @@ Before they send anything, the page says, in plain words:
 - **What happens next:** "Nothing happens until he answers. You get no account, no email and no messages from us
   until then."
 - **What is kept, and for how long:** your name, contact and note, for 7 days while the request waits. After a
-  request is approved, denied or expired, its contact and note are deleted after 30 days, and its name is kept with
-  the decision for the station's record.
+  request is approved, denied or expired, its contact and note are deleted after 30 days. Copies of them stay in the
+  station's backups until those rotate out: up to 8 more weeks, since the station keeps 14 daily and 8 weekly copies,
+  and as long as any off-site copy keeps them. Its name is kept with the decision for the station's record, unless
+  Andy decides otherwise (D2). The page says whichever he picks.
 - **What not to send:** "Please don't put patient information or anything private in the note."
 
 **This needs one change to the door.** Today nothing ever deletes a decided or expired request's contact or note
@@ -58,7 +60,10 @@ required and the note is optional, with the door's existing caps.
 - **D1:** may a stranger ask for access from the front page at all? Today the README says "by invitation only; to
   ask, say hello in Discussions". A yes changes that welcome. A no keeps the door CLI-only, and the README's
   Discussions line stays the way in.
-- **D2:** how long a decided or expired request's contact and note are kept. The draft says 30 days.
+- **D2:** how long a decided or expired request's contact and note are kept (the draft says 30 days, plus up to 8
+  weeks in backups), and whether a denied or expired request's name is kept with its decision or cleared too. A denied
+  stranger's name is their data as well (Rio Grande's review of fix:door-request-retention). The sweep is built
+  (tardis/door-request-retention, approved); its constant becomes his number before the timer is switched on.
 - **D3:** the welcome line's words for his station.
 
 ## 6. Acceptance
