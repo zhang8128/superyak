@@ -3,7 +3,7 @@ import hmac
 import re
 import secrets
 from .auth import token_hash, public_user
-from .common import REPLACED_ADD, REPLACED_ROOMS, Problem, require, text, uid
+from .common import BRIEF_CHANGED, REPLACED_ROOMS, Problem, require, text, uid
 
 DOCKING_LIFETIME = 600
 DOCKING_HOURLY_LIMIT = 20
@@ -36,6 +36,13 @@ def safe_line(value, limit=80):
     a run on that ship's machine, so no '@' survives; control characters and newlines cannot start a new line."""
     value = ''.join(c if c.isprintable() else ' ' for c in str(value))
     return ' '.join(value.split()).replace('@', '(at)')[:limit].rstrip()
+
+
+def short_id(prefix):
+    """A short id an operator typed (station-rooms lists them): at least 4 characters, compared lower-cased."""
+    if not isinstance(prefix, str) or len(prefix.strip()) < 4:
+        raise Problem(400, 'Give at least 4 characters of the short id')
+    return prefix.strip().lower()
 
 
 def addressed_names(body):
@@ -101,6 +108,17 @@ class Ships:
             if presence:  # S1: inside this transaction, so no new contention and no race (R3)
                 self._record_presence(db, row['id'], presence)
             return public_user(row)
+
+    def ship_key_is_valid(self, key):
+        """Public route spec 2: the lookup ship_for_key does, answered True or False. It writes nothing, no last_used
+        and no presence; the route's own ship_for_key still writes those afterwards."""
+        if not isinstance(key, str) or not 0 < len(key) <= 128:
+            return False
+        with self.transaction() as db:
+            return db.execute(
+                "SELECT 1 FROM ship_keys JOIN users ON users.id=ship_keys.ship_id WHERE key_hash=? AND revoked IS NULL AND users.kind='ship'",
+                (token_hash(key),),
+            ).fetchone() is not None
 
     def revoke_presented_key(self, key):
         with self.transaction() as db:
@@ -221,60 +239,80 @@ class Ships:
             for room in self._current_rooms(db, actor):
                 members = [r[0] for r in db.execute('SELECT users.username FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_id=? ORDER BY users.username', (room['id'],))]
                 bridged = wormhole is not None and db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (room['id'], wormhole)).fetchone() is not None
-                rooms.append({'id': room['id'], 'title': room['title'], 'members': members, 'bridged': bridged})
+                rooms.append({'id': room['id'], 'title': room['title'], 'members': members, 'bridged': bridged,
+                              'moderators': [f'{m["username"]} #{m["grant"][:4]}' for m in self._moderators(db, room['id'])]})
             return rooms
 
-    def _earlier_bridged(self, db, actor, room, wormhole):
-        """Rooms earlier in this room's linked chain, owned by the same person, that still have the wormhole ship:
-        a replaced room keeps its members, so once the current room loses Wormhole the bridge would take it as current."""
-        found, seen, key = [], set(), room['linked_room_id']
-        while key and key not in seen:
-            seen.add(key)
-            row = db.execute('SELECT owner_id,linked_room_id FROM rooms WHERE id=?', (key,)).fetchone()
-            if row is None:
-                break
-            if row['owner_id'] == actor and db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (key, wormhole)).fetchone():
-                found.append(key)
-            key = row['linked_room_id']
-        return found
+    def _owned_room(self, db, actor, prefix):
+        """The current room this person owns that a short id (from short_id) names, and the brief revision a member
+        add carries: adding members is the same room continuing, so its brief comes along (None when it has none)."""
+        matches = [r['id'] for r in self._current_rooms(db, actor) if r['id'].startswith(prefix)]
+        if not matches:
+            raise Problem(404, f'No room you own starts with {prefix}')
+        if len(matches) > 1:
+            raise Problem(409, f'{prefix} matches more than one room; give more characters')
+        room = self._room(db, actor, matches[0])
+        brief, revision = self._room_brief(db, room['id'])
+        return room, (revision if brief else None)
+
+    def _station_add(self, db, actor, room, member_id, carry, doing, command, mover_id=None, grant_id=None):
+        """One member added by an operator command, in the same transaction that picked the room and read its brief
+        (carry), through the station's own rule (_add_members): a new linked room with the same title and members, the
+        brief at that revision, and the open board items with their claims. Returns the new room, saying whether the brief came."""
+        try:
+            new = self._add_members(db, actor, room, [member_id], carry, mover_id or actor, grant_id)
+        except Problem as exc:
+            if exc.status == 409 and exc.message == BRIEF_CHANGED:  # the brief was saved between the read and the carry
+                raise Problem(409, f'The room brief changed while {doing}; run {command} again') from exc
+            raise
+        return {**new, 'brief_carried': carry is not None}  # the operator tells Andy whether it came along
 
     def station_bridge(self, username, prefix, bridge):
         """Trusted local operator only: add the wormhole ship to (or remove it from) a current room its owner
         names by a short id, through the station's own rules: adding members makes a new linked room. Unbridging
         also removes it from the earlier rooms that room replaced.
         Returns (room, changed); room is the new room after a bridge, the same room after an unbridge."""
-        if not isinstance(prefix, str) or len(prefix.strip()) < 4:
-            raise Problem(400, 'Give at least 4 characters of the short id')
-        prefix = prefix.strip().lower()
+        prefix = short_id(prefix)
         with self.transaction() as db:
             actor = self._operator(db, username)
             wormhole = self._wormhole_id(db)
             if wormhole is None:
                 raise Problem(404, 'There is no wormhole ship on the station; create it first (create-ship --username wormhole)')
-            matches = [r['id'] for r in self._current_rooms(db, actor) if r['id'].startswith(prefix)]
-            if not matches:
-                raise Problem(404, f'No room you own starts with {prefix}')
-            if len(matches) > 1:
-                raise Problem(409, f'{prefix} matches more than one room; give more characters')
-            room = self._room(db, actor, matches[0])
-            brief, revision = self._room_brief(db, room['id'])
-            carry = revision if brief else None  # bridging is the same room continuing, so its brief comes along
-            earlier = [] if bridge else self._earlier_bridged(db, actor, room, wormhole)
-        if (wormhole in room['member_ids']) == bridge and not earlier:
-            return room, False
-        if bridge:
-            try:
-                new = self.add_participants(actor, room['id'], [wormhole], carry)
-            except Problem as exc:
-                if exc.status == 409 and carry is not None and exc.message != REPLACED_ADD:  # the brief was saved between the read and the carry
-                    raise Problem(409, 'The room brief changed while bridging; run station-bridge again') from exc
-                raise
-            return {**new, 'brief_carried': carry is not None}, True  # the operator tells Andy whether it came along
-        for key in earlier:  # the earlier rooms first: if this stops halfway, the current room still shows bridged
-            self.remove_participant(actor, key, wormhole)
-        if wormhole in room['member_ids']:
-            room = self.remove_participant(actor, room['id'], wormhole)
-        return room, True
+            room, carry = self._owned_room(db, actor, prefix)
+            if bridge:  # the read and the add share this transaction
+                if wormhole in room['member_ids']:
+                    return room, False
+                return self._station_add(db, actor, room, wormhole, carry, 'bridging', 'station-bridge'), True
+            if wormhole not in room['member_ids'] and not self._earlier_with(db, actor, room, wormhole):
+                return room, False
+            return self._remove_member(db, room, wormhole, actor), True  # the one removal: the whole chain, announced
+
+    def station_add_ship(self, username, prefix, ship):
+        """Trusted local operator only: add one of the owner's own ships to a current room they own, named by a short
+        id, through the station's own rules, as station_bridge adds the wormhole (which only it adds). A breakout, a
+        person, another owner's ship, an ownerless one and a ship already in the room are refused before anything is
+        written. Returns (the new room, the ship's name)."""
+        prefix = short_id(prefix)
+        name = ship.strip().lower() if isinstance(ship, str) else ''
+        if not name:
+            raise Problem(400, 'Name the ship to add')
+        if name == 'wormhole':
+            raise Problem(400, "Use make station-bridge to add wormhole: it bridges the room to Stanley's aDNA lattice")
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            room, carry = self._owned_room(db, actor, prefix)
+            if self._breakout(db, room['id']) is not None:  # ships own breakouts, so only a defence: never one of a person's
+                raise Problem(409, f'Room {room["id"][:6]} is a breakout, which its ships keep among themselves; no one is added to it here')
+            row, said = db.execute('SELECT id,kind,owner_id FROM users WHERE username=?', (name,)).fetchone(), safe_line(name)
+            if row is None:
+                raise Problem(404, f'There is no ship named {said}')
+            if row['kind'] != 'ship':
+                raise Problem(400, f'{said} is not a ship')
+            if row['owner_id'] != actor:
+                raise Problem(403, f"{said} is not one of {safe_line(username)}'s ships")
+            if row['id'] in room['member_ids']:
+                raise Problem(409, f'{said} is already a member of room {room["id"][:6]}; nothing changed')
+            return self._station_add(db, actor, room, row['id'], carry, 'adding the ship', 'station-add-ship'), name
 
     def station_decide(self, username, prefix, approve):
         """Trusted local operator only: approve or refuse one pending item by a short id,

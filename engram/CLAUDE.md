@@ -57,6 +57,7 @@ lifecycle barrier per step, never inside the handshake: Claude Code allows
 needed ~40 s of startup compression (2026-09-02). `status()` reports
 `maintenance_pending` until the pass lands; `_init()` callers outside the
 served process still get it inline.
+Auto-captured prompts (`source='auto'`) are never auto-compressed, and the model's `compress()` offers them only after a used recall returned them.
 Decay uses ACT-R power-law: `B = ln(1 + n * t^(-d))` where n = access count,
 t = hours since last access, d = 0.5. Rate-limited (30min minimum). Core episodes exempt.
 Centroid-based selection (most representative episode per cluster, MMR for diversity).

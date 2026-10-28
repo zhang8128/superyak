@@ -489,9 +489,48 @@ def test_get_uncompressed_episodes(tmp_db, fake_embedding):
     tmp_db.add_episode(id="ep-1", session_id="s1", content="a", embedding=fake_embedding())
     tmp_db.add_episode(id="ep-2", session_id="s1", content="b", embedding=fake_embedding())
     tmp_db.mark_episodes_compressed(["ep-1"])
-    uncompressed = tmp_db.get_uncompressed_episodes()
+    uncompressed = tmp_db.get_uncompressed_episodes(auto="all")
     assert len(uncompressed) == 1
     assert uncompressed[0]["id"] == "ep-2"
+
+
+def _auto_fixture(tmp_db, fake_embedding):
+    """auto (used), auto (unused), source 'remember', NULL source."""
+    for eid, src in [("a-used", "auto"), ("a-unused", "auto"), ("r1", "remember"), ("n1", None)]:
+        tmp_db.add_episode(id=eid, session_id="s1", content=eid, embedding=fake_embedding())
+        if src is not None:
+            tmp_db.conn.execute("UPDATE episodes SET source = ? WHERE id = ?", (src, eid))
+    tmp_db.conn.commit()
+    tmp_db.add_log_entry("l1", "recall", "episode", ["a-used"], outcome="used: auto: cited")
+
+
+def test_get_uncompressed_episodes_auto_modes(tmp_db, fake_embedding):
+    _auto_fixture(tmp_db, fake_embedding)
+    ids = lambda **kw: sorted(e["id"] for e in tmp_db.get_uncompressed_episodes(**kw))
+    with pytest.raises(TypeError):  # every caller says which captures it wants; there is no default
+        tmp_db.get_uncompressed_episodes()
+    assert ids(auto="all") == ["a-unused", "a-used", "n1", "r1"]
+    assert ids(auto="none") == ["n1", "r1"]
+    assert ids(auto="used") == ["a-used", "n1", "r1"]
+
+
+def test_get_uncompressed_episodes_used_skips_malformed_and_wrong_rows(tmp_db, fake_embedding):
+    _auto_fixture(tmp_db, fake_embedding)
+    tmp_db.conn.execute(
+        "INSERT INTO memory_log (id, timestamp, event_type, layer, target_ids, outcome) "
+        "VALUES ('bad', '2026-01-01', 'recall', 'episode', 'not json', 'used')"
+    )
+    tmp_db.conn.commit()
+    tmp_db.add_log_entry("l2", "recall", "episode", ["a-unused"], outcome="not_used")
+    tmp_db.add_log_entry("l3", "recall", "episode", ["a-unused"], outcome=None)
+    tmp_db.add_log_entry("l4", "other", "episode", ["a-unused"], outcome="used")
+    ids = sorted(e["id"] for e in tmp_db.get_uncompressed_episodes(auto="used"))
+    assert ids == ["a-used", "n1", "r1"]
+
+
+def test_get_uncompressed_episodes_unknown_auto_raises(tmp_db):
+    with pytest.raises(ValueError):
+        tmp_db.get_uncompressed_episodes(auto="bogus")
 
 
 def test_increment_episode_access(tmp_db, fake_embedding):
