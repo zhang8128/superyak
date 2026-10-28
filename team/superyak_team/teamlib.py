@@ -54,25 +54,41 @@ TAG_MARK = "[quoted text, not a team message] "
 BLANK = re.compile("[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e"
                    "\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3"
                    "\U0001d173-\U0001d17a\U000e0000-\U000e0fff]")
-# Letters from other scripts that a reader takes for the letters of "team" and "from", folded to them before matching.
-# Only these letters are folded, so a line is never judged by its alphabet: text in any language is left as written
-# (Rio Grande's review of 42620c0c, M1: marking any bracket-led line with a non-ASCII letter marked 35 of 48 ordinary
-# lines). Accents need no entry: NFKD splits them off as combining marks, which _hidden drops.
-FOLD = str.maketrans({
-    "т": "t", "τ": "t", "ᴛ": "t",                  # Cyrillic te, Greek tau, small capital T
-    "е": "e", "ε": "e", "ɛ": "e", "ᴇ": "e",   # Cyrillic ie, Greek epsilon, Latin epsilon, small E
-    "а": "a", "α": "a", "ɑ": "a", "ᴀ": "a",   # Cyrillic a, Greek alpha, Latin alpha, small A
-    "м": "m", "ᴍ": "m",                                 # Cyrillic em, small capital M
-    "ꜰ": "f",                                                # small capital F
-    "г": "r", "ʀ": "r",                                 # Cyrillic ghe, small capital R
-    "о": "o", "ο": "o", "օ": "o", "ᴏ": "o",   # Cyrillic o, Greek omicron, Armenian oh, small O
-})
+# Letters from other scripts that a reader takes for the letters of "team" and "from", by the letter they read as.
+# Generated from Unicode's confusables.txt (UTS #39, version 18.0.0, 2026-08-06): each letter whose confusable target,
+# read as _seen_as reads it, is one of t, e, a, m, f, r or o, keyed in its own _seen_as form (NFKD, marks dropped,
+# casefolded); with the small capitals and Latin alpha and epsilon added by hand. Only these letters are folded, so a
+# line is never judged by its alphabet: text in any language is left as written (Rio Grande's review of 42620c0c, M1:
+# marking any bracket-led line with a non-ASCII letter marked 35 of 48 ordinary lines). Accented letters need no
+# entry, since NFKD splits the accent off as a combining mark, which _hidden drops; letters with a stroke, hook or bar
+# don't decompose, so they are listed.
+LOOK_ALIKES = {
+    "t": "\u0167\u01ab\u01ad\u0288\u03c4\u0442\u04ad\u07e0\u13a2\u13bf\u1d1b\u1d75\u2c66\u2ca7\u3112\u4e05"
+         "\ua4d4\ua50b\ua68d\U00010297\U000102b1\U00010315\U000118dc\U00016f0a",  # 24
+    "e": "\u0247\u025b\u03b5\u0435\u04bd\u04bf\u13ac\u1d07\u2d39\ua4f0\ua5cb\uab32\U00010286\U000118c6"
+         "\U000118ce",  # 15
+    "a": "\u0251\u03b1\u0430\u13aa\u15c5\u1d00\ua4ee\uab64\U000102a0\U00016f40",  # 10
+    "m": "\u03bc\u03fb\u043c\u04ce\u13b7\u15f0\u16d6\u1d0d\u2c99\ua4df\U000102b0\U00010311\U00010c21",  # 13
+    "f": "\u0192\u0284\u03dd\u0584\u07d3\u15b4\u1d6e\u1e9d\ua4dd\ua730\ua799\uab35\U00010287\U000102a5"
+         "\U00010525\U000118c2",  # 16
+    "r": "\u024d\u027c\u027d\u0280\u0433\u0493\u13a1\u13b1\u13d2\u1587\u1d26\u1d72\u2c85\ua4e3\uab47\uab48"
+         "\U000104dc\U00016a19\U00016f35",  # 19
+    "o": "\u00f8\u0275\u03b8\u03bf\u03c3\u03ed\u043e\u0473\u04e9\u0585\u05e1\u0629\u0647\u06be\u06c1\u06c3"
+         "\u06d5\u06ff\u07cb\u0840\u0b20\u0d20\u101d\u10ff\u110b\u11bc\u12d0\u1340\u13a4\u13be\u13eb\u1a45"
+         "\u1d0f\u1d11\u2c91\u2c9f\u2d31\u2d41\u2d54\ua4f3\ua6a2\ua74b\uab3d\uab3e\U00010292\U000102ab"
+         "\U0001030f\U0001042c\U000104ea\U00010516\U0001051e\U0001092c\U00010c17\U00010d07\U00011124"
+         "\U000118c8\U000118d5\U000118d7\U0001699b\U00016ae9",  # 60
+}
+FOLD = str.maketrans({char: letter for letter, chars in LOOK_ALIKES.items() for char in chars})
+# Long s, plain and with a dot above, read as "f", but NFKD turns them into "s" before FOLD sees them: folded first.
+LONG_S = str.maketrans({"\u017f": "f", "\u1e9b": "f"})
 
 
 def _seen_as(line):
     """The line as a reader sees it: NFKD (compatibility forms made plain, accents split off), without hidden
-    (_hidden) or blank (BLANK) characters, without leading space, casefolded, with FOLD's look-alike letters folded."""
-    shown = BLANK.sub("", unicodedata.normalize("NFKD", line))
+    (_hidden) or blank (BLANK) characters, without leading space, casefolded, with LONG_S's and FOLD's look-alike
+    letters folded."""
+    shown = BLANK.sub("", unicodedata.normalize("NFKD", line.translate(LONG_S)))
     return "".join(c for c in shown if not _hidden(c)).lstrip().casefold().translate(FOLD)
 
 
