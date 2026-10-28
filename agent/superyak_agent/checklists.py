@@ -61,6 +61,11 @@ def read_file(path: Path) -> bytes:
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ParseError('not a regular file')
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid():
+            raise ParseError('owned by another user')
+        if info.st_mode & 0o022:
+            raise ParseError('writable by its group or by others')
         data = os.read(fd, FILE_BYTES + 1)
         while len(data) <= FILE_BYTES:
             more = os.read(fd, FILE_BYTES + 1 - len(data))
@@ -336,6 +341,14 @@ def trust_refusal(path: Path) -> str | None:
     return None
 
 
+def _dir_safe(directory: Path) -> bool:
+    try:
+        info = os.lstat(directory)
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o022
+
+
 def _load_dir(directory: Path, location: Path | None, own: bool, order: int, notices: list[str]) -> list[Loaded]:
     shown = _clean(directory)
     try:
@@ -379,7 +392,7 @@ def find(cwd: str | None, own_dir: Path, home: Path | None = None) -> Found:
     raws: dict[str, set[bytes]] = {}
     untrusted_dirs: list[Path] = []
     for order, (directory, location) in enumerate(dirs):
-        if str(directory) not in allowed:
+        if str(directory) not in allowed or (str(directory) != own_real and not _dir_safe(directory)):
             untrusted_dirs.append(directory)
             continue
         for item in _load_dir(directory, location, str(directory) == own_real, order, notices):

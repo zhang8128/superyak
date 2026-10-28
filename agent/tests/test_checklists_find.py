@@ -146,3 +146,34 @@ def test_trust_refuses(case, tmp_path, monkeypatch):
     else:
         target = tmp_path / 'r'
     assert isinstance(cl.trust_refusal(target), str)
+
+
+def test_a_trusted_directory_that_becomes_group_writable_is_untrusted_at_load(tmp_path):      # Ruling 37
+    repo = checkout(tmp_path / 'r', ('good', {}))
+    lists = repo / '.superyak' / 'checklists'
+    trust_dirs(own(), lists)
+    assert ids(cl.find(str(repo), own())) == ['good']
+    lists.chmod(0o775)
+    found = cl.find(str(repo), own())
+    assert found.lists == () and found.untrusted == 1 and found.notices == ()
+
+
+def test_a_trusted_directory_owned_by_another_user_is_untrusted_at_load(tmp_path, monkeypatch):
+    repo = checkout(tmp_path / 'r', ('good', {}))
+    trust_dirs(own(), repo / '.superyak' / 'checklists')
+    uid = os.getuid()
+    monkeypatch.setattr(os, 'getuid', lambda: uid + 1)
+    assert cl.find(str(repo), own()).lists == ()
+
+
+def test_a_list_file_writable_by_group_is_refused(tmp_path):
+    repo = checkout(tmp_path / 'r', ('good', {}), ('other', {}))
+    trust_dirs(own(), repo / '.superyak' / 'checklists')
+    (repo / '.superyak' / 'checklists' / 'good.md').chmod(0o664)
+    found = cl.find(str(repo), own())
+    assert ids(found) == ['other'] and 'good.md was skipped: writable by its group or by others' in found.notices[0]
+
+
+def test_the_ships_own_directory_still_loads_without_trust():
+    write_list(own(), 'mine')
+    assert ids(cl.find(None, own())) == ['mine']
