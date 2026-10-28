@@ -157,6 +157,120 @@ def test_a_dry_run_prints_each_check_and_posts_and_keeps_nothing(tmp_path):
     assert 'FAIL health: 503' in printed and 'PASS the app' in printed and len(printed) == len(rw.CHECKS)
 
 
+def test_an_outage_that_changes_kind_each_run_is_still_reported_and_once(tmp_path):
+    """The Pi reviewer's should-fix: a timeout, then a refused connection, then a 503 is one outage, not three
+    results that never match."""
+    run(tmp_path, Route())
+    flaps = [TimeoutError(), ConnectionRefusedError(), (503, None), (502, {'error': 'Bad gateway'})]
+    got = [run(tmp_path, Route(health=answer)) for answer in flaps]
+    assert got == [[], ['route watch: health now no answer (ConnectionRefusedError) (was ok)'], [], []]
+    assert run(tmp_path, Route()) == []
+    assert run(tmp_path, Route()) == ['route watch: health now ok (was no answer (ConnectionRefusedError))']
+
+
+def test_a_wrong_answer_that_changes_to_another_is_reported_at_once(tmp_path):
+    run(tmp_path, Route())
+    assert run(tmp_path, Route(health=(200, {'ok': False}))) == ['route watch: health now 200 (was ok)']
+    assert run(tmp_path, Route(health=(404, {'error': 'Not found'}))) == [
+        'route watch: health now 404 "Not found" (was 200)']
+
+
+def test_lines_past_pending_max_are_dropped_and_counted_in_one_line_sent_first(tmp_path):
+    run(tmp_path, Route())
+    down = Station(fail=True)
+    for i in range(rw.PENDING_MAX + 2):  # each run a different wrong answer, so each makes a line
+        run(tmp_path, Route(**{'anonymous /api/me refused': (418, {'error': f'tea {i}'})}), down)
+    state = json.loads((tmp_path / 'route-watch.json').read_text())
+    assert len(state['pending']) == rw.PENDING_MAX and state['dropped'] == 2
+    station = Station()
+    sent = run(tmp_path, Route(**{'anonymous /api/me refused': (418, {'error': 'tea last'})}), station)
+    assert sent[0] == 'route watch: 2 older lines were dropped while the station was unreachable'
+    assert len(sent) == rw.PENDING_MAX + 2 and '"tea last"' in sent[-1] and '"tea 2"' in sent[1]
+    state = json.loads((tmp_path / 'route-watch.json').read_text())
+    assert state['pending'] == [] and state['dropped'] == 0
+
+
+def test_a_dropped_count_whose_post_fails_is_kept(tmp_path):
+    run(tmp_path, Route())
+    path = tmp_path / 'route-watch.json'
+    state = json.loads(path.read_text())
+    path.write_text(json.dumps(dict(state, dropped=3)))
+    run(tmp_path, Route(), Station(fail=True))
+    assert json.loads(path.read_text())['dropped'] == 3
+
+
+def test_a_daily_line_whose_post_fails_is_sent_next_run_and_only_once(tmp_path):
+    clock = Clock()
+    run(tmp_path, Route(), clock=clock)
+    clock.now += rw.DAY
+    assert run(tmp_path, Route(), Station(fail=True), clock=clock) == []
+    clock.now += 900
+    assert run(tmp_path, Route(), clock=clock) == ['route watch: still watching; 7/7 pass']
+    clock.now += 900
+    assert run(tmp_path, Route(), clock=clock) == []
+
+
+def test_public_address_asks_public_dns_for_an_a_record():
+    asked = []
+
+    class Answer:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, *a):
+            return self.body
+
+    def opener(request, timeout):
+        asked.append((request.full_url, request.get_header('Accept'), timeout))
+        return Answer(json.dumps({'Answer': [{'type': 5, 'data': 'alias.'}, {'type': 1, 'data': '203.0.113.7'}]})
+                      .encode())
+
+    assert rw.public_address('smart.example.ts.net', opener=opener) == '203.0.113.7'
+    assert asked == [(rw.DNS + '?name=smart.example.ts.net&type=A', 'application/dns-json', rw.TIMEOUT)]
+    with pytest.raises(OSError, match='no address'):
+        rw.public_address('x.example', opener=lambda request, timeout: Answer(b'{"Status": 3}'))
+
+
+def test_ask_never_falls_back_to_plain_http(tmp_path):
+    """A server that answers in plain HTTP fails the TLS handshake: there is no unverified path."""
+    import socket
+    import ssl
+    import threading
+    server = socket.create_server(('127.0.0.1', 0))
+    port = server.getsockname()[1]
+
+    def answer():
+        conn, _ = server.accept()
+        conn.recv(1024)
+        conn.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}')
+        conn.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    with pytest.raises(ssl.SSLError):
+        rw.ask('127.0.0.1', 'localhost', 'GET', '/api/health', port=port)
+    server.close()
+
+
+def test_the_command_needs_a_room_unless_it_is_a_dry_run(tmp_path, monkeypatch, capsys):
+    from superyak_agent.__main__ import main
+    config = tmp_path / 'station.json'
+    config.write_text(json.dumps(CONFIG))
+    calls = []
+    monkeypatch.setattr(rw, 'run_once', lambda *a, **kw: calls.append((a, kw)) or [])
+    assert main(['route-watch', '--config', str(config), '--dry-run', '--state', str(tmp_path / 's.json')]) == 0
+    [(args, kw)] = calls
+    assert args[0] == CONFIG and args[1] is None and args[3] is None and kw == {'dry_run': True}
+    with pytest.raises(SystemExit) as stop:
+        main(['route-watch', '--config', str(config)])
+    assert stop.value.code == 2 and '--room' in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('result, is_outage', [('ok', False), ('200', False), ('401 "Sign in required"', False),
                                                ('503', True), ('500 "boom"', True), ('no answer (TimeoutError)', True),
                                                ('no public address (OSError)', True)])

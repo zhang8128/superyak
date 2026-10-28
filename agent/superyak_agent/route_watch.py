@@ -7,7 +7,12 @@ is still watching, so silence means healthy, not dead. It writes nothing on the 
 nothing that moves a cursor, and nothing that marks the ship present. Its key check is GET /api/home with the key,
 which the route refuses with a 403 before any ship lookup (peer/tests/test_public_route.py,
 test_the_middleware_writes_nothing_for_a_ship_key). A post names a status and, at most, a JSON error string: never a
-body, never the key."""
+body, never the key.
+
+Posts that fail wait for the next run, at most PENDING_MAX of them; older ones are dropped and counted in one line
+sent first. A state write that fails after a post went out sends that post again next run: a repeated line is the
+cheaper failure. TLS uses the system's trust store, which SSL_CERT_FILE or SSL_CERT_DIR can add roots to; nothing
+turns verification off."""
 import http.client
 import json
 import socket
@@ -34,6 +39,7 @@ CHECKS = (
 OK = 'ok'
 DAY = 86400
 PENDING_MAX = 10
+DROPPED = 'route watch: {} older lines were dropped while the station was unreachable'
 DNS = 'https://cloudflare-dns.com/dns-query'
 TIMEOUT = 15
 
@@ -50,11 +56,11 @@ def public_address(host, opener=urllib.request.urlopen):
     raise OSError(f'public DNS has no address for {host}')
 
 
-def ask(address, host, method, path, key=None):
+def ask(address, host, method, path, key=None, port=443):
     """One HTTPS request to `address`, verified as `host`: (status, the JSON body or None)."""
     context = ssl.create_default_context()
-    conn = http.client.HTTPSConnection(host, 443, timeout=TIMEOUT, context=context)
-    conn.sock = context.wrap_socket(socket.create_connection((address, 443), timeout=TIMEOUT), server_hostname=host)
+    conn = http.client.HTTPSConnection(host, port, timeout=TIMEOUT, context=context)
+    conn.sock = context.wrap_socket(socket.create_connection((address, port), timeout=TIMEOUT), server_hostname=host)
     headers = {'Host': host, 'Origin': f'https://{host}'}
     body = None
     if method == 'POST':
@@ -90,6 +96,12 @@ def outage(result):
     return result != OK and not result[:3].isdigit() or result[:1] == '5'
 
 
+def kind(result):
+    """What a result is when runs are compared: ok, an outage of any sort, or the exact wrong answer. A route flapping
+    between a timeout, a refused connection and a 503 is one outage (the Pi reviewer's should-fix)."""
+    return 'outage' if outage(result) else result
+
+
 def run_checks(host, key, resolve=public_address, request=ask):
     try:
         address = resolve(host)
@@ -111,16 +123,17 @@ def summary(results):
 
 
 def changes(results, state):
-    """The lines for this run, and the results now reported. A changed answer is reported at once when it's a wrong
+    """The lines for this run, and the results now reported. A change of kind is reported at once when it's a wrong
     HTTP answer below 500 (a running route answering wrong); any other change, the recovery to ok included, only
-    when the same result came back twice in a row."""
+    when the last run's result was of the same kind."""
     reported, seen = state.get('reported'), state.get('seen') or {}
     if not isinstance(reported, dict):
         return [f'route watch: started; {summary(results)}'], dict(results)
     now_reported, lines = dict(reported), []
     for name, result in results.items():
         before = reported.get(name, OK)
-        if result != before and (not outage(result) and result != OK or seen.get(name) == result):
+        if kind(result) != kind(before) and (kind(result) not in ('outage', OK)
+                                             or kind(seen.get(name, before)) == kind(result)):
             lines.append(f'{name} now {result} (was {before})')
             now_reported[name] = result
     return ([f'route watch: {"; ".join(lines)}'] if lines else []), now_reported
@@ -128,7 +141,8 @@ def changes(results, state):
 
 def run_once(config, room, state_path, client=None, now=time.time, resolve=public_address, request=ask,
              dry_run=False, out=print):
-    """One run: check, decide, post, keep state. Returns the lines it posted (or would post, in a dry run)."""
+    """One run: check, decide, post, keep state. Returns the lines it posted, or in a dry run, which reads the state
+    but writes none, the lines it would post."""
     host = urllib.parse.urlsplit(config['station']).hostname
     results = run_checks(host, config['key'], resolve, request)
     try:
@@ -148,13 +162,18 @@ def run_once(config, room, state_path, client=None, now=time.time, resolve=publi
             out(f'{"PASS" if result == OK else "FAIL"} {name}' + ('' if result == OK else f': {result}'))
         return lines
     pending = [line for line in state.get('pending') or [] if isinstance(line, str)] + lines
+    dropped = state.get('dropped') if type(state.get('dropped')) is int else 0
+    queue = ([DROPPED.format(dropped)] if dropped else []) + pending  # the count of lines lost goes first
     sent = 0
-    for line in pending:
+    for line in queue:
         try:
             client.post(room, line, f'route-watch-{uuid.uuid4().hex}')
         except Exception:  # noqa: BLE001 - the station unreachable: kept for the next run
             break
         sent += 1
-    state.update(reported=reported, seen=results, pending=pending[sent:][-PENDING_MAX:])
+    left = queue[max(sent, 1 if dropped else 0):]
+    dropped = 0 if dropped and sent else dropped
+    over = max(0, len(left) - PENDING_MAX)  # the oldest go, and are counted
+    state.update(reported=reported, seen=results, pending=left[over:], dropped=dropped + over)
     write_private(state_path, state)
-    return pending[:sent]
+    return queue[:sent]

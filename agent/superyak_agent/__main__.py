@@ -25,7 +25,7 @@ def build_parser():
     route.add_argument('--config', type=Path, default=CONFIG)
     route.add_argument('--room', help='The room that gets the lines (not needed with --dry-run)')
     route.add_argument('--state', type=Path, default=HOME / 'route-watch.json')
-    route.add_argument('--dry-run', action='store_true', help='Print each check; post nothing and keep no state')
+    route.add_argument('--dry-run', action='store_true', help='Print each check; post nothing and write no state')
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
