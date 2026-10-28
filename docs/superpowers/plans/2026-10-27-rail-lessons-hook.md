@@ -8,10 +8,11 @@ hook's `budget_ms` since rail-room-confirm (a05d1d51).
 
 **The review round of 8742c108 (City of AI, 2026-10-28; Serenity's fresh Mac reviewer, Rio Grande's fresh Pi
 reader):** the provider's deadline counts from the entry's start (`now`), SAVE_MARGIN before it gives up; undock
-removes the lessons hook and its settings; dock copies `--lessons` to `~/.superyak/lessons-hook.json`, the one file
-the hook and the hold read; every event sends `budget_ms`, and none starts a query with none left; a watchdog stops
-the hook at each event's limit; a subagent's failure asks nothing; could_hold is asked again with `seen` (Rio
-Grande's `lessons-hold-contract`), and before a command only a value of 6 bytes or more is answered (his side).
+removes the lessons hook and its settings; dock copies `--lessons` to `~/.superyak/lessons-hook.installed.json`
+(dock's own name, so undock never removes the person's file), the one file the hook and the hold read; every event
+sends `budget_ms`, and none starts a query with none left; a watchdog stops the hook at each event's limit; a
+subagent's failure asks nothing; could_hold is asked again with `seen` (Rio Grande's `lessons-hold-contract`), and
+before a command only a value of 6 bytes or more is answered (Rio Grande's side).
 
 **Branch:** `tardis/rail-lessons-hook`, local only, never pushed. Each task is test-first: the tests, seen failing,
 then the code, then green, then one commit. Tardis builds it.

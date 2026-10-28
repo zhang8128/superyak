@@ -201,12 +201,19 @@ def test_undock_never_deletes_the_file_the_person_named(monkeypatch, tmp_path):
     assert not lh.default_settings().exists() and mine.read_text() == before
 
 
-def test_naming_dock_s_own_copy_is_refused(monkeypatch, tmp_path):
+@pytest.mark.parametrize('how', ['itself', 'hard link'])
+def test_naming_dock_s_own_copy_is_refused(monkeypatch, tmp_path, how):
+    """Directly, or through a hard link (Rio Grande's reader's nit: os.path.samefile, not only the resolved path)."""
+    import os
     from superyak_agent import lessons_hook as lh
     machine = Machine(monkeypatch, tmp_path)
     copy = lessons_settings(tmp_path / 'x')
     lh.default_settings().parent.mkdir(parents=True, exist_ok=True)
     lh.default_settings().write_text(copy.read_text())
-    machine.install(adna=False, lessons=lh.default_settings())
+    named = lh.default_settings()
+    if how == 'hard link':
+        named = tmp_path / 'linked.json'
+        os.link(lh.default_settings(), named)
+    machine.install(adna=False, lessons=named)
     assert lessons_commands(machine.home / '.claude' / 'settings.json') == []
     assert any('is the copy dock makes' in line for line in machine.out)

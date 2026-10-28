@@ -520,7 +520,7 @@ def install_lessons(lessons_settings, out=print):
     find no settings and stay silent, rather than the hold holding for a hook that isn't there."""
     from .lessons_hook import default_settings, read_settings
     given, copy = Path(lessons_settings).expanduser().resolve(), default_settings()
-    if given == copy.resolve():
+    if given == copy.resolve() or (copy.exists() and given.exists() and os.path.samefile(given, copy)):
         out(f'The lessons hook was not installed: {given} is the copy dock makes and undock removes. Keep your '
             'settings in a file of your own and give that to --lessons.')
         return

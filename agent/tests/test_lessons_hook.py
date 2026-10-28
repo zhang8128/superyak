@@ -685,15 +685,54 @@ def test_a_session_start_blocked_on_its_record_is_stopped_past_its_limit_printin
     assert (done.returncode, done.stdout, done.stderr) == (0, b'', b'') and limit <= took < limit + 1.0, took
 
 
-def test_main_runs_unarmed_in_process(rail, monkeypatch, capsys):
-    """In pytest's own process the watchdog is never armed (conftest; Serenity's condition 2), so a test's call of
-    main() leaves no alarm behind and can't end the run."""
+def real_arm_an_hour_out(monkeypatch):
+    """For one test, the unpatched _arm (from a fresh copy of the module) with every slack an hour long, so main() arms
+    a real alarm that can't fire inside the test. The alarms it arms are recorded, as seconds left."""
+    import importlib.util
+    import signal
+    spec = importlib.util.find_spec('superyak_agent.lessons_hook')
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    armed = []
+
+    def arm(at, monotonic=time.monotonic):
+        done = fresh._arm(at, monotonic)
+        armed.append(signal.getitimer(signal.ITIMER_REAL)[0])
+        return done
+    monkeypatch.setattr(lh, '_arm', arm)
+    monkeypatch.setattr(lh, 'WATCHDOG_SLACK', {name: 3600.0 for name in lh.WATCHDOG_SLACK})
+    return armed
+
+
+@pytest.mark.parametrize('raises', [False, True])
+def test_main_disarms_before_it_prints_and_on_the_way_out(rail, monkeypatch, raises):
+    """Rio Grande's reader (W4): with the real watchdog armed an hour out, main() has disarmed it by the time it writes
+    its output, so a prompt's lessons rendered late are still printed, and again on the way out when the hook fails.
+    The alarm is cleared here whatever happens, so this test can't leave one behind."""
     import io
     import signal
+    armed, at_write = real_arm_an_hour_out(monkeypatch), []
+
+    class Out(io.StringIO):
+        def write(self, text):
+            at_write.append(signal.getitimer(signal.ITIMER_REAL)[0])
+            return super().write(text)
     rail.answers(*SERENITY)
+    if raises:
+        monkeypatch.setattr(lh, 'run', lambda *a, **k: 1 / 0)
+    out, previous = Out(), signal.getsignal(signal.SIGALRM)
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(rail.event('SessionStart', cwd=str(rail.root)))))
-    assert lh.main(['--settings', str(rail.settings)]) == 0
-    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0) and 'Lesson ' in capsys.readouterr().out
+    monkeypatch.setattr(sys, 'stdout', out)
+    try:
+        assert lh.main(['--settings', str(rail.settings)]) == 0
+        after = signal.getitimer(signal.ITIMER_REAL)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+    assert armed and all(left > 3000 for left in armed)              # it really armed, an hour out
+    assert after == (0.0, 0.0)                                          # and nothing is left on the way out
+    if not raises:
+        assert at_write and at_write[0] == 0.0 and 'Lesson ' in out.getvalue()   # disarmed before the print
 
 
 def test_the_real_watchdog_arms_and_disarms():

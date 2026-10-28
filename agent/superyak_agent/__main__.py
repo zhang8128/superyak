@@ -29,7 +29,8 @@ def build_parser():
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
     lessons = commands.add_parser('lessons-hook', help="Claude Code hook: lessons from Andy's ships (first rail)")
-    lessons.add_argument('--settings', type=Path, help='The hook\'s own settings (default ~/.superyak/lessons-hook.json)')
+    lessons.add_argument('--settings', type=Path, help='The hook\'s own settings (default '
+                         '~/.superyak/lessons-hook.installed.json, the copy dock makes of --lessons)')
     held = commands.add_parser('hold', help='Claude Code PreToolUse hook on Bash: checklists and lessons hold a '
                                'command once (dispatched before this parser, which only describes it)')
     held.add_argument('--config', type=Path, default=CONFIG)
