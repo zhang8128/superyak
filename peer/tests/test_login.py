@@ -458,3 +458,27 @@ def test_a_full_public_lane_refuses_without_hashing_or_counting_and_other_lanes_
 def test_the_lanes_sizes(station):
     lanes = station.app.state.sign_in_lanes
     assert [(lane.size, lane.queue) for lane in (lanes.public, lanes.tailnet, lanes.known)] == [(2, 8), (1, 4), (1, 4)]
+
+
+def test_a_store_from_the_first_deploy_gains_the_device_attempt_columns_on_open(tmp_path):
+    """a3ade5e6 shipped login_devices without attempts and attempt_reset. Opening such a store adds both, keeps its
+    rows, and a known browser then signs in and counts as before."""
+    clock = [1000000.0]
+    first = create_app(tmp_path / 'peer', clock=lambda: clock[0], allowed_origins=[ORIGIN])
+    first.state.store.create_user('patient', 'Patient', 'long-password-patient')
+    with first.state.store.transaction() as db:  # the shape the first deploy left on the Pi
+        db.execute('DROP TABLE login_devices')
+        db.execute('CREATE TABLE login_devices(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), '
+                   'expires REAL NOT NULL, failures INTEGER NOT NULL DEFAULT 0, failure_reset REAL NOT NULL DEFAULT 0)')
+        user = db.execute("SELECT id FROM users WHERE username='patient'").fetchone()['id']
+        db.execute('INSERT INTO login_devices VALUES(?,?,?,0,0)', ('old-row', user, clock[0] + 86400))
+    again = SimpleNamespace(app=create_app(tmp_path / 'peer', clock=lambda: clock[0], allowed_origins=[ORIGIN]), clock=clock)
+    again.store = again.app.state.store
+    with again.store.transaction() as db:
+        columns = {row['name'] for row in db.execute('PRAGMA table_info(login_devices)')}
+        kept = db.execute("SELECT attempts, attempt_reset FROM login_devices WHERE token_hash='old-row'").fetchone()
+    assert {'attempts', 'attempt_reset'} <= columns
+    assert (kept['attempts'], kept['attempt_reset']) == (0, 0)
+    client = browser(again)
+    assert sign_in(again, 'patient', source='203.0.113.5', client=client)[0] == 200
+    assert sign_in(again, 'patient', source='203.0.113.5', client=client)[0] == 200  # now a known browser, counted
