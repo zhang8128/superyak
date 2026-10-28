@@ -1,6 +1,19 @@
 import pytest
 from fastapi.testclient import TestClient
 
+# Public route spec 6.1: Starlette's default client host, "testclient", is not an IP address, so the station treats it
+# as public. Every TestClient the suite builds runs as tailnet instead, unless the test passes its own client.
+TAILNET_CLIENT = ('127.0.0.1', 50000)
+
+
+@pytest.fixture(autouse=True)
+def tailnet_test_clients(monkeypatch):
+    built = TestClient.__init__
+
+    def tailnet(self, *args, client=TAILNET_CLIENT, **kwargs):
+        built(self, *args, client=client, **kwargs)
+    monkeypatch.setattr(TestClient, '__init__', tailnet)
+
 @pytest.fixture
 def env(tmp_path):
     from superyak_peer.app import create_app

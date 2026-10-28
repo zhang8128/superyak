@@ -107,14 +107,16 @@ class StationClient:
         self.key, self.transport = key, transport or urllib_transport()
         self.presence = dict(presence or {})  # spec S1: names the session on every call; {} sends nothing new
 
-    def request(self, method, path, body=None):
-        headers = {'origin': self.origin, 'accept': 'application/json'}
+    def request(self, method, path, body=None, headers=None):
+        """`headers` adds to this call only, such as a docking poll's X-Superyak-Secret."""
+        extra, headers = headers or {}, {'origin': self.origin, 'accept': 'application/json'}
         if self.origin != self.base:
             scheme, _, host = self.origin.partition('://')
             headers.update({'host': host, 'x-forwarded-proto': scheme})
         if self.key:
             headers['authorization'] = f'Bearer {self.key}'
         headers.update(self.presence)
+        headers.update(extra)
         data = None
         if body is not None:
             headers['content-type'] = 'application/json'

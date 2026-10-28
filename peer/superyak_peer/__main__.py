@@ -492,12 +492,15 @@ def main(argv=None):
         else:
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback
+                ipv4_loopback = loopback and ipaddress.ip_address(args.host).version == 4
             except ValueError:
-                loopback = args.host == 'localhost'
+                loopback, ipv4_loopback = args.host == 'localhost', False
             if args.local_demo and not loopback:
                 raise ValueError('Local demo requires a loopback bind')
-            if args.proxy_headers and (not loopback or args.local_demo or not args.origin or any(not o.startswith('https://') for o in args.origin)):
-                raise ValueError('Proxy headers require a loopback bind, explicit HTTPS origins, and no local demo')
+            # public route spec 1: uvicorn trusts forwarded headers from TRUSTED_PROXY (127.0.0.1) only, so a proxy on ::1
+            # (or localhost resolving to it) would make every request look like loopback, and so tailnet
+            if args.proxy_headers and (not ipv4_loopback or args.local_demo or not args.origin or any(not o.startswith('https://') for o in args.origin)):
+                raise ValueError('Proxy headers require an IPv4 loopback bind, explicit HTTPS origins, and no local demo')
             if args.peer_tls:
                 from .identity import PeerIdentity
                 from urllib.parse import urlsplit
@@ -515,13 +518,15 @@ def main(argv=None):
                 raise ValueError('Remote binds require TLS certificate and key')
             if bool(args.tls_cert) != bool(args.tls_key):
                 raise ValueError('TLS requires both certificate and key')
-            from .app import create_app
+            from .app import TRUSTED_PROXY, create_app
             import uvicorn
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
             from .models import load_config
             model_config = load_config(args.model_config)
             app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=agent_version.load())
-            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None, proxy_headers=args.proxy_headers, forwarded_allow_ips='127.0.0.1' if args.proxy_headers else None)
+            # access_log=False as for the door (public route spec 4): an older dock client's poll still carries ?secret=
+            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None,
+                        proxy_headers=args.proxy_headers, forwarded_allow_ips=TRUSTED_PROXY if args.proxy_headers else None, access_log=False)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')
 

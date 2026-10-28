@@ -109,6 +109,17 @@ class Ships:
                 self._record_presence(db, row['id'], presence)
             return public_user(row)
 
+    def ship_key_is_valid(self, key):
+        """Public route spec 2: the lookup ship_for_key does, answered True or False. It writes nothing, no last_used
+        and no presence; the route's own ship_for_key still writes those afterwards."""
+        if not isinstance(key, str) or not 0 < len(key) <= 128:
+            return False
+        with self.transaction() as db:
+            return db.execute(
+                "SELECT 1 FROM ship_keys JOIN users ON users.id=ship_keys.ship_id WHERE key_hash=? AND revoked IS NULL AND users.kind='ship'",
+                (token_hash(key),),
+            ).fetchone() is not None
+
     def revoke_presented_key(self, key):
         with self.transaction() as db:
             if not db.execute('UPDATE ship_keys SET revoked=? WHERE key_hash=? AND revoked IS NULL', (self.clock(), token_hash(key or ''))).rowcount:

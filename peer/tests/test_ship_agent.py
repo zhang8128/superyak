@@ -642,6 +642,36 @@ def test_a_ship_never_sets_a_replaced_rooms_brief(env, tmp_path):
     assert not error and saved.startswith(f'Saved the brief of room {newer} as revision 1.')
 
 
+def test_dock_over_the_public_route_says_refused_public_and_keeps_its_docking(docking):
+    """Public route spec 4: the station answers 401 to POST /api/dockings and to its status poll on public requests;
+    the dock client prints STATUS: refused-public, keeps docking.json and ends the run with 3. A later run that takes
+    the tailnet picks the docking up."""
+    from superyak_agent.dock import Dock
+    app, clients, users, clock, make, opened, home = docking
+    outside = TestClient(app, base_url='http://testserver', client=('203.0.113.5', 50000))
+
+    def public(method, url, headers, data):
+        response = outside.request(method, url.removeprefix('http://testserver'), headers=headers, content=data)
+        return response.status_code, response.content
+    said = []
+
+    def from_outside():
+        return Dock('http://testserver', ship='serenity', workspace=str(home.parent / 'repo'), home=home, transport=public,
+                    clock=lambda: clock[0], sleep=lambda s: pytest.fail('it waited'), out=said.append, machine='test-host',
+                    open_url=opened.append)
+    assert from_outside().run(wait=540, poll=15) == 3
+    assert said[-1].startswith('STATUS: refused-public (the station docks only over the tailnet.') and not (home / 'docking.json').exists()
+    with app.state.store.transaction() as db:
+        assert db.execute('SELECT count(*) FROM dockings').fetchone()[0] == 0
+    assert make('serenity').step() == 'waiting-for-confirm'  # over the tailnet
+    pending = json.loads((home / 'docking.json').read_text())
+    clients[0].post(f'/api/dockings/{pending["id"]}/confirm', json={'code': pending['code']})
+    said.clear()
+    assert from_outside().run(wait=540, poll=15) == 3
+    assert said[-1].startswith('STATUS: refused-public') and json.loads((home / 'docking.json').read_text()) == pending
+    assert make('serenity').step() == 'docked'  # the key was still waiting for it
+
+
 def test_a_session_moderates_through_the_real_station_and_no_notice_crosses_the_bridge(env, tmp_path):
     """T10, M21 and §7's first use, end to end: Rio Grande's session adds Tardis by the room's title through the real
     station, in a bridged room; the appointment, add, end and removal notices name an account called @venus, are
