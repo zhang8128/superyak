@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+import store_identity
 from lighthouse_protocol import content_digest
 from permissions import MAX_PLACEMENTS
 
@@ -105,6 +106,8 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
     vector is copied without one and becomes searchable after maintenance fills
     it; sharing never requires an embedder.
     """
+    if store_identity.is_imprint(source_storage.conn):
+        raise store_identity.ImprintRefused("the source is an imprint; imprints are never shared from")
     audience = validate_audience(audience)
     if layer not in SHAREABLE_LAYERS:
         raise ValueError(f"layer {layer!r} is not shareable")

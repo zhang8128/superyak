@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from superyak_team.teamlib import redact
 from . import acting, checklist_firing as firing, checklists, claims, holds
-from .station import BREAKOUT_MARK, DEFERRED_MARK, MESSAGE_LIMIT, ON_WATCH_LINE, StationError, UNREADABLE_BOARD, authors, breakout_count_lines, breakout_note, brief_block, board_block, claims_block, client_for, client_version, fence_message, label, load_config, plain_id, presence_headers, quoted_title, read_hint, session_key, shown_id, source_label, utc_time, write_private
+from .station import BREAKOUT_MARK, DEFERRED_MARK, MESSAGE_LIMIT, ON_WATCH_LINE, StationError, UNREADABLE_BOARD, authors, breakout_count_lines, breakout_note, brief_block, board_block, claims_block, client_for, client_version, fence_message, label, lesson_count_line, load_config, plain_id, presence_headers, quoted_title, read_hint, session_key, shown_id, source_label, utc_time, write_private
 
 DEFAULT_CHARS = 2000
 TOTAL_CHARS = 40000  # one tool result, about; one message alone can be longer once quoted
@@ -472,7 +472,8 @@ class Tools:
         limit = max(1, min(100, int(args.get('limit') or 30)))
         wait = max(0, min(25, int(args.get('wait_seconds') or 0)))
         got = self.client.unread(cursor, limit, wait, breakouts='mentions')  # S6: the station leaves breakout noise out
-        counts = breakout_count_lines(got)  # ...and counts it, one line per breakout, after everything else
+        # ...and counts it, one line per breakout, after everything else, then the lessons room's line (first rail section 3)
+        counts = breakout_count_lines(got) + lesson_count_line(got)
         blocks, size, last = [], NOTE_ROOM + sum(len(c) + 2 for c in counts), None
         for m in got['messages']:
             reply = f', reply to {shown_id(m["reply_to"])}' if m.get('reply_to') else ''
@@ -664,7 +665,8 @@ class Tools:
                 f'Runs: {self._runs_summary(key, c.version, len(c.items))}\n'
                 f'Default: adding an item or a moment is accepted if no one objects by {utc_time(deadline)}. Removing or '
                 'weakening anything needs an explicit yes: from a person, or from each ship when the list guards an '
-                'irreversible act; otherwise from one ship other than the proposer, or a person. Any person can veto.')
+                'irreversible act; otherwise from one ship other than the proposer, or a person. Any person can veto. '
+                'A killer: item climbs only to automation, never down to being remembered.')
 
     def _runs_summary(self, key, version, count):
         runs = []

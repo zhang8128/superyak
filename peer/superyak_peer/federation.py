@@ -4,11 +4,24 @@ import hashlib
 import json
 import re
 import threading
-from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse
+from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse, pairing_code, show_code, typed_code
 from .common import Problem, require, uid, encode, text, linked_room_ok
 
 class Obsolete(Exception):
     pass
+
+class _NoIdentity:
+    """A peer with no identity yet, for the CLI's pair and connections, which never make one (fix:pairing-code SF2):
+    `card --endpoint` makes it, naming its host. Truthy, so Federation keeps it; any use raises."""
+    def __bool__(self):
+        return True
+
+    def __getattr__(self, name):
+        raise RuntimeError('This peer has no identity yet; card --endpoint makes one')
+
+NO_IDENTITY = _NoIdentity()
+TRUST_KEYS = ('signing_key', 'certificate', 'fingerprint', 'endpoint')  # a known peer's, never replaced
+HELD = 'SELECT 1 FROM contact_holds WHERE contact_id=remote_contacts.id'  # a contact waiting for its own code (SF3)
 
 class Federation:
     def __init__(self, store, *, endpoint, identity=None):
@@ -21,34 +34,87 @@ class Federation:
             user = require(db.execute('SELECT id,name FROM users WHERE id=?', (actor,)).fetchone())
             return self.identity.card(self.endpoint, dict(user))
 
-    def pair(self, actor, card):
+    def pair(self, actor, card, *, code):
+        """fix:pairing-code (federation-pull spec §2): an admin pairs a card only with the other side's code, typed off
+        that machine's screen. One check, here, after the admin check; the confirmation keeps the card's code, never
+        the typed text."""
         card = validate_card(card)
-        if card['peer_id'] == self.identity.peer_id:
+        if self.identity is not NO_IDENTITY and card['peer_id'] == self.identity.peer_id:  # no identity: no card of ours
             raise Problem(400, 'Cannot pair this peer with itself')
         with self.store.transaction() as db:
             self.store._admin(db, actor)
-            previous = db.execute('SELECT card FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()
+            expected, typed = pairing_code(card), typed_code(code)
+            if typed is None:
+                raise Problem(400, 'Type the pairing code shown on the other machine')
+            if typed != expected:
+                raise Problem(400, f"That code doesn't match this card. Its code is {show_code(expected)}; read the "
+                                   "other machine's screen again.")
+            previous = db.execute('SELECT card, paired FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()
             if previous:
                 prior = json.loads(previous['card'])
-                if any(prior[k] != card[k] for k in ('signing_key','certificate','fingerprint','endpoint')):
+                if any(prior[k] != card[k] for k in TRUST_KEYS):
                     raise Problem(409, 'Known peer trust material cannot be replaced')
+            # The confirmation is for the card connections() will rebuild (the stored card with this participant), so
+            # a field the 409 list doesn't name can never make "confirmed by typing" describe another card (pairing
+            # review SF2).
+            if pairing_code({**(prior if previous else card), 'participant': card['participant']}) != expected:
+                raise Problem(409, 'Known peer trust material cannot be replaced')
+            if previous and not previous['paired']:
+                # Serenity's review MF2: a peer unpaired with no holds (by main's unpair, before this branch or after a
+                # rollback, or in a copy restored from before holds) gets every contact held and unconfirmed first, so
+                # "unpaired" means "every contact held" whatever made it, and this pair releases the typed one only.
+                db.execute('INSERT OR IGNORE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?',
+                           (self.store.clock(), card['peer_id']))
+                db.execute('DELETE FROM pairing_confirmations WHERE contact_id IN '
+                           '(SELECT id FROM remote_contacts WHERE peer_id=?)', (card['peer_id'],))
             db.execute('INSERT INTO peers VALUES(?,?,1) ON CONFLICT(peer_id) DO UPDATE SET paired=1', (card['peer_id'], encode(card)))
             db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?) ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name', ('remote_'+uid(), card['peer_id'],card['participant']['id'],card['participant']['name']))
-            return dict(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (card['peer_id'],card['participant']['id'])).fetchone())
+            contact = dict(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (card['peer_id'],card['participant']['id'])).fetchone())
+            db.execute('INSERT INTO pairing_confirmations VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET '
+                       'code=excluded.code, confirmed=excluded.confirmed', (contact['id'], expected, self.store.clock()))
+            db.execute('DELETE FROM contact_holds WHERE contact_id=?', (contact['id'],))  # this one's code was typed
+            return {**contact, 'pairing_code': show_code(expected), 'confirmed': True, 'held': False}
 
     def unpair(self, actor, contact_id):
+        """Disconnects the whole peer. Every contact of it is held, and loses its confirmation, so pairing one
+        participant again reconnects that one only: each other one waits for its own code (pairing review SF3)."""
         with self.store.transaction() as db:
             self.store._admin(db, actor)
             row = require(db.execute('SELECT peer_id FROM remote_contacts WHERE id=?', (contact_id,)).fetchone())
+            siblings = "SELECT id FROM remote_contacts WHERE peer_id=?"
+            db.execute(f'INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?',
+                       (self.store.clock(), row['peer_id']))
+            db.execute(f'DELETE FROM pairing_confirmations WHERE contact_id IN ({siblings})', (row['peer_id'],))
             db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (row['peer_id'],))
             db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (row['peer_id'],))
             db.execute('UPDATE inbox SET payload=NULL WHERE origin=?', (row['peer_id'],))
         return {'ok':True}
 
     def connections(self, actor):
+        """Each contact with the card it was paired with: peers.card with the contact's own id and name, which is the
+        card last imported for it, whether a typed code confirmed that card, and whether it's held. A confirmation
+        counts only while its code is still the card's (fix:pairing-code, re-check SF1). The code is listed only for
+        a confirmed contact: shown for any other, it could be copied into a re-pair with no screens compared
+        (pairing review, nit 1)."""
         with self.store.transaction() as db:
             self.store._admin(db, actor)
-            return [{**dict(r), 'card':{**json.loads(r['card']), 'participant':{'id':r['user_id'],'name':r['name']}}} for r in db.execute('SELECT remote_contacts.*,peers.card,peers.paired FROM remote_contacts JOIN peers USING(peer_id)')]
+            rows = db.execute('SELECT remote_contacts.*,peers.card,peers.paired,pairing_confirmations.code AS confirmed_code,'
+                              'contact_holds.contact_id IS NOT NULL AS held '
+                              'FROM remote_contacts JOIN peers USING(peer_id) '
+                              'LEFT JOIN pairing_confirmations ON pairing_confirmations.contact_id=remote_contacts.id '
+                              'LEFT JOIN contact_holds ON contact_holds.contact_id=remote_contacts.id').fetchall()
+        listed = []
+        for r in rows:
+            fields = {k: r[k] for k in r.keys() if k not in ('confirmed_code', 'held')}
+            card = {**json.loads(r['card']), 'participant': {'id': r['user_id'], 'name': r['name']}}
+            try:
+                code = pairing_code(card)
+            except Problem:  # a stored card that no longer validates has no code to show
+                code = None
+            confirmed = code is not None and r['confirmed_code'] == code
+            listed.append({**fields, 'card': card, 'pairing_code': show_code(code) if confirmed else None,
+                           'confirmed': confirmed, 'held': bool(r['held'])})
+        return listed
 
     def collect(self):
         with self.store.transaction() as db:
@@ -72,7 +138,8 @@ class Federation:
                     action = 'room.message' if kind == 'chat.message' else 'room.roster'
                 else:
                     continue
-                for contact in contacts:
+                held = {r[0] for r in db.execute('SELECT contact_id FROM contact_holds')}  # nothing queued for them (SF3)
+                for contact in contacts - held:
                     db.execute('INSERT OR IGNORE INTO outbox(id,event_seq,contact_id,resource_id,revision,action,metadata,status) VALUES(?,?,?,?,?,?,?,?)', (uid(),event['id'],contact,rid,event['resource_version'],action,event['payload'],'pending'))
             if events:
                 db.execute('UPDATE federation_cursor SET seq=? WHERE id=1', (events[-1]['id'],))
@@ -89,8 +156,8 @@ class Federation:
             row = require(db.execute('SELECT * FROM outbox WHERE id=?', (key,)).fetchone())
             if row['status'] not in ('pending','failed'):
                 raise Obsolete()
-            contact = db.execute('SELECT remote_contacts.*,peers.paired FROM remote_contacts JOIN peers USING(peer_id) WHERE id=?', (row['contact_id'],)).fetchone()
-            if not contact or not contact['paired']:
+            contact = db.execute(f'SELECT remote_contacts.*,peers.paired,EXISTS({HELD}) AS held FROM remote_contacts JOIN peers USING(peer_id) WHERE id=?', (row['contact_id'],)).fetchone()
+            if not contact or not contact['paired'] or contact['held']:  # a held contact gets nothing (SF3)
                 raise Obsolete()
             action, revision, rid = row['action'], row['revision'], row['resource_id']
             meta = json.loads(row['metadata'])
@@ -288,8 +355,8 @@ class Federation:
                 raise Problem(403, 'Unknown or unpaired peer')
             value = verify_envelope(value, json.loads(peer['card']), self.identity.peer_id)
             actor, origin = value['actor']['id'], value['origin']
-            if not db.execute('SELECT 1 FROM remote_contacts WHERE peer_id=? AND user_id=?', (origin,actor)).fetchone():
-                raise Problem(403, 'Unknown remote participant')
+            if not db.execute(f'SELECT 1 FROM remote_contacts WHERE peer_id=? AND user_id=? AND NOT EXISTS({HELD})', (origin,actor)).fetchone():
+                raise Problem(403, 'Unknown remote participant')  # a held one too, until its own code is typed (SF3)
             for recipient in value['recipients']:
                 if not db.execute('SELECT 1 FROM users WHERE id=?', (recipient,)).fetchone():
                     raise Problem(403, 'Unknown recipient')
@@ -411,6 +478,7 @@ class Federation:
             if old['body'] != p['body']:
                 raise Problem(409, 'Message ID already used')
             return
+        self.store._lessons_gate(db, rid, author, p['body'], client_id=p['client_message_id'])  # first rail section 3: the origin's reply door
         key = uid()
         db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (key,rid,author,p['client_message_id'],p['body'],room['epoch'],self.store.clock()))
         self.store.emit(db,'chat.message',rid,room['epoch'],{'message_id':key,'author_id':author})

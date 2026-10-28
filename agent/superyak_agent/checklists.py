@@ -142,10 +142,10 @@ def parse(name: str, data: bytes, own: bool) -> Checklist:
         key, sep, value = line.partition(': ')
         if not sep or not value or not key.isascii() or not key.isidentifier():
             raise ParseError('a front matter line is not "key: value"')
-        if not value.isprintable():
-            raise ParseError(f'{key} has a control character')
+        if not value.isprintable():   # never the key's own text: a notice shows this outside any fence (section 2's S1)
+            raise ParseError('a front matter value has a control character')
         if value[0] in '"\'':
-            raise ParseError(f'{key} is quoted')
+            raise ParseError('a front matter value is quoted')
         keys.append(key)
         values[key] = value
     if tuple(keys[:5]) != REQUIRED:
@@ -275,27 +275,41 @@ def search_dirs(cwd: str | None, own_dir: Path, home: Path | None = None) -> lis
 
 
 def trusted(own_dir: Path) -> frozenset[str]:
+    return read_trusted(own_dir)[0]
+
+
+def read_trusted(own_dir: Path) -> tuple[frozenset[str], str | None]:
+    """trusted.json's paths and None, or no paths and why a trusted.json that is there can't be used, so a writer
+    leaves it as it is (the final review's M7). No file is no paths and None."""
     try:
         fd = os.open(Path(own_dir) / 'trusted.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    except OSError:
-        return frozenset()
+    except FileNotFoundError:
+        return frozenset(), None
+    except OSError as error:
+        if error.errno in (errno.ELOOP, getattr(errno, 'EMLINK', -1)):
+            return frozenset(), 'is a symlink'
+        return frozenset(), f"can't be read: {error.strerror or 'unreadable'}"
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
-            return frozenset()
+        if not stat.S_ISREG(info.st_mode):
+            return frozenset(), 'is not a regular file'
+        if info.st_uid != os.getuid():
+            return frozenset(), 'is owned by another user'
+        if info.st_mode & 0o022:
+            return frozenset(), 'is writable by its group or by others'
         data = os.read(fd, 1 << 20)
-    except OSError:
-        return frozenset()
+    except OSError as error:
+        return frozenset(), f"can't be read: {error.strerror or 'unreadable'}"
     finally:
         os.close(fd)
     try:
         value = json.loads(data.decode('utf-8'))
         paths = value['trusted']
-        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
-            return frozenset()
-        return frozenset(paths)
+        if isinstance(paths, list) and all(isinstance(p, str) for p in paths):
+            return frozenset(paths), None
     except (ValueError, KeyError, TypeError, RecursionError):
-        return frozenset()
+        pass
+    return frozenset(), 'is not a JSON list of paths under "trusted"'
 
 
 def _dir_refusal(real: str) -> str | None:
@@ -356,8 +370,9 @@ def _load_dir(directory: Path, location: Path | None, own: bool, order: int, not
         return []
     good = [n for n in names if ID.fullmatch(n[:-3])]
     odd = [n for n in names if not ID.fullmatch(n[:-3])]
-    for name in odd[:DIR_FILES]:
-        notices.append(f'Checklist {shown}/{_clean(name)} was skipped: the file name is not an id and .md.')
+    if odd:   # counted, never named: a name is text from the directory, shown outside any fence (section 2's S1)
+        files, verb = ('1 file', "isn't a list") if len(odd) == 1 else (f'{len(odd)} files', "aren't lists")
+        notices.append(f"{files} in {shown} {verb}: a list's file name is an id and .md.")
     loaded: list[Loaded] = []
     for name in good[:DIR_FILES]:
         try:

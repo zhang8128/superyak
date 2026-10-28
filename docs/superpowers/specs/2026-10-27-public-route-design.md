@@ -53,7 +53,8 @@ and nothing else.
 - The door on 8443, which is unchanged.
 - **Federation.** Pull and its own listener are in the approved federation-pull spec on branch
   `tardis/federation-pull` (05c9ea7), not yet merged.
-  - Until that listener exists, `/federation/events` on the main app refuses public requests.
+  - Until that listener exists, `/federation/events` on the main app refuses anonymous public requests (a valid
+    session or ship key passes it, as any route, §2).
   - No live peer depends on it: federation has carried no live traffic.
 
 ## 1. Which requests are public (nits 1, 2)
@@ -128,7 +129,9 @@ names, and the dummy hash for unknown names kept explicitly, so a 401 takes the 
 - A **public** source is its IPv6 /64, or its full IPv4 address.
 - A **tailnet** source is its full address, so tailnet nodes never share a bucket.
 - A non-IP source is public and gets its own bucket.
-- Counter keys are JSON arrays such as `["user-source", source, username]`, unambiguous for any username.
+- Counter keys are JSON arrays such as `["user-source", "public", source, username]`, unambiguous for any username.
+  A source's keys name the request's class, public or tailnet, so a public and a tailnet failure never share a row
+  (section 2 review should-fix 4): a Funnel request from a tailnet node has that node's address as its source.
 
 **Holds:**
 1. **Per (username, source):** 8 failures in 5 minutes, as today. Someone guessing from elsewhere no longer locks
@@ -141,11 +144,23 @@ names, and the dummy hash for unknown names kept explicitly, so a 401 takes the 
 - **Known-device cookie,** the OWASP device-cookie pattern in full (re-check should-fix 3(b)):
   - A successful sign-in sets `superyak_device`: a random 256-bit token with HttpOnly, Secure, SameSite=Strict and a
     180-day life.
-  - The token is stored hashed as **one row per browser** (user, token hash, expiry, failures, failure reset). A
+  - The token is stored hashed as **one row per browser** (user, token hash, expiry, failures, failure reset, attempts,
+    attempt reset). A
     sign-in presenting a valid cookie keeps that row and extends it rather than adding one. Expired rows are deleted,
     with at most 20 rows per user (the oldest goes). Logout keeps the cookie.
   - A browser presenting a cookie valid for the username it signs into is exempt from holds 1-3. Its failures count
     against its own token instead: 8 in 5 minutes holds that token only, and they never count toward hold 3.
+  - Its public sign-ins count against its token too, successes included: 8 in 5 minutes hold it, so one browser
+    signing in over and over can't keep the known browsers' lane full (section 2 review should-fix 1). A success
+    resets the failures, never the attempts.
+  - **And per username, over all its known browsers** (section 2 review of 581cea18, should-fix 1). A cookieless
+    public success mints a token and costs nothing against holds 1-3, so minted tokens would otherwise get round the
+    per-token count. Every public known-browser sign-in, of any outcome, also counts under `["known", username]`:
+    24 in 5 minutes hold that username's known browsers, and a success never gives one back.
+    - Only a valid token's sign-in raises it, so nobody without one can hold anyone's browsers.
+    - Tailnet sign-ins neither count nor are held by it, so a tailnet sign-in still recovers.
+    - `device_is_valid` answers it 429 before any lane, and `Store.login` counts and holds it in the transaction that
+      counts the token.
   - A cookie for another user, an expired one or a made-up one exempts nothing.
 - **Recovery:** a successful tailnet sign-in clears that username's public hold.
 
@@ -165,11 +180,15 @@ anyio's shared threads.
 - **Tailnet sign-ins:** 1 at a time, with a queue of 4. Public requests never enter this lane.
 - **Known browsers:** a public sign-in presenting a `superyak_device` cookie that a side-effect-free read finds valid
   for the username uses a third lane, 1 at a time with a queue of 4. The read runs in a worker before queueing, like
-  the middleware's reads.
+  the middleware's reads. It answers 429 to a held token, or one whose username's known browsers are held, so it
+  enters no lane; `Store.login` holds it again.
 - **A full lane** answers 429 without hashing or counting.
 
 **Old rows:** today's `user:` and `source:` rows go inert at deploy. The new keys are different, so any current hold
 ends at deploy, and expired rows are deleted in step 1.
+- **At the follow-ups' deploy,** the first deploy's `user-source` and `source` rows retire the same way, since their
+  keys lack the request's class: their holds end.
+- The hold-3 key `["user", username]` is unchanged and carries over, and so do the device rows' failure holds.
 
 ## 4. Logs, and docking from the public route (S7, nit 9)
 
@@ -263,6 +282,11 @@ ends at deploy, and expired rows are deleted in step 1.
      - A sign-in with a valid cookie adds no row.
      - Logout keeps it.
      - There are at most 20 rows per user.
+     - Eight public sign-ins of any outcome hold a token before any lane. A tailnet sign-in neither counts, its token's
+       attempts unchanged, nor is held. `Store.login` enforces the hold itself.
+     - Tokens minted by cookieless sign-ins are held at the per-username limit of 24, of any outcome, before any lane.
+       Another user's known browser and a tailnet sign-in still get in. `Store.login` enforces it itself.
+     - A store from the first deploy gains the two attempt columns on open, with its rows whole.
    - A `user:` row from before the upgrade, at its limit, holds nobody.
    - Unknown and known names answer the same.
 8. **Logs and docking:**
@@ -276,6 +300,15 @@ ends at deploy, and expired rows are deleted in step 1.
 ## 7. Deploy (nits 9, 10)
 
 There's no migration beyond the new device-token table. Restart `superyak-lighthouse` on the Pi.
+
+**The follow-ups' deploy** adds two columns to that table, `attempts` and `attempt_reset` (`NOT NULL DEFAULT 0`).
+- The store gains them on open, under the dispatch lock, and old rows keep their values.
+- Any process with the new code that opens the store adds them, a `make station-*` target included. That's harmless:
+  the first deploy's code reads by column name, so a rollback is safe.
+- After the restart, add three checks:
+  - one failed public sign-in's key reads `["user-source","public",<its address>,…]`;
+  - one failed tailnet sign-in's key reads `"tailnet"`;
+  - `PRAGMA table_info(login_devices)` lists both columns.
 
 **Live checks after the deploy:**
 - From a device off the tailnet (a tailnet machine resolves the name to the tailnet):

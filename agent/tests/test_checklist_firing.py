@@ -90,6 +90,9 @@ def test_a_command_list_holds_each_distinct_command_once_and_a_deferred_list_pas
     assert record['fired'][lists[0].key]['version'] == 1
     assert names(fp.due_at_command(lists, record, 'git push origin y', 30.0)[0])[0] == 'c'
     assert fp.due_at_command(lists, record, 'ls', 40.0)[0] == []
+    # The re-run spends the pass (section 2's M1): the same command later is due again, every list of it.
+    assert fp.spend(record, lists, digest) is True and fp.spend(record, lists, digest) is False
+    assert names(fp.due_at_command(lists, record, 'git push origin x', 50.0)[0]) == ['c', 'a', 'b']
 
 
 def test_claim_fires_once_for_each_item_and_never_on_a_renewal():
@@ -243,6 +246,8 @@ def test_a_wrong_typed_section_reads_as_empty_and_heals_on_write(bad):
     event, command, claim = loaded('e', 'every 1h'), loaded('c', 'command git push'), loaded('k', 'claim')
     fp.due_at_event([event], dict(bad), None, 9e9)
     fp.due_at_command([command], dict(bad), 'git push', 1.0)
+    assert fp.spend(dict(bad), [command], 'x') is False
+    assert fp.spend({'passed': {command.key: 'xd'}}, [command], 'd') is False     # a damaged pass isn't read as a string
     fp.due_at_claim([claim], dict(bad), 'i', 1.0)
     fp.begin(dict(bad), 'clear')
     assert fp.told(dict(bad), 'n') is False

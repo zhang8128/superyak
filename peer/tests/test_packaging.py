@@ -92,6 +92,7 @@ def test_fresh_extraction_builds_static_wheel_and_starts_without_parent_repo(arc
     python = installed / 'bin/python'
     state = tmp_path / 'private-demo'
     seeded = command(python, '-m', 'superyak_peer', 'demo', '--data-dir', state, cwd=tmp_path)
+    assert 'station-room' in command(python, '-I', '-m', 'superyak_peer.lessons', '--help', cwd=tmp_path).stdout  # first rail: in the wheel
     credentials = json.loads((state / 'demo-credentials.json').read_text())
     assert all(c['password'] not in seeded.stdout for c in credentials)
     with socket.socket() as sock:
@@ -142,9 +143,25 @@ def test_standard_build_excludes_private_state_and_unlisted_package_source(archi
         direct_wheel_files = {name: wheel.read(name) for name in wheel.namelist()}
     for files in (sdist, wheel_files, direct_wheel_files):
         assert {'superyak_peer/static/index.html', 'superyak_peer/static/app.js', 'superyak_peer/static/app.css', 'superyak_peer/static/research.js', 'superyak_peer/static/dashboard.js'} <= files.keys()
+        assert 'superyak_peer/lessons.py' in files  # first rail: a module the only-include lists must name
         assert any(name == 'LICENSE' or name.endswith('/LICENSE') for name in files)
         assert any(name == 'NOTICE' or name.endswith('/NOTICE') for name in files)
     assert {'scripts/source_bundle.py', 'scripts/two_peer_check.py', 'uv.lock', 'tests/test_packaging.py'} <= sdist.keys()
+    assert {'scripts/lessons_timing.py', 'systemd/superyak-lessons-index.service', 'systemd/superyak-lessons-index.timer',
+            'tests/test_lessons.py', 'tests/test_lessons_index.py', 'tests/test_lessons_repeats.py', 'tests/test_lessons_room.py',
+            'tests/test_lessons_timing.py'} <= sdist.keys()
     forbidden = [sentinel.encode(), *(c['password'].encode() for c in credentials)]
     leaks = {kind: [name for name, content in files.items() if any(part.startswith('.') for part in Path(name).parts) or any(marker in content for marker in forbidden) or name in injected] for kind, files in [('sdist', sdist), ('wheel', wheel_files), ('direct_wheel', direct_wheel_files)]}
     assert leaks == {'sdist': [], 'wheel': [], 'direct_wheel': []}, leaks
+
+
+def test_the_sdist_list_names_every_test_file_and_only_paths_that_exist():
+    """The include-list rung for test files (Rio Grande and Tardis, 2026-10-27). A test file left off the sdist list is
+    left out of the sdist while every suite stays green: ten were, on imprints and main. So both directions: each
+    tests/*.py at any depth is listed, and each listed path exists."""
+    import tomllib
+    listed = tomllib.loads((ROOT / 'pyproject.toml').read_text())['tool']['hatch']['build']['targets']['sdist'][
+        'only-include']
+    tests = {p.relative_to(ROOT).as_posix() for p in (ROOT / 'tests').rglob('*.py') if '__pycache__' not in p.parts}
+    assert sorted(tests - set(listed)) == [], 'test files missing from the sdist list'
+    assert sorted(p for p in listed if not (ROOT / p).exists()) == [], 'listed paths that do not exist'

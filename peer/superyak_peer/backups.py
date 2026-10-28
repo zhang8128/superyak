@@ -461,6 +461,65 @@ def _expire_waiting(db, old, now, report):
             report['counts'][label] = db.execute(f'UPDATE {table} SET expires=? WHERE status=? AND expires>?', (now, status, now)).rowcount
 
 
+IMPRINT_NEEDS = ('imprint_requests.id', 'imprint_requests.imprint_id', 'imprint_requests.status',
+                 'imprint_requests.imprints_root', 'imprint_requests.ended_at', 'imprint_requests.delete_reason',
+                 'imprint_receipts.id', 'imprint_receipts.request_id', 'imprint_receipts.record',
+                 'imprint_receipts.signature')
+
+
+def _tombstone_receipts(root, imprint_id):
+    """The receipts a tombstone holds, or None when the root records none or no tombstone exists. A tombstone that
+    cannot be read still counts: its existence is what stops a restore, so it returns an empty list."""
+    if not root:
+        return None
+    path = Path(root) / 'tombstones' / f'{imprint_id}.json'
+    if not os.path.lexists(path):
+        return None
+    try:
+        held = json.loads(path.read_bytes())['receipts']
+        return [r for r in held if isinstance(r, dict) and isinstance(r.get('record'), dict) and isinstance(r['record'].get('id'), str)]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def _hold_imprints(db, old, now, report):
+    """Step 6, imprints (D15): a withdrawn or deleted imprint never comes back from a backup. A row the copy still holds
+    live closes to what the replaced file says (`deleting`, `deleted`, `declined` or `expired`), and to `deleted` when a
+    tombstone exists under the root the row records. The receipts the copy lacks, the replaced file's and the
+    tombstone's, are added so the reason is in the chain. The sweep removes any files and finishes a `deleting` row."""
+    if not _usable(db, None, report, *IMPRINT_NEEDS):
+        return
+    comparing = old is not None and _has(old, *IMPRINT_NEEDS)
+    held = 0
+    rows = db.execute("SELECT id, imprint_id, imprints_root FROM imprint_requests "
+                      "WHERE status NOT IN ('deleted', 'declined', 'expired')").fetchall()
+    for row in rows:
+        target, receipts, ended, reason = None, [], None, None
+        if comparing:
+            there = old.execute('SELECT status, ended_at, delete_reason FROM imprint_requests WHERE id=?', (row['id'],)).fetchone()
+            if there is not None and there[0] in ('deleting', 'deleted', 'declined', 'expired'):
+                target, ended, reason = there[0], there[1], there[2]
+                receipts = [{'record': json.loads(r[0]), 'signature': r[1]} for r in old.execute(
+                    'SELECT record, signature FROM imprint_receipts WHERE request_id=? ORDER BY seq', (row['id'],))]
+        tombstoned = _tombstone_receipts(row['imprints_root'], row['imprint_id'])
+        if tombstoned is not None:
+            target = 'deleted'
+            receipts += tombstoned
+        if target is None:
+            continue
+        have = {r[0] for r in db.execute('SELECT id FROM imprint_receipts WHERE request_id=?', (row['id'],))}
+        for receipt in receipts:
+            if receipt['record']['id'] not in have:
+                have.add(receipt['record']['id'])
+                db.execute('INSERT INTO imprint_receipts(id, request_id, record, signature) VALUES(?,?,?,?)',
+                           (receipt['record']['id'], row['id'], json.dumps(receipt['record'], sort_keys=True, separators=(',', ':'), ensure_ascii=False),
+                            receipt.get('signature')))
+        db.execute('UPDATE imprint_requests SET status=?, ended_at=COALESCE(?, ended_at, ?), delete_reason=COALESCE(?, delete_reason) '
+                   'WHERE id=?', (target, ended, int(now), reason, row['id']))
+        held += 1
+    report['counts']['imprints kept deleted'] = held
+
+
 def _sequence(db, table):
     row = db.execute('SELECT seq FROM sqlite_sequence WHERE name=?', (table,)).fetchone() if _has(db, 'sqlite_sequence') else None
     return max(row[0] if row else 0, db.execute(f'SELECT COALESCE(MAX(rowid), 0) FROM "{table}"').fetchone()[0])
@@ -693,9 +752,16 @@ def _shown(db, old, peer):
 
 
 def _unpair(db, old, peer, report):
-    """Exactly Federation.unpair (federation.py:43-45) on the staged copy: paired=0, that peer's contacts' pending and
-    failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled."""
+    """Exactly Federation.unpair on the staged copy: every contact of the peer held and its confirmation gone, so
+    pairing one participant again reconnects that one only (fix:pairing-code, review SF3); paired=0, that peer's
+    contacts' pending and failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled. A
+    copy from before contact holds gains the table here, so the hold isn't lost on restore."""
     names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))]
+    db.execute('CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL)')
+    db.execute('INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?', (time.time(), peer))
+    if _has(db, 'pairing_confirmations.contact_id'):
+        db.execute('DELETE FROM pairing_confirmations WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?)',
+                   (peer,))
     db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (peer,))
     withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN "
                            "(SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (peer,)).rowcount
@@ -716,6 +782,33 @@ def _unpair_like_replaced(db, old, now, report):
     for peer, paired in db.execute('SELECT peer_id, paired FROM peers ORDER BY peer_id').fetchall():
         if paired and peer in there and not there[peer]:
             _unpair(db, old, peer, report)
+
+
+def _hold_like_replaced(db, old, now, report):
+    """fix:pairing-code, Serenity's review MF1: a contact held in the replaced file is held here too, when the copy has it.
+    Copying the older copy's holds as they are would replace the newer live ones: cut a peer off, pair one participant
+    again, restore an older copy, and every sibling would be active again with no code typed. So each is held as
+    Federation.unpair holds it: its confirmation gone, its pending and failed outbox rows withdrawn, and the received
+    payloads it authored cleared. It runs after _unpair_like_replaced, whose peers are already held whole. A replaced file
+    from before holds has none to compare. Only takes away."""
+    if not _usable(db, old, report, *PEER_NEEDS, 'remote_contacts.user_id', 'inbox.actor') \
+            or not _has(old, 'contact_holds.contact_id'):
+        return
+    held_there = {row[0] for row in old.execute('SELECT contact_id FROM contact_holds')}
+    db.execute('CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL)')
+    held_here = {row[0] for row in db.execute('SELECT contact_id FROM contact_holds')}
+    for contact in db.execute('SELECT id, peer_id, user_id, name FROM remote_contacts ORDER BY peer_id, name, id').fetchall():
+        if contact['id'] not in held_there or contact['id'] in held_here:
+            continue
+        db.execute('INSERT INTO contact_holds VALUES(?, ?)', (contact['id'], now))
+        if _has(db, 'pairing_confirmations.contact_id'):
+            db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (contact['id'],))
+        withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id=? AND status IN ('pending','failed')",
+                               (contact['id'],)).rowcount
+        nulled = db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND actor=? AND payload IS NOT NULL',
+                            (contact['peer_id'], contact['user_id'])).rowcount
+        report['held'].append((_shown(db, old, contact['peer_id']), contact['name']))
+        report['held_counts'] = [sum(pair) for pair in zip(report['held_counts'], (withdrawn, nulled))]
 
 
 def _unpair_named(db, old, named, report):
@@ -908,7 +1001,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     _refuse(db_path, live_data_dir)
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
-              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
+              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0],
+              'held': [], 'held_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
               'not_compared': [], 'grants': []}
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
@@ -936,7 +1030,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
         db.execute('BEGIN IMMEDIATE')
         try:
             now = clock()
-            for step in (_end_sessions, _use_invitations, _revoke_held_keys, _clear_uncollected, _expire_waiting, _raise_sequences):
+            for step in (_end_sessions, _use_invitations, _revoke_held_keys, _clear_uncollected, _expire_waiting, _raise_sequences,
+                         _hold_imprints):
                 step(db, old, now, report)
             if old is None:
                 _revoke_owned_ship_keys(db, old, now, report)
@@ -945,7 +1040,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
                              _add_member_changes_like_replaced,
-                             _unpair_like_replaced, _report_differences):
+                             _unpair_like_replaced, _hold_like_replaced, _report_differences):
                     step(db, old, now, report)
             _unpair_named(db, old, named, report)
             _write_mark(db, old, now, db_path)
@@ -1001,6 +1096,11 @@ def describe_reconcile(report):
     if report['unpaired']:
         withdrawn, cleared = report['unpaired_counts']
         lines.append('Unpaired again: ' + '; '.join(f'{peer} ({people(names)})' if names else peer for peer, names in report['unpaired'])
+                     + f'. Withdrew {withdrawn} pending and failed deliveries and cleared {cleared} received payloads.')
+    if report['held']:
+        withdrawn, cleared = report['held_counts']
+        lines.append('Held again, as in the replaced file, each until its own code is typed: '
+                     + '; '.join(f'{peer} ({safe_line(name)})' for peer, name in report['held'])
                      + f'. Withdrew {withdrawn} pending and failed deliveries and cleared {cleared} received payloads.')
     if report['passwords']:
         lines.append(f'Reported, not applied: these passwords differ from the replaced file: {people(report["passwords"])}. '

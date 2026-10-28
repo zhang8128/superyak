@@ -5,7 +5,7 @@ import subprocess
 import sys
 import pytest
 from superyak_agent import install
-from checklist_fakes import checkout
+from checklist_fakes import checkout, trust_dirs
 from test_install import SETTINGS_CONFIG
 
 
@@ -79,9 +79,12 @@ def test_dock_says_why_it_cannot_trust_a_group_writable_checkout(tmp_path):
     assert len(said) == 1 and 'chmod -R go-w' in said[0] and not (tmp_path / 'home' / 'checklists' / 'trusted.json').exists()
 
 
-def test_a_checkout_without_lists_is_skipped_silently(tmp_path):
+def test_a_checkout_without_lists_says_so_in_one_line(tmp_path):                       # section 2's S5
     said = []
-    assert install.trust_checkout(tmp_path / 'home', said.append, checkout=tmp_path / 'old-checkout') is False and said == []
+    assert install.trust_checkout(tmp_path / 'home', said.append, checkout=tmp_path / 'old-checkout') is False
+    assert said == [f"This checkout has no checklists to trust: {tmp_path / 'old-checkout' / '.superyak' / 'checklists'} "
+                    'is missing. Dock again once it has them.']
+    assert not (tmp_path / 'home' / 'checklists').exists()
 
 
 def test_trust_checkout_never_raises(tmp_path, monkeypatch):                           # plan review S7
@@ -92,3 +95,49 @@ def test_trust_checkout_never_raises(tmp_path, monkeypatch):                    
     monkeypatch.setattr(install, 'add_trusted', full)
     said = []
     assert install.trust_checkout(tmp_path / 'home', said.append, checkout=superyak) is False and len(said) == 1
+
+
+def test_a_trusted_checkout_is_told_a_list_git_rewrites_under_umask_002_is_skipped(tmp_path):   # the final review's M6
+    superyak = checkout(tmp_path / 'superyak', ('reflect', {}))
+    said = []
+    assert install.trust_checkout(tmp_path / 'home', said.append, checkout=superyak) is True
+    assert len(said) == 1 and 'umask 002' in said[0] and 'skipped' in said[0] and '`chmod -R go-w`' in said[0]
+
+
+def test_a_valid_trust_file_keeps_its_other_entries(tmp_path):                             # the final review's M7
+    superyak = checkout(tmp_path / 'superyak', ('reflect', {}))
+    other = checkout(tmp_path / 'other', ('mine', {})) / '.superyak' / 'checklists'
+    home = tmp_path / 'home'
+    trust_dirs(home / 'checklists', other)
+    assert install.trust_checkout(home, [].append, checkout=superyak) is True
+    assert json.loads((home / 'checklists' / 'trusted.json').read_text())['trusted'] == sorted(
+        [os.path.realpath(other), os.path.realpath(superyak / '.superyak' / 'checklists')])
+
+
+DAMAGED = {'not JSON': ('{"trusted": ["/kept/.superyak/checklists"', 0o600, 'not a JSON list of paths'),
+           'the wrong shape': ('{"trusted": "/kept/.superyak/checklists"}', 0o600, 'not a JSON list of paths'),
+           'nested too deep': ('[' * 100000, 0o600, 'not a JSON list of paths'),
+           'group-writable': ('{"trusted": ["/kept/.superyak/checklists"]}', 0o620, 'writable by its group or by others'),
+           'a symlink': (None, 0o600, 'a symlink')}
+
+
+@pytest.mark.parametrize('case', DAMAGED)
+def test_a_damaged_or_unsafe_trust_file_is_left_as_it_is_and_named(tmp_path, case):    # the final review's M7
+    text, mode, why = DAMAGED[case]
+    superyak = checkout(tmp_path / 'superyak', ('reflect', {}))
+    own = tmp_path / 'home' / 'checklists'
+    own.mkdir(parents=True)
+    path = own / 'trusted.json'
+    if text is None:
+        (tmp_path / 'elsewhere.json').write_text('{"trusted": []}')
+        os.symlink(tmp_path / 'elsewhere.json', path)
+    else:
+        path.write_text(text)
+        os.chmod(path, mode)
+    before = (os.readlink(path) if path.is_symlink() else path.read_bytes(), os.lstat(path).st_mode)
+    said = []
+    assert install.trust_checkout(tmp_path / 'home', said.append, checkout=superyak) is False
+    assert len(said) == 1 and str(path) in said[0] and why in said[0] and 'left as it is' in said[0], said
+    assert (os.readlink(path) if path.is_symlink() else path.read_bytes(), os.lstat(path).st_mode) == before
+    with pytest.raises(OSError):                       # `checklists trust` reports an OSError and trusts nothing
+        install.add_trusted(own, superyak / '.superyak' / 'checklists')

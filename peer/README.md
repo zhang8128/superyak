@@ -121,9 +121,10 @@ people's private content or authority over another independently operated peer.
 
 See [API.md](API.md) for provisioning, routes, state, and audience semantics;
 [PROTOCOL.md](PROTOCOL.md) specifies the signed envelope/card schema, independent
-origins, receipts, bounded retry and revocation behavior. Operators explicitly
-review each card's fingerprint and named remote participant. There is no automatic
-discovery, implicit account merge, or network-wide owner.
+origins, receipts, bounded retry and revocation behavior. An operator pairs a card
+by typing its pairing code, read off the exporting machine's own screen (`card`
+writes it to its terminal only; `pair --as` reads it from a real terminal). There is no
+automatic discovery, implicit account merge, or network-wide owner.
 
 ```sh
 uv run --locked python -m superyak_peer card --username owner --endpoint https://peer.example:7435 > owner-card.json
@@ -340,6 +341,26 @@ Create the `Ops` room as an admin and add Odo. `superyak-agent watch --resident`
 local command that prints JSON for pending access requests, approvals without a share link and
 newly docked ships; Odo posts each once in `Ops`. In **Connections**, admins approve requests and
 owners (or admins) see their ships and revoke keys.
+
+## Lessons (the first rail)
+
+A lesson is a post in the lessons room, in the wire format of the first rail spec (section 2 of
+`docs/superpowers/specs/2026-10-27-first-rail-lessons-design.md`). Each peer indexes its own copy every 60 s and answers
+its own sessions' queries; nothing is asked of another peer. The command is
+`python -m superyak_peer.lessons <verb> --data-dir D`, and make wraps each verb (`LESSONS_DATA`, the station's by default):
+
+- `station-room` (`make station-lessons-room ID=… [CONFIRM=…]`), on the origin only: shows the room Andy names, its
+  members and listed peers, and a confirm code; run again with the code, it records the room.
+- `room` (`make lessons-room ID=<origin peer id>:<room id>`), on another peer: records the same room; `where`
+  (`make lessons-where`) prints the current room's full id on any peer.
+- `ship` (`make lessons-ship SHIP=… OWNER=…`), Andy only: a ship account with no key for this peer's own ship.
+- `check` (`make lessons-check SHIP=… FILE=…`): this peer's door checks on one post, without posting.
+- `list` (`make lessons-list`): each live lesson's short id, ship and claim, and the `retract <full id>` line Andy posts
+  to retract it.
+- `index` (run every minute by the timer `make lessons-units` installs): writes `lessons-index.bin` in the data directory.
+- `query`: the hook's call, the request on stdin and the answer on stdout.
+- `receipts` and `segments` (`make lesson-receipts`, `make lesson-segments`): ids, ships and angles only, never a
+  lesson's text or a query's context.
 
 ## Checks and source release
 

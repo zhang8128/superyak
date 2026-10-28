@@ -1,6 +1,22 @@
 # Checklists: rules that fire at moments, renegotiated in the open
 
-Revision 3, 2026-10-27. Serenity (the Mac). Asked for by Andy.
+Revision 4, 2026-10-28. Serenity (the Mac). Asked for by Andy.
+
+**Revision 4** applies section 2's fix round (Rio Grande's APPROVE WITH CHANGES at 7dc96f8a; Ruling 53):
+- the re-run spends the pass. Revision 3 said both that a list that has held "passes every later command whose digest
+  it held" and that "Merging to main" "shows at `git push origin main` however many pushes came before it"; the
+  second wins. A hold keeps the command's digest only until that command next goes through, so a later identical
+  command is held again, or shown as context once the 3 holds are spent. Past the cap no digest is kept, since nothing
+  was held.
+- the report lists every skip of a `killer:` item first, at any count, with its reason, and `checklist_propose`'s
+  default says a `killer:` item climbs only to automation.
+- a notice counts files whose names aren't ids and never names a front matter key, since it stands outside any fence;
+  dock's trust is of the checkout's working tree on whatever branch, `checklists list` shows that branch (by name
+  only from a safe set), and dock says when the checkout has no lists; the terminal check is named a speed bump; a
+  `post:` room id is named as shown outside the fence; the hold logs no `time` miss, by design.
+- the seed: Merging to main's partners item is `killer:` and carries law section 7's "No ship pushes straight to
+  main"; Before any push's first item says to put the pushed ref in place of HEAD; a new list, An imprint act, takes
+  CLAUDE.md's IMPRINT rules out of A live station act, which gains its lessons-room clauses in their place.
 
 **Revision 3** applies the re-check's R1 to R4 as written (APPROVE WITH CHANGES, no further round needed):
 - `unshown` is dropped;
@@ -119,7 +135,9 @@ see: docs/checklists.md#before-any-push
   starts with `- [ ] `.
 - `title` and `owner` are 1 to 80 bytes with no control characters. `version` is `[1-9][0-9]{0,5}`. `post` is a room
   id that `plain_id` accepts. `see` is 1 to 120 bytes with no spaces or control characters.
-- Anything else is a parse error. The agent is told once a session for each file, and the file is skipped.
+- Anything else is a parse error. The agent is told once a session for each file, and the file is skipped. A notice
+  stands outside any fence, so it never repeats a file's text: a `.md` file whose name isn't an id is counted, never
+  named ("3 files in <dir> aren't lists"), and a front matter error never names its key (revision 4).
 
 ### Where checklists are found
 
@@ -162,10 +180,12 @@ checkout's `enter` list doesn't fire in its `.worktrees/<name>`.
   regular expression, case-sensitive, at least 6 bytes, with no `;`. A match must begin at the start of the command,
   after whitespace, or after one of `;&|(` or a backtick.
 - A `command` list holds once for each distinct command (by SHA-256), with at most 3 holds a session across all lists.
-  A list that has held passes every later command whose digest it held.
+  A list that has held passes the re-run, the next command with that digest, and the re-run spends the pass: the same
+  command later is held again, or shown as context past the cap (revision 4).
 - Past the cap, a matching list is still shown: the hook adds it as `additionalContext` with no `permissionDecision`,
-  so it reaches the model with the command's result, and records it as fired. It is still never `allow`, `ask` or
-  `updatedInput`. So "Merging to main" shows at `git push origin main` however many pushes came before it.
+  so it reaches the model with the command's result, and records it as fired, with no digest: nothing was held, so no
+  re-run is passed. It is still never `allow`, `ask` or `updatedInput`. So "Merging to main" shows at
+  `git push origin main` however many pushes came before it.
 
 **`claim`, exactly.**
 - The MCP server finds lists from the last cwd in the session's record (Firing, below), found by
@@ -182,8 +202,8 @@ checkout's `enter` list doesn't fire in its `.worktrees/<name>`.
   server update it under `flock`. `_prune`'s `STATE_NAME` gains the suffix (`hook.py:96`). A session start that shows
   no law, which makes the station hook forget the session, leaves this record alone.
 - A cap of 2 lists applies per hook event, and per `station_claim` result, across every moment kind.
-- A list named but not shown isn't fired. It's due again at the next event (for a `command` list, the next distinct
-  command it matches), and due lists show in the order of the longest wait first, then nearest.
+- A list named but not shown isn't fired. It's due again at the next event (for a `command` list, the next command it
+  matches after the held one's re-run), and due lists show in the order of the longest wait first, then nearest.
 - `start` fires on `startup`, `clear` and `fork`, not on `resume` or `compact`.
 - `every <N>h` first fires N hours after the session's first event, then at most once each N hours.
 - `start` and `enter` fire a list at most once a session. `command` and `claim` fire as above.
@@ -202,9 +222,9 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
 <fence_external closes>
 ```
 
-- The list key, version and path stand outside the fence. The title, owner, `see` and items are inside it, exactly as
-  written. The fence is the station client's `fence_external`, as the rail's, so a list holding three backticks can't
-  close it.
+- The list key, version and path, and a `post:` room id, stand outside the fence. The title, owner, `see` and items
+  are inside it, exactly as written. The fence is the station client's `fence_external`, as the rail's, so a list
+  holding three backticks can't close it.
 - **The budget.** Lists go after the law and the version line, and before the board lines, within the hook's
   `TOTAL_CHARS`. At a prompt they go after the law and the room messages. A list is shown whole or not at all. One
   that doesn't fit is named in the "N more" line ("1 more due: reflect. It shows at the next event.") and isn't marked
@@ -253,8 +273,9 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
 - It stays light. The hold path imports only the checklist module and the standard library, never `station`, `claims`
   or urllib, and `__main__` dispatches it before it imports `station`. It reads the claims registry for the acting-ship
   rule without them. It has 150 ms from its start to read files and at most 1 s in all, as the rail's hold. Past
-  either it prints nothing. The builder measures the time it adds to a Bash call on the Pi and posts it with the
-  branch.
+  either it prints nothing. Its main thread does no file I/O by design (a worker does it all), so a hold past its
+  time logs no `time` miss in `fired.jsonl`; the hook does. The builder measures the time it adds to a Bash call on
+  the Pi and posts it with the branch.
 - It never runs, expands or evaluates a list or anything in one.
 
 ### Running it out loud
@@ -304,7 +325,8 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
   - **retire into a lesson:** items done before asked in every one of the last 10 runs;
   - **keep:** items that caught a mistake, with their reasons;
   - **drop or narrow the moment:** items answered n/a in every one of the last 10 runs;
-  - **look at why:** items skipped more than half the time, with their reasons, `law §N` and `person` apart;
+  - **look at why:** items skipped more than half the time, with their reasons, `law §N` and `person` apart, and
+    every skip of a `killer:` item at any count, listed first with its reason (revision 4);
   - **lists that fire but go unrun,** with a refusal's reason where there is one.
 
   The reflect list reads this report.
@@ -316,15 +338,24 @@ directories:
 - The ship's own directory, `<ship home>/checklists/`.
 - Trust is per directory: the realpath of one `.superyak/checklists/` directory, never its subdirectories or parents,
   recorded in `<ship home>/checklists/trusted.json`. `make dock` trusts `<CHECKOUT>/.superyak/checklists`
-  (`station.py:21`) only, so a worktree inside it isn't trusted. It gets the checkout's accepted lists through the
-  parent walk, and a branch's edits take effect when they merge.
+  (`station.py:21`) only, so a worktree inside it isn't trusted. It gets the checkout's lists through the parent
+  walk, and a branch's edits in a worktree take effect when they merge. The trust is of the checkout's working tree,
+  on whatever branch it has checked out, so an edit there, or another branch checked out there, loads at once.
+  `checklists list` shows that branch beside each trusted directory in a git checkout, in quotes, only when its name
+  is 1 to 64 of `A-Z`, `a-z`, `0-9` and `._/-`; a branch named otherwise shows its commit, never its name, since a
+  session reads that line unfenced (revision 4).
 - `superyak-agent checklists trust <path>` runs only from an interactive terminal (stdin and stdout are TTYs) and asks
-  the person to type the path back. It refuses a directory, or a file in it, that another user owns or that is group-
-  or world-writable, and a directory holding a symlink or a non-regular file.
+  the person to type the path back. That is a speed bump against an agent trusting by mistake, not a lock: a program
+  that runs a pseudo-terminal passes it. It refuses a directory, or a file in it, that another user owns or that is
+  group- or world-writable, and a directory holding a symlink or a non-regular file. `make dock` says so in one line
+  when its checkout has no `.superyak/checklists` to trust.
 - From an untrusted directory the hook shows one line and none of the lists' text: "This directory has 3 checklists
   that aren't trusted on this machine. Tell the person you work with. Don't trust them yourself." An untrusted list
   that is byte for byte a trusted list with the same id is passed over silently, so in a worktree the line counts only
   a branch's edits (D15).
+- A trusted list's `post:` room id is shown outside the fence, in the header's "Post your answers in room <id>". It
+  is a plain id (at most 200 of `A-Z`, `a-z`, `0-9` and `:_.-`, no spaces), so it can name only a room, but it is the
+  list's own text all the same (revision 4).
 - Even a trusted list is quoted data. It can ask an agent to check or do only what the law and its permissions already
   allow, and a hold never runs anything.
 - This narrows mistakes, not malice: an agent that can write `~/.superyak` can still change what loads.
@@ -350,7 +381,8 @@ linked by each file's `see:` key. docs/checklists.md then points to the files, s
 | Merging to main | Repository | `command git push origin main; command systemctl --user restart superyak-`. The Pi's units run from its main checkout, so the restart is where a merge goes live, and for a security fix the push comes after it (merge, restart, probe, then push: no unfixed hole is ever public). The list fires at whichever comes first in the session (D10). A push to main spelt another way (`git push` from main, `HEAD:main`) gets only Before any push. Its run is recorded after its last item, so the items after the push are answered then. A last item is added: "Reflect is run once the merge is announced." |
 | Before starting a piece of work | Repository | `claim`, once for each claimed item |
 | A session starting | Repository | `start` |
-| A live station act | Repository | `command make station-approve; command make station-deny; command make station-bridge; command make station-unbridge; command make station-add-ship; command make station-moderate; command make station-unmoderate` |
+| A live station act | Repository | `command make station-approve; command make station-deny; command make station-bridge; command make station-unbridge; command make station-add-ship; command make station-moderate; command make station-unmoderate; command make station-lessons-room; command make station-imprint-admit; command make station-imprint-delete; command make station-imprint-use` |
+| An imprint act | Repository | `command make station-imprint-admit; command make station-imprint-delete; command make station-imprint-use; command make station-approve`: CLAUDE.md's IMPRINT paragraph, moved out of A live station act (revision 4). An IMPRINT item is approved with `make station-approve`, so it fires at every approval, beside A live station act; no seed command matches three lists. |
 | The Mac's main checkout | The Mac's `~/.superyak/checklists/` | `enter /Users/kairos/Projects/superyak`. In the repository it would break its own first item untracked, and fire in every clone tracked. |
 | Shell commands (zsh) | The Mac's `~/.superyak/checklists/` | `command --include=*`. The Pi's shell may not be zsh. Tardis may copy it into its own lists. |
 | Copying a person's store | Not yet | Waits for the imprint commands to land on main, then `command` with their exact words. |

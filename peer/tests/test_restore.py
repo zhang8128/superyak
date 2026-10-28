@@ -1388,12 +1388,15 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
-    'account_role_changes', 'room_briefs', 'grants', 'budget_uses', 'member_changes'}
+    'account_role_changes', 'room_briefs', 'grants', 'budget_uses', 'member_changes', 'imprint_requests', 'imprint_receipts',
+    'contact_holds', 'pairing_confirmations'}  # fix:pairing-code (Serenity's review MF1): held as in the replaced file
 COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
     'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'login_devices', 'files', 'room_activity',
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
     'inbox_received', 'receipts', 'peer_messages', 'federation_cursor', 'layer_revisions',
-    'revision_signatures', 'room_brief_revisions', 'grant_origins'}
+    'revision_signatures', 'room_brief_revisions', 'grant_origins',
+    'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries',  # first rail: coordination; the add gate also needs a paired peer
+    'lesson_repeats'}  # first rail 7.1: a local record beside the receipts, never federated
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):
@@ -1498,3 +1501,78 @@ def test_a_hostile_room_title_prints_on_one_line_in_the_brief_report(tmp_path, c
     for bad in ('\x1b', '\u202e', '@'):
         assert bad not in out
     assert 'Ops' in line and 'Evil' in line
+
+
+@pytest.mark.parametrize('old_copy', [False, True])
+def test_the_reconcile_s_unpair_holds_every_contact_as_federation_unpair_does(tmp_path, old_copy):
+    """fix:pairing-code, review SF3: _unpair is exactly Federation.unpair, so the peer's contacts are held and lose their
+    confirmations; a copy from before contact holds gains the table, so the hold isn't lost on restore."""
+    from superyak_peer.federation import Federation
+    from superyak_peer.identity import pairing_code
+    here = Store(tmp_path / 'here')
+    admin = here.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    there = Store(tmp_path / 'there')
+    one, two = (there.create_user(n, n.title(), 'long-password', is_admin=True) for n in ('casey', 'drew'))
+    remote = Federation(there, endpoint='https://localhost:7436')
+    fed = Federation(here, endpoint='https://localhost:7435')
+    for user in (one, two):
+        card = remote.card(user['id'])
+        fed.pair(admin['id'], card, code=pairing_code(card))
+    with closing(sqlite3.connect(here.db_path)) as db:
+        if old_copy:
+            db.execute('DROP TABLE contact_holds')
+        report = {'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0]}
+        backups._unpair(db, None, remote.identity.peer_id, report)
+        db.commit()
+        held = {row[0] for row in db.execute('SELECT contact_id FROM contact_holds')}
+        contacts = {row[0] for row in db.execute('SELECT id FROM remote_contacts')}
+        confirmations = db.execute('SELECT COUNT(*) FROM pairing_confirmations').fetchone()[0]
+    assert held == contacts and len(contacts) == 2 and confirmations == 0
+
+
+@pytest.mark.parametrize('old_copy', [False, True])
+def test_a_restore_keeps_every_hold_the_replaced_file_had(tmp_path, capsys, old_copy):
+    """Serenity's review MF1. Pair Casey and Drew, two participants of one peer, and take the copy. Then on the live
+    station cut the peer off and pair Casey again, so Drew is held. Copying the older copy's holds as they are would
+    bring Drew back with no code typed. So the reconcile holds, in the copy, every contact held in the replaced file, as
+    Federation.unpair holds it: its confirmation gone, its pending and failed rows withdrawn, the payloads it authored
+    cleared. Casey stays active, and the report names Drew. A copy from before holds gains the table."""
+    from superyak_peer.federation import Federation
+    from superyak_peer.identity import pairing_code
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    there = Store(tmp_path / 'there')
+    remote, fed = Federation(there, endpoint='https://localhost:7436'), Federation(store, endpoint='https://localhost:7435')
+    users, contacts = {}, {}
+    for name in ('casey', 'drew'):
+        users[name] = there.create_user(name, name.title(), 'long-password', is_admin=True)['id']
+        card = remote.card(users[name])
+        contacts[name] = fed.pair(andy['id'], card, code=pairing_code(card))['id']
+    peer = remote.identity.peer_id
+    with store.transaction() as db:
+        for number, name in enumerate(('casey', 'drew')):
+            db.execute("INSERT INTO outbox(id, event_seq, contact_id, resource_id, revision, action, metadata, status) "
+                       "VALUES(?, ?, ?, 'r', 1, 'room.message', '{}', 'pending')", ('o-' + name, number, contacts[name]))
+            db.execute("INSERT INTO inbox(origin, resource_id, kind, recipient, revision, actor, payload) "
+                       "VALUES(?, ?, 'room', ?, 1, ?, 'text')", (peer, 'r-' + name, andy['id'], users[name]))
+    copy = staged(tmp_path, store)
+    if old_copy:
+        with closing(sqlite3.connect(copy)) as db:
+            db.execute('DROP TABLE contact_holds')
+            db.commit()
+    fed.unpair(andy['id'], contacts['casey'])            # after the copy: the peer cut off,
+    card = remote.card(users['casey'])
+    fed.pair(andy['id'], card, code=pairing_code(card))    # and Casey paired again, so Drew is held
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        held = {row[0] for row in db.execute('SELECT contact_id FROM contact_holds')}
+        confirmed = {row[0] for row in db.execute('SELECT contact_id FROM pairing_confirmations')}
+        outbox = dict(db.execute('SELECT id, status FROM outbox').fetchall())
+        inbox = dict(db.execute('SELECT resource_id, payload FROM inbox').fetchall())
+    assert held == {contacts['drew']} and confirmed == {contacts['casey']}
+    assert outbox == {'o-casey': 'pending', 'o-drew': 'withdrawn'}
+    assert inbox == {'r-casey': 'text', 'r-drew': None}
+    line = next(line for line in out.splitlines() if line.startswith('Held again'))
+    assert f'{peer[:12]} (Drew)' in line and 'Casey' not in line
+    assert 'Withdrew 1 pending and failed deliveries and cleared 1 received payloads' in line

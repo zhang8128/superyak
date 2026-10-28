@@ -11,6 +11,7 @@ from superyak_agent.checklists import Loaded, command_matches, enter_applies
 LISTS_PER_EVENT = 2
 READ_SECONDS = 0.150
 HOLD_SECONDS = 1.0
+SAVE_SECONDS = 0.5   # more for a save already under way at HOLD_SECONDS (the final review's M3)
 START_SOURCES = ('startup', 'clear', 'fork')
 ANSWERS = ('done', 'done-before-asked', 'caught', 'n/a', 'skipped')
 REASON_BYTES = 200
@@ -154,6 +155,21 @@ def mark_fired(record: dict, shown, now: float, *, digest: str | None = None, it
 def mark_passed(record: dict, deferred, digest: str) -> None:
     for loaded, _ in deferred:
         _add(record, 'passed', loaded.key, digest)
+
+
+def spend(record: dict, lists, digest: str) -> bool:
+    """The command went through: drop its digest from each list's passes, so the re-run spends the pass and a later
+    identical command is due again (section 2's M1; spec revision 4). True when one was dropped."""
+    passed = _section(record, 'passed', dict)
+    spent = False
+    for loaded in lists:
+        values = passed.get(loaded.key)
+        if isinstance(values, list) and digest in values:
+            values[:] = [v for v in values if v != digest]
+            spent = True
+            if not values:
+                del passed[loaded.key]
+    return spent
 
 
 def told(record: dict, notice: str) -> bool:
