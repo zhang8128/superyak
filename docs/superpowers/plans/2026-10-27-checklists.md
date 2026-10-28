@@ -2,22 +2,30 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Revision 2** (2026-10-27) applies the plan review (`docs/superpowers/reviews/2026-10-27-checklists-plan-review.md`,
+APPROVE WITH CHANGES at 9a756393): M1 to M5 as worded, S1 to S12, the nits and the proportion cuts. It also folds in
+the hold seam the three ships agreed in City of AI (messages a6afa473, 4124166f, 715890fd, 7239c6d1, 43e3f15e): one
+`run_agent.py hold` entry for checklists and the rail's lessons, providers behind one signature, one `.holds` record
+and one cap of 3 held commands a session (Rulings 31 to 36).
+
 **Goal:** Agreed checklists, kept as files, fire at a session's start, every N hours, on entering a location, before a
 matched Bash command and when a board item is claimed; the agent runs them out loud, and every firing and run is logged
 so the lists can be renegotiated from evidence.
 
-**Architecture:** Two stdlib-only modules carry the logic: `checklists.py` (what a list is, where lists are found,
-trust, matching, rendering) and `checklist_firing.py` (the per-session record under `flock`, when a list is due, the
-logs). The station hook shows due lists inside its own output budget, after the law; a new light `hold` subcommand,
-installed as a Bash `PreToolUse` hook, holds a matched command once; the station MCP server fires `claim` lists and
-records runs; a CLI lists, trusts and reports. A shared `acting.py` gives the hook, the hold and the tools one copy of
-the acting-ship rule.
+**Architecture:** Stdlib-only modules carry the logic: `checklists.py` (what a list is, where lists are found, trust,
+matching, rendering), `holds.py` (the hold seam: `Hold`, the shared per-session record under `flock`, the logs) and
+`checklist_firing.py` (when a list is due). The station hook shows due lists inside its own output budget, after the
+law. A new light `hold` subcommand, installed as a Bash `PreToolUse` hook, is the one entry that asks the checklists
+provider and the lessons provider (a stub here; Tardis builds the real one) and holds a command at most 3 times a
+session. The station MCP server fires `claim` lists and records runs, and a CLI lists, trusts and reports. A shared
+`acting.py` gives the hook, the hold and the tools one copy of the acting-ship rule.
 
 **Tech Stack:** Python 3.11+ standard library (the agent has no dependencies), pytest; Claude Code hooks
 (`SessionStart`, `UserPromptSubmit`, `PreToolUse`); the station MCP server (`agent/superyak_agent/mcp.py`).
 
-**Spec:** `docs/superpowers/specs/2026-10-27-checklists-design.md` (revision 3, at 784a60b), the binding authority.
-Its review and re-check: `docs/superpowers/reviews/2026-10-27-checklists-review.md`. Executors read both.
+**Spec:** `docs/superpowers/specs/2026-10-27-checklists-design.md` (revision 3, at 784a60b), the binding authority, with
+the ships' hold seam on top (Ruling 32 renames its record). Its review and re-check:
+`docs/superpowers/reviews/2026-10-27-checklists-review.md`. Executors read the spec, this plan and the plan review.
 
 **Worktree and baseline:** `/Users/kairos/Projects/superyak/.worktrees/checklists-feature`, branch `checklists-feature`.
 `cd agent && uv run --locked --extra dev python -m pytest -q` gives **755 passed** at 784a60b (the branch's code is
@@ -25,112 +33,39 @@ main's at ba4f677; only docs differ). Never check out a branch in `/Users/kairos
 
 ## Global Constraints
 
-Every task's requirements include these. Values are the spec's, verbatim.
+Every task's requirements include the spec's values, verbatim. Read them in the spec, in these sections: "A checklist is a
+file" and "Format, exactly" (every limit); "Where checklists are found"; "Moments", with "`enter`", "`command`" and
+"`claim`, exactly"; "Firing, exactly"; "How a list is shown" (the header's wording, the budget, the time); "Where it
+runs"; "Install"; "The hold" (its output and its wording); "Running it out loud"; "Renegotiation"; "Trust". Tests quote
+them where they pin them. The plan adds or fixes these:
 
 - Python 3.11 or newer, standard library only (`agent/pyproject.toml`: `dependencies = []`). Test command:
   `cd agent && uv run --locked --extra dev python -m pytest -q`.
-- **Light path.** The hold imports only the checklist modules (`checklists`, `checklist_firing`), `acting` and the
-  standard library, never `station`, `claims`, `hook` or the network (`urllib.request`, `http.client`); "`__main__`
-  dispatches it before it imports `station`". `fence_external` is imported lazily, only when a list is shown.
-- **Files.** "Only regular files named `<id>.md` load", opened with "`O_NOFOLLOW | O_NONBLOCK`, then `fstat` must show a
-  regular file"; "at most 4 KiB a file and 32 files a directory", "skips the rest with one notice"; "`runs.jsonl`,
-  `fired.jsonl` and `trusted.json` sit beside the lists and never load as one".
-- **Format.** "UTF-8 with LF line endings and no BOM. Line 1 is `---`. Then the five keys `id`, `title`, `when`,
-  `version`, `owner`, each exactly once, in that order, as `key: value`, with no quoting. Then, optionally and in this
-  order, `read`, `post` and `see`, each at most once. Then `---`, then the body, and one final newline."
-- `id` fullmatches `[a-z0-9-]{1,40}` and equals the file name without `.md`. `when` holds moments "separated by `; `".
-  `version` is `[1-9][0-9]{0,5}`. `title` and `owner` are 1 to 80 bytes with no control characters. `post` is a room id
-  that `plain_id` accepts. `see` is 1 to 120 bytes with no spaces or control characters.
-- An ordinary body is "1 to 12 item lines and nothing else, with no blank line"; an item line is "`- [ ] `, then 1 to 200
-  bytes with no control characters". With `read: yes`, the body is "1 to 1,500 bytes of plain lines, shown as written.
-  Blank lines are allowed, and no line starts with `- [ ] `"; its run has no answers.
-- "Anything else is a parse error. The agent is told once a session for each file, and the file is skipped."
-- **Moments.** `start` ("a `SessionStart` with source `startup`, `clear` or `fork`", "not on `resume` or `compact`");
-  `every <N>h` (N 1 to 24); `enter`; `enter <absolute path>` ("Only in a ship's own directory"); `command <words>`;
-  `claim`. `room` is cut (D2).
-- **`command`.** "a literal piece of the raw command string ...: never expanded, never a glob or a regular expression,
-  case-sensitive, at least 6 bytes, with no `;`. A match must begin at the start of the command, after whitespace, or
-  after one of `;&|(` or a backtick" (and, by ruling S-b, outside quotes).
-- **Finding.** The ship's own directory, `<ship home>/checklists/` (`~/.superyak/checklists/` for the machine ship,
-  `~/.superyak/ships/<name>/checklists/` for a project ship), always, and it "counts as the farthest". The walk:
-  `.superyak/checklists/` in the cwd and its parents; "When the cwd is under home, the walk runs from the cwd up to, but
-  not including, home. A ship's own directory is never part of the walk. Outside home, it covers the cwd and its
-  parents up to the nearest directory that holds `.git`, or the cwd alone when there is none, and never `/`." Same id:
-  "the nearest wins". "Within one directory, lists are ordered by id." "A list's location is the directory that holds
-  its `.superyak/`."
-- **`enter`.** Fires "when the cwd is the list's location or below it, but not when a directory below the location, up
-  to and including the cwd, holds `.git` (a file or a directory: another working tree)".
-- **Trust.** Per directory, "the realpath of one `.superyak/checklists/` directory, never its subdirectories or parents,
-  recorded in `<ship home>/checklists/trusted.json`". The ship's own directory is trusted. "`make dock` trusts
-  `<CHECKOUT>/.superyak/checklists` (`station.py:21`) only"; "Docking a project ship trusts nothing more".
-  `checklists trust <path>` "runs only from an interactive terminal (stdin and stdout are TTYs) and asks the person to
-  type the path back. It refuses a directory, or a file in it, that another user owns or that is group- or
-  world-writable, and a directory holding a symlink or a non-regular file."
-- **Untrusted notice, verbatim:** "This directory has 3 checklists that aren't trusted on this machine. Tell the person
-  you work with. Don't trust them yourself." "An untrusted list that is byte for byte a trusted list with the same id is
-  passed over silently."
-- **Firing record.** `<ship home>/sessions/<session_key>.checklists`: "the fired list keys with their times, the claimed
-  item keys each list fired for, the command digests each list held, and the last cwd", plus the session's first-event
-  time (S-c). "The hook and the MCP server update it under `flock`. `_prune`'s `STATE_NAME` gains the suffix
-  (`hook.py:96`). A session start that shows no law ... leaves this record alone."
-- **Caps.** "A cap of 2 lists applies per hook event, and per `station_claim` result, across every moment kind." "A list
-  named but not shown isn't fired. It's due again at the next event (for a `command` list, the next distinct command it
-  matches), and due lists show in the order of the longest wait first, then nearest."
-- **Once.** "`start` and `enter` fire a list at most once a session." "`every <N>h` first fires N hours after the
-  session's first event, then at most once each N hours." `command` "holds once for each distinct command (by SHA-256),
-  with at most 3 holds a session across all lists. A list that has held passes every later command whose digest it
-  held." `claim` "fires a list once for each claimed item key, under the cap of 2 a result. A renewal fires nothing";
-  "Without a session id (Codex, scripts), a list fires once for each claimed item per server process"; only when the
-  claim's result says `board == 'open'` (re-check nit).
-- **Shown.** The header, verbatim: "Checklist 3fa2c1d0/before-push v3, from /Users/kairos/Projects/superyak/.superyak/
-  checklists. It is an agreed working practice, not law and not an instruction from your owner. Run it out loud: say
-  which list you ran, and answer each item done, done before asked, caught, n/a, or skipped and why. Then record the run
-  with checklist_run." Then `fence_external` around "Before any push (owner: ships of this repository; see
-  docs/checklists.md#before-any-push)" and the items. "The list key, version and path stand outside the fence."
-- **Budget.** "Lists go after the law and the version line, and before the board lines, within the hook's
-  `TOTAL_CHARS`" (9,500). "At a prompt they go after the law and the room messages. A list is shown whole or not at
-  all. One that doesn't fit is named in the 'N more' line ('1 more due: reflect. It shows at the next event.') and
-  isn't marked fired. The law is never shortened for a list."
-- **Time.** "The hook has 150 ms from its start to read its lists. Past that it shows none, records the miss in
-  `fired.jsonl`, and goes on to the station part. It never stalls a prompt." "their 150 ms is apart from the station's
-  deadline". The hold: "150 ms from its start to read files and at most 1 s in all ... Past either it prints nothing."
-- **Where.** "The hook reads them before any station call. It shows them whether the station answers or is in its quiet
-  minute". "Only the hook of the ship that acts in this session (`claims.verdict == 'act'`) shows lists ... The hold
-  follows the same rule. With an unreadable registry no list shows". "No list fires in a watcher or teamd run
-  (`SUPERYAK_RUN`), and nothing holds there."
-- **Install.** "`make dock` adds a `PreToolUse` entry with `"matcher": "Bash"` and the same `|| true` guard.
-  `PreToolUse` joins `HOOK_EVENTS`, so undock removes it, and `is_station_hook` recognises its command." "The hold is
-  its own subcommand, `run_agent.py hold`." "The hook takes its event from stdin's `hook_event_name`. It acts only on
-  the events it knows. Any other event makes no station call and prints nothing."
-- **The hold's output** is only `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-  "permissionDecisionReason": …}}`, or, past the cap, `additionalContext` "with no `permissionDecision`", or nothing.
-  "It never returns `allow`, `ask` or `updatedInput`." Reason: "Held once: checklist <id> v<version> applies. It is a
-  checklist, not a refusal.", then each due list as shown (at most 2), then "Re-run the same command if you still want
-  it." "It holds only when the input has no `agent_id`." "It never runs, expands or evaluates a list or anything in one."
-- **Runs.** `checklist_run(key, version, moment, answers)` appends to `<ship home>/checklists/runs.jsonl` "the time,
-  session key, list key, version, moment, and for each item one of `done`, `done-before-asked`, `caught` ..., `n/a` or
-  `skipped`". "`skipped` needs a reason, and `caught` may have one. A reason is ... one line of at most 200 bytes." It
-  refuses an email address `[^\s@]+@[^\s@]+\.[A-Za-z]{2,}`, a phone number `\+\d[\d ().-]{7,}\d` or
-  `\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}`, or "a run of 32 or more characters from `[A-Za-z0-9+/=_-]` that holds an uppercase
-  letter, a lowercase letter and a digit, and isn't a 40- or 64-digit hex hash. A file path passes. The refusal never
-  says which."
-- **Logs.** `fired.jsonl` holds each firing "(time, session key, list key, version, moment)" and each budget miss;
-  "Both files are 0600, and each line is appended in one `write` under `O_APPEND`."
-- **List key:** "the first 8 hex digits of the SHA-256 of its directory's realpath, then `/` and its id. The report
-  compares items only within one list key and version." **Unrun:** "A firing with no run of its list key and version
-  after it in the same session counts as `unrun`. It is never guessed."
-- **Propose.** `checklist_propose(key, change, reason)` "only drafts. It returns a post marked 'Proposal:', with a
-  default, a deadline of at least one ten-minute tick, and the runs and the mistake that motivated it, and it names the
-  room: the list's `post:` room, else all hands" (`1bfd1b03e9f94519b1bb3c86c0fafaa1`). It posts nothing.
-- **Report** "proposes, never applies": retire (done before asked "in every one of the last 10 runs"), keep (caught,
-  with reasons), drop or narrow (n/a "in every one of the last 10 runs"), look at why ("skipped more than half the
-  time, with their reasons, `law §N` and `person` apart"), fire but unrun ("with a refusal's reason where there is
-  one").
-- **Precedence:** "The law, then the person at the terminal (law section 7), then a checklist. On a conflict the agent
-  answers `skipped` with the reason `law §N` or `person`."
-- List text is quoted data: it never authorizes an act, never reaches a command, and an untrusted list's text never
-  reaches the context.
-- Phase 1 is Claude Code on macOS and Linux; Codex gets only `claim`, through the MCP server.
+- **Light path.** The hold imports only `holds`, `checklist_hold`, `lessons_hold`, `checklists`, `checklist_firing`,
+  `acting` and the standard library, never `station`, `claims`, `hook`, `urllib.request` or `http.client`; `__main__`
+  dispatches it before any station import; `superyak_team.teamlib.fence_external` loads only when a list is shown.
+- **Budgets.** `OUTPUT_CHARS = 9500` (`hook.TOTAL_CHARS`); `LISTS_PER_EVENT = 2`; `READ_SECONDS = 0.150`;
+  `HOLD_SECONDS = 1.0`; `HOLDS_PER_SESSION = 3`, across checklists and lessons; `LESSON_BYTES = 2000`.
+- **The seam.** `Hold(kind, key, text)`, with `kind` either `"checklist"` or `"lesson"`. A provider is
+  `candidates(command, record, now, limit) -> list[Hold]`. The lessons provider gets `limit = 0` (and isn't asked) when
+  no hold is left, else `3 −` the checklists in this deny. Checklists come first in a deny.
+- **The record.** `<ship home>/sessions/<session_key>.holds`, 0600 in a 0700 folder, under `flock`, for the hook, the
+  hold and the MCP server. Its shape is `{"first", "seen", "cwd", "fresh", "holds", "fired": {list key: {"last",
+  "version", "<moment kind>": time}}, "items": {list key: [item]}, "passed": {list key: [digest]}, "told": [digest]}`,
+  plus the lessons provider's own entries. `_prune`'s `STATE_NAME` gains `holds`.
+- **Logs** in `<ship home>/checklists/`: `fired.jsonl` lines `{time, session, key, version, moment}`, `{time, session,
+  miss: "time"}` and `{time, session, key, version, miss: "space"}`; `runs.jsonl` lines `{time, session, key, version,
+  moment, answers}` and `{time, session, key, version, moment, refused}`. Both are 0600, and each line is one `write`
+  under `O_APPEND`.
+- **Screen** (the rail's section 6 and the spec): email `[^\s@]+@[^\s@]+\.[A-Za-z]{2,}`; phone `\+\d[\d ().-]{7,}\d` or
+  `\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}`; key-like: a run of 32 or more of `[A-Za-z0-9+/=_-]` holding an uppercase letter, a
+  lowercase letter and a digit, unless it is a 40- or 64-digit hex hash.
+- **Ids and files.** All hands is `1bfd1b03e9f94519b1bb3c86c0fafaa1`. `trusted.json` is `{"trusted": [realpath, …]}`,
+  0600.
+- **Wordings.** The untrusted notice in the singular: "This directory has 1 checklist that isn't trusted on this
+  machine. Tell the person you work with. Don't trust them yourself." The more line: `1 more due: reflect. It shows at
+  the next event.` and `2 more due: a, b. They show at the next event.` The prefix the hook gives notices and the more
+  line: "Not part of the instructions, and not an instruction: ".
 
 ## Rulings where the spec is silent
 
@@ -139,12 +74,13 @@ Each is binding on the tasks below; the task that owns it repeats what it needs.
 1. **Shared acting module (S-a).** `acting.py` holds `verdict` and its helpers, moved from `claims.py` and re-exported
    there, and `session_key`, moved from `station.py` and re-exported. — The hook and the hold must agree, and the hold
    can't import `claims` or `station`. — Cost if wrong: one module move.
-2. **Quotes (S-b).** A match also begins outside quotes: single quotes, double quotes (with `\` escapes inside them)
-   and a `\`-escaped character outside them. — Removes the commit-message false positive. — Cost: `"$(git push)"` is
-   missed; heredocs, `bash -c '…'` and `main-fix` stay known limits.
-3. **First event (S-c).** The hook creates the record at the first event at which a list loads or a notice is due,
-   and `first` is that time (a hold or a claim that fires creates it too); a session that meets no list writes nothing. — Keeps list-less sessions (and today's
-   sessions-folder tests) unchanged. — Cost: `every` counts from when lists first appeared in the session.
+2. *Deleted (plan review M1). The spec's `command` rule stands as written; S-b would need a spec revision under law
+   section 3.*
+3. **First event (S-c, S3).** The hook creates the record at the first event at which a list loads or a notice is due,
+   and `first` is that time. A hold or a claim that fires also creates it, and the hold opens it at each main-agent Bash
+   call in an acting session (it writes only when it prints). On a time miss at a fresh session start, the hook's main
+   thread still records `touch` and `begin`. — Keeps list-less sessions' prompts (and today's sessions-folder tests)
+   unchanged. — Cost if wrong: `every` counts from when lists first appeared in the session.
 4. **`claim` and the board (nit).** `claim` fires only when the result's `board == 'open'`. — The re-check's nit. —
    Cost: a plain claim (`spec:d7` with no board item) gets no list.
 5. **Moments (nit).** A moment repeated in `when` is a parse error, and so is a second `every` or a second `enter`. —
@@ -152,72 +88,79 @@ Each is binding on the tasks below; the task that owns it repeats what it needs.
 6. **Event source.** The hook takes `hook_event_name` from stdin when it is there (`SessionStart`, `UserPromptSubmit`,
    `SessionEnd`; any other value prints nothing); when it is absent, `SUPERYAK_HOOK_EVENT` decides, as today. — Keeps
    older settings and today's tests working. — Cost: none.
-7. **`start` and deferral.** A `SessionStart` with source `startup`, `clear` or `fork` marks the record `fresh`; `start`
-   is due at any event of a fresh session until that list has fired `start`; `clear` also forgets earlier `start`
-   firings; no `source` never fires `start`. — A `start` list deferred for space must still show at the next event,
-   and `/clear` may keep the session id (nit). — Cost: a `start` list added mid-session fires once at the next prompt.
+7. **`start` and deferral (S3, N9).** A `SessionStart` with source `startup`, `clear` or `fork` marks the record
+   `fresh`, even when its read misses the 150 ms (the main thread records it). `start` is due at any event of a fresh
+   session until that list has fired `start`. `clear` also forgets earlier `start` firings, and no `source` never fires
+   `start`. Whether `/clear` keeps the session id is unknown; Task 12 confirms. — A `start` list deferred for space must
+   still show at the next event. — Cost: a `start` list added mid-session fires once at the next prompt.
 8. **No session id** (hook or hold): no list shows and nothing holds. — "Once a session" needs a record. — Cost: none in
    Claude Code, which always sends one.
 9. **Not the law.** Notices and the "N more" line, when the hook shows them, start with the version line's prefix "Not
    part of the instructions, and not an instruction: ". — They follow the law, whose last block has no end marker
    (`hook.py:26-27`). — Cost: 54 characters a line.
 10. **Notices once.** Parse errors, skips and the untrusted line are each told once a session (by SHA-256 of the text,
-    in the record). All untrusted directories in the walk make one line; one list reads "This directory has 1 checklist
-    that isn't trusted on this machine. …". Untrusted directories give no other notice. — Avoids repeating noise and
-    never prints a stranger's file names. — Cost: wording.
+    in the record), and only when shown. All untrusted directories in the walk make one line. Untrusted directories
+    give no other notice. — Avoids repeated noise and never prints a stranger's file names. — Cost: wording.
 11. **The fence.** `render` imports `superyak_team.teamlib.fence_external` lazily and calls it with
     `limit=FILE_BYTES`, so a 12-item list is never cut at `fence_external`'s default 2,000. — teamlib is stdlib-only
     but not the standard library. — Cost: a few milliseconds when a list shows.
 12. **"No urllib"** is tested as no `urllib.request` and no `http.client`: `pathlib` imports `urllib.parse` on Python
     3.11 and 3.12. — Cost: none.
 13. **Clocks.** The hook's 150 ms runs from `hook.run`'s entry, and the station's 2.5 s deadline starts after the lists'
-    read. The hold's 150 ms and 1 s run from `hold.main`'s entry; interpreter start is measured on the Pi (Task 12), and
-    the hold's hook entry has `"timeout": 5`. — Cost: a stalled interpreter costs up to 5 s per Bash call.
-14. **The record is written in place.** `locked_record` opens `O_RDWR | O_CREAT | O_NOFOLLOW` (0600), polls
-    `flock(LOCK_EX | LOCK_NB)` every 5 ms until the caller's deadline, and rewrites the same inode (no rename, which
-    would break the lock). It always carries `seen`, or `_prune` deletes it as damaged. Lists show only when their
-    firing was recorded. — Cost: a lock held past the deadline drops that event's lists, which stay due.
+    read. The hold's 150 ms and 1 s run from `hold.main`'s entry, and its acting check runs inside them (M2).
+    Interpreter start is measured on the Pi (Task 12), and the hold's hook entry has `"timeout": 5`. — Cost: a stalled
+    interpreter costs up to 5 s per Bash call.
+14. **The record is written in place (S2, N3).** `open_record` opens `O_RDWR | O_CREAT | O_NOFOLLOW` (0600, making the
+    sessions folder 0700) and polls `flock(LOCK_EX | LOCK_NB)` every 5 ms until the caller's deadline. It reopens when
+    the locked inode has no links left, because a `_prune` raced it. `save()` rewrites the same inode in one write, and
+    a short write is an error; leaving without `save()` writes nothing. `_prune` ages a `.holds` file without a usable
+    `seen` by its mtime, as it does `.watch`. Lists show only when their firing was recorded. — Cost: a lock held past
+    the deadline drops that event's lists, which stay due.
 15. **Deferred lists.** A `command` list that was due but not shown (cap or space) records the digest as passed, so the
     re-run passes and it is due at the next distinct command; a `claim` list deferred is due at the next claim result
     for that item, a renewal included; past the cap, a list shown as context also records the digest. — Cost: none.
-16. **Two lists in one hold.** The first line names the first list in the rail's words; the second follows under its
-    own header (the rail's pattern); the reason fits `OUTPUT_CHARS` (9,500) with the same "N more" line. — Cost: none.
+16. **Lists in a hold.** The first line names the first list in the rail's words; each list follows under its own
+    header. A due list that doesn't fit, or a third, is passed for this command (Ruling 15) and not named: a Hold
+    carries only what is shown, and no seed command matches three lists. — Cost: a third list waits silently for the
+    next distinct command.
 17. **Waiting.** A list's wait is now minus its last firing, else minus the session's first event; `every` is due when
     that is at least N hours. Ties go nearest first, then by id. — Starvation-free (Task 5's day test). — Cost: none.
-18. **Trust files.** `trusted.json` is `{"trusted": [<realpath>, …]}`, 0600, written whole. The hook doesn't re-check
-    permissions at load. `trust` also refuses a path whose realpath isn't a `checklists` directory inside a `.superyak`
-    directory; the typed-back line must equal the printed realpath. Dock trusts only when the checks pass, and otherwise
-    prints one line naming `chmod -R go-w <dir>` (a checkout made under umask 002 is group-writable). — Cost: a ship
-    docked under umask 002 shows the untrusted line until the person runs the chmod and docks again.
+18. **Trust files.** The hook doesn't re-check permissions at load. `trust` also refuses a path whose realpath isn't a
+    `checklists` directory inside a `.superyak` directory, and the typed-back line must equal the printed realpath.
+    Dock trusts only when the checks pass, and otherwise prints one line naming `chmod -R go-w <dir>` (a checkout made
+    under umask 002 is group-writable); it never raises. — Cost: a ship docked under umask 002 shows the untrusted line
+    until the person runs the chmod and docks again.
 19. **Names.** `.md` names that aren't `<id>.md` get a parse notice; other names are ignored; the 32 read are the first
     32 `<id>.md` names in sorted order. — Cost: none.
-20. **Parse strictness.** "Control characters" means anything `str.isprintable()` rejects (tabs, zero-width and
-    direction marks included); a value starting with `"` or `'` is quoting; `read` takes only `yes`; bare `enter` in a
-    ship's own directory and `enter <path>` in a repository are errors; `command` words don't start or end with
-    whitespace. — Titles go into the header unfenced. — Cost: a person rewords.
-21. **`checklist_run`.** `moment` is the kind word (`start`, `every`, `enter`, `command`, `claim`); `answers` is a list
-    of `{"answer": …, "reason": …}` objects; a reason is allowed only on `skipped` (required) and `caught`; when the list
-    loads at that key and version the answer count must equal its items (0 for a read list), otherwise only the format
-    is checked, so a run of an edited list's fired version is kept. One refusal text covers every screen failure. —
-    Cost: a run of a mistyped key is recorded and matches nothing.
+20. **Parse strictness (N6).** "Control characters" means anything `str.isprintable()` rejects (tabs, zero-width and
+    direction marks included). A value starting with `"` or `'` is quoting. `read` takes only `yes`. A bare `enter` in a
+    ship's own directory and `enter <path>` in a repository are errors. `command` words don't start or end with
+    whitespace. — Titles appear unfenced in `checklists list` and in a proposal. — Cost: a person rewords.
+21. **`checklist_run`.** `moment` is the kind word (`start`, `every`, `enter`, `command`, `claim`). `answers` is a list
+    of `{"answer": …, "reason": …}` objects, and a reason is allowed only on `skipped` (required) and `caught`. When
+    the list loads at that key and version, the answer count must equal its items (0 for a read list); otherwise only
+    the format is checked, so a run of an edited list's fired version is kept. One refusal text covers every screen
+    failure. — Cost: a run of a mistyped key is recorded and matches nothing.
 22. **Refused runs.** When the guard refuses `checklist_run`, the server appends `{time, session, key, version, moment,
-    refused}` to `runs.jsonl`, `refused` one of `run`, `unreadable`, `claimed`, `stale`, `elsewhere`, `unclaimed`,
-    `unknown`. — The report's only source for "with that reason". — Cost: none.
-23. **Misses.** `{time, session, miss: "time"}` when the 150 ms passed; `{time, session, key, version, miss: "space"}`
-    for a due list within the cap that didn't fit. — Cost: none.
+    refused}` to `runs.jsonl`, with `refused` one of `run`, `unreadable`, `claimed`, `stale`, `elsewhere`, `unclaimed`
+    or `unknown`. — The report's only source for "with that reason". — Cost: none.
+23. **Misses.** A `time` miss when the 150 ms passed; a `space` miss for a list the hook deferred within its cap because
+    it didn't fit. The hold logs no misses. — Cost: none.
 24. **Sessions in logs.** `session_key(session id)`; without one (Codex, scripts), the server's `proc-<12 hex>` salt
     (`mcp.py:169`). — Cost: none.
 25. **Propose.** `change` at most 300 bytes and `reason` at most 200, one line each, screened like reasons; deadline =
     the first 10-minute mark at least 10 minutes away, in UTC; the default states both consent rules (silence accepts
     only an added item or moment). — The tool can't tell an addition from a weakening. — Cost: a longer post.
-26. **CLI home.** `checklists list|report` default to the ship that acts at the cwd (`acting.acting_home`); `--home`
-    overrides; run as `python3 agent/run_agent.py checklists …`. — Cost: none.
-27. **Seed push spellings (Review Focus 1).** Before any push adds `command push origin` and `command push https://`;
-    Merging to main adds `command push origin main` and `command push https://github.com/zhang8128/superyak.git main`.
-    — The Mac pushes as `git -c 'credential.helper=!gh auth git-credential' push https://…` and worktree agents as
-    `git -C <path> push origin …`; neither contains `git push`. Adding a moment is the lightest change the spec's
-    renegotiation allows, and the seed's wording goes through review with the branch. — Cost: a reviewer may strike
-    them, and then the Mac's pushes run unlisted.
+26. **CLI home (S6).** `list` and `report` default to the ship that acts at the cwd (`acting_home(cwd)`). `trust`
+    defaults to the ship that acts where the lists are (`acting_home` of the directory holding `.superyak`) and prints
+    the home it changed. `--home` overrides. They run as `python3 agent/run_agent.py checklists …`. — Cost: none.
+27. **Seed push spellings (Review Focus 1, S4).** Before any push adds `command push origin`, `command push -u origin`
+    and `command push https://`. Merging to main adds `command push origin main` and
+    `command push https://github.com/zhang8128/superyak.git main`. — The Mac pushes as
+    `git -c 'credential.helper=!gh auth git-credential' push https://…` and worktree agents as
+    `git -C <path> push [-u] origin …`; none contains `git push`. Adding a moment is the change silence can accept. The
+    branch's post names these moments so the section 2 verdict accepts them explicitly (Task 12). — Cost: a verdict may
+    strike them, and then those pushes run unlisted.
 28. **Docs.** docs/checklists.md keeps every heading (so `see:` anchors hold); each seeded section points to its file
     and keeps its long form as plain bullets, without checkboxes. The `checklists` branch (127d285, docs only, on
     60dd851) is merged into this branch in Task 11, or main if it has landed. — Cost: none.
@@ -225,31 +168,61 @@ Each is binding on the tasks below; the task that owns it repeats what it needs.
     `claims.py` and `project_dock.py`; a test keeps it whole. — The merge checklist's own item. — Cost: none.
 30. **The Mac's own lists** are drafted in Task 11 and installed in `~/.superyak/checklists/` only with Andy's yes. —
     "A change to a ship's own lists is that ship's person's to make." — Cost: none.
+31. **The seam (the ships' agreement).** `run_agent.py hold` (`hold.py`) is the one `PreToolUse` entry. It asks two
+    providers through `candidates(command, record, now, limit) -> list[Hold]`: checklists (`checklist_hold`, built here)
+    and lessons (`lessons_hold`, a stub returning `[]` here; Tardis's branch replaces the module with the rail's provider
+    against the same signature). — Agreed in City of AI. — Cost: none.
+32. **One record, one cap.** The hook, the hold and the MCP server share `<session_key>.holds` (the spec's `.checklists`
+    record, renamed by the agreement). `holds` counts denies of either kind, at most 3 a session. The lessons provider
+    gets `limit = 0` and isn't asked when no hold is left, else `3 −` the checklists in this deny. Checklists past the
+    cap still show as context (spec R2); lessons don't. — The agreement. — Cost: lists and lessons compete for 3 holds.
+33. **Providers record what they return.** `candidates` records its Holds in the record it is given; checklists mark the
+    shown lists fired with the digest, and every other due list passed. The entry renders every Hold it gets and saves
+    the record only when it prints. — "The entry renders every Hold it got; no second cut." — Cost: a provider must never
+    return what it doesn't want shown.
+34. **The hold's budget.** A list is placed only if the lists so far, it, 200 characters for the fixed lines and
+    `LESSON_BYTES × (3 − lists placed)` of room for lessons fit in 9,500; past the cap, only the lists count. Lessons are
+    at most 2,000 bytes each, the provider's cap, and the entry never cuts a Hold. — "Lists fit whole-or-nothing into
+    the rest of the 9,500-char budget." — Cost: a list rendering over about 5,300 characters can't hold beside two
+    lessons' room (a 4 KiB file renders well under that).
+35. **A lessons-first deny.** The entry writes the first line only for a checklist. Called with `limit` 3 (no checklist
+    in this deny), the lessons provider starts its first Hold's text with the rail's "Held once: lesson <id> from <ship>
+    applies." — Cost: Tardis's provider must do so, and his branch tests it.
+36. **`holds.py`** holds the seam: `Hold`, the record, `touch`, `append_line`, and the cap and budget constants. The
+    lessons provider imports it without importing the entry or the checklist modules. — Cost: none.
 
-**From the re-check, left out or carried as known limits:** S-d (a different notice under a trusted checkout) is left
-out: revision 3 keeps the one notice text. R1's confirmation (what the model sees when two `PreToolUse` hooks deny one
-call) is Task 12's, recorded as a known limit. **Known limits:** after `/clear` the hook has a new session id while the
-MCP server keeps `CLAUDE_CODE_SESSION_ID` (agent/README.md:48), so a run recorded after a `/clear` lands under the old
-session key and its firing reports `unrun` (Task 12 confirms; the fix, a `session` argument named in the header, needs
-a spec revision); a reason holding a path with an uppercase letter and a digit in one 32-character run
-(`/Users/kairos/Projects/superyak/agent/tests/test_hook2`) is refused as key-like; subagents and commands outside Bash
-are never held (D14, N1).
+**From the re-check:** S-d (a different notice under a trusted checkout) is left out, because revision 3 keeps the one
+notice text. S-b is left out (Ruling 2). R1's confirmation is Task 12's.
+
+**Known limits** (one copy; Task 12 confirms the first):
+- After `/clear`, the hook may have a new session id while the MCP server keeps `CLAUDE_CODE_SESSION_ID`
+  (agent/README.md:48). If so, a run recorded after a `/clear` lands under the old session key and reports `unrun`.
+  The fix, a `session` argument named in the header, needs a spec revision.
+- `command` words match inside quotes, as the spec says. `git commit -m "fix: git push docs"` is held once, a known
+  false positive bounded by the cap and the context fallback.
+- A reason holding a path with an uppercase letter and a digit in one 32-character run
+  (`/Users/kairos/Projects/superyak/agent/tests/test_hook2`) is refused as key-like.
+- Subagents and commands outside Bash are never held (D14, N1).
+- From the rail's side: a crash between the lessons query's receipt and the deny's print leaves a receipt for a lesson
+  sent but not shown.
 
 ## Review Focus
 
 1. **How ships really push.** The Mac pushes with `git -c 'credential.helper=!gh auth git-credential' push
-   https://github.com/zhang8128/superyak.git <branch>`, and worktree agents with `git -C <path> push origin <branch>`;
-   neither holds the literal `git push`, so Before any push would never fire for the pushes that matter. Expected: both
-   spellings hold. Test: Task 11, `test_before_any_push_holds_the_ways_ships_really_push`.
+   https://github.com/zhang8128/superyak.git <branch>`, and worktree agents with `git -C <path> push [-u] origin
+   <branch>`. None holds the literal `git push`, so Before any push would never fire for the pushes that matter.
+   Expected: every spelling holds. Test: Task 11, `test_before_any_push_holds_the_ways_ships_really_push`.
 2. **Parallel Bash calls.** Claude Code often runs several Bash calls at once, so several holds (and the prompt hook and
-   a `station_claim`) update one session record together; a read-modify-write without the lock would lose a digest
-   (the re-run is held again) or pass 3 holds. Expected: no update lost, never a fourth hold. Tests: Task 5,
+   a `station_claim`) update one session record together. A read-modify-write without the lock would lose a digest (and
+   hold the re-run again) or pass 3 holds. Expected: no update lost, never a fourth hold. Tests: Task 5,
    `test_parallel_writers_never_lose_an_update`; Task 7, `test_parallel_holds_never_pass_three`.
 3. **A cwd that is gone or hangs.** Sessions outlive `git worktree remove`, and a network or cloud-backed folder can
-   stall one `stat`. Expected: a removed cwd still finds the lists above it; a hung read never stalls the prompt (the
-   law still shows, the miss is logged) and the hold prints nothing within its second. Tests: Task 3,
-   `test_a_cwd_that_is_gone_still_finds_the_lists_above_it`; Task 6, `test_a_hung_read_never_stalls_the_session_start`;
-   Task 7, `test_past_its_read_time_it_prints_nothing_and_never_hangs`.
+   stall one `stat` (in the walk, or in the acting check's `project_root`). Expected: a removed cwd still finds the
+   lists above it; a hung read never stalls the prompt (the law still shows, the miss is logged), and the hold prints
+   nothing within its second. Tests: Task 3, `test_a_cwd_that_is_gone_still_finds_the_lists_above_it`; Task 6,
+   `test_a_hung_read_never_stalls_the_session_start`; Task 7,
+   `test_past_its_read_time_it_prints_nothing_and_never_hangs` and
+   `test_a_hung_registry_or_cwd_read_never_stalls_the_bash_call`.
 4. **A list edited mid-session.** Every merge that touches lists, and the Mac's `git reset --keep`, rewrites list files
    under running sessions. Expected: a held command's re-run still passes after the list changed, and a run of the
    version that fired is recorded. Tests: Task 7, `test_a_list_edited_between_the_hold_and_the_re_run_lets_it_pass`;
@@ -265,8 +238,11 @@ are never held (D14, N1).
 |---|---|
 | `agent/superyak_agent/acting.py` (new) | Which ship acts in a session (moved from `claims.py`), `session_key` (moved from `station.py`), `acting_home`. Stdlib only. |
 | `agent/superyak_agent/checklists.py` (new) | What a list is (parse, safe read), where lists are found (walk, own directory, trust, overrides, notices), matching (`command`, `enter`), rendering and fitting a budget. Stdlib only. |
-| `agent/superyak_agent/checklist_firing.py` (new) | The per-session record under `flock`, when a list is due, the logs and the reason screen. Stdlib only. |
-| `agent/superyak_agent/hold.py` (new) | The `PreToolUse` hold: the light path. |
+| `agent/superyak_agent/holds.py` (new) | The hold seam: `Hold`, the shared per-session record under `flock`, `touch`, `append_line`, the cap and budget constants. Stdlib only. |
+| `agent/superyak_agent/checklist_firing.py` (new) | When a list is due, what firing marks, log lines, the reason screen. Stdlib only. |
+| `agent/superyak_agent/hold.py` (new) | The `PreToolUse` entry: the light path, asking both providers. |
+| `agent/superyak_agent/checklist_hold.py` (new) | The checklists provider for the hold. |
+| `agent/superyak_agent/lessons_hold.py` (new) | The lessons provider: a stub returning `[]`, replaced on Tardis's branch. |
 | `agent/superyak_agent/checklist_report.py` (new) | `fired.jsonl` against `runs.jsonl`: unrun and the report's proposals. Pure. |
 | `agent/superyak_agent/checklist_cli.py` (new) | `checklists list | trust | report`. |
 | `agent/superyak_agent/hook.py` | Lists in the station hook's output; event and source from stdin. |
@@ -284,8 +260,9 @@ are never held (D14, N1).
 
 **Files:**
 - Create: `agent/superyak_agent/acting.py`
-- Modify: `agent/superyak_agent/claims.py:13-158` (`NAME` to `project_root`), `:161-214` (`FIELDS` to `read_registry`),
-  `:270-274` (`read_json_quiet`), `:283-330` (`match`, `session_project`, `verdict`): move them; re-export
+- Modify: `agent/superyak_agent/claims.py` (the names below move out and are re-exported; within the ranges `:13-158`,
+  `:161-214`, `:270-274` and `:283-330`, `Refused`, `local_ships`, `check_mode` and `lock_path` stay, because the
+  name list governs)
 - Modify: `agent/superyak_agent/station.py:40-44` (`session_key`): move; re-export
 - Modify: `agent/pyproject.toml:21-35` (`only-include`)
 - Test: `agent/tests/test_acting.py`
@@ -351,12 +328,14 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'superyak_agent.acting'`.
 
 Move the listed definitions verbatim into `acting.py` (its imports: `json`, `os`, `hashlib`, `re`, `pathlib.Path`,
 `typing.NamedTuple`). `claims.py` keeps `from .station import write_private` and gains
-`from .acting import (NAME, Repo, Unreadable, ...)  # noqa: F401 - re-exported`; `station.py` gains
-`from .acting import session_key  # noqa: F401 - re-exported` (no cycle: `acting` imports nothing from the package).
-Add `superyak_agent/acting.py`, `superyak_agent/claims.py` and `superyak_agent/project_dock.py` to `only-include`;
-every later task adds the module it creates. Only `registry_lock`, `write_private`, `claim` and `unclaim` are
-monkeypatched on `claims` by today's tests, and they stay in `claims`; `test_hook_version.py`'s patch of
-`hook.claims.kind_of` steers only `_version_line`, which still calls `claims.kind_of`.
+`from .acting import (NAME, Repo, Unreadable, ...)  # noqa: F401 - re-exported`, naming every moved name it or its
+callers use; `station.py` gains `from .acting import session_key  # noqa: F401 - re-exported` (no cycle: `acting`
+imports nothing from the package). `hook.py` keeps calling `claims.verdict` and `claims.kind_of` through the `claims`
+module: `test_hook.py:707` patches `hook.claims.verdict` and `test_hook_version.py` patches `hook.claims.kind_of`, and
+switching `hook.py` to `acting` would make both patches miss silently. Today's tests patch only `registry_lock`,
+`write_private`, `claim` and `unclaim` otherwise, and those stay in `claims`. Add `superyak_agent/acting.py`,
+`superyak_agent/claims.py` and `superyak_agent/project_dock.py` to `only-include`; every later task adds the modules it
+creates.
 
 - [ ] **Step 4: Run the new tests, then the whole suite**
 
@@ -522,7 +501,7 @@ Expected: FAIL, `ImportError: cannot import name 'checklists'`.
 
 `read_file`: `os.open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)` (an `ELOOP` is "a symlink"), `os.fstat`
 must be `S_ISREG`, then read at most `FILE_BYTES + 1` bytes. `parse`: decode strict UTF-8; refuse a BOM and any `\r`;
-the frontmatter is exactly the key lines in the Global Constraints' order; each value is non-empty, printable
+the frontmatter is exactly the spec's key lines in its order; each value is non-empty, printable
 (`str.isprintable()`), and doesn't start with `"` or `'`. Moments, split on `'; '`: `start`, `claim`,
 `every ([1-9]|1[0-9]|2[0-4])h`, `enter` (only when not `own`), `enter <absolute path>` (only when `own`; `os.path.isabs`),
 `command <words>` (words of at least 6 UTF-8 bytes, no `;`, no leading or trailing whitespace); a repeated moment, a
@@ -563,13 +542,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `list_key(directory, list_id: str) -> str`.
   - `search_dirs(cwd: str | None, own_dir: Path, home: Path | None = None) -> list[tuple[Path, Path | None]]`:
     existing `.superyak/checklists` realpaths nearest first, each with its location (the directory holding
-    `.superyak/`), then `(own_dir, None)` when it exists. `home` defaults to `Path.home()`; anything under
-    `~/.superyak` is never part of the walk.
+    `.superyak/`), then `(own_dir, None)` when it exists. `home` defaults to `Path.home()`, and the walk compares
+    `realpath(cwd)` with `realpath(home)` (N2); anything under `~/.superyak` is never part of the walk.
   - `trusted(own_dir: Path) -> frozenset[str]`: the realpaths in `<own_dir>/trusted.json`; damaged counts as empty.
   - `trust_refusal(path: Path) -> str | None`: why `trust` and dock refuse this directory (Ruling 18), or `None`.
   - `find(cwd: str | None, own_dir: Path, home: Path | None = None) -> Found`.
   - `notice_lines(found: Found) -> list[str]`: `found.notices`, then the untrusted line when `found.untrusted`.
-  - `UNTRUSTED` and `UNTRUSTED_ONE`, the notice's two wordings.
   - Notice wordings: `Checklist <dir>/<name> was skipped: <reason>.` and
     `<n> more checklist files in <dir> were not read: at most 32 a directory.`
 - Produces, in `checklist_fakes`: `loaded(list_id, when='start', *, order=0, directory=Path('/lists'), location=None,
@@ -735,16 +713,16 @@ Expected: FAIL, `AttributeError: module 'superyak_agent.checklists' has no attri
 
 - [ ] **Step 3: Implement finding and trust in `checklists.py`**
 
-`search_dirs`: work on `os.path.realpath(cwd)` (a removed cwd still resolves); the walk's candidates follow the Global
-Constraints' rule; a candidate counts when `<dir>/.superyak/checklists` is a directory whose realpath isn't under
-`realpath(~/.superyak)`. `find` loads the trusted directories first (trusted = `trusted(own_dir)` plus `own_dir`): for
-each, `os.listdir`, the first 32 sorted `<id>.md` names through `read_file` and `parse` (the location is the holder,
-or the `enter <path>` of an own-directory list), a notice for each skip (Ruling 19). Then each untrusted directory
-counts its `<id>.md` files that aren't byte-identical (`raw`) to a loaded trusted list with that id (Ruling 10). The
-nearest of two loaded lists with one id wins; the rest go to `overridden`. Directory paths in notices replace
-non-printable characters with `?`. `trust_refusal` checks, with `lstat`: the realpath is a `checklists` directory
-inside a `.superyak` directory; the directory and every entry are owned by `os.getuid()` and have no `0o022` bits; no
-entry is a symlink or a non-regular file.
+`search_dirs` works on `os.path.realpath(cwd)` (a removed cwd still resolves) against `os.path.realpath(home)`. The
+walk's candidates follow the spec's rule, and a candidate counts when `<dir>/.superyak/checklists` is a directory whose
+realpath isn't under `realpath(~/.superyak)`. `find` loads the trusted directories first (trusted = `trusted(own_dir)`
+plus `own_dir`). For each, `os.listdir`, then the first 32 sorted `<id>.md` names through `read_file` and `parse` (the
+location is the holder, or the `enter <path>` of an own-directory list), with a notice for each skip (Ruling 19). Then
+each untrusted directory counts its `<id>.md` files that aren't byte-identical (`raw`) to a loaded trusted list with that
+id (Ruling 10). The nearest of two loaded lists with one id wins, and the rest go to `overridden`. Directory paths in
+notices replace non-printable characters with `?`. `trust_refusal` checks, with `lstat`: the realpath is a
+`checklists` directory inside a `.superyak` directory; the directory and every entry are owned by `os.getuid()` and
+have no `0o022` bits; no entry is a symlink or a non-regular file.
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -771,19 +749,19 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: Task 3's `Loaded`, `list_key`; `superyak_team.teamlib.fence_external(sender, text, limit)` (lazily).
 - Produces, in `checklists`:
-  - `command_matches(words: str, command: str) -> bool`.
+  - `command_matches(words: str, command: str) -> bool`, the spec's rule exactly (M1).
   - `enter_applies(location: Path, cwd: str | None) -> bool` (realpaths both; `False` for no cwd).
-  - `render(loaded: Loaded) -> str`: one header line (the spec's wording, with `{key}`, `{version}`, `{path}`; a read
-    list's ends "Read it again, and say that you did. Then record the run with checklist_run, with no answers."; a list
-    with `post` adds " Post your answers in room {post} with station_post too."), a newline, then
-    `fence_external(f'checklist {key}', inner, limit=FILE_BYTES)` where `inner` is `{title} (owner: {owner}; see {see})`
-    (or `(owner: {owner})`), a newline, and the items as `- [ ] …` lines or the read body.
-  - `more_line(names: Sequence[str]) -> str`: `1 more due: reflect. It shows at the next event.` /
-    `2 more due: a, b. They show at the next event.`
+  - `render(loaded: Loaded) -> str`: one header line (the spec's wording, with `{key}`, `{version}` and `{path}`, the
+    path's non-printable characters replaced with `?` (N4); a read list's header ends "Read it again, and say that you
+    did. Then record the run with checklist_run, with no answers."; a list with `post` adds " Post your answers in
+    room {post} with station_post too."), a newline, then `fence_external(f'checklist {key}', inner,
+    limit=FILE_BYTES)`. `inner` is `{title} (owner: {owner}; see {see})` (or `(owner: {owner})`), a newline, and the
+    items as `- [ ] …` lines or the read body.
+  - `more_line(names: Sequence[str]) -> str`.
   - `fit(blocks: Sequence[tuple[object, str, str]], used: int, budget: int, cap: int = 2, prefix: str = '')
     -> tuple[list, list, str]`: `blocks` are `(tag, name, text)` in show order; returns `(shown tags, deferred tags,
     text)`. Blocks are taken in order while fewer than `cap` are shown, each only if it fits whole and the "more" line
-    for the blocks left still fits after it; the "more" line (with `prefix`) names every deferred block and is added
+    for the blocks left still fits after it. The "more" line (with `prefix`) names every deferred block and is added
     only if it fits. Parts are joined by a blank line, and when `used > 0` the 2 characters joining `text` to what came
     before are counted. `text` is `''` when nothing fits.
 
@@ -800,15 +778,20 @@ from checklist_fakes import loaded
 TICKS = '`' * 3                                       # a Markdown fence, spelt so this plan's own fences stay closed
 
 
-@pytest.mark.parametrize('command', ['git push', '  git push origin x', 'cd /a && git push', 'cd /a;git push', 'x|git push',
-                                     '(git push)', '`git push`', 'sleep 1 &git push', 'cd /a\ngit push'])
-def test_words_match_at_the_start_after_whitespace_or_after_a_separator(command):
+@pytest.mark.parametrize('command', [
+    'git push', '  git push origin x', 'cd /a && git push', 'cd /a;git push', 'x|git push', '(git push)', '`git push`',
+    'sleep 1 &git push', 'cd /a\ngit push',
+    "bash -c 'cd /x && git push origin feature'", "ssh andy@smart 'cd ~/superyak && git push origin main'",
+    "cat <<EOF\nwe don't push yet\nEOF\ngit push origin feature",
+    'git commit -m "fix: git push docs"',                     # a known false positive (Known limits)
+])
+def test_words_match_at_the_start_after_whitespace_or_after_a_separator_quotes_or_not(command):
     assert cl.command_matches('git push', command)
 
 
 @pytest.mark.parametrize('command', ['Git push', 'xgit push', 'agit push', 'echo "git push"', "echo 'git push'",
-                                     'git commit -m "fix: git push docs"', 'git  push', 'git pus', '$PUSH'])
-def test_words_match_nowhere_else_never_inside_quotes_and_never_expanded(command, monkeypatch):
+                                     'git  push', 'git pus', '$PUSH'])
+def test_words_match_nowhere_else_and_are_never_expanded(command, monkeypatch):
     monkeypatch.setenv('PUSH', 'git push')
     assert not cl.command_matches('git push', command)
 
@@ -841,6 +824,12 @@ def test_a_list_shows_its_key_version_and_path_outside_the_fence_and_its_text_in
     assert fenced.startswith(f'[team] from checklist {key} ')
     assert (f'{TICKS}\nBefore any push (owner: ships of this repository; see docs/checklists.md#before-any-push)\n'
             f'- [ ] One.\n- [ ] Two.\n{TICKS}') in fenced
+
+
+def test_a_path_outside_the_fence_shows_no_control_characters():
+    odd = Path('/odd\nname')
+    head = cl.render(loaded('x', directory=odd)).split('\n', 1)[0]
+    assert head.startswith(f'Checklist {cl.list_key(odd, "x")} v1, from /odd?name.')
 
 
 def test_backticks_or_a_team_tag_in_a_list_cannot_close_or_forge_its_fence():
@@ -891,32 +880,10 @@ Expected: FAIL, `AttributeError: … 'command_matches'`.
 
 - [ ] **Step 3: Implement matching, rendering and fitting**
 
-`command_matches` scans once, tracking quotes; a candidate position must be outside quotes and not escaped:
-
-```python
-BOUNDARY = frozenset(';&|(`')
-
-def command_matches(words, command):
-    quote, escaped = None, False
-    for i, ch in enumerate(command):
-        if quote is None and not escaped and (i == 0 or command[i - 1].isspace() or command[i - 1] in BOUNDARY) \
-                and command.startswith(words, i):
-            return True
-        if escaped:
-            escaped = False
-        elif quote == "'":
-            quote = None if ch == "'" else quote
-        elif quote == '"':
-            escaped, quote = ch == '\\', (None if ch == '"' else quote)
-        elif ch == '\\':
-            escaped = True
-        elif ch in '\'"':
-            quote = ch
-    return False
-```
-
-`enter_applies`: the realpath of the cwd equals the location's or is below it, and no directory strictly below the
-location, up to and including the cwd, has a `.git` (`os.path.lexists`).
+`command_matches` is true when some `i` has `command.startswith(words, i)`, with `i == 0`, or
+`command[i-1].isspace()`, or `command[i-1] in ';&|(`'`. `enter_applies`: the realpath of the cwd equals the location's
+or is below it, and no directory strictly below the location, up to and including the cwd, has a `.git`
+(`os.path.lexists`).
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -927,35 +894,39 @@ Expected: PASS.
 
 ```bash
 git add agent/superyak_agent/checklists.py agent/tests/test_checklists_match.py
-git commit -m "Checklists 4: literal command matching outside quotes, enter, and lists shown whole in a fence
+git commit -m "Checklists 4: the spec's command matching, enter, and lists shown whole in a fence
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 5: The session record, when a list is due, and the logs
+### Task 5: The shared record, when a list is due, and the logs
 
 **Files:**
+- Create: `agent/superyak_agent/holds.py`
 - Create: `agent/superyak_agent/checklist_firing.py`
 - Modify: `agent/pyproject.toml` (`only-include`)
 - Test: `agent/tests/test_checklist_firing.py`
 
 **Interfaces:**
 - Consumes: `checklists.Loaded`, `checklists.command_matches`, `checklists.enter_applies`; `acting.session_key`.
-- Produces, in `checklist_firing` (stdlib only):
-  - `LISTS_PER_EVENT = 2`, `HOLDS_PER_SESSION = 3`, `READ_SECONDS = 0.150`, `HOLD_SECONDS = 1.0`,
-    `OUTPUT_CHARS = 9500` (`hook.TOTAL_CHARS`, pinned by a test), `START_SOURCES = ('startup', 'clear', 'fork')`,
-    `RECORD_SUFFIX = '.checklists'`.
-  - `Due = tuple[Loaded, tuple[str, ...]]`: a due list and the moment kinds due for it, first kind first.
-  - `record_path(sessions_dir, session_id: str) -> Path` (`<sessions_dir>/<session_key>.checklists`).
-  - `locked_record(path: Path, deadline: float, monotonic=time.monotonic)`: a context manager yielding the record as a
-    dict (absent or damaged: `{}`) and writing it back in place on a clean exit; raises `TimeoutError` past `deadline`
-    (a monotonic time). Ruling 14.
+- Produces, in `holds` (stdlib only; the seam, Rulings 31 to 36):
+  - `class Hold(NamedTuple): kind: str; key: str; text: str` (`kind` `"checklist"` or `"lesson"`).
+  - `HOLDS_PER_SESSION = 3`, `OUTPUT_CHARS = 9500` (`hook.TOTAL_CHARS`, pinned by a test), `LESSON_BYTES = 2000`,
+    `RECORD_SUFFIX = '.holds'`.
+  - `record_path(sessions_dir, session_id: str) -> Path` (`<sessions_dir>/<session_key>.holds`).
+  - `open_record(path: Path, deadline: float, monotonic=time.monotonic)`: a context manager yielding a record file with
+    `.data` (a dict; absent or damaged gives `{}`) and `.save()`. Leaving the `with` closes and unlocks without writing.
+    It raises `TimeoutError` past `deadline`, a monotonic time (Ruling 14).
   - `touch(record, now: float, cwd: str | None) -> None`: sets `first` once, `seen` each time, and `cwd` when one is
-    given (so the MCP server can `touch(record, now, None)` without clearing the hook's cwd). Every writer touches
-    before it writes, so a record always has `seen` (`_prune` deletes one without it); the due functions treat a
-    missing `first` as `now`.
+    given. Every writer touches before it saves, so a saved record always has `seen`; the due functions treat a missing
+    `first` as `now`.
+  - `append_line(path: Path, line: dict) -> None`: one `os.write` of the JSON line under `O_WRONLY | O_APPEND | O_CREAT
+    | O_NOFOLLOW`, 0600, making the directory 0700.
+- Produces, in `checklist_firing` (stdlib only):
+  - `LISTS_PER_EVENT = 2`, `READ_SECONDS = 0.150`, `HOLD_SECONDS = 1.0`, `START_SOURCES = ('startup', 'clear', 'fork')`.
+  - `Due = tuple[Loaded, tuple[str, ...]]`: a due list and the moment kinds due for it, first kind first.
   - `begin(record, source: str | None) -> None`: a `SessionStart`; `source` in `START_SOURCES` sets `fresh`, and `clear`
     also forgets every `start` firing (Ruling 7).
   - `due_at_event(lists, record, cwd, now) -> list[Due]`: `start`, `enter` and `every` (Rulings 7, 17).
@@ -964,33 +935,29 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
     that haven't passed its digest, and the digest.
   - `item_key(room_id: str, key: str) -> str` (first 16 hex of SHA-256 of `room_id + '\n' + key`).
   - `due_at_claim(lists, record, item: str, now) -> list[Due]`.
-  - `mark_fired(record, shown, now, *, digest=None, item=None, held=False) -> None`: for each shown list, `last` and
-    each of its due kinds get `now`; `digest` joins its passed digests; `item` joins its claimed items; `held` adds one
-    to `holds`.
+  - `mark_fired(record, shown, now, *, digest=None, item=None) -> None`: for each shown list, `last`, `version` and each
+    of its due kinds; `digest` joins its passed digests; `item` joins its claimed items.
   - `mark_passed(record, deferred, digest) -> None`; `told(record, notice: str) -> bool`;
     `mark_told(record, notices) -> None`.
-  - `append_line(path: Path, line: dict) -> None`: one `os.write` of the JSON line under `O_WRONLY | O_APPEND |
-    O_CREAT | O_NOFOLLOW`, 0600, making the directory 0700.
-  - `fired_line(now, session, loaded, moment) -> dict` = `{time, session, key, version, moment}`;
-    `miss_line(now, session, kind, loaded=None) -> dict` = `{time, session, miss}` or
-    `{time, session, key, version, miss}` (Ruling 23).
-  - Record shape: `{"first", "seen", "cwd", "fresh", "holds", "fired": {key: {"last", "<kind>": time}},
-    "items": {key: [item]}, "passed": {key: [digest]}, "told": [digest]}`.
+  - `fired_line(now, session, key, version, moment) -> dict` = `{time, session, key, version, moment}`;
+    `miss_line(now, session, kind, key=None, version=None) -> dict` = `{time, session, miss}`, with `key` and `version`
+    when given (Ruling 23).
 
 - [ ] **Step 1: Write the failing tests** in `agent/tests/test_checklist_firing.py`
 
 ```python
-"""Checklists: the session record, when a list is due, and the logs (spec, Firing, exactly; Running it out loud)."""
+"""Checklists: the shared record, when a list is due, and the logs (spec, Firing, exactly; the ships' hold seam)."""
 import fcntl
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 import pytest
-from superyak_agent import checklist_firing as fp, hook
+from superyak_agent import checklist_firing as fp, holds, hook
 from checklist_fakes import loaded
 
 H = 3600.0
@@ -1003,7 +970,7 @@ def names(due):
 
 def fresh(now=0.0, source=None):
     record = {}
-    fp.touch(record, now, None)
+    holds.touch(record, now, None)
     fp.begin(record, source)
     return record
 
@@ -1065,9 +1032,10 @@ def test_a_command_list_holds_each_distinct_command_once_and_a_deferred_list_pas
     record = fresh()
     due, digest = fp.due_at_command(lists, record, 'git push origin x', 10.0)
     assert names(due) == ['a', 'b', 'c'] and digest == hashlib.sha256(b'git push origin x').hexdigest()
-    fp.mark_fired(record, due[:2], 10.0, digest=digest, held=True)
+    fp.mark_fired(record, due[:2], 10.0, digest=digest)
     fp.mark_passed(record, due[2:], digest)
-    assert fp.due_at_command(lists, record, 'git push origin x', 20.0)[0] == [] and record['holds'] == 1
+    assert fp.due_at_command(lists, record, 'git push origin x', 20.0)[0] == []
+    assert record['fired'][lists[0].key]['version'] == 1
     assert names(fp.due_at_command(lists, record, 'git push origin y', 30.0)[0])[0] == 'c'
     assert fp.due_at_command(lists, record, 'ls', 40.0)[0] == []
 
@@ -1081,54 +1049,78 @@ def test_claim_fires_once_for_each_item_and_never_on_a_renewal():
 
 
 def test_the_record_is_private_written_in_place_and_keeps_first_seen_and_cwd(tmp_path):
-    path = fp.record_path(tmp_path / 'sessions', 'abc')
-    assert path == tmp_path / 'sessions' / 'ba7816bf8f01cfea.checklists'
-    with fp.locked_record(path, time.monotonic() + 1) as record:
-        fp.touch(record, 5.0, '/x')
+    path = holds.record_path(tmp_path / 'sessions', 'abc')
+    assert path == tmp_path / 'sessions' / 'ba7816bf8f01cfea.holds'
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        holds.touch(rec.data, 5.0, '/x')
+        rec.save()
     inode = path.stat().st_ino
-    with fp.locked_record(path, time.monotonic() + 1) as record:
-        fp.touch(record, 9.0, '/y')
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        holds.touch(rec.data, 9.0, '/y')
+        rec.save()
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        holds.touch(rec.data, 12.0, '/z')                    # no save: nothing written
     data = json.loads(path.read_text())
     assert path.stat().st_ino == inode and oct(path.stat().st_mode & 0o777) == '0o600'
+    assert oct((tmp_path / 'sessions').stat().st_mode & 0o777) == '0o700'
     assert (data['first'], data['seen'], data['cwd']) == (5.0, 9.0, '/y')
 
 
 @pytest.mark.parametrize('damaged', [b'', b'{', b'[]', b'null', b'\xff'])
 def test_a_damaged_record_counts_as_empty(tmp_path, damaged):
-    path = fp.record_path(tmp_path, 'abc')
+    path = holds.record_path(tmp_path, 'abc')
     path.write_bytes(damaged)
-    with fp.locked_record(path, time.monotonic() + 1) as record:
-        assert record == {}
+    with holds.open_record(path, time.monotonic() + 1) as rec:
+        assert rec.data == {}
 
 
 def test_a_held_record_times_out_at_the_deadline(tmp_path):
-    path = fp.record_path(tmp_path, 'abc')
+    path = holds.record_path(tmp_path, 'abc')
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
     started = time.monotonic()
     with pytest.raises(TimeoutError):
-        with fp.locked_record(path, started + 0.1):
+        with holds.open_record(path, started + 0.1):
             pass
     assert time.monotonic() - started < 0.5
     os.close(fd)
 
 
-WRITER = ('import sys, time\nfrom pathlib import Path\nfrom superyak_agent import checklist_firing as fp\n'
-          'with fp.locked_record(Path(sys.argv[1]), time.monotonic() + 10) as r:\n'
-          '    r.setdefault("passed", {}).setdefault("k", []).append(sys.argv[2])\n'
-          '    r["holds"] = r.get("holds", 0) + 1\n')
+def test_a_record_unlinked_while_waiting_for_its_lock_is_reopened(tmp_path):           # plan review S2
+    path = holds.record_path(tmp_path, 'abc')
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def writer():
+        with holds.open_record(path, time.monotonic() + 5) as rec:
+            holds.touch(rec.data, 2.0, '/after')
+            rec.save()
+    waiting = threading.Thread(target=writer)
+    waiting.start()
+    time.sleep(0.1)
+    path.unlink()                                             # a _prune elsewhere
+    os.close(fd)
+    waiting.join(5)
+    assert json.loads(path.read_text())['cwd'] == '/after'
+
+
+WRITER = ('import sys, time\nfrom pathlib import Path\nfrom superyak_agent import holds\n'
+          'with holds.open_record(Path(sys.argv[1]), time.monotonic() + 10) as r:\n'
+          '    r.data.setdefault("passed", {}).setdefault("k", []).append(sys.argv[2])\n'
+          '    r.data["holds"] = r.data.get("holds", 0) + 1\n'
+          '    r.save()\n')
 
 
 def test_parallel_writers_never_lose_an_update(tmp_path):                       # Review Focus 2
-    path = fp.record_path(tmp_path, 'abc')
+    path = holds.record_path(tmp_path, 'abc')
     writers = [subprocess.Popen([sys.executable, '-c', WRITER, str(path), f'd{n}'], cwd=AGENT) for n in range(8)]
     assert [w.wait(30) for w in writers] == [0] * 8
     record = json.loads(path.read_text())
     assert sorted(record['passed']['k']) == [f'd{n}' for n in range(8)] and record['holds'] == 8
 
 
-APPENDER = ('import sys\nfrom pathlib import Path\nfrom superyak_agent import checklist_firing as fp\n'
-            'for n in range(200):\n    fp.append_line(Path(sys.argv[1]), {"n": n, "pad": "x" * 300})\n')
+APPENDER = ('import sys\nfrom pathlib import Path\nfrom superyak_agent import holds\n'
+            'for n in range(200):\n    holds.append_line(Path(sys.argv[1]), {"n": n, "pad": "x" * 300})\n')
 
 
 def test_log_lines_are_private_and_whole_under_concurrent_appends(tmp_path):
@@ -1141,14 +1133,13 @@ def test_log_lines_are_private_and_whole_under_concurrent_appends(tmp_path):
 
 
 def test_firing_and_miss_lines_hold_exactly_their_fields():
-    l = loaded('reflect', 'every 3h', version=2)
-    assert fp.fired_line(5.0, 's', l, 'every') == {'time': 5.0, 'session': 's', 'key': l.key, 'version': 2, 'moment': 'every'}
+    assert fp.fired_line(5.0, 's', 'k/reflect', 2, 'every') == {'time': 5.0, 'session': 's', 'key': 'k/reflect', 'version': 2, 'moment': 'every'}
     assert fp.miss_line(5.0, 's', 'time') == {'time': 5.0, 'session': 's', 'miss': 'time'}
-    assert fp.miss_line(5.0, 's', 'space', l) == {'time': 5.0, 'session': 's', 'key': l.key, 'version': 2, 'miss': 'space'}
+    assert fp.miss_line(5.0, 's', 'space', 'k/reflect', 2) == {'time': 5.0, 'session': 's', 'key': 'k/reflect', 'version': 2, 'miss': 'space'}
 
 
 def test_the_output_budget_is_the_hooks():
-    assert fp.OUTPUT_CHARS == hook.TOTAL_CHARS
+    assert holds.OUTPUT_CHARS == hook.TOTAL_CHARS
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -1156,13 +1147,14 @@ def test_the_output_budget_is_the_hooks():
 Run: `cd agent && uv run --locked --extra dev python -m pytest tests/test_checklist_firing.py -q`
 Expected: FAIL, `ImportError: cannot import name 'checklist_firing'`.
 
-- [ ] **Step 3: Implement `checklist_firing.py`**
+- [ ] **Step 3: Implement `holds.py` and `checklist_firing.py`**
 
 The due functions sort by `(-(now - last), order, id)` where `last` is the list's `fired[key]['last']`, else the
-record's `first`. `due_at_event`: `start` when `fresh` and the list hasn't fired `start`; `enter` when the list has a
-location, `enter_applies(location, cwd)` and it hasn't fired `enter`; `every N` when `now - last >= N * 3600`.
-`locked_record` writes back with `os.lseek(fd, 0, 0)`, `os.ftruncate(fd, 0)` and one `os.write` of the JSON, then
-closes (which releases the lock). Add `superyak_agent/checklist_firing.py` to `only-include`.
+record's `first` (else `now`). `due_at_event`: `start` when `fresh` and the list hasn't fired `start`; `enter` when the
+list has a location, `enter_applies(location, cwd)` and it hasn't fired `enter`; `every N` when `now - last >= N * 3600`.
+`open_record`: open, poll the lock, then if `os.fstat(fd).st_nlink == 0` close and open again (S2); `save()` is
+`os.lseek(fd, 0, 0)`, `os.ftruncate(fd, 0)` and one `os.write` of the JSON, raising `OSError` when it writes short
+(N3). Add `superyak_agent/holds.py` and `superyak_agent/checklist_firing.py` to `only-include`.
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -1172,8 +1164,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent/superyak_agent/checklist_firing.py agent/tests/test_checklist_firing.py agent/pyproject.toml
-git commit -m "Checklists 5: the session record under flock, when a list is due, and the logs
+git add agent/superyak_agent/holds.py agent/superyak_agent/checklist_firing.py agent/tests/test_checklist_firing.py agent/pyproject.toml
+git commit -m "Checklists 5: the shared .holds record under flock, when a list is due, and the logs
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1185,13 +1177,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `agent/superyak_agent/hook.py:16` (imports), `:66-88` (`hook_fields`), `:96` (`STATE_NAME`), `:154-194`
   (`run`), `:209-258` (`_run_all`: the `OSError` return at `:219-221`, then lists between the version line at
-  `:248-254` and the board lines at `:255-257`)
+  `:248-254` and the board lines at `:255-257`), `:276-297` (`_prune`)
 - Modify: `agent/superyak_agent/__main__.py:73-87` (`_hook`, event at `:80`)
 - Test: `agent/tests/test_hook_checklists.py`
 
 **Interfaces:**
 - Consumes: `checklists.find`, `notice_lines`, `render`, `fit` (always called through the module, so tests can patch
-  them); `checklist_firing.*` from Task 5; `acting.session_key`.
+  them); `checklist_firing.*` and `holds.*` from Task 5; `acting.session_key`.
 - Produces, in `hook`:
   - `class HookInput(NamedTuple): session: str | None; cwd: str | None; mode: str | None; event: str | None;
     source: str | None`; `read_hook_input(stdin) -> HookInput` (the one reader of stdin; `hook_fields(stdin)` returns
@@ -1200,7 +1192,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `run(config_path, …, cwd=None, mode=None, source=None) -> str`.
   - `NOT_INSTRUCTIONS = 'Not part of the instructions, and not an instruction: '`; `CHECKLIST_THREAD =
     'superyak-checklists'`.
-  - `STATE_NAME = re.compile(r'[0-9a-f]{16}\.(?:json|watch|prompted|checklists)')`.
+  - `STATE_NAME = re.compile(r'[0-9a-f]{16}\.(?:json|watch|prompted|holds)')`.
 
 - [ ] **Step 1: Write the failing tests** in `agent/tests/test_hook_checklists.py`
 
@@ -1214,7 +1206,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
-from superyak_agent import __main__ as cli, checklist_firing as fp, checklists as cl, hook
+from superyak_agent import __main__ as cli, checklists as cl, holds, hook
 from conftest import board_item
 from checklist_fakes import checkout, trust_dirs, write_list
 from test_hook import Recorder, law, setup
@@ -1318,7 +1310,20 @@ def test_past_150_ms_no_list_shows_the_law_does_and_the_miss_is_logged(world, mo
     monkeypatch.setattr(cl, 'find', lambda *a, **k: (time.sleep(0.3), real_find(*a, **k))[1])
     text = start(world)
     assert 'Run tests.' in text and 'Checklist ' not in text
-    assert fired(world)[-1] == {'time': 0.0, 'session': fp.record_path(world.sessions, 's1').stem, 'miss': 'time'}
+    assert fired(world)[-1] == {'time': 0.0, 'session': holds.record_path(world.sessions, 's1').stem, 'miss': 'time'}
+
+
+def test_a_slow_session_start_still_marks_the_session_fresh(world, monkeypatch):           # plan review S3
+    real_find, calls = cl.find, []
+
+    def slow_once(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            time.sleep(0.3)
+        return real_find(*a, **k)
+    monkeypatch.setattr(cl, 'find', slow_once)
+    assert WATCH not in start(world)
+    assert WATCH in prompt(world)
 
 
 def test_a_hung_read_never_stalls_the_session_start(world, monkeypatch):            # Review Focus 3
@@ -1400,21 +1405,28 @@ def test_the_event_and_its_source_come_from_stdin(world, monkeypatch, capsys):
     assert 'Run tests.' in out and WATCH in out
 
 
-def test_a_session_start_without_law_forgets_the_session_but_not_its_checklist_record(world):
+def test_a_session_start_without_law_forgets_the_session_but_not_its_hold_record(world):
     start(world)
     world.fake.down = True
     assert WATCH not in start(world, now=5.0)                     # fired once already this session
-    record = fp.record_path(world.sessions, 's1')
+    record = holds.record_path(world.sessions, 's1')
     assert record.exists() and not (world.sessions / (record.stem + '.json')).exists()
     assert 'start' in next(iter(json.loads(record.read_text())['fired'].values()))
 
 
-def test_old_checklist_records_are_pruned_and_the_current_one_kept(tmp_path):
-    old, current = tmp_path / ('a' * 16 + '.checklists'), tmp_path / ('b' * 16 + '.checklists')
+def test_old_hold_records_are_pruned_and_the_current_one_kept(tmp_path):
+    old, current = tmp_path / ('a' * 16 + '.holds'), tmp_path / ('b' * 16 + '.holds')
     for path in (old, current):
         path.write_text(json.dumps({'seen': 0.0}))
     hook._prune(tmp_path, tmp_path / ('b' * 16 + '.json'), 15 * 86400.0)
     assert not old.exists() and current.exists() and hook.STATE_NAME.fullmatch(current.name)
+
+
+def test_a_record_caught_mid_rewrite_survives_prune(tmp_path):                       # plan review S2
+    record = tmp_path / ('c' * 16 + '.holds')
+    record.write_text('')                                     # empty: no seen, a fresh mtime
+    hook._prune(tmp_path, tmp_path / ('b' * 16 + '.json'), time.time())
+    assert record.exists()
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -1432,19 +1444,22 @@ Expected: FAIL, `TypeError: run() got an unexpected keyword argument 'source'`.
   there is a session id, `pending = _read_lists(...)`; the station's `started` is taken after it (Ruling 13). The
   quiet-minute return and `_run_all`'s `OSError` return become `_place('', pending)`; `session-end` is unchanged.
 - `_read_lists(home, sessions_dir, session_id, event, source, cwd, now, deadline, monotonic) -> Pending | None` runs
-  in a daemon thread named `CHECKLIST_THREAD`, joined until `entry + READ_SECONDS`. The thread: `checklists.find(cwd,
-  home / 'checklists')`; nothing when no list loads and no notice is due (Ruling 3); under
-  `locked_record(record_path(...), deadline)`: `touch`, `begin` at a session start, `due_at_event`, notices not yet
-  `told`; then `render` each due list. A late or failed thread gives `None`; a late one also appends
-  `miss_line(now, key, 'time')` to `<home>/checklists/fired.jsonl`. A thread that reaches the end of its `with` after
-  the deadline raises inside it, so a late thread writes nothing. `Pending` is a NamedTuple of `due`, `blocks`,
-  `notices`, `record`, `session` (the session key) and `now`.
-- `_place(text, pending) -> str`: `checklists.fit(blocks, len(text), TOTAL_CHARS, LISTS_PER_EVENT, NOT_INSTRUCTIONS)`,
-  then each notice (prefixed with `NOT_INSTRUCTIONS`) while it fits whole; then, under `locked_record(record,
-  monotonic() + 0.1)`, `mark_fired` and `mark_told`; then append a `fired_line` per shown list and a `space` miss per
-  deferred list within the first two. If the commit fails, return `text` unchanged (Ruling 14). `_run_all` calls it
-  once, after the version line and before the board lines, so at a prompt it follows the law and the messages.
-- `STATE_NAME` gains `checklists`.
+  in a daemon thread named `CHECKLIST_THREAD`, joined until `entry + READ_SECONDS`. The thread runs
+  `checklists.find(cwd, home / 'checklists')`, and gives nothing when no list loads and no notice is due (Ruling 3).
+  Under `holds.open_record(record_path(...), deadline)` it runs `touch`, `begin` at a session start, `due_at_event`,
+  collects the notices not yet `told`, then `save()` unless the deadline has passed (so a late thread writes nothing),
+  and renders each due list. A late or failed thread gives `None`. A late one also appends `miss_line(now, key,
+  'time')` to `<home>/checklists/fired.jsonl`, and at a `session-start` whose source is in `START_SOURCES` the main
+  thread records `touch` and `begin` under `open_record(..., monotonic() + 0.05)` beside the miss (S3). `Pending` is a
+  NamedTuple of `due`, `blocks`, `notices`, `record`, `session` (the session key) and `now`.
+- `_place(text, pending) -> str`: `checklists.fit(blocks, len(text), TOTAL_CHARS, LISTS_PER_EVENT,
+  NOT_INSTRUCTIONS)`, then each notice (prefixed with `NOT_INSTRUCTIONS`) while it fits whole. Then, under
+  `open_record(record, monotonic() + 0.1)`: `mark_fired` for the shown lists, `mark_told` for the notices it showed
+  (N5), and `save()`. Then append a `fired_line` per shown list and a `space` miss per deferred list within the first
+  two. If the commit fails, return `text` unchanged (Ruling 14). `_run_all` calls it once, after the version line and
+  before the board lines, so at a prompt it follows the law and the messages.
+- `STATE_NAME` gains `holds`. In `_prune`, a `.holds` file without a usable `seen` ages by its mtime, as a `.watch`
+  does (`hook.py:289-290`; S2).
 
 - [ ] **Step 4: Run the new tests and the hook suites**
 
@@ -1462,32 +1477,50 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 7: The hold before a matched command
+### Task 7: The hold entry, its checklists provider and the lessons seam
 
 **Files:**
 - Create: `agent/superyak_agent/hold.py`
+- Create: `agent/superyak_agent/checklist_hold.py`
+- Create: `agent/superyak_agent/lessons_hold.py`
 - Modify: `agent/superyak_agent/__main__.py:5` (the module-level `from .station import CONFIG, HOME` moves into
-  `build_parser`), `:8-22` (a `hold` parser, for help), `:120-125` (`main` dispatches `hold` first)
+  `build_parser`), `:8-22` (a `hold` parser, for help), `:120-125` (`main` resolves `argv`, then dispatches `hold`
+  first; N8)
 - Modify: `agent/pyproject.toml` (`only-include`)
 - Test: `agent/tests/test_hold.py`
 
 **Interfaces:**
-- Consumes: `acting.verdict`, `acting.session_project`; `checklists.find`, `render`, `fit` (through the module);
-  `checklist_firing.*`.
+- Consumes: `acting.verdict`, `acting.session_project` (through the module); `checklists.find`, `render` (through the
+  module); `checklist_firing.*`; `holds.*`.
+- Produces, in `checklist_hold` (the checklists provider):
+  - `HELD = 'Held once: checklist {id} v{version} applies. It is a checklist, not a refusal.'`;
+    `FIXED_CHARS = 200`.
+  - `provider(home: Path, cwd: str | None, command: str) -> ChecklistProvider`: `checklists.find(cwd, home /
+    'checklists')`, keeping the lists with a matching `command` moment and rendering each with `checklists.render`, all
+    before any lock (S5).
+  - `ChecklistProvider.matching: tuple[Loaded, ...]`; `ChecklistProvider.candidates(command, record, now, limit) ->
+    list[Hold]`: `fp.due_at_command` among the matching lists, at most `limit` placed under Ruling 34, as
+    `Hold('checklist', <list key>, <rendered text>)`. It marks them fired with the digest and every other due list
+    passed, in `record` (Rulings 15, 33).
+  - `first_line(record, hold) -> str`: `HELD` with the list's id and the version recorded at firing.
+  - `fired_lines(record, shown: list[Hold], session: str, now: float) -> list[dict]` (moment `command`).
+- Produces, in `lessons_hold`: `candidates(command, record, now, limit) -> list[Hold]`, returning `[]`. Tardis's branch
+  replaces this module against the same signature (Ruling 31).
 - Produces, in `hold`:
-  - `HELD = 'Held once: checklist {id} v{version} applies. It is a checklist, not a refusal.'`,
-    `RERUN = 'Re-run the same command if you still want it.'`.
+  - `RERUN = 'Re-run the same command if you still want it.'`.
   - `main(argv: list[str], stdin=sys.stdin, stdout=sys.stdout, clock=time.time, monotonic=time.monotonic) -> int`:
     always 0; `--config` (default `~/.superyak/station.json`) names the ship home; unknown flags are ignored.
-  - `decide(payload: dict, home: Path, now: float, started: float, monotonic=time.monotonic) -> dict | None`: the JSON
-    object to print, or `None`.
-- `__main__.main(argv)`: `if argv[:1] == ['hold']: from .hold import main as hold; return hold(argv[1:])` before
-  `build_parser()`.
+  - `decide(payload: dict, home: Path, now: float, started: float, monotonic=time.monotonic, lessons=None)
+    -> dict | None`: the JSON object to print, or `None`; `lessons` defaults to `lessons_hold.candidates`, looked up at
+    call time.
+- `__main__.main(argv=None)`: resolve `argv`, then `if argv[:1] == ['hold']: from .hold import main as hold; return
+  hold(argv[1:])` before `build_parser()`.
 
 - [ ] **Step 1: Write the failing tests** in `agent/tests/test_hold.py`
 
 ```python
-"""Checklists: the hold before a matched command (spec, The hold; Where it runs)."""
+"""Checklists: the hold entry, its checklists provider and the seam lessons share (spec, The hold; the ships' seam)."""
+import io
 import json
 import os
 import random
@@ -1498,7 +1531,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
-from superyak_agent import checklist_firing as fp, checklists as cl, hold, hook
+from superyak_agent import acting, checklist_firing as fp, checklists as cl, hold, holds, hook, lessons_hold
 from checklist_fakes import checkout, trust_dirs, write_list
 from test_ship_hook_claims import Ships
 
@@ -1522,8 +1555,12 @@ def payload(ship, command, **extra):
             'tool_input': {'command': command}, **extra}
 
 
-def decide(ship, command, now=10.0, **extra):
-    return hold.decide(payload(ship, command, **extra), ship.home, now, time.monotonic())
+def decide(ship, command, now=10.0, lessons=None, **extra):
+    return hold.decide(payload(ship, command, **extra), ship.home, now, time.monotonic(), lessons=lessons)
+
+
+def saved(ship):
+    return json.loads(holds.record_path(ship.home / 'sessions', 's1').read_text())
 
 
 def test_a_matching_command_is_held_once_in_the_rails_words(ship):
@@ -1553,8 +1590,35 @@ def test_past_the_cap_merging_to_main_still_shows_at_git_push_origin_main(ship):
     assert '- [ ] Verdict posted.' in context and BASE in context
 
 
+def test_lessons_share_the_cap_and_get_three_minus_the_checklists_in_the_deny(ship):     # the ships' seam
+    asked = []
+
+    def lessons(command, record, now, limit):
+        asked.append(limit)
+        key = f'lesson:{command}'
+        record.setdefault('lessons', []).append(key)
+        head = 'Held once: lesson L1 from tardis applies.' if limit == 3 else 'Lesson L1 from tardis'
+        return [holds.Hold('lesson', key, f'{head}\n[the fenced lesson for {command}]')]
+    one = decide(ship, 'git push origin a', lessons=lessons)['hookSpecificOutput']['permissionDecisionReason']
+    assert one.startswith('Held once: checklist before-push') and one.index('Checklist ') < one.index('Lesson L1 from tardis')
+    two = decide(ship, 'npm test', now=11.0, lessons=lessons)['hookSpecificOutput']['permissionDecisionReason']
+    assert two.startswith('Held once: lesson L1 from tardis applies.') and 'Checklist ' not in two
+    three = decide(ship, 'git push origin main', now=12.0, lessons=lessons)['hookSpecificOutput']
+    assert three['permissionDecision'] == 'deny' and three['permissionDecisionReason'].count('\nChecklist ') == 2
+    four = decide(ship, 'git push origin b', now=13.0, lessons=lessons)['hookSpecificOutput']
+    assert set(four) == {'hookEventName', 'additionalContext'} and 'Lesson' not in four['additionalContext']
+    assert decide(ship, 'npm run build', now=14.0, lessons=lessons) is None
+    assert asked == [2, 3, 1]                  # 3 minus the checklists in the deny; not asked once no hold is left
+    record = saved(ship)
+    assert record['holds'] == 3 and record['lessons'] == ['lesson:git push origin a', 'lesson:npm test', 'lesson:git push origin main']
+
+
+def test_the_lessons_stub_returns_nothing():
+    assert lessons_hold.candidates('git push origin x', {}, 0.0, 3) == []
+
+
 def test_never_allow_ask_or_updated_input_across_many_commands(ship):
-    rng = random.Random(7)
+    rng, seen = random.Random(7), set()
     words = ['git', 'push', 'origin', 'main', ';', '&&', '|', '(', '`', '"', "'", 'echo', 'ls', 'x']
     for n in range(300):
         out = decide(ship, ' '.join(rng.choice(words) for _ in range(rng.randint(1, 8))), now=float(n))
@@ -1563,6 +1627,8 @@ def test_never_allow_ask_or_updated_input_across_many_commands(ship):
             assert set(out) == {'hookSpecificOutput'} and spec['hookEventName'] == 'PreToolUse'
             assert spec.get('permissionDecision') in (None, 'deny') and 'updatedInput' not in json.dumps(out)
             assert set(spec) <= {'hookEventName', 'permissionDecision', 'permissionDecisionReason', 'additionalContext'}
+            seen.add(spec.get('permissionDecision', 'context'))
+    assert seen == {'deny', 'context'}                                   # plan review S11: it asserted something
 
 
 def test_a_subagent_is_never_held(ship):
@@ -1573,6 +1639,13 @@ def test_a_subagent_is_never_held(ship):
                                  {'tool_input': 'git push'}, {'session_id': None}])
 def test_anything_but_a_main_agents_bash_call_prints_nothing(ship, bad):
     assert hold.decide({**payload(ship, 'git push x'), **bad}, ship.home, 10.0, time.monotonic()) is None
+
+
+@pytest.mark.parametrize('stdin', ['', 'not json', '[]', '{"tool_input": {"command": 5}}'])
+def test_malformed_input_exits_0_and_prints_nothing(ship, stdin):                        # plan review S9
+    out = io.StringIO()
+    assert hold.main(['--config', str(ship.home / 'station.json')], stdin=io.StringIO(stdin), stdout=out) == 0
+    assert out.getvalue() == ''
 
 
 def test_no_hold_in_a_watcher_or_teamd_run(ship, monkeypatch):
@@ -1590,13 +1663,28 @@ def test_past_its_read_time_it_prints_nothing_and_never_hangs(ship, monkeypatch)
     assert hold.decide(payload(ship, 'git push origin x'), ship.home, 10.0, time.monotonic() - 0.2) is None
 
 
-def test_past_one_second_it_prints_nothing_and_records_no_hold(ship, monkeypatch):
-    real = cl.render
-    monkeypatch.setattr(cl, 'render', lambda loaded: (time.sleep(1.1), real(loaded))[1])
-    assert decide(ship, 'git push origin x') is None
-    monkeypatch.setattr(cl, 'render', real)
+def test_a_hung_registry_or_cwd_read_never_stalls_the_bash_call(ship, monkeypatch):    # Review Focus 3, plan review M2
+    never = threading.Event()
+    monkeypatch.setattr(acting, 'verdict', lambda *a, **k: never.wait())
+    began = time.monotonic()
+    assert decide(ship, 'git push origin x') is None and time.monotonic() - began < 1.2
+    never.set()
+
+
+def test_past_one_second_it_prints_nothing_and_records_no_hold(ship):
+    def slow(command, record, now, limit):
+        time.sleep(1.1)
+        return []
+    assert decide(ship, 'git push origin x', lessons=slow) is None
     time.sleep(0.3)                                     # the abandoned worker lets go of the record
     assert decide(ship, 'git push origin x', now=20.0)['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
+def test_a_slow_log_append_never_hides_a_recorded_hold(ship, monkeypatch):               # plan review S1
+    real = holds.append_line
+    monkeypatch.setattr(holds, 'append_line', lambda path, line: (time.sleep(1.5), real(path, line)))
+    out = decide(ship, 'git push origin x')
+    assert out['hookSpecificOutput']['permissionDecision'] == 'deny' and saved(ship)['holds'] == 1
 
 
 def test_a_list_edited_between_the_hold_and_the_re_run_lets_it_pass(ship):            # Review Focus 4
@@ -1606,7 +1694,9 @@ def test_a_list_edited_between_the_hold_and_the_re_run_lets_it_pass(ship):      
     assert decide(ship, 'git push origin x', now=20.0) is None
 
 
-def test_parallel_holds_never_pass_three(ship):                                       # Review Focus 2
+def test_parallel_holds_never_pass_three(ship, monkeypatch):                          # Review Focus 2
+    monkeypatch.setattr(fp, 'READ_SECONDS', 5.0)        # plan review S5: this pins the cap, not the clock
+    monkeypatch.setattr(fp, 'HOLD_SECONDS', 5.0)
     gate, outs = threading.Barrier(6), [None] * 6
 
     def one(n):
@@ -1616,10 +1706,9 @@ def test_parallel_holds_never_pass_three(ship):                                 
     for t in threads:
         t.start()
     for t in threads:
-        t.join(10)
+        t.join(20)
     decisions = [o['hookSpecificOutput'].get('permissionDecision') for o in outs]
-    assert decisions.count('deny') == 3 and decisions.count(None) == 3
-    assert json.loads(fp.record_path(ship.home / 'sessions', 's1').read_text())['holds'] == 3
+    assert decisions.count('deny') == 3 and decisions.count(None) == 3 and saved(ship)['holds'] == 3
 
 
 def test_the_hold_never_runs_anything_from_a_list(ship, monkeypatch):
@@ -1671,22 +1760,37 @@ def test_the_hook_and_the_hold_agree_on_which_ship_acts(ships):
 Run: `cd agent && uv run --locked --extra dev python -m pytest tests/test_hold.py -q`
 Expected: FAIL, `ImportError: cannot import name 'hold'`.
 
-- [ ] **Step 3: Implement `hold.py` and the dispatch**
+- [ ] **Step 3: Implement the entry and the two providers**
 
-`decide` returns `None` unless: `SUPERYAK_RUN` is unset, `''` or `hook`; the payload is a dict with
-`hook_event_name == 'PreToolUse'`, `tool_name == 'Bash'`, no `agent_id`, a string `session_id` and a string
-`tool_input['command']`; and `acting.verdict(home, acting.session_project(cwd))[0] == 'act'`. The work runs in a daemon
-thread; the main thread waits for its "read done" event until `started + READ_SECONDS` and for the thread until
-`started + HOLD_SECONDS`, and on either timeout sets an `abandoned` flag under a small lock, which the worker checks
-under the same lock right before its record write (so a late worker writes nothing). The worker: `checklists.find(cwd,
-home / 'checklists')`; keep lists with a matching `command` moment (none: return without touching the record); under
-`locked_record(record_path(home / 'sessions', session_id), started + READ_SECONDS)`: `due_at_command`, set "read done";
-with `holds < HOLDS_PER_SESSION` build the deny (`HELD` for the first shown list, the blocks, then `RERUN`, fitted
-with `checklists.fit` into `OUTPUT_CHARS` less the two fixed lines), else the context (the blocks and any "more"
-line); `mark_fired(..., digest=digest, held=deny)`, `mark_passed(deferred, digest)`, `touch`; then append the
-`fired_line`s. `main` prints `json.dumps(result)` when there is one and swallows every exception. In `__main__.py`, move
-`from .station import CONFIG, HOME` into `build_parser`, add `hold` (with `--config`) to the parser for `--help`, and
-dispatch `hold` before building the parser. Add `superyak_agent/hold.py` to `only-include`.
+- **Main thread (payload only, M2).** `decide` returns `None` unless `SUPERYAK_RUN` is unset, `''` or `hook`, and the
+  payload is a dict with `hook_event_name == 'PreToolUse'`, `tool_name == 'Bash'`, no `agent_id`, a string
+  `session_id` and a string `tool_input['command']`. It does no file I/O; everything else runs in a daemon worker.
+- **The worker.** It runs `acting.verdict(home, acting.session_project(cwd))` first (not `'act'`: stop), then
+  `checklist_hold.provider(home, cwd, command)`, then, under `holds.open_record(record_path(home / 'sessions',
+  session_id), started + fp.READ_SECONDS)`:
+  - set "read done", then `touch(record, now, cwd)`;
+  - `left = record.get('holds', 0) < HOLDS_PER_SESSION`;
+  - `lists = provider.candidates(command, record, now, fp.LISTS_PER_EVENT)`;
+  - `got = (lessons or lessons_hold.candidates)(command, record, now, HOLDS_PER_SESSION - len(lists)) if left else []`.
+
+  With no Holds it stops without saving. When `left`, it builds the deny: `first_line(record, lists[0])` when there is
+  a list, then every Hold's text (lists, then lessons), then `RERUN`, joined by blank lines, and adds one to `holds`.
+  Otherwise it builds the context from the lists' texts. Then, under a small `threading.Lock` (S1): if `abandoned`, or
+  past `started + fp.HOLD_SECONDS`, it stops; otherwise it calls `save()` and publishes the result, in that critical
+  section. Only after that does it append `checklist_hold.fired_lines(...)` with `holds.append_line` to
+  `<home>/checklists/fired.jsonl`. It sets "read done" on every early stop too.
+- **Waiting (S1).** The main thread waits for "read done" until `started + fp.READ_SECONDS` (otherwise it sets
+  `abandoned` under the lock and returns `None`), then joins the worker until `started + fp.HOLD_SECONDS`. Then it
+  takes the lock with `acquire(timeout=max(0, started + fp.HOLD_SECONDS - monotonic()))`: a published result is
+  returned; otherwise it sets `abandoned` and returns `None`. Read every `fp` constant at call time, so tests can patch
+  them.
+- **Placing lists (`ChecklistProvider.candidates`, Ruling 34).** A due list is placed while fewer than `limit` are
+  placed and the placed lists' texts, its text, `FIXED_CHARS` and `LESSON_BYTES × (HOLDS_PER_SESSION − placed lists)`
+  fit in `OUTPUT_CHARS`. Past the cap (`record['holds'] >= 3`), only the lists' texts count.
+- **Printing and dispatch.** `main` prints `json.dumps(result)` when there is one and swallows every exception. In
+  `__main__.py`, move `from .station import CONFIG, HOME` into `build_parser`, add `hold` (with `--config`) to the
+  parser for `--help`, and dispatch `hold` before building the parser. Add `hold.py`, `checklist_hold.py` and
+  `lessons_hold.py` to `only-include`.
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -1696,8 +1800,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent/superyak_agent/hold.py agent/superyak_agent/__main__.py agent/tests/test_hold.py agent/pyproject.toml
-git commit -m "Checklists 7: the hold, a light PreToolUse path that holds a matched command once, at most 3 a session
+git add agent/superyak_agent/hold.py agent/superyak_agent/checklist_hold.py agent/superyak_agent/lessons_hold.py agent/superyak_agent/__main__.py agent/tests/test_hold.py agent/pyproject.toml
+git commit -m "Checklists 7: one hold entry for checklists and lessons, at most 3 held commands a session
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1713,6 +1817,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `agent/superyak_agent/project_dock.py:266-267` (trust after the project's hooks)
 - Modify: `agent/tests/test_install.py:120-136` (four installed commands, not three) and `:138-151` (the upgraded events
   include `PreToolUse`)
+- Modify: `agent/tests/test_session_end.py:57` (the installed events include `PreToolUse`; M3)
+- Modify: `agent/tests/test_ship_project_dock.py:72` (dock trusts only this checkout, and a failing trust never undoes
+  the dock)
 - Test: `agent/tests/test_install_hold.py`
 
 **Interfaces:**
@@ -1721,18 +1828,21 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit', 'SessionEnd', 'PreToolUse')`; `HOLD_TIMEOUT = 5`.
   - `hold_command(config_path) -> str` = `shlex.join([sys.executable, str(RUN_AGENT), 'hold', '--config',
     str(config_path)])`; `_hook_commands` maps `PreToolUse` to `hold_command(config_path) + GUARD`.
-  - The installed entry is `{'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': …, 'timeout': 5}]}`.
-  - `add_trusted(own_dir: Path, path: Path) -> bool`: adds the realpath to `trusted.json` (`{"trusted": [...]}`,
-    0600, written whole); `False` when it was there.
+  - The installed entry is `{'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': …, 'timeout': 5}]}`. An
+    installed hold whose entry has another matcher, or whose timeout isn't `HOLD_TIMEOUT`, counts as different (N10).
+  - `add_trusted(own_dir: Path, path: Path) -> bool`: adds the realpath to `trusted.json`, written whole; `False` when
+    it was there.
   - `trust_checkout(home: Path, out, checkout: Path | None = None) -> bool`: dock's trust of
-    `<checkout>/.superyak/checklists` (default `AGENT_DIR.parent`) for that ship. Silent when the directory is missing;
-    when `trust_refusal` refuses, one line: `Not trusting this checkout's checklists ({dir}): {reason}. If the
-    checkout was made under umask 002, run `chmod -R go-w {dir}` and dock again.`; when added:
-    `Trusted this checkout's checklists ({dir}).`
+    `<checkout>/.superyak/checklists` (default `AGENT_DIR.parent`) for that ship. It never raises (S7). It is silent when
+    the directory is missing. When `trust_refusal` refuses, it prints one line: `Not trusting this checkout's checklists
+    ({dir}): {reason}. If the checkout was made under umask 002, run `chmod -R go-w {dir}` and dock again.`. An
+    `OSError` or `ValueError` gives one line, `Couldn't trust this checkout's checklists ({dir}): {error}.`. When it
+    adds the directory, it prints `Trusted this checkout's checklists ({dir}).`.
 
-- [ ] **Step 1: Write the failing tests** in `agent/tests/test_install_hold.py`, and update the two tests in
-  `test_install.py` (`len(commands) == 4` with `hook_commands(settings, 'PreToolUse')` added; `'PreToolUse'` in the
-  sorted list of upgraded events and `hook_commands(settings, 'PreToolUse') == ['notify-me']` after removal)
+- [ ] **Step 1: Write the failing tests** in `agent/tests/test_install_hold.py`, and update the existing tests. In
+  `test_install.py`, the four installed commands include `hook_commands(settings, 'PreToolUse')`; the sorted list of
+  upgraded events includes `'PreToolUse'`; and after removal, `hook_commands(settings, 'PreToolUse') == ['notify-me']`.
+  `test_session_end.py:57` expects `['PreToolUse', 'SessionEnd', 'SessionStart', 'UserPromptSubmit']`.
 
 ```python
 """Checklists: installing the hold and trusting the checkout at dock (spec, Install; Trust)."""
@@ -1740,6 +1850,7 @@ import json
 import os
 import subprocess
 import sys
+import pytest
 from superyak_agent import install
 from checklist_fakes import checkout
 from test_install import SETTINGS_CONFIG
@@ -1769,12 +1880,16 @@ def test_the_hold_is_a_station_hook_and_its_neighbours_are_not():
     assert not install.is_station_hook(command.replace(' hold ', ' hold-log '))
 
 
-def test_a_hold_entry_without_the_bash_matcher_is_replaced(tmp_path):
+@pytest.mark.parametrize('entry', [{}, {'matcher': 'Bash', 'timeout': 10}])
+def test_a_hold_entry_without_the_bash_matcher_or_with_an_old_timeout_is_replaced(tmp_path, entry):
     settings = tmp_path / 'settings.json'
     held = {'type': 'command', 'command': install.hold_command(SETTINGS_CONFIG) + ' || true'}
-    settings.write_text(json.dumps({'hooks': {'PreToolUse': [{'hooks': [held]}]}}))
+    if 'timeout' in entry:
+        held['timeout'] = entry['timeout']
+    settings.write_text(json.dumps({'hooks': {'PreToolUse': [{**({'matcher': entry['matcher']} if 'matcher' in entry else {}), 'hooks': [held]}]}}))
     assert 'PreToolUse' in install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
-    assert [e.get('matcher') for e in json.loads(settings.read_text())['hooks']['PreToolUse']] == ['Bash']
+    entries = json.loads(settings.read_text())['hooks']['PreToolUse']
+    assert [(e.get('matcher'), e['hooks'][0]['timeout']) for e in entries] == [('Bash', 5)]
 
 
 OLD_AGENT = ('import argparse\nparser = argparse.ArgumentParser(prog="superyak-agent")\n'
@@ -1814,28 +1929,41 @@ def test_dock_says_why_it_cannot_trust_a_group_writable_checkout(tmp_path):
 def test_a_checkout_without_lists_is_skipped_silently(tmp_path):
     said = []
     assert install.trust_checkout(tmp_path / 'home', said.append, checkout=tmp_path / 'old-checkout') is False and said == []
+
+
+def test_trust_checkout_never_raises(tmp_path, monkeypatch):                           # plan review S7
+    superyak = checkout(tmp_path / 'superyak', ('reflect', {}))
+
+    def full(*a):
+        raise OSError(28, 'No space left on device')
+    monkeypatch.setattr(install, 'add_trusted', full)
+    said = []
+    assert install.trust_checkout(tmp_path / 'home', said.append, checkout=superyak) is False and len(said) == 1
 ```
 
-Also add, in `test_install.py` beside `test_dock_without_hook_flag_installs_the_law_hooks_with_messages_off`
-(`:359`), a machine dock test: monkeypatch `install.AGENT_DIR` to `checkout(tmp_path / 'superyak', ('reflect', {})) /
-'agent'`, run `machine.install(adna=False)`, and assert `~/.superyak/checklists/trusted.json` lists exactly that
-checkout's realpath; and in `test_ship_project_dock.py`'s `test_a_project_dock_wires_the_project_and_says_so` (`:72`),
-monkeypatch `install.trust_checkout` to record `(home, checkout)` and assert it was called once with
-`claims.project_home(SHIP)` and the default checkout (so a project dock trusts only the Superyak checkout, never the
-project's own `.superyak/checklists`).
+In `test_install.py`, beside `test_dock_without_hook_flag_installs_the_law_hooks_with_messages_off` (`:359`), add a
+machine dock test. It monkeypatches `install.AGENT_DIR` to `checkout(tmp_path / 'superyak', ('reflect', {})) /
+'agent'`, runs `machine.install(adna=False)`, and asserts that `~/.superyak/checklists/trusted.json` lists exactly that
+checkout's realpath. In `test_ship_project_dock.py`'s `test_a_project_dock_wires_the_project_and_says_so` (`:72`),
+monkeypatch `install.trust_checkout` to record `(home, checkout)`. Assert it was called once, with
+`claims.project_home(SHIP)` and the default checkout; a project dock never trusts the project's own
+`.superyak/checklists`. Add a sibling test that monkeypatches `install.add_trusted` to raise `OSError` and asserts
+`world.dock()[0] == 0` with the claim in place (S7).
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `cd agent && uv run --locked --extra dev python -m pytest tests/test_install_hold.py tests/test_install.py tests/test_ship_project_dock.py -q`
+Run: `cd agent && uv run --locked --extra dev python -m pytest tests/test_install_hold.py tests/test_install.py tests/test_session_end.py tests/test_ship_project_dock.py -q`
 Expected: FAIL, `AttributeError: module 'superyak_agent.install' has no attribute 'hold_command'`.
 
 - [ ] **Step 3: Implement**
 
-`is_station_hook`: the word after `run_agent.py` is `hook` or `hold`. `_same_hook`'s kind gains `'hold' in words`.
-`install_hooks`: for `PreToolUse`, an installed station hold whose entry's `matcher` isn't `'Bash'` counts as
-different, and the appended entry carries `'matcher': 'Bash'` and `'timeout': HOLD_TIMEOUT`. `install_all` calls
-`trust_checkout(home, out)` after the hooks, and `ProjectDock.install` calls `install.trust_checkout(self.home,
-self.out)` after `install.install_hooks` (its undo needs nothing: the project home is removed whole by undock).
+- `is_station_hook`: the word after `run_agent.py` is `hook` or `hold`. `_same_hook`'s kind gains `'hold' in words`.
+- `install_hooks`: for `PreToolUse`, an installed station hold whose entry's `matcher` isn't `'Bash'`, or whose
+  `timeout` isn't `HOLD_TIMEOUT`, counts as different. The appended entry carries `'matcher': 'Bash'` and
+  `'timeout': HOLD_TIMEOUT`.
+- Trust at dock: `install_all` calls `trust_checkout(home, out)` after the hooks, and `ProjectDock.install` calls
+  `install.trust_checkout(self.home, self.out)` after `install.install_hooks`. That call needs no undo, because undock
+  removes the project home whole. `trust_checkout` catches `OSError` and `ValueError` (S7).
 
 - [ ] **Step 4: Run the tests, then the install and dock suites**
 
@@ -1845,7 +1973,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent/superyak_agent/install.py agent/superyak_agent/project_dock.py agent/tests/test_install_hold.py agent/tests/test_install.py agent/tests/test_ship_project_dock.py
+git add agent/superyak_agent/install.py agent/superyak_agent/project_dock.py agent/tests/test_install_hold.py agent/tests/test_install.py agent/tests/test_session_end.py agent/tests/test_ship_project_dock.py
 git commit -m "Checklists 8: dock installs the hold on Bash with the guard, undock removes it, dock trusts this checkout
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -1859,35 +1987,43 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `agent/superyak_agent/mcp.py:11-13` (imports), `:162-171` (`Tools.__init__`), `:374-387` (`station_claim`,
   `board == 'open'` at `:383`), `:511-574` (`TOOLS`), `:611-613` (`handle`'s refusal), `:657-661` (`serve`)
 - Modify: `agent/superyak_agent/checklist_firing.py` (the reason screen, run lines)
+- Modify: `agent/tests/test_mcp.py:21-24` (the tool list gains `checklist_run`, `checklist_propose` in `TOOLS` order;
+  M4)
+- Modify: `agent/tests/conftest.py:27-35` (`private_home` also deletes `CLAUDE_CODE_SESSION_ID`, so no test depends on
+  the session running it; N11)
 - Test: `agent/tests/test_checklist_tools.py`
 
 **Interfaces:**
-- Consumes: `checklists.find`, `render`, `fit`, `list_key`, `ALL_HANDS`; `checklist_firing.*`; `acting.verdict`,
-  `acting.session_project`, `acting.session_key`; `station.utc_time`.
+- Consumes: `checklists.find`, `render`, `fit`, `list_key`, `ALL_HANDS`; `checklist_firing.*`; `holds.*`;
+  `acting.verdict`, `acting.session_project`, `acting.session_key`; `station.utc_time`.
 - Produces, in `checklist_firing`:
   - `ANSWERS = ('done', 'done-before-asked', 'caught', 'n/a', 'skipped')`, `REASON_BYTES = 200`.
   - `REASON_REFUSED = "A reason is one line of at most 200 bytes, with no email address, phone number or key-like token. Reword it."`
   - `screen_reason(text: str, limit: int = REASON_BYTES) -> bool`: one line, at most `limit` UTF-8 bytes, printable,
-    and none of the email, phone or key-like patterns (Global Constraints).
+    and none of the screen's patterns (Global Constraints).
   - `run_line(now, session, key, version, moment, answers) -> dict`; `refused_line(now, session, key, version, moment,
     kind) -> dict` (Ruling 22).
 - Produces, in `mcp`:
-  - `Tools(client, quick_client=None, guard=None, sessions_dir=None, home=None, clock=time.time)`; `home` defaults to
-    `sessions_dir`'s parent; without a home the checklist tools refuse and `station_claim` shows no list. `serve`
+  - `Tools(client, quick_client=None, guard=None, sessions_dir=None, home=None, clock=time.time)`. `home` defaults to
+    `sessions_dir`'s parent. Without a home, the checklist tools refuse and `station_claim` shows no list. `serve`
     passes `home=Path(config_path).parent`.
   - Tools `checklist_run` (`key`: string, `version`: integer, `moment`: one of the five kinds, `answers`: array of
-    `{answer, reason}` objects; all required) and `checklist_propose` (`key`, `change`, `reason`; all required).
+    `{answer, reason}` objects; all required) and `checklist_propose` (`key`, `change`, `reason`; all required),
+    appended to `TOOLS` in that order.
   - `Tools.refused_run(arguments) -> None`, called by `handle` when the guard refuses `checklist_run`.
   - `station_claim`'s result gains, for an open board item, a blank line and the due `claim` lists (at most 2, and the
     "more" line), fired once per item key (Ruling 15).
   - `checklist_propose` returns `Draft only; nothing was posted. Send it with station_post room=<room> if you still
-    want to:` and a blank line, then the post: `Proposal: <change> (checklist <key> v<version>, "<title>", owner:
-    <owner>)`, `Why: <reason>`, `Runs: …` (the last 10 runs of that key and version: answers counted per item, or
-    `no runs yet`), and `Default: adding an item or a moment is accepted if no one objects by <YYYY-MM-DD HH:MM UTC>.
-    Removing or weakening anything needs an explicit yes: from a person, or from each ship when the list guards an
-    irreversible act; otherwise from one ship other than the proposer, or a person. Any person can veto.`
+    want to:`, a blank line, and then the post:
+    - `Proposal: <change> (checklist <key> v<version>, "<title>", owner: <owner>)`;
+    - `Why: <reason>`;
+    - `Runs: …`: the last 10 runs of that key and version, with answers counted per item, or `no runs yet`;
+    - `Default: adding an item or a moment is accepted if no one objects by <YYYY-MM-DD HH:MM UTC>. Removing or
+      weakening anything needs an explicit yes: from a person, or from each ship when the list guards an
+      irreversible act; otherwise from one ship other than the proposer, or a person. Any person can veto.`
 
-- [ ] **Step 1: Write the failing tests** in `agent/tests/test_checklist_tools.py`
+- [ ] **Step 1: Write the failing tests** in `agent/tests/test_checklist_tools.py`, and update `test_mcp.py:21-24` and
+  `conftest.private_home`.
 
 ```python
 """Checklists in the station tools: checklist_run, checklist_propose and the claim moment (spec, Running it out loud;
@@ -1897,7 +2033,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
-from superyak_agent import checklist_firing as fp, checklists as cl
+from superyak_agent import checklist_firing as fp, checklists as cl, holds
 from superyak_agent.mcp import Tools, claim_guard, handle
 from superyak_agent.station import StationClient
 from conftest import board_item
@@ -1924,12 +2060,13 @@ def ship(station, monkeypatch):
                     ('reflect', {'when': 'every 3h', 'post': 'r-reflect', 'items': ('What happened?',)}))
     trust_dirs(home / 'checklists', repo / '.superyak' / 'checklists')
     monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 's1')
-    with fp.locked_record(fp.record_path(home / 'sessions', 's1'), time.monotonic() + 1) as record:
-        fp.touch(record, 0.0, str(repo))
+    with holds.open_record(holds.record_path(home / 'sessions', 's1'), time.monotonic() + 1) as rec:
+        holds.touch(rec.data, 0.0, str(repo))
+        rec.save()
     client = StationClient('http://station.test', 'serenity-key', transport=fake)
     return SimpleNamespace(fake=fake, andy=andy, serenity=serenity, home=home, repo=repo, client=client,
                            tools=Tools(client, home=home, clock=lambda: 1000.0), runs=home / 'checklists' / 'runs.jsonl',
-                           fired=home / 'checklists' / 'fired.jsonl', session=fp.record_path(home, 's1').stem)
+                           fired=home / 'checklists' / 'fired.jsonl', session=holds.record_path(home, 's1').stem)
 
 
 def key(ship, list_id):
@@ -2070,35 +2207,36 @@ Expected: FAIL, `TypeError: Tools.__init__() got an unexpected keyword argument 
 
 - [ ] **Step 3: Implement**
 
-- The lists the server sees: the record at `record_path(home / 'sessions', CLAUDE_CODE_SESSION_ID)` gives the cwd;
-  with no session id or no recorded cwd, `acting.session_project(os.getcwd())` (an unreadable cwd counts as none).
-  `checklists.find(cwd, home / 'checklists')`.
-- `checklist_run`: validate `key` (`[0-9a-f]{8}/` + `ID`), `version` (`VERSION`), `moment` (one of the kinds) and
-  `answers` (at most 12, Ruling 21; a failing reason raises `ValueError(REASON_REFUSED)`); when the list loads at that
-  key and version, the count must equal its items (0 for a read list); append `run_line` to `runs.jsonl`; return
+- **Which lists the server sees.** The record at `holds.record_path(home / 'sessions', CLAUDE_CODE_SESSION_ID)` gives
+  the cwd. With no session id or no recorded cwd, use `acting.session_project(os.getcwd())`; an unreadable cwd counts
+  as none. Then `checklists.find(cwd, home / 'checklists')`.
+- **`checklist_run`.** Validate `key` (`[0-9a-f]{8}/` + `ID`), `version` (`VERSION`), `moment` (one of the kinds) and
+  `answers` (at most 12; Ruling 21). A failing reason raises `ValueError(REASON_REFUSED)`. When the list loads at that
+  key and version, the count must equal its items (0 for a read list). Append `run_line` to `runs.jsonl` and return
   `Recorded the run of <key> v<version>.`
-- `handle`: when the guard refuses and the tool is `checklist_run`, call `tools.refused_run(arguments)` (when the tools
-  have it) before returning the refusal. `refused_run` records `refused_line` with `run` when `SUPERYAK_RUN` is set,
-  else `acting.verdict(home, project)[0]` with `claim_guard`'s project rule, `unknown` on an exception, and nothing for
-  arguments that don't validate.
-- `checklist_propose`: screen `change` (`limit=300`) and `reason`; find the list (unknown key: `ValueError`); the
-  deadline is `math.ceil((clock() + 600) / 600) * 600`, shown with `station.utc_time`; the room is the list's `post`
-  else `ALL_HANDS`.
-- `station_claim`: when `board == 'open'` and a home is set, append `_claim_lists(room_id, got['key'])`: `item_key`,
-  `due_at_claim`, `checklists.fit(..., used=0, budget=OUTPUT_CHARS, cap=LISTS_PER_EVENT)`, then `touch(record, now,
-  None)` and `mark_fired(..., item=item)` under `locked_record(..., monotonic() + 1.0)` (with a session id) or in an
-  in-memory record kept on the `Tools` (without one); append `fired_line`s with the session (`session_key(id)` or
-  `self.salt`, Ruling 24).
+- **Refusals.** When the guard refuses and the tool is `checklist_run`, `handle` calls `tools.refused_run(arguments)`
+  (when the tools have it) before returning the refusal. `refused_run` records a `refused_line` with `run` when
+  `SUPERYAK_RUN` is set, else with `acting.verdict(home, project)[0]` under `claim_guard`'s project rule. An exception
+  gives `unknown`, and arguments that don't validate record nothing.
+- **`checklist_propose`.** Screen `change` (`limit=300`) and `reason`, and find the list (an unknown key raises
+  `ValueError`). The deadline is `math.ceil((clock() + 600) / 600) * 600`, shown with `station.utc_time`. The room is
+  the list's `post`, else `ALL_HANDS`.
+- **`station_claim`.** When `board == 'open'` and a home is set, append `_claim_lists(room_id, got['key'])`:
+  - `item_key`, then `due_at_claim`, then `checklists.fit(..., used=0, budget=OUTPUT_CHARS, cap=LISTS_PER_EVENT)`;
+  - with a session id, under `holds.open_record(..., monotonic() + 1.0)`: `touch(record, now, None)`,
+    `mark_fired(..., item=item)` and `save()`;
+  - without one, the same marks in an in-memory record kept on the `Tools`;
+  - append the `fired_line`s with the session (`session_key(id)` or `self.salt`; Ruling 24).
 
-- [ ] **Step 4: Run the tests, then the MCP suites**
+- [ ] **Step 4: Run the tests, then the MCP suites and the whole suite** (the conftest change touches every test)
 
-Run: `cd agent && uv run --locked --extra dev python -m pytest tests/test_checklist_tools.py tests/test_mcp.py tests/test_claim_tools.py tests/test_board_tools.py tests/test_ship_mcp_claims.py -q`
-Expected: PASS.
+Run: `cd agent && uv run --locked --extra dev python -m pytest -q`
+Expected: 0 failed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent/superyak_agent/mcp.py agent/superyak_agent/checklist_firing.py agent/tests/test_checklist_tools.py
+git add agent/superyak_agent/mcp.py agent/superyak_agent/checklist_firing.py agent/tests/test_checklist_tools.py agent/tests/test_mcp.py agent/tests/conftest.py
 git commit -m "Checklists 9: checklist_run with screened reasons, checklist_propose drafts, claim lists per open board item
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2128,13 +2266,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `report(fired, runs, last: int = 10) -> list[Proposal]`; `render_report(proposals, misses: int) -> str`.
 - Produces, in `checklist_cli`: `main(args, out=print, stdin=None, stdout=None) -> int` (stdin and stdout default to
   `sys.stdin` and `sys.stdout`), dispatching `list` (`--cwd`, `--home`), `trust PATH` (`--home`) and `report`
-  (`--home`); the home defaults to `acting.acting_home(cwd)`.
-  - `list` prints, per directory in search order: its path and `trusted`, `not trusted (N lists)` or `the ship's own`;
-    under a trusted one, each loaded list as `<key> v<version> "<title>": <when>; last fired <up to 3 UTC times>` (or
-    `never fired`), each overridden list as `overridden by a nearer <id>`, and each notice. No list text from an
-    untrusted directory.
+  (`--home`). Homes default under Ruling 26.
+  - `list` prints, per directory in search order, its path and `trusted`, `not trusted (N lists)` or `the ship's own`.
+    Under a trusted one it prints each loaded list as `<key> v<version> "<title>": <when>; last fired <up to 3 UTC
+    times>` (or `never fired`), each overridden list as `overridden by a nearer <id>`, and each notice. It prints no
+    list text from an untrusted directory.
   - `trust` refuses (exit 2) without a TTY on stdin and stdout, on `trust_refusal`, or when the typed line isn't the
-    printed realpath; otherwise `install.add_trusted` and exit 0.
+    printed realpath. Otherwise it runs `install.add_trusted`, prints the home it changed, and exits 0.
   - `report` prints `render_report` and writes nothing.
 
 - [ ] **Step 1: Write the failing tests** in `agent/tests/test_checklist_cli.py`
@@ -2144,11 +2282,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 import io
 import json
 import os
+import sys
 from pathlib import Path
 import pytest
-from superyak_agent import __main__ as cli, checklists as cl
+from superyak_agent import __main__ as cli, checklists as cl, claims
 from superyak_agent.checklist_report import report, unrun
 from checklist_fakes import checkout, trust_dirs, write_list
+from ships_fakes import isolate_git, make_repo
 
 K = 'aaaaaaaa/reflect'
 
@@ -2184,7 +2324,7 @@ def test_unrun_counts_a_firing_without_a_later_run_in_its_session_and_names_a_re
     assert unrun(fired, runs) == [(fired[1], None), (fired[2], 'claimed'), (fired[3], None)]
 
 
-def test_report_writes_nothing(tmp_path, capsys):
+def test_report_writes_nothing():
     home = Path.home() / '.superyak'
     write_list(home / 'checklists', 'mine')
     (home / 'checklists' / 'runs.jsonl').write_text(json.dumps(run_log(['done'])) + '\n')
@@ -2211,7 +2351,7 @@ def test_list_shows_what_loads_from_where_trust_errors_overrides_and_last_firing
     assert 'evil' not in out and 'Farther copy.' not in out
 
 
-def test_trust_refuses_a_call_without_a_terminal(monkeypatch, capsys):
+def test_trust_refuses_a_call_without_a_terminal(monkeypatch):
     lists = checkout(Path.home() / 'Projects' / 'other', ('mine', {})) / '.superyak' / 'checklists'
     monkeypatch.setattr('sys.stdin', io.StringIO(os.path.realpath(lists) + '\n'))
     assert cli.main(['checklists', 'trust', str(lists)]) == 2
@@ -2231,6 +2371,20 @@ def test_trust_from_a_terminal(monkeypatch, typed, setup, code):
     assert cli.main(['checklists', 'trust', str(lists)]) == code
     trusted = Path.home() / '.superyak' / 'checklists' / 'trusted.json'
     assert (json.loads(trusted.read_text())['trusted'] == [os.path.realpath(lists)]) if code == 0 else not trusted.exists()
+
+
+def test_trust_goes_to_the_ship_that_acts_where_the_lists_are(monkeypatch, tmp_path):         # plan review S6
+    isolate_git(monkeypatch, tmp_path)
+    repo = make_repo(tmp_path / 'proj')
+    claims.claim('serenity-bricks', repo)
+    lists = repo / '.superyak' / 'checklists'
+    write_list(lists, 'mine')
+    monkeypatch.setattr('sys.stdin', Terminal(os.path.realpath(lists) + '\n'))
+    monkeypatch.setattr('sys.stdout', Terminal())
+    assert cli.main(['checklists', 'trust', str(lists)]) == 0
+    project = claims.project_home('serenity-bricks')
+    assert json.loads((project / 'checklists' / 'trusted.json').read_text())['trusted'] == [os.path.realpath(lists)]
+    assert str(project) in sys.stdout.getvalue()
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -2240,12 +2394,16 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'superyak_agent.checklist_
 
 - [ ] **Step 3: Implement**
 
-`report` groups answered runs by `(key, version)` in time order: `retire` and `drop` look at the last `last` runs and
-need that many; `keep` is any `caught`, with its reasons; `why` is an item skipped in more than half of all the runs,
-its reasons grouped as `law §N` (fullmatch `law §\d+`), `person` and the rest; `unrun` adds one proposal per key and
-version with the count and the refusal kinds. In `__main__.py`, add `checklists` with subparsers `list` (`--cwd`,
-`--home`), `trust` (`path`, `--home`) and `report` (`--home`), dispatched lazily to `checklist_cli.main(args)`. Add both
-modules to `only-include`.
+`report` groups answered runs by `(key, version)` in time order:
+- `retire` and `drop` look at the last `last` runs, and need that many;
+- `keep` is any `caught`, with its reasons;
+- `why` is an item skipped in more than half of all the runs, its reasons grouped as `law §N` (fullmatch `law §\d+`),
+  `person` and the rest;
+- `unrun` adds one proposal per key and version, with the count and the refusal kinds.
+
+In `__main__.py`, add `checklists` with subparsers `list` (`--cwd`, `--home`), `trust` (`path`, `--home`) and `report`
+(`--home`), dispatched lazily to `checklist_cli.main(args)`. `trust`'s default home is `acting.acting_home` of the
+directory holding `.superyak` (the path's parent's parent; Ruling 26). Add both modules to `only-include`.
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -2274,7 +2432,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Test: `agent/tests/test_seed_lists.py`
 
 **Interfaces:**
-- Consumes: `checklists.parse`, `find`, `command_matches`; `checklist_fakes.trust_dirs`.
+- Consumes: `checklists.parse`, `command_matches`, `ALL_HANDS`.
 - Produces: the eight files below, version 1, mode 0644 in a 0755 directory.
 
 - [ ] **Step 1: Merge the checklists branch**
@@ -2296,7 +2454,7 @@ REPO = Path(__file__).resolve().parents[2]
 SEED = REPO / '.superyak' / 'checklists'
 TABLE = {
     'why-we-build': 'start; every 3h', 'each-hour': 'every 1h', 'reflect': 'every 3h',
-    'before-push': 'command git push; command push origin; command push https://',
+    'before-push': 'command git push; command push origin; command push -u origin; command push https://',
     'merging-to-main': ('command git push origin main; command push origin main; '
                         'command push https://github.com/zhang8128/superyak.git main; command systemctl --user restart superyak-'),
     'before-work': 'claim', 'session-start': 'start',
@@ -2322,6 +2480,7 @@ def test_the_seed_is_the_spec_s_table():
     for list_id, when in TABLE.items():
         assert (SEED / f'{list_id}.md').read_text().split('\n')[3] == f'when: {when}' and seed(list_id).version == 1
     assert seed('why-we-build').read and seed('reflect').post == cl.ALL_HANDS
+    assert any('checklists report' in item for item in seed('reflect').items)          # plan review M5
     assert seed('merging-to-main').items[-1] == 'Reflect is run once the merge is announced.'
 
 
@@ -2334,13 +2493,15 @@ def test_every_see_points_at_a_heading_in_docs_checklists():
 
 @pytest.mark.parametrize('command', ['git push origin feature', 'cd /x && git push',
                                      "git -c 'credential.helper=!gh auth git-credential' push https://github.com/zhang8128/superyak.git feature",
-                                     'git -C /Users/kairos/Projects/superyak/.worktrees/x push origin feature'])
+                                     'git -C /Users/kairos/Projects/superyak/.worktrees/x push origin feature',
+                                     'git -C /x push -u origin feature'])
 def test_before_any_push_holds_the_ways_ships_really_push(command):                    # Review Focus 1
     assert matches('before-push', command)
 
 
 def test_merging_to_main_fires_at_the_main_push_or_the_units_restart_and_not_at_a_merge():
     for command in ('git push origin main', 'git -C /x push origin main', 'systemctl --user restart superyak-peer.service',
+                    "ssh andy@smart '… && systemctl --user restart superyak-peer'",
                     "git -c 'credential.helper=!gh auth git-credential' push https://github.com/zhang8128/superyak.git main"):
         assert matches('merging-to-main', command), command
     for command in ('git merge main', 'git merge-base --is-ancestor 60dd851 HEAD', 'git push origin feature',
@@ -2348,9 +2509,10 @@ def test_merging_to_main_fires_at_the_main_push_or_the_units_restart_and_not_at_
         assert not matches('merging-to-main', command), command
 
 
-def test_a_live_station_act_fires_at_each_make_target_and_not_at_a_read():
+def test_a_live_station_act_fires_at_each_make_target_over_ssh_too_and_not_at_a_read():
     for target in ('approve', 'deny', 'bridge', 'unbridge', 'add-ship', 'moderate', 'unmoderate'):
         assert matches('live-station-act', f'make station-{target} ID=abc')
+    assert matches('live-station-act', "ssh andy@smart 'cd ~/superyak && make station-approve ID=abc'")   # plan review M1
     assert not matches('live-station-act', 'make station-rooms') and not matches('live-station-act', 'make station-pending')
 
 
@@ -2411,9 +2573,9 @@ The other seven share `version: 1` and `owner: ships of this repository`. Their 
 - What did it teach? A lesson someone will need again goes in the rail's lesson shape, its cost in `why`; a step we keep missing goes in a checklist.
 - What did a person ask that we haven't answered or done? Andy's open asks, and anyone's outside us.
 - Do I still remember why? Re-read "Why we build". Is my next hour aimed at it?
+- Read `python3 agent/run_agent.py checklists report` and propose what it suggests with checklist_propose.
 
-`before-push.md` — `title: Before any push`, `when: command git push; command push origin; command push https://`
-(Ruling 27), `see: docs/checklists.md#before-any-push`:
+`before-push.md` — `title: Before any push`, `when:` as in `TABLE` (Ruling 27), `see: docs/checklists.md#before-any-push`:
 - The branch's base is on the rewritten history: `git merge-base --is-ancestor 60dd851 HEAD` (main after the 2026-10-27 scrub).
 - Nothing in the diff names a person with health, contact or identity details, or holds a key or token (gitleaks, plus a read of every new doc).
 - Nothing in the diff describes a security hole that isn't fixed and live yet, in code, docs, lessons or commit messages. It stays in a members-only room until the fix ships.
@@ -2455,19 +2617,28 @@ The other seven share `version: 1` and `owner: ships of this repository`. Their 
 
 - [ ] **Step 5: Point the docs at the files**
 
-In `docs/checklists.md`, after the opening paragraph, add "How the lists run": lists are files in
-`.superyak/checklists/` (and a ship's own `~/.superyak/checklists/`); they fire at their moments and are run out loud
-and recorded with `checklist_run`; the law, then the person at the terminal, then a checklist; `make dock` trusts this
-checkout's lists, and `python3 agent/run_agent.py checklists list|report` shows what loads and what the runs suggest;
-changes are proposed with `checklist_propose` and accepted as a branch merged under law section 2. The intro names no
-single list's file (the docs test counts the sections that do). In each of the
-eight seeded sections, keep the heading and the why, replace the `- [ ]` items with "The list itself is
-[`.superyak/checklists/<id>.md`](../.superyak/checklists/<id>.md) (`when: …`). Its long form:" and the old items as
-plain `- ` bullets. "The Mac's main checkout" and "Shell commands (zsh)" each gain one line: "On the Mac this list is
-`~/.superyak/checklists/<id>.md` (`when: …`)." In `agent/README.md`, add `hold` and `checklists` to the commands table,
-the `PreToolUse` line to "The hooks" (`<python> run_agent.py hold --config <station.json> || true   # PreToolUse,
-matcher Bash`), and a short "Checklists" section with the same facts as docs/checklists.md's intro, plus that the
-hold holds at most 3 distinct commands a session and never a subagent's.
+**docs/checklists.md: the intro.** After the opening paragraph, add "How the lists run":
+- lists are files in `.superyak/checklists/` (and a ship's own `~/.superyak/checklists/`);
+- they fire at their moments, and are run out loud and recorded with `checklist_run`;
+- the law comes first, then the person at the terminal, then a checklist;
+- `make dock` trusts this checkout's lists;
+- `python3 agent/run_agent.py checklists list|report` shows what loads and what the runs suggest;
+- changes are proposed with `checklist_propose`, and accepted as a branch merged under law section 2.
+
+The intro names no single list's file (the docs test counts the sections that do).
+
+**docs/checklists.md: the seeded sections.** In each of the eight, keep the heading and the why. Replace the `- [ ]`
+items with "The list itself is [`.superyak/checklists/<id>.md`](../.superyak/checklists/<id>.md) (`when: …`). Its long
+form:", followed by the old items as plain `- ` bullets. "The Mac's main checkout" and "Shell commands (zsh)" each gain
+one line: "On the Mac this list is `~/.superyak/checklists/<id>.md` (`when: …`)."
+
+**agent/README.md.**
+- Add `hold` and `checklists` to the commands table.
+- Add the `PreToolUse` line to "The hooks": `<python> run_agent.py hold --config <station.json> || true   #
+  PreToolUse, matcher Bash`.
+- Add a short "Checklists" section with the same facts as the docs intro, and these: the hold is the one entry for
+  checklists and the rail's lessons; it holds at most 3 distinct commands a session across both; it never holds a
+  subagent's command.
 
 - [ ] **Step 6: Draft the Mac's own lists for Andy** (not committed; installed only with his yes, Ruling 30)
 
@@ -2504,6 +2675,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:** none changed; results go in the branch's post.
 
+Every run below uses a scratch home (S8): `HOME=<scratch>`, a scratch `station.json`, and a scratch `trusted.json`
+that trusts the worktree's `.superyak/checklists`. Real ship homes stay untouched, so no fake firing reaches a real
+`fired.jsonl`.
+
 - [ ] **Step 1: Whole suite**
 
 Run: `cd agent && uv run --locked --extra dev python -m pytest -q`
@@ -2511,25 +2686,35 @@ Expected: 0 failed; record the count against the 755 baseline.
 
 - [ ] **Step 2: The hold's cost on the Pi**
 
-In a scratch worktree on the Pi (never its main checkout), with the branch's agent, time 50 runs each of the installed
-command form (`sh -c '<python> <worktree>/agent/run_agent.py hold --config ~/.superyak/station.json || true'`) fed
-(a) a non-matching Bash payload and (b) a matching one in fresh sessions. Report p50 and p95 wall milliseconds for
-each, interpreter start included (spec: "The builder measures the time it adds to a Bash call on the Pi").
+Work in a scratch worktree on the Pi (never its main checkout), with the branch's agent and the scratch home. Time 50
+runs each of the installed command form (`sh -c '<python> <worktree>/agent/run_agent.py hold --config
+<scratch>/.superyak/station.json || true'`), fed (a) a non-matching Bash payload and (b) a matching one in fresh
+sessions. Report p50 and p95 wall milliseconds for each, interpreter start included (spec: "The builder measures the
+time it adds to a Bash call on the Pi").
 
 - [ ] **Step 3: Confirm on each ship's Claude Code version**, and record each answer:
   - what the model sees when two `PreToolUse` hooks deny one call (spec, The hold; re-check R1: a known limit);
   - that the 10-minute tick produces a `UserPromptSubmit` (spec, Deferred S2: `every` relies on it);
   - that `SessionStart` carries `source` `startup`, `clear` and `fork` as the hooks reference says (Ruling 7);
-  - whether `/clear` gives the hook a new `session_id` while the MCP server keeps `CLAUDE_CODE_SESSION_ID` (the known
-    limit: runs after a `/clear` report as `unrun`).
+  - whether `/clear` gives the hook a new `session_id` while the MCP server keeps `CLAUDE_CODE_SESSION_ID` (Known
+    limits).
 
-- [ ] **Step 4: Smoke the real paths on the Mac**, in a scratch worktree: `python3 agent/run_agent.py checklists list
-  --cwd <worktree>` shows the worktree's lists as untrusted copies passed over and the checkout's as loaded only after
-  this branch is merged and the Mac re-docks; a hand-fed `PreToolUse` payload for `git push origin x` prints the deny
-  once and nothing on the re-run.
+- [ ] **Step 4: Smoke the real paths on the Mac**, in a scratch worktree with the scratch home:
+  - `python3 agent/run_agent.py checklists list --cwd <worktree>` shows the worktree's lists as loaded from the
+    trusted scratch entry;
+  - a hand-fed `PreToolUse` payload for `git push origin x` prints the deny once, and nothing on the re-run.
 
-- [ ] **Step 5: Post the branch** with the measurements and confirmations, the shortened seed wording for review, and
-  the note that every docked ship docks again once after the merge, so dock trusts the checkout's lists.
+- [ ] **Step 5: Post the branch** with:
+  - the measurements and the confirmations;
+  - the shortened seed wording, for review;
+  - the moments added beyond the spec's table (`command push origin`, `command push -u origin`,
+    `command push https://`, `command push origin main` and the main URL push; Ruling 27), so the section 2 verdict
+    accepts them explicitly (S4);
+  - the note that every docked ship docks again once after the merge, so dock trusts the checkout's lists;
+  - the note that each ship retires its own reflect reminder once the hook fires Reflect, so it doesn't fire twice
+    (spec, Deferred S2; S12);
+  - the note that Tardis's `lessons_hold` replaces the stub against `candidates(command, record, now, limit)`
+    (Rulings 31 to 35).
 
 ---
 
@@ -2540,13 +2725,13 @@ each, interpreter start included (spec: "The builder measures the time it adds t
 | A checklist is a file; Format, exactly | 2 |
 | Where checklists are found; `checklists list` | 3, 10 |
 | Moments (`start`, `every`, `enter`, `command`, `claim`) | 4, 5, 6, 7, 9 |
-| Firing, exactly | 5, 6, 7, 9 |
+| Firing, exactly (record renamed `.holds` by the ships' seam) | 5, 6, 7, 9 |
 | How a list is shown (budget, time, precedence) | 4, 6 |
 | Where it runs | 1, 6, 7 |
 | Install | 6, 7, 8 |
-| The hold | 7, 12 |
+| The hold (and the ships' seam with lessons) | 7, 12 |
 | Running it out loud (runs, firings, list keys, unrun) | 5, 9, 10 |
-| Renegotiation (propose, the report) | 9, 10 |
+| Renegotiation (propose, the report, Reflect reads it) | 9, 10, 11 |
 | Trust | 3, 8, 10 |
 | Reaching every ship; Seeding | 8, 11, 12 |
 | Tests (every bullet) | 2-11 |
