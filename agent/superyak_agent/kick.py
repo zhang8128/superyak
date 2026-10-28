@@ -5,7 +5,7 @@ message id, room and sender, never the body: the session reads the text itself, 
 import time
 from .station import label
 
-CURSOR_SUFFIX = '-kick'
+CURSOR_SUFFIX = '-kick'  # the station's WATCHER_SUFFIX (peer inbox.py): a new session never starts at this cursor
 QUIET_SECONDS = 60     # an outage this short is silent
 FIRST_BACKOFF = 5
 MAX_BACKOFF = 300
