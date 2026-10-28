@@ -54,7 +54,8 @@ def device_held(known, now, public):
 
 
 def attempts_key(*parts):
-    """A login_attempts key: a JSON array such as ["user-source", source, username], unambiguous for any username."""
+    """A login_attempts key: a JSON array such as ["user-source", "public", source, username], unambiguous for any
+    username. A source's keys name the request's class, so a public and a tailnet failure never share a row."""
     return json.dumps(parts)
 
 
@@ -160,8 +161,8 @@ class Auth:
         the token to set, the same one extended or a new one."""
         text(username, 'username', 254)
         text(password, 'password', 1024)
-        bucket = login_source(source, public)
-        holds = {attempts_key('user-source', bucket, username): PAIR_HOLD, attempts_key('source', bucket): SOURCE_HOLD}
+        bucket, kind = login_source(source, public), 'public' if public else 'tailnet'
+        holds = {attempts_key('user-source', kind, bucket, username): PAIR_HOLD, attempts_key('source', kind, bucket): SOURCE_HOLD}
         if public:  # hold 3 counts and holds public sign-ins only
             holds[attempts_key('user', username)] = USER_HOLD
         held, reserved = False, {}

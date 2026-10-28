@@ -32,11 +32,11 @@ def browser(station):
     return TestClient(ProxyHeadersMiddleware(station.app, trusted_hosts=TRUSTED_PROXY), base_url=ORIGIN, headers={'origin': ORIGIN})
 
 
-def sign_in(station, username, password=None, source=None, client=None):
-    """source: the address the proxy forwards (None is a tailnet request from 127.0.0.1)."""
+def sign_in(station, username, password=None, source=None, client=None, headers=None):
+    """source: the address the proxy forwards (None is a tailnet request from 127.0.0.1); headers: any others to send."""
     client = client or browser(station)
     response = client.post('/api/login', json={'username': username, 'password': password or f'long-password-{username}'},
-                           headers={'x-forwarded-for': source} if source else {})
+                           headers={**({'x-forwarded-for': source} if source else {}), **(headers or {})})
     return response.status_code, response.json()
 
 
@@ -119,8 +119,25 @@ def test_the_bucket_a_source_counts_in(host, public, bucket):
 
 def test_counter_keys_are_json_arrays(station):
     assert sign_in(station, 'odd:"name"', WRONG, '203.0.113.5') == INVALID
-    assert counters(station) == {('user-source', '203.0.113.5', 'odd:"name"'): 1, ('source', '203.0.113.5'): 1,
+    assert counters(station) == {('user-source', 'public', '203.0.113.5', 'odd:"name"'): 1, ('source', 'public', '203.0.113.5'): 1,
                                  ('user', 'odd:"name"'): 1}
+
+
+def test_a_public_and_a_tailnet_failure_never_share_a_counter(station):
+    """Section 2 review should-fix 4: a Funnel request from a tailnet node is public, yet its source is the address a
+    tailnet sign-in from that node counts in. The keys name the request's class, so neither holds the other."""
+    funnel = {'tailscale-funnel-request': '?1'}
+    for _ in range(8):
+        assert sign_in(station, 'patient', WRONG, '100.70.0.1', headers=funnel) == INVALID
+    assert sign_in(station, 'patient', source='100.70.0.1', headers=funnel) == HELD
+    assert sign_in(station, 'patient', source='100.70.0.1')[0] == 200  # tailnet, from the same node
+    for _ in range(8):
+        assert sign_in(station, 'doctor', WRONG, '100.70.0.1') == INVALID
+    assert sign_in(station, 'doctor', source='100.70.0.1') == HELD
+    assert sign_in(station, 'doctor', source='100.70.0.1', headers=funnel)[0] == 200
+    assert counters(station) == {('user-source', 'public', '100.70.0.1', 'patient'): 8, ('source', 'public', '100.70.0.1'): 8,
+                                 ('user-source', 'tailnet', '100.70.0.1', 'doctor'): 8, ('source', 'tailnet', '100.70.0.1'): 8,
+                                 ('user', 'doctor'): 0}
 
 
 def test_the_reservation_is_visible_while_hashing(station, monkeypatch):
@@ -139,18 +156,18 @@ def test_the_reservation_is_visible_while_hashing(station, monkeypatch):
         guess = threading.Thread(target=lambda: answers.append(sign_in(station, 'patient', WRONG, '203.0.113.5', client)))
         guess.start()
         assert hashing.wait(10)
-        assert counters(station) == {('user-source', '203.0.113.5', 'patient'): 1, ('source', '203.0.113.5'): 1, ('user', 'patient'): 1}
+        assert counters(station) == {('user-source', 'public', '203.0.113.5', 'patient'): 1, ('source', 'public', '203.0.113.5'): 1, ('user', 'patient'): 1}
         release.set()
         guess.join(10)
     assert answers == [INVALID]
-    assert counters(station) == {('user-source', '203.0.113.5', 'patient'): 1, ('source', '203.0.113.5'): 1, ('user', 'patient'): 1}
+    assert counters(station) == {('user-source', 'public', '203.0.113.5', 'patient'): 1, ('source', 'public', '203.0.113.5'): 1, ('user', 'patient'): 1}
 
 
 def test_success_gives_back_the_reservation(station):
     for _ in range(7):
         assert sign_in(station, 'patient', WRONG, '203.0.113.5') == INVALID
     assert sign_in(station, 'patient', source='203.0.113.5')[0] == 200
-    assert counters(station) == {('source', '203.0.113.5'): 7, ('user', 'patient'): 7}  # the pair's row is gone
+    assert counters(station) == {('source', 'public', '203.0.113.5'): 7, ('user', 'patient'): 7}  # the pair's row is gone
 
 
 def test_the_give_back_stays_in_its_window_and_never_goes_below_zero(station, monkeypatch):
@@ -160,11 +177,11 @@ def test_the_give_back_stays_in_its_window_and_never_goes_below_zero(station, mo
     def slow(password, salt):
         station.clock[0] += 301  # the source window ends while this attempt hashes
         with station.store.transaction() as db:
-            db.execute('UPDATE login_attempts SET reset=?, count=5 WHERE key=?', (station.clock[0] + 300, json.dumps(['source', '203.0.113.5'])))
+            db.execute('UPDATE login_attempts SET reset=?, count=5 WHERE key=?', (station.clock[0] + 300, json.dumps(['source', 'public', '203.0.113.5'])))
         return real(password, salt)
     monkeypatch.setattr(auth, 'password_hash', slow)
     assert sign_in(station, 'patient', source='203.0.113.5')[0] == 200
-    assert counters(station)[('source', '203.0.113.5')] == 5
+    assert counters(station)[('source', 'public', '203.0.113.5')] == 5
 
 
 def test_an_activation_between_the_hash_and_the_reread_gives_401(station, monkeypatch, tmp_path):
@@ -199,7 +216,7 @@ def test_expired_rows_are_deleted(station):
             (json.dumps(['source', '198.51.100.9']), 3, now - 1), ('user:patient', 8, now), ('source:198.51.100.9', 40, now - 50),
             (json.dumps(['user', 'doctor']), 2, now + 100)])
     assert sign_in(station, 'patient', source='203.0.113.5')[0] == 200
-    assert counters(station) == {('user', 'doctor'): 2, ('source', '203.0.113.5'): 0, ('user', 'patient'): 0}
+    assert counters(station) == {('user', 'doctor'): 2, ('source', 'public', '203.0.113.5'): 0, ('user', 'patient'): 0}
 
 
 def test_held_attempts_neither_hash_nor_count(station, monkeypatch):
@@ -354,7 +371,7 @@ def test_a_cookie_for_another_user_an_expired_one_or_a_made_up_one_exempts_nothi
     for client in (doctors, expired, made_up):
         assert sign_in(station, 'patient', source='203.0.113.5', client=client) == HELD
         assert sign_in(station, 'patient', WRONG, '203.0.113.6', client=client) == INVALID  # counted as anyone's
-    assert counters(station)[('user-source', '203.0.113.6', 'patient')] == 3
+    assert counters(station)[('user-source', 'public', '203.0.113.6', 'patient')] == 3
 
 
 def test_a_sign_in_with_a_valid_cookie_keeps_its_row_and_extends_it(station):

@@ -128,7 +128,9 @@ names, and the dummy hash for unknown names kept explicitly, so a 401 takes the 
 - A **public** source is its IPv6 /64, or its full IPv4 address.
 - A **tailnet** source is its full address, so tailnet nodes never share a bucket.
 - A non-IP source is public and gets its own bucket.
-- Counter keys are JSON arrays such as `["user-source", source, username]`, unambiguous for any username.
+- Counter keys are JSON arrays such as `["user-source", "public", source, username]`, unambiguous for any username.
+  A source's keys name the request's class, public or tailnet, so a public and a tailnet failure never share a row
+  (section 2 review should-fix 4): a Funnel request from a tailnet node has that node's address as its source.
 
 **Holds:**
 1. **Per (username, source):** 8 failures in 5 minutes, as today. Someone guessing from elsewhere no longer locks
