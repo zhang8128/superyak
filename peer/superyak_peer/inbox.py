@@ -197,7 +197,8 @@ class Inbox:
         them when the page is empty), counted per room with the room's title. Those before the page's first message
         are passed here, so the cursor never stops in front of noise; the rest are passed when the reader advances
         through the page, as it does past any message it showed. The lessons room's posts are left out and passed the same
-        way, and counted apart: a lesson, never a retraction or a station notice (first rail section 3). Returns
+        way, and counted apart: a lesson, never a retraction, a station notice or the backfill's copy of an older lesson
+        (first rail section 3). Returns
         (position, counts, titles, lesson_count)."""
         bound = page[-1]['id'] if page else None
         noise, noise_args = self._noise(db, actor)
@@ -208,8 +209,9 @@ class Inbox:
         counts, titles, lesson_count = {}, {}, 0
         chain, system = set(noise_args[1:]), self.system_author_id(db)
         for row in rows:
-            if row['resource_id'] in chain:  # first rail section 3: counted apart; the station's notices and retractions not at all
-                lesson_count += row['author'] != system and not self._is_retraction(db, row['message_id'])
+            if row['resource_id'] in chain:  # first rail section 3: counted apart; notices, retractions and carried copies not at all
+                lesson_count += (row['author'] != system and not self._is_retraction(db, row['message_id'])
+                                 and not self._is_carried(db, row['message_id']))
                 continue
             counts[row['resource_id']] = counts.get(row['resource_id'], 0) + 1
             titles[row['resource_id']] = row['title']

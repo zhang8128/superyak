@@ -699,6 +699,35 @@ def test_unread_leaves_the_lessons_room_out_counts_it_and_passes_it(lessons_stat
     assert 'lesson_count' not in store.unread(ids['rio-grande'], 'c', 30, breakouts=True)   # R35: only when it says something
 
 
+def test_the_backfills_copies_are_not_new_lessons_on_the_unread_line(tmp_path, lessons_peers):
+    """Final review N4: when an add carries the chain's lessons into its new room (section 3), the copies are old
+    lessons laid again, so the Pi's unread line doesn't count them, any more than the add's notice; a lesson laid in the
+    new room afterwards still counts."""
+    from superyak_peer.db import Store
+    from superyak_peer.federation import Federation
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    tardis, tardis_fed, tids = lessons_peers['peers']['tardis']
+    room, deliver, clock, rio = lessons_peers['room'], lessons_peers['deliver'], lessons_peers['clock'], pids['rio-grande']
+    tardis.send_message(tids['tardis'], lessons_peers['key'], 't1', lesson_body())
+    deliver('tardis', 'pi')
+    pi.send_message(rio, room, 'p1', lesson_body(ship='rio-grande', claim='Mine.', command=('make check',)))
+    assert pi.unread(rio, 'c', 30, breakouts=True)['lesson_count'] == 1   # tardis's; its own never reaches its unread
+    mac = Store(tmp_path / 'mac', clock=lambda: clock[0])
+    mac_fed = Federation(mac, endpoint='https://mac:7437')
+    andy_m = mac.create_user('andy', 'Andy Example', 'a-long-password', is_admin=True)['id']
+    contact = pi_fed.pair(pids['andy'], mac_fed.card(mac.lessons_ship('serenity', 'andy')['id']))['id']
+    mac_fed.pair(andy_m, pi_fed.card(pids['andy']))
+    both = [tardis_fed.identity.peer_id, mac_fed.identity.peer_id]
+    pi.station_lessons_room('andy', room[:6], 'rio-grande', both, pi.station_lessons_room('andy', room[:6], 'rio-grande', both)['confirm'])
+    new = pi.add_participants(pids['andy'], room, [contact])
+    assert new['lessons_carried'] == 2
+    assert 'lesson_count' not in pi.unread(rio, 'c', 30, breakouts=True)   # tardis's copy, rio-grande's own, the notice
+    pi_fed.sync_once(send=lambda card, prepare: (mac_fed if card['peer_id'] == mac_fed.identity.peer_id else tardis_fed).receive(prepare()))
+    tardis.send_message(tids['tardis'], f"{pi_fed.identity.peer_id}:{new['id']}", 't2', lesson_body(claim='After the add.'))
+    deliver('tardis', 'pi')
+    assert pi.unread(rio, 'c', 30, breakouts=True)['lesson_count'] == 1
+
+
 def test_a_wait_adds_up_the_lessons_it_left_out():
     from superyak_peer.inbox import with_earlier_noise
     earlier = {'breakout_counts': {}, 'breakout_titles': {}, 'lesson_count': 2}

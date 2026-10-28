@@ -47,6 +47,7 @@ PROMPT_WORDS = 4
 INDEX_FILE = 'lessons-index.bin'  # a JSON part, then float32 vectors (C17)
 PROMPT_NEAR_OFF = 'lessons-prompt-near-off'  # in the data directory: Near never runs at a prompt on this peer (C44)
 INDEX_MAGIC = b'superyak-lessons-index 1\n'
+CARRIED = 'lesson-carry-'  # the client id of the backfill's copies (section 3), which unread doesn't count as new
 EMBED_BATCH = 8
 EMBED_SECONDS = 120.0
 INFO_SECONDS = 2.0
@@ -942,6 +943,14 @@ class Lessons:
                          (message_id, message_id)).fetchone()
         return row is not None and RETRACT.fullmatch(row['body']) is not None
 
+    def _is_carried(self, db, message_id):
+        """Whether a post is the backfill's copy of an older lesson (section 3), so unread doesn't count it as a new one
+        (final review N4). Only _carry_lessons posts under the CARRIED client id; a ship that chose one would only leave
+        its own post out of the count."""
+        return db.execute('SELECT 1 FROM messages WHERE id=? AND substr(client_message_id,1,?)=? UNION ALL '
+                          'SELECT 1 FROM peer_messages WHERE id=? AND substr(client_message_id,1,?)=?',
+                          (message_id, len(CARRIED), CARRIED) * 2).fetchone() is not None
+
     def _refuse_in_lessons_room(self, db, key, what):
         if self._in_lessons_chain(db, key):
             raise Problem(409, NOT_HERE.format(what=what))
@@ -1083,7 +1092,7 @@ class Lessons:
         epoch = db.execute('SELECT epoch FROM rooms WHERE id=?', (new_key,)).fetchone()[0]
         carried = 0
         for item in chain_lessons(snapshot)[0]:
-            client = f'lesson-carry-{item.id.partition(":")[2][:16]}'
+            client = f'{CARRIED}{item.id.partition(":")[2][:16]}'
             peer, _, user = item.author.partition(':')
             if peer == snapshot.peer:
                 key = uid()
