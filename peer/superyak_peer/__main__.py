@@ -476,6 +476,9 @@ def main(argv=None):
     ship.add_argument('--origin', help='Public origin when --station is a loopback proxy target')
     ship.add_argument('--workspace', type=Path, required=True)
     ship.add_argument('--config', type=Path, required=True)
+    federate = commands.add_parser('federate', help='Deliver for this data directory: pull in pull mode, then collect and '
+                                   'push, every 5 s (federation pull)')
+    federate.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve = commands.add_parser('serve')
     serve.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve.add_argument('--host', default='127.0.0.1')
@@ -659,6 +662,23 @@ def main(argv=None):
                 password = args.password_file.read_text().rstrip('\r\n') if args.password_file else getpass.getpass('Owner password (12+ characters): ')
                 store._create_user(db, args.username, args.name, password, True)
             print(f'Superyak owner created in {args.data_dir}')
+        elif args.command == 'federate':
+            # plan P9 and nit 18: nothing is created where there's no peer database, and no identity is ever made
+            if not (args.data_dir / 'peer.sqlite3').is_file():
+                raise ValueError(f'No peer database at {args.data_dir / "peer.sqlite3"}: federate starts nothing there')
+            from .identity import PeerIdentity
+            from .signatures import refuse_a_lost_identity_before_the_store
+            refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b
+            if not (args.data_dir / 'identity.json').is_file():
+                raise ValueError('identity.json is missing, and federate never makes one')
+            from .dispatch import federation_lock
+            sync_lock = federation_lock(args.data_dir)  # noqa: F841 - one process syncs a directory, held for good
+            import logging
+            logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(message)s')
+            store = Store(args.data_dir)
+            from .federate import Federate
+            from .federation import Federation
+            Federate(Federation(store, endpoint=None, identity=PeerIdentity.load_or_create(store.data_dir))).run()
         elif args.command == 'federation-listen':
             # plan P9 and nit 18: nothing is created in a directory that isn't a peer's, and nothing serves a pull peer
             if not (args.data_dir / 'peer.sqlite3').is_file():
