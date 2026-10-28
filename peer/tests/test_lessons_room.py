@@ -267,3 +267,88 @@ def test_another_peer_records_the_room_by_full_id_from_a_paired_origin(lessons_p
             tardis.record_lessons_room(wrong)
     with pytest.raises(Problem):
         pi.record_lessons_room(lessons_peers['key'])  # on the origin it is station-lessons-room
+
+
+# Task 7: the doors
+def test_the_origin_post_door_checks_every_lesson(lessons_station):
+    store, clock, ids, room = lessons_station
+    sent = store.send_message(ids['tardis'], room, 'c1', lesson_body())
+    assert sent['replayed'] is False and store.send_message(ids['tardis'], room, 'c1', lesson_body())['replayed']
+    for author, body, status, message in (
+            ('tardis', 'hello', 422, lessons.NOT_A_LESSON),
+            ('tardis', lesson_body(ship='rio-grande'), 422, lessons.SHIP_IS_AUTHOR),
+            ('andy', lesson_body(ship='andy', claim='A person laid it.'), 403, lessons.SHIPS_ONLY),
+            ('tardis', lesson_body(claim='Ask Andy Example first.'), 422, lessons.PERSON),
+            ('tardis', lesson_body(claim='Mail git@github.com.'), 422, lessons.PERSON),
+            ('tardis', lesson_body(claim='Ping @serenity about it.'), 422, lessons.NO_MENTIONS)):
+        with pytest.raises(Problem) as refused:
+            store.send_message(ids[author], room, uid(), body)
+        assert (refused.value.status, refused.value.message) == (status, message)
+    with pytest.raises(Problem, match='no reply label'):
+        store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Two.'), reply_to=sent['id'])
+    other = store.create_room(ids['andy'], 'Talk', [ids['tardis']])['id']
+    assert store.send_message(ids['tardis'], other, 'c3', 'hello, @rio-grande')['replayed'] is False
+
+
+def test_the_cap_retraction_for_good_and_a_repost(lessons_station):
+    store, clock, ids, room = lessons_station
+    for n in range(32):
+        clock[0] += 3   # under 30 posts a minute
+        store.send_message(ids['tardis'], room, f'c{n}', lesson_body(claim=f'Claim {n}.'))
+    with pytest.raises(Problem) as refused:
+        store.send_message(ids['tardis'], room, 'c32', lesson_body(claim='Claim 32.'))
+    assert refused.value.message == lessons.CAP
+    store.send_message(ids['tardis'], room, 'again', lesson_body(claim='Claim 0.'))   # a re-post adds no lesson
+    first = store.check_lesson(ids['tardis'], lesson_body(claim='Claim 0.'))['lesson_id']
+    with pytest.raises(Problem) as refused:
+        store.send_message(ids['rio-grande'], room, 'r1', 'retract ' + first)
+    assert refused.value.message == lessons.WHO_RETRACTS
+    store.send_message(ids['andy'], room, 'r2', 'retract ' + first)
+    with pytest.raises(Problem, match='No live lesson'):
+        store.send_message(ids['andy'], room, 'r3', 'retract ' + first)
+    with pytest.raises(Problem) as refused:
+        store.send_message(ids['tardis'], room, 'c0b', lesson_body(claim='Claim 0.'))
+    assert refused.value.message == lessons.RETRACTED
+    store.send_message(ids['tardis'], room, 'c32b', lesson_body(claim='Claim 32.'))   # the retraction freed a place
+
+
+def test_no_board_item_no_claim_and_no_brief_in_the_lessons_room(lessons_station):
+    store, clock, ids, room = lessons_station
+    with pytest.raises(Problem, match='no board item'):
+        store.post_item(ids['andy'], room, 'spec:d7', 'A title', 'spec')
+    with pytest.raises(Problem, match='no claim'):
+        store.claim(ids['tardis'], room, 'spec:d7')
+    with pytest.raises(Problem, match='no brief'):
+        store.save_brief(ids['andy'], room, 'A brief.', 0)
+    with pytest.raises(Problem, match='no brief'):
+        store.save_ship_brief(ids['rio-grande'], room, 'A brief.', 0)
+
+
+def test_the_laying_peers_door_and_the_origins_reply_door(lessons_peers):
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    tardis, tardis_fed, tids = lessons_peers['peers']['tardis']
+    with pytest.raises(Problem):
+        tardis.send_message(tids['tardis'], lessons_peers['key'], 't0', 'hello')
+    with pytest.raises(Problem) as refused:
+        tardis.send_message(tids['andy'], lessons_peers['key'], 'a1', lesson_body(ship='andy'))
+    assert refused.value.status == 403
+    tardis.send_message(tids['tardis'], lessons_peers['key'], 't1', lesson_body())
+    assert lessons_peers['deliver']('tardis', 'pi')['delivered'] == 1
+    forged = tardis_fed.identity.envelope(destination=pi_fed.identity.peer_id, actor=tids['tardis'], resource_id=lessons_peers['room'],
+                                          revision=1, action='room.reply', recipients=[pids['andy']],
+                                          payload={'body': lesson_body(claim='Ask Andy Example.'), 'client_message_id': 'x'})
+    with pytest.raises(Problem) as refused:
+        pi_fed.receive(forged)   # skipped Tardis's door: the origin's refuses it, a 4xx to the sender
+    assert refused.value.message == lessons.PERSON
+    with pi.transaction() as db:
+        assert db.execute('SELECT count(*) FROM peer_messages').fetchone()[0] == 1
+
+
+def test_lessons_check_runs_the_doors_checks_without_posting(lessons_station):
+    store, clock, ids, room = lessons_station
+    ok = run_lessons('check', '--data-dir', store.data_dir, '--ship', 'tardis', stdin=lesson_body())
+    assert ok.returncode == 0 and ok.stdout.startswith('ok: a lesson, lesson ')
+    crlf = run_lessons('check', '--data-dir', store.data_dir, '--ship', 'tardis', stdin=lesson_body().replace('\n', '\r\n'))
+    assert crlf.returncode == 1 and '\\r' in crlf.stderr
+    with store.transaction() as db:
+        assert db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room,)).fetchone()[0] == 0

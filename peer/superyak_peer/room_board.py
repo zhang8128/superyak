@@ -231,6 +231,7 @@ class RoomBoard:
         no_at_name(title)
         with self.transaction() as db:
             room = self._board_room(db, actor, room_id, write=True)
+            self._refuse_in_lessons_room(db, room_id, 'board item')  # first rail section 2
             if not self._board_writer(db, room, actor):  # before the key's 409, so a non-writer learns nothing of used keys (5.1)
                 raise Problem(403, WRITER)
             used = self._key_used(db, room_id, key)

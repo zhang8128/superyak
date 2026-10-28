@@ -553,6 +553,50 @@ class Lessons:
             chain = self._lessons_chain(db)
             return chain[-1] if chain else None
 
+    def _lessons_gate(self, db, key, author, body, labelled=False):
+        """Every door's checks for a post into a room of the lessons chain (sections 2, 3 and 6), in the caller's
+        transaction. `author` is a local user id or a full `<peer>:<user>` id. Returns the lesson id, or None for a
+        room outside the chain."""
+        if not self._in_lessons_chain(db, key):
+            return None
+        if labelled:
+            raise Problem(400, LABELS)
+        snapshot = self._lessons_snapshot(db)
+        full = author if ':' in author else f'{snapshot.peer}:{author}'
+        post = parse_post(body)
+        live, retracted = chain_lessons(snapshot)
+        if isinstance(post, Retraction):
+            target = next((item for item in live if item.id == post.lesson_id), None)
+            if target is None:
+                raise Problem(409, NO_SUCH_LESSON)
+            if full not in (target.author, snapshot.owner):
+                raise Problem(403, WHO_RETRACTS)
+            return post.lesson_id
+        refusal = lesson_refusal(snapshot, full, post, body, self._live_ship_key_in(db, body))
+        if refusal is not None:
+            raise Problem(403 if refusal == SHIPS_ONLY else 422, refusal)
+        found = lesson_id(full.partition(':')[0], post)
+        if found in retracted:
+            raise Problem(409, RETRACTED)
+        if found not in {item.id for item in live} and sum(item.author == full for item in live) >= LIVE_CAP:
+            raise Problem(409, CAP)
+        return found
+
+    def _refuse_in_lessons_room(self, db, key, what):
+        if self._in_lessons_chain(db, key):
+            raise Problem(409, NOT_HERE.format(what=what))
+
+    def check_lesson(self, actor, body):
+        """For the writing tool (Serenity's `lay`) and `lessons check`: every check this peer's door runs, without
+        posting. Returns {'kind', 'lesson_id', 'short'}."""
+        with self.transaction() as db:
+            chain = self._lessons_chain(db)
+            if not chain:
+                raise Problem(404, 'No lessons room is recorded on this peer')
+            found = self._lessons_gate(db, chain[-1], actor, body)
+            kind = 'retraction' if RETRACT.fullmatch(body) else 'lesson'
+            return {'kind': kind, 'lesson_id': found, 'short': short_lesson_id(found), 'room': chain[-1]}
+
 
 LESSON_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS lessons_room(id INTEGER PRIMARY KEY CHECK(id=1), room_key TEXT NOT NULL, ship_id TEXT REFERENCES users(id), recorded REAL NOT NULL);
@@ -630,6 +674,16 @@ def _ship(store, args):
 def _room(store, args):
     got = store.record_lessons_room(args.id)
     return f"Recorded the lessons room {args.id.partition(':')[2][:6]} from peer {args.id[:12]}."
+
+
+@verb('check', "Every check this peer's door runs, without posting: the post on stdin", ('--ship', {'required': True}))
+def _check(store, args):
+    with store.transaction() as db:
+        actor = db.execute("SELECT id FROM users WHERE username=? AND kind!='system'", (args.ship,)).fetchone()
+    if actor is None:
+        raise Problem(404, f'No account named {args.ship} on this peer')
+    got = store.check_lesson(actor['id'], sys.stdin.buffer.read(BODY_BYTES + 1).decode('utf-8'))  # bytes: a \r stays
+    return f"ok: a {got['kind']}, lesson {got['short']}"
 
 
 if __name__ == '__main__':
