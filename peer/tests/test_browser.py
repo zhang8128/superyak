@@ -1,5 +1,5 @@
 """Real-browser acceptance flows for the same-origin personal home."""
-from superyak_peer.identity import pairing_code
+from superyak_peer.identity import pairing_code, show_code
 
 from contextlib import contextmanager
 import json
@@ -805,6 +805,65 @@ def test_invited_participant_chooses_local_account_details(browser_peer):
             expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
 
 
+def preview_remote_card(page, browser_peer):
+    page.get_by_role("link", name="Connections", exact=True).click()
+    page.get_by_label("Peer card").fill(json.dumps(browser_peer["remote_card"]))
+    page.get_by_role("button", name="Preview peer card").click()
+    expect(page.get_by_role("heading", name="Casey Remote")).to_be_visible()
+
+
+def test_show_my_peer_card_shows_the_code_apart_from_the_card(browser_peer):
+    """fix:pairing-code (plan review SF7): the code isn't in the copyable card, so one copy never carries both."""
+    browser_peer["app"].state.federation.endpoint = "https://localhost:7435"
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Connections", exact=True).click()
+            page.get_by_role("button", name="Show my peer card").click()
+            card = browser_peer["app"].state.federation.card(browser_peer["users"]["patient"]["id"])
+            code = show_code(pairing_code(card))
+            shown = page.get_by_test_id("my-pairing-code")
+            expect(shown).to_contain_text(code)
+            expect(shown).to_contain_text("Type this on the other machine. Never send it with the card.")
+            flash = page.locator(".notice[role=status]").first.inner_text()
+            assert card["peer_id"] in flash and code not in flash and pairing_code(card) not in flash
+
+
+def test_the_code_box_starts_empty_and_an_empty_or_wrong_code_pairs_nothing(browser_peer):
+    code = pairing_code(browser_peer["remote_card"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+            preview_remote_card(page, browser_peer)
+            box = page.get_by_label("Type the code shown on the other machine")
+            expect(box).to_have_value("")
+            content = page.content()
+            assert code not in content and show_code(code) not in content  # the preview never shows it
+            page.get_by_role("button", name="Pair this peer").click()
+            expect(page.locator(".notice.error")).to_have_text("Type the pairing code shown on the other machine")
+            page.get_by_label("Type the code shown on the other machine").fill("0" * 32)
+            page.get_by_role("button", name="Pair this peer").click()
+            expect(page.locator(".notice.error")).to_contain_text("That code doesn't match this card.")
+            expect(page.get_by_role("heading", name="Casey Remote")).to_have_count(0)  # the preview is cleared
+            expect(page.get_by_role("button", name="Disconnect peer and 1 contact")).to_have_count(0)
+    assert browser_peer["app"].state.federation.connections(browser_peer["users"]["organizer"]["id"]) == []
+
+
+def test_the_right_code_typed_with_enter_pairs_and_survives_a_re_render(browser_peer):
+    code = show_code(pairing_code(browser_peer["remote_card"]))
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+            preview_remote_card(page, browser_peer)
+            box = page.get_by_label("Type the code shown on the other machine")
+            box.fill(code[:10])
+            page.get_by_role("button", name="Check delivery now").click()  # refresh() renders the page again
+            expect(page.get_by_label("Type the code shown on the other machine")).to_have_value(code[:10])
+            page.get_by_label("Type the code shown on the other machine").fill(code)
+            page.get_by_label("Type the code shown on the other machine").press("Enter")
+            expect(page.locator("#main-content").get_by_text("Peer paired. Nothing has been shared automatically.")
+                   ).to_be_visible()
+            expect(page.get_by_text(f"Pairing code: {code}")).to_be_visible()
+            expect(page.get_by_text("Confirmed by typing", exact=True)).to_be_visible()
+
+
 def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
     """Break caught: pairing shares implicitly or canceled delivery looks retryable."""
     with sync_playwright() as playwright:
@@ -814,9 +873,10 @@ def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
             page.get_by_role("button", name="Preview peer card").click()
             expect(page.get_by_role("heading", name="Casey Remote")).to_be_visible()
             expect(page.get_by_text(browser_peer["remote_card"]["fingerprint"])).to_be_visible()
-            page.get_by_role(
-                "button", name="Fingerprint matches — pair this peer"
-            ).click()
+            page.get_by_label("Type the code shown on the other machine").fill(
+                show_code(pairing_code(browser_peer["remote_card"]))
+            )
+            page.get_by_role("button", name="Pair this peer").click()
             expect(
                 page.locator("#main-content").get_by_text(
                     "Peer paired. Nothing has been shared automatically."
