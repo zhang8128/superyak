@@ -19,6 +19,7 @@ def password_hash(password, salt):
 # Public route spec 3, the holds: (limit, window in seconds). A pair is a username from one source; a device is a
 # browser's known-device token, whose failures count against it instead of holds 1-3.
 PAIR_HOLD, SOURCE_HOLD, USER_HOLD, DEVICE_HOLD = (8, 300), (40, 300), (30, 3600), (8, 300)
+INVITATION_TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')  # what secrets.token_urlsafe(32) makes, for both kinds
 DEVICE_LIFETIME = 180 * 86400
 DEVICES_PER_USER = 20
 
@@ -296,6 +297,8 @@ class Auth:
 
     def redeem(self, token, username, name, password):
         text(token, 'invitation', 128)
+        if not INVITATION_TOKEN.fullmatch(token):  # anonymous and public: a made-up token never reaches the database
+            raise Problem(400, 'Invitation unavailable')
         with self.transaction() as db:
             activation = db.execute('SELECT * FROM account_activations WHERE token_hash=? AND used=0 AND expires>?', (token_hash(token), self.clock())).fetchone()
             if activation:

@@ -361,3 +361,34 @@ def test_invalid_unicode_json_is_rejected_before_mutation(env):
     assert app.state.store.list_layers(users[0]['id']) == []
     assert doctor.get('/api/home').status_code == 200
     assert doctor.get('/api/shared/layers').json() == []
+
+
+@pytest.mark.parametrize('token', ['short', 'x' * 42, 'x' * 44, 'a' * 42 + '=', 'a' * 42 + '/', 'a' * 42 + ' '])
+def test_a_malformed_invitation_token_is_refused_before_any_database_read(env, monkeypatch, token):
+    """Public route, Serenity's read: anonymous redeem refuses a token that isn't token_urlsafe(32)'s shape without
+    opening a transaction, and answers as an unknown token does."""
+    app, *_ = env
+    def no_database():
+        raise AssertionError('redeem read the database for a malformed token')
+    monkeypatch.setattr(app.state.store, 'transaction', no_database)
+    response = TestClient(app, headers={'origin': 'http://testserver'}).post('/api/invitations/redeem', json={
+        'token': token, 'username': 'new', 'name': 'New', 'password': 'a-long-new-password'})
+    assert (response.status_code, response.json()) == (400, {'error': 'Invitation unavailable'})
+
+
+def test_redeem_runs_off_the_event_loop(env, monkeypatch):
+    import asyncio
+    app, *_ = env
+    store, seen = app.state.store, []
+    real = store.redeem
+    def recording(*args):
+        try:
+            asyncio.get_running_loop()
+            seen.append('loop')
+        except RuntimeError:
+            seen.append('worker')
+        return real(*args)
+    monkeypatch.setattr(store, 'redeem', recording)
+    TestClient(app, headers={'origin': 'http://testserver'}).post('/api/invitations/redeem', json={
+        'token': 'a' * 43, 'username': 'new', 'name': 'New', 'password': 'a-long-new-password'})
+    assert seen == ['worker']

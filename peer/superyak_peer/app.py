@@ -486,7 +486,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/invitations/redeem', status_code=201)
     async def redeem(request: Request):
         data = await body(request)
-        return store.redeem(data.get('token'), data.get('username'), data.get('name'), data.get('password'))
+        # off the event loop: under a held write lock, one forged token stalled the whole station (Serenity's read)
+        return await run_in_threadpool(store.redeem, data.get('token'), data.get('username'), data.get('name'), data.get('password'))
 
     @app.post('/api/access-requests', status_code=201)
     async def request_access(request: Request):
