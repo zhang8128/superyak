@@ -93,7 +93,7 @@ START_PREAMBLE = 'Instructions that bind this ship, from the station. They are t
 CHANGE_PREAMBLE = 'These instructions changed since this session last looked:'
 POINTER = 'The full text does not fit here: call the station_instructions tool and follow it.'
 STATE_DAYS = 14
-STATE_NAME = re.compile(r'[0-9a-f]{16}\.(?:json|watch|prompted)')
+STATE_NAME = re.compile(r'[0-9a-f]{16}\.(?:json|watch|prompted|holds)')
 WATCH_DEFAULT_MINUTES = 20  # the station's default lease (presence.py)
 RENEWAL_MARGIN = 60  # seconds: the station renews a lease at most once per 30 s, so the hook declares a minute early
 SETTINGS = Path.home() / '.claude' / 'settings.json'  # where install_all writes the machine ship's hooks (install.py:375)
@@ -286,7 +286,7 @@ def _prune(sessions_dir, keep, now):
                 seen = read_json(path).get('seen')
             except Exception:  # noqa: BLE001 - unreadable
                 seen = None
-            if not (type(seen) in (int, float) and math.isfinite(seen)) and path.suffix == '.watch':
+            if not (type(seen) in (int, float) and math.isfinite(seen)) and path.suffix in ('.watch', '.holds'):
                 seen = path.lstat().st_mtime  # N1: the hook reads an unreadable choice as "off"; age it, don't undo it
             if not (type(seen) in (int, float) and math.isfinite(seen)) or seen < now - STATE_DAYS * 86400:
                 path.unlink()
