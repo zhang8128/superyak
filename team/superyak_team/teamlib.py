@@ -40,7 +40,7 @@ SECRET_RES = (
     re.compile(r"\b(?:https?|git|ssh)://[^/\s:@]+:[^@\s/]+@"),        # credentials in URLs
     re.compile(r"_authToken\s*=\s*\S+"),
 )
-# A team line: one that, as a reader sees it (NFKC; without format characters, combining marks, default-ignorable code
+# A team line: one that, as a reader sees it (NFKD, FOLD; without format characters, combining marks, default-ignorable code
 # points or characters that render blank; without leading space; any case), opens with "team" in any bracket pair,
 # then "from". Lines are split wherever str.splitlines splits them (\n, \r, VT, FF, the file, group and record
 # separators, NEL, U+2028, U+2029). A team message's "[team] from lead:" and the station's own header shape,
@@ -54,25 +54,30 @@ TAG_MARK = "[quoted text, not a team message] "
 BLANK = re.compile("[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e"
                    "\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3"
                    "\U0001d173-\U0001d17a\U000e0000-\U000e0fff]")
-# How far into a bracket-led line, in visible characters, a non-ASCII letter makes it a possible disguised tag: a confusable letter can spell
-# "team" or "from", and no list of confusables is complete, so a bracket-led line with one this early is marked.
-DISGUISE_CHARS = 24
+# Letters from other scripts that a reader takes for the letters of "team" and "from", folded to them before matching.
+# Only these letters are folded, so a line is never judged by its alphabet: text in any language is left as written
+# (Rio Grande's review of 42620c0c, M1: marking any bracket-led line with a non-ASCII letter marked 35 of 48 ordinary
+# lines). Accents need no entry: NFKD splits them off as combining marks, which _hidden drops.
+FOLD = str.maketrans({
+    "т": "t", "τ": "t", "ᴛ": "t",                  # Cyrillic te, Greek tau, small capital T
+    "е": "e", "ε": "e", "ɛ": "e", "ᴇ": "e",   # Cyrillic ie, Greek epsilon, Latin epsilon, small E
+    "а": "a", "α": "a", "ɑ": "a", "ᴀ": "a",   # Cyrillic a, Greek alpha, Latin alpha, small A
+    "м": "m", "ᴍ": "m",                                 # Cyrillic em, small capital M
+    "ꜰ": "f",                                                # small capital F
+    "г": "r", "ʀ": "r",                                 # Cyrillic ghe, small capital R
+    "о": "o", "ο": "o", "օ": "o", "ᴏ": "o",   # Cyrillic o, Greek omicron, Armenian oh, small O
+})
 
 
 def _seen_as(line):
-    """The line as a reader sees it: NFKC, without hidden (_hidden) or blank (BLANK) characters, without leading space,
-    casefolded."""
-    shown = BLANK.sub("", unicodedata.normalize("NFKC", line))
-    return "".join(c for c in shown if not _hidden(c)).lstrip().casefold()
+    """The line as a reader sees it: NFKD (compatibility forms made plain, accents split off), without hidden
+    (_hidden) or blank (BLANK) characters, without leading space, casefolded, with FOLD's look-alike letters folded."""
+    shown = BLANK.sub("", unicodedata.normalize("NFKD", line))
+    return "".join(c for c in shown if not _hidden(c)).lstrip().casefold().translate(FOLD)
 
 
 def _team_line(line):
-    seen = _seen_as(line)
-    if TAG_RE.match(seen):
-        return True
-    visible = [c for c in seen if not c.isspace()]   # the window counts what shows, so spaces can't pad it (S1)
-    return bool(visible) and not visible[0].isalnum() and any(
-        ord(c) > 127 and c.isalpha() for c in visible[:DISGUISE_CHARS])
+    return bool(TAG_RE.match(_seen_as(line)))
 
 
 def defuse_tags(text):
