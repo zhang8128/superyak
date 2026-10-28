@@ -241,17 +241,23 @@ class Compressor:
     def _instinct_confidence(self) -> float:
         return self._config.instinct_confidence if self._config else 0.75
 
-    def cluster_episodes(self, scope: str = "recent") -> dict:
+    def cluster_episodes(self, scope: str = "recent", *, auto: str = "used") -> dict:
         """Phase 1: cluster uncompressed episodes, check for semantic matches.
+
+        ``auto`` is passed to ``Storage.get_uncompressed_episodes``: prompt
+        captures (source 'auto') are offered only once a recall that returned
+        them was logged used ("used"), or never ("none", the no-model path).
 
         Returns: {clusters: [{episodes, centroid, match, action}], compress_id}
         """
+        if auto not in ("all", "used", "none"):  # before any reset: a bad value must not wipe semantics first
+            raise ValueError(f"auto must be 'all', 'used' or 'none', not {auto!r}")
         if scope == "full":
             self._reset_all()
         elif scope == "refine":
             return self._refine_clusters()
 
-        episodes = self._storage.get_uncompressed_episodes()
+        episodes = self._storage.get_uncompressed_episodes(auto=auto)
         if not episodes:
             return {"clusters": [], "compress_id": None}
 
@@ -626,7 +632,13 @@ class Compressor:
                     )
 
                 # External graph writes run only after the local transaction commits.
-                knowledge_feeds.append((cluster["episodes"], semantic_content))
+                # Prompt captures never reach the graph; a cluster made only
+                # of them adds no feed.
+                feed_episodes = [
+                    ep for ep in cluster["episodes"] if ep.get("source") != "auto"
+                ]
+                if feed_episodes:
+                    knowledge_feeds.append((feed_episodes, semantic_content))
 
             self._storage.mark_episodes_compressed(all_episode_ids)
             episodes_processed += len(all_episode_ids)
@@ -837,7 +849,7 @@ class Compressor:
         of concatenating everything. Uses MMR for clusters with 4+ episodes
         to select diverse representatives.
         """
-        result = self.cluster_episodes()
+        result = self.cluster_episodes(auto="none")
         clusters = result.get("clusters", [])
         compress_id = result.get("compress_id")
 
@@ -1225,6 +1237,7 @@ class Compressor:
             """
             SELECT e.id, e.content, e.context, e.source FROM episodes e
             WHERE e.core = 1
+            AND coalesce(e.source, '') <> 'auto'
             AND e.id NOT IN (SELECT episode_id FROM semantic_sources)
             """
         ).fetchall()

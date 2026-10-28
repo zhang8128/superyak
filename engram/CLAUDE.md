@@ -57,6 +57,7 @@ lifecycle barrier per step, never inside the handshake: Claude Code allows
 needed ~40 s of startup compression (2026-09-02). `status()` reports
 `maintenance_pending` until the pass lands; `_init()` callers outside the
 served process still get it inline.
+Auto-captured prompts (`source='auto'`) are never auto-compressed, and the model's `compress()` offers them only after a used recall returned them.
 Decay uses ACT-R power-law: `B = ln(1 + n * t^(-d))` where n = access count,
 t = hours since last access, d = 0.5. Rate-limited (30min minimum). Core episodes exempt.
 Centroid-based selection (most representative episode per cluster, MMR for diversity).
@@ -253,21 +254,26 @@ memory, for what, and where. Four modules: `permissions.py` holds the pure rules
 `permission_uses.py` is the receipts file and the views over it; `permission_cli.py` is `engram-permissions`, the
 person's side. The ledger lives at `ENGRAM_HOME/.engram/permissions.db` and the receipts at
 `ENGRAM_HOME/.engram/permission-uses.db`, fixed paths. The gate is `off` until the owner raises it (`shadow`, then
-`enforce`). With no ledger, or with the gate `off`, engram behaves as before apart from these changes, each of which
+`enforce`; `gate enforce` refuses until the ledger's projection digest lands, plan R56). With no ledger, or with the gate `off`, engram behaves as before apart from these changes, each of which
 only refuses or narrows: the daemon never serves `group:outside-home`, `share` refuses that audience, and the policy
 generator refuses a group named `outside-home` in `groups.toml`; the daemon caps a recall's `k` at 20; and `share`
-refuses a new placement in a house that already holds 20,000. Once a ledger exists, these hold under `off` too: the
-`shares` and `unshare` tools answer only an agent acting for the ledger owner (plan gate G13), and the gate act
-re-marks every house that carries `unreadable` or another ledger's id, so `gate off` opens it. Under `enforce`,
+refuses a new placement in a house that already holds 20,000. Once a ledger exists, these hold under `off` too, and
+two more hold: the `shares` and `unshare` tools answer only an agent acting for the ledger owner (plan gate
+G13), and the gate act re-marks every house that carries `unreadable` or another ledger's id, so `gate off` opens
+it. Under `enforce`,
 `remember(genome=True)` of delivered content is refused. The lighthouse daemon does not refuse to start without `ENGRAM_EMBEDDER_SOCKET`:
 without it, it loads the model in process and logs a warning, as before this branch. Small-hardware machines (the Pi) still need `embedder_socket` in
 their `runtime.json` and the `superyak-embedder` unit running, so the model is never loaded twice there (spec 12.2;
 the plan's gate G0).
 
 Agents never run, for the person, any `engram-permissions` command that writes, such as `sign`, `allow`, `grant`, `migrate` or `gate`. Each needs the person's own terminal yes.
-`engram-permissions verify` writes nothing, so an agent may run it. It checks the log's hash chain, and that no
-table names a seq past the log's last row: a cut tail (a copy of the file taken mid-write without its journal),
-which every reader refuses.
+`engram-permissions verify` writes nothing, so an agent may run it. It runs SQLite's integrity check and checks
+the log's hash chain, that no table names a seq past the log's last row, and that each seq column the row sets
+holds its seq, reading every table past its indexes. Every reader makes the same tail checks and refuses a
+ledger that fails them, and the gate reads `closed` when the head is not the log's last row. The checks catch a
+cut tail (a copy of the file taken mid-write without its journal) that tore one row per column. A tear across
+several rows of one column, or a torn index page, can still read whole to a reader; the projection digest (a
+follow-up, before any house runs `enforce`) closes the class.
 
 An agent asks through the `permit` tool (a proposal the owner signs, unless a grant covers it) and reads through
 `permissions`. Memory: each process peaks under 512 MB on the Pi (spec 15); on the Pi the daemon needs `ENGRAM_EMBEDDER_SOCKET`, or it loads a second model.

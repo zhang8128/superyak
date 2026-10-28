@@ -210,3 +210,14 @@ def test_by_hand_targets_run_the_same_commands(tmp_path):
         reconcile + ['--replaced', str(replaced), '--unpair', 'abcdef012345', '--unpair', 'ab' * 32]]
     refused = make('station-restore-reconcile', dry=False)
     assert refused.returncode == 2 and refused.stdout.startswith('Usage: make station-restore-reconcile DB=')
+
+
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
+def test_station_moderate_ignores_exported_hours_budget_and_actions_but_takes_the_command_line():
+    """An exported HOURS, BUDGET or ACTIONS must not silently change a grant; the make command line still wins."""
+    env = {**os.environ, 'HOURS': '1', 'BUDGET': '1', 'ACTIONS': 'kick'}
+    base = ['make', '-n', '-C', str(REPO), 'station-moderate', 'ID=abc123', 'GRANTEE=rio-grande']
+    plain = subprocess.run(base, capture_output=True, text=True, env=env, check=True).stdout
+    assert '--hours "720" --budget "10" --actions "add,remove"' in plain
+    typed = subprocess.run([*base, 'HOURS=5'], capture_output=True, text=True, env=env, check=True).stdout
+    assert '--hours "5" --budget "10"' in typed

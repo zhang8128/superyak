@@ -63,6 +63,13 @@ def with_earlier_noise(earlier, later):
     return later
 
 
+def replies_sql(count=None):
+    """The query behind `_replies`. With `count` ids (a page's), `+messages.room_id` keeps the room filter off the
+    room index so SQLite looks the ids up by primary key."""
+    only, room = (' AND messages.id IN (%s)' % ','.join('?' * count), '+messages.room_id') if count is not None else ('', 'messages.room_id')
+    return f'SELECT message_replies.* FROM message_replies JOIN messages ON messages.id=message_replies.message_id WHERE {room}=?{only}'
+
+
 class Inbox:
     @contextmanager
     def inbox_wait_slot(self, actor):
@@ -154,6 +161,8 @@ class Inbox:
                         'room_title': row['title'], 'body': found['body'], 'created': found['created'],
                         'author': self._inbox_author(db, found['author_id']), 'mentions_me': bool(mentioned),
                         'reply_to': self._reply_to(db, found['id']), 'source': sources[row['resource_id']].get(found['id'])}
+                if item['reply_to'] and self._replies_to(db, item['reply_to'], actor):  # R35: the key only when True
+                    item['replies_to_me'] = True
                 if row['resource_id'] in breakout_rooms:  # breakouts S6: only a breakout's items carry the key
                     item['breakout'] = True
                 messages.append(item)
@@ -196,10 +205,16 @@ class Inbox:
         row = db.execute('SELECT reply_to FROM message_replies WHERE message_id=?', (message_id,)).fetchone()
         return row['reply_to'] if row else None
 
-    def _replies(self, db, room_id):
-        """Every reply in a room, keyed by the replying message (local posts only carry the field)."""
+    def _replies_to(self, db, target_id, actor):
+        """Whether the message `target_id` (local or a peer's) was written by `actor`: one indexed read."""
+        return db.execute('SELECT 1 FROM messages WHERE id=? AND author_id=? UNION ALL '
+                          'SELECT 1 FROM peer_messages WHERE id=? AND author_id=?',
+                          (target_id, actor, target_id, actor)).fetchone() is not None
+
+    def _replies(self, db, room_id, ids=None):
+        """Every reply in a room, keyed by the replying message (local posts only carry the field). With `ids`, only those messages'."""
         return {r['message_id']: r['reply_to'] for r in db.execute(
-            'SELECT message_replies.* FROM message_replies JOIN messages ON messages.id=message_replies.message_id WHERE messages.room_id=?', (room_id,))}
+            replies_sql(None if ids is None else len(ids)), (room_id, *(() if ids is None else tuple(ids))))}
 
     def _check_reply_to(self, db, room_id, reply_to):
         """A reply names a message in the same local room, a local post or a federated member's reply."""

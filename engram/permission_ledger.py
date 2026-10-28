@@ -94,6 +94,8 @@ CREATE INDEX group_members_group ON group_members(group_id);
 CREATE INDEX subjects_removed ON subjects(removed_seq) WHERE removed_seq IS NOT NULL;
 CREATE INDEX collection_members_removed ON collection_members(removed_seq) WHERE removed_seq IS NOT NULL;
 CREATE INDEX proposals_decided ON proposals(decided_seq) WHERE decided_seq IS NOT NULL;
+CREATE INDEX records_revoked ON records(revoked_seq) WHERE revoked_seq IS NOT NULL;
+CREATE INDEX grants_revoked ON permission_grants(revoked_seq) WHERE revoked_seq IS NOT NULL;
 """
 # the indexes a writing open adds to a ledger made before they were in the schema
 _LATER_INDEXES = (
@@ -102,6 +104,8 @@ _LATER_INDEXES = (
     "CREATE INDEX IF NOT EXISTS collection_members_removed ON collection_members(removed_seq) "
     "WHERE removed_seq IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS proposals_decided ON proposals(decided_seq) WHERE decided_seq IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS records_revoked ON records(revoked_seq) WHERE revoked_seq IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS grants_revoked ON permission_grants(revoked_seq) WHERE revoked_seq IS NOT NULL",
 )
 
 # the tables a State reads per object, through StateRows, and not whole
@@ -117,15 +121,25 @@ _HOT = ("This ledger has a hot journal from a writer that stopped mid-commit, wh
         "such as `engram-permissions sweep`.")
 # Every column that holds the seq of the log row that wrote it (P 5.6). A file copy taken mid-commit without its
 # journal (a torn restore) can keep a log row's projection and lose the row: that seq is then past the log's last.
+# Or it can keep the row and lose its projection: a column the last row sets then does not hold the row's seq, unless
+# the row set that column on several rows and the tear kept one of them, which then reads whole (Serenity's
+# re-check, N1): these columns catch a tear of one row per column, and the projection digest, a follow-up before any
+# house runs `enforce`, closes the class.
 _SEQ_COLUMNS = {t: cs for t, cs in ((t, tuple(c for c in cols if c == "seq" or c.endswith("_seq")))
                                     for t, cols in _COLUMNS.items()) if cs}
 # the seq columns an update sets on an older row; every other one is set only when its row is inserted
 _SET_LATER = frozenset({"retired_seq", "removed_seq", "revoked_seq", "decided_seq"})
+# The seq columns a log row's body sets (`_seq_sets`), kept by the row's head, `<seq>:<digest>`, for the last few
+# heads read in this process (Serenity's pre-merge N5): the digest hashes the row with its body, so one head names
+# one body. A read whose head is unchanged parses nothing; a different head, even at the same seq, parses again.
+_LAST_SETS_KEPT = 8
+_LAST_SETS: "OrderedDict[str, frozenset]" = OrderedDict()
+_LAST_SETS_LOCK = threading.Lock()
 _CUT = ("The log's tail was cut, as by a copy or restore of the file taken mid-write without its journal, so the "
-        "tables may hold a change, such as a revocation, that the log has lost. Every reader refuses the ledger "
-        "until it verifies (P 5.6): `engram-permissions verify` reports it. Restore the file together with its "
-        "journal, or replay the log that is left with `engram-permissions rebuild --out <dir>` and make the lost "
-        "acts again.")
+        "tables may hold a change, such as a revocation, that the log has lost, or lack one the log holds. Every "
+        "reader refuses the ledger until it verifies (P 5.6): `engram-permissions verify` reports it. Restore the "
+        "file together with its journal, or replay the log that is left with `engram-permissions rebuild --out "
+        "<dir>` and make the lost acts again.")
 
 
 class LedgerUnreadable(Exception):
@@ -513,6 +527,15 @@ def _bad(why: str) -> RuleError:
     return RuleError(_RULE, why)
 
 
+def _seq_sets(text: str) -> frozenset:
+    """The seq columns, as (table, column), that a log row's body (its JSON text) sets to the row's own seq."""
+    body = json.loads(text)
+    sets = [(i["table"], i["row"]) for i in body.get("insert", ())]
+    sets += [(i["table"], i["set"]) for i in body.get("update", ())]
+    return frozenset((t, c) for t, values in sets for c, v in values.items()
+                     if v == "@seq" and c in _SEQ_COLUMNS.get(t, ()))
+
+
 class Ledger:
     def __init__(self, conn: sqlite3.Connection, path: Path, read_only: bool):
         self.conn, self.path, self.read_only = conn, path, read_only
@@ -693,45 +716,103 @@ class Ledger:
         row = self.conn.execute("SELECT seq, digest FROM ledger_log WHERE seq = ?", (top,)).fetchone()
         return None if row is None else f"{row[0]}:{row[1]}"
 
+    def _head_problem(self, top: int, meta: Mapping) -> str | None:
+        """How `meta.head`, when the ledger keeps one, is not the log's last row, in words; None when it is."""
+        head, last = meta.get("head"), self._head(top)
+        if head is None or head == last:
+            return None
+        return f"meta.head names seq {head.split(':', 1)[0]} ({head}), but the log's last row is {last or 'none'}"
+
     def _max_seq(self, table: str, column: str, loaded: Mapping | None):
         """The highest value of a seq column. A table the State read whole is read from `loaded`. Otherwise, with
-        `loaded` given (a State, which must stay cheap), a column an update sets is read through its partial index,
-        and one set only at insert from the table's newest row: rows are only ever inserted, in seq order, and
-        never deleted, so the newest carries the highest. With `loaded` None (`integrity`), every row is read."""
+        `loaded` given (a State, or `_append` with {}, which must stay cheap), a column an update sets is read
+        through its partial index where it has one (`subjects_removed`, `collection_members_removed`,
+        `proposals_decided`, `records_revoked`, `grants_revoked`), or whole in the other tables a State reads whole
+        (they are small), and one set only at insert from the table's newest row: rows are only ever inserted, in
+        seq order, and never deleted, so the newest carries the highest. With `loaded` None (`integrity`), every
+        row is read from the table itself, past its indexes (`NOT INDEXED`), so a torn index page can neither hide
+        a row nor invent one."""
         if loaded is not None and table in loaded:
             return max((r[column] for r in loaded[table] if r[column] is not None), default=None)
-        if loaded is None or column in _SET_LATER:
+        if loaded is None:
+            sql = f"SELECT MAX({column}) FROM {table} NOT INDEXED WHERE {column} IS NOT NULL"
+        elif column in _SET_LATER:
             sql = f"SELECT MAX({column}) FROM {table} WHERE {column} IS NOT NULL"
         else:
             sql = f"SELECT {column} FROM {table} ORDER BY rowid DESC LIMIT 1"
         row = self.conn.execute(sql).fetchone()
         return None if row is None else row[0]
 
+    def _last_sets(self, top: int) -> tuple[frozenset, str | None]:
+        """The seq columns, as (table, column), that the log's last row sets to its own seq ("@seq"), and why its
+        body cannot be read, if it cannot. The parse is kept by the row's head (`_LAST_SETS`): a read whose head is
+        unchanged reads no body and parses nothing, and a different head always parses its own."""
+        head = self._head(top)
+        if head is None:
+            return frozenset(), None
+        with _LAST_SETS_LOCK:
+            sets = _LAST_SETS.get(head)
+            if sets is not None:
+                _LAST_SETS.move_to_end(head)
+                return sets, None
+        row = self.conn.execute("SELECT body FROM ledger_log WHERE seq = ?", (top,)).fetchone()
+        if row is None:
+            return frozenset(), None
+        try:
+            sets = _seq_sets(row[0])
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            return frozenset(), f"the body of the log's last row, seq {top}, cannot be read ({e!r})"
+        with _LAST_SETS_LOCK:
+            _LAST_SETS[head] = sets
+            _LAST_SETS.move_to_end(head)
+            while len(_LAST_SETS) > _LAST_SETS_KEPT:
+                _LAST_SETS.popitem(last=False)
+        return sets, None
+
     def _tail_problems(self, top: int, meta: Mapping, loaded: Mapping | None = None) -> list[str]:
-        """P 5.6: the tables are the log's projection, so no seq column names a seq past the log's last row, and
-        `meta.head`, when the ledger keeps one, is that row. Each way this fails, in words; none for a whole
-        tail. Read inside the caller's read transaction."""
+        """P 5.6: the tables are the log's projection, so no seq column names a seq past the log's last row,
+        `meta.head`, when the ledger keeps one, is that row, and each seq column that row sets to its own seq holds
+        that seq at its highest (a tear can keep the row and its head and lose the page that held its change). Each
+        way this fails, in words. Read inside the caller's read transaction.
+
+        An empty list is not proof of a whole tail. These checks catch a tear of one row per column; a tear across
+        several rows of one column (an act that set the column on several rows, the tear keeping one) or a torn
+        index page that a partial-index or newest-row read trusts can still read whole. The projection digest, a
+        follow-up before any house runs `enforce`, closes the class (Serenity's re-check, N1)."""
         out = []
-        head = meta.get("head")
-        if head is not None and head != self._head(top):
-            out.append(f"meta.head names seq {head.split(':', 1)[0]} ({head}), but the log's last row is "
-                       f"{self._head(top) or 'none'}")
+        cut = self._head_problem(top, meta)
+        if cut:
+            out.append(cut)
+        last, unread = self._last_sets(top)
+        if unread:
+            out.append(unread)
         for table, columns in _SEQ_COLUMNS.items():
             for column in columns:
                 v = self._max_seq(table, column, loaded)
                 if v is not None and v > top:
                     out.append(f"{table}.{column} names seq {v}, past the log's last row {top}")
+                elif (table, column) in last and v != top:
+                    out.append(f"the log's last row, seq {top}, sets {table}.{column}, but the highest seq that "
+                               f"column holds is {'none' if v is None else v}: the row's change is not in the table")
         return out
 
     def integrity(self) -> tuple[int, list[str]]:
         """What `engram-permissions verify` reports, read in one transaction: (the log's last seq, each problem
-        in words). The hash chain from the first row, `meta.head`, and every seq column of every row."""
+        in words). SQLite's own check of the file (`PRAGMA integrity_check`, which also holds every index against
+        its table), the hash chain from the first row, `meta.head`, and every seq column of every row. Each table
+        is read past its indexes (`NOT INDEXED`; `ledger_log` has none, its seq is the rowid), so a torn index page
+        can neither hide a row nor invent one. No problem is not proof of a whole tail: a tear across several rows
+        of one column can still read whole (`_tail_problems`) until the projection digest lands."""
         self.conn.execute("BEGIN")
         try:
+            checked = [str(r[0]) for r in self.conn.execute("PRAGMA integrity_check")]
+            problems = [] if checked == ["ok"] else [f"SQLite's integrity check of the file: {m}"
+                                                     for m in checked or ["no answer"]]
             top = self.seq()
             broken = self.verify()
-            problems = [] if broken is None else [f"the log's hash chain breaks at seq {broken}"]
-            problems += self._tail_problems(top, self.meta())
+            problems += [] if broken is None else [f"the log's hash chain breaks at seq {broken}"]
+            meta = {r["key"]: r["value"] for r in self.conn.execute("SELECT key, value FROM meta NOT INDEXED")}
+            problems += self._tail_problems(top, meta)
         finally:
             self.conn.execute("COMMIT")
         return top, problems
@@ -754,10 +835,12 @@ class Ledger:
             last = self.conn.execute("SELECT seq, digest FROM ledger_log ORDER BY seq DESC LIMIT 1").fetchone()
             seq, prev = (last["seq"] + 1, last["digest"]) if last else (1, ZERO)
             head = self.conn.execute("SELECT value FROM meta WHERE key = 'head'").fetchone()
-            if head is not None and (last is None or head[0] != f"{last['seq']}:{last['digest']}"):
-                # a cut tail (P 5.6): a row written now would take the seq of the one the log lost
-                raise LedgerUnreadable(f"{self.path}: meta.head is {head[0]}, but the log's last row is "
-                                       f"{'none' if last is None else str(last['seq']) + ':' + last['digest']}. {_CUT}")
+            # a cut tail (P 5.6), checked here for every writer, a State read first or not: a row written now would
+            # take the seq of the one the log lost, or, written over a last row whose change was lost, hide the tear.
+            # The cheap reads a State makes, with no table loaded.
+            cut = self._tail_problems(seq - 1, {} if head is None else {"head": head[0]}, loaded={})
+            if cut:
+                raise LedgerUnreadable(f"{self.path}: a row written now would take seq {seq}, but {cut[0]}. {_CUT}")
             entry = {"seq": seq, "at": at, "kind": kind, "ref": ref, "actor": actor, "channel": channel,
                      "under_grant": under_grant, "proposal_id": proposal_id, "body": text}
             digest = _digest(prev, entry)
@@ -1948,6 +2031,14 @@ def _make_end_grant(state, actor, args, auth, now):
 
 _GATE = "12.3 the gate"
 GATE_MODES = ("off", "shadow", "enforce")
+# Serenity's pre-merge item 5: the gate act refuses `enforce`, with this reason, until the ledger's projection digest
+# lands (R48's follow-up); then this is None. `off` and `shadow` are unchanged, and a gate already at `enforce` reads
+# as it is.
+ENFORCE_WAITS: str | None = (
+    "enforce waits for the ledger's projection digest, a follow-up to this branch. The ledger's tail checks catch a "
+    "copy of the file torn in one row per column, but one torn across several rows of one column, or a torn index "
+    "page, can still read whole, so a removal or revocation the log holds could read as never made and what it took "
+    "away be served. off and shadow are unchanged")
 PUBLISHED_HOUSE = Path(".engram") / "instances" / "lighthouse" / "graph.db"
 
 
@@ -2033,11 +2124,21 @@ def effective_gate(engram_home: Path, served: Sequence[Path], *, busy_ms: int = 
             return _closed("ledger has a hot journal; any writing open clears it, such as engram-permissions sweep")
         return _closed(f"ledger cannot be read: {e}")
     try:
-        meta = led.meta()
+        # meta and the log's last row in one read: a gate act writes `gate` and `head` in one commit, so a meta page
+        # torn apart from the log names an older head, and the gate it holds is not the ledger's (P 5.6)
+        led.conn.execute("BEGIN")
+        try:
+            meta = led.meta()
+            cut = led._head_problem(led.seq(), meta)
+        finally:
+            led.conn.execute("COMMIT")
     except sqlite3.Error as e:
         return _closed(f"ledger cannot be read: {e}")
     finally:
         led.close()
+    if cut:
+        return _closed(f"{cut}: the log's tail was cut, so the gate it holds may be an older one; "
+                       "engram-permissions verify reports it")
     ledger_id, mode, raised = meta.get("ledger_id"), meta.get("gate"), bool(meta.get("gate_raised"))
     for house in served:
         try:
@@ -2096,9 +2197,17 @@ def _prep_gate(state, actor, args):
     if set(args) - {"mode"}:
         raise RuleError(_GATE, "the gate act takes only mode: the houses are those on disk at the yes")
     mode = args.get("mode")
+    check_gate_mode(mode)
+    return {"mode": mode}
+
+
+def check_gate_mode(mode) -> None:
+    """The gate act's mode (P 12.3), which the CLI also checks before it asks for a yes: one of GATE_MODES, and not
+    `enforce` while ENFORCE_WAITS holds its reason."""
     if mode not in GATE_MODES:
         raise RuleError(_GATE, f"the gate is one of {', '.join(GATE_MODES)}")
-    return {"mode": mode}
+    if mode == "enforce" and ENFORCE_WAITS:
+        raise RuleError(_GATE, ENFORCE_WAITS)
 
 
 def _mark_house(db_path: Path, ledger_id: str) -> None:
