@@ -322,6 +322,20 @@ def test_a_rebuild_replays_unsynced_with_its_journal_in_memory_and_the_copy_open
     assert [p.name for p in ledger_path(dest).parent.iterdir()] == ["permissions.db"]
 
 
+def test_a_torn_rebuilding_file_left_by_a_power_loss_is_removed_before_the_next_rebuild(tmp_path):
+    """Rio Grande's case: a pulled plug runs no `finally`, and an unsynced file can be torn any way at all. The next
+    rebuild deletes it, and its journal, before it starts, and never opens it."""
+    led = small_ledger(tmp_path)
+    final = ledger_path(tmp_path / "copy")
+    final.parent.mkdir(parents=True)
+    torn = final.with_name("permissions.db.rebuilding")
+    torn.write_bytes(b"SQLite format 3\x00" + os.urandom(8192))
+    final.with_name("permissions.db.rebuilding-journal").write_bytes(os.urandom(4096))
+    copy = Ledger.open(led.rebuild(tmp_path / "copy"))
+    assert copy.tables() == led.tables() and copy.verify() is None
+    assert [p.name for p in final.parent.iterdir()] == ["permissions.db"]
+
+
 def test_a_rebuild_syncs_its_file_then_renames_it_then_syncs_the_folder(tmp_path, monkeypatch):
     led = small_ledger(tmp_path)
     calls, real_replace = [], os.replace
