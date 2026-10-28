@@ -2313,7 +2313,8 @@ make imprint-plan IMPRINT_ARGS='--store <his graph.db> --lanes personal,work --l
 `route` waits until trails ships (the safety review's S1, 2026-10-28). Without `trails.py`, admission of a route
 imprint fails at step `count`, after its session ids and recall and operation logs have reached the station. So
 `imprint_filter.ROUTE_OPEN` and the station's `imprints.ROUTE_OPEN` are false: the plan refuses `--actions
-imprint,route`, and the station refuses such a request before staging it. Trails opens both.
+imprint,route`, a plan saved with route before the gate neither reads nor builds ("Run the plan again without
+route."; the fresh review's S-1), and the station refuses such a request before staging it. Trails opens both.
 
 Even then, instincts, dream residue, task contexts, the knowledge graph and the other files of 6.3 stay home (D8,
 the permissions spec's 5.2), as do memories whose text names something that stays (D23), those whose lane change

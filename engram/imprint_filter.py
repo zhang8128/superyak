@@ -229,6 +229,7 @@ OPERATOR_RE = re.compile(r"[a-z][a-z0-9-]{0,62}")
 # its count, after the session ids and the recall and operation logs have reached the station. Opening it is this
 # line and `imprints.ROUTE_OPEN` on the station, with trails.
 ROUTE_OPEN = False
+ROUTE_WAITS = "--actions must be imprint for now: route waits until trails ships."
 
 
 class PlanRefused(ValueError):
@@ -374,7 +375,7 @@ def parse_terms(*, audience: str, actions: str, purposes: str, days: int, operat
     if acts not in (frozenset({"imprint"}), frozenset({"imprint", "route"})):
         raise PlanRefused("--actions must be imprint, or imprint,route, in step 1.")
     if "route" in acts and not ROUTE_OPEN:
-        raise PlanRefused("--actions must be imprint for now: route waits until trails ships.")
+        raise PlanRefused(ROUTE_WAITS)
     purps = frozenset(p.strip() for p in (purposes or "").split(",") if p.strip())
     want = frozenset({"calibration", "trail-evaluation"}) if "route" in acts else frozenset({"calibration"})
     if purps != want:

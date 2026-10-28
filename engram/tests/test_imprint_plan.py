@@ -160,6 +160,22 @@ def test_a_plan_naming_another_home_is_refused_before_anything_is_written(tmp_pa
     assert "acting for andy" in render_dry_run(make_plan(*plan_args(tmp_path / "ok")), CONTEXT)
 
 
+def test_the_plan_command_refuses_route_before_anything_is_written(tmp_path, monkeypatch, capsys, route_closed):
+    """The fresh review's N1: route waits for trails at the command, not only in parse_terms."""
+    home = tmp_path / "h"; write_context(home, ANDY_CONTEXT)
+    scratch_env(monkeypatch, home)
+    assert main(plan_flags(tmp_path, home, "--actions", "imprint,route")) == 2
+    assert "route waits until trails ships" in capsys.readouterr().err
+    assert not list((home / "imprints" / "plans").glob("*.json"))
+
+
+def test_the_help_says_route_waits(capsys):                             # the fresh review's N3
+    with pytest.raises(SystemExit):
+        main(["plan", "--help"])
+    shown = " ".join(capsys.readouterr().out.split())
+    assert shown.count("waits until trails ships") == 2 and "imprint, or imprint,route" not in shown
+
+
 def test_without_a_station_context_nothing_is_planned(tmp_path):
     with pytest.raises(PlanRefused, match="No station context"):
         read_context(tmp_path / "h")

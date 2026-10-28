@@ -45,6 +45,8 @@ def test_route_waits_for_trails(tmp_path, route_closed):
     refused = post(st, request_doc())
     assert refused.status_code == 400 and "terms.actions" in refused.json()["error"]
     assert not (tmp_path / "peer" / "imprints").exists() or not any((tmp_path / "peer" / "imprints").iterdir())
+    with st.store.transaction() as db:                                  # and no row either (the fresh review's N2)
+        assert db.execute("SELECT count(*) FROM imprint_requests").fetchone()[0] == 0
     assert post(st, request_doc(route=False)).status_code == 201
 
 

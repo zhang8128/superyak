@@ -343,6 +343,27 @@ def test_the_subcommand_prints_the_request_and_if_needed_prints_nothing_the_seco
     assert main(flags) == 0 and capsys.readouterr().out == ""
 
 
+def test_a_route_plan_saved_before_the_gate_neither_reads_nor_builds(tmp_path, monkeypatch, capsys, route_closed):
+    """The fresh review's S-1: a plan saved with route while it was open is refused by every reader of a saved plan
+    (read, build, and build --if-needed as make imprint-send runs it) once route is shut, and no imprint is made."""
+    import imprint_filter
+    from imprint import read_plan
+    with pytest.MonkeyPatch.context() as opened:
+        opened.setattr(imprint_filter, "ROUTE_OPEN", True)                 # saved before the gate
+        plan = make_plan(*plan_args(tmp_path, owner="andy", route=True))
+    assert imprint_filter.ROUTE_OPEN is False
+    words = "route waits until trails ships. Run the plan again without route."
+    with pytest.raises(PlanRefused, match=words):
+        read_plan(plan.id, home=HOME(tmp_path), engram_home=EH(tmp_path), limit=5)
+    with pytest.raises(PlanRefused, match=words):
+        run_build(tmp_path, plan)
+    scratch_env(monkeypatch, HOME(tmp_path))
+    assert main(["build", "--plan", plan.id[:4], "--if-needed", "--superyak-home", str(HOME(tmp_path)),
+                 "--engram-home", str(EH(tmp_path))]) == 2
+    assert words in capsys.readouterr().err
+    assert imprint_dirs(tmp_path) == [] and "imprint_id" not in plan_file(tmp_path, plan)
+
+
 def test_rf5_a_second_build_of_one_plan_refuses(tmp_path, monkeypatch, capsys):
     plan = make_plan(*plan_args(tmp_path))
     scratch_env(monkeypatch, HOME(tmp_path))
