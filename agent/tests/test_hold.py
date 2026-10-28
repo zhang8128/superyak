@@ -366,6 +366,29 @@ def test_the_session_is_in_the_record_before_any_provider_is_asked(ship):
     assert seen[1] == {'id': 's1', 'transcript': None}
 
 
+def test_a_provider_that_noted_something_is_saved_though_nothing_prints(ship):       # the lessons-hook reviews' S2
+    """A provider that asked about a command and found nothing keeps its note, so the next call of that command doesn't
+    ask again: the entry saves when a provider changed its own entries, though nothing is held or spent."""
+    asked = []
+
+    def lessons(command, record, now, limit):
+        heads = record.setdefault('lessons', {}).setdefault('heads', [])
+        if command in heads:
+            return []
+        asked.append(command)
+        heads.append(command)
+        return []
+    assert decide(ship, 'npm test', lessons=lessons) is None
+    assert saved(ship)['lessons'] == {'heads': ['npm test']}
+    assert decide(ship, 'npm test', now=11.0, lessons=lessons) is None
+    assert asked == ['npm test']                                                  # asked once, not on every call
+
+
+def test_a_provider_that_changed_nothing_leaves_the_record_unwritten(ship):
+    assert decide(ship, 'npm test', lessons=lambda command, record, now, limit: []) is None
+    assert holds.record_path(ship.home / 'sessions', 's1').read_text() == ''     # nothing held, spent or noted
+
+
 BROKEN = ['raises', 'not holds', 'over its limit', 'over its bytes', 'empty text', 'SystemExit', 'KeyboardInterrupt',
           'a set in the record']
 
