@@ -94,6 +94,8 @@ CREATE INDEX group_members_group ON group_members(group_id);
 CREATE INDEX subjects_removed ON subjects(removed_seq) WHERE removed_seq IS NOT NULL;
 CREATE INDEX collection_members_removed ON collection_members(removed_seq) WHERE removed_seq IS NOT NULL;
 CREATE INDEX proposals_decided ON proposals(decided_seq) WHERE decided_seq IS NOT NULL;
+CREATE INDEX records_revoked ON records(revoked_seq) WHERE revoked_seq IS NOT NULL;
+CREATE INDEX grants_revoked ON permission_grants(revoked_seq) WHERE revoked_seq IS NOT NULL;
 """
 # the indexes a writing open adds to a ledger made before they were in the schema
 _LATER_INDEXES = (
@@ -102,6 +104,8 @@ _LATER_INDEXES = (
     "CREATE INDEX IF NOT EXISTS collection_members_removed ON collection_members(removed_seq) "
     "WHERE removed_seq IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS proposals_decided ON proposals(decided_seq) WHERE decided_seq IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS records_revoked ON records(revoked_seq) WHERE revoked_seq IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS grants_revoked ON permission_grants(revoked_seq) WHERE revoked_seq IS NOT NULL",
 )
 
 # the tables a State reads per object, through StateRows, and not whole
@@ -704,9 +708,11 @@ class Ledger:
     def _max_seq(self, table: str, column: str, loaded: Mapping | None):
         """The highest value of a seq column. A table the State read whole is read from `loaded`. Otherwise, with
         `loaded` given (a State, or `_append` with {}, which must stay cheap), a column an update sets is read
-        through its partial index, or whole in a table a State reads whole (they are small), and one set only at
-        insert from the table's newest row: rows are only ever inserted, in seq order, and never deleted, so the
-        newest carries the highest. With `loaded` None (`integrity`), every row is read."""
+        through its partial index where it has one (`subjects_removed`, `collection_members_removed`,
+        `proposals_decided`, `records_revoked`, `grants_revoked`), or whole in the other tables a State reads whole
+        (they are small), and one set only at insert from the table's newest row: rows are only ever inserted, in
+        seq order, and never deleted, so the newest carries the highest. With `loaded` None (`integrity`), every
+        row is read."""
         if loaded is not None and table in loaded:
             return max((r[column] for r in loaded[table] if r[column] is not None), default=None)
         if loaded is None or column in _SET_LATER:
