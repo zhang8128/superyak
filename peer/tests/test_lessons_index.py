@@ -408,7 +408,8 @@ def test_the_prompt_path_imports_no_store_and_writes_nothing(lessons_station, tm
 def test_the_prompt_path_runs_on_the_standard_library_alone_and_writes_no_bytecode(lessons_station, tmp_path):
     """Tardis's conditions for the hook's in-process path. Its interpreter is the system python3 without the peer's venv,
     so superyak_peer/__init__.py imports only the standard library, and __init__, common and lessons import with no
-    site-packages at all (-S); importing them with bytecode off writes no __pycache__."""
+    site-packages at all (-S); importing them with bytecode off writes no __pycache__. Both clocks are pinned before the
+    import binds them as answer_prompt's defaults, so the 90 ms budget is never spent by a loaded machine."""
     import ast, shutil, subprocess, sys
     store, clock, ids, room = lessons_station
     store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', error=('no matches found',)))
@@ -423,7 +424,7 @@ def test_the_prompt_path_runs_on_the_standard_library_alone_and_writes_no_byteco
     for name in ('__init__.py', 'common.py', 'lessons.py'):
         shutil.copy(package / name, checkout / 'superyak_peer' / name)
     code = (f'import json, sys, time; sys.dont_write_bytecode = True; sys.path.insert(0, {str(checkout)!r}); '
-            f'time.time = lambda: {LESSON_TIME + 10!r}\n'
+            f'time.time = lambda: {LESSON_TIME + 10!r}; time.monotonic = lambda: 0.0\n'
             'from superyak_peer import lessons\n'
             "request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'prompt': 'why does it say no matches found', 'budget_ms': 90}))\n"
             f'print(lessons.dumps(lessons.answer_prompt(request, {str(store.data_dir)!r}, None)))')
@@ -575,19 +576,31 @@ def test_receipts_list_newest_first_with_ids_ships_and_angles_only(lessons_stati
 
 
 def test_segments_pair_two_ships_own_lessons_and_never_a_copy(lessons_peers, fake_embedder):
+    """The rail is counted honestly (goal 1): a lesson that came from another ship is never its ship's own, even reworded.
+    `reworded` passes every other rule against `a` (another author, on another peer, with another text, at angle 0), so
+    only `learned from: own` keeps it out; `copy`, with `a`'s text, the digest rule would also drop."""
     pi, pi_fed, pids = lessons_peers['peers']['pi']
     tardis, tardis_fed, tids = lessons_peers['peers']['tardis']
     a = lesson_body(ship='tardis', claim='Read before you trust a count.', command=('grep -c',))
     b = lesson_body(ship='rio-grande', claim='Never trust a keyword count over reading.', command=('grep -c',))
     copy = lesson_body(ship='rio-grande', claim='Read before you trust a count.', command=('grep -c',), learned='tardis')
-    for body in (a, b, copy):
+    reworded = lesson_body(ship='rio-grande', claim='Read the matching lines before you believe a tally.', command=('grep -c',),
+                           learned='tardis')
+    for body in (a, b, copy, reworded):
         fake_embedder.vectors[lessons.embedded_text(lessons.parse_post(body))] = [1.0, 0.0, 0.0, 0.0]
     tardis.send_message(tids['tardis'], lessons_peers['key'], 't1', a)
     lessons_peers['deliver']('tardis', 'pi')
     pi.send_message(pids['rio-grande'], lessons_peers['room'], 'p1', b)
     pi.send_message(pids['rio-grande'], lessons_peers['room'], 'p2', copy)
+    pi.send_message(pids['rio-grande'], lessons_peers['room'], 'p3', reworded)
     pi.lessons_index(fake_embedder.path)
-    found = lessons.segments(lessons.read_index(pi.data_dir / lessons.INDEX_FILE))
+    index = lessons.read_index(pi.data_dir / lessons.INDEX_FILE)
+    taught = [item for item in index['lessons'] if item['learned_from'] == 'tardis']
+    assert len(taught) == 2 and all(item['vector'] is not None for item in taught)   # both indexed, with vectors
+    found = lessons.segments(index)
     assert [(x[0], x[1], x[4]) for x in found] == [('rio-grande', 'tardis', 0.0)]
+    short = lambda peer, body: lessons.short_lesson_id(lessons.lesson_id(peer, lessons.parse_post(body)))
+    assert [x[2:4] for x in found] == [(short(pi_fed.identity.peer_id, b), short(tardis_fed.identity.peer_id, a))]
     listed = run_lessons('segments', '--data-dir', pi.data_dir)
     assert listed.stdout.startswith('rio-grande and tardis: 1 segment\n') and 'count' not in listed.stdout
+    assert short(pi_fed.identity.peer_id, reworded) not in listed.stdout
