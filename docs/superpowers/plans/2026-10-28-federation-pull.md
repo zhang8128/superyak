@@ -308,6 +308,10 @@ mode until this is.
 
 **scripts/two_peer_check.py (SF8)**
 - It serves with `--sync` (:141, :214), so its `POST /api/sync` checks (:234-300) still deliver under P11.
+- With A's own worker running, the lost-ack check (:310-315) races it: the worker can deliver "lost-ack" before the
+  checker's `sync_once(send=lose_ack)` does. The checker stops A first and queues that message itself. A failed
+  delivery's backoff must also outlast the restarts (:290, :319), or the worker retries before the checker's Retry
+  (Tardis, Task 8e).
 
 **pyproject.toml and the packaging test (SF12)**
 - `listener.py` goes in both the sdist and the wheel inventories.

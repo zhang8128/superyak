@@ -18,6 +18,12 @@ class Federate:
     def __init__(self, federation, *, clock=time.time, sleep=time.sleep, send=None, pass_seconds=PASS_SECONDS):
         self.federation, self.clock, self.sleep, self.send = federation, clock, sleep, send
         self.pass_seconds, self.due, self.last_end, self.stopping = pass_seconds, {}, None, False
+        self.seen_requests = None  # "Check delivery now" counts in peer_meta; a change makes every pull due (P11)
+
+    def _requests(self):
+        with self.federation.store.transaction() as db:
+            row = db.execute("SELECT value FROM peer_meta WHERE key='sync_requests'").fetchone()
+        return row[0] if row else None
 
     def pull_cards(self):
         """The paired push peers' cards: the listeners a pull peer fetches from."""
@@ -28,6 +34,8 @@ class Federate:
     def run_pass(self):
         now = self.clock()
         woke = self.last_end is not None and now - self.last_end - self.pass_seconds > WAKE_OVERRUN
+        requests = self._requests()
+        woke, self.seen_requests = woke or requests != self.seen_requests, requests
         if self.federation.store.federation_mode() == 'pull':
             for card in self.pull_cards():
                 if self.stopping:

@@ -688,6 +688,15 @@ class Federation:
                        (row['contact_id'],))
         return {'ok':True}
 
+    def make_due(self):
+        """Check delivery now (plan P11): every peer is due at once. A push goes once its peer's next_attempt is NULL; a
+        pull's due time lives in the process that syncs, which sees `sync_requests` change at its next pass. Dials
+        nothing itself."""
+        with self.store.transaction() as db:
+            db.execute('UPDATE peer_delivery SET next_attempt=NULL')
+            db.execute("INSERT INTO peer_meta VALUES('sync_requests', '1') "
+                       "ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER) + 1")
+
     def _cancel_replies(self, db, origin, rid, recipient, revision):
         """Apply recipient-specific cancellation in the tombstone transaction."""
         rows = db.execute("SELECT outbox.* FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE peer_id=? AND resource_id=? AND action='room.reply' AND revision<=? AND status IN ('pending','failed')", (origin,rid,revision)).fetchall()

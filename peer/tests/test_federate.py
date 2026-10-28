@@ -140,3 +140,98 @@ def test_federate_runs_its_passes_and_sigterm_ends_it_cleanly(tmp_path):
     out, err = proc.communicate(timeout=30)
     assert proc.returncode == 0, err
     assert 'Traceback (most recent call last)' not in err.split('A pull from')[0]  # only a logged pull failure, if any
+
+
+# Task 8e: "Check delivery now", POST /api/sync (plan P11, nit 9)
+
+def sync_app(tmp_path, *, sync_enabled):
+    from starlette.testclient import TestClient
+    from superyak_peer.app import create_app
+    app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'], sync_enabled=sync_enabled)
+    app.state.store.create_user('owner', 'Owner', 'long-password-owner', is_admin=True)
+    client = TestClient(app, base_url='http://testserver')
+    client.headers['origin'] = 'http://testserver'
+    return app, client
+
+
+def sign_in(client):
+    answer = client.post('/api/login', json={'username': 'owner', 'password': 'long-password-owner'})
+    client.headers['x-csrf-token'] = answer.json()['csrf_token']
+
+
+def test_check_delivery_now_without_sync_never_dials_and_makes_every_peer_due(tmp_path, monkeypatch):
+    """With federate holding the lock, the lighthouse never dials: the button makes every peer due, and federate's next
+    pass delivers."""
+    from superyak_peer import transport
+    app, client = sync_app(tmp_path, sync_enabled=False)
+    sign_in(client)
+
+    def dial(*args, **kwargs):
+        raise AssertionError('the lighthouse dialled without --sync')
+    monkeypatch.setattr(transport, 'send_pinned', dial)
+    monkeypatch.setattr(transport, 'pull_pinned', dial)
+    monkeypatch.setattr(app.state.federation, 'sync_once', dial)
+    store = app.state.store
+    with store.transaction() as db:
+        db.execute("INSERT INTO peer_delivery(peer_id, mode, failures, next_attempt) VALUES(?, 'push', 3, ?)",
+                   ('a' * 64, store.clock() + 1000))
+    answer = client.post('/api/sync')
+    assert answer.status_code == 200 and answer.json()['enabled'] is False
+    with store.transaction() as db:
+        assert db.execute('SELECT next_attempt FROM peer_delivery').fetchone()[0] is None
+        assert db.execute("SELECT value FROM peer_meta WHERE key='sync_requests'").fetchone()[0] == '1'
+    client.post('/api/sync')
+    with store.transaction() as db:
+        assert db.execute("SELECT value FROM peer_meta WHERE key='sync_requests'").fetchone()[0] == '2'
+
+
+def test_check_delivery_now_with_sync_answers_after_the_pass_it_woke(tmp_path, monkeypatch):
+    import time
+    from superyak_peer.federate import Federate
+    app, client = sync_app(tmp_path, sync_enabled=True)
+    passes = []
+
+    def run_pass(self):
+        passes.append(time.monotonic())
+        time.sleep(0.2)
+    monkeypatch.setattr(Federate, 'run_pass', run_pass)
+    with client:                                      # the lifespan runs the worker
+        sign_in(client)
+        time.sleep(0.5)                               # its first pass is over, and it waits up to 5 s for the next
+        began = time.monotonic()
+        answer = client.post('/api/sync')
+        took = time.monotonic() - began
+    assert answer.status_code == 200 and answer.json()['enabled'] is True
+    assert any(at >= began for at in passes) and 0.2 <= took < 5
+
+
+def test_the_sync_worker_survives_a_pass_that_raises(tmp_path, monkeypatch):
+    import time
+    from superyak_peer.federate import Federate
+    app, client = sync_app(tmp_path, sync_enabled=True)
+    calls = []
+
+    def run_pass(self):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError('a pass broke')
+    monkeypatch.setattr(Federate, 'run_pass', run_pass)
+    with client:
+        sign_in(client)
+        time.sleep(0.3)
+        assert client.post('/api/sync').status_code == 200
+    assert len(calls) >= 2
+
+
+def test_federate_pulls_at_once_after_check_delivery_now(tmp_path, monkeypatch):
+    from superyak_peer.federate import Federate
+    clock, a, mac = puller(tmp_path)
+    wake, pulls = Wake(), []
+    monkeypatch.setattr(mac[2], 'pull_once', lambda card, send=None: pulls.append(wake()) or {'next': 60})
+    loop = Federate(mac[2], clock=wake, sleep=wake.sleep)
+    loop.run_pass()
+    wake.sleep(5), loop.run_pass()                    # not due: 60 s off
+    mac[2].make_due()
+    wake.sleep(5), loop.run_pass()                    # asked: at once
+    wake.sleep(5), loop.run_pass()                    # once per ask
+    assert pulls == [1_000_000.0, 1_000_010.0]

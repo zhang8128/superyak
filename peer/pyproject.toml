@@ -202,3 +202,4 @@ only-include = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["sync_worker: the browser peer runs serve --sync's worker, which passes only when Check delivery now wakes it"]

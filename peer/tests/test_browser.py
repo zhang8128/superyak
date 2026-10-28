@@ -17,6 +17,7 @@ import pytest
 import uvicorn
 from playwright.sync_api import expect, sync_playwright
 
+from superyak_peer import peer_routes
 from superyak_peer.app import create_app
 from superyak_peer.common import Problem
 from superyak_peer.db import Store
@@ -41,7 +42,7 @@ ARTIFACTS = Path(tempfile.mkdtemp(prefix="superyak-browser-", dir=os.environ.get
 
 
 @pytest.fixture
-def browser_peer(tmp_path, request):
+def browser_peer(tmp_path, request, monkeypatch):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -50,7 +51,12 @@ def browser_peer(tmp_path, request):
     if local_demo:
         from superyak_peer.__main__ import seed_demo
         seed_demo(tmp_path / "browser-peer")
-    app = create_app(tmp_path / "browser-peer", allowed_origins=[base_url], local_demo=local_demo)
+    # "Check delivery now" dials only from serve --sync's worker (plan P11). Its timed passes would race a test's
+    # "Pending delivery" check, so under the marker the worker passes only when the button wakes it.
+    sync_worker = request.node.get_closest_marker("sync_worker") is not None
+    if sync_worker:
+        monkeypatch.setattr(peer_routes, "SYNC_SECONDS", 3600)
+    app = create_app(tmp_path / "browser-peer", allowed_origins=[base_url], local_demo=local_demo, sync_enabled=sync_worker)
     store = app.state.store
     password = "long-browser-password"
     users = {} if local_demo else {
@@ -1403,6 +1409,7 @@ def test_fresh_participant_creates_space_and_previews_exact_selection(browser_pe
             page.screenshot(path=str(ARTIFACTS / ('final-space-' + kind + '.png')), full_page=True)
 
 
+@pytest.mark.sync_worker
 def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer, tmp_path):
     app = browser_peer['app']
     fed, store = app.state.federation, app.state.store
