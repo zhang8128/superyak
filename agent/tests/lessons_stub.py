@@ -6,8 +6,11 @@
   unless `ignore-limit` or `ignore-seen` is present: then the hook's own cut and skip are what's left.
 - `raw`: bytes printed as they are, in place of an answer; `exit`: the exit code; `sleep`: seconds to wait first.
 - `record`: when present, each request is appended to `sent.jsonl`. Without it the stub writes nothing, for the test
-  that the hook writes nothing at a prompt."""
+  that the hook writes nothing at a prompt.
+- `receipt`: after the sleep, `receipt` is appended to `late.txt`, as the query's commit writes receipts after its work;
+  `grandchild`: first a process of its own session is started that appends `grandchild` to `late.txt` 1.5 s later."""
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -17,8 +20,15 @@ request = json.loads(sys.stdin.read())
 if (data / 'record').exists():
     with open(data / 'sent.jsonl', 'a') as stream:
         stream.write(json.dumps(request) + '\n')
+if (data / 'grandchild').exists():
+    subprocess.Popen([sys.executable, '-S', '-c', 'import sys, time; time.sleep(1.5); open(sys.argv[1], "a").write('
+                      '"grandchild\\n")', str(data / 'late.txt')], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 if (data / 'sleep').exists():
     time.sleep(float((data / 'sleep').read_text()))
+if (data / 'receipt').exists():
+    with open(data / 'late.txt', 'a') as stream:
+        stream.write('receipt\n')
 if (data / 'exit').exists():
     sys.exit(int((data / 'exit').read_text()))
 if (data / 'raw').exists():

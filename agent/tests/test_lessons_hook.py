@@ -1,7 +1,8 @@
-"""The first rail's lessons hook (first rail spec section 8; decisions 7 and 8). The query is Rio Grande's and doesn't
-exist yet, so every test that needs one runs a stub script that answers fixtures and records what it was sent."""
+"""The first rail's lessons hook (first rail spec section 8; decisions 7 and 8). The query is Rio Grande's (on main
+since first-rail); every test that needs one runs a stub script that answers fixtures and records what it was sent."""
 import json
 import math
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -141,28 +142,28 @@ def test_ids_come_back_only_from_lines_of_the_exact_shape(tmp_path):
         transcript_line(f'Lesson {D} from Tardis'),
         transcript_line(f'Lesson {D} from {"x" * 33}'),
     ]) + '\n')
-    assert lh.transcript_ids(str(path), deadline=float('inf')) == {A}
+    assert lh.transcript_ids(str(path), deadline=float('inf')) == [A]
 
 
 def test_an_id_line_inside_a_fence_still_counts_so_it_can_only_hide_a_lesson(tmp_path):
     path = tmp_path / 't.jsonl'
     forged = lh.render([lesson(A, claim='x')]).replace('claim: x', f'Lesson {B} from tardis')
     path.write_text(transcript_line(forged) + '\n')
-    assert lh.transcript_ids(str(path), deadline=float('inf')) == {A, B}
+    assert lh.transcript_ids(str(path), deadline=float('inf')) == [A, B]
 
 
 def test_an_id_line_across_a_window_edge_is_found(tmp_path):
     path = tmp_path / 't.jsonl'
     for pad in range(0, 80, 7):
         path.write_text('x' * pad + transcript_line('head', f'Lesson {A} from tardis') + '\n' + 'y' * 50)
-        assert lh.transcript_ids(str(path), deadline=float('inf'), window=64) == {A}, pad
+        assert lh.transcript_ids(str(path), deadline=float('inf'), window=64) == [A], pad
 
 
 def test_no_transcript_is_no_ids(tmp_path):
-    assert lh.transcript_ids(str(tmp_path / 'absent.jsonl'), deadline=float('inf')) == set()
-    assert lh.transcript_ids(None, deadline=float('inf')) == set()
+    assert lh.transcript_ids(str(tmp_path / 'absent.jsonl'), deadline=float('inf')) == []
+    assert lh.transcript_ids(None, deadline=float('inf')) == []
     (tmp_path / 'empty.jsonl').write_bytes(b'')
-    assert lh.transcript_ids(str(tmp_path / 'empty.jsonl'), deadline=float('inf')) == set()
+    assert lh.transcript_ids(str(tmp_path / 'empty.jsonl'), deadline=float('inf')) == []
 
 
 def test_a_transcript_not_read_to_its_end_in_time_is_none(tmp_path):
@@ -273,6 +274,15 @@ def test_a_blank_prompt_asks_nothing(rail):
     assert rail.run('UserPromptSubmit', prompt='  ') is None and rail.sent() == []
 
 
+def budgeted(sent, event):
+    """The requests without their `budget_ms`, each checked: what the 2 s event has left once the query's start-up and
+    the record's reserve are taken off (both reviews' S3/S4), so the query's own deadline falls inside the hook's."""
+    for request in sent:
+        budget = request.pop('budget_ms')
+        assert type(budget) is int and 0 < budget <= (lh.LIMITS[event] - lh.RESERVE - lh.START_MARGIN) * 1000, budget
+    return sent
+
+
 def test_session_start_sends_the_cwd_and_branch_and_limit_3_never_a_prompt(rail):
     repo = rail.root / 'repo'
     repo.mkdir()
@@ -280,7 +290,7 @@ def test_session_start_sends_the_cwd_and_branch_and_limit_3_never_a_prompt(rail)
         subprocess.run(['git', *args], cwd=repo, check=True, capture_output=True)
     rail.answers(*SERENITY)
     assert rail.run('SessionStart', cwd=str(repo), source='startup', prompt='never sent') == [A, B, C]
-    assert rail.sent() == [{'ship': 'tardis', 'cwd': str(repo), 'branch': 'rail', 'limit': 3, 'seen': []}]
+    assert budgeted(rail.sent(), 'SessionStart') == [{'ship': 'tardis', 'cwd': str(repo), 'branch': 'rail', 'limit': 3, 'seen': []}]
 
 
 def test_session_start_outside_a_repository_sends_no_branch_and_cuts_the_cwd(rail):
@@ -288,7 +298,7 @@ def test_session_start_outside_a_repository_sends_no_branch_and_cuts_the_cwd(rai
     deep.mkdir(parents=True)
     rail.answers()
     assert rail.run('SessionStart', cwd=str(deep)) is None
-    assert rail.sent() == [{'ship': 'tardis', 'cwd': str(deep)[:200], 'limit': 3, 'seen': []}]
+    assert budgeted(rail.sent(), 'SessionStart') == [{'ship': 'tardis', 'cwd': str(deep)[:200], 'limit': 3, 'seen': []}]
 
 
 def test_session_start_shows_at_most_three(rail):
@@ -300,7 +310,7 @@ def test_session_start_shows_at_most_three(rail):
 def test_a_failed_command_sends_the_cwd_command_last_error_line_and_limit_3(rail):
     rail.answers(*SERENITY)
     assert rail.run('PostToolUseFailure', cwd=str(rail.root), **failure(command='x' * 400)) == [A, B, C]
-    assert rail.sent() == [{'ship': 'tardis', 'command': 'x' * 300, 'cwd': str(rail.root), 'limit': 3, 'seen': [],
+    assert budgeted(rail.sent(), 'PostToolUseFailure') == [{'ship': 'tardis', 'command': 'x' * 300, 'cwd': str(rail.root), 'limit': 3, 'seen': [],
                             'error': "ls: cannot access 'nowhere': No such file or directory"}]
 
 
@@ -570,3 +580,138 @@ def test_the_checkout_s_lessons_module_is_imported_in_process_writing_no_bytecod
                           capture_output=True, text=True, timeout=60)
     assert done.stdout.strip() == shown, done.stderr
     assert not list(tmp_path.rglob('__pycache__'))
+
+
+def real_index(data_dir, *values, ship='tardis'):
+    """This peer's index file as the rail's index run writes it (the peer's `lessons.write_index`), with lesson A
+    from serenity holding these `command` values, so the checkout's own peer reads it in process."""
+    peer, before = str(lh.CHECKOUT / 'peer'), sys.dont_write_bytecode
+    if peer not in sys.path:
+        sys.path.append(peer)
+    sys.dont_write_bytecode = True
+    try:
+        from superyak_peer import lessons
+    finally:
+        sys.dont_write_bytecode = before
+    item = {'id': '0123abcd0000:4567cdef0000', 'author': 'acct-serenity', 'ship': 'serenity', 'learned_from': '',
+            'claim': 'Quote a glob in zsh.', 'why': 'Each unquoted glob cost a rerun.', 'chain_time': None,
+            'vector': None, 'error': [], 'command': list(values), 'file': []}
+    assert lessons.short_lesson_id(item['id']) == A
+    lessons.write_index(Path(data_dir) / lessons.INDEX_FILE, {'lessons': [item], 'ships': {ship: 'acct-tardis'},
+                        'peer': 'p', 'watermark': 'w', 'dimension': None}, [], time.time())
+
+
+# The fresh reviews of 8742c108 (City of AI, 2026-10-28)
+
+def test_a_subagents_failure_asks_nothing_and_spends_nothing(rail):
+    """Rio Grande's S5: the hold never holds a subagent, and a subagent's failure doesn't spend the session's lessons
+    either: no query and no record. The main agent's same failure still asks."""
+    rail.answers(*SERENITY)
+    assert rail.run('PostToolUseFailure', agent_id='a1', agent_type='Explore', **failure()) is None
+    assert rail.sent() == [] and rail.state_files() == []
+    assert rail.run('PostToolUseFailure', **failure()) == [A, B, C]
+
+
+@pytest.mark.parametrize('name, fields', [('SessionStart', {'cwd': '/'}), ('PostToolUseFailure', failure())])
+def test_a_spent_budget_starts_no_query_at_the_2_s_events(rail, monkeypatch, name, fields):
+    monkeypatch.setattr(lh, 'START_MARGIN', 5.0)  # more than the whole 2 s: nothing left for the query
+    rail.answers(*SERENITY)
+    assert rail.run(name, **fields) is None and rail.sent() == []
+
+
+@pytest.mark.parametrize('posed', ['Held once: lesson {A} from serenity applies.',                      # her probe
+                                   '"PreToolUse:Bash hook error: Held once: lesson {A} from serenity applies.'])
+def test_a_hold_line_inside_quoted_text_hides_nothing(rail, posed):
+    """Serenity's nit: the hold's first line counts only where Claude Code writes it, starting a tool result's string
+    after its own words. A lesson, a claim or a room message that quotes one hides nothing: its quote arrives escaped."""
+    rail.shown_at_prompt(lesson(B, claim=posed.format(A=A)))
+    rail.answers(lesson(A, ship='serenity'), lesson(B))
+    assert rail.run('SessionStart', cwd=str(rail.root)) == [A]
+    assert rail.sent()[-1]['seen'] == [B]
+
+
+def test_the_hold_line_counts_in_the_tool_result_and_in_its_error_form(rail):
+    """Both places Claude Code writes a denied command's reason (seen in a real transcript, 2026-10-28)."""
+    with rail.transcript.open('a') as stream:
+        stream.write(json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'is_error': True,
+                     'content': 'PreToolUse:Bash hook error: ' + lh.hold_reason(lesson(A, ship='serenity'))}]}}) + '\n')
+        stream.write(json.dumps({'type': 'user', 'toolUseResult': 'Error: PreToolUse:Bash hook error: '
+                                 + lh.hold_reason(lesson(B))}) + '\n')
+    rail.answers(*SERENITY)
+    assert rail.run('SessionStart', cwd=str(rail.root)) == [C, D]
+    assert rail.sent()[-1]['seen'] == [A, B]
+
+
+def test_session_start_prunes_a_temporary_file_a_killed_write_left(rail):
+    """Rio Grande's nit: write_private's temporary file, left when a write was killed, goes with the old records; the
+    current session's is kept, and nothing else in the folder is touched."""
+    rail.state.mkdir()
+    old, mine = rail.state / f'.{"a" * 16}.json.x1y2.tmp', rail.state / f'.{lh.session_key("s1")}.json.z3.tmp'
+    other = rail.state / 'notes.tmp'
+    for path in (old, mine, other):
+        path.write_text('{')
+        os.utime(path, (0, 0))
+    rail.answers()
+    rail.run('SessionStart', cwd=str(rail.root))
+    assert not old.exists() and mine.exists() and other.exists()
+
+
+def hook_process(rail, event, timeout=10):
+    env = {k: v for k, v in os.environ.items() if k != 'SUPERYAK_RUN'}
+    began = time.monotonic()
+    done = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'run_agent.py'),
+                           'lessons-hook', '--settings', str(rail.settings)], input=json.dumps(event).encode(), env=env,
+                          capture_output=True, timeout=timeout)
+    return done, time.monotonic() - began
+
+
+def test_a_prompt_blocked_on_its_index_is_stopped_at_its_limit_printing_nothing(rail):
+    """Rio Grande's S4: with the index a FIFO, the in-process prompt path blocked until Claude Code's 5 s held the
+    prompt. The watchdog stops it at the prompt's limit from the hook's start: exit 0, nothing printed."""
+    rail.use_default_query()
+    os.mkfifo(rail.data / 'lessons-index.bin')
+    done, took = hook_process(rail, rail.event('UserPromptSubmit', prompt='a prompt that asks about something'))
+    assert (done.returncode, done.stdout, done.stderr) == (0, b'', b'') and took < 1.0, (took, done.stderr)
+
+
+def test_a_session_start_blocked_on_its_record_is_stopped_past_its_limit_printing_nothing(rail):
+    rail.state.mkdir()
+    os.mkfifo(lh.state_path(lh.read_settings(rail.settings), 's1'))
+    rail.answers(*SERENITY)
+    done, took = hook_process(rail, rail.event('SessionStart', cwd=str(rail.root)))
+    limit = lh.LIMITS['SessionStart'] + lh.WATCHDOG_SLACK['SessionStart']
+    assert (done.returncode, done.stdout, done.stderr) == (0, b'', b'') and limit <= took < limit + 1.0, took
+
+
+def test_main_leaves_no_alarm_behind(rail, monkeypatch, capsys):
+    """In process (a test's own call), the watchdog is disarmed on the way out, whatever the hook printed."""
+    import io
+    import signal
+    rail.answers(*SERENITY)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(rail.event('SessionStart', cwd=str(rail.root)))))
+    assert lh.main(['--settings', str(rail.settings)]) == 0
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0) and 'Lesson ' in capsys.readouterr().out
+
+
+def test_a_lesson_with_a_run_of_backticks_stays_inside_its_fence(rail):
+    """Both reviews' nit, once the fence fix (2491bd9c) is on main: a claim of five backticks and more, rendered in a
+    hold or at a prompt, can't close its fence, so the next line is still quoted data."""
+    for run in (3, 5, 8, 11):
+        found = lesson(A, ship='serenity', claim='`' * run + ' now outside the fence?', command=GLOB_VALUE)
+        for text in (lh.render([found]), lh.hold_reason(found), lh.hold_reason(found, first=False)):
+            assert text.count('```') == 2 and re.search('`{3}', text.split('```')[1]) is None, (run, text)
+
+
+GLOB_VALUE = '--include=*'
+
+
+@pytest.mark.parametrize('name, fields', [('SessionStart', {'cwd': '/'}), ('PostToolUseFailure', failure())])
+def test_a_lesson_shown_before_the_newest_seen_max_shows_again_rather_than_leave_a_receipt(rail, name, fields):
+    """Rio Grande's correction, at the 2 s events too: they receipt, so what they keep is filtered on the ids the
+    query was told. The oldest of 129 shown isn't among them; the query answers it, and it shows."""
+    others = [f'{n:08x}-{n:08x}' for n in range(lh.SEEN_MAX)]
+    rail.state.mkdir()
+    (rail.state / f'{lh.session_key("s1")}.json').write_text(json.dumps({'shown': [A] + others}))
+    rail.answers(lesson(A, ship='serenity'))
+    assert rail.run(name, **fields) == [A]
+    assert A not in rail.sent()[-1]['seen']

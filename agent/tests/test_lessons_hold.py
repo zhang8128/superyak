@@ -1,7 +1,9 @@
 """The lessons side of the shared hold entry before a Bash command (first rail spec section 8, decision 8). The entry
 is Serenity's (`run_agent.py hold`): it renders every Hold, keeps the cap of 3 a session and saves the record only when
 it prints. The provider is tested here alone, with a plain record dict and the stub query."""
+import functools
 import json
+import os
 import subprocess
 import sys
 import time
@@ -9,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from superyak_agent import holds, lessons_hold, lessons_hook as lh
-from test_lessons_hook import A, B, C, D, Rail, lesson, transcript_line
+from superyak_agent import checklist_firing as fp, hold, holds, lessons_hold, lessons_hook as lh
+from test_hold import payload as hold_payload, ship  # noqa: F401 - ship is a fixture
+from test_lessons_hook import A, B, C, D, Rail, lesson, real_index, transcript_line
 
 AGENT = Path(__file__).resolve().parents[1]
 GLOB = '--include=*'  # the spec's illustration: a command value of 11 bytes
@@ -29,7 +32,7 @@ def rail(tmp_path):
     return Rail(tmp_path)
 
 
-def yes(command, ship, data_dir):
+def yes(command, ship, data_dir, seen=()):
     """A could_hold that always says some lesson's command value is in the command, so the stub query decides."""
     return True
 
@@ -60,14 +63,15 @@ def test_the_hold_sends_a_budget_net_of_its_own_time_and_the_childs_start(rail):
     rail.answers(lesson(A, command=GLOB))
     ask(rail)
     [sent] = rail.sent()
-    assert 0 <= sent['budget_ms'] <= (lh.COMMAND_LIMIT - lessons_hold.START_MARGIN) * 1000
+    entry = (fp.HOLD_SECONDS - lessons_hold.SAVE_MARGIN - lessons_hold.START_MARGIN) * 1000  # `now` was this call's
+    assert 0 < sent['budget_ms'] <= entry < (lh.COMMAND_LIMIT - lessons_hold.START_MARGIN) * 1000
 
 
-def test_a_spent_budget_is_sent_as_zero_never_negative(rail, monkeypatch):
+def test_a_spent_budget_starts_no_query(rail, monkeypatch):
+    """Nothing left for the query before the entry gives up: it isn't started, so no receipt can follow."""
     monkeypatch.setattr(lessons_hold, 'START_MARGIN', 5.0)  # more than the whole second: nothing left for the query
     rail.answers(lesson(A, command=GLOB))
-    ask(rail)
-    assert [s['budget_ms'] for s in rail.sent()] == [0]
+    assert ask(rail) == [] and rail.sent() == []
 
 
 def test_the_key_names_the_session_the_head_and_the_lesson(rail):
@@ -244,7 +248,7 @@ def test_a_session_keeps_at_most_heads_max_heads(rail, monkeypatch):
     assert rec['lessons']['heads'] == ['h1', lessons_hold.head_digest(COMMAND)]
 
 
-def raises(command, ship, data_dir):
+def raises(command, ship, data_dir, seen=()):
     raise OSError('no index')
 
 
@@ -261,17 +265,45 @@ def test_could_hold_gets_the_command_as_the_query_would_the_ship_and_the_data_di
     rail.answers(lesson(A, command=GLOB))
     long = COMMAND + ' ' + 'x' * 400
     assert ask(rail, command=long, could_hold=lambda *a: asked.append(a) or True)
-    settings = json.loads(rail.settings.read_text())
-    assert asked == [(long[:lh.CUTS['command']], 'tardis', settings['data_dir'])]
-    assert rail.sent()[0]['command'] == long[:lh.CUTS['command']]
+    settings, cut = json.loads(rail.settings.read_text()), long[:lh.CUTS['command']]
+    assert asked == [(cut, 'tardis', settings['data_dir']), (cut, 'tardis', settings['data_dir'], [])]  # then with seen
+    assert rail.sent()[0]['command'] == cut
+
+
+def test_a_lesson_already_seen_starts_no_query_and_no_transcript_is_read_for_a_command_none_could_hold(rail, monkeypatch):
+    """Rio Grande's could_hold(seen): asked first without it, reading the index alone, so a command no lesson could
+    hold never reads the transcript; then with the newest SEEN_MAX shown, so a lesson already shown starts no query
+    (both reviews' S1/S2: four runs of one head made four store queries)."""
+    rail.answers(lesson(A, command=GLOB))
+    rail.shown_at_prompt(lesson(A, command=GLOB))
+    asked, read = [], []
+    monkeypatch.setattr(lh, 'transcript_ids', lambda *a, **k: read.append(a) or [A])
+    could = lambda cut, ship, data, seen=None: asked.append(seen) or seen is None or A not in seen  # noqa: E731
+    for _ in range(4):
+        assert ask(rail, could_hold=could) == []
+    assert rail.sent() == [] and asked == [None, [A]] * 4 and len(read) == 4
+    asked.clear(), read.clear()
+    assert ask(rail, could_hold=lambda *a: asked.append(a[3:]) or False) == [] and asked == [()] and read == []
+
+
+def test_the_seen_sent_are_the_newest_shown(rail):
+    """`seen`'s order past SEEN_MAX (Rio Grande's nit): the transcript's ids in the order they appeared, so the newest
+    SEEN_MAX are the ones sent, to the query and to could_hold alike."""
+    ids = [f'{n:08x}-{n:08x}' for n in range(lh.SEEN_MAX + 5)]
+    rail.transcript.write_text(''.join(transcript_line(f'Lesson {i} from serenity') + '\n' for i in reversed(ids)))
+    rail.answers(lesson(A, command=GLOB))
+    asked = []
+    ask(rail, could_hold=lambda *a: asked.append(a[3:]) or True)
+    [sent] = rail.sent()
+    assert sent['seen'] == list(reversed(ids))[-lh.SEEN_MAX:] == asked[1][0]
 
 
 @pytest.mark.parametrize('module, said', [
     (None, ['False', 'False']),  # a checkout without the rail's lessons module
-    ('def could_hold(command, ship, data_dir):\n'
+    ('def could_hold(command, ship, data_dir, seen=()):\n'
      '    return command == "git push" and ship == "tardis" and data_dir == "/d"\n', ['True', 'False']),
-    ('def could_hold(command, ship, data_dir):\n    raise OSError("index")\n', ['False', 'False']),
-    ('def could_hold(command, ship, data_dir):\n    return "yes"\n', ['False', 'False']),
+    ('def could_hold(command, ship, data_dir, seen=()):\n    raise OSError("index")\n', ['False', 'False']),
+    ('def could_hold(command, ship, data_dir, seen=()):\n    return "yes"\n', ['False', 'False']),
 ])
 def test_peer_could_hold_is_the_checkouts_lessons_in_process_writing_no_bytecode(tmp_path, module, said):
     package = tmp_path / 'peer' / 'superyak_peer'
@@ -287,6 +319,26 @@ def test_peer_could_hold_is_the_checkouts_lessons_in_process_writing_no_bytecode
                           timeout=60)
     assert done.stdout.split() == said, done.stderr
     assert not list(tmp_path.rglob('__pycache__'))
+
+
+@pytest.mark.parametrize('module, said', [
+    ('def could_hold(command, ship, data_dir, seen=()):\n    return list(seen) == ["' + A + '"]\n', ['False', 'True']),
+    ('def could_hold(command, ship, data_dir):\n    return True\n', ['True', 'True']),  # a peer from before `seen`
+])
+def test_peer_could_hold_passes_seen_only_when_there_is_some(tmp_path, module, said):
+    """The first ask is today's three-argument call; `seen` goes as the fourth. A peer from before it is asked as
+    before: the query is told `seen` too, so that costs a query, never a receipt."""
+    package = tmp_path / 'peer' / 'superyak_peer'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    (package / 'lessons.py').write_text(module)
+    code = ('import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); '
+            'from superyak_agent import lessons_hold, lessons_hook; lessons_hook.CHECKOUT = Path(sys.argv[2]); '
+            f'print(lessons_hold.peer_could_hold("git push", "tardis", "/d"), '
+            f'lessons_hold.peer_could_hold("git push", "tardis", "/d", ["{A}"]))')
+    done = subprocess.run([sys.executable, '-I', '-c', code, str(AGENT), str(tmp_path)], capture_output=True, text=True,
+                          timeout=60)
+    assert done.stdout.split() == said, done.stderr
 
 
 # Serenity's first-rail review, condition 2 (Tardis's hook half), pinned: a late query is killed at its deadline with
@@ -326,3 +378,95 @@ def test_the_answers_command_value_is_never_shown(rail):
     [hold] = ask(rail, command=f'grep -rn {value} .', rec=rec)
     assert 'MARKER7' not in hold.text and 'MARKER7' not in json.dumps(rec)
     assert 'MARKER7' not in lh.render([lesson(A, command=value)])
+
+
+# Both reviews' M1/M2 (City of AI, 2026-10-28): the entry gives up HOLD_SECONDS after its own start, when it took
+# `now`, and the process then exits with nothing left to stop a query running in its own session. So the provider's
+# deadline counts from the entry's start, SAVE_MARGIN before it gives up, whatever lead the entry had before asking.
+
+def test_the_deadline_counts_from_the_entrys_start_not_the_call():
+    at, wall = (lambda: 50.0), (lambda: 100.3)          # this call: 0.3 s after the entry took now=100.0
+    assert lessons_hold.deadline_of(100.0, at, wall) == pytest.approx(50.0 + fp.HOLD_SECONDS - lessons_hold.SAVE_MARGIN - 0.3)
+    assert lessons_hold.deadline_of(100.3, at, wall) == pytest.approx(50.0 + fp.HOLD_SECONDS - lessons_hold.SAVE_MARGIN)
+    assert lessons_hold.deadline_of(200.0, at, wall) == 50.0 + lh.COMMAND_LIMIT  # a clock stepped back: never past 1 s
+
+
+@pytest.mark.parametrize('now', [float('nan'), float('inf'), None, '1.0', True])
+def test_a_now_that_isnt_a_time_holds_nothing(rail, now):
+    rail.answers(lesson(A, command=GLOB))
+    assert lessons_hold.candidates(COMMAND, record(rail=rail), now, 3, settings=rail.settings, env={}, could_hold=yes) == []
+    assert rail.sent() == []
+
+
+@pytest.mark.parametrize('lead', [0.0, 0.08, 0.14])   # the entry asks only within READ_SECONDS of its start
+def test_through_the_entry_the_query_stops_before_it_gives_up_whatever_the_lead(ship, rail, lead):
+    rail.answers(lesson(A, command=GLOB))
+    rail.flag('sleep', '1.5')
+    provider = functools.partial(lessons_hold.candidates, settings=rail.settings, env={}, could_hold=yes)
+    started = time.monotonic() - lead
+    out = hold.decide(hold_payload(ship, COMMAND), ship.home, time.time() - lead, started, lessons=provider)
+    took = time.monotonic() - started
+    [sent] = rail.sent()
+    assert out is None and took < fp.HOLD_SECONDS - lessons_hold.SAVE_MARGIN + 0.1, took
+    assert 0 < sent['budget_ms'] <= (fp.HOLD_SECONDS - lessons_hold.SAVE_MARGIN - lessons_hold.START_MARGIN - lead) * 1000
+
+
+def test_through_the_installed_hold_a_late_query_and_all_it_started_write_nothing(ship, rail):
+    """Rio Grande's probe, pinned: the real `run_agent.py hold` as Claude Code runs it, with the checkout's own
+    could_hold reading a real index. A query that would write its receipt after 1.5 s of work, and a process it
+    started that would write after 1.5 s, both write nothing: they were stopped SAVE_MARGIN before the entry gave up
+    and its process exited. Against the old deadline, a second from the provider's own call, both wrote."""
+    real_index(rail.data, GLOB)
+    lh.default_settings().write_text(rail.settings.read_text())
+    rail.answers(lesson(A, command=GLOB))
+    for name, text in (('sleep', '1.5'), ('receipt', ''), ('grandchild', '')):
+        rail.flag(name, text)
+    env = {k: v for k, v in os.environ.items() if k != 'SUPERYAK_RUN'}
+    began = time.monotonic()
+    done = subprocess.run([sys.executable, '-B', str(AGENT / 'run_agent.py'), 'hold'], env=env, capture_output=True,
+                          input=json.dumps(hold_payload(ship, COMMAND, transcript_path=str(rail.transcript))).encode(),
+                          timeout=30)
+    took = time.monotonic() - began
+    assert (done.returncode, done.stdout) == (0, b'') and took < fp.HOLD_SECONDS + 0.5, (took, done.stderr)
+    assert [s['command'] for s in rail.sent()] == [COMMAND]       # the query really started
+    time.sleep(2.5)
+    assert not (rail.data / 'late.txt').exists(), (rail.data / 'late.txt').read_text()
+
+
+def test_a_ship_without_lessons_settings_never_splits_the_command(rail, monkeypatch):
+    """Serenity's S3: the settings are read before anything reads the command, and the head is taken from the
+    command as cut for the query, so a 1 MB command costs a ship without the lessons hook nothing."""
+    split = []
+    monkeypatch.setattr(lh, 'head', lambda command: split.append(len(command)) or 'grep -rn')
+    big = COMMAND + ' ' + 'x' * 1_000_000
+    assert lessons_hold.candidates(big, record(rail=rail), time.time(), 3, settings=rail.root / 'absent.json', env={},
+                                   could_hold=yes) == [] and split == []
+    rail.answers()
+    ask(rail, command=big)
+    assert split == [lh.CUTS['command']]
+
+
+def test_a_lesson_shown_before_the_newest_seen_max_is_held_not_dropped_after_its_receipt(rail):
+    """Rio Grande's correction (his reviewer's S3): the answer is filtered on the ids the query was told. With 129
+    seen, the oldest isn't among them, so the query may answer it and write its receipt; dropping it then would leave
+    a receipt for a lesson never shown, and take a slot. It holds again instead, as the 128 cap accepts."""
+    others = [f'{n:08x}-{n:08x}' for n in range(lh.SEEN_MAX)]
+    rail.transcript.write_text(''.join(transcript_line(f'Lesson {i} from serenity') + '\n' for i in [A] + others))
+    found = lesson(A, ship='serenity', command=GLOB)
+    rail.answers(found)
+    assert ask(rail) == [holds.Hold('lesson', key(COMMAND, A), lh.hold_reason(found))]
+    [sent] = rail.sent()
+    assert sent['seen'] == others and A not in sent['seen']
+
+
+def test_the_hold_bytes_are_the_peers():
+    """Rio Grande's reviewer: the provider's 6 bytes and the query's can't drift apart."""
+    peer, before = str(lh.CHECKOUT / 'peer'), sys.dont_write_bytecode
+    if peer not in sys.path:
+        sys.path.append(peer)
+    sys.dont_write_bytecode = True
+    try:
+        from superyak_peer import lessons
+    finally:
+        sys.dont_write_bytecode = before
+    assert lessons_hold.HOLD_BYTES == lessons.HOLD_BYTES == 6

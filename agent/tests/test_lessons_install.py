@@ -134,3 +134,52 @@ def test_the_lessons_hook_exits_0_and_prints_nothing_when_the_checkout_is_gone(m
         done = subprocess.run(['sh', '-c', command], capture_output=True, input=b'{"session_id": "s1"}', timeout=30)
         assert (done.returncode, done.stdout) == (0, b''), command
         assert subprocess.run(['sh', '-c', command.removesuffix(' || true')], capture_output=True, timeout=30).returncode == 2
+
+
+def settings_named(command):
+    """The `--settings` file a lessons hook command names."""
+    words = shlex.split(command.removesuffix(' || true'))
+    return words[words.index('--settings') + 1]
+
+
+def test_a_settings_file_elsewhere_is_copied_to_the_one_file_the_hook_and_the_hold_read(monkeypatch, tmp_path):
+    """Rio Grande's S2: dock resolves `--lessons` as typed, copies it to lessons_hook.default_settings() at 0600, and
+    the hook names that copy, the file the hold before each command reads, so the two can't disagree."""
+    from superyak_agent import lessons_hook as lh
+    machine = Machine(monkeypatch, tmp_path)
+    elsewhere = lessons_settings(tmp_path / 'mine' / 'deep', query=['/opt/lessons-query'])
+    monkeypatch.chdir(tmp_path / 'mine')
+    machine.install(adna=False, lessons=Path('deep') / 'lessons-hook.json')
+    copy, settings = lh.default_settings(), machine.home / '.claude' / 'settings.json'
+    assert copy == machine.home / '.superyak' / 'lessons-hook.json'
+    assert json.loads(copy.read_text()) == json.loads(elsewhere.read_text()) and oct(copy.stat().st_mode & 0o777) == '0o600'
+    assert [settings_named(c) for c in lessons_commands(settings)] == [str(copy)] * 3
+    assert any(str(copy) in line and str(elsewhere) in line for line in machine.out)
+    elsewhere.write_text(json.dumps({'ship': 'tardis', 'data_dir': '/srv/other'}))   # changed, then docked again
+    machine.install(adna=False, lessons=elsewhere)
+    assert json.loads(copy.read_text()) == {'ship': 'tardis', 'data_dir': '/srv/other'}
+
+
+def test_settings_the_hook_cant_use_leave_no_copy(monkeypatch, tmp_path):
+    from superyak_agent import lessons_hook as lh
+    machine = Machine(monkeypatch, tmp_path)
+    machine.install(adna=False, lessons=lessons_settings(tmp_path / 'mine', ship='Not A Ship'))
+    assert not lh.default_settings().exists() and lessons_commands(machine.home / '.claude' / 'settings.json') == []
+
+
+def test_undock_removes_the_lessons_hook_and_its_settings_and_keeps_the_persons_own(monkeypatch, tmp_path):
+    """Serenity's M1: undock removed only the room hook, so the lessons hook kept sending every prompt to the index
+    reader. Now all three of its entries go, with the settings copy, and the person's own hook stays."""
+    from types import SimpleNamespace
+    from superyak_agent import lessons_hook as lh
+    machine = Machine(monkeypatch, tmp_path)
+    settings = machine.home / '.claude' / 'settings.json'
+    settings.parent.mkdir(parents=True)
+    mine = {'hooks': [{'type': 'command', 'command': 'echo mine'}]}
+    settings.write_text(json.dumps({'hooks': {'UserPromptSubmit': [mine]}}))
+    machine.install(adna=False, lessons=lessons_settings(tmp_path / 'mine'))
+    assert len(lessons_commands(settings)) == 3 and lh.default_settings().exists()
+    monkeypatch.setattr(install, 'client_for', lambda config: SimpleNamespace(revoke_key=lambda: None))
+    install.uninstall_all(machine.config, out=machine.out.append)
+    assert lessons_commands(settings) == [] and not lh.default_settings().exists()
+    assert entries(settings, 'UserPromptSubmit') == [mine]

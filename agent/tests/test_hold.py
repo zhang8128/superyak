@@ -155,8 +155,11 @@ def test_lessons_share_the_cap_and_get_three_minus_the_checklists_in_the_deny(sh
     assert record['holds'] == 3 and record['lessons'] == ['lesson:git push origin a', 'lesson:npm test', 'lesson:git push origin main']
 
 
-def test_the_lessons_stub_returns_nothing():
-    assert lessons_hold.candidates('git push origin x', {}, 0.0, 3) == []
+def test_without_lessons_settings_the_provider_returns_nothing():
+    """No lessons-hook.json in this HOME: nothing holds, even with a session and a lesson that could hold, so a ship
+    without the lessons hook never queries."""
+    record = {'session': {'id': 's1', 'transcript': None}}
+    assert lessons_hold.candidates('git push origin x', record, time.time(), 3, could_hold=lambda *a: True) == []
 
 
 def test_never_allow_ask_or_updated_input_across_many_commands(ship):

@@ -33,7 +33,14 @@ PROMPT, START, FAILURE = 'UserPromptSubmit', 'SessionStart', 'PostToolUseFailure
 LIMITS = {PROMPT: 0.150, START: 2.0, FAILURE: 2.0}
 COMMAND_LIMIT = 1.0
 RESERVE = 0.1  # of the 2 s events' time, kept for the lock and the record after the query
-PRINT_RESERVE = 0.005  # at a prompt, for printing the answer
+PRINT_RESERVE = 0.02  # at a prompt, for teamlib's import (11-15 ms), the render and the print (Rio Grande's S4)
+# A hard stop past each event's limit, however the hook is blocked (an index that is a FIFO): it exits 0 printing
+# nothing (Rio Grande's S4). At a prompt nothing is written, so it stops at the limit; the 2 s events keep a little
+# for the record they may be writing.
+WATCHDOG_SLACK = {PROMPT: 0.0, START: 0.25, FAILURE: 0.25}
+# The query counts budget_ms from its own main(), so it is sent net of the child's start-up: the query's deadline then
+# falls inside the hook's, and past it the query writes no receipt (rail-room-confirm's S1, on main at a05d1d51).
+START_MARGIN = 0.15
 REQUEST_LIMITS = {PROMPT: 2, START: 3, FAILURE: 3}  # the request's `limit`: how many lessons the query may answer
 MAX_LESSONS = 3
 ANSWER_BYTES = 2000
@@ -45,14 +52,20 @@ OVERLAP = 128  # longer than any id line, so a line across a window's edge is fo
 GIT_SECONDS = 0.5
 STATE_DAYS = 14
 STATE_NAME = re.compile(r'[0-9a-f]{16}\.(?:json|lock)')
+STATE_TEMP = re.compile(r'\.[0-9a-f]{16}\.json\..+\.tmp')  # write_private's temporary file, left by a killed write
 CHECKOUT = Path(__file__).resolve().parents[2]
-# In the transcript (JSON lines), the hook's id line stands between escaped line breaks; the hold's first line follows
-# Claude Code's own words ("PreToolUse:Bash hook error: "), so it may start anywhere. Either one can only hide a lesson.
+# In the transcript (JSON lines), the hook's id line stands between escaped line breaks. The hold's first line starts a
+# tool result's string, after Claude Code's own words: `"PreToolUse:Bash hook error: Held once: ...` in `content`, and
+# `"Error: PreToolUse:...` in `toolUseResult`. A quote inside quoted text is escaped, so fenced text can't pose as
+# either (Serenity's nit). Either one can only hide a lesson.
 ID_LINE = re.compile(rb'Lesson ([0-9a-f]{8}-[0-9a-f]{8}) from [a-z][a-z0-9-]{1,31}(?=\\[nr]|["\r\n])')
-HOLD_LINE = re.compile(rb'Held once: lesson ([0-9a-f]{8}-[0-9a-f]{8}) from [a-z][a-z0-9-]{1,31} applies\.(?=\\[nr]|["\r\n])')
+HOLD_LINE = re.compile(rb'(?<!\\)"(?:Error: )?PreToolUse:Bash hook error: '
+                       rb'Held once: lesson ([0-9a-f]{8}-[0-9a-f]{8}) from [a-z][a-z0-9-]{1,31} applies\.(?=\\[nr]|["\r\n])')
 
 
 def default_settings():
+    """The one settings file the hook and the hold before each command both read. `make dock` copies the file given
+    with `--lessons` here, and undock removes it (Rio Grande's S2)."""
     return Path.home() / '.superyak' / 'lessons-hook.json'
 
 
@@ -162,16 +175,17 @@ def hold_reason(lesson, first=True):
 
 
 def transcript_ids(path, deadline, window=WINDOW, monotonic=time.monotonic):
-    """The short ids on the hook's own lines in the session's transcript: `Lesson <id> from <ship>` lines of the exact
-    shape, and the hold's first line. They only ever join `seen`, so text inside a fence can at most hide a lesson,
-    never show one. An empty set without a transcript; None when it is there but can't be read to its end (as it
-    stood when opened) by `deadline`: then the event adds nothing and holds nothing (section 8)."""
+    """The short ids on the hook's own lines in the session's transcript, in the order they first appear:
+    `Lesson <id> from <ship>` lines of the exact shape, and the hold's first line. They only ever join `seen`, so text
+    inside a fence can at most hide a lesson, never show one; `seen`'s newest SEEN_MAX are the latest shown. An empty
+    list without a transcript; None when it is there but can't be read to its end (as it stood when opened) by
+    `deadline`: then the event adds nothing and holds nothing (section 8)."""
     if not path or not isinstance(path, str):
-        return set()
+        return []
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, 'O_CLOEXEC', 0))
     except FileNotFoundError:
-        return set()
+        return []
     except (OSError, ValueError):
         return None
     try:
@@ -179,19 +193,20 @@ def transcript_ids(path, deadline, window=WINDOW, monotonic=time.monotonic):
         if not stat.S_ISREG(info.st_mode):
             return None
         if info.st_size == 0:
-            return set()
-        found = set()
+            return []
+        found = {}
         with mmap.mmap(fd, info.st_size, access=mmap.ACCESS_READ) as data:
             for start in range(0, info.st_size, window):
                 if monotonic() > deadline:
                     return None
-                end = min(info.st_size, start + window + OVERLAP)
+                end, here = min(info.st_size, start + window + OVERLAP), []
                 for match in ID_LINE.finditer(data, start, end):
                     at = match.start()
                     if at == 0 or data[at - 1:at] in (b'"', b'\n', b'\r') or data[max(at - 2, 0):at] in (b'\\n', b'\\r'):
-                        found.add(match.group(1).decode())
-                found.update(match.group(1).decode() for match in HOLD_LINE.finditer(data, start, end))
-        return found if monotonic() <= deadline else None
+                        here.append((at, match.group(1).decode()))
+                here += [(match.start(), match.group(1).decode()) for match in HOLD_LINE.finditer(data, start, end)]
+                found.update((id_, None) for _, id_ in sorted(here))
+        return list(found) if monotonic() <= deadline else None
     except (OSError, ValueError):
         return None
     finally:
@@ -345,10 +360,12 @@ def _output(event, lessons):
     return json.dumps({'hookSpecificOutput': {'hookEventName': event, 'additionalContext': render(lessons)}})
 
 
-def _record(path, lessons, seen, sent, limit, deadline, clock, monotonic):
-    """At the events other than the prompt: under the session's lock, at most `limit` of the lessons not yet shown
-    (by `seen`, or by a concurrent event since), recorded with the digests sent before any is printed. A record that
-    can't be written shows nothing."""
+def _record(path, lessons, seen, sent, limit, deadline, clock, monotonic, own=()):
+    """At the events other than the prompt: under the session's lock, at most `limit` of the lessons not yet shown,
+    recorded with the digests sent before any is printed. Not yet shown means not in `seen`, the ids the query was
+    told, and not shown by a concurrent event since this one read the record as `own`: a lesson the query answered,
+    and receipted, is never dropped for an older id it wasn't told (Rio Grande's correction). A record that can't be
+    written shows nothing."""
     import fcntl
     from .station import write_private
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -364,7 +381,7 @@ def _record(path, lessons, seen, sent, limit, deadline, clock, monotonic):
                 time.sleep(0.005)
         state = read_state(path)
         shown = strings(state, 'shown')
-        fresh = [l for l in lessons if l['id'] not in set(shown) | set(seen)][:limit]
+        fresh = [l for l in lessons if l['id'] not in set(seen) | (set(shown) - set(own))][:limit]
         record = {'shown': shown + [l['id'] for l in fresh], 'updated': clock()}
         for key in ('commands', 'errors'):
             record[key] = list(dict.fromkeys(strings(state, key) + sent.get(key, [])))
@@ -376,9 +393,11 @@ def _record(path, lessons, seen, sent, limit, deadline, clock, monotonic):
 
 
 def _prune(folder, keep, now):
-    """Session records untouched for STATE_DAYS go; the current session's never does."""
+    """Session records untouched for STATE_DAYS go, with any temporary file a killed write left; the current session's
+    never does."""
     for path in Path(folder).iterdir():
-        if STATE_NAME.fullmatch(path.name) and path.name[:16] != keep:
+        if (STATE_NAME.fullmatch(path.name) and path.name[:16] != keep
+                or STATE_TEMP.fullmatch(path.name) and path.name[1:17] != keep):
             try:
                 if path.lstat().st_mtime < now - STATE_DAYS * 86400:
                     path.unlink()
@@ -398,6 +417,8 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
     session = event.get('session_id') if name in LIMITS else None
     if not isinstance(session, str) or not session:
         return ''
+    if event.get('agent_id') is not None:
+        return ''  # a subagent: the hold never holds one, and its failure doesn't spend the session's lessons (S5)
     deadline = started + LIMITS[name]
     settings = read_settings(settings_path or default_settings())
     if settings is None:
@@ -407,7 +428,7 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
     shown_there = transcript_ids(event.get('transcript_path'), deadline, monotonic=monotonic)
     if shown_there is None:
         return ''
-    seen = seen_list(own, sorted(shown_there))
+    seen = seen_list(own, shown_there)
     request = {'ship': settings['ship']}
     if name == PROMPT:
         prompt = event.get('prompt')
@@ -442,28 +463,60 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
         request['branch'] = found
     if len(request) == 1:
         return ''  # nothing to ask with
-    request.update(limit=REQUEST_LIMITS[name], seen=seen[-SEEN_MAX:])
+    budget_ms = int((deadline - RESERVE - monotonic() - START_MARGIN) * 1000)
+    if budget_ms <= 0:
+        return ''  # no time left for the query to answer inside the hook's: it isn't started
+    request.update(limit=REQUEST_LIMITS[name], seen=seen[-SEEN_MAX:], budget_ms=budget_ms)
     lessons = ask(settings, request, deadline - RESERVE, monotonic) or []
     if not lessons and not sent:
         return ''
     try:
-        fresh = _record(path, lessons, seen, sent, REQUEST_LIMITS[name], deadline, clock, monotonic)
+        fresh = _record(path, lessons, seen[-SEEN_MAX:], sent, REQUEST_LIMITS[name], deadline, clock, monotonic,
+                        own=own)
     except OSError:
         return ''  # what isn't recorded isn't shown, so the budget holds
     return _output(name, fresh) if fresh else ''
 
 
-def main(argv=None):
-    """`run_agent.py lessons-hook [--settings <file>]`, the event's JSON on stdin. Always exits 0."""
-    started = time.monotonic()
+def _arm(at, monotonic=time.monotonic):
+    """The watchdog (Rio Grande's S4): at `at` (monotonic) the process exits 0 at once, printing nothing, even from a
+    blocking read. False where no timer can be set (not the main thread, or no SIGALRM)."""
     try:
+        signal.signal(signal.SIGALRM, lambda signum, frame: os._exit(0))
+        signal.setitimer(signal.ITIMER_REAL, max(at - monotonic(), 0.001))
+        return True
+    except (ValueError, OSError, AttributeError):
+        return False
+
+
+def _disarm(previous):
+    try:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+    except (ValueError, OSError, AttributeError, TypeError):
+        pass
+
+
+def main(argv=None):
+    """`run_agent.py lessons-hook [--settings <file>]`, the event's JSON on stdin. Always exits 0. Every limit counts
+    from here, after the interpreter's start-up (40-60 ms), which the hook can't see."""
+    started = time.monotonic()
+    previous = signal.getsignal(signal.SIGALRM) if hasattr(signal, 'SIGALRM') else None
+    try:
+        _arm(started + max(LIMITS[e] + WATCHDOG_SLACK[e] for e in LIMITS))  # until the event is known
         argv = sys.argv[1:] if argv is None else argv
         settings = argv[argv.index('--settings') + 1] if '--settings' in argv[:-1] else None
         event = json.loads(sys.stdin.read() or 'null') if not sys.stdin.isatty() else None
+        name = event.get('hook_event_name') if isinstance(event, dict) else None
+        if name in LIMITS:
+            _arm(started + LIMITS[name] + WATCHDOG_SLACK[name])
         text = run(event, settings, started=started)
+        _disarm(previous)  # what is printed is printed whole
         if text:
             sys.stdout.write(text + '\n')
             sys.stdout.flush()
     except BaseException:  # noqa: BLE001 - a hook must never break the prompt
         pass
+    finally:
+        _disarm(previous)
     return 0

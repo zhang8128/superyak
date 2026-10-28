@@ -513,21 +513,36 @@ def start_at_newest_mention(config_path, state_path, client, out):
 
 
 def install_lessons(lessons_settings, out=print):
-    """The lessons hook, when its settings are ones it can use; says what it did. Never raises."""
-    from .lessons_hook import read_settings
-    if read_settings(lessons_settings) is None:
-        out(f'The lessons hook was not installed: {lessons_settings} needs `ship` (a ship name) and `data_dir` (the '
+    """The lessons hook, when its settings are ones it can use; says what it did. Never raises. The settings are
+    copied to lessons_hook.default_settings(), the one file both the hook and the hold before each command read, and
+    the hook is installed naming that file (Rio Grande's S2). The hook goes in first: if the copy then fails, both
+    find no settings and stay silent, rather than the hold holding for a hook that isn't there."""
+    from .lessons_hook import default_settings, read_settings
+    given = Path(lessons_settings).expanduser().resolve()
+    if read_settings(given) is None:
+        out(f'The lessons hook was not installed: {given} needs `ship` (a ship name) and `data_dir` (the '
             "peer's data directory), and `query`, if it has one, as a list of words. Fix it and run make dock again.")
         return
+    copy = default_settings()
     try:
-        changes = install_lessons_hooks(Path.home() / '.claude' / 'settings.json', lessons_settings)
+        value = json.loads(given.read_text())
+        changes = install_lessons_hooks(Path.home() / '.claude' / 'settings.json', copy)
     except (OSError, ValueError, AttributeError, TypeError) as error:
         out(f'Could not install the lessons hook in ~/.claude/settings.json ({_reason(error)}). Fix the file and run '
             'make dock again.')
         return
+    try:
+        if read_json(copy) != value:
+            write_private(copy, value)
+    except (OSError, ValueError, TypeError) as error:
+        out(f'Could not write {copy} ({_reason(error)}), so the lessons hook stays silent. Run make dock again.')
+        return
     if changes:
-        out("Added the lessons hook: lessons from Andy's ships can appear at a prompt, at session start and after a "
-            'failed command.')
+        out("Added the lessons hook: lessons from Andy's ships can appear at a prompt, at session start, after a "
+            'failed command and before a command.')
+    if given != copy:
+        out(f'The lessons hook and the hold read {copy}, a copy of {given}. Run make dock again after changing it; '
+            'undock removes the copy.')
 
 
 def install_all(config_path, *, hook=False, adna=True, service=True, out=print, client=None, lessons=None):
@@ -603,12 +618,14 @@ def uninstall_all(config_path, out=print):
     local = 'watcher stopped, station tools and hook removed'
     try:
         remove_hooks(Path.home() / '.claude' / 'settings.json')
+        remove_lessons_hooks(Path.home() / '.claude' / 'settings.json')
     except (OSError, ValueError, AttributeError, TypeError) as error:
-        # Undock goes on: station.json goes below, and a hook without it prints nothing.
+        # Undock goes on: station.json and the lessons settings go below, and a hook without them prints nothing.
         out(f'Could not remove the Claude Code hooks from ~/.claude/settings.json ({_reason(error)}). Fix the file and remove '
-            'the entries that run run_agent.py hook.')
+            'the entries that run run_agent.py hook or lessons-hook.')
         local = 'watcher stopped and station tools removed; the hooks stay in ~/.claude/settings.json'
-    for path in (config_path, config_path.parent / 'run-mcp.json'):
+    from .lessons_hook import default_settings
+    for path in (config_path, config_path.parent / 'run-mcp.json', default_settings()):
         path.unlink(missing_ok=True)
     if revoked is False:
         out(f'Undocked on this machine ({local}), but the key was NOT revoked on the station: ask an admin to revoke it.')

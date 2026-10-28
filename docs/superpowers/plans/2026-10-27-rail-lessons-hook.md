@@ -1,8 +1,17 @@
 # The first rail's lessons hook: implementation plan
 
 **Spec:** `docs/superpowers/specs/2026-10-27-first-rail-lessons-design.md` on branch `trail-arrows-spec`, revision 3
-(approved). The hook only: section 8, the request fields and the prompt path of section 5, the short id of section 2,
-decisions 7 and 8. The `lessons query` command and the index are Rio Grande's (R1) and don't exist yet.
+(approved) when this plan was written; revision 4 (2026-10-28, sections 7 and 7.1) changes nothing the hook does. The
+hook only: section 8, the request fields and the prompt path of section 5, the short id of section 2, decisions 7 and
+8. The `lessons query` command and the index are Rio Grande's (R1), on main since first-rail; the query stops at the
+hook's `budget_ms` since rail-room-confirm (a05d1d51).
+
+**The review round of 8742c108 (City of AI, 2026-10-28; Serenity's fresh Mac reviewer, Rio Grande's fresh Pi
+reader):** the provider's deadline counts from the entry's start (`now`), SAVE_MARGIN before it gives up; undock
+removes the lessons hook and its settings; dock copies `--lessons` to `~/.superyak/lessons-hook.json`, the one file
+the hook and the hold read; every event sends `budget_ms`, and none starts a query with none left; a watchdog stops
+the hook at each event's limit; a subagent's failure asks nothing; could_hold is asked again with `seen` (Rio
+Grande's `lessons-hold-contract`), and before a command only a value of 6 bytes or more is answered (his side).
 
 **Branch:** `tardis/rail-lessons-hook`, local only, never pushed. Each task is test-first: the tests, seen failing,
 then the code, then green, then one commit. Tardis builds it.

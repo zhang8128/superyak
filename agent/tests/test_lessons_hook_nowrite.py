@@ -14,7 +14,7 @@ import uuid
 import pytest
 
 from superyak_agent import lessons_hook as lh
-from test_lessons_hook import A, B, C, Rail, failure, lesson, transcript_line
+from test_lessons_hook import A, B, C, Rail, failure, lesson, real_index, transcript_line
 
 AGENT = Path(__file__).resolve().parents[1]
 RUN_AGENT = AGENT / 'run_agent.py'
@@ -63,6 +63,7 @@ def test_the_hook_at_a_prompt_writes_nothing(world):
     assert f'Lesson {A} from serenity' in context and f'Lesson {B} from rio-grande' in context  # it really ran
     audit = done.stderr.decode()
     assert 'AUDIT' not in audit, audit  # no write, no database, and not even the station client imported
+    assert audit == '', audit  # nor anything else on stderr: a prompt echoed there is a leak too (Serenity's nit)
     assert (snapshot(world.state), snapshot(world.data), snapshot(world.tmp)) == before
     for path, content in everything_under(world.data, world.state, world.tmp, world.home):
         assert world.marker not in str(path) and world.marker.encode() not in content, path
@@ -119,3 +120,23 @@ def test_main_takes_the_same_path(world, monkeypatch, capsys):
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(event)))
     assert main(['lessons-hook', '--settings', str(world.settings)]) == 0
     assert f'Lesson {A} from serenity' in capsys.readouterr().out
+
+
+def test_the_installed_in_process_path_at_a_prompt_writes_nothing(world):
+    """Both reviews' S6/S1: settings as dock writes them name no `query`, so at a prompt the hook reads this checkout's
+    peer in process, against a real index. That path, under the same audit: no write, no database, nothing on stderr,
+    and the marker nowhere. (The stub's subprocess path is the test above.)"""
+    world.use_default_query()
+    real_index(world.data, 'what it means')
+    world.shown_at_prompt(lesson('dddddddd-eeeeeeee'))
+    before = snapshot(world.state), snapshot(world.data), snapshot(world.tmp)
+    bytecode = snapshot(lh.CHECKOUT / 'peer' / 'superyak_peer')
+    event = {'hook_event_name': 'UserPromptSubmit', 'session_id': 's1', 'transcript_path': str(world.transcript),
+             'cwd': str(world.root), 'prompt': f'Please look at {world.marker} and tell me what it means, thanks.'}
+    done = audited(world, RUN_AGENT, 'lessons-hook', '--settings', str(world.settings), stdin=json.dumps(event).encode())
+    assert (done.returncode, done.stderr) == (0, b''), done.stderr
+    assert f'Lesson {A} from serenity' in json.loads(done.stdout)['hookSpecificOutput']['additionalContext']
+    assert (snapshot(world.state), snapshot(world.data), snapshot(world.tmp)) == before
+    for path, content in everything_under(world.data, world.state, world.tmp, world.home):
+        assert world.marker not in str(path) and world.marker.encode() not in content, path
+    assert snapshot(lh.CHECKOUT / 'peer' / 'superyak_peer') == bytecode  # the peer read in process, compiling nothing
