@@ -15,7 +15,7 @@ terms_file="${SUPERYAK_SCRUB_TERMS:-$HOME/.superyak/scrub-terms}"
 # Exactly 0600 or 0400: POSIX exact modes, since macOS's find rejects `-perm /077`. A check that can't run refuses.
 if [ ! -r "$terms_file" ] || ! loose=$(find "$terms_file" -prune ! -perm 0600 ! -perm 0400 2>/dev/null) \
         || [ -n "$loose" ]; then
-    echo "pre-push: $terms_file is missing, unreadable, or readable by others (it must be 0600), so the scrubbed-text" >&2
+    echo "pre-push: $terms_file is missing, unreadable, or readable by others (it must be 0600 or 0400), so the scrubbed-text" >&2
     echo "pre-push: check can't run and nothing was pushed. Ask Andy for the file; only a person skips this check." >&2
     exit 1
 fi
