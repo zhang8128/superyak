@@ -75,7 +75,7 @@ def test_compression_creates_semantics(storage, embeddings, compressor):
     assert result["semantics_created"] >= 1
 
     # Episodes should be marked compressed
-    uncompressed = storage.get_uncompressed_episodes()
+    uncompressed = storage.get_uncompressed_episodes(auto="all")
     assert len(uncompressed) == 0
 
 
@@ -92,7 +92,7 @@ def test_crash_recovery_auto_compress(storage, embeddings, compressor):
     assert result["semantics_created"] >= 1
 
     # All episodes now compressed
-    assert len(storage.get_uncompressed_episodes()) == 0
+    assert len(storage.get_uncompressed_episodes(auto="all")) == 0
 
 
 def test_instinct_lifecycle(storage, embeddings, compressor):
