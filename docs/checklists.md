@@ -153,11 +153,17 @@ Why: the queue fills any hour nobody aims, and a full re-check on low-risk work 
 
 ## Before any push
 
-- [ ] The branch's base is on the rewritten history: `git merge-base --is-ancestor 60dd851 HEAD` (main after the
-      2026-10-27 scrub). A branch built on the old history brings the scrubbed files back. `make install-hooks`
-      installs a pre-push hook that refuses such a push to the public repo (with the scrubbed terms in a private
-      0600 file, ~/.superyak/scrub-terms, never in the repo); this item retires on each machine
-      once its clone runs the hook (`git config core.hooksPath` prints its scripts/git-hooks).
+- [ ] No commit in the push comes from the old history (main before the 2026-10-27 scrub), which brings the scrubbed
+      files back. The base check alone (`git merge-base --is-ancestor 60dd851 HEAD`) misses an old ref merged into a
+      new branch, so run the hook's check: this prints nothing (bash or zsh, with the full hash
+      60dd85175a1709627be63a4678694029c5721b74 as B):
+      `comm -23 <(git rev-list HEAD --not $B | sort) <(git rev-list --ancestry-path $B..HEAD | sort)`.
+      `make install-hooks` installs a pre-push hook that runs it and refuses such a push to the public repo (with
+      the scrubbed terms in a private 0600 file, ~/.superyak/scrub-terms, never in the repo); this item retires on
+      each machine once its clone runs the hook (`git config core.hooksPath` prints its scripts/git-hooks).
+- [ ] Before merging a `gh/*` or `origin/*` ref, check that it descends from the scrub: `git merge-base
+      --is-ancestor $B <ref>`. A fetch without `+` can leave a stale ref on the old history (Serenity, 2026-10-28:
+      the Mac's gh/main was still 5f8788b0, from 2026-10-09).
 - [ ] killer: Nothing in the diff names a person with health, contact or identity details, or holds a key or token
       (gitleaks, plus a read of every new doc). Once pushed, it can't be pulled back: clones and caches keep what a
       history rewrite removes.
