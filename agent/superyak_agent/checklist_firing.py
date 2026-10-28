@@ -4,6 +4,7 @@ Standard library only: the hold imports this module. The functions work on the r
 """
 import hashlib
 import math
+import re
 
 from superyak_agent.checklists import Loaded, command_matches, enter_applies
 
@@ -11,6 +12,15 @@ LISTS_PER_EVENT = 2
 READ_SECONDS = 0.150
 HOLD_SECONDS = 1.0
 START_SOURCES = ('startup', 'clear', 'fork')
+ANSWERS = ('done', 'done-before-asked', 'caught', 'n/a', 'skipped')
+REASON_BYTES = 200
+REASON_REFUSED = ('A reason is one line of at most 200 bytes, with no email address, phone number or key-like token. '
+                  'Reword it.')
+
+_EMAIL = re.compile(r'[^\s@]+@[^\s@]+\.[A-Za-z]{2,}')
+_PHONE = re.compile(r'\+\d[\d ().-]{7,}\d|\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}')
+_RUN = re.compile(r'[A-Za-z0-9+/=_-]{32,}')
+_HASH = re.compile(r'(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})')
 
 Due = tuple[Loaded, tuple[str, ...]]
 
@@ -171,3 +181,32 @@ def miss_line(now: float, session: str, kind: str, key: str | None = None, versi
         line['version'] = version
     line['miss'] = kind
     return line
+
+
+def _key_like(text: str) -> bool:
+    for run in _RUN.findall(text):
+        if _HASH.fullmatch(run):
+            continue
+        if re.search(r'[A-Z]', run) and re.search(r'[a-z]', run) and re.search(r'[0-9]', run):
+            return True
+    return False
+
+
+def screen_reason(text: str, limit: int = REASON_BYTES) -> bool:
+    """One printable line of at most `limit` UTF-8 bytes with no email address, phone number or key-like token."""
+    if not isinstance(text, str) or not text.isprintable():
+        return False
+    try:
+        if len(text.encode('utf-8')) > limit:
+            return False
+    except UnicodeEncodeError:
+        return False
+    return not (_EMAIL.search(text) or _PHONE.search(text) or _key_like(text))
+
+
+def run_line(now: float, session: str, key: str, version: int, moment: str, answers: list) -> dict:
+    return {'time': now, 'session': session, 'key': key, 'version': version, 'moment': moment, 'answers': answers}
+
+
+def refused_line(now: float, session: str, key: str, version: int, moment: str, kind: str) -> dict:
+    return {'time': now, 'session': session, 'key': key, 'version': version, 'moment': moment, 'refused': kind}

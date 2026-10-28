@@ -165,12 +165,17 @@ def stale_claims(entries):
     return stale
 
 
+def inside_run():
+    """Whether this process runs inside a teamd worker or a watcher run (SUPERYAK_RUN set to anything but `hook`)."""
+    return os.environ.get('SUPERYAK_RUN') not in (None, '', 'hook')
+
+
 def refusal(home, project_dir):
     """S7: why the station MCP server of the ship whose home this is refuses a call from a session in `project_dir`,
     or None when it may act. In order: inside a teamd worker or a watcher run; an unreadable registry; the machine
     ship in another ship's project (with the codex -p hint) or at a stale claim; a project ship at its stale claim,
     outside its claim, or with no claim."""
-    if os.environ.get('SUPERYAK_RUN') not in (None, '', 'hook'):
+    if inside_run():
         return ('The station tools are off inside teamd workers and watcher runs (SUPERYAK_RUN is set): those act for '
                 'the person through their own channels, never as a ship.')
     acts, detail = verdict(home, project_dir)

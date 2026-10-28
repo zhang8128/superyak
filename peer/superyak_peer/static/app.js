@@ -521,6 +521,61 @@ function sourceLabel(message) {
 // The server's mark for words a room's host attributes to someone on this station that this station never sent.
 const UNVERIFIED_AUTHOR = "Unverified: the room's host says this is from someone on this station";
 
+// Chat paging: a room opens on its newest page and reads on from there. A room the station does not page (a paired
+// peer's, or an older station) answers without `paged` and is the whole room, as it always was.
+const ROOM_PAGE = 100;
+const roomPath = (id) => `/api/chats/${pathPart(id)}`;
+const withoutRepeats = (older, newer) => { const seen = new Set(older.map((message) => message.id)); return newer.filter((message) => !seen.has(message.id)); };
+
+function loadRoom(id) { return api(`${roomPath(id)}?limit=${ROOM_PAGE}`); }
+
+// The room as it is now: the messages already shown stay, what arrived since is appended, and every other field
+// (brief, claims, members, ...) is the answer's. A message the answer carries replaces the shown copy and takes its
+// place (the sender's own message is shown from the POST before the answer has it). `room` is the room being
+// refreshed; the copy on screen is the base, read again after the answers so a "Load earlier" that finished meanwhile stays.
+async function refreshRoom(room) {
+  const shown = state.room?.id === room.id ? state.room : room;
+  if (!shown.paged) return api(roomPath(room.id));
+  let fresh = [], seq = shown.seq, answer;
+  do {
+    answer = await api(`${roomPath(room.id)}?since=${encodeURIComponent(seq)}&limit=${ROOM_PAGE}`);
+    if (!answer.paged) return answer;  // the station stopped paging this room: take it whole
+    fresh = [...fresh, ...(answer.messages || [])];
+    seq = answer.seq;
+  } while (answer.more);
+  const current = state.room?.id === room.id ? state.room : shown;
+  const arrived = new Set(fresh.map((message) => message.id));
+  const messages = [...(current.messages || []).filter((message) => !arrived.has(message.id)), ...fresh];
+  // A fresh message that sorts at or before the first one shown (a peer row with an older `created`) belongs above
+  // the window, so the window's real start is that many positions later. Counting a tie is safe: `before` then
+  // overlaps what is shown, and withoutRepeats absorbs it; counting too few would skip a message.
+  const start = Math.min(shown.first_position, current.first_position), top = (current.messages || [])[0];
+  const shownIds = new Set((current.messages || []).map((message) => message.id));
+  const above = top && start > 0 ? fresh.filter((message) => !shownIds.has(message.id) && message.created <= top.created).length : 0;
+  return { ...answer, messages, more: undefined, first_position: Math.min(start + above, answer.total) };
+}
+
+// Earlier messages go in front of the shown ones; the page keeps the line the reader was on.
+async function loadEarlier() {
+  const room = state.room;
+  if (!room?.paged || !(room.first_position > 0) || state.earlierLoading) return;
+  state.earlierLoading = true;
+  try {
+    const answer = await api(`${roomPath(room.id)}?before=${room.first_position}&limit=${ROOM_PAGE}`);
+    if (state.room?.id !== room.id) return;
+    const scroller = document.scrollingElement, height = scroller.scrollHeight, top = scroller.scrollTop;
+    const messages = [...withoutRepeats(state.room.messages, answer.messages || []), ...state.room.messages];
+    state.room = { ...state.room, messages, first_position: answer.first_position, total: answer.total };
+    render();
+    scroller.scrollTop = top + scroller.scrollHeight - height;
+  } catch (error) {
+    setFlash(error.message, true);
+    render();
+  } finally {
+    state.earlierLoading = false;
+  }
+}
+
 function messageMarkup(message, room) {
   const mine = isSelf(message.author_id);
   const system = room?.system_author;  // the station's own author, known by id, never by display name (R31)
@@ -822,7 +877,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
   } finally {
     state.boardSaving = false;
     if (state.me && state.room?.id === room.id) {
-      try { const latest = await api(`/api/chats/${pathPart(room.id)}`); if (state.room?.id === room.id) state.room = latest; } catch (_) { /* the board below still reads */ }
+      try { const latest = await refreshRoom(room); if (state.room?.id === room.id) state.room = latest; } catch (_) { /* the board below still reads */ }
       if (state.room?.id === room.id) await loadBoard(state.room);
     }
     render();
@@ -872,9 +927,9 @@ function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members (409)
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
-    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
+    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
 
@@ -1081,7 +1136,11 @@ async function loadRoute() {
   if (route === "chats") {
     state.selectedChatId = id || state.selectedChatId || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
-      try { state.room = await api(`/api/chats/${pathPart(state.selectedChatId)}`); await loadBoard(state.room); }
+      try {
+        const paged = state.room?.id === state.selectedChatId && state.room.paged;  // keep the earlier messages the reader loaded
+        state.room = paged ? await refreshRoom(state.room) : await loadRoom(state.selectedChatId);
+        await loadBoard(state.room);
+      }
       catch (_) { state.room = null; }
     } else {
       state.room = null;
@@ -1389,7 +1448,7 @@ async function confirmWithdraw() {
 
 async function openChat(id) {
   state.selectedChatId = id;
-  state.room = await api(`/api/chats/${pathPart(id)}`);
+  state.room = await loadRoom(id);
   await loadBoard(state.room);
   location.hash = `chats/${pathPart(id)}`;
   state.flash = null;
@@ -1413,7 +1472,7 @@ async function createChat(form) {
     state.chatDialog = null; state.chatPicked = null; state.chatError = null;
     await loadData();
     state.selectedChatId = room.id;
-    state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    state.room = await loadRoom(room.id);
     await loadBoard(state.room);
     history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
     render();
@@ -1429,7 +1488,7 @@ async function createChat(form) {
       state.chatPicked = members;
       state.chatError = "The room brief changed since you opened this. The newer brief is shown below; tick the box again to carry it.";
       try {
-        state.room = await api(`/api/chats/${pathPart(state.room.id)}`);
+        state.room = await refreshRoom(state.room);
       } catch (_) {
         state.chatError = "The room brief changed since you opened this. Close this and open the room again to see the newer brief.";
       }
@@ -1461,7 +1520,7 @@ async function saveBrief(form) {
     if (error.status === 409) {
       message = "A newer brief was saved while you were editing. It is shown above, and your text is still here. Save again to replace it.";
       try {
-        const latest = await api(`/api/chats/${pathPart(room.id)}`);
+        const latest = await refreshRoom(room);
         if (state.room?.id === room.id) state.room = latest;
         edit.revision = latest.brief_revision;
       } catch (_) {
@@ -1476,7 +1535,7 @@ async function saveBrief(form) {
   }
   if (state.briefEdit === edit) state.briefEdit = null;  // only this editor closes: one opened since then stays
   try {
-    const latest = await api(`/api/chats/${pathPart(room.id)}`);
+    const latest = await refreshRoom(room);
     if (state.room?.id === room.id) state.room = latest;
   } catch (_) { /* the save stands; the next refresh shows it */ }
   if (state.briefHistory?.roomId === room.id) await openBriefHistory(room);  // the saved revision joins the list
@@ -1532,7 +1591,7 @@ async function removeParticipant(id) {
   }
   try {
     await loadData();
-    if (state.room?.id === room.id) state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    if (state.room?.id === room.id) state.room = await refreshRoom(room);
     render();
   } catch (error) {
     if (error.status === 401) {
@@ -1577,7 +1636,7 @@ async function sendMessage(form) {
   }
   try {
     const [latestRoom, latestSync] = await Promise.all([
-      api(`/api/chats/${pathPart(room.id)}`),
+      refreshRoom(room),
       api("/api/sync"),
     ]);
     if (state.room?.id === room.id) state.room = latestRoom;
@@ -1894,6 +1953,7 @@ document.addEventListener("click", async (event) => {
     document.querySelector("#brief-body")?.focus();
   }
   if (action === "cancel-brief") { state.briefEdit = null; if (state.briefHistory) state.briefHistory.ask = null; render(); }
+  if (action === "load-earlier") await loadEarlier();
   if (action === "brief-history" && state.room) await openBriefHistory(state.room);
   if (action === "hide-brief-history") { state.briefHistory = null; render(); }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));

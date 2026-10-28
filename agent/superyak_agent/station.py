@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import tempfile
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 import urllib.error
 import urllib.request
 from superyak_team.teamlib import fence_external
@@ -101,14 +101,16 @@ class StationClient:
         self.key, self.transport = key, transport or urllib_transport()
         self.presence = dict(presence or {})  # spec S1: names the session on every call; {} sends nothing new
 
-    def request(self, method, path, body=None):
-        headers = {'origin': self.origin, 'accept': 'application/json'}
+    def request(self, method, path, body=None, headers=None):
+        """`headers` adds to this call only, such as a docking poll's X-Superyak-Secret."""
+        extra, headers = headers or {}, {'origin': self.origin, 'accept': 'application/json'}
         if self.origin != self.base:
             scheme, _, host = self.origin.partition('://')
             headers.update({'host': host, 'x-forwarded-proto': scheme})
         if self.key:
             headers['authorization'] = f'Bearer {self.key}'
         headers.update(self.presence)
+        headers.update(extra)
         data = None
         if body is not None:
             headers['content-type'] = 'application/json'
@@ -132,8 +134,10 @@ class StationClient:
     def rooms(self):
         return self.request('GET', '/api/chats')
 
-    def room(self, room_id):
-        return self.request('GET', f'/api/chats/{quote(room_id, safe="")}')
+    def room(self, room_id, **page):
+        """The room. `page` (limit, before, at, start, after, since) asks for a window of its messages; values of None are left out."""
+        query = urlencode({name: value for name, value in page.items() if value is not None})
+        return self.request('GET', f'/api/chats/{quote(room_id, safe="")}' + (f'?{query}' if query else ''))
 
     def post(self, room_id, body, client_message_id, ticket_id=None, reply_to=None):
         payload = {'client_message_id': client_message_id, 'body': body}
@@ -223,6 +227,13 @@ class StationClient:
     def set_brief(self, room_id, body, revision):
         """Ship briefs S3: set or update a room's brief under this ship's own key; the station decides who may."""
         return self.request('PUT', f'/api/ships/me/rooms/{quote(room_id, safe="")}/brief', {'body': body, 'revision': revision})
+
+    def add_member(self, room_id, member):
+        """Room moderators: add one member to a room this ship moderates; the station makes the new room."""
+        return self.request('POST', f'/api/ships/me/rooms/{quote(room_id, safe="")}/members', {'member': member})
+
+    def remove_member(self, room_id, member):
+        return self.request('DELETE', f'/api/ships/me/rooms/{quote(room_id, safe="")}/members/{quote(member, safe="")}')
 
     def directory(self):
         return self.request('GET', '/api/ships/directory')
