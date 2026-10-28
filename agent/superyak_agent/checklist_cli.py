@@ -32,21 +32,52 @@ def _count(directory) -> int:
         return 0
 
 
-def _small(path) -> str:
+SAFE_BRANCH = re.compile(r'[A-Za-z0-9._/-]{1,64}')
+HEX = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+
+
+def _small(path, limit=4096) -> str:
     """A small regular file's text, read without blocking (a FIFO or a device is refused)."""
     fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError('not a regular file')
-        return os.read(fd, 4096).decode('utf-8').strip()
+        return os.read(fd, limit).decode('utf-8').strip()
     finally:
         os.close(fd)
 
 
+def _commit(gitdir, ref) -> str | None:
+    """The commit `ref` names, from the loose ref or packed-refs of the common git directory. A ref that could leave
+    refs/ (`..`, an absolute path, a NUL) is never looked up."""
+    if '..' in ref.split('/') or '\0' in ref or not ref.startswith('refs/heads/'):
+        return None
+    common = gitdir
+    try:   # a linked worktree's branches live in the main git directory
+        common = os.path.join(gitdir, _small(os.path.join(gitdir, 'commondir')))
+    except (OSError, ValueError):
+        pass
+    try:
+        value = _small(os.path.join(common, ref))
+        if HEX.fullmatch(value):
+            return value
+    except (OSError, ValueError):
+        pass
+    try:
+        for line in _small(os.path.join(common, 'packed-refs'), 1 << 20).splitlines():
+            value, _, name = line.partition(' ')
+            if name == ref and HEX.fullmatch(value):
+                return value
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def _branch(holder) -> str:
-    """' (on branch <name>)' or ' (detached at <hash>)' for the git checkout holding `holder`, from git's own files, so
-    a trusted directory shows which branch its lists load from (dock trusts the working tree, section 2's S5). Best
-    effort: '' outside a checkout or on any trouble, and it never fails the command."""
+    """Which checkout a trusted directory's lists load from (dock trusts the working tree, section 2's S5), from git's
+    own files: ' (on branch "<name>")' only for a name of 1 to 64 of A-Z a-z 0-9 . _ / -, since a session reads this
+    line unfenced; a branch named otherwise shows its commit, never its name; a HEAD that isn't a branch is a detached
+    checkout. Best effort: '' outside a checkout or on any trouble, and it never fails the command."""
     try:
         current = os.path.realpath(holder)
         while not os.path.lexists(os.path.join(current, '.git')):
@@ -61,13 +92,19 @@ def _branch(holder) -> str:
                 return ''
             gitdir = os.path.join(current, line[len('gitdir: '):])
         head = _small(os.path.join(gitdir, 'HEAD'))
+        if head.startswith('ref: refs/heads/'):
+            name = head[len('ref: refs/heads/'):]
+            if SAFE_BRANCH.fullmatch(name):
+                return f' (on branch "{name}")'
+            commit = _commit(gitdir, head[len('ref: '):])
+            if commit:
+                return f" (on a branch at {commit[:8]}; its name isn't shown)"
+            return " (on a branch whose name isn't shown)"
+        if HEX.fullmatch(head):
+            return f' (a detached checkout at {head[:8]})'
+        return ' (a detached checkout)'
     except Exception:  # noqa: BLE001 - best effort: no branch shown
         return ''
-    if head.startswith('ref: refs/heads/'):
-        return f' (on branch {cl._clean(head[len("ref: refs/heads/"):])})'
-    if re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', head):
-        return f' (detached at {head[:8]})'
-    return ''
 
 
 def _list(args, out) -> int:

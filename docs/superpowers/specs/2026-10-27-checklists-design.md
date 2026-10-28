@@ -337,7 +337,9 @@ directories:
   (`station.py:21`) only, so a worktree inside it isn't trusted. It gets the checkout's lists through the parent
   walk, and a branch's edits in a worktree take effect when they merge. The trust is of the checkout's working tree,
   on whatever branch it has checked out, so an edit there, or another branch checked out there, loads at once.
-  `checklists list` shows that branch beside each trusted directory in a git checkout (revision 4).
+  `checklists list` shows that branch beside each trusted directory in a git checkout, in quotes, only when its name
+  is 1 to 64 of `A-Z`, `a-z`, `0-9` and `._/-`; a branch named otherwise shows its commit, never its name, since a
+  session reads that line unfenced (revision 4).
 - `superyak-agent checklists trust <path>` runs only from an interactive terminal (stdin and stdout are TTYs) and asks
   the person to type the path back. That is a speed bump against an agent trusting by mistake, not a lock: a program
   that runs a pseudo-terminal passes it. It refuses a directory, or a file in it, that another user owns or that is
