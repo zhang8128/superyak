@@ -34,7 +34,8 @@ from imprint_filter import (CLOSED_SECONDS, FILTER, DIGEST_TABLES, IMPRINT_SUBJE
                             OTHERS_HOME_WORDS, OTHERS_NO_LEDGER_WORDS, TIMES_WORDS, WITHOUT_ROUTE_WORDS, IdSet,
                             PackageRows, People, PlanRefused, Scratch, ScratchMap, Selection, Terms, check_owner,
                             canonical, check_package_tables, check_source, classify_source, contents_of, cross_references, left_out_keys, open_ledger,
-                            package_rows, parse_selection, parse_terms, people, plan_digest, row_key, scope_of, semantic_rows)
+                            package_rows, parse_selection, parse_terms, people, plan_digest, refuse_unmatched_exclude,
+                            row_key, scope_of, semantic_rows)
 from imprint_filter import _instant_text
 
 BATCH_ROWS = 1000                   # rows per insert batch (D42, I 14)
@@ -365,6 +366,7 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
         c = replace(ctx, scratch=scratch, terms=terms, now=now)
         conn = _connect(working, read_only=True, vec=True)
         conn.row_factory = sqlite3.Row
+        refuse_unmatched_exclude(conn, sel)             # every --exclude id names a memory here (review S4)
         pr = package_rows(conn, sel, terms, c)
         digest = plan_digest(scope_of(sel), pr.rows, scratch=scratch)
         contents = contents_of(pr.rows)
@@ -376,6 +378,8 @@ def make_plan(store: Path, sel: Selection, terms: Terms, ctx, context: Context, 
         counts.update(sessions=len(sessions),
                       source_episodes=conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0],
                       source_semantics=conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0])
+        if sel.exclude:                                 # the ids --exclude matched: all of them, or it refused
+            counts.update(exclude_ids=len(sel.exclude), excluded=counts.get("excluded", 0))
         who = {reason: people(scratch, reason) for reason in PEOPLE_REASONS}
         cold = Path(store).with_name("cold.db")
         cold_conn = store_reader.connect(cold, immutable=True) if cold.is_file() else None
@@ -533,6 +537,10 @@ def render_dry_run(plan: Plan, context: Context, *, show_cross_references: bool 
                "stores, knowledge graph, the session registry (harness, model, working directory).")
     if not route:
         out.append("  " + WITHOUT_ROUTE_WORDS)
+    if sel.exclude:
+        n, ids = c.get("excluded", 0), c.get("exclude_ids", len(sel.exclude))
+        out.append(f"  {_n(n, 'memory stays', 'memories stay')} because --exclude names {'it' if n == 1 else 'them'}; "
+                   f"its {_n(ids, 'id names', 'ids each name')} a memory in this store.")
     if c.get("semantic_source_stays"):
         out.append(f"  {_n(c['semantic_source_stays'], 'semantic stays', 'semantics stay')} because a recorded source "
                    "episode stays.")

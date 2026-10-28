@@ -288,9 +288,41 @@ def parse_selection(*, lanes: str | None, layers: str | None, since: str | None,
             lines = Path(exclude_file).read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError) as exc:
             raise PlanRefused(f"--exclude file can't be read: {exc}") from None
+        # Taken exactly as written: no case folding and no ref parsing. A plan refuses an id that names no memory
+        # (refuse_unmatched_exclude), so a typo, another case or a mem: ref is never a silent no-op (review S4).
         exclude = frozenset(line.strip() for line in lines if line.strip())
     return Selection(lanes=chosen_lanes, layers=chosen_layers, since=t0, until=t1, shared_with=shared_with,
                      exclude=exclude, unsourced=bool(unsourced))
+
+
+EXCLUDE_SHOWN = 20              # the unmatched --exclude ids a refusal lists; it counts the rest
+
+
+def unmatched_exclude(conn: sqlite3.Connection, exclude: Iterable[str]) -> tuple[str, ...]:
+    """The ``exclude`` ids, sorted, that name no episode and no semantic in ``conn``, in any lane or time. A match is
+    exact, compared in Python on the ids the store holds, so a typo, another case or a ``mem:`` ref never matches.
+    Only the ``id`` columns are read."""
+    wanted = sorted(set(exclude))
+    found: set[str] = set()
+    for table in _TABLES.values():
+        for batch in _batches(wanted):
+            marks = ", ".join("?" * len(batch))
+            found.update(r[0] for r in conn.execute(f"SELECT id FROM {table} WHERE id IN ({marks})", batch))
+    return tuple(i for i in wanted if i not in found)
+
+
+def refuse_unmatched_exclude(conn: sqlite3.Connection, sel: Selection) -> None:
+    """Refuses a plan whose ``--exclude`` holds an id that names no memory in the store (review S4). The refusal lists
+    the owner's own ids (at most ``EXCLUDE_SHOWN``, then a count), never a memory's content."""
+    missing = unmatched_exclude(conn, sel.exclude)
+    if not missing:
+        return
+    shown = ", ".join(repr(i) for i in missing[:EXCLUDE_SHOWN])
+    if len(missing) > EXCLUDE_SHOWN:
+        shown += f" and {len(missing) - EXCLUDE_SHOWN:,} more"
+    raise PlanRefused(f"{len(missing):,} {'id' if len(missing) == 1 else 'ids'} in --exclude name no memory in this "
+                      f"store, so nothing was planned: {shown}. Each line must be one memory's id exactly as stored: "
+                      "case counts, and an id is not a mem: ref.")
 
 
 @dataclass(frozen=True)
@@ -585,7 +617,8 @@ def base(conn: sqlite3.Connection, layer: str, sel: Selection, ctx: SourceContex
     """Ids of ``layer`` that pass I 5.2's base(m), in (created_at, id) order.
 
     The source is read one row at a time from a cursor, so a row and its content are all that is in memory.
-    A row whose time does not parse is counted in ``counts["unparseable_time"]`` and left out. With a ledger a
+    A row whose time does not parse is counted in ``counts["unparseable_time"]`` and left out, and one in the lanes and
+    window that ``sel.exclude`` names in ``counts["excluded"]``. With a ledger a
     memory is also left out, and counted once, for an unsettled lane (``lane_unsettled``); without ``home`` for a
     co-subject (``needs_yes``); with it, in this order, for a retired co-subject (``retired``), more than 8
     subjects (``bound``) or a co-subject's no (``said_no``). One that ships with co-subjects is counted in
@@ -608,7 +641,10 @@ def base(conn: sqlite3.Connection, layer: str, sel: Selection, ctx: SourceContex
             if at is None:
                 counts["unparseable_time"] += 1
                 continue
-            if (t0 is not None and at < t0) or at >= t1 or id in sel.exclude:
+            if (t0 is not None and at < t0) or at >= t1:
+                continue
+            if id in sel.exclude:
+                counts["excluded"] += 1                 # in this selection but for --exclude (review S4)
                 continue
             if sel.shared_with is not None and (
                     house is None or not shared(house, {"id": id, "content": content}, layer, ctx,
