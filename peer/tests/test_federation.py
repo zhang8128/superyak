@@ -1252,15 +1252,29 @@ def test_re_pairing_one_participant_after_a_disconnect_reconnects_that_one_only(
     with pytest.raises(Problem):  # out of audiences
         a[0].create_layer(a[1], {'body': 'to the held one', 'audience_users': [c2['id']]})
     from superyak_peer.identity import parse
+
+    def queued_for_held():
+        with a[0].transaction() as db:
+            return db.execute('SELECT COUNT(*) FROM outbox WHERE contact_id=?', (c2['id'],)).fetchone()[0]
+
+    before = queued_for_held()
     a[0].send_message(a[1], room['id'], 'after-1', 'after the re-pair')
     prepared = []
     a[2].sync_once(send=lambda card, prepare: prepared.append(parse(prepare())))
     recipients = [e['recipients'] for e in prepared]
     assert [b[1]] in recipients and not any(second in r for r in recipients)  # no delivery to the held one
+    assert queued_for_held() == before  # nothing is even queued for it (re-check residual 1)
+    with a[0].transaction() as db:  # and a row that got there anyway is refused before it's sent (defence in depth):
+        model = dict(db.execute("SELECT * FROM outbox WHERE contact_id=? AND action='room.message' "  # a faithful copy
+                                "ORDER BY event_seq DESC LIMIT 1", (ca['id'],)).fetchone())        # of a real row
+        db.execute("INSERT INTO outbox(id,event_seq,contact_id,resource_id,revision,action,metadata,status) "
+                   "VALUES('stray',?,?,?,?,?,?,'pending')", (model['event_seq'], c2['id'], model['resource_id'],
+                                                             model['revision'], model['action'], model['metadata']))
+    again = []
+    a[2].sync_once(send=lambda card, prepare: again.append(parse(prepare())))
+    assert not any(second in e['recipients'] for e in again)
     with a[0].transaction() as db:
-        held_rows = db.execute("SELECT status FROM outbox WHERE contact_id=? AND status NOT IN ('delivered')",
-                               (c2['id'],)).fetchall()
-    assert held_rows and {r['status'] for r in held_rows} == {'withdrawn'}
+        assert db.execute("SELECT status FROM outbox WHERE id='stray'").fetchone()[0] == 'withdrawn'
     event = b[2].identity.envelope(destination=a[2].identity.peer_id, actor=second, resource_id='layer-x', revision=1,
                                    action='layer.release', recipients=[a[1]], payload={'body': 'from the held one'})
     with pytest.raises(Problem, match='Unknown remote participant'):  # its events refused

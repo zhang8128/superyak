@@ -1,5 +1,8 @@
 """Run synthetic acceptance against two independent HTTPS peers over SSH forwards.
 
+Ships don't run this checker: it's Andy's, or a test's. It pairs its two synthetic hosts by computing their codes,
+which CLAUDE.md forbids a ship (a ship never computes a pairing code).
+
 Requires a new local output directory and a new remote run directory, plus a
 remote Python with this release's locked production dependencies. SSH host-key
 checking remains enabled. See README.md for the generic configuration format.

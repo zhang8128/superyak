@@ -130,7 +130,8 @@ class Federation:
                     action = 'room.message' if kind == 'chat.message' else 'room.roster'
                 else:
                     continue
-                for contact in contacts:
+                held = {r[0] for r in db.execute('SELECT contact_id FROM contact_holds')}  # nothing queued for them (SF3)
+                for contact in contacts - held:
                     db.execute('INSERT OR IGNORE INTO outbox(id,event_seq,contact_id,resource_id,revision,action,metadata,status) VALUES(?,?,?,?,?,?,?,?)', (uid(),event['id'],contact,rid,event['resource_version'],action,event['payload'],'pending'))
             if events:
                 db.execute('UPDATE federation_cursor SET seq=? WHERE id=1', (events[-1]['id'],))
