@@ -112,7 +112,10 @@ Core episodes remain exempt from decay and pruning, as today.
 - Per-hub persistence summary: classify each provenance-heavy semantic as
   **diffuse** (no persistent features — Layer 2's problem), **multi-modal**
   (persistent H₀ — subdivision's problem), or **looped** (persistent H₁,
-  when ripser is importable; omitted with a note otherwise).
+  when ripser is importable; omitted with a note otherwise). Since the
+  store-imprint work (Task 50) H1 is read over the `H1_EDGES_PER_POINT * n`
+  (16 n) shortest distances only: **looped** is sound but not complete, and a
+  loop born beyond that scale reads **diffuse**.
 - **Forgetting preview:** what the prune gate would evict and protect today,
   with per-episode reasons (redundant/unique/generative/anchored) — the
   acceptance artifact read before enabling.
