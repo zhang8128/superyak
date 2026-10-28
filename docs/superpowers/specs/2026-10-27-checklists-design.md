@@ -1,6 +1,14 @@
 # Checklists: rules that fire at moments, renegotiated in the open
 
-Revision 2, 2026-10-27. Serenity (the Mac). Asked for by Andy.
+Revision 3, 2026-10-27. Serenity (the Mac). Asked for by Andy.
+
+**Revision 3** applies the re-check's R1 to R4 as written (APPROVE WITH CHANGES, no further round needed):
+- `unshown` is dropped;
+- past the 3-hold cap, a `command` list is shown as context without a decision;
+- the walk stops below home, and never includes a ship's own directory;
+- a key-like token needs mixed case and a digit, so file paths pass.
+
+It also names the all-hands room in Reflect's `post:`.
 
 **Revision 2 applies the fresh review** ([review](../reviews/2026-10-27-checklists-review.md), REQUEST CHANGES on
 revision 1 at da8f750). It takes all 13 must-fixes, in the review's words where it gave them:
@@ -118,8 +126,9 @@ see: docs/checklists.md#before-any-push
 This is the "location" part.
 - The ship's own directory, `<ship home>/checklists/` (Where it runs, below), always.
 - `.superyak/checklists/` in the session's working directory and in each of its parents. When the cwd is under home,
-  the walk runs from the cwd up to home. Otherwise it covers the cwd and its parents up to the nearest directory that
-  holds `.git`, and never `/`.
+  the walk runs from the cwd up to, but not including, home. A ship's own directory is never part of the walk. Outside
+  home, it covers the cwd and its parents up to the nearest directory that holds `.git`, or the cwd alone when there
+  is none, and never `/`.
 - Superyak's shared set lives in the repository at `.superyak/checklists/`, so a session in a Superyak checkout, or in
   a worktree under one, finds it.
 - Only trusted directories load (Trust, below).
@@ -154,6 +163,9 @@ checkout's `enter` list doesn't fire in its `.worktrees/<name>`.
   after whitespace, or after one of `;&|(` or a backtick.
 - A `command` list holds once for each distinct command (by SHA-256), with at most 3 holds a session across all lists.
   A list that has held passes every later command whose digest it held.
+- Past the cap, a matching list is still shown: the hook adds it as `additionalContext` with no `permissionDecision`,
+  so it reaches the model with the command's result, and records it as fired. It is still never `allow`, `ask` or
+  `updatedInput`. So "Merging to main" shows at `git push origin main` however many pushes came before it.
 
 **`claim`, exactly.**
 - The MCP server finds lists from the last cwd in the session's record (Firing, below), found by
@@ -235,8 +247,7 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
 - It holds only when the input has no `agent_id`. Subagents are never held (D14).
 - Phase 1 keeps its own per-session record (Firing, above). When the rail's hook is built, the two holds become one
   hook process, whose single deny carries the checklist first and then the lesson (D16). Until then, the builder
-  confirms on each ship's Claude Code version what the model sees when two `PreToolUse` hooks deny one call. A list
-  held at a deny whose reason didn't reach the model is recorded as `unshown`, not fired.
+  confirms on each ship's Claude Code version what the model sees when two `PreToolUse` hooks deny one call.
 - It stays light. The hold path imports only the checklist module and the standard library, never `station`, `claims`
   or urllib, and `__main__` dispatches it before it imports `station`. It reads the claims registry for the acting-ship
   rule without them. It has 150 ms from its start to read files and at most 1 s in all, as the rail's hold. Past
@@ -254,8 +265,9 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
   (done, and it caught a mistake), `n/a` or `skipped`. A `read: yes` list's run has no answers.
 - `skipped` needs a reason, and `caught` may have one. A reason is the agent's own words: one line of at most 200
   bytes. The tool refuses a reason holding an email address or a phone number, by the rail's person-data patterns
-  (first-rail spec, section 6), or a key-like token: a run of 32 or more characters from `[A-Za-z0-9+/=_-]` that isn't
-  a 40- or 64-digit hex hash. The refusal never says which. The log never leaves the machine except in a report the
+  (first-rail spec, section 6), or a key-like token: a run of 32 or more characters from `[A-Za-z0-9+/=_-]` that holds
+  an uppercase letter, a lowercase letter and a digit, and isn't a 40- or 64-digit hex hash. A file path passes. The
+  refusal never says which. The log never leaves the machine except in a report the
   agent chooses to post.
 - **Firings.** The hook and the MCP server append each firing (time, session key, list key, version, moment) to
   `fired.jsonl`, and each budget miss, beside `runs.jsonl`. Both files are 0600, and each line is appended in one
@@ -291,7 +303,7 @@ Before any push (owner: ships of this repository; see docs/checklists.md#before-
   - **keep:** items that caught a mistake, with their reasons;
   - **drop or narrow the moment:** items answered n/a in every one of the last 10 runs;
   - **look at why:** items skipped more than half the time, with their reasons, `law §N` and `person` apart;
-  - **lists that fire but go unrun,** with a refusal's reason where there is one, and lists recorded `unshown`.
+  - **lists that fire but go unrun,** with a refusal's reason where there is one.
 
   The reflect list reads this report.
 
@@ -331,7 +343,7 @@ linked by each file's `see:` key. docs/checklists.md then points to the files, s
 |---|---|---|
 | Why we build | Repository | `start; every 3h`, with `read: yes`: its three points, as written |
 | Each hour, before the queue | Repository | `every 1h` |
-| Reflect, an after-action review | Repository | `every 3h`, with `post:` the all-hands room. "After a merge" becomes Merging to main's last item. "After a mistake" is the agent's own call. "At a session's end" has no moment: `SessionEnd` output never reaches the model. |
+| Reflect, an after-action review | Repository | `every 3h`, with `post: 1bfd1b03e9f94519b1bb3c86c0fafaa1` (all hands). "After a merge" becomes Merging to main's last item. "After a mistake" is the agent's own call. "At a session's end" has no moment: `SessionEnd` output never reaches the model. |
 | Before any push | Repository | `command git push` |
 | Merging to main | Repository | `command git push origin main`, where the irreversible step is (D10). A push to main spelt another way (`git push` from main, `HEAD:main`) gets only Before any push. Its run is recorded after its last item, so the items after the push are answered then. A last item is added: "Reflect is run once the merge is announced." |
 | Before starting a piece of work | Repository | `claim`, once for each claimed item |
@@ -398,7 +410,8 @@ a week, and count whether the behaviour holds without the prompt.
 - **Runs:**
   - the logs hold exactly the fields above and are 0600, and `caught` is recorded;
   - a reason with an email address, a phone number or a key-like token is refused, and so is a reason over 200 bytes
-    or over one line; a reason with a date, a version, a short hash or a 40-digit hash passes;
+    or over one line; a reason with a date, a version, a short hash, a 40-digit hash or a file path
+    (`docs/superpowers/specs/2026-10-27-checklists-design`) passes;
   - `fired.jsonl` against `runs.jsonl` gives `unrun`, with a refusal's reason;
   - two lists with one id in two directories get two list keys;
   - the report's proposals come from crafted logs, and it never writes to a checklist.
