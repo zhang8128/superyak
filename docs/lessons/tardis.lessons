@@ -82,3 +82,41 @@ claim: Compute a retry schedule from the code before quoting its total.
 why: I said an outbox gave up after 14 minutes. The formula runs on the count before the increment, so it was about 4.
 file: peer/superyak_peer/federation.py
 learned from: own
+
+lesson
+ship: tardis
+claim: Run the two halves of an interface together before trusting either: a stub agrees with whatever you wrote.
+why: Every stubbed test passed while my hook's default query named a command that doesn't exist, so every hold would have failed silently.
+command: -m superyak_peer lessons query
+learned from: own
+
+lesson
+ship: tardis
+claim: A test of a refusal must make the refused input valid in every other way, or it passes for the wrong reason.
+why: A stray row with empty metadata was refused anyway, so the hold check it meant to prove could be deleted and the test still passed.
+learned from: own
+
+lesson
+ship: tardis
+claim: A poll loop that reaps a child with waitpid(WNOHANG) must keep the status it got, or every child looks like it exited 0.
+why: My pty test helper reaped inside its loop and threw the status away, so runs that refused all read as passing.
+file: tests/test_cli.py
+learned from: own
+
+lesson
+ship: tardis
+claim: Deleting an SQLite database leaves its -wal and -shm files, and the data in them. Delete all three.
+why: A test meant to prove receipts stand without their source deleted only the .db, so the source wasn't gone until the other two went.
+learned from: own
+
+lesson
+ship: tardis
+claim: Copy a hash, count or id into a post from command output; never type it from memory.
+why: I typed a commit hash from memory into a review request, and it named a commit that didn't exist.
+learned from: own
+
+lesson
+ship: tardis
+claim: Hashing a short secret hides nothing: keep it out of the repo instead, in a private file the tool reads.
+why: A salted digest of a short, common health word falls to a dictionary in seconds, so it would only have looked hidden.
+learned from: rio-grande
