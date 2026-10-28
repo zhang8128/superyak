@@ -111,7 +111,8 @@ class Federation:
                 code = pairing_code(card)
             except Problem:  # a stored card that no longer validates has no code to show
                 code = None
-            confirmed = code is not None and r['confirmed_code'] == code
+            # a contact of a peer that isn't paired is never confirmed: main's unpair kept confirmations (re-check minor 1)
+            confirmed = code is not None and r['confirmed_code'] == code and bool(r['paired'])
             listed.append({**fields, 'card': card, 'pairing_code': show_code(code) if confirmed else None,
                            'confirmed': confirmed, 'held': bool(r['held'])})
         return listed
