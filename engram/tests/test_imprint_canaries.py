@@ -6,7 +6,7 @@ from tests.imprint_support import (HOME, EH, any_value_contains, any_vec0_slot_e
 NOW = 1_761_415_451
 
 
-def test_no_canary_survives_the_build(tmp_path):
+def test_no_canary_survives_the_build(tmp_path, route_open):
     store, canaries = canary_store(tmp_path)
     plan = make_plan(*plan_args(tmp_path, store=lambda _: store, route=True))
     built = build(plan.id, home=HOME(tmp_path), now=NOW, engram_home=EH(tmp_path))

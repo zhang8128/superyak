@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import imprint_filter
 import store_reader
 from imprint_filter import (IdSet, People, PlanRefused, Refusals, Scratch, ScratchMap, Shipped, base, check_owner,
                             check_source, cosubject_rows, cosubjects_of, parse_instant, parse_selection,
@@ -58,7 +59,7 @@ def test_shared_with_and_no_house_admits_nothing(tmp_path):
     assert list(base(s.conn, "episode", selection(shared_with="group:ph"), ctx(s), Counter())) == []
 
 
-def test_terms_accept_only_step_one_values():
+def test_terms_accept_only_step_one_values(route_open):
     assert parse_terms(audience="place:home/andy", actions="imprint,route", purposes="calibration,trail-evaluation",
                        days=90, operator="andy").route
     for bad in [dict(audience="place:home/jenn"), dict(actions="route"), dict(purposes="calibration"),
@@ -67,7 +68,15 @@ def test_terms_accept_only_step_one_values():
             parse_terms(**{**ROUTE_TERMS, **bad})
 
 
-def test_terms_without_route_and_their_other_refusals():
+def test_route_waits_for_trails(route_closed):
+    """S1: no trails module ships yet, so route is refused at the plan, before anything is built or sent."""
+    assert imprint_filter.ROUTE_OPEN is False
+    with pytest.raises(PlanRefused, match="route waits until trails ships"):
+        parse_terms(**ROUTE_TERMS)
+    assert not parse_terms(**{**ROUTE_TERMS, "actions": "imprint", "purposes": "calibration"}).route
+
+
+def test_terms_without_route_and_their_other_refusals(route_open):
     t = parse_terms(audience="place:home/andy", actions="imprint", purposes="calibration", days=1, operator="andy")
     assert not t.route and t.actions == {"imprint"} and t.purposes == {"calibration"} and t.days == 1
     assert parse_terms(**{**ROUTE_TERMS, "days": 365}).days == 365
