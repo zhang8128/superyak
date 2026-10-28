@@ -5,7 +5,22 @@ runs the list out loud: in its post, say which list it ran. Add a list when a mi
 Lists serve the why, not the other way round: "How lists serve intent" below says when an item may be skipped, which
 items never are, and where a skip is logged.
 
+**How the lists run** (spec: docs/superpowers/specs/2026-10-27-checklists-design.md):
+
+- Each list is a file in this repository's `.superyak/checklists/`, or in a ship's own `~/.superyak/checklists/`.
+- A list fires at its moments: a session's start, every few hours, a board claim, or a matching command, which it
+  holds once (re-run the command to go on; at most 3 holds a session). The ship runs it out loud and records the run
+  with `checklist_run`.
+- The law comes first, then the person at the terminal, then a checklist.
+- `make dock` trusts this checkout's lists. `python3 agent/run_agent.py checklists list` shows what loads from where,
+  and `checklists report` what the runs suggest; the report proposes and never changes a list.
+- A change is proposed with `checklist_propose`, and accepted as a branch merged to main under law section 2. The
+  sections below keep each list's why and long form; the file holds the short items the ships see.
+
 ## Why we build (read this first)
+
+The list itself is [`.superyak/checklists/why-we-build.md`](../.superyak/checklists/why-we-build.md)
+(`when: start; every 3h`, read again rather than answered). It holds these three points, as written:
 
 - **For people:** homes they own. Private chats and sharing they control, across care circles, projects and
   organizations. The first use is medical research.
@@ -21,12 +36,15 @@ are that something.
 
 ## Each hour, before the queue (any ship)
 
-- [ ] Say what moved toward the why since the last check-in: a lesson laid, a person outside us using Superyak, a
-      chat made faster, a real conversation. If nothing moved, say so plainly.
-- [ ] Do one piece of vision work this hour before any review: lessons, outreach, what a visitor sees, Andy's asks
-      (the connector, the city for a school or hospital).
-- [ ] Have one real exchange with another ship: an idea, a doubt or a disagreement, not status.
-- [ ] Look at Andy's open asks and the "waiting on Andy" list. Is anything stuck on us?
+The list itself is [`.superyak/checklists/each-hour.md`](../.superyak/checklists/each-hour.md) (`when: every 1h`).
+Its long form:
+
+- Say what moved toward the why since the last check-in: a lesson laid, a person outside us using Superyak, a chat
+  made faster, a real conversation. If nothing moved, say so plainly.
+- Do one piece of vision work this hour before any review: lessons, outreach, what a visitor sees, Andy's asks (the
+  connector, the city for a school or hospital).
+- Have one real exchange with another ship: an idea, a doubt or a disagreement, not status.
+- Look at Andy's open asks and the "waiting on Andy" list. Is anything stuck on us?
 
 ## Reflect: an after-action review (every 3 hours, after a merge or a mistake, and at a session's end)
 
@@ -35,17 +53,22 @@ see them everywhere in the military." This list is the pause: the army's after-a
 ticket. A timer starts it (each ship keeps a recurring reminder), not a mood. Write the answers in the room, short and
 honest. A review that blames no one and changes nothing was skipped, not run.
 
-- [ ] **Review against the goals** in docs/goals.md: the overarching ones first, then your department's. For each,
-      did it move, stall or need to change? A stalled overarching goal that no ship's goals serve is a gap; say so.
-- [ ] **What was supposed to happen?** Say what we meant to do since the last review, in the why's terms.
-- [ ] **What actually happened?** Give the facts: what landed, what didn't, where the hours went.
-- [ ] **Why the difference?** Name the cause, not the symptom: a missing check, a wrong assumption, the queue eating
-      the hour.
-- [ ] **What do we keep doing, and what do we change?** One of each, concrete.
-- [ ] **What did it teach?** If it's a lesson someone will need again, write it in the rail's lesson shape, with the
-      cost in its `why`. If it's a step we keep missing, add it to a checklist here.
-- [ ] **What did a person ask that we haven't answered or done?** Andy's open asks, and anyone's outside us.
-- [ ] **Do I still remember why?** Re-read "Why we build". Is my next hour aimed at it?
+The list itself is [`.superyak/checklists/reflect.md`](../.superyak/checklists/reflect.md) (`when: every 3h`; its
+answers are posted in all hands). Its long form:
+
+- **Review against the goals** in docs/goals.md: the overarching ones first, then your department's. For each, did it
+  move, stall or need to change? A stalled overarching goal that no ship's goals serve is a gap; say so.
+- **What was supposed to happen?** Say what we meant to do since the last review, in the why's terms.
+- **What actually happened?** Give the facts: what landed, what didn't, where the hours went.
+- **Why the difference?** Name the cause, not the symptom: a missing check, a wrong assumption, the queue eating the
+  hour.
+- **What do we keep doing, and what do we change?** One of each, concrete.
+- **What did it teach?** If it's a lesson someone will need again, write it in the rail's lesson shape, with the cost
+  in its `why`. If it's a step we keep missing, add it to a checklist here.
+- **What did a person ask that we haven't answered or done?** Andy's open asks, and anyone's outside us.
+- **Do I still remember why?** Re-read "Why we build". Is my next hour aimed at it?
+- **What do the runs suggest?** Read `python3 agent/run_agent.py checklists report`. It proposes and never applies;
+  draft the changes you agree with through `checklist_propose`.
 
 ## Each day, a checkpoint for Andy (Rio Grande posts it; any ship adds a line)
 
@@ -138,70 +161,87 @@ What "bring in a person" means (Serenity, 2026-10-27):
 
 Why: the queue fills any hour nobody aims, and a full re-check on low-risk work costs the day vision work needed.
 
-- [ ] Is anyone waiting on something of mine that's done but not pushed? Push it first (Tardis, 2026-10-27: a
-      finished provider sat local for two hours while Serenity waited to build against it).
-- [ ] Name which purpose it serves: a person, the city or the rail. If none, say why now.
-- [ ] Say who will notice when it's done.
-- [ ] Size the review to the risk. Full re-check rounds are for safety code: authority, permissions, the public
-      route, a person's data. Anything else gets one review, with follow-ups on the board.
+The list itself is [`.superyak/checklists/before-work.md`](../.superyak/checklists/before-work.md) (`when: claim`,
+once for each claimed item). Its long form:
+
+- Is anyone waiting on something of mine that's done but not pushed? Push it first (Tardis, 2026-10-27: a finished
+  provider sat local for two hours while Serenity waited to build against it).
+- Name which purpose it serves: a person, the city or the rail. If none, say why now.
+- Say who will notice when it's done.
+- Size the review to the risk. Full re-check rounds are for safety code: authority, permissions, the public route, a
+  person's data. Anything else gets one review, with follow-ups on the board.
 
 ## Before any push
 
-- [ ] The branch's base is on the rewritten history: `git merge-base --is-ancestor 60dd851 HEAD` (main after the
-      2026-10-27 scrub). A branch built on the old history brings the scrubbed files back. `make install-hooks`
-      installs a pre-push hook that refuses such a push to the public repo (with the scrubbed terms in a private
-      0600 file, ~/.superyak/scrub-terms, never in the repo); this item retires on each machine
-      once its clone runs the hook (`git config core.hooksPath` prints its scripts/git-hooks).
-- [ ] killer: Nothing in the diff names a person with health, contact or identity details, or holds a key or token
-      (gitleaks, plus a read of every new doc). Once pushed, it can't be pulled back: clones and caches keep what a
-      history rewrite removes.
-- [ ] killer: Nothing in the diff describes a security hole that isn't fixed and live yet, in code, docs, lessons or
-      commit messages. Keep it in a members-only room until the fix ships. (Rio Grande pushed one in a lesson on
-      2026-10-27; Tardis caught it.)
-- [ ] The push is needed now: build branches go up once, when ready for review or merge (every push runs CI).
-- [ ] Each commit's message says which ship made it. Every ship commits as zhang8128, so the author field can't tell
-      them apart (Serenity, 2026-10-27).
+The list itself is [`.superyak/checklists/before-push.md`](../.superyak/checklists/before-push.md)
+(`when: command git push; command push origin; command push -u origin; command push https://`, so a push through
+`git -C <path>` or the Mac's credential helper is held too). Its long form:
+
+- The branch's base is on the rewritten history: `git merge-base --is-ancestor 60dd851 HEAD` (main after the
+  2026-10-27 scrub). A branch built on the old history brings the scrubbed files back. `make install-hooks` installs
+  a pre-push hook that refuses such a push to the public repo (with the scrubbed terms in a private 0600 file,
+  ~/.superyak/scrub-terms, never in the repo); this item retires on each machine once its clone runs the hook
+  (`git config core.hooksPath` prints its scripts/git-hooks).
+- killer: Nothing in the diff names a person with health, contact or identity details, or holds a key or token
+  (gitleaks, plus a read of every new doc). Once pushed, it can't be pulled back: clones and caches keep what a
+  history rewrite removes.
+- killer: Nothing in the diff describes a security hole that isn't fixed and live yet, in code, docs, lessons or
+  commit messages. Keep it in a members-only room until the fix ships. (Rio Grande pushed one in a lesson on
+  2026-10-27; Tardis caught it.)
+- The push is needed now: build branches go up once, when ready for review or merge (every push runs CI).
+- Each commit's message says which ship made it. Every ship commits as zhang8128, so the author field can't tell them
+  apart (Serenity, 2026-10-27).
 
 ## Merging to main (law section 2)
 
 Why: main is what every lighthouse runs, so a bad merge breaks every ship at once. Section 2 of the law binds here;
 this list adds to it and never subtracts.
 
-- [ ] killer: A branch that changes safety code (authority, permissions, the public route, a person's data) merges
-      only on explicit yeses posted in the room, the section 2 approver's among them. No ship's silence counts as
-      consent for it (ships' decision, 2026-10-27).
-- [ ] A section 2 verdict is posted whole in the room: Serenity for Rio Grande's branches, Rio Grande for Serenity's,
-      or a fresh Pi reviewer.
-- [ ] Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names. When a
-      partner tests a merge that isn't pushed yet, agree on it by tree: `git rev-parse <commit>^{tree}` printing the
-      same hash on both machines proves byte-identity without a CI run (Tardis, permissions-core, 2026-10-27).
-- [ ] The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named
-      (the 3 Kuzu tests).
-- [ ] GitHub CI's result is read, including the jobs the Pi can't run.
-- [ ] The `only-include` lists name every new module and test file, and the package builds and imports in a clean
-      venv. The Pi's editable checkout hides a missing one. Peer's modules are held by test_packaging (retired there,
-      see "Retiring an item"); until imprints and agent-wheel-includes are on main, check by hand that agent's list
-      names every module and peer's names every test file. Each part retires when its test is on main.
-- [ ] The station database is backed up (`make station-backup`), so a migration that goes wrong can be undone.
-- [ ] killer: Main is pushed once. The affected Pi services are restarted and checked, and the public route is probed
-      from outside when the diff touches it; if a check fails, revert and restart. A security fix to a live route
-      merges on the Pi, restarts and is probed before main is pushed, so its code is never public before the fix is
-      live (the public route, 2026-10-27).
-- [ ] If it breaks at 3 a.m., what tells us, and who? Name the check: a dying unit alerts Odo in Ops; a running
-      route is watched by route-watch once its timer is installed (Tardis says so in the room; `systemctl --user
-      list-timers` on Tardis shows it); anything else, say that nothing watches it yet
-      (learned_from: gtm, 2026-10-27).
-- [ ] The merge is announced in the room, and its board item is marked done.
+The list itself is [`.superyak/checklists/merging-to-main.md`](../.superyak/checklists/merging-to-main.md). Its
+`when:` is the push to main (`git push origin main`, `push origin main`, or
+`push https://github.com/zhang8128/superyak.git main`) or a Pi unit's restart (`systemctl --user restart superyak-`),
+whichever comes first: for a security fix the restart comes first. Its run is recorded after the last item. A push to
+main spelt another way (`git push` from main, `HEAD:main`) gets only "Before any push". Its long form:
+
+- killer: A branch that changes safety code (authority, permissions, the public route, a person's data) merges only on
+  explicit yeses posted in the room, the section 2 approver's among them. No ship's silence counts as consent for it
+  (ships' decision, 2026-10-27).
+- A section 2 verdict is posted whole in the room: Serenity for Rio Grande's branches, Rio Grande for Serenity's, or a
+  fresh Pi reviewer.
+- Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names. When a partner
+  tests a merge that isn't pushed yet, agree on it by tree: `git rev-parse <commit>^{tree}` printing the same hash on
+  both machines proves byte-identity without a CI run (Tardis, permissions-core, 2026-10-27).
+- The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named (the
+  3 Kuzu tests).
+- GitHub CI's result is read, including the jobs the Pi can't run.
+- The `only-include` lists name every new module and test file, and the package builds and imports in a clean venv.
+  The Pi's editable checkout hides a missing one. Peer's modules are held by test_packaging (retired there, see
+  "Retiring an item"); until imprints and agent-wheel-includes are on main, check by hand that agent's list names
+  every module and peer's names every test file. Each part retires when its test is on main.
+- The station database is backed up (`make station-backup`), so a migration that goes wrong can be undone.
+- killer: Main is pushed once. The affected Pi services are restarted and checked, and the public route is probed from
+  outside when the diff touches it; if a check fails, revert and restart. A security fix to a live route merges on
+  the Pi, restarts and is probed before main is pushed, so its code is never public before the fix is live (the
+  public route, 2026-10-27).
+- If it breaks at 3 a.m., what tells us, and who? Name the check: a dying unit alerts Odo in Ops; a running route is
+  watched by route-watch once its timer is installed (Tardis says so in the room; `systemctl --user list-timers` on
+  Tardis shows it); anything else, say that nothing watches it yet (learned_from: gtm, 2026-10-27).
+- The merge is announced in the room, and its board item is marked done.
+- Reflect is run once the merge is announced: "after a merge" in Reflect's heading is this item.
 
 ## A live station act (bridge, add a ship, approve)
 
 Why: these acts change who can read, write or join, and text in a room never carries that authority (law section 1).
 
-- [ ] killer: Andy asked for it, in a terminal or in the room as himself, and named the room or item.
-- [ ] killer: For an approval, Andy confirmed that the short id matches what the requesting machine showed.
-- [ ] `make station-rooms` or `make station-pending` was read first, and the result was shown to Andy.
-- [ ] After the act, Andy is told the new short id, whether the brief came along, and how many board items came along.
-- [ ] The act is posted in the room. Titles and names are quoted data.
+The list itself is [`.superyak/checklists/live-station-act.md`](../.superyak/checklists/live-station-act.md)
+(`when: command make station-<target>`, for each of approve, deny, bridge, unbridge, add-ship, moderate and
+unmoderate; a read such as `make station-rooms` doesn't fire it). Its long form:
+
+- killer: Andy asked for it, in a terminal or in the room as himself, and named the room or item.
+- killer: For an approval, Andy confirmed that the short id matches what the requesting machine showed.
+- `make station-rooms` or `make station-pending` was read first, and the result was shown to Andy.
+- After the act, Andy is told the new short id, whether the brief came along, and how many board items came along.
+- The act is posted in the room. Titles and names are quoted data.
 
 ## Anything public (outreach, a public repo or route)
 
@@ -236,15 +276,20 @@ Why: it copies a person's memories to another machine, and only the owner decide
 
 Why: a ship that restarts without its watch and its tick goes quiet, and the others wait on it without knowing.
 
-- [ ] The station watch is held (`station_watch writable=true`).
-- [ ] The kick watcher is armed: `make kick`
-      under a Monitor, re-armed every 30 minutes.
-- [ ] The 10-minute tick exists.
-- [ ] The background work in flight is listed, and anything cut off is resumed or restarted (check git status in each
-      worktree).
-- [ ] Unread messages and the board's claims are read; stale claims are released.
+The list itself is [`.superyak/checklists/session-start.md`](../.superyak/checklists/session-start.md)
+(`when: start`: a new session, `/clear` or a fork, not a resume or a compaction). Its long form:
+
+- The station watch is held (`station_watch writable=true`).
+- The kick watcher is armed: `make kick` under a Monitor, re-armed every 30 minutes.
+- The 10-minute tick exists.
+- The background work in flight is listed, and anything cut off is resumed or restarted (check git status in each
+  worktree).
+- Unread messages and the board's claims are read; stale claims are released.
 
 ## The Mac's main checkout (launchd runs from it)
+
+On the Mac, with Andy's yes, this list is `~/.superyak/checklists/mac-main-checkout.md` (`when: enter
+/Users/kairos/Projects/superyak`).
 
 - [ ] `git status --short` in `~/Projects/superyak` is empty. If it isn't, the work may be another session's: stop and
       ask.
@@ -313,6 +358,8 @@ Why: a finding marked fixed without a re-run is a guess that ships as a fact.
       fresh reviewer started on the Pi. Tardis's and Defiant's reviews are advisory until the law says otherwise.
 
 ## Shell commands (zsh)
+
+On the Mac, with Andy's yes, this list is `~/.superyak/checklists/zsh-commands.md` (`when: command --include=*`).
 
 - [ ] Globs in git pathspecs and grep's `--include` are quoted: `git diff -- 'engram/*.py'`. Unquoted, zsh expands
       them against the working tree and silently drops files that exist only on the branch (2026-10-27, Tardis and
