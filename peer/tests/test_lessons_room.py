@@ -352,3 +352,55 @@ def test_lessons_check_runs_the_doors_checks_without_posting(lessons_station):
     assert crlf.returncode == 1 and '\\r' in crlf.stderr
     with store.transaction() as db:
         assert db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room,)).fetchone()[0] == 0
+
+
+# Task 9: the add gate and the backfill
+def test_no_new_local_member_and_no_bridge(lessons_station):
+    store, clock, ids, room = lessons_station
+    serenity = lesson_ship(store, ids['andy'], 'serenity')['id']
+    for add in (lambda: store.add_participants(ids['andy'], room, [serenity]),
+                lambda: store.station_add_ship('andy', room[:6], 'serenity')):
+        with pytest.raises(Problem) as refused:
+            add()
+        assert refused.value.message == lessons.NEW_LOCAL
+    lesson_ship(store, None, 'wormhole')
+    with pytest.raises(Problem, match='no new member'):
+        store.station_bridge('andy', room[:6], True)
+
+
+def test_no_moderator_in_the_lessons_room(lessons_station):
+    store, clock, ids, room = lessons_station
+    with pytest.raises(Problem, match='no moderator'):
+        store.station_moderate('andy', room[:6], 'rio-grande', actions=['add_member', 'remove_member'])
+
+
+def test_the_backfill_carries_live_lessons_once_to_a_new_peer(tmp_path, lessons_peers):
+    from superyak_peer.db import Store
+    from superyak_peer.federation import Federation
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    tardis, tardis_fed, tids = lessons_peers['peers']['tardis']
+    room, deliver, clock = lessons_peers['room'], lessons_peers['deliver'], lessons_peers['clock']
+    tardis.send_message(tids['tardis'], lessons_peers['key'], 't1', lesson_body())
+    deliver('tardis', 'pi')
+    pi.send_message(pids['rio-grande'], room, 'p1', lesson_body(ship='rio-grande', claim='Kept.', command=('make check',)))
+    pi.send_message(pids['rio-grande'], room, 'p2', lesson_body(ship='rio-grande', claim='Gone.', command=('make check',)))
+    gone = pi.check_lesson(pids['rio-grande'], lesson_body(ship='rio-grande', claim='Gone.', command=('make check',)))
+    pi.send_message(pids['andy'], room, 'p3', 'retract ' + gone['lesson_id'])
+    mac = Store(tmp_path / 'mac', clock=lambda: clock[0])
+    mac_fed = Federation(mac, endpoint='https://mac:7437')
+    andy_m = mac.create_user('andy', 'Andy Example', 'a-long-password', is_admin=True)['id']
+    contact = pi_fed.pair(pids['andy'], mac_fed.card(mac.lessons_ship('serenity', 'andy')['id']))['id']
+    mac_fed.pair(andy_m, pi_fed.card(pids['andy']))
+    with pytest.raises(Problem, match='not listed'):
+        pi.add_participants(pids['andy'], room, [contact])
+    both = [tardis_fed.identity.peer_id, mac_fed.identity.peer_id]
+    pi.station_lessons_room('andy', room[:6], 'rio-grande', both, pi.station_lessons_room('andy', room[:6], 'rio-grande', both)['confirm'])
+    new = pi.add_participants(pids['andy'], room, [contact])
+    assert new['lessons_carried'] == 2   # not the retracted one
+    later = pi_fed.pair(pids['andy'], mac_fed.card(andy_m))['id']
+    assert pi.add_participants(pids['andy'], new['id'], [later])['lessons_carried'] == 0   # the Mac already had them
+    pi_fed.sync_once(send=lambda card, prepare: (mac_fed if card['peer_id'] == mac_fed.identity.peer_id else tardis_fed).receive(prepare()))
+    mac.record_lessons_room(pi.lessons_room_full_id())
+    assert mac.lessons_index(None)['lessons'] == 2
+    tardis.lessons_index(None)   # its own copy came back unverified and is skipped; the original stands
+    assert len(lessons.read_index(tardis.data_dir / lessons.INDEX_FILE)['lessons']) == 2

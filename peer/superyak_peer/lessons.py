@@ -743,6 +743,50 @@ class Lessons:
                            'lessons': lessons}, rows, read_at)
         return {'status': 'written', 'lessons': len(lessons), 'vectors': len(rows)}
 
+    def _lessons_add_gate(self, db, key, new_ids):
+        """Section 3, at the origin: no new local member in any room of the chain, and a remote one only from a listed
+        peer."""
+        if not self._in_lessons_chain(db, key):
+            return
+        listed = {r[0] for r in db.execute('SELECT peer_id FROM lessons_peers')}
+        for member in new_ids:
+            if db.execute('SELECT 1 FROM users WHERE id=?', (member,)).fetchone():
+                raise Problem(403, NEW_LOCAL)
+            contact = db.execute('SELECT peer_id, name FROM remote_contacts WHERE id=?', (member,)).fetchone()
+            if contact is not None and contact['peer_id'] not in listed:
+                from .ships import safe_line
+                raise Problem(403, UNLISTED.format(name=safe_line(contact['name'], 40)))
+
+    def _carry_lessons(self, db, old_key, new_key, new_ids):
+        """Section 3's backfill, in the add's own transaction: when the add brings in a member on a listed peer that no
+        earlier room of the chain had, each live lesson whose author is in the new room is posted there once, by its own
+        author, its body byte for byte, in the order laid. Returns how many were carried."""
+        peers_of = lambda key: {r[0] for r in db.execute(
+            'SELECT remote_contacts.peer_id FROM remote_room_members JOIN remote_contacts ON '
+            'remote_contacts.id=remote_room_members.contact_id WHERE remote_room_members.room_id=?', (key,))}
+        before = set().union(*(peers_of(key) for key in self._rooms_back(db, old_key)))
+        listed = {r[0] for r in db.execute('SELECT peer_id FROM lessons_peers')}
+        arriving = {r[0] for r in db.execute(f'SELECT peer_id FROM remote_contacts WHERE id IN ({",".join("?" * len(new_ids))})',
+                                             new_ids)} & listed
+        if not arriving - before:
+            return 0
+        snapshot = self._lessons_snapshot(db)  # the new room is now current, so membership is the new room's
+        epoch = db.execute('SELECT epoch FROM rooms WHERE id=?', (new_key,)).fetchone()[0]
+        carried = 0
+        for item in chain_lessons(snapshot)[0]:
+            client = f'lesson-carry-{item.id.partition(":")[2][:16]}'
+            peer, _, user = item.author.partition(':')
+            if peer == snapshot.peer:
+                key = uid()
+                db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?)', (key, new_key, user, client, item.body, epoch, self.clock()))
+                self.emit(db, 'chat.message', new_key, epoch, {'message_id': key, 'author_id': user})
+            else:
+                key = uid()
+                db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (key, new_key, item.author, client, item.body, epoch, self.clock()))
+                self.emit(db, 'chat.message', new_key, epoch, {'message_id': key, 'author_id': item.author})
+            carried += 1
+        return carried
+
 
 LESSON_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS lessons_room(id INTEGER PRIMARY KEY CHECK(id=1), room_key TEXT NOT NULL, ship_id TEXT REFERENCES users(id), recorded REAL NOT NULL);
