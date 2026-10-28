@@ -62,7 +62,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: dock kick station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove lessons-units lessons-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -92,6 +92,7 @@ help:
 	@echo "make lessons-check SHIP=… FILE=…  Run this peer's checks on one lesson or retraction, without posting"
 	@echo "make lessons-list       Each live lesson with its full id and the line that retracts it"
 	@echo "make lesson-receipts / lesson-segments  This peer's receipts, newest first / its segments per pair of ships"
+	@echo "make lessons-units      Install the lessons index timer for LESSONS_DATA; make lessons-units-remove undoes it"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
 	@echo "make wormhole-key KEY_FILE=…  On the Pi: authorize Stanley's sync key (a .pub file) for the station vault only"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
@@ -295,6 +296,26 @@ lesson-receipts:
 
 lesson-segments:
 	$(LESSONS) segments --data-dir "$(LESSONS_DATA)"
+
+# First rail section 4: the index timer on this peer. The directory is resolved in the shell: make's abspath splits a
+# path on its spaces.
+lessons-units:
+	@test -f "$(LESSONS_DATA)/peer.sqlite3" || { echo 'No peer database at $(LESSONS_DATA)/peer.sqlite3: set LESSONS_DATA to this peer data directory'; exit 2; }
+	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
+	for unit in $(LESSONS_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
+	test -d "$(HOME)/.config/superyak" || install -d -m 700 "$(HOME)/.config/superyak"
+	printf 'SUPERYAK_LESSONS_DATA=%s\n' "$$(cd "$(LESSONS_DATA)" && pwd)" > "$(HOME)/.config/superyak/lessons.env"
+	chmod 600 "$(HOME)/.config/superyak/lessons.env"
+	systemctl --user daemon-reload
+	systemctl --user enable --now superyak-lessons-index.timer
+
+lessons-units-remove:
+	-systemctl --user disable --now superyak-lessons-index.timer
+	-systemctl --user stop superyak-lessons-index.service
+	-systemctl --user reset-failed superyak-lessons-index.service
+	for unit in $(LESSONS_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
+	rm -f "$(HOME)/.config/superyak/lessons.env"
+	systemctl --user daemon-reload
 
 station-units:
 	@test -f "$(STATION_DATA)/peer.sqlite3" || { echo 'No station database at $(STATION_DATA)/peer.sqlite3: make station-units runs on the station host only'; exit 2; }

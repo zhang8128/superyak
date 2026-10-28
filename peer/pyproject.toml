@@ -46,6 +46,8 @@ only-include = [
     "systemd/superyak-alert@.service",
     "systemd/superyak-backup.service",
     "systemd/superyak-backup.timer",
+    "systemd/superyak-lessons-index.service",
+    "systemd/superyak-lessons-index.timer",
     "systemd/superyak-restore-test.service",
     "systemd/superyak-restore-test.timer",
     "superyak_peer/__init__.py",
