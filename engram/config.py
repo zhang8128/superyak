@@ -315,6 +315,13 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
 
     raw = tomllib.loads(config_file.read_text())
 
+    if "permissions" in raw:
+        logging.getLogger("engram.config").warning(
+            "Ignoring the [permissions] section in %s: the permission gate is "
+            "set only by `engram-permissions gate`, never by config",
+            config_file,
+        )
+
     def load_section(name: str, config_type):
         values = raw.get(name, {})
         allowed = {item.name for item in dataclass_fields(config_type)}

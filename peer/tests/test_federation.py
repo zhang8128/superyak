@@ -4,6 +4,7 @@ import json
 
 import pytest
 from superyak_peer.common import Problem
+from superyak_peer.identity import pairing_code
 
 @pytest.fixture
 def two_peers(tmp_path):
@@ -16,8 +17,8 @@ def two_peers(tmp_path):
         fed = Federation(store, endpoint='https://localhost:7435')
         peers.append((store, user['id'], fed))
     a, b = peers
-    ca = a[2].pair(a[1], b[2].card(b[1]))
-    cb = b[2].pair(b[1], a[2].card(a[1]))
+    ca = a[2].pair(a[1], b[2].card(b[1]), code=pairing_code(b[2].card(b[1])))
+    cb = b[2].pair(b[1], a[2].card(a[1]), code=pairing_code(a[2].card(a[1])))
     return a, b, ca, cb
 
 
@@ -154,7 +155,7 @@ def test_remote_ids_cannot_shadow_local_layer(two_peers):
 def test_pair_cannot_replace_known_endpoint_or_gain_login(two_peers):
     a,b,ca,cb=two_peers
     with pytest.raises(Problem):
-        a[2].pair(a[1],{**b[2].card(b[1]),'endpoint':'https://evil.example'})
+        a[2].pair(a[1],{**b[2].card(b[1]),'endpoint':'https://evil.example'}, code=pairing_code({**b[2].card(b[1]),'endpoint':'https://evil.example'}))
     with pytest.raises(Problem):
         a[0].login('bob','a-long-password','local')
     assert a[0].contacts(a[1])[0]['remote'] is True
@@ -224,11 +225,11 @@ def test_remote_reply_remains_visible_offline_without_duplicate_echo(two_peers):
 def test_multiple_imported_participants_keep_their_own_card_labels(two_peers):
     a,b,ca,cb=two_peers
     second=b[0].create_user('second','Second person','long-password')['id']
-    contact=a[2].pair(a[1],b[2].card(second))
+    contact=a[2].pair(a[1],b[2].card(second), code=pairing_code(b[2].card(second)))
     connections={c['id']:c for c in a[2].connections(a[1])}
     assert connections[contact['id']]['card']['participant']['id']==second
     b[0].rename_user(second,'Corrected name')
-    again=a[2].pair(a[1],b[2].card(second))
+    again=a[2].pair(a[1],b[2].card(second), code=pairing_code(b[2].card(second)))
     assert again['id']==contact['id']
     assert again['name']=='Corrected name'
 
@@ -328,7 +329,7 @@ def test_received_room_withdrawal_cancels_reply_atomically(two_peers,prior_statu
     assert restarted.sync_once(send=must_not_send)['pending']==0
     with pytest.raises(Obsolete):
         restarted._prepare(key)
-    assert not a[0].get_room(a[1],room['id'])['messages']
+    assert [m['client_message_id'].startswith('member-') for m in a[0].get_room(a[1],room['id'])['messages']]==[True]  # only the removal's notice
 
 
 def test_withdrawal_during_reply_ack_cannot_restore_canceled_status(two_peers):
@@ -396,7 +397,7 @@ def test_normal_sync_get_exposes_pending_without_network(env, tmp_path):
     remote = Store(tmp_path / 'status-remote')
     other = remote.create_user('remote','Remote recipient','long-password')
     fed = Federation(remote, endpoint='https://localhost:7435')
-    contact = app.state.federation.pair(users[2]['id'], fed.card(other['id']))
+    contact = app.state.federation.pair(users[2]['id'], fed.card(other['id']), code=pairing_code(fed.card(other['id'])))
     layer = clients[0].post('/api/layers', json={'title':'API queued', 'audience_users':[contact['id']]}).json()
     clients[0].post('/api/layers/' + layer['id'] + '/activate', json={'version':1})
     response = clients[0].get('/api/sync').json()
@@ -414,7 +415,7 @@ def test_a_received_room_has_no_brief_and_takes_none(two_peers):
     remote = b[0].list_rooms(b[1])[0]['id']
     assert ':' in remote
     got = b[0].get_room(b[1], remote)
-    assert got['brief'] is None and got['brief_revision'] == 0
+    assert got['brief'] is None and got['brief_revision'] == 0 and got['moderators'] == []
     with pytest.raises(Problem) as refused:
         b[0].save_brief(b[1], remote, 'Mine.', 0)
     assert refused.value.status == 404
@@ -700,8 +701,8 @@ def test_one_local_users_reply_never_verifies_as_another(two_peers):
     reply to another local user."""
     a, b, ca, cb = two_peers
     second = b[0].create_user('second', 'Second person', 'long-password', is_admin=True)['id']
-    c2 = a[2].pair(a[1], b[2].card(second))
-    b[2].pair(second, a[2].card(a[1]))
+    c2 = a[2].pair(a[1], b[2].card(second), code=pairing_code(b[2].card(second)))
+    b[2].pair(second, a[2].card(a[1]), code=pairing_code(a[2].card(a[1])))
     room = a[0].create_room(a[1], 'Two local users', [ca['id'], c2['id']])
     deliver(a, b)
     remote = b[0].list_rooms(b[1])[0]['id']
@@ -810,8 +811,8 @@ def test_another_local_users_echoed_reply_carries_no_state_in_this_view(two_peer
     local user's echoed reply shows it to that user and carries no state for anyone else."""
     a, b, ca, cb = two_peers
     second = b[0].create_user('second', 'Second person', 'long-password', is_admin=True)['id']
-    c2 = a[2].pair(a[1], b[2].card(second))
-    b[2].pair(second, a[2].card(a[1]))
+    c2 = a[2].pair(a[1], b[2].card(second), code=pairing_code(b[2].card(second)))
+    b[2].pair(second, a[2].card(a[1]), code=pairing_code(a[2].card(a[1])))
     a[0].create_room(a[1], 'Two local users', [ca['id'], c2['id']])
     deliver(a, b)
     remote = b[0].list_rooms(b[1])[0]['id']
@@ -980,8 +981,8 @@ def test_an_honest_linked_room_is_received_with_its_origins_earlier_room(two_pee
     still takes it, showing `<origin>:<earlier id>`."""
     a, b, ca, cb = two_peers
     second = b[0].create_user('second', 'Second person', 'long-password', is_admin=True)['id']
-    c2 = a[2].pair(a[1], b[2].card(second))
-    b[2].pair(second, a[2].card(a[1]))
+    c2 = a[2].pair(a[1], b[2].card(second), code=pairing_code(b[2].card(second)))
+    b[2].pair(second, a[2].card(a[1]), code=pairing_code(a[2].card(a[1])))
     room = a[0].create_room(a[1], 'Growing', [ca['id']])
     deliver(a, b)
     grown = a[0].add_participants(a[1], room['id'], [c2['id']])
@@ -1074,3 +1075,225 @@ def test_a_received_message_with_a_foreign_linked_room_is_refused(two_peers):
     with pytest.raises(Problem, match='Invalid linked room'):
         b[2].receive(_roster_with(a, b, room, action='room.message', message=message,
                                   linked_room_id='f' * 64 + ':' + room['id']))
+
+
+# fix:pairing-code (plan Task 2): pairing takes the other side's code, typed; one check, in Federation.pair
+
+@pytest.fixture
+def remote(tmp_path):
+    """A second peer whose cards the env app imports: (store, federation, its first user, a second user)."""
+    from superyak_peer.db import Store
+    from superyak_peer.federation import Federation
+    store = Store(tmp_path / 'remote')
+    first = store.create_user('remote', 'Remote One', 'long-password')
+    second = store.create_user('remote2', 'Remote Two', 'long-password')
+    return store, Federation(store, endpoint='https://localhost:7435'), first, second
+
+
+def pair_over_http(client, card, **fields):
+    return client.post('/api/connections/pair', json={'card': card, **fields})
+
+
+def test_the_typed_code_pairs_and_the_confirmation_keeps_the_card_s_code(env, remote):
+    from superyak_peer.identity import pairing_code, show_code
+    app, clients, users, _ = env
+    card = remote[1].card(remote[2]['id'])
+    code = pairing_code(card)
+    typed = show_code(code).upper().replace(' ', '-')  # typed with hyphens and upper case
+    response = pair_over_http(clients[2], card, code=typed)
+    assert response.status_code == 201
+    assert response.json()['pairing_code'] == show_code(code) and response.json()['confirmed'] is True
+    with app.state.store.transaction() as db:
+        assert [tuple(r) for r in db.execute('SELECT contact_id, code FROM pairing_confirmations')] == [
+            (response.json()['id'], code)]  # the card's code, never the typed text
+    [listed] = clients[2].get('/api/connections').json()
+    assert listed['pairing_code'] == show_code(code) and listed['confirmed'] is True
+
+
+@pytest.mark.parametrize('fields', [{}, {'code': ''}, {'code': None}, {'code': 123}, {'code': ['0' * 32]},
+                                    {'code': 'not a code'}])
+def test_a_missing_or_malformed_code_is_refused_without_showing_the_code(env, remote, fields):
+    from superyak_peer.identity import pairing_code, show_code
+    _, clients, _, _ = env
+    card = remote[1].card(remote[2]['id'])
+    response = pair_over_http(clients[2], card, **fields)
+    assert response.status_code == 400 and response.json()['error'] == 'Type the pairing code shown on the other machine'
+    assert pairing_code(card) not in response.text and show_code(pairing_code(card)) not in response.text
+    assert clients[2].get('/api/connections').json() == []
+
+
+def test_the_old_fingerprint_field_alone_pairs_nothing(env, remote):
+    _, clients, _, _ = env
+    card = remote[1].card(remote[2]['id'])
+    response = pair_over_http(clients[2], card, fingerprint=card['fingerprint'])
+    assert response.status_code == 400 and 'Type the pairing code' in response.json()['error']
+    assert clients[2].get('/api/connections').json() == []
+
+
+def test_a_wrong_code_is_refused_and_the_message_names_the_card_s_code(env, remote):
+    from superyak_peer.identity import pairing_code, show_code
+    _, clients, _, _ = env
+    card = remote[1].card(remote[2]['id'])
+    response = pair_over_http(clients[2], card, code='0' * 32)
+    assert response.status_code == 400
+    assert response.json()['error'] == ("That code doesn't match this card. Its code is "
+                                        f"{show_code(pairing_code(card))}; read the other machine's screen again.")
+    assert clients[2].get('/api/connections').json() == []
+
+
+def test_a_non_admin_is_refused_before_anything_about_codes(env, remote):
+    from superyak_peer.identity import pairing_code
+    _, clients, _, _ = env
+    card = remote[1].card(remote[2]['id'])
+    for code in (pairing_code(card), '0' * 32, None):
+        response = pair_over_http(clients[0], card, code=code)
+        assert response.status_code == 403, code
+
+
+def test_one_card_s_code_never_pairs_another_card_of_the_same_peer(env, remote):
+    """The binding (plan review SF6b): another participant, or the same one renamed, is another card."""
+    from superyak_peer.identity import pairing_code
+    _, clients, _, _ = env
+    card = remote[1].card(remote[2]['id'])
+    for other in (remote[1].card(remote[3]['id']), {**card, 'participant': {**card['participant'], 'name': 'Renamed'}}):
+        response = pair_over_http(clients[2], other, code=pairing_code(card))
+        assert response.status_code == 400 and "doesn't match" in response.json()['error']
+    assert clients[2].get('/api/connections').json() == []
+
+
+def test_each_contact_lists_the_code_of_the_card_it_was_paired_with(env, remote):
+    """MF1: connections() rebuilds each contact's card from peers.card and the contact's own id and name, and that is
+    byte-equal to the card last imported for it, so two participants of one peer list two codes, and a renaming
+    re-pair lists the new one."""
+    from superyak_peer.identity import canonical, pairing_code, show_code
+    app, clients, _, _ = env
+    cards = [remote[1].card(remote[2]['id']), remote[1].card(remote[3]['id'])]
+    for card in cards:
+        assert pair_over_http(clients[2], card, code=pairing_code(card)).status_code == 201
+    listed = {c['user_id']: c for c in clients[2].get('/api/connections').json()}
+    for card in cards:
+        mine = listed[card['participant']['id']]
+        assert canonical(mine['card']) == canonical(card) and mine['pairing_code'] == show_code(pairing_code(card))
+    renamed ={**cards[0], 'participant': {**cards[0]['participant'], 'name': 'Remote One, renamed'}}
+    assert pair_over_http(clients[2], renamed, code=pairing_code(renamed)).status_code == 201
+    listed = {c['user_id']: c for c in clients[2].get('/api/connections').json()}
+    assert listed[renamed['participant']['id']]['pairing_code'] == show_code(pairing_code(renamed))
+    assert listed[renamed['participant']['id']]['confirmed'] is True
+
+
+def test_a_contact_paired_before_codes_lists_its_code_unconfirmed(env, remote):
+    """A store from before this change: the contact row exists and no confirmation does."""
+    from superyak_peer.common import encode
+    from superyak_peer.identity import pairing_code, show_code
+    app, clients, _, _ = env
+    card = remote[1].card(remote[2]['id'])
+    with app.state.store.transaction() as db:  # main's pair() SQL, by position
+        db.execute('INSERT INTO peers VALUES(?,?,1)', (card['peer_id'], encode(card)))
+        db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?)',
+                   ('remote_old', card['peer_id'], card['participant']['id'], card['participant']['name']))
+    [listed] = clients[2].get('/api/connections').json()
+    # no code shown for it: listed, it could be copied into a re-pair with no screens compared (pairing review, nit 1)
+    assert listed['pairing_code'] is None and listed['confirmed'] is False and listed['held'] is False
+    assert pairing_code(card) not in clients[2].get('/api/connections').text
+
+
+def test_rollback_to_main_still_pairs_and_a_stale_confirmation_reads_unconfirmed(env, remote):
+    """MF1 and re-check SF1: remote_contacts keeps its four columns, so main's positional INSERT and its renaming
+    re-pair still work on a store this branch opened; the confirmation that re-pair leaves behind no longer matches."""
+    from superyak_peer.identity import pairing_code
+    app, clients, _, _ = env
+    card = remote[1].card(remote[2]['id'])
+    assert pair_over_http(clients[2], card, code=pairing_code(card)).status_code == 201
+    with app.state.store.transaction() as db:  # main's renaming re-pair, which leaves the confirmation alone
+        db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?) ON CONFLICT(peer_id,user_id) DO UPDATE SET '
+                   'name=excluded.name', ('remote_new', card['peer_id'], card['participant']['id'], 'Renamed under main'))
+        db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?)',
+                   ('remote_third', card['peer_id'], 'third', 'A third, under main'))
+    listed = {c['user_id']: c for c in clients[2].get('/api/connections').json()}
+    assert listed[card['participant']['id']]['confirmed'] is False
+    assert listed['third']['confirmed'] is False
+
+
+def test_the_preview_shows_the_card_and_never_its_code(env, remote):
+    from superyak_peer.identity import pairing_code, show_code
+    _, clients, _, _ = env
+    card = remote[1].card(remote[2]['id'])
+    response = clients[2].post('/api/connections/preview', json={'card': card})
+    assert response.status_code == 200 and response.json() == card
+    assert pairing_code(card) not in response.text and show_code(pairing_code(card)) not in response.text
+
+
+def test_any_signed_in_user_reads_their_own_code_and_none_without_an_endpoint(env):
+    from superyak_peer.identity import pairing_code, show_code
+    app, clients, users, _ = env
+    assert clients[0].get('/api/connections/code').status_code == 409
+    app.state.federation.endpoint = 'https://localhost:7435'
+    response = clients[0].get('/api/connections/code')
+    assert response.status_code == 200
+    assert response.json() == {'code': show_code(pairing_code(clients[0].get('/api/connections/card').json()))}
+    assert clients[0].get('/api/connections/card').json()['participant']['id'] == users[0]['id']
+
+
+def test_re_pairing_one_participant_after_a_disconnect_reconnects_that_one_only(two_peers):
+    """Pairing review SF3: a peer-wide disconnect holds every contact of the peer; a re-pair releases only the
+    participant whose code was typed. The held one is out of audiences, gets no delivery and has its events refused,
+    until its own code is typed."""
+    a, b, ca, _ = two_peers
+    second = b[0].create_user('bob2', 'Bob Two', 'a-long-password')['id']
+    c2 = a[2].pair(a[1], b[2].card(second), code=pairing_code(b[2].card(second)))
+    room = a[0].create_room(a[1], 'Both of them', [ca['id'], c2['id']])
+    deliver(a, b)
+    a[2].unpair(a[1], ca['id'])
+    a[2].pair(a[1], b[2].card(b[1]), code=pairing_code(b[2].card(b[1])))
+    listed = {c['id']: c for c in a[2].connections(a[1])}
+    assert (listed[ca['id']]['held'], listed[ca['id']]['confirmed']) == (False, True)
+    assert (listed[c2['id']]['held'], listed[c2['id']]['confirmed'], listed[c2['id']]['pairing_code']) == (True, False, None)
+    assert [c['id'] for c in a[0].contacts(a[1]) if c.get('remote')] == [ca['id']]
+    with pytest.raises(Problem):  # out of audiences
+        a[0].create_layer(a[1], {'body': 'to the held one', 'audience_users': [c2['id']]})
+    from superyak_peer.identity import parse
+
+    def queued_for_held():
+        with a[0].transaction() as db:
+            return db.execute('SELECT COUNT(*) FROM outbox WHERE contact_id=?', (c2['id'],)).fetchone()[0]
+
+    before = queued_for_held()
+    a[0].send_message(a[1], room['id'], 'after-1', 'after the re-pair')
+    prepared = []
+    a[2].sync_once(send=lambda card, prepare: prepared.append(parse(prepare())))
+    recipients = [e['recipients'] for e in prepared]
+    assert [b[1]] in recipients and not any(second in r for r in recipients)  # no delivery to the held one
+    assert queued_for_held() == before  # nothing is even queued for it (re-check residual 1)
+    with a[0].transaction() as db:  # and a row that got there anyway is refused before it's sent (defence in depth):
+        model = dict(db.execute("SELECT * FROM outbox WHERE contact_id=? AND action='room.message' "  # a faithful copy
+                                "ORDER BY event_seq DESC LIMIT 1", (ca['id'],)).fetchone())        # of a real row
+        db.execute("INSERT INTO outbox(id,event_seq,contact_id,resource_id,revision,action,metadata,status) "
+                   "VALUES('stray',?,?,?,?,?,?,'pending')", (model['event_seq'], c2['id'], model['resource_id'],
+                                                             model['revision'], model['action'], model['metadata']))
+    again = []
+    a[2].sync_once(send=lambda card, prepare: again.append(parse(prepare())))
+    assert not any(second in e['recipients'] for e in again)
+    with a[0].transaction() as db:
+        assert db.execute("SELECT status FROM outbox WHERE id='stray'").fetchone()[0] == 'withdrawn'
+    event = b[2].identity.envelope(destination=a[2].identity.peer_id, actor=second, resource_id='layer-x', revision=1,
+                                   action='layer.release', recipients=[a[1]], payload={'body': 'from the held one'})
+    with pytest.raises(Problem, match='Unknown remote participant'):  # its events refused
+        a[2].receive(event)
+    a[2].pair(a[1], b[2].card(second), code=pairing_code(b[2].card(second)))  # its own code typed
+    released = {c['id']: c for c in a[2].connections(a[1])}[c2['id']]
+    assert (released['held'], released['confirmed']) == (False, True)
+    assert {c['id'] for c in a[0].contacts(a[1]) if c.get('remote')} == {ca['id'], c2['id']}
+
+
+def test_the_confirmation_is_for_the_card_connections_rebuilds(two_peers, monkeypatch):
+    """Pairing review SF2: with a trust field missing from the 409 list (as a v2 key would be), a card that differs in
+    it still can't be confirmed as if it were the stored one."""
+    from superyak_peer import federation
+    a, b, ca, _ = two_peers
+    monkeypatch.setattr(federation, 'TRUST_KEYS', ('signing_key', 'certificate', 'fingerprint'))
+    moved = {**b[2].card(b[1]), 'endpoint': 'https://localhost:9999'}
+    with pytest.raises(Problem) as refused:
+        a[2].pair(a[1], moved, code=pairing_code(moved))
+    assert refused.value.status == 409
+    listed = {c['id']: c for c in a[2].connections(a[1])}[ca['id']]
+    assert listed['card']['endpoint'] == 'https://localhost:7435' and listed['confirmed'] is True

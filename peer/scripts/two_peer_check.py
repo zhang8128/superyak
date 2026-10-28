@@ -1,5 +1,8 @@
 """Run synthetic acceptance against two independent HTTPS peers over SSH forwards.
 
+Ships don't run this checker: it's Andy's, or a test's. It pairs its two synthetic hosts by computing their codes,
+which CLAUDE.md forbids a ship (a ship never computes a pairing code).
+
 Requires a new local output directory and a new remote run directory, plus a
 remote Python with this release's locked production dependencies. SSH host-key
 checking remains enabled. See README.md for the generic configuration format.
@@ -22,6 +25,15 @@ import time
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, build_opener, HTTPCookieProcessor, HTTPSHandler
+
+
+def pairing_code(card):
+    """identity.pairing_code, standalone (this script imports nothing from the peer): the first 32 hex of the whole
+    canonical card's SHA-256. tests/test_packaging.py pins the two together. The person running this checker owns both
+    synthetic hosts and holds both cards this run just made, so computing the code here is that person's own act on
+    their own machines. A ship never runs this checker against a station (CLAUDE.md: a ship never computes a code)."""
+    canonical = json.dumps(card, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()
+    return hashlib.sha256(canonical).hexdigest()[:32]
 
 
 class Client:
@@ -212,8 +224,8 @@ print(json.dumps({{'card':card,'host':socket.gethostname(),'python':sys.version.
         a, b = Client(a_url, card_a['certificate']), Client(b_url, card_b['certificate'])
         a.ready(); b.ready()
         me_a, me_b = a.login('host_a', passwords['a']), b.login('host_b', passwords['b'])
-        contact_b = a.request('POST', '/api/connections/pair', {'card': card_b, 'fingerprint': card_b['fingerprint']}, 201)
-        b.request('POST', '/api/connections/pair', {'card': card_a, 'fingerprint': card_a['fingerprint']}, 201)
+        contact_b = a.request('POST', '/api/connections/pair', {'card': card_b, 'code': pairing_code(card_b)}, 201)
+        b.request('POST', '/api/connections/pair', {'card': card_a, 'code': pairing_code(card_a)}, 201)
         layer = a.request('POST', '/api/layers', {'title': 'Fictional correction check', 'body': 'Fictional original event attribution.', 'audience_users': [contact_b['id']]}, 201)
         assert b.request('GET', '/api/shared/layers') == []
         result['checks']['draft_private_across_hosts'] = True

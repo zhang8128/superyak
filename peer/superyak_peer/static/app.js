@@ -33,6 +33,8 @@ const state = {
   chatDialog: null,
   profileDialog: false,
   pairPreview: null,
+  pairCode: "",  // what the person typed in the pair box, kept through a re-render, never filled in by the page
+  myCode: null,  // this account's own pairing code, shown apart from its card
   invitation: null,
   flash: null,
   transitionNote: null,
@@ -103,8 +105,8 @@ function identityKey(user) {
 
 function clearAccountAdministration() {
   state.accounts = []; state.accessRequests = []; state.roleChanges = []; state.invitation = null;
-  state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null;
-  state.ships = []; state.docking = null;
+  state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null; state.pairCode = "";
+  state.myCode = null; state.ships = []; state.docking = null;
 }
 
 function bindEditorIdentity(user) {
@@ -521,6 +523,61 @@ function sourceLabel(message) {
 // The server's mark for words a room's host attributes to someone on this station that this station never sent.
 const UNVERIFIED_AUTHOR = "Unverified: the room's host says this is from someone on this station";
 
+// Chat paging: a room opens on its newest page and reads on from there. A room the station does not page (a paired
+// peer's, or an older station) answers without `paged` and is the whole room, as it always was.
+const ROOM_PAGE = 100;
+const roomPath = (id) => `/api/chats/${pathPart(id)}`;
+const withoutRepeats = (older, newer) => { const seen = new Set(older.map((message) => message.id)); return newer.filter((message) => !seen.has(message.id)); };
+
+function loadRoom(id) { return api(`${roomPath(id)}?limit=${ROOM_PAGE}`); }
+
+// The room as it is now: the messages already shown stay, what arrived since is appended, and every other field
+// (brief, claims, members, ...) is the answer's. A message the answer carries replaces the shown copy and takes its
+// place (the sender's own message is shown from the POST before the answer has it). `room` is the room being
+// refreshed; the copy on screen is the base, read again after the answers so a "Load earlier" that finished meanwhile stays.
+async function refreshRoom(room) {
+  const shown = state.room?.id === room.id ? state.room : room;
+  if (!shown.paged) return api(roomPath(room.id));
+  let fresh = [], seq = shown.seq, answer;
+  do {
+    answer = await api(`${roomPath(room.id)}?since=${encodeURIComponent(seq)}&limit=${ROOM_PAGE}`);
+    if (!answer.paged) return answer;  // the station stopped paging this room: take it whole
+    fresh = [...fresh, ...(answer.messages || [])];
+    seq = answer.seq;
+  } while (answer.more);
+  const current = state.room?.id === room.id ? state.room : shown;
+  const arrived = new Set(fresh.map((message) => message.id));
+  const messages = [...(current.messages || []).filter((message) => !arrived.has(message.id)), ...fresh];
+  // A fresh message that sorts at or before the first one shown (a peer row with an older `created`) belongs above
+  // the window, so the window's real start is that many positions later. Counting a tie is safe: `before` then
+  // overlaps what is shown, and withoutRepeats absorbs it; counting too few would skip a message.
+  const start = Math.min(shown.first_position, current.first_position), top = (current.messages || [])[0];
+  const shownIds = new Set((current.messages || []).map((message) => message.id));
+  const above = top && start > 0 ? fresh.filter((message) => !shownIds.has(message.id) && message.created <= top.created).length : 0;
+  return { ...answer, messages, more: undefined, first_position: Math.min(start + above, answer.total) };
+}
+
+// Earlier messages go in front of the shown ones; the page keeps the line the reader was on.
+async function loadEarlier() {
+  const room = state.room;
+  if (!room?.paged || !(room.first_position > 0) || state.earlierLoading) return;
+  state.earlierLoading = true;
+  try {
+    const answer = await api(`${roomPath(room.id)}?before=${room.first_position}&limit=${ROOM_PAGE}`);
+    if (state.room?.id !== room.id) return;
+    const scroller = document.scrollingElement, height = scroller.scrollHeight, top = scroller.scrollTop;
+    const messages = [...withoutRepeats(state.room.messages, answer.messages || []), ...state.room.messages];
+    state.room = { ...state.room, messages, first_position: answer.first_position, total: answer.total };
+    render();
+    scroller.scrollTop = top + scroller.scrollHeight - height;
+  } catch (error) {
+    setFlash(error.message, true);
+    render();
+  } finally {
+    state.earlierLoading = false;
+  }
+}
+
 function messageMarkup(message, room) {
   const mine = isSelf(message.author_id);
   const system = room?.system_author;  // the station's own author, known by id, never by display name (R31)
@@ -822,7 +879,7 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
   } finally {
     state.boardSaving = false;
     if (state.me && state.room?.id === room.id) {
-      try { const latest = await api(`/api/chats/${pathPart(room.id)}`); if (state.room?.id === room.id) state.room = latest; } catch (_) { /* the board below still reads */ }
+      try { const latest = await refreshRoom(room); if (state.room?.id === room.id) state.room = latest; } catch (_) { /* the board below still reads */ }
       if (state.room?.id === room.id) await loadBoard(state.room);
     }
     render();
@@ -872,9 +929,9 @@ function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members (409)
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
-    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
+    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
 
@@ -892,10 +949,16 @@ function chatsView() {
     <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong><span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
 }
 
+function contactState(contact) {
+  // a code shows only for a contact confirmed by typing: any other could be copied into a re-pair (fix:pairing-code)
+  if (contact.held) return "Held until its own code is typed";
+  return contact.confirmed ? "Confirmed by typing" : "No typed code on record";
+}
+
 function connectionGroup(connection) {
   const peers = state.connections.filter((item) => item.peer_id === connection.peer_id);
   if (peers[0]?.id !== connection.id) return "";
-  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3><p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p><p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
+  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3><p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p><p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><ul class="meta">${peers.map((item) => `<li><span>${escapeHtml(item.name)}</span> <span>${item.pairing_code ? `Pairing code: ${escapeHtml(item.pairing_code)}` : "No code shown"}</span> <span>${contactState(item)}</span></li>`).join("")}</ul>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
 }
 
 function deliveryDescription(delivery) {
@@ -987,10 +1050,11 @@ function accountRoleDialog() {
 
 function connectionsView() {
   const statuses = state.sync.deliveries || [];
-  return `<header class="page-head"><div><p class="eyebrow">Explicit peer exchange</p><h1>Connections</h1><p class="lede">Review a peer’s address, participant, and certificate fingerprint before pairing. Pairing alone shares nothing.</p></div><div class="button-row"><button class="button secondary" data-action="show-card">Show my peer card</button><button class="button" data-action="sync">Check delivery now</button></div></header>
-    <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and compare its fingerprint before connecting.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
+  return `<header class="page-head"><div><p class="eyebrow">Explicit peer exchange</p><h1>Connections</h1><p class="lede">Pair a peer by typing the code its own screen shows. Pairing alone shares nothing.</p></div><div class="button-row"><button class="button secondary" data-action="show-card">Show my peer card</button><button class="button" data-action="sync">Check delivery now</button></div></header>
+    ${state.myCode ? `<p class="notice" data-testid="my-pairing-code"><strong>Your pairing code:</strong> <code>${escapeHtml(state.myCode)}</code>. Type this on the other machine. Never send it with the card.</p>` : ""}
+    <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and type the code the other machine shows.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
-    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card, preview it, and compare the fingerprint outside Superyak before confirming.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${escapeHtml(state.pairPreview.endpoint)}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><button class="button" data-action="confirm-pair">Fingerprint matches — pair this peer</button></div>` : ""}</section>` : ""}
+    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${escapeHtml(state.pairPreview.endpoint)}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form"><div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
     ${shipsSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
 }
 
@@ -1081,7 +1145,11 @@ async function loadRoute() {
   if (route === "chats") {
     state.selectedChatId = id || state.selectedChatId || null;
     if (state.selectedChatId && state.home.chats.some((item) => item.id === state.selectedChatId)) {
-      try { state.room = await api(`/api/chats/${pathPart(state.selectedChatId)}`); await loadBoard(state.room); }
+      try {
+        const paged = state.room?.id === state.selectedChatId && state.room.paged;  // keep the earlier messages the reader loaded
+        state.room = paged ? await refreshRoom(state.room) : await loadRoom(state.selectedChatId);
+        await loadBoard(state.room);
+      }
       catch (_) { state.room = null; }
     } else {
       state.room = null;
@@ -1389,7 +1457,7 @@ async function confirmWithdraw() {
 
 async function openChat(id) {
   state.selectedChatId = id;
-  state.room = await api(`/api/chats/${pathPart(id)}`);
+  state.room = await loadRoom(id);
   await loadBoard(state.room);
   location.hash = `chats/${pathPart(id)}`;
   state.flash = null;
@@ -1413,7 +1481,7 @@ async function createChat(form) {
     state.chatDialog = null; state.chatPicked = null; state.chatError = null;
     await loadData();
     state.selectedChatId = room.id;
-    state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    state.room = await loadRoom(room.id);
     await loadBoard(state.room);
     history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
     render();
@@ -1429,7 +1497,7 @@ async function createChat(form) {
       state.chatPicked = members;
       state.chatError = "The room brief changed since you opened this. The newer brief is shown below; tick the box again to carry it.";
       try {
-        state.room = await api(`/api/chats/${pathPart(state.room.id)}`);
+        state.room = await refreshRoom(state.room);
       } catch (_) {
         state.chatError = "The room brief changed since you opened this. Close this and open the room again to see the newer brief.";
       }
@@ -1461,7 +1529,7 @@ async function saveBrief(form) {
     if (error.status === 409) {
       message = "A newer brief was saved while you were editing. It is shown above, and your text is still here. Save again to replace it.";
       try {
-        const latest = await api(`/api/chats/${pathPart(room.id)}`);
+        const latest = await refreshRoom(room);
         if (state.room?.id === room.id) state.room = latest;
         edit.revision = latest.brief_revision;
       } catch (_) {
@@ -1476,7 +1544,7 @@ async function saveBrief(form) {
   }
   if (state.briefEdit === edit) state.briefEdit = null;  // only this editor closes: one opened since then stays
   try {
-    const latest = await api(`/api/chats/${pathPart(room.id)}`);
+    const latest = await refreshRoom(room);
     if (state.room?.id === room.id) state.room = latest;
   } catch (_) { /* the save stands; the next refresh shows it */ }
   if (state.briefHistory?.roomId === room.id) await openBriefHistory(room);  // the saved revision joins the list
@@ -1532,7 +1600,7 @@ async function removeParticipant(id) {
   }
   try {
     await loadData();
-    if (state.room?.id === room.id) state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    if (state.room?.id === room.id) state.room = await refreshRoom(room);
     render();
   } catch (error) {
     if (error.status === 401) {
@@ -1577,7 +1645,7 @@ async function sendMessage(form) {
   }
   try {
     const [latestRoom, latestSync] = await Promise.all([
-      api(`/api/chats/${pathPart(room.id)}`),
+      refreshRoom(room),
       api("/api/sync"),
     ]);
     if (state.room?.id === room.id) state.room = latestRoom;
@@ -1631,6 +1699,7 @@ async function logout() {
 async function showCard() {
   try {
     const card = await api("/api/connections/card");
+    state.myCode = (await api("/api/connections/code")).code;  // shown apart: never inside the copyable card
     setFlash(JSON.stringify(card, null, 2));
   } catch (error) {
     setFlash(error.message, true);
@@ -1642,11 +1711,28 @@ async function previewPair(form) {
   try {
     const card = JSON.parse(form.elements.card.value);
     state.pairPreview = await api("/api/connections/preview", { method: "POST", json: { card } });
+    state.pairCode = "";
     state.flash = null;
   } catch (error) {
     setFlash(error instanceof SyntaxError ? "Peer card is not valid JSON" : error.message, true);
   }
   render();
+}
+
+async function confirmPair(form) {
+  // fix:pairing-code: the person types the other machine's code; the server checks it. After a code that doesn't
+  // match, the preview is cleared, so copying the code the message names is a deliberate step, not a reflex.
+  const typed = form.elements.code.value;
+  const wellFormed = /^[0-9a-f]{32}$/.test(typed.replace(/[\s-]/g, "").toLowerCase());  // what the server would check
+  try {
+    await api("/api/connections/pair", { method: "POST", json: { card: state.pairPreview, code: typed } });
+    state.pairPreview = null; state.pairCode = "";
+    await refresh("Peer paired. Nothing has been shared automatically.");
+  } catch (error) {
+    if (wellFormed && error.status === 400) { state.pairPreview = null; state.pairCode = ""; }  // a code that didn't match
+    setFlash(error.message, true);
+    render();
+  }
 }
 
 function isDemoAccount(username) {
@@ -1770,6 +1856,7 @@ document.addEventListener("submit", async (event) => {
   if (form.id === "board-done-form") await boardWrite("/board/done", { key: form.dataset.key, outcome: form.elements.outcome.value }, "Marked done.", { focusKey: form.dataset.key });
   if (form.id === "message-form") await sendMessage(form);
   if (form.id === "pair-preview-form") await previewPair(form);
+  if (form.id === "pair-confirm-form") await confirmPair(form);
   if (form.id === "profile-form") {
     const oldName = state.me.name;
     try {
@@ -1894,6 +1981,7 @@ document.addEventListener("click", async (event) => {
     document.querySelector("#brief-body")?.focus();
   }
   if (action === "cancel-brief") { state.briefEdit = null; if (state.briefHistory) state.briefHistory.ask = null; render(); }
+  if (action === "load-earlier") await loadEarlier();
   if (action === "brief-history" && state.room) await openBriefHistory(state.room);
   if (action === "hide-brief-history") { state.briefHistory = null; render(); }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
@@ -1987,13 +2075,6 @@ document.addEventListener("click", async (event) => {
     try { await api(`/api/sync/${pathPart(target.dataset.id)}/retry`, { method: "POST", json: {} }); await refresh("Delivery queued again"); }
     catch (error) { setFlash(error.message, true); render(); }
   }
-  if (action === "confirm-pair") {
-    try {
-      await api("/api/connections/pair", { method: "POST", json: { card: state.pairPreview, fingerprint: state.pairPreview.fingerprint } });
-      state.pairPreview = null;
-      await refresh("Peer paired. Nothing has been shared automatically.");
-    } catch (error) { setFlash(error.message, true); render(); }
-  }
   if (action === "unpair") {
     try { await api(`/api/connections/${pathPart(target.dataset.id)}`, { method: "DELETE", json: {} }); await refresh("The peer and all of its contacts are disconnected"); }
     catch (error) { setFlash(error.message, true); render(); }
@@ -2012,6 +2093,7 @@ document.addEventListener("input", (event) => {
     state.boardPost = { roomId: state.room.id, key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
   }
   if (event.target.id === "board-outcome" && state.boardDone) state.boardDone.outcome = event.target.value;
+  if (event.target.id === "pair-code") state.pairCode = event.target.value;  // kept through a re-render
   if (event.target.closest("#grant-form")) state.grantForm = readGrantForm(event.target.form);  // kept through a re-render
   if (event.target.id === "grant-reason" && state.grantAsk) state.grantAsk.reason = event.target.value;
   if (event.target.id === "assistant-request" && selectedLayer() && !editorSwitching()) {

@@ -4,7 +4,7 @@ import asyncio
 from fastapi import APIRouter, Request
 from starlette.concurrency import run_in_threadpool
 from .common import Problem
-from .identity import validate_card
+from .identity import validate_card, pairing_code, show_code
 
 @asynccontextmanager
 async def federation_lifespan(app):
@@ -40,6 +40,14 @@ def install(app):
             raise Problem(409, 'Configure this peer HTTPS endpoint before exporting a card')
         return fed.card(who)
 
+    @router.get('/api/connections/code')
+    def code(request: Request):
+        """The actor's own pairing code, for the other machine's person to type (fix:pairing-code)."""
+        who = actor(request)
+        if not fed.endpoint:
+            raise Problem(409, 'Configure this peer HTTPS endpoint before exporting a card')
+        return {'code': show_code(pairing_code(fed.card(who)))}
+
     @router.post('/api/connections/preview')
     async def preview(request: Request):
         who = actor(request)
@@ -51,10 +59,7 @@ def install(app):
     async def pair(request: Request):
         who = actor(request)
         data = await body(request)
-        card = validate_card(data.get('card'))
-        if data.get('fingerprint') != card['fingerprint']:
-            raise Problem(400, 'Review and confirm the certificate fingerprint')
-        return fed.pair(who, card)
+        return fed.pair(who, data.get('card'), code=data.get('code'))  # the one check is in pair()
 
     @router.delete('/api/connections/{contact_id}')
     def unpair(contact_id: str, request: Request):

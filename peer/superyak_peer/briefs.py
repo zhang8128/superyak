@@ -5,7 +5,7 @@ next revision on that row, so a stale tab can never overwrite a later brief. Eve
 history (ship briefs S5, docs/superpowers/specs/2026-10-14-ship-room-briefs-design.md), which only the owner reads. The
 owner's own ships write too, through their own route, in his current rooms they're in (ship briefs S1–S3)."""
 from .breakouts import CURRENT_PERSON_ROOM
-from .common import Problem, text
+from .common import BRIEF_CHANGED, Problem, text
 from .ships import addressed_names, safe_line
 
 MAX_BRIEF = 4000
@@ -123,7 +123,7 @@ class Briefs:
             return None
         brief, revision = self._room_brief(db, room_id)
         if carry != revision:
-            raise Problem(409, 'The room brief changed since you looked at it; look again before carrying it')
+            raise Problem(409, BRIEF_CHANGED)
         if not brief:
             return None
         if db.execute('SELECT 1 FROM users WHERE id=?', (brief['author_id'],)).fetchone() is None:

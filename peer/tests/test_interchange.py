@@ -1,4 +1,5 @@
 """Selected source attribution conveys no access authority."""
+from superyak_peer.identity import pairing_code
 import copy
 import json
 import pytest
@@ -96,7 +97,7 @@ def test_remote_audience_keeps_original_peer_and_person_identity(env, tmp_path):
     person = remote.create_user('remote-person', 'Remote Person', 'long-remote-password')
     remote_fed = Federation(remote, endpoint='https://localhost:7443')
     card = remote_fed.card(person['id'])
-    contact = app.state.federation.pair(users[2]['id'], card)
+    contact = app.state.federation.pair(users[2]['id'], card, code=pairing_code(card))
     _, selected = selection(patient, audience_users=[contact['id']])
     result = export(patient, [selected]).json()['records'][0]
     assert result['audience']['people'] == [f"{remote_fed.identity.peer_id}:{person['id']}"]

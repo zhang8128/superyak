@@ -185,7 +185,7 @@ def test_carrying_copies_the_brief_into_the_new_room_and_never_its_messages(env)
     got = organizer.get(f'/api/chats/{new}').json()
     assert got['brief'] == {'body': 'D1-D9 are decided. Rio Grande builds the brief.', 'revision': 1, 'author_id': users[0]['id'],
                             'author_name': 'Patient', 'author_kind': 'person', 'author_username': 'patient', 'updated': 1000060.0, 'carried_from': room}
-    assert got['brief_revision'] == 1 and got['messages'] == []
+    assert got['brief_revision'] == 1 and [m['client_message_id'][:7] for m in got['messages']] == ['member-']  # only the member- notice, never the old messages
     assert 'old secret' not in organizer.get(f'/api/chats/{new}').text
     assert organizer.get(f'/api/chats/{room}').status_code == 404
     assert brief_of(doctor, room)['revision'] == 2  # the old room keeps its own brief
@@ -203,7 +203,7 @@ def test_without_carry_the_new_room_has_no_brief(env):
         response = add_members(patient, room, users[2], **extra)
         assert response.status_code == 201, response.text
         got = organizer.get(f'/api/chats/{response.json()["id"]}').json()
-        assert got['brief'] is None and got['brief_revision'] == 0 and got['messages'] == []
+        assert got['brief'] is None and got['brief_revision'] == 0 and [m['client_message_id'][:7] for m in got['messages']] == ['member-']
     room = new_room(patient, users[1])
     put_brief(patient, room, 'Plan.', 0)
     put_brief(patient, room, '', 1)

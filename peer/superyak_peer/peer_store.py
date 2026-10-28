@@ -29,6 +29,8 @@ PEER_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS peers(peer_id TEXT PRIMARY KEY, card TEXT NOT NULL, paired INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS remote_contacts(id TEXT PRIMARY KEY, peer_id TEXT NOT NULL REFERENCES peers(peer_id), user_id TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(peer_id,user_id));
 CREATE TABLE IF NOT EXISTS remote_room_members(room_id TEXT NOT NULL REFERENCES rooms(id), contact_id TEXT NOT NULL REFERENCES remote_contacts(id), PRIMARY KEY(room_id,contact_id));
+CREATE TABLE IF NOT EXISTS pairing_confirmations(contact_id TEXT PRIMARY KEY, code TEXT NOT NULL, confirmed REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS peer_messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id), author_id TEXT NOT NULL, client_message_id TEXT NOT NULL, body TEXT NOT NULL, epoch INTEGER NOT NULL, created REAL NOT NULL, UNIQUE(room_id,author_id,client_message_id));
 CREATE TABLE IF NOT EXISTS inbox(origin TEXT NOT NULL, resource_id TEXT NOT NULL, kind TEXT NOT NULL, recipient TEXT NOT NULL REFERENCES users(id), revision INTEGER NOT NULL, actor TEXT NOT NULL, payload TEXT, PRIMARY KEY(origin,resource_id,kind,recipient));
 CREATE TABLE IF NOT EXISTS inbox_received(origin TEXT NOT NULL, resource_id TEXT NOT NULL, recipient TEXT NOT NULL, received REAL NOT NULL, PRIMARY KEY(origin,resource_id,recipient));
@@ -43,12 +45,14 @@ class PeerStore:
         for key in members:
             if db.execute("SELECT 1 FROM users WHERE id=? AND kind!='system'", (key,)).fetchone():  # R34: never an audience
                 continue
-            require(db.execute('SELECT 1 FROM remote_contacts JOIN peers USING(peer_id) WHERE id=? AND paired=1', (key,)).fetchone())
+            require(db.execute('SELECT 1 FROM remote_contacts JOIN peers USING(peer_id) WHERE id=? AND paired=1 '
+                               'AND id NOT IN (SELECT contact_id FROM contact_holds)', (key,)).fetchone())  # SF3
 
     def contacts(self, actor):
         with self.transaction() as db:
             local = [dict(r) for r in db.execute("SELECT id,name FROM users WHERE id!=? AND kind!='system' ORDER BY name,id", (actor,))]
-            remote = [dict(r) for r in db.execute('SELECT id,name,peer_id,user_id FROM remote_contacts JOIN peers USING(peer_id) WHERE paired=1 ORDER BY name,id')]
+            remote = [dict(r) for r in db.execute('SELECT id,name,peer_id,user_id FROM remote_contacts JOIN peers USING(peer_id) WHERE paired=1 '
+                                                  'AND id NOT IN (SELECT contact_id FROM contact_holds) ORDER BY name,id')]  # SF3
             return local + [{**r, 'remote': True} for r in remote]
 
     def _remote_inbox(self, db, actor, key, kind):

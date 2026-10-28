@@ -1,4 +1,5 @@
 """Real-browser acceptance flows for the same-origin personal home."""
+from superyak_peer.identity import pairing_code, show_code
 
 from contextlib import contextmanager
 import json
@@ -804,6 +805,65 @@ def test_invited_participant_chooses_local_account_details(browser_peer):
             expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
 
 
+def preview_remote_card(page, browser_peer):
+    page.get_by_role("link", name="Connections", exact=True).click()
+    page.get_by_label("Peer card").fill(json.dumps(browser_peer["remote_card"]))
+    page.get_by_role("button", name="Preview peer card").click()
+    expect(page.get_by_role("heading", name="Casey Remote")).to_be_visible()
+
+
+def test_show_my_peer_card_shows_the_code_apart_from_the_card(browser_peer):
+    """fix:pairing-code (plan review SF7): the code isn't in the copyable card, so one copy never carries both."""
+    browser_peer["app"].state.federation.endpoint = "https://localhost:7435"
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Connections", exact=True).click()
+            page.get_by_role("button", name="Show my peer card").click()
+            card = browser_peer["app"].state.federation.card(browser_peer["users"]["patient"]["id"])
+            code = show_code(pairing_code(card))
+            shown = page.get_by_test_id("my-pairing-code")
+            expect(shown).to_contain_text(code)
+            expect(shown).to_contain_text("Type this on the other machine. Never send it with the card.")
+            flash = page.locator(".notice[role=status]").first.inner_text()
+            assert card["peer_id"] in flash and code not in flash and pairing_code(card) not in flash
+
+
+def test_the_code_box_starts_empty_and_an_empty_or_wrong_code_pairs_nothing(browser_peer):
+    code = pairing_code(browser_peer["remote_card"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+            preview_remote_card(page, browser_peer)
+            box = page.get_by_label("Type the code shown on the other machine")
+            expect(box).to_have_value("")
+            content = page.content()
+            assert code not in content and show_code(code) not in content  # the preview never shows it
+            page.get_by_role("button", name="Pair this peer").click()
+            expect(page.locator(".notice.error")).to_have_text("Type the pairing code shown on the other machine")
+            page.get_by_label("Type the code shown on the other machine").fill("0" * 32)
+            page.get_by_role("button", name="Pair this peer").click()
+            expect(page.locator(".notice.error")).to_contain_text("That code doesn't match this card.")
+            expect(page.get_by_role("heading", name="Casey Remote")).to_have_count(0)  # the preview is cleared
+            expect(page.get_by_role("button", name="Disconnect peer and 1 contact")).to_have_count(0)
+    assert browser_peer["app"].state.federation.connections(browser_peer["users"]["organizer"]["id"]) == []
+
+
+def test_the_right_code_typed_with_enter_pairs_and_survives_a_re_render(browser_peer):
+    code = show_code(pairing_code(browser_peer["remote_card"]))
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+            preview_remote_card(page, browser_peer)
+            box = page.get_by_label("Type the code shown on the other machine")
+            box.fill(code[:10])
+            page.get_by_role("button", name="Check delivery now").click()  # refresh() renders the page again
+            expect(page.get_by_label("Type the code shown on the other machine")).to_have_value(code[:10])
+            page.get_by_label("Type the code shown on the other machine").fill(code)
+            page.get_by_label("Type the code shown on the other machine").press("Enter")
+            expect(page.locator("#main-content").get_by_text("Peer paired. Nothing has been shared automatically.")
+                   ).to_be_visible()
+            expect(page.get_by_text(f"Pairing code: {code}")).to_be_visible()
+            expect(page.get_by_text("Confirmed by typing", exact=True)).to_be_visible()
+
+
 def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
     """Break caught: pairing shares implicitly or canceled delivery looks retryable."""
     with sync_playwright() as playwright:
@@ -813,9 +873,10 @@ def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
             page.get_by_role("button", name="Preview peer card").click()
             expect(page.get_by_role("heading", name="Casey Remote")).to_be_visible()
             expect(page.get_by_text(browser_peer["remote_card"]["fingerprint"])).to_be_visible()
-            page.get_by_role(
-                "button", name="Fingerprint matches — pair this peer"
-            ).click()
+            page.get_by_label("Type the code shown on the other machine").fill(
+                show_code(pairing_code(browser_peer["remote_card"]))
+            )
+            page.get_by_role("button", name="Pair this peer").click()
             expect(
                 page.locator("#main-content").get_by_text(
                     "Peer paired. Nothing has been shared automatically."
@@ -1292,7 +1353,7 @@ def test_fresh_participant_creates_space_and_previews_exact_selection(browser_pe
     import base64
     store = browser_peer['app'].state.store
     admin = browser_peer['users']['organizer']['id']
-    browser_peer['app'].state.federation.pair(admin, browser_peer['remote_card'])
+    browser_peer['app'].state.federation.pair(admin, browser_peer['remote_card'], code=pairing_code(browser_peer['remote_card']))
     invitation = store.invite(admin)
     fresh = store.redeem(invitation['token'], 'fresh', 'Fresh Person', browser_peer['password'])
     selected = store.upload_file(fresh['id'], 'selected-evidence.txt', 'text/plain', base64.b64encode(b'selected').decode())
@@ -1350,8 +1411,8 @@ def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer
     recipient = remote.create_user('remote', 'Casey Delivery', 'long-password', is_admin=True)['id']
     other = Federation(remote, endpoint='https://remote.example:7443')
     fed.endpoint = 'https://local.example:7443'
-    contact = fed.pair(owner, other.card(recipient))
-    back = other.pair(recipient, fed.card(owner))
+    contact = fed.pair(owner, other.card(recipient), code=pairing_code(other.card(recipient)))
+    back = other.pair(recipient, fed.card(owner), code=pairing_code(fed.card(owner)))
     original = fed.sync_once
     offline = [False]
     def sync(**kwargs):
@@ -2324,7 +2385,8 @@ def test_a_carry_refused_for_a_newer_brief_shows_it_and_carries_it_on_a_second_t
 def test_a_replaced_room_offers_no_add_and_a_stale_add_says_why(browser_peer):
     """Work board 8.4 (final review): a room another add replaced takes no more members. A page opened before that add
     gets the station's 409 in the dialog, not the brief's message, and nothing is added. After a reload the replaced
-    room offers no "Change participants" (its other controls stay), and its replacement does."""
+    room offers neither "Change participants" nor Remove (both answer 409 there, the moderators plan's ruling 7), and its
+    replacement does."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
     patient, doctor = users["patient"]["id"], users["doctor"]["id"]
     room = store.create_room(patient, "City of AI", [users["family"]["id"]])
@@ -2344,7 +2406,7 @@ def test_a_replaced_room_offers_no_add_and_a_stale_add_says_why(browser_peer):
             assert store.list_rooms(doctor) == []
             dialog.get_by_role("button", name="Cancel").click()
             page.reload()
-            expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_be_visible()
+            expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_have_count(0)  # removal answers 409 REPLACED_REMOVE (ruling 7)
             expect(page.get_by_role("button", name="Change participants")).to_have_count(0)
             page.goto(f"{base}/#chats/{replacement['id']}")
             page.reload()
@@ -2566,9 +2628,9 @@ def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_del
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
     here, remote = browser_peer["app"].state.federation, browser_peer["remote"]
     there, casey, patient = remote["federation"], remote["user"]["id"], users["patient"]["id"]
-    paired = here.pair(users["organizer"]["id"], browser_peer["remote_card"])  # pairing is an admin's act
+    paired = here.pair(users["organizer"]["id"], browser_peer["remote_card"], code=pairing_code(browser_peer["remote_card"]))  # pairing is an admin's act
     card = Federation(store, endpoint="https://localhost:7435").card(patient)  # this station's identity, an endpoint
-    contact = there.pair(casey, card)
+    contact = there.pair(casey, card, code=pairing_code(card))
     room = remote["store"].create_room(casey, "Hosted elsewhere", [contact["id"]])
     there.sync_once(send=lambda card, prepare: here.receive(prepare()))
     key = f"{there.identity.peer_id}:{room['id']}"
@@ -3293,3 +3355,140 @@ def test_the_rooms_offered_for_a_grant_leave_out_breakouts_and_received_rooms(br
             expect(page.get_by_label("Made-up breakout")).to_have_count(0)
             expect(page.get_by_label("Made-up received")).to_have_count(0)
             assert served  # the interception ran, so the two added rooms were in the page's data
+
+
+def test_a_long_room_opens_on_the_newest_hundred_and_loads_earlier(browser_peer):
+    """Break caught: opening a long room fetches and draws all of it, or earlier messages cannot be reached."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(150):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            messages = page.locator(".messages .message p")
+            expect(messages).to_have_count(100)
+            expect(messages.first).to_have_text("message 50")
+            expect(messages.last).to_have_text("message 149")
+            page.get_by_role("button", name="Load earlier messages").click()
+            expect(messages).to_have_count(150)
+            assert messages.all_inner_texts() == [f"message {i}" for i in range(150)]
+            expect(page.get_by_role("button", name="Load earlier messages")).to_have_count(0)
+
+
+def test_a_refresh_appends_a_new_message_once(browser_peer):
+    """Break caught: a refresh after a brief save drops the messages shown, or shows a new one twice."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(3):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".messages .message p")).to_have_count(3)
+            store.send_message(users["family"]["id"], room["id"], "late", "A word that arrived while you read.")
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Edit brief").click()
+            panel.get_by_label("Edit brief").fill("A brief.")
+            panel.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".notice", has_text="Room brief saved.")).to_be_visible()
+            shown = page.locator(".messages .message p").all_inner_texts()  # the brief's station notice joins them
+            assert shown[:3] == ["message 0", "message 1", "message 2"]
+            assert shown.count("A word that arrived while you read.") == 1
+
+
+def test_a_sent_message_takes_its_place_among_those_that_arrived_first(browser_peer):
+    """Break caught: after a send, a message that arrived while the reader typed is shown below the sent one until reload."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(3):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            messages = page.locator(".messages .message p")
+            expect(messages).to_have_count(3)
+            store.send_message(users["family"]["id"], room["id"], "late", "A question while you typed.")
+            page.get_by_role("textbox", name="Message", exact=True).fill("My answer to it.")
+            page.get_by_role("button", name="Send message").click()
+            expect(messages).to_have_count(5)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")
+            shown = messages.all_inner_texts()
+            page.reload()
+            expect(messages).to_have_count(5)
+            assert shown == messages.all_inner_texts()
+
+
+def test_a_generic_refresh_keeps_the_earlier_messages_the_reader_loaded(browser_peer):
+    """Break caught: a refresh reloads the newest hundred and drops the earlier messages the reader asked for."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(150):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            messages = page.locator(".messages .message p")
+            expect(messages).to_have_count(100)
+            page.get_by_role("button", name="Load earlier messages").click()
+            expect(messages).to_have_count(150)
+            store.send_message(users["family"]["id"], room["id"], "late", "A word that arrived.")
+            page.evaluate("refresh()")
+            expect(messages).to_have_count(151)
+            assert messages.all_inner_texts() == [f"message {i}" for i in range(150)] + ["A word that arrived."]
+            expect(page.get_by_role("button", name="Load earlier messages")).to_have_count(0)
+
+
+def test_a_remote_room_still_opens(browser_peer):
+    """Break caught: a paired peer's room, which has no pages, fails to open or loses its messages."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    peer, patient = "b" * 64, users["patient"]["id"]
+    payload = {
+        "title": "Remote room", "owner_id": f"{peer}:casey", "created": 1000.0, "last_activity": 1002.0,
+        "members": [{"peer": peer, "id": "casey"}], "member_ids": [f"{peer}:casey", patient],
+        "messages": [
+            {"id": f"r{i}", "room_id": "remote-1", "author_id": f"{peer}:casey", "client_message_id": f"c{i}",
+             "body": f"remote word {i}", "epoch": 1, "created": 1000.0 + i}
+            for i in range(3)
+        ],
+    }
+    with store.transaction() as db:
+        db.execute("INSERT INTO peers VALUES(?,?,1)", (peer, "{}"))
+        db.execute("INSERT INTO inbox VALUES(?,?,?,?,?,?,?)", (peer, "remote-1", "room", patient, 1, "casey", json.dumps(payload)))
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{quote(peer + ':remote-1', safe='')}")
+            page.reload()
+            expect(page.get_by_role("heading", name="Remote room")).to_be_visible()
+            assert page.locator(".messages .message p").all_inner_texts() == [f"remote word {i}" for i in range(3)]
+            expect(page.get_by_role("button", name="Load earlier messages")).to_have_count(0)
+
+
+def test_load_earlier_skips_nothing_after_a_message_arrives_above_the_window(browser_peer):
+    """Section 2 review M2: a since refresh brings a peer row whose older `created` puts it above the shown window.
+    The window then starts one lower than first_position says, and Load earlier used to skip that one message."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    for i in range(150):
+        store.send_message(users["patient"]["id"], room["id"], f"m{i}", f"message {i}")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            messages = page.locator(".messages .message p")
+            expect(messages).to_have_count(100)
+            with store.transaction() as db:
+                created = db.execute("SELECT created FROM messages WHERE client_message_id='m10'").fetchone()[0]
+                db.execute("INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)",
+                           ("late-peer", room["id"], f"{'a' * 64}:remote", "late", "A relayed word from long ago.", 1, created + 1e-6))
+                store.emit(db, "chat.message", room["id"], 1, {"message_id": "late-peer", "author_id": f"{'a' * 64}:remote"})
+            page.evaluate("refresh()")
+            expect(messages).to_have_count(101)  # it shows at the end until the room is reopened (a spec Known limit)
+            page.get_by_role("button", name="Load earlier messages").click()
+            expect(messages).to_have_count(151)
+            assert messages.all_inner_texts() == [f"message {i}" for i in range(150)] + ["A relayed word from long ago."]
+            expect(page.get_by_role("button", name="Load earlier messages")).to_have_count(0)
