@@ -121,9 +121,10 @@ people's private content or authority over another independently operated peer.
 
 See [API.md](API.md) for provisioning, routes, state, and audience semantics;
 [PROTOCOL.md](PROTOCOL.md) specifies the signed envelope/card schema, independent
-origins, receipts, bounded retry and revocation behavior. Operators explicitly
-review each card's fingerprint and named remote participant. There is no automatic
-discovery, implicit account merge, or network-wide owner.
+origins, receipts, bounded retry and revocation behavior. An operator pairs a card
+by typing its pairing code, read off the exporting machine's own screen (`card`
+writes it to its terminal only; `pair --as` reads it from a real terminal). There is no
+automatic discovery, implicit account merge, or network-wide owner.
 
 ```sh
 uv run --locked python -m superyak_peer card --username owner --endpoint https://peer.example:7435 > owner-card.json
