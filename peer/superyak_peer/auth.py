@@ -20,6 +20,9 @@ def password_hash(password, salt):
 # browser's known-device token, whose failures count against it instead of holds 1-3. Its public sign-ins count against
 # it too, successes included (section 2 review should-fix 1), so one browser can't keep the known browsers' lane full.
 PAIR_HOLD, SOURCE_HOLD, USER_HOLD, DEVICE_HOLD, DEVICE_ATTEMPTS_HOLD = (8, 300), (40, 300), (30, 3600), (8, 300), (8, 300)
+# And per username across all its known browsers (section 2 review of 581cea18, should-fix 1): a cookieless success
+# mints a token for free, so the per-token count alone holds a browser, not an account holder.
+KNOWN_USER_HOLD = (24, 300)
 INVITATION_TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')  # what secrets.token_urlsafe(32) makes, for both kinds
 DEVICE_LIFETIME = 180 * 86400
 DEVICES_PER_USER = 20
@@ -51,6 +54,13 @@ def device_held(known, now, public):
     failures = known['failures'] if known['failure_reset'] > now else 0
     attempts = known['attempts'] if known['attempt_reset'] > now else 0
     return failures >= DEVICE_HOLD[0] or public and attempts >= DEVICE_ATTEMPTS_HOLD[0]
+
+
+def known_user_held(db, username, now):
+    """Whether username's known browsers are held: 24 public known-browser sign-ins of any outcome in five minutes, over
+    all its tokens. Only a valid token's sign-in raises the count, so nobody without one can hold anyone's browsers."""
+    row = db.execute('SELECT count,reset FROM login_attempts WHERE key=?', (attempts_key('known', username),)).fetchone()
+    return row is not None and row['reset'] > now and row['count'] >= KNOWN_USER_HOLD[0]
 
 
 def attempts_key(*parts):
@@ -127,11 +137,13 @@ class Auth:
     def device_is_valid(self, device, username):
         """Public route spec 3: whether a superyak_device token is valid for username, read without writing. It picks
         the known browsers' sign-in lane for a public sign-in; Store.login checks again in its own transaction. A valid
-        token that is held answers 429 here, so it enters no lane (section 2 review should-fix 1)."""
+        token that is held answers 429 here, so it enters no lane (section 2 review should-fix 1), and so does one whose
+        username's known browsers are held (the review of 581cea18, should-fix 1)."""
         with self.transaction() as db:
             now = self.clock()
             known = self._known_device(db, device, username, now)
-        if known is not None and device_held(known, now, public=True):
+            user_held = known is not None and known_user_held(db, username, now)
+        if known is not None and (device_held(known, now, public=True) or user_held):
             raise Problem(429, 'Too many attempts; try again later')
         return known is not None
 
@@ -171,13 +183,19 @@ class Auth:
             db.execute('DELETE FROM login_attempts WHERE reset<=?', (now,))
             known = self._known_device(db, device, username, now)
             if known is not None:
-                held = device_held(known, now, public)
+                held = device_held(known, now, public) or public and known_user_held(db, username, now)
                 if not held:  # a success resets the failures (_device_signed_in) and keeps the attempts
                     holds, failures = {}, counted(known['failures'], known['failure_reset'], now, DEVICE_HOLD[1])
                     attempts = (counted(known['attempts'], known['attempt_reset'], now, DEVICE_ATTEMPTS_HOLD[1]) if public
                                 else (known['attempts'], known['attempt_reset']))
                     db.execute('UPDATE login_devices SET failures=?, failure_reset=?, attempts=?, attempt_reset=? WHERE token_hash=?',
                                (*failures, *attempts, known['token_hash']))
+                    if public:  # and per username, in this same transaction; a success never gives it back
+                        key = attempts_key('known', username)
+                        row = db.execute('SELECT count,reset FROM login_attempts WHERE key=?', (key,)).fetchone()
+                        db.execute('INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)',
+                                   (key, *(counted(row['count'], row['reset'], now, KNOWN_USER_HOLD[1]) if row
+                                           else (1, now + KNOWN_USER_HOLD[1]))))
             rows = {key: db.execute('SELECT count,reset FROM login_attempts WHERE key=?', (key,)).fetchone() for key in holds}
             if held or any(rows[key] and rows[key]['count'] >= limit for key, (limit, _) in holds.items()):
                 held = True

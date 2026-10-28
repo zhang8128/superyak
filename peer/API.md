@@ -139,7 +139,9 @@ Secure, SameSite=Strict, 180 days, stored hashed, one row per browser, at most 2
 kept at logout): presented on a sign-in to its own username, it exempts that browser from
 the three holds, and its failures hold only its own token (eight in five minutes), as do
 its public sign-ins of any outcome (eight in five minutes; a held token gets 429 before
-entering a lane). Sign-ins
+entering a lane). A username's known browsers together are held after 24 public sign-ins
+of any outcome in five minutes, with the same 429 before a lane, since a cookieless sign-in
+mints a token for free; only a valid token's sign-in counts, and tailnet sign-ins never do. Sign-ins
 run in worker lanes of their own: public 2 at a time with 8 waiting, tailnet 1 with 4,
 known browsers 1 with 4; a full lane answers 429. One-use invitation redemption is atomic.
 

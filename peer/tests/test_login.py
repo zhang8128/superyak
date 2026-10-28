@@ -295,7 +295,8 @@ def test_a_known_browser_is_exempt_from_holds_1_to_3_and_its_failures_hold_only_
     assert sign_in(station, 'patient', source='203.0.113.5', client=exempt)[0] == 200
     for _ in range(8):  # its failures count against its own token, never toward holds 1-3
         assert sign_in(station, 'patient', WRONG, '203.0.113.5', client=known) == INVALID
-    assert counters(station) == before
+    assert {key: count for key, count in counters(station).items() if key[0] != 'known'} == before
+    assert counters(station)[('known', 'patient')] == 9  # known-browser sign-ins count per username instead
     assert sign_in(station, 'patient', source='203.0.113.5', client=known) == HELD
     assert sign_in(station, 'patient', source='203.0.113.7', client=other)[0] == 200  # only that token is held
     station.clock[0] += 301
@@ -330,9 +331,63 @@ def test_a_known_browser_signing_in_over_and_over_is_held_before_any_lane(statio
     assert sign_in(station, 'patient', source='203.0.113.5', client=known) == HELD
     assert entered == ['known'] * 8  # the ninth entered no lane
     assert sign_in(station, 'doctor', source='203.0.113.7', client=doctors)[0] == 200 and entered[-1] == 'known'
+    before = counters(station)
     assert sign_in(station, 'patient', client=known)[0] == 200 and entered[-1] == 'tailnet'
+    # the tailnet one counted nowhere (review SF2); its success clears the username's public hold, as recovery does
+    assert devices(station)[0]['attempts'] == 8
+    assert counters(station) == {key: count for key, count in before.items() if key != ('user', 'patient')}
     station.clock[0] += 301
     assert sign_in(station, 'patient', source='203.0.113.5', client=known)[0] == 200
+
+
+def test_minted_tokens_are_held_at_the_per_user_known_browser_limit(station, monkeypatch):
+    """Section 2 review of 581cea18, should-fix 1: a cookieless public success mints a token and costs nothing against
+    holds 1-3, so tokens minted that way would get round the per-token count, and keep the known lane full. Every public
+    known-browser sign-in also counts per username, of any outcome and never given back: 24 in 5 minutes hold that
+    username's known browsers before any lane. Only a valid token raises it; tailnet sign-ins neither count nor are held
+    by it; another user's known browser still gets in."""
+    minted = [known_browser(station, source=f'203.0.113.{n}') for n in range(1, 5)]
+    doctors = known_browser(station, 'doctor', '203.0.113.9')
+    lanes, entered = station.app.state.sign_in_lanes, []
+    for name in ('public', 'tailnet', 'known'):
+        lane = getattr(lanes, name)
+
+        async def run(call, *args, name=name, real=lane.run, **kwargs):
+            entered.append(name)
+            return await real(call, *args, **kwargs)
+        monkeypatch.setattr(lane, 'run', run)
+    assert ('known', 'patient') not in counters(station)  # cookieless sign-ins never raise it
+    for client in minted:
+        for _ in range(6):  # each token stays under its own 8
+            assert sign_in(station, 'patient', source='198.51.100.7', client=client)[0] == 200
+    assert counters(station)[('known', 'patient')] == 24
+    assert sign_in(station, 'patient', source='198.51.100.7', client=minted[0]) == HELD
+    assert sign_in(station, 'patient', WRONG, '198.51.100.7', client=minted[1]) == HELD  # any outcome
+    assert entered == ['known'] * 24  # the held ones entered no lane
+    assert counters(station)[('known', 'patient')] == 24  # and counted nothing
+    assert sign_in(station, 'doctor', source='203.0.113.9', client=doctors)[0] == 200
+    assert sign_in(station, 'patient', client=minted[2])[0] == 200 and entered[-1] == 'tailnet'  # recovery
+    assert counters(station)[('known', 'patient')] == 24
+    station.clock[0] += 301
+    assert sign_in(station, 'patient', source='198.51.100.7', client=minted[3])[0] == 200
+
+
+def test_store_login_enforces_the_per_user_known_browser_hold_itself(station):
+    """The pre-lane read can race, so Store.login counts and holds the username in the same transaction as the
+    token's count."""
+    store = station.store
+    tokens = [known_browser(station, source=f'203.0.113.{n}').cookies.get(DEVICE) for n in range(1, 5)]
+    for n, token in enumerate(tokens):
+        for password in [WRONG] * 2 + ['long-password-patient'] * 4:
+            try:
+                store.login('patient', password, '198.51.100.7', device=token)
+            except Problem as failed:
+                assert failed.status == 401
+    with pytest.raises(Problem) as held:
+        store.login('patient', 'long-password-patient', '198.51.100.7', device=tokens[0])
+    assert (held.value.status, held.value.message) == (HELD[0], HELD[1]['error'])
+    assert counters(station)[('known', 'patient')] == 24
+    assert store.login('patient', 'long-password-patient', '127.0.0.1', public=False, device=tokens[0])['user']['username'] == 'patient'
 
 
 def test_store_login_enforces_the_attempts_hold_itself(station):
@@ -471,14 +526,17 @@ def test_a_store_from_the_first_deploy_gains_the_device_attempt_columns_on_open(
         db.execute('CREATE TABLE login_devices(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), '
                    'expires REAL NOT NULL, failures INTEGER NOT NULL DEFAULT 0, failure_reset REAL NOT NULL DEFAULT 0)')
         user = db.execute("SELECT id FROM users WHERE username='patient'").fetchone()['id']
-        db.execute('INSERT INTO login_devices VALUES(?,?,?,0,0)', ('old-row', user, clock[0] + 86400))
+        db.execute('INSERT INTO login_devices VALUES(?,?,?,3,?)', ('old-row', user, clock[0] + 86400, clock[0] + 100))
     again = SimpleNamespace(app=create_app(tmp_path / 'peer', clock=lambda: clock[0], allowed_origins=[ORIGIN]), clock=clock)
     again.store = again.app.state.store
     with again.store.transaction() as db:
         columns = {row['name'] for row in db.execute('PRAGMA table_info(login_devices)')}
-        kept = db.execute("SELECT attempts, attempt_reset FROM login_devices WHERE token_hash='old-row'").fetchone()
+        kept = dict(db.execute("SELECT * FROM login_devices WHERE token_hash='old-row'").fetchone())
     assert {'attempts', 'attempt_reset'} <= columns
-    assert (kept['attempts'], kept['attempt_reset']) == (0, 0)
+    assert kept == {'token_hash': 'old-row', 'user_id': user, 'expires': clock[0] + 86400, 'failures': 3,
+                    'failure_reset': clock[0] + 100, 'attempts': 0, 'attempt_reset': 0}  # the whole old row kept (review nit 2)
     client = browser(again)
     assert sign_in(again, 'patient', source='203.0.113.5', client=client)[0] == 200
     assert sign_in(again, 'patient', source='203.0.113.5', client=client)[0] == 200  # now a known browser, counted
+    mine = next(row for row in devices(again) if row['token_hash'] == auth.token_hash(client.cookies.get(DEVICE)))
+    assert mine['attempts'] == 1
