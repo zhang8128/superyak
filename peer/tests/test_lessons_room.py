@@ -410,6 +410,16 @@ def test_no_new_local_member_and_no_bridge(lessons_station):
         store.station_bridge('andy', room[:6], True)
 
 
+def test_a_ship_removed_from_the_lessons_room_cant_be_added_back(lessons_station):
+    """Final review N3, spec-literal and said in CLAUDE.md: once recorded, the chain takes no new local member, and a
+    ship Andy removes, the recorded Rio Grande included, is a new member when added back."""
+    store, clock, ids, room = lessons_station
+    newer = store.remove_participant(ids['andy'], room, ids['rio-grande'])['id']
+    with pytest.raises(Problem) as refused:
+        store.add_participants(ids['andy'], newer, [ids['rio-grande']])
+    assert refused.value.message == lessons.NEW_LOCAL
+
+
 def test_no_moderator_in_the_lessons_room(lessons_station):
     store, clock, ids, room = lessons_station
     with pytest.raises(Problem, match='no moderator'):
