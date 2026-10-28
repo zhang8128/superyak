@@ -499,6 +499,22 @@ def ledger_path(engram_home: Path) -> Path:
     return Path(engram_home) / ".engram" / "permissions.db"
 
 
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as database:
+        os.fsync(database.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        directory_fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 def make_private(path: Path) -> None:
     """Create `path` empty with mode 0600 unless it exists: the ledger, the receipts file and the migrate plan name
     people and their uses (Serenity's section 2, nits). SQLite fills an empty file as a new database, and makes
@@ -1288,7 +1304,12 @@ class Ledger:
         """Replay the log into a fresh ledger whose engram home is `dest`; the same tables. Returns `dest`.
 
         The old chain must verify first, each replayed digest must equal the stored one, and the new file is built
-        beside its final name and renamed into place only when the whole replay succeeded (P 5.6)."""
+        beside its final name and renamed into place only when the whole replay succeeded (P 5.6).
+
+        The `.rebuilding` file is deleted on any failure and again at the next rebuild's start, so its build needs no
+        crash safety: each replayed row commits with its journal in memory and no fsync. The finished file is synced
+        once before its rename, and its folder after (fix:ledger-rebuild-writes: a U24 rebuild wrote about 21 times
+        the fixture's size and took 36 minutes)."""
         final = ledger_path(dest)
         if final.exists():
             raise FileExistsError(str(final))
@@ -1302,6 +1323,8 @@ class Ledger:
         new = None
         try:
             new = Ledger._blank(dest, self.meta()["ledger_id"], path=tmp)
+            new.conn.execute("PRAGMA journal_mode=MEMORY")  # per connection: the finished file keeps its own mode
+            new.conn.execute("PRAGMA synchronous=OFF")
             for r in self.conn.execute("SELECT * FROM ledger_log ORDER BY seq"):
                 got = new._append(r["kind"], r["ref"], r["actor"], r["channel"], json.loads(r["body"]),
                                   under_grant=r["under_grant"], proposal_id=r["proposal_id"], at=r["at"])
@@ -1310,7 +1333,9 @@ class Ledger:
                     raise _bad(f"the replay does not match the log at seq {r['seq']}; it cannot be rebuilt")
             new.close()
             new = None
+            _fsync_file(tmp)
             os.replace(tmp, final)
+            _fsync_directory(final.parent)
         except BaseException:
             if new is not None:
                 new.close()
