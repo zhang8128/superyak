@@ -9,8 +9,12 @@ to "I'd hand it to a colleague as is".
 
 1. Copy the README under review into an empty directory, `<walk>/README.md`, and make `<walk>/work` beside it.
 2. Start a **fresh** agent session: a subagent, or a new session with no conversation behind it. Give it the prompt
-   below with the two paths filled in. If the README is on a branch, add the harness step it names.
-3. Post its report in the room, stalls ranked, and give the author one sentence per stall.
+   below with the two paths filled in. If the README is on a branch, add the harness step it names. The walker
+   clones from GitHub, so the draft's branch has to be pushed first. A draft that mustn't be public yet (a
+   security fix) can't be walked this way.
+3. The memory cap uses `systemd-run`, which is Linux only. On macOS, drop the `systemd-run …` prefix and keep the
+   other rules; the demo is small.
+4. Post its report in the room, stalls ranked, and give the author one sentence per stall.
 
 ## The prompt
 
