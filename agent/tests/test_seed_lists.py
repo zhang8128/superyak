@@ -20,6 +20,8 @@ TABLE = {
     'imprint-act': '; '.join(f'command make station-{t}' for t in IMPRINT_ACTS),
 }
 
+VERSIONS = {'imprint-act': 2}   # F1: its content changed after it was on main
+
 
 def seed(list_id):
     return cl.parse(f'{list_id}.md', (SEED / f'{list_id}.md').read_bytes(), own=False)
@@ -36,7 +38,7 @@ def slug(heading):
 def test_the_seed_is_the_spec_s_table():
     assert sorted(p.stem for p in SEED.glob('*.md')) == sorted(TABLE)
     for list_id, when in TABLE.items():
-        assert (SEED / f'{list_id}.md').read_text().split('\n')[3] == f'when: {when}' and seed(list_id).version == 1
+        assert (SEED / f'{list_id}.md').read_text().split('\n')[3] == f'when: {when}' and seed(list_id).version == VERSIONS.get(list_id, 1)
     assert seed('why-we-build').read and seed('reflect').post == cl.ALL_HANDS
     assert any('checklists report' in item for item in seed('reflect').items)          # plan review M5
     assert seed('merging-to-main').items[-1] == 'Reflect is run once the merge is announced.'
@@ -124,7 +126,8 @@ PINNED = {   # Rulings 50 and 51: an item is never looser than the law or CLAUDE
     'imprint-act': (  # section 2's S4: CLAUDE.md's IMPRINT paragraph, moved out of live-station-act
         "count of other people's memories is above 0 until gate G18 is passed", "the one the owner's machine showed",
         'make station-imprint-admit', 'except through `imprint.py use`', 'never sign or write imprint records by hand',
-        'owner, ship and machine names are data'),
+        'owner, ship and machine names are data',
+        "isn't an IMPRINT item (a docking or an access request), answer each item n/a"),   # F1: scoped to an IMPRINT
     'merging-to-main': ("each partner's explicit yes", 'Only Rio Grande and Serenity merge to main',
                         'for a Serenity branch', 'took no part', 'before main is pushed',
                         'No ship pushes straight to main', "No ship's silence counts as consent"),   # section 2's M3
@@ -142,6 +145,14 @@ def test_items_that_restate_the_law_or_claude_md_are_as_strict_in_the_list_and_i
             assert phrase in items and phrase in section, (list_id, phrase)
     # The old approver wording read as if a fresh reviewer could approve a Serenity branch (law section 2 says not).
     assert not any("Rio Grande for Serenity's, or a" in s for s in sections)
+
+
+def test_the_imprint_list_says_it_is_for_an_imprint_item_only():                         # F1
+    imprint = seed('imprint-act')
+    assert imprint.title == 'An imprint act (an IMPRINT item only; n/a at a docking)' and imprint.version == 2
+    assert len(imprint.items) <= cl.MAX_ITEMS and 'n/a' in imprint.items[0]
+    text = ' '.join((REPO / 'docs' / 'checklists.md').read_text().split())
+    assert 'n/a at a docking' in text
 
 
 def test_docs_checklists_points_to_each_file_and_ticks_nothing_twice():

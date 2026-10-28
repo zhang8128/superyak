@@ -79,6 +79,26 @@ def test_the_re_run_spends_the_pass_so_the_same_command_later_is_held_again(ship
     assert not any(saved(ship).get('passed', {}).values())                               # every pass spent, and saved
 
 
+def test_a_re_run_held_by_a_lesson_keeps_the_checklists_pass_until_it_goes_through(ship):   # section 2's M1
+    digest = fp.command_digest('git push origin main')
+    offered = []
+
+    def lessons(command, record, now, limit):
+        if not offered:
+            return []
+        return [holds.Hold('lesson', f'lesson:{command}', 'Held once: lesson L1 from tardis applies.\n[the fenced lesson]')]
+    assert decide(ship, 'git push origin main', lessons=lessons)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert any(digest in values for values in saved(ship)['passed'].values())              # 1. the pass is recorded
+    offered.append(1)
+    held = decide(ship, 'git push origin main', now=11.0, lessons=lessons)['hookSpecificOutput']
+    assert held['permissionDecision'] == 'deny' and held['permissionDecisionReason'].startswith('Held once: lesson')
+    assert 'Checklist ' not in held['permissionDecisionReason']                           # 2. the lesson's deny...
+    assert any(digest in values for values in saved(ship)['passed'].values())              # ...and the pass is kept
+    offered.clear()
+    assert decide(ship, 'git push origin main', now=12.0, lessons=lessons) is None        # 3. it goes through
+    assert not any(saved(ship).get('passed', {}).values())                                 # ...and the pass is spent
+
+
 def test_past_the_cap_the_same_command_shows_its_lists_every_time(ship):                 # section 2's M1: spec :168
     assert decide(ship, 'git push origin main')['hookSpecificOutput']['permissionDecision'] == 'deny'
     assert decide(ship, 'git push origin main', now=11.0) is None
