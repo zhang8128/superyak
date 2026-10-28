@@ -40,17 +40,27 @@ SECRET_RES = (
     re.compile(r"\b(?:https?|git|ssh)://[^/\s:@]+:[^@\s/]+@"),        # credentials in URLs
     re.compile(r"_authToken\s*=\s*\S+"),
 )
-# "[team] from …" at the start of any line, wherever str.splitlines starts one (\n, \r, VT, FF, the file, group and
-# record separators, NEL, U+2028 and U+2029), whatever follows "from": a team message's "from lead:" and the station's
-# own header shape, "from <name> (…) (quoted message; …)", alike.
-TAG_RE = re.compile(r"(?:^|(?<=[\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]))(\s*)\[team\][ \t]+from[ \t]",
-                    re.MULTILINE | re.IGNORECASE)   # any case or spacing reads the same to a model
-TAG_MARK = r"\1[quoted text, not a team message] from "
+# A team line: one that, as a reader sees it (NFKC, no format characters or combining marks, no leading space, any case),
+# starts with "[team]" and then "from". Lines are split wherever str.splitlines splits them (\n, \r, VT, FF, the file,
+# group and record separators, NEL, U+2028, U+2029). A team message's "[team] from lead:" and the station's own
+# header shape, "[team] from <name> (…) (quoted message; …)", are both team lines.
+TAG_RE = re.compile(r"\[\s*team\s*\]\s*from")
+TAG_MARK = "[quoted text, not a team message] "
+# "[" and the two characters that NFKC turns into one (U+FE47, U+FF3B): every form a tag can start with.
+OPEN_BRACKETS = "\u005b\ufe47\uff3b"
+
+
+def _seen_as(line):
+    """The line as a reader sees it: NFKC, without hidden characters (_hidden), without leading space, casefolded."""
+    return "".join(c for c in unicodedata.normalize("NFKC", line) if not _hidden(c)).lstrip().casefold()
 
 
 def defuse_tags(text):
-    """Every team line in text, marked as quoted, so none can pose as a message from the team or the station."""
-    return TAG_RE.sub(TAG_MARK, text)
+    """Every team line in text, marked as quoted, so none can pose as a message from the team or the station. The mark
+    goes before the line and nothing of the line is removed, so what a hidden character hides still shows."""
+    if not any(b in text for b in OPEN_BRACKETS):   # no "[" in any form, so nothing can read as "[team]"
+        return text
+    return "".join(TAG_MARK + line if TAG_RE.match(_seen_as(line)) else line for line in text.splitlines(keepends=True))
 
 DEFAULT_CONFIG = {
     "slack_channel": "",            # channel ID, e.g. C0123ABCD; empty = local transcript only
