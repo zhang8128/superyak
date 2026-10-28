@@ -340,8 +340,10 @@ def refuse_unmatched_exclude(conn: sqlite3.Connection, sel: Selection, *, cold: 
     shown = ", ".join(repr(i) for i in missing[:EXCLUDE_SHOWN])
     if len(missing) > EXCLUDE_SHOWN:
         shown += f" and {len(missing) - EXCLUDE_SHOWN:,} more"
-    one = len(missing) == 1
-    raise PlanRefused(f"{len(missing):,} {'id' if one else 'ids'} in --exclude {'names' if one else 'name'} no memory "
+    one, total = len(missing) == 1, len(sel.exclude)
+    # "2 of the 4 ids": the count of the whole file lets the owner check it against his own list at a glance
+    which = "The one id" if total == 1 else f"{len(missing):,} of the {total:,} ids"
+    raise PlanRefused(f"{which} in --exclude {'names' if one else 'name'} no memory "
                       f"in this store or its cold storage, so nothing was planned: {shown}. Each line must be one "
                       "memory's id exactly as stored: case counts, and an id is not a mem: ref.")
 
