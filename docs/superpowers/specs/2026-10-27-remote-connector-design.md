@@ -111,7 +111,10 @@ Dynamic Client Registration (D1), bounded:
 - `client_name` is at most 100 characters. It is stored and shown only as quoted data.
 - `grant_types` is a subset of `authorization_code` and `refresh_token`.
 - Every client is public (`none`) and gets no secret. There is no RFC 7592 management endpoint.
-- A per-source rate limit, **and** a global cap of 100 unused registrations (then 429).
+- A per-source rate limit, **and** a global cap of 100 unused registrations. At the cap, the oldest unused
+  registration is evicted, never the new one refused. Every phase 1 client has the same single redirect URI and no
+  secret, so unused ones are interchangeable. A flood costs the attacker only their own registrations, and can't
+  block the owner from connecting.
 - An unused registration is deleted after 24 hours. A client whose grants have all ended is deleted after 30 days.
 
 #### The authorization request (`/authorize`)
@@ -444,7 +447,10 @@ these against it, and update this spec where it differs:
    2. the authorization server and the consent page;
    3. `/mcp` with the four tools;
    4. receipts, Connected apps, the admins' view and the new-connection notice.
-5. Test with a real claude.ai account on Andy's home, from the Mac and from a phone, as an invited person (Measure).
+5. **It's safety code.** The new routes widen the public route's allow-list, so the build needs a partner's section 2
+   and each partner's explicit yes. Deploy as the public route did: a backup, the merge on the Pi, the restarts, and
+   the off-tailnet probe re-run with the new routes, all before the push.
+6. Test with a real claude.ai account on Andy's home, from the Mac and from a phone, as an invited person (Measure).
    Then test ChatGPT with a real account on the plan Andy has, and write down what worked.
 
 ## Tests
@@ -456,7 +462,8 @@ these against it, and update this spec where it differs:
   - only the configured callback is accepted;
   - the 8 KB body, the 100-character `client_name`, exactly 1 `redirect_uri`, and `grant_types` bounds;
   - no client gets a secret;
-  - the per-source limit, and 429 past 100 unused registrations;
+  - the per-source limit, and at 100 unused registrations the oldest unused one is evicted (a 101st registration
+    succeeds, and the first is gone);
   - an unused registration is gone after 24 hours.
 - **Authorization:**
   - a bad `client_id` or `redirect_uri` shows an error page and never redirects;
