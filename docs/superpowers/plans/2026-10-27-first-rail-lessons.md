@@ -22,8 +22,8 @@ machine's shared embedder over its Unix socket (`engram/embedder_service.py`'s p
 task; push nothing until Task 16 (every push runs eight CI jobs).
 
 **Tested before it was written:** the code and tests of Tasks 1 to 15, as they stand when Task 15 ends, ran green on the
-Pi against main at `3787e765` in a scratch copy: the 91 lessons tests, the whole peer suite (`test_packaging` and
-`test_station_units` included) and the whole agent suite. Only the prose for `CLAUDE.md` and the READMEs, Task 1's interim
+Pi against main at `3787e765` in a scratch copy, again after the review's fix round: the 103 lessons tests, the whole peer
+suite (`test_packaging` and `test_station_units` included) and the whole agent suite. Only the prose for `CLAUDE.md` and the READMEs, Task 1's interim
 packaging line (Task 5 replaces it) and Task 20's code (it waits on the pairing code) didn't run. The steps'
 "Expected: FAIL" lines are what a missing name or method raises.
 
@@ -46,24 +46,24 @@ Where the spec is ambiguous or main's code differs from what it assumes, the pla
 - **C12.** An author's membership is checked against the chain's current room, because main's removal takes a member out of every room of the chain; a ship Andy removes stops being shown, and comes back if he adds it again.
 - **C13.** On a peer other than the origin the index reads only what the origin sent (the stored copy), never this peer's queued replies, because the origin orders the room and decides the cap and the retractions.
 - **C14.** The station's own notices in the lessons room are allowed (main's `_add_members` and `_remove_member` post one per change, a brief posts one): they never federate, every door and index skips them, and main's adds must keep working. The spec's "nothing else is accepted" governs members' posts.
-- **C15.** Briefs are not refused in the lessons room: the spec names posts, board items and claims.
+- **C15.** The lessons chain takes no brief (the coordinator's ruling on review S2: section 2's "Nothing else is accepted"). Both brief routes refuse one there; the owner may still remove a brief, and `station-lessons-room` refuses a room that has one, so no brief is ever carried along the chain.
 - **C16.** The add gate and the backfill go in `members.py` `_add_members`, not `add_participants`, because main moved every add (the participants route, `station-bridge`, `station-add-ship`, a moderator's add) through it.
 - **C17.** The index file is one file: a magic line, a 4-byte length, the JSON part, then the unit vectors as little-endian float32. It also holds this peer's id, the watermark and whether every lesson has a vector. Parsing base64 vectors put the prompt path at 159 ms p95 on this Pi, and step 1 must know when vectors are missing.
 - **C18.** Each index run asks the embedder for its model (`info`); a run whose watermark matches still goes on when a vector is missing and an embedder answers, so lessons indexed while the embedder was down get vectors.
 - **C19.** The index lists only member ships (username to author id), because the query answers only ships.
 - **C20.** Near's context is the non-empty fields `command`, `error`, `cwd` and `branch`, one per line in that order.
 - **C21.** Near runs only when fewer lessons than `limit` survive words, the step 3 skips and `seen`.
-- **C22.** A query row's nearest angle is the smallest angle over every lesson with a vector, before `r_max` and the skips (none when Near didn't run), because recalibrating `r_max` needs the misses.
+- **C22.** A query row's nearest angle is the smallest angle over the lessons this ship could be shown (after step 3's skips and `seen`), before `r_max` (none when Near didn't run), because recalibrating `r_max` needs the misses, and its own lessons and those it has seen aren't misses.
 - **C23.** A words match through a `command` value carries the first such value, in the lesson's order, as `command`, and the hook applies section 8's rule (a value of at least 6 bytes holds). So before a command every `command` value matches, as section 5 says, and the query keeps no copy of the hold rule.
 - **C24.** "Embedder unavailable" is one line on stderr, said only when the answer is empty and Near couldn't reach an embedder with the index's model (no socket, a refusal, another model, no vectors), never for a deadline or a spent budget, and never at a prompt, because the agreed stdout has no other key and a slow embedder isn't an unavailable one.
-- **C25.** Near's deadline is counted from the query's own start: 800 ms, or 100 ms at a prompt, and never past `budget_ms` when the hook sends one. A budget of 0 means words only, and Near isn't tried.
+- **C25.** Near's deadline counts from the request: the command's `main` notes the time first thing and passes it down as `started` (review S3), so the store's start and step 4 can't push it past 800 ms; at a prompt, 100 ms; never past `budget_ms` when the hook sends one. A budget of 0 means Near isn't tried.
 - **C26.** A missing index file answers nothing (exit 0), since a peer with no lessons room has none. An index file that exists but can't be read or parsed is a failure (exit 1, nothing on stdout), as the agreed contract says, and the next index run rebuilds it.
 - **C27.** `station-lessons-room` records in two runs. The first shows the members, the listed peers and an 8-hex confirm code, and records nothing. The second, with `CONFIRM=<code>`, records, and refuses if anything changed. Ships run make with no terminal, and Andy's yes must bind to what he saw.
 - **C28.** The record names this machine's ship (`LESSONS_SHIP`, default `rio-grande`), which must be Andy's and already a member; after that the add gate refuses every new local member.
 - **C29.** One lessons room per peer: recording a room outside the recorded chain is refused.
 - **C30.** Until the pairing code lands, `station-lessons-room` takes no `PEERS`; Task 20 resolves codes through federation pull's pairing code.
 - **C31.** `lessons where` prints the chain's current room by its full id on any peer, because a later add makes a new room, and a peer added then holds only that one.
-- **C32.** The unread count counts every left-out post of the chain except the station's own notices (lessons and retractions alike). `lesson_count` is present only when it is above 0 (R35), and one reads "1 new lesson; it reaches you through the lessons hook".
+- **C32.** The unread count counts the chain's left-out lesson posts, and neither the station's own notices nor retractions, which aren't new lessons. `lesson_count` is present only when it is above 0 (R35), and one reads "1 new lesson; it reaches you through the lessons hook".
 - **C33.** The room hook's exclusion (the peer's unread and the agent's count line) is built here, because it rests on the room record and no row of section 11 names it.
 - **C34.** The four lessons tables are coordination for the restore reconcile, because the add gate also needs the peer paired, which the reconcile already takes back.
 - **C35.** Lessons code refuses to run on a peer with no `identity.json` rather than create one, so a new station's first card still names its host (G4). The query never reads `identity.json`: the index carries the peer id.
@@ -71,15 +71,30 @@ Where the spec is ambiguous or main's code differs from what it assumes, the pla
 - **C37.** The timing check runs a fixture at the bound (4 ships × 32 lessons at the byte limits) in a temporary data directory, through the machine's real embedder. Each query reports its own peak (VmHWM), because Linux carries a parent's peak RSS across exec into `ru_maxrss`.
 - **C38.** The Pi's embedder gets a `LimitDATA=3G` drop-in at its deploy gate, because its unit's `MemoryMax=3G` does nothing without a memory cgroup.
 - **C39.** The Pi's lessons are written in the wire format outside the repository, and `docs/lessons/rio-grande.md` (branch `lessons-rio-grande`) stays off main until the blind test has run, because the blind test's export leaves out only `docs/superpowers`, `docs/governance` and `HANDOFF.md`.
-- **C40.** Rio Grande lays its lessons with Serenity's `lay` once it is on main. Before then it lays them with `station_post`, after `make lessons-check` passes and Rio Grande has read each body, because every door runs the same checks.
-- **C41.** The Mac's index runs as a `federate` step only when `federate` is started with `--lessons-index`, because pull's spec lists the lessons index as a non-goal and the Pi and Tardis keep their timer.
-- **C42.** The prompt path is also a function, `answer_prompt`, so the hook may call it in process, because a second interpreter costs about 50 ms of the hook's 150 ms on the Pi. Its request is the same, `budget_ms` included.
+- **C40.** Rio Grande lays its lessons with Serenity's `lay` once it is on main. Before then it lays them with `station_post`, after `make lessons-check` passes and Rio Grande has read each body, because every door runs the same checks. `station_post` redacts its text (`mcp.py`), so afterwards `make lessons-list` must show each draft's short id; a missing one means the posted text differs, and that lesson is retracted and laid again another way.
+- **C41.** The Mac's index runs as a `federate` step only when `federate` is started with `--lessons-index`, because pull's spec lists the lessons index as a non-goal and the Pi and Tardis keep their timer. Task 22 edits Tardis's code, so it waits on Tardis's and Serenity's explicit yes on its actual diff (review S8), under their four conditions (C53).
+- **C42.** The prompt path is also a function, `answer_prompt`, so the hook may call it in process, because a second interpreter costs about 50 ms of the hook's 150 ms on the Pi. Its request is the same, `budget_ms` included, and it keeps the budget itself (C49).
+- **C43.** A words match carries, as `command`, the first matched `command` value of at least 6 bytes when there is one, else the first matched (review S1), so `make` beside `make check` never stops a hold.
+- **C44.** Near at a prompt can be switched off on a peer: the file `lessons-prompt-near-off` in its data directory, which `make lessons-prompt-near NEAR=off` writes. Task 18 writes it when the embedder's p95 on a 2,000-character prompt is over 100 ms (review S5): the embedder runs one request at a time, so a prompt request it can't finish only delays the next query.
+- **C45.** `lessons list` (`make lessons-list`) prints each live lesson's short id, ship and claim, and its `retract <full id>` line, so Andy vetoes without Serenity's tool (the coordinator's ruling on review S7).
+- **C46.** No moderator in the lessons chain (the coordinator's ruling on review S10): `_make_moderate`, which both the browser's route and `station-moderate` use, refuses the chain, and `station-lessons-room` refuses a room that already has a moderator.
+- **C47.** A ship the index doesn't list gets the empty answer before anything is embedded; a ship added since the last index run waits for the next one, at most a minute.
+- **C48.** The index file is `lessons-index.bin`, since it holds binary vectors after its JSON part; a `Snapshot`'s `[room, epoch]` pairs are its `epochs`.
+- **C49.** At a prompt, `budget_ms` bounds the whole answer (Tardis's condition): spent before the words, the answer is `{"lessons": []}`; spent during Near, words only. The embedder's socket timeout is the time the budget leaves, since a blocked socket can't be interrupted in process.
+- **C50.** Task 18 gates on the hook's in-process path (review M2): a fresh interpreter without site-packages imports `superyak_peer.lessons` from the checkout and calls `answer_prompt` with `budget_ms` set to what is left of 100 ms since its spawn, timed from the spawn. The subprocess path is reported beside it and gates nothing.
+- **C51.** `make lessons-timing RESTART=1` restarts the embedder after the fixture is built (which embeds), so each path's first run is the first after the embedder starts (review S4).
+- **C52.** Nothing is laid until Andy says yes to the drafts (the coordinator's ruling on review S6: section 2's "chosen with its owner's knowledge"). It is a person gate, marked like the others.
+- **C53.** Task 22's four conditions, from Tardis and Serenity: the index step runs in its own pass with its own try; only after a pull that delivered something, at most once a minute, inside `federate`'s own process; `federate` imports nothing from `lessons` at module load; and the Mac never listens.
+- **C54.** Condition 3 reads as: `federate`'s module has no import from `lessons`, and the step reaches the index only through `store.lessons_index` and imports `embedder_socket` inside its own try. `db.py` imports the mixin on every peer, because its doors need it, so "a peer without lessons" is one whose step finds nothing to run.
+- **C55.** Condition 4 reads as: the step opens no TCP socket, loopback included, and listens on nothing. Its one connection is a client to the machine's embedder over the Unix socket that `runtime.json` names (section 1). If the partners read the condition as excluding that too, the step passes no socket and the Mac indexes by words; that is one argument.
+- **C56.** `superyak_peer/__init__.py` stays standard-library only, and `__init__`, `common` and `lessons` import with no site-packages at all (`-I -S`), because the hook's interpreter is the system `python3` without the peer's venv. Importing them with bytecode off writes no `__pycache__` (Tardis's conditions).
+- **C57.** The offered query command is `python -I -B -m superyak_peer.lessons query` (review S9), so a run at a prompt writes no bytecode.
 
 ## Global Constraints
 
 - Python 3.11 or newer (`requires-python = ">=3.11"`); no new dependency. `peer/.venv` has no numpy.
 - The Pi has no memory cgroup, so units use `LimitDATA=512M`. A lessons process stays under 512 MiB; the query process under 64 MiB.
-- The query answers in under 1 s at p95 on the Pi; the prompt path in under 150 ms (spec section 5's measure). Task 18 checks both.
+- The query answers in under 1 s at p95 on the Pi; the prompt path, as the hook runs it in process, in under 150 ms (spec section 5's measure; C50). Task 18 checks both.
 - Anything about a person moves only with their yes. Section 6 is binding at every door: "A lesson can't name a person or hold an email address or phone number".
 - No embedding inside a station transaction (`transaction()`: `dispatch_gate`, then `BEGIN IMMEDIATE`). No query off its own peer.
 - Every test that touches time pins the clock: the store's `clock`, `monotonic=`, or a child process whose `time.time` is set before anything binds it (`run_lessons`).
@@ -91,7 +106,7 @@ Where the spec is ambiguous or main's code differs from what it assumes, the pla
 
 1. **A lesson saved by an editor or a heredoc**, with a final newline or CRLF line ends. Expected: refused with a message naming the final newline or the `\r`, and `lessons check` reads bytes, so a `\r` is never hidden. Tests: Task 1's refusal table, Task 7's `test_lessons_check_runs_the_doors_checks_without_posting`.
 2. **A damaged, truncated or foreign index file.** Expected: the query exits 1 with nothing on stdout (the hook adds nothing), and the next index run replaces the file. Tests: Task 8's `test_a_damaged_index_is_rebuilt_and_only_member_ships_are_listed`, Task 11's contract test.
-3. **An embedder that hangs, answers late, or serves another dimension or model, and a hook with no time left.** Expected: the query answers by words within its deadline or `budget_ms`, never with an error, and the index writes no vector from the wrong model and stays incomplete until one answers. Tests: Task 3's `test_embed_is_unavailable_past_its_deadline_without_a_socket_or_with_bad_vectors`, Task 8's model test, Task 10's spent budget, Task 11's `test_embedder_unavailable_is_noted_only_when_nothing_is_found`.
+3. **An embedder that hangs, answers late, or serves another dimension or model, and a hook with no time left.** Expected: the query answers by words within its deadline or `budget_ms`, never with an error, and the index writes no vector from the wrong model and stays incomplete until one answers. Tests: Task 3's `test_embed_is_unavailable_past_its_deadline_without_a_socket_or_with_bad_vectors`, Task 8's model test, Task 10's two budget tests, Task 11's `test_embedder_unavailable_is_noted_only_when_nothing_is_found` and `test_the_deadline_counts_from_the_request`.
 4. **Non-ASCII, differently cased or tab-separated person names, and a path under the owner's home** (`/home/andy/...`). Expected: refused with the one sentence; the ship rewords (`~/...`). Test: Task 2's two tables.
 5. **A ship removed from the room, then added back.** Expected: its lessons stop showing at the next query (step 4, before any index run) and come back when it is added again, without being laid again. Test: Task 11's `test_a_ship_removed_from_the_room_stops_being_shown_and_comes_back_when_added`.
 
@@ -104,14 +119,14 @@ Where the spec is ambiguous or main's code differs from what it assumes, the pla
 - `Store.lessons_room_key() -> str | None`: where a ship on this peer posts (a local room id on the origin, `<origin>:<room id>` elsewhere). Post with `Store.send_message(actor, key, client_message_id, body)`; a client message id of `lesson-<first 16 of the digest>` makes a re-lay a replay.
 
 **Offered to Tardis (the hook and `federate`):**
-- `peer/.venv/bin/python -I -m superyak_peer.lessons query --data-dir D [--runtime-config R]`: the request as JSON on stdin, the answer on stdout. The socket comes from `embedder_socket` in `~/.config/superyak/runtime.json`.
-- `superyak_peer.lessons.answer_prompt(request, data_dir, socket_path) -> dict` (C42): the prompt path in process, after `read_request(raw)`. It imports only the standard library and `superyak_peer.common`, so the hook may put the peer checkout on `sys.path` and skip a second interpreter.
+- `peer/.venv/bin/python -I -B -m superyak_peer.lessons query --data-dir D [--runtime-config R]` (C57): the request as JSON on stdin, the answer on stdout. The socket comes from `embedder_socket` in `~/.config/superyak/runtime.json`.
+- `superyak_peer.lessons.answer_prompt(request, data_dir, socket_path) -> dict` (C42, C49): the prompt path in process, after `read_request(raw)`. It imports only the standard library and `superyak_peer.common` (C56), so the hook's system `python3`, with `sys.dont_write_bytecode = True` set first, puts the peer checkout on `sys.path` and skips a second interpreter. `budget_ms` is kept inside it.
 - `Store.lessons_index(socket_path=None) -> dict`, for `federate`'s step on the Mac (Task 22).
 - The short id's shape for the transcript parser: `[0-9a-f]{8}-[0-9a-f]{8}`.
 
 **The query contract, agreed with Tardis, who builds the hook against it** (Task 11's contract test runs the real CLI against it):
 - **Request:** the spec's fields plus `limit` and `budget_ms`, as a JSON object. `ship` is the asking ship's username on this peer. Then either `cwd` (≤ 200 characters), `branch` (≤ 200), `command` (≤ 300), `error` (≤ 300) and `words_only` (a boolean), or `prompt` (≤ 2,000). Also `seen` (≤ 128 short ids); `limit`, an optional integer from 0 to 3, by default 3, which at a prompt defaults to 2 and can only lower that; and `budget_ms`, an optional integer of at least 0, the hook's time left. The hook cuts each field to its cap; the query refuses a longer one.
-- **`budget_ms`** is a ceiling on top of the query's own limits: Near runs only while both `budget_ms` and its own deadline (800 ms from the query's start, 100 ms at a prompt) have time left. At a prompt the hook passes its remaining share of 100 ms. Absent, the query uses its own limits; 0 or spent, the answer is words only, never an error.
+- **`budget_ms`** is a ceiling on top of the query's own limits: Near runs only while both `budget_ms` and its own deadline (800 ms from the request, 100 ms at a prompt) have time left. At a prompt the hook passes its remaining share of 100 ms. Absent, the query uses its own limits; 0 or spent, the answer is words only, never an error. At a prompt the budget bounds the whole answer (C49, agreed with Tardis): 0, or spent before the words, answers `{"lessons": []}`; spent during Near, words only.
 - **stdout** is exactly `{"lessons": [{"id": "<short id>", "ship": "<ship>", "claim": "...", "why": "...", "match": "words" | <angle>}]}`, spelled as `json.dumps` spells it, with no trailing newline. Each lesson has exactly those keys, plus `command` only when `match` is `"words"` and the lesson matched through a `command` value: that value exactly as the lesson holds it (the first in its order, if several). There is no `command` for an error-only or file-only words match, nor for Near.
 - **`match`** is the string `"words"`, or the Kahan angle of section 5 step 2 as a float in radians rounded to 4 places. It is never a cosine.
 - **Order:** words matches first (by number of values matched, then id), then Near by angle, then id.
@@ -124,16 +139,17 @@ Where the spec is ambiguous or main's code differs from what it assumes, the pla
 - **Federation pull:** the listener on the Pi and Tardis, the push worker (`federate` or `serve --sync`, one `federation.lock`), and the Mac's `federate` loop, which gets the step of Task 22.
 - **The hook:** it sends the request above, cuts fields to their caps, shows each lesson fenced with `fence_external` under its own `Lesson <id> from <ship>` line, and holds a command only for a `words_only` answer's lesson whose `command` has at least 6 bytes (C23).
 
-**Expected from Andy** (the acts section 12 reserves for a person): opening the lessons room once; confirming the room's short id, members and peers for `station-lessons-room`; pairing each card after comparing its code; running `make lessons-ship` on each other peer; adding members (Tardis's, later the Mac's); his yes before each deploy gate below.
+**Expected from Andy** (the acts section 12 reserves for a person): opening the lessons room once; confirming the room's short id, members and peers for `station-lessons-room`; his yes to the Pi's drafts before they are laid (C52); pairing each card after comparing its code; running `make lessons-ship` on each other peer; adding members (Tardis's, later the Mac's); retracting with the line `make lessons-list` prints (C45); his yes before each deploy gate below.
 
 ## What the prototype measured on this Pi
 
-These numbers are for the query process alone, with a fake embedder that answers at once, against the bound (128 lessons
-at the byte limits, `lessons_timing.py`, 50 runs). The store-side query took p95 434 ms. The prompt path took p95 136 ms;
-in a first version, with base64 vectors and normalizing at read, it took 159 ms (C17). The peak was 34.6 MiB (VmHWM).
-Python starts in about 45 ms here, `lessons.py`'s imports add about 30 ms, and the whole `Store` adds about 290 ms. The
-real embedder adds its own time, which Task 18 measures. At a prompt, Near will rarely finish inside 100 ms of the hook's
-start on this Pi, so the prompt path will answer mostly by words, which section 5 allows.
+These numbers are whole processes timed from their spawn, with a fake embedder that answers at once, against the bound
+(128 lessons at the byte limits, `lessons_timing.py`, 50 runs, after the fix round). The store-side query took p95
+360 ms. The hook's in-process path (C50) took p95 83 ms; the same prompt through the query command in its own interpreter
+took 105 ms. A first version, with base64 vectors normalized at read, put the prompt path at 159 ms (C17). The peak was
+35.2 MiB (VmHWM). Python starts in about 45 ms here, `lessons.py`'s imports add about 30 ms, and the whole `Store` adds
+about 290 ms. The real embedder adds its own time, which Task 18 measures; at a prompt it will rarely finish inside what
+is left of 100 ms on this Pi, so the prompt path will answer mostly by words, which section 5 allows (C44).
 
 ## File structure
 
@@ -142,7 +158,8 @@ start on this Pi, so the prompt path will answer mostly by words, which section 
   `test_lessons_index.py` (index, prompt path, query, listings, unread), `test_lessons_timing.py`.
 - Create `peer/scripts/lessons_timing.py`; `peer/systemd/superyak-lessons-index.service` and `.timer`.
 - Modify `peer/superyak_peer/db.py` (the mixin and schema), `chats.py`, `peer_store.py`, `federation.py`, `members.py`,
-  `room_board.py`, `room_claims.py` (one line each), `inbox.py` (unread leaves the room out).
+  `room_board.py`, `room_claims.py`, `briefs.py`, `moderators.py` (one or two lines each), `inbox.py` (unread leaves the
+  room out).
 - Modify `peer/tests/conftest.py` (the lessons fixtures), `test_restore.py`, `test_station_units.py`, `test_packaging.py`,
   `peer/pyproject.toml`, `peer/README.md`.
 - Modify `agent/superyak_agent/station.py`, `hook.py` and `mcp.py`, `agent/tests/test_breakout_tools.py` (the count
@@ -242,8 +259,8 @@ def test_the_spec_illustration_parses_and_its_id_is_the_digest_of_the_embedded_t
     (lesson_body(error=('e' * 121,)), '1 to 120 bytes'),
     (lesson_body(claim=' padded'), 'leading or trailing space'),
     (lesson_body(claim='tab\there'), 'control or format'),
-    (lesson_body(claim='bidi ‮ here'), 'control or format'),
-    (lesson_body(claim='zero​width'), 'control or format'),
+    (lesson_body(claim='bidi \u202e here'), 'control or format'),
+    (lesson_body(claim='zero\u200bwidth'), 'control or format'),
     (lesson_body(ship='Tardis'), 'ship: is a ship name'),
     (lesson_body(learned='Owner'), 'learned from: is own, owner'),
     (lesson_body().replace('\nwhy:', '\n\nwhy:'), 'blank line'),
@@ -336,7 +353,8 @@ PROMPT_NEAR_SECONDS = 0.1
 STALE_SECONDS = 180
 PROMPT_WORDS = 4
 # Section 4.
-INDEX_FILE = 'lessons-index.json'
+INDEX_FILE = 'lessons-index.bin'  # a JSON part, then float32 vectors (C17)
+PROMPT_NEAR_OFF = 'lessons-prompt-near-off'  # in the data directory: Near never runs at a prompt on this peer (C44)
 INDEX_MAGIC = b'superyak-lessons-index 1\n'
 EMBED_BATCH = 8
 EMBED_SECONDS = 120.0
@@ -365,7 +383,7 @@ Retraction = namedtuple('Retraction', 'lesson_id')
 Post = namedtuple('Post', 'room id author body live_key skip')  # skip: the system's, or marked unverified
 Live = namedtuple('Live', 'id author lesson body')
 Account = namedtuple('Account', 'username name kind')
-Snapshot = namedtuple('Snapshot', 'peer room chain owner members posts accounts names ships')
+Snapshot = namedtuple('Snapshot', 'peer room epochs owner members posts accounts names ships')  # epochs: [room key, epoch] along the chain
 
 
 class LessonRefused(Problem):
@@ -824,7 +842,7 @@ git commit -m "First rail: Kahan angles and the shared embedder's socket, never 
   `chain_lessons(snapshot) -> (live: list[Live], retracted: set[str])`; the mixin `Lessons` with
   `_lessons_record(db)`, `_lessons_peer(db) -> str`, `_remote_rooms_from(db, origin) -> {room id: (recipient, revision, payload)}`,
   `_lessons_chain(db) -> list[str]` (oldest first, the current room last), `_in_lessons_chain(db, key) -> bool`, and
-  `_lessons_snapshot(db) -> Snapshot | None`. A `Snapshot` holds `peer, room, chain, owner, members, posts, accounts, names, ships`;
+  `_lessons_snapshot(db) -> Snapshot | None`. A `Snapshot` holds `peer, room, epochs, owner, members, posts, accounts, names, ships`;
   every author and member id in it is a full `<peer>:<user>` id. In conftest: `lesson_ship(store, owner_id, username)` and
   `lessons_station`, which returns `(store, clock, ids, room)`, with Andy, his ships `rio-grande` and `tardis` (both local,
   so one peer lays as two ships) and the room recorded by SQL.
@@ -1155,7 +1173,7 @@ git commit -m "First rail: the lessons tables, the room's chain and the snapshot
 
 **Interfaces:**
 - Consumes: main's `Ships._operator(db, username)`, `Ships._owned_room(db, actor, prefix)`, `ships.short_id`,
-  `ships.safe_line`, `Breakouts._breakout(db, room_id)`.
+  `ships.safe_line`, `Breakouts._breakout(db, room_id)`, `Briefs._room_brief(db, room_id)`, `Moderators._moderators(db, room_id)`.
 - Produces: `Store.station_lessons_room(username, prefix, ship, peer_ids=(), confirm=None) -> dict` with keys `room`,
   `full_id`, `title`, `members` (each `{'kind', 'username', 'owner'}`, or `{'kind': 'remote', 'name', 'peer'}`),
   `peers`, `confirm`, `recorded`; `Store.lessons_room_full_id() -> str | None`; `describe_station_room(view) -> str`.
@@ -1212,6 +1230,17 @@ def test_station_lessons_room_refuses_what_isnt_only_andys(origin):
         store.station_lessons_room('andy', other[:6], 'rio-grande')
 
 
+def test_station_lessons_room_refuses_a_room_with_a_brief_or_a_moderator(origin):
+    store, andy, rio, room = origin
+    store.save_brief(andy, room, 'Our lessons.', 0)
+    with pytest.raises(Problem, match='has a brief'):
+        store.station_lessons_room('andy', room[:6], 'rio-grande')
+    store.save_brief(andy, room, '', 1)   # Andy removes it
+    store.station_moderate('andy', room[:6], 'rio-grande', actions=['add_member', 'remove_member'])   # as the CLI passes them
+    with pytest.raises(Problem, match='has a moderator'):
+        store.station_lessons_room('andy', room[:6], 'rio-grande')
+
+
 def test_the_station_room_verb_shows_then_records(origin):
     store, andy, rio, room = origin
     shown = run_lessons('station-room', '--data-dir', store.data_dir, '--id', room[:6], '--as', 'andy', '--ship', 'rio-grande')
@@ -1231,7 +1260,9 @@ Expected: FAIL, `AttributeError: 'Store' object has no attribute 'station_lesson
 - [ ] **Step 3: Add the record and its view**
 
 Plan's calls C27 (two runs, the confirm code), C28 (the named ship), C29 (one room per peer), C30 (no `PEERS` until the
-pairing code: the CLI passes `()`). In `class Lessons`:
+pairing code: the CLI passes `()`), C15 and C46 (no brief, no moderator). The loop over the listed peers never reuses
+`peer`, which holds this peer's id and so the full id's prefix (review M1; `lessons_peers` asserts the full id). In
+`class Lessons`:
 
 ```python
     def station_lessons_room(self, username, prefix, ship, peer_ids=(), confirm=None):
@@ -1248,14 +1279,18 @@ pairing code: the CLI passes `()`). In `class Lessons`:
                 raise Problem(409, f'Room {short} is a breakout, which is never the lessons room')
             if self._lessons_record(db) is not None and room['id'] not in self._lessons_chain(db):
                 raise Problem(409, 'This peer already records another lessons room')
+            if self._room_brief(db, room['id'])[0] is not None:  # C15: the lessons room takes no brief
+                raise Problem(409, f'Room {short} has a brief, and the lessons room takes none; Andy removes it first')
+            if self._moderators(db, room['id']):  # C46: only Andy changes who is in it
+                raise Problem(409, f'Room {short} has a moderator; Andy ends that grant first (make station-unmoderate)')
             vessel = db.execute("SELECT id, owner_id FROM users WHERE username=? AND kind='ship'", (ship,)).fetchone()
             if vessel is None or vessel['owner_id'] != owner:
                 raise Problem(403, f"{safe_line(ship)} is not one of {safe_line(username)}'s ships")
             if vessel['id'] not in room['member_ids']:
                 raise Problem(409, f'Add {safe_line(ship)} to room {short} first')
-            for peer in listed:
-                if not db.execute('SELECT 1 FROM peers WHERE peer_id=? AND paired=1', (peer,)).fetchone():
-                    raise Problem(404, f'Peer {peer[:12]} is not paired here')
+            for listed_peer in listed:  # never `peer`: that is this peer's id, the full id's prefix (review M1)
+                if not db.execute('SELECT 1 FROM peers WHERE peer_id=? AND paired=1', (listed_peer,)).fetchone():
+                    raise Problem(404, f'Peer {listed_peer[:12]} is not paired here')
             members = []
             for member in room['member_ids']:
                 user = db.execute('SELECT username, kind, owner_id FROM users WHERE id=?', (member,)).fetchone()
@@ -1283,7 +1318,7 @@ pairing code: the CLI passes `()`). In `class Lessons`:
             db.execute('INSERT INTO lessons_room VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET room_key=excluded.room_key, '
                        'ship_id=excluded.ship_id, recorded=excluded.recorded', (room['id'], vessel['id'], now))
             db.execute('DELETE FROM lessons_peers')
-            db.executemany('INSERT INTO lessons_peers VALUES(?,?)', [(peer, now) for peer in listed])
+            db.executemany('INSERT INTO lessons_peers VALUES(?,?)', [(listed_peer, now) for listed_peer in listed])
             return {**view, 'recorded': True}
 
     def lessons_room_full_id(self):
@@ -1318,7 +1353,8 @@ def describe_station_room(view):
 - [ ] **Step 4: Add the command (C1), at the end of `lessons.py`**
 
 Each later task adds its verb as one more decorated function before the `if __name__` block. The block imports `main`
-again, so the running module and the store's are the same.
+again, so the running module and the store's are the same. `main` notes the time first thing, for the query's deadline
+(C25).
 
 ```python
 class Malformed(ValueError):
@@ -1339,6 +1375,7 @@ def verb(name, help, *arguments, store=True):
 def main(argv=None):
     """`python -m superyak_peer.lessons <verb> --data-dir D ...`. Its own parser, not a superyak_peer subcommand:
     __main__.py imports the store at module level, and the query at a prompt imports none."""
+    started = time.monotonic()  # C25: the request's deadlines count from here
     import argparse
     parser = argparse.ArgumentParser(prog='python -m superyak_peer.lessons')
     verbs = parser.add_subparsers(dest='verb', required=True)
@@ -1348,6 +1385,7 @@ def main(argv=None):
         for flag, options in arguments:
             sub.add_argument(flag, **options)
     args = parser.parse_args(argv)
+    args.started = started
     _, _, run, opens = VERBS[args.verb]
     try:
         store = None
@@ -1444,6 +1482,7 @@ git commit -m "First rail: make station-lessons-room shows the room, then record
 **Interfaces:**
 - Consumes: main's `Ships._new_ship(db, username, name, owner_id)`, `Federation.pair`, `Federation.card`.
 - Produces: `Store.lessons_ship(username, owner) -> dict` (a public user; no key); `Store.record_lessons_room(key) -> dict`;
+  (the fixture also pins M1: the recorded `full_id` is the origin's, with a peer listed)
   `Store.lessons_room_key() -> str | None`; the verbs `ship` and `room`; `make lessons-ship`, `make lessons-room`,
   `make lessons-where`. In conftest: `lessons_peers`, the origin (`pi`: Andy and `rio-grande`) and Tardis's peer (Andy's
   account and the ship `tardis`), paired card by card, with the room recorded on both. It returns `{'peers': {'pi': (store,
@@ -1471,7 +1510,8 @@ def lessons_peers(tmp_path):
     tardis_fed.pair(andy_t, pi_fed.card(andy))
     room = pi.create_room(andy, 'Lessons', [rio, contact_ship, contact_andy])['id']
     view = pi.station_lessons_room('andy', room[:6], 'rio-grande', [tardis_fed.identity.peer_id])
-    pi.station_lessons_room('andy', room[:6], 'rio-grande', [tardis_fed.identity.peer_id], view['confirm'])
+    recorded = pi.station_lessons_room('andy', room[:6], 'rio-grande', [tardis_fed.identity.peer_id], view['confirm'])
+    assert view['full_id'] == recorded['full_id'] == f'{pi_fed.identity.peer_id}:{room}'   # the origin's, never a listed peer's
     peers = {'pi': (pi, pi_fed, {'andy': andy, 'rio-grande': rio, 'contact': contact_ship}), 'tardis': (tardis, tardis_fed, {'andy': andy_t, 'tardis': ship_t})}
 
     def deliver(src, dst):
@@ -1619,7 +1659,7 @@ git commit -m "First rail: lessons ship and lessons room, for the peers other th
 **Files:**
 - Modify: `peer/superyak_peer/lessons.py`, `peer/superyak_peer/chats.py`, `peer/superyak_peer/peer_store.py`,
   `peer/superyak_peer/federation.py`, `peer/superyak_peer/room_board.py`, `peer/superyak_peer/room_claims.py`,
-  `peer/tests/test_lessons_room.py`, `Makefile`
+  `peer/superyak_peer/briefs.py`, `peer/tests/test_lessons_room.py`, `Makefile`
 
 **Interfaces:**
 - Consumes: Task 4's `lesson_refusal`, `chain_lessons`, `_lessons_snapshot`; `Ships._live_ship_key_in`.
@@ -1676,12 +1716,16 @@ def test_the_cap_retraction_for_good_and_a_repost(lessons_station):
     store.send_message(ids['tardis'], room, 'c32b', lesson_body(claim='Claim 32.'))   # the retraction freed a place
 
 
-def test_no_board_item_and_no_claim_in_the_lessons_room(lessons_station):
+def test_no_board_item_no_claim_and_no_brief_in_the_lessons_room(lessons_station):
     store, clock, ids, room = lessons_station
     with pytest.raises(Problem, match='no board item'):
         store.post_item(ids['andy'], room, 'spec:d7', 'A title', 'spec')
     with pytest.raises(Problem, match='no claim'):
         store.claim(ids['tardis'], room, 'spec:d7')
+    with pytest.raises(Problem, match='no brief'):
+        store.save_brief(ids['andy'], room, 'A brief.', 0)
+    with pytest.raises(Problem, match='no brief'):
+        store.save_ship_brief(ids['rio-grande'], room, 'A brief.', 0)
 
 
 def test_the_laying_peers_door_and_the_origins_reply_door(lessons_peers):
@@ -1814,6 +1858,19 @@ In `peer/superyak_peer/room_claims.py` `claim`, after `self._room(db, actor, roo
             self._refuse_in_lessons_room(db, room_id, 'claim')  # first rail section 2
 ```
 
+In `peer/superyak_peer/briefs.py` (C15), `save_brief`, after the owner check (`raise Problem(403, 'Only the room owner can change its brief')`):
+
+```python
+            if body:  # first rail section 2: the lessons room takes no brief; its owner may still remove one
+                self._refuse_in_lessons_room(db, key, 'brief')
+```
+
+and `save_ship_brief`, after `room = self._room(db, actor, key)                       # 404 for a non-member`:
+
+```python
+            self._refuse_in_lessons_room(db, key, 'brief')          # first rail section 2
+```
+
 A retry under the same client message id stays a replay: each gate sits after its door's replay check.
 
 - [ ] **Step 5: Add `make lessons-check`**
@@ -1829,13 +1886,13 @@ lessons-check:
 
 - [ ] **Step 6: Run the tests, and the suites of the doors you touched**
 
-Run: `cd peer && uv run --locked python -m pytest tests/test_lessons_room.py tests/test_chats.py tests/test_federation.py tests/test_replies.py tests/test_room_board.py tests/test_room_claims.py tests/test_key_refusal.py -q`
+Run: `cd peer && uv run --locked python -m pytest tests/test_lessons_room.py tests/test_chats.py tests/test_federation.py tests/test_replies.py tests/test_room_board.py tests/test_room_claims.py tests/test_room_brief.py tests/test_ship_briefs.py tests/test_key_refusal.py -q`
 Expected: PASS
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add peer/superyak_peer/lessons.py peer/superyak_peer/chats.py peer/superyak_peer/peer_store.py peer/superyak_peer/federation.py peer/superyak_peer/room_board.py peer/superyak_peer/room_claims.py peer/tests/test_lessons_room.py Makefile
+git add peer/superyak_peer/lessons.py peer/superyak_peer/chats.py peer/superyak_peer/peer_store.py peer/superyak_peer/federation.py peer/superyak_peer/room_board.py peer/superyak_peer/room_claims.py peer/superyak_peer/briefs.py peer/tests/test_lessons_room.py Makefile
 git commit -m "First rail: every door checks a lesson (send_message, remote_send, the origin's reply path), and lessons check" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -1850,7 +1907,8 @@ git commit -m "First rail: every door checks a lesson (send_message, remote_send
 - Produces: `watermark(snapshot) -> str`; `read_index(path) -> dict | None` (None when there is no file; raises
   `IndexUnreadable` for a file that can't be read or parsed); `vectors_of(index) -> {lesson id: unit vector}`;
   `write_index(path, value, vectors, read_at)`; `Store.lessons_index(socket_path=None, monotonic=time.monotonic) -> dict`
-  (`{'status': 'written' | 'unchanged' | 'no lessons room', 'lessons', 'vectors'}`); the verb `index`. The file's JSON part
+  (`{'status': 'written' | 'unchanged' | 'no lessons room', 'lessons', 'vectors'}`); the verb `index`. The file is
+  `lessons-index.bin` (C48). Its JSON part
   holds `peer, room, watermark, model, dimension, complete, ships, lessons`, and each lesson holds
   `id, author, ship, learned_from, error, command, file, claim, why, vector` (`vector` its row in the block, or null).
 
@@ -1866,9 +1924,9 @@ from contextlib import contextmanager
 import json
 import math
 import os
+from pathlib import Path
 import pytest
 from superyak_peer import lessons
-from superyak_peer.common import Problem
 from conftest import LESSON_TIME, lesson_body, run_lessons
 
 
@@ -1965,7 +2023,7 @@ def watermark(snapshot):
     """Section 4 step 1: what the index depends on: the chain's posts, its epochs and members, and this peer's accounts."""
     import hashlib
     return hashlib.sha256(encode({
-        'peer': snapshot.peer, 'room': snapshot.room, 'chain': snapshot.chain, 'owner': snapshot.owner,
+        'peer': snapshot.peer, 'room': snapshot.room, 'epochs': snapshot.epochs, 'owner': snapshot.owner,
         'members': sorted(snapshot.members),
         'posts': [[p.room, p.id, p.author, hashlib.sha256(p.body.encode('utf-8', 'surrogatepass')).hexdigest(),
                    p.live_key, p.skip] for p in snapshot.posts],
@@ -2136,10 +2194,12 @@ git commit -m "First rail: the lessons index, every 60 s into one file, never em
 ### Task 9: Only Andy's room, and the backfill (section 3's chain)
 
 **Files:**
-- Modify: `peer/superyak_peer/lessons.py`, `peer/superyak_peer/members.py`, `peer/tests/test_lessons_room.py`
+- Modify: `peer/superyak_peer/lessons.py`, `peer/superyak_peer/members.py`, `peer/superyak_peer/moderators.py`,
+  `peer/tests/test_lessons_room.py`
 
 **Interfaces:**
-- Consumes: main's `Members._add_members(db, owner_id, room, member_ids, carry, actor_id, grant_id=None)`, the one path
+- Consumes: main's `Moderators._make_moderate`, where every moderate grant is made; main's
+  `Members._add_members(db, owner_id, room, member_ids, carry, actor_id, grant_id=None)`, the one path
   of every add (C16); Task 8's `lessons_index` and `read_index` (the backfill test reads the new peer's index).
 - Produces: `Store._lessons_add_gate(db, key, new_ids)`; `Store._carry_lessons(db, old_key, new_key, new_ids) -> int`;
   `_add_members`' view gains `lessons_carried` when the room is in the chain.
@@ -2163,6 +2223,12 @@ def test_no_new_local_member_and_no_bridge(lessons_station):
     lesson_ship(store, None, 'wormhole')
     with pytest.raises(Problem, match='no new member'):
         store.station_bridge('andy', room[:6], True)
+
+
+def test_no_moderator_in_the_lessons_room(lessons_station):
+    store, clock, ids, room = lessons_station
+    with pytest.raises(Problem, match='no moderator'):
+        store.station_moderate('andy', room[:6], 'rio-grande', actions=['add_member', 'remove_member'])
 
 
 def test_the_backfill_carries_live_lessons_once_to_a_new_peer(tmp_path, lessons_peers):
@@ -2269,20 +2335,27 @@ and after `new['board_carried'] = self._carry_board(db, key, new['id'])  # work 
             new['lessons_carried'] = self._carry_lessons(db, key, new['id'], new_ids)
 ```
 
-So `station-bridge`, `station-add-ship`, the participants route and a moderator's add all meet the gate. Moderate grants
-already refuse and pause on a room with a remote member (main's M2, M5 check 5), so only Andy changes this room once
-Tardis is in it.
+So `station-bridge`, `station-add-ship`, the participants route and a moderator's add all meet the gate.
+
+In `peer/superyak_peer/moderators.py` `_make_moderate` (C46), after `raise Problem(403, MODERATE_NOT_OWNER)`:
+
+```python
+        self._refuse_in_lessons_room(db, room, 'moderator')  # first rail section 3: only Andy changes who is in it
+```
+
+Main's moderate grants already refuse and pause on a room with a remote member (its M2, M5 check 5), but before Tardis
+joins the room has none; this refusal covers that time, for the browser's route and `station-moderate` alike.
 
 - [ ] **Step 5: Run the tests, and the member suites**
 
-Run: `cd peer && uv run --locked python -m pytest tests/test_lessons_room.py tests/test_member_changes.py tests/test_moderator_acts.py tests/test_station_cli.py -q`
+Run: `cd peer && uv run --locked python -m pytest tests/test_lessons_room.py tests/test_member_changes.py tests/test_moderator_acts.py tests/test_moderate_grants.py tests/test_station_cli.py -q`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add peer/superyak_peer/lessons.py peer/superyak_peer/members.py peer/tests/test_lessons_room.py
-git commit -m "First rail: the lessons room takes members only from listed peers, and carries its lessons to a new one" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add peer/superyak_peer/lessons.py peer/superyak_peer/members.py peer/superyak_peer/moderators.py peer/tests/test_lessons_room.py
+git commit -m "First rail: the lessons room takes members only from listed peers and no moderator, and carries its lessons to a new one" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ### Task 10: The prompt path
@@ -2294,14 +2367,16 @@ git commit -m "First rail: the lessons room takes members only from listed peers
 - Consumes: Task 8's `read_index` and `vectors_of`; Task 3's `embed` and `angle`.
 - Produces: `read_request(raw) -> dict` (the contract's request; `ValueError` for anything else); `fit(entries) -> dict`;
   `dumps(answer) -> str`; `shown(item, match, command=None) -> dict`; `near_deadline(request, start, own) -> float`;
-  `prompt_answer(request, index, age, socket_path, deadline, monotonic) -> dict`;
-  `answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic) -> dict`, the in-process entry
-  offered to Tardis (C42).
+  `prompt_answer(request, index, age, socket_path, deadline, monotonic) -> dict` (`deadline` None: no Near);
+  `answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic, started=None) -> dict`, the
+  in-process entry offered to Tardis (C42, C49); `PROMPT_NEAR_OFF`, the switch file's name (C44).
 
 - [ ] **Step 1: Append the failing tests to `peer/tests/test_lessons_index.py`**
 
 The helper pins both clocks: `age` sets the index file's age, and `monotonic` is frozen, so Near's deadline never passes
-unless a `budget_ms` of 0 leaves it none. That case is Review Focus 3 at a prompt: words only, and the embedder is never asked.
+unless a `budget_ms` leaves it none. Tardis's conditions for the in-process path (C49) are the budget cases: 0 answers
+nothing and never asks the embedder; 50 ms with an embedder that answers after 500 ms answers words only, and every socket
+timeout is at most the 50 ms left. The switch test is C44.
 
 ```python
 # Task 10: the prompt path
@@ -2326,11 +2401,38 @@ def test_at_a_prompt_6_byte_values_by_words_and_near_within_r_prompt(lessons_sta
     assert prompt(store, clock, 'ls', fake_embedder.path) == {'lessons': []}   # 'ls' is under 6 bytes
     assert prompt(store, clock, 'zzzz', fake_embedder.path) == {'lessons': []}   # under 4 words: no Near
     asked = len(fake_embedder.requests)
-    spent = prompt(store, clock, question, fake_embedder.path, budget=0)   # the hook's share of 100 ms is gone
-    assert [e['claim'] for e in spent['lessons']] == ['Words.'] and len(fake_embedder.requests) == asked
+    assert prompt(store, clock, question, fake_embedder.path, budget=0) == {'lessons': []}   # the hook has no time left
+    assert len(fake_embedder.requests) == asked
     with store.transaction() as db:
         assert db.execute('SELECT count(*) FROM lesson_receipts').fetchone()[0] == 0
         assert db.execute('SELECT count(*) FROM lesson_queries').fetchone()[0] == 0
+
+
+def test_at_a_prompt_a_budget_spent_during_near_leaves_words_and_the_socket_waits_no_longer(lessons_station, fake_embedder, monkeypatch):
+    """Tardis's condition for the in-process path: the embedder's socket timeout is what the budget leaves, since a
+    blocked socket can't be interrupted in process; a budget spent during Near answers words only."""
+    import socket
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', error=('no matches found',)))
+    store.lessons_index(fake_embedder.path)
+    timeouts, settimeout = [], socket.socket.settimeout
+    monkeypatch.setattr(socket.socket, 'settimeout', lambda sock, value: (timeouts.append(value), settimeout(sock, value))[1])
+    fake_embedder.delay = 0.5   # it answers long after the 50 ms the hook has left
+    got = prompt(store, clock, 'why does it say no matches found', fake_embedder.path, budget=50)
+    assert [e['match'] for e in got['lessons']] == ['words'] and timeouts and max(timeouts) <= 0.05
+
+
+def test_where_the_switch_is_off_near_never_runs_at_a_prompt(lessons_station, fake_embedder):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Near.', command=('zzzz-never',)))
+    fake_embedder.vectors[embedded(claim='Near.', command=('zzzz-never',))] = [1.0, 0.0, 0.0, 0.0]
+    fake_embedder.vectors['tell me about the never thing'] = [1.0, 0.0, 0.0, 0.0]
+    store.lessons_index(fake_embedder.path)
+    assert [e['claim'] for e in prompt(store, clock, 'tell me about the never thing', fake_embedder.path)['lessons']] == ['Near.']
+    (store.data_dir / lessons.PROMPT_NEAR_OFF).touch()
+    asked = len(fake_embedder.requests)
+    assert prompt(store, clock, 'tell me about the never thing', fake_embedder.path) == {'lessons': []}
+    assert len(fake_embedder.requests) == asked
 
 
 def test_at_a_prompt_at_most_2_and_nothing_from_a_stale_or_missing_index(lessons_station):
@@ -2355,8 +2457,8 @@ Expected: FAIL, `AttributeError: module 'superyak_peer.lessons' has no attribute
 
 - [ ] **Step 3: Add the request, the answer's shape and the prompt path**
 
-Plan's calls C23 (`command` in a words match), C25 (`near_deadline`) and C26. The prompt path reads this peer's index
-file and nothing else: no store, no database, no write. `fit` drops a lesson that would pass 2,000 bytes whole, in order;
+Plan's calls C23 and C43 (`command` in a words match), C25 (`near_deadline`), C26, C44 (the switch) and C49 (the budget
+over the whole answer). The prompt path reads this peer's index file and nothing else: no store, no database, no write. `fit` drops a lesson that would pass 2,000 bytes whole, in order;
 `dumps` spells the answer as the contract does. At module level:
 
 ```python
@@ -2441,7 +2543,7 @@ def prompt_answer(request, index, age, socket_path, deadline, monotonic):
     picked = [shown(item, 'words', command) for _, _, item, command in matched[:limit]]
     taken = {item['id'] for _, _, item, _ in matched[:limit]}
     if (len(picked) < limit and len(prompt.split()) >= PROMPT_WORDS and index.get('model') and socket_path
-            and deadline > monotonic()):
+            and deadline is not None and deadline > monotonic()):
         try:
             model, (vector,) = embed(socket_path, [prompt], 'search_query', deadline, monotonic)
         except EmbedderUnavailable:
@@ -2454,17 +2556,25 @@ def prompt_answer(request, index, age, socket_path, deadline, monotonic):
     return fit(picked)
 
 
-def answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic):
+def answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic, started=None):
     """The prompt path's one entry: this peer's index file, its age, and the answer. The hook may call it in process
-    (this module imports only the standard library and superyak_peer.common), saving a second interpreter. Near gets
-    100 ms from here, or the request's budget_ms if that is less."""
-    deadline = near_deadline(request, monotonic(), PROMPT_NEAR_SECONDS)
+    (this module imports only the standard library and superyak_peer.common), saving a second interpreter. `budget_ms`
+    bounds the whole answer (C49): spent before the words, it answers nothing; spent during Near, words only, since the
+    embedder's socket never waits past it. Near also stops at 100 ms, and never runs where PROMPT_NEAR_OFF is (C44)."""
+    start = monotonic() if started is None else started
+    end = None if request['budget_ms'] is None else start + request['budget_ms'] / 1000
+    if end is not None and monotonic() >= end:
+        return {'lessons': []}
     path = Path(data_dir) / INDEX_FILE
     try:
         age = clock() - os.stat(path).st_mtime
     except OSError:
         return {'lessons': []}
-    return prompt_answer(request, read_index(path), age, socket_path, deadline, monotonic)
+    index = read_index(path)
+    if end is not None and monotonic() >= end:
+        return {'lessons': []}
+    near = None if os.path.exists(Path(data_dir) / PROMPT_NEAR_OFF) else near_deadline(request, start, PROMPT_NEAR_SECONDS)
+    return prompt_answer(request, index, age, socket_path, near, monotonic)
 ```
 
 - [ ] **Step 4: Run the tests to see them pass**
@@ -2486,8 +2596,8 @@ git commit -m "First rail: the prompt path, from the index file alone, at most 2
 
 **Interfaces:**
 - Consumes: Task 10's `read_request`, `fit`, `shown`, `answer_prompt`; Task 4's `chain_lessons`.
-- Produces: `words(item, request) -> (count, the first matched command value or None)`; `context_text(request) -> str`;
-  `query(request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic) -> (answer, note | None)`;
+- Produces: `words(item, request) -> (count, the matched command value to show or None)`; `context_text(request) -> str`;
+  `query(request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic, started=None) -> (answer, note | None)`;
   `Store._lessons_answer(request, candidates, nearest) -> dict` (section 5 step 4: one transaction, receipts, one query
   row); the verb `query`.
 
@@ -2496,9 +2606,11 @@ git commit -m "First rail: the prompt path, from the index file alone, at most 2
 The contract test runs the real CLI and checks stdout against the agreed contract (Interfaces, above): the keys and their
 order, `command` on a words match through a `command` value and on nothing else, `match` as a rounded angle, the order,
 the 2,000 bytes, "answers nothing", `budget_ms` 0 as words only, and the failures. The limit test: `limit` 1 writes
-exactly one receipt; `limit` 0 writes none and opens no store. The removed-ship test is Review Focus 5. The last test pins
-C2 and decision 7: at a prompt the query imports no store and no `sqlite3`, and writes nothing under the data directory,
-not even the marker.
+exactly one receipt; `limit` 0 writes none and opens no store. The removed-ship test is Review Focus 5. Then S1 (C43), S3
+(C25: a request 900 ms old gets no Near), and C47 with C22 (a stranger costs no embedding; an all-own query's nearest
+angle is none). The last two tests pin C2, C56 and decision 7: at a prompt the query imports no store and no `sqlite3` and
+writes nothing under the data directory, not even the marker; and `__init__`, `common` and `lessons` run the prompt path
+with no site-packages (`-I -S -B`), as the hook's system `python3` will, leaving no `__pycache__`.
 
 ```python
 # Task 11: the query
@@ -2669,6 +2781,34 @@ def test_query_stdout_keeps_to_the_agreed_contract(lessons_station, fake_embedde
     assert failed.returncode != 0 and failed.stdout == ''
 
 
+def test_a_words_match_shows_a_command_value_that_can_hold(lessons_station):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Both.', command=('make', 'make check')))
+    store.lessons_index(None)
+    held, _ = ask(store, clock, command='make check -j4', words_only=True)
+    assert [(e['claim'], e['command']) for e in held['lessons']] == [('Both.', 'make check')]   # not 'make': it can't hold
+
+
+def test_the_deadline_counts_from_the_request(lessons_station, fake_embedder):
+    store, clock, ids, room = lessons_station
+    two_lessons(store, ids, room, fake_embedder)
+    asked = len(fake_embedder.requests)
+    request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'command': 'grep --include=*.py x'}))
+    late, _ = lessons.query(request, store.data_dir, fake_embedder.path, clock=lambda: clock[0], monotonic=lambda: 0.9, started=0.0)
+    assert [e['match'] for e in late['lessons']] == ['words'] and len(fake_embedder.requests) == asked   # 800 ms are gone
+
+
+def test_a_stranger_costs_no_embedding_and_the_nearest_angle_counts_only_what_could_be_shown(lessons_station, fake_embedder):
+    store, clock, ids, room = lessons_station
+    two_lessons(store, ids, room, fake_embedder)
+    asked = len(fake_embedder.requests)
+    assert ask(store, clock, fake_embedder.path, command='grep --include=*.py x', ship='odo') == ({'lessons': []}, None)
+    assert len(fake_embedder.requests) == asked
+    assert ask(store, clock, fake_embedder.path, command='grep --include=*.py x', ship='tardis')[0] == {'lessons': []}
+    with store.transaction() as db:
+        assert [tuple(r) for r in db.execute('SELECT ship_id, nearest FROM lesson_queries')] == [(ids['tardis'], None)]
+
+
 def test_the_prompt_path_imports_no_store_and_writes_nothing(lessons_station, tmp_path):
     import subprocess, sys
     store, clock, ids, room = lessons_station
@@ -2688,6 +2828,34 @@ def test_the_prompt_path_imports_no_store_and_writes_nothing(lessons_station, tm
     assert json.loads(done.stderr.strip().splitlines()[-1]) == ['superyak_peer', 'superyak_peer.common', 'superyak_peer.lessons']
     assert {p: (p.stat().st_mtime_ns, p.stat().st_size) for p in store.data_dir.rglob('*')} == before
     assert not any(b'MARKER' in p.read_bytes() for p in store.data_dir.rglob('*') if p.is_file())
+
+
+def test_the_prompt_path_runs_on_the_standard_library_alone_and_writes_no_bytecode(lessons_station, tmp_path):
+    """Tardis's conditions for the hook's in-process path. Its interpreter is the system python3 without the peer's venv,
+    so superyak_peer/__init__.py imports only the standard library, and __init__, common and lessons import with no
+    site-packages at all (-S); importing them with bytecode off writes no __pycache__."""
+    import ast, shutil, subprocess, sys
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', error=('no matches found',)))
+    store.lessons_index(None)
+    package = Path(lessons.__file__).parent
+    init = ast.parse((package / '__init__.py').read_text())
+    roots = {a.name.split('.')[0] for n in ast.walk(init) if isinstance(n, ast.Import) for a in n.names}
+    roots |= {n.module.split('.')[0] for n in ast.walk(init) if isinstance(n, ast.ImportFrom) and n.module}
+    assert roots <= set(sys.stdlib_module_names) and not any(isinstance(n, ast.ImportFrom) and n.level for n in ast.walk(init))
+    checkout = tmp_path / 'checkout'
+    (checkout / 'superyak_peer').mkdir(parents=True)
+    for name in ('__init__.py', 'common.py', 'lessons.py'):
+        shutil.copy(package / name, checkout / 'superyak_peer' / name)
+    code = (f'import json, sys, time; sys.dont_write_bytecode = True; sys.path.insert(0, {str(checkout)!r}); '
+            f'time.time = lambda: {LESSON_TIME + 10!r}\n'
+            'from superyak_peer import lessons\n'
+            "request = lessons.read_request(json.dumps({'ship': 'rio-grande', 'prompt': 'why does it say no matches found', 'budget_ms': 90}))\n"
+            f'print(lessons.dumps(lessons.answer_prompt(request, {str(store.data_dir)!r}, None)))')
+    done = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', code], capture_output=True, text=True, cwd=tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout)['lessons'][0]['claim'] == 'Words.'
+    assert not list(checkout.rglob('__pycache__'))
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -2697,39 +2865,45 @@ Expected: FAIL, `AttributeError: module 'superyak_peer.lessons' has no attribute
 
 - [ ] **Step 3: Add words, Near, step 4 and the verb**
 
-Plan's calls C20 (the context), C21 (Near fills only up to `limit`), C22 (the nearest angle), C23 (`command`), C24 (the
-note on stderr, never for a timeout), C25 (the deadline and `budget_ms`). Near embeds before any transaction opens; step 4
-re-checks each candidate against the room as it stands, so a lesson refused there is never named. At module level:
+Plan's calls C20 (the context), C21 (Near fills only up to `limit`), C22 (the nearest angle, over what could be shown),
+C23 and C43 (`command`), C24 (the note on stderr, never for a timeout), C25 (`started`, from `main`), C47 (no embedding
+for a ship the index doesn't list). Near embeds before any transaction opens; step 4 re-checks each candidate against the
+room as it stands, so a lesson refused there is never named. At module level:
 
 ```python
 def words(item, request):
-    """Section 5 step 1: (how many values match, the first `command` value that matched or None). Before a command
-    (`words_only`) only `command` values are matched; the hook holds on the one returned when it has 6 bytes or more."""
+    """Section 5 step 1: (how many values match, the matched `command` value to show, or None). Before a command
+    (`words_only`) only `command` values are matched; the hook holds on the one returned when it has 6 bytes or more,
+    so the first matched value of at least 6 bytes is returned when there is one, else the first matched."""
     commands = [v for v in item['command'] if v in request['command']]
     count = len(commands)
     if not request['words_only']:
         count += sum(1 for v in item['error'] if v in request['error'])
         count += sum(1 for v in item['file'] if v in request['command'] or v in request['error'] or v in request['cwd'])
-    return count, (commands[0] if commands else None)
+    holding = [v for v in commands if len(v.encode('utf-8')) >= HOLD_BYTES]  # C43: one that can hold, when one matched
+    return count, (holding or commands or [None])[0]
 
 
 def context_text(request):
     return '\n'.join(request[field] for field in ('command', 'error', 'cwd', 'branch') if request[field])
 
 
-def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic):
+def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic, started=None):
     """`lessons query`, section 5: (the answer, a note for stderr or None). With a `prompt`, the prompt path, which
     never notes; otherwise words, Near, then step 4 in the store. The note is "embedder unavailable", said only when the
-    answer is empty and Near couldn't reach an embedder with this index's model: never for a deadline or a spent budget."""
+    answer is empty and Near couldn't reach an embedder with this index's model: never for a deadline or a spent budget.
+    `started` is when the request arrived (the command's start, C25); by default, now."""
     if 'prompt' in request:
-        return answer_prompt(request, data_dir, socket_path, clock, monotonic), None
+        return answer_prompt(request, data_dir, socket_path, clock, monotonic, started), None
     if request['limit'] == 0:
         return {'lessons': []}, None  # no slot to fill: no index read, no embedder, no transaction
-    started = monotonic()
+    started = monotonic() if started is None else started
     index = read_index(Path(data_dir) / INDEX_FILE)
     if index is None:
         return {'lessons': []}, None
     asking = index['ships'].get(request['ship'])
+    if asking is None:  # C47: not a member at the last index run, so nothing is embedded for it
+        return {'lessons': []}, None
     pool = [item for item in index['lessons'] if item['author'] != asking and item['learned_from'] != request['ship']
             and short_lesson_id(item['id']) not in request['seen']]
     matched = sorted(((-n, item['id'], item, command) for item in pool for n, command in [words(item, request)] if n),
@@ -2737,7 +2911,7 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
     candidates = [(item, 'words', command) for _, _, item, command in matched]
     nearest, unavailable = None, False
     text, deadline = context_text(request), near_deadline(request, started, NEAR_SECONDS)
-    if not request['words_only'] and len(candidates) < request['limit'] and text:
+    if not request['words_only'] and len(candidates) < request['limit'] and text and pool:
         model = None
         if not (index.get('model') and socket_path):
             unavailable = True
@@ -2753,10 +2927,9 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
         if model is not None and not unavailable:
             taken = {item['id'] for item, _, _ in candidates}
             stored = vectors_of(index)
-            angles = sorted((angle(vector, stored[item['id']]), item['id'], item) for item in index['lessons'] if item['id'] in stored)
-            nearest = angles[0][0] if angles else None
-            allowed = {item['id'] for item in pool} - taken
-            candidates += [(item, round(theta, 4), None) for theta, _, item in angles if theta <= R_MAX and item['id'] in allowed]
+            angles = sorted((angle(vector, stored[item['id']]), item['id'], item) for item in pool if item['id'] in stored)
+            nearest = angles[0][0] if angles else None  # C22: over the lessons this ship could be shown
+            candidates += [(item, round(theta, 4), None) for theta, _, item in angles if theta <= R_MAX and item['id'] not in taken]
     from .db import Store
     answer = Store(data_dir, signing=False, clock=clock)._lessons_answer(request, candidates, nearest)
     return answer, ('embedder unavailable' if unavailable and not answer['lessons'] else None)
@@ -2805,7 +2978,7 @@ def _query(store, args):
         request = read_request(sys.stdin.buffer.read(65536))
     except (ValueError, UnicodeError):
         raise Malformed('lessons query: the request is not JSON, or breaks a field cap') from None
-    answer, note = query(request, args.data_dir, embedder_socket(args.runtime_config))
+    answer, note = query(request, args.data_dir, embedder_socket(args.runtime_config), started=args.started)
     if note:
         print(note, file=sys.stderr)
     sys.stdout.write(dumps(answer))  # the whole answer at once, at the end: a failure before it writes nothing
@@ -2829,9 +3002,10 @@ git commit -m "First rail: the lessons query, words then Near, step 4's receipts
 - Modify: `peer/superyak_peer/lessons.py`, `peer/tests/test_lessons_index.py`, `Makefile`, `peer/README.md`
 
 **Interfaces:**
-- Produces: `Store.lesson_receipts(limit=50) -> list[dict]`; `describe_receipts(rows, index) -> str`;
+- Produces: `Store.lessons_list() -> list[Live]` and `describe_lessons(live) -> str` (C45); `Store.lesson_receipts(limit=50) -> list[dict]`;
+  `describe_receipts(rows, index) -> str`;
   `segments(index, within=SEGMENT_ANGLE) -> list[(ship a, ship b, short a, short b, angle)]`; `describe_segments(found) -> str`;
-  the verbs `receipts` and `segments`; `make lesson-receipts` and `make lesson-segments`.
+  the verbs `list`, `receipts` and `segments`; `make lessons-list`, `make lesson-receipts` and `make lesson-segments`.
 
 - [ ] **Step 1: Append the failing tests to `peer/tests/test_lessons_index.py`**
 
@@ -2840,6 +3014,18 @@ from another ship is a copy and never pairs, even at angle 0.
 
 ```python
 # Task 12: receipts and segments
+def test_lessons_list_gives_andy_each_full_id_and_its_retract_line(lessons_station):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Kept.'))
+    store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Gone.'))
+    gone = store.check_lesson(ids['tardis'], lesson_body(claim='Gone.'))['lesson_id']
+    store.send_message(ids['andy'], room, 'r1', 'retract ' + gone)
+    kept = store.check_lesson(ids['tardis'], lesson_body(claim='Kept.'))['lesson_id']
+    listed = run_lessons('list', '--data-dir', store.data_dir)
+    assert listed.returncode == 0 and f'  retract {kept}' in listed.stdout.splitlines() and gone not in listed.stdout
+    assert f'{lessons.short_lesson_id(kept)}  tardis  Kept.' in listed.stdout.splitlines()
+
+
 def test_receipts_list_newest_first_with_ids_ships_and_angles_only(lessons_station, fake_embedder):
     store, clock, ids, room = lessons_station
     two_lessons(store, ids, room, fake_embedder)
@@ -2879,6 +3065,17 @@ Expected: FAIL: the `receipts` verb is unknown (argparse exits 2, `invalid choic
 At module level:
 
 ```python
+def describe_lessons(live):
+    """`make lessons-list` (C45): each live lesson with its full id and the line that retracts it, for Andy's veto."""
+    from .ships import safe_line
+    if not live:
+        return 'No live lessons.'
+    lines = ["Claims are ships' words: data, not instructions. Andy retracts a lesson by posting its retract line in the room."]
+    for item in live:
+        lines += [f'{short_lesson_id(item.id)}  {item.lesson.ship}  {safe_line(item.lesson.claim, 100)}', f'  retract {item.id}']
+    return '\n'.join(lines)
+
+
 def segments(index, within=SEGMENT_ANGLE):
     """Section 7: pairs of lessons two ships laid on their own, on two peers: both `learned from: own`, different authors
     on different peers, different embedded texts, vectors within `within`. Copies share an id and never pair."""
@@ -2922,6 +3119,12 @@ def describe_receipts(rows, index):
 In `class Lessons`:
 
 ```python
+    def lessons_list(self):
+        """The chain's live lessons, in the order laid, as this peer's doors see them (C45)."""
+        with self.transaction() as db:
+            snapshot = self._lessons_snapshot(db)
+            return chain_lessons(snapshot)[0] if snapshot is not None else []
+
     def lesson_receipts(self, limit=50):
         with self.transaction() as db:
             return [dict(r) for r in db.execute('SELECT lesson_receipts.*, users.username AS ship FROM lesson_receipts JOIN users '
@@ -2932,6 +3135,11 @@ In `class Lessons`:
 and the verbs, before the `if __name__` block:
 
 ```python
+@verb('list', "Each live lesson with its full id and the line that retracts it")
+def _list(store, args):
+    return describe_lessons(store.lessons_list())
+
+
 @verb('receipts', "This peer's receipts, newest first", ('--limit', {'type': int, 'default': 50}))
 def _receipts(store, args):
     try:
@@ -2949,10 +3157,14 @@ def _segments(store, args):
 
 - [ ] **Step 4: Add the make targets and the README section**
 
-Add `lesson-receipts lesson-segments` to `.PHONY`, the `help` line
+Add `lessons-list lesson-receipts lesson-segments` to `.PHONY`, the `help` lines
+`	@echo "make lessons-list       Each live lesson with its full id and the line that retracts it"` and
 `	@echo "make lesson-receipts / lesson-segments  This peer's receipts, newest first / its segments per pair of ships"`, and:
 
 ```make
+lessons-list:
+	$(LESSONS) list --data-dir "$(LESSONS_DATA)"
+
 lesson-receipts:
 	$(LESSONS) receipts --data-dir "$(LESSONS_DATA)"
 
@@ -2976,7 +3188,9 @@ its own sessions' queries; nothing is asked of another peer. The command is
   (`make lessons-where`) prints the current room's full id on any peer.
 - `ship` (`make lessons-ship SHIP=… OWNER=…`), Andy only: a ship account with no key for this peer's own ship.
 - `check` (`make lessons-check SHIP=… FILE=…`): this peer's door checks on one post, without posting.
-- `index` (run every minute by the timer `make lessons-units` installs): writes `lessons-index.json` in the data directory.
+- `list` (`make lessons-list`): each live lesson's short id, ship and claim, and the `retract <full id>` line Andy posts
+  to retract it.
+- `index` (run every minute by the timer `make lessons-units` installs): writes `lessons-index.bin` in the data directory.
 - `query`: the hook's call, the request on stdin and the answer on stdout.
 - `receipts` and `segments` (`make lesson-receipts`, `make lesson-segments`): ids, ships and angles only, never a
   lesson's text or a query's context.
@@ -2991,7 +3205,7 @@ Expected: PASS
 
 ```bash
 git add peer/superyak_peer/lessons.py peer/tests/test_lessons_index.py Makefile peer/README.md
-git commit -m "First rail: make lesson-receipts and lesson-segments, ids and angles only" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "First rail: make lessons-list for Andy's veto, and lesson-receipts and lesson-segments, ids and angles only" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ### Task 13: Kept out of the room hook (C32, C33)
@@ -3002,8 +3216,9 @@ git commit -m "First rail: make lesson-receipts and lesson-segments, ids and ang
 
 **Interfaces:**
 - Consumes: Task 4's `_lessons_chain`; main's `NOISE`, `UNREAD_FROM`, `_left_out` and `with_earlier_noise`.
-- Produces: `Inbox._noise(db, actor) -> (sql, args)`; unread with `breakouts=mentions` gains `lesson_count` when it is
-  above 0; `agent/superyak_agent/station.py` `lesson_count_line(got) -> list[str]`.
+- Produces: `Inbox._noise(db, actor) -> (sql, args)`; `Store._is_retraction(db, message_id) -> bool`; unread with
+  `breakouts=mentions` gains `lesson_count` when it is above 0; `agent/superyak_agent/station.py`
+  `lesson_count_line(got) -> list[str]`.
 
 - [ ] **Step 1: Append the failing tests**
 
@@ -3015,14 +3230,16 @@ def test_unread_leaves_the_lessons_room_out_counts_it_and_passes_it(lessons_stat
     store, clock, ids, room = lessons_station
     store.send_message(ids['tardis'], room, 'c1', lesson_body())
     store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Two.'))
+    store.send_message(ids['andy'], room, 'r1', 'retract ' + store.check_lesson(ids['tardis'], lesson_body(claim='Two.'))['lesson_id'])
     with store.transaction() as db:
         store._post_as_system(db, room, 'notice-1', 'A station notice.')
     talk = store.create_room(ids['andy'], 'Talk', [ids['rio-grande']])['id']
     store.send_message(ids['andy'], talk, 'm1', 'hello')
     plain = store.unread(ids['rio-grande'], 'd', 30)   # first: a new cursor starts where the ship has read furthest
-    assert len(plain['messages']) == 4 and 'lesson_count' not in plain   # without the flag, exactly today's
+    assert len(plain['messages']) == 5 and 'lesson_count' not in plain   # without the flag, exactly today's
     got = store.unread(ids['rio-grande'], 'c', 30, breakouts=True)
-    assert [m['body'] for m in got['messages']] == ['hello'] and got['lesson_count'] == 2 and got['breakout_counts'] == {}
+    assert [m['body'] for m in got['messages']] == ['hello'] and got['breakout_counts'] == {}
+    assert got['lesson_count'] == 2   # two lessons; the retraction and the station's notice are not new lessons
     store.advance(ids['rio-grande'], 'c', got['messages'][-1]['event_id'])
     assert 'lesson_count' not in store.unread(ids['rio-grande'], 'c', 30, breakouts=True)   # R35: only when it says something
 
@@ -3106,6 +3323,16 @@ Add the method after `unread`:
         return f"(({NOISE}) OR events.resource_id IN ({','.join('?' * len(chain))}))", [actor, *chain]
 ```
 
+In `class Lessons` (`lessons.py`), add:
+
+```python
+    def _is_retraction(self, db, message_id):
+        """Whether a post is a retraction, so unread doesn't count it as a new lesson (C32)."""
+        row = db.execute('SELECT body FROM messages WHERE id=? UNION ALL SELECT body FROM peer_messages WHERE id=?',
+                         (message_id, message_id)).fetchone()
+        return row is not None and RETRACT.fullmatch(row['body']) is not None
+```
+
 In `_left_out`, replace its query and the loop's start
 
 ```python
@@ -3120,14 +3347,15 @@ with
 
 ```python
         noise, noise_args = self._noise(db, actor)
-        rows = db.execute(f"SELECT events.id, events.resource_id, rooms.title, json_extract(events.payload,'$.author_id') AS author "
-                          f'{UNREAD_FROM} AND {noise}' + ('' if bound is None else ' AND events.id<=?') + ' ORDER BY events.id',
+        rows = db.execute(f"SELECT events.id, events.resource_id, rooms.title, json_extract(events.payload,'$.author_id') AS author, "
+                          f"json_extract(events.payload,'$.message_id') AS message_id {UNREAD_FROM} AND {noise}"
+                          + ('' if bound is None else ' AND events.id<=?') + ' ORDER BY events.id',
                           (actor, position, actor, *noise_args, *([] if bound is None else [bound]))).fetchall()
         counts, titles, lesson_count = {}, {}, 0
         chain, system = set(noise_args[1:]), self.system_author_id(db)
         for row in rows:
-            if row['resource_id'] in chain:  # first rail section 3: counted apart, the station's own notices not at all
-                lesson_count += row['author'] != system
+            if row['resource_id'] in chain:  # first rail section 3: counted apart; the station's notices and retractions not at all
+                lesson_count += row['author'] != system and not self._is_retraction(db, row['message_id'])
                 continue
 ```
 
@@ -3175,7 +3403,7 @@ Expected: PASS (unread without the flag is exactly today's, R10).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add peer/superyak_peer/inbox.py peer/tests/test_lessons_index.py agent/superyak_agent/station.py agent/superyak_agent/hook.py agent/superyak_agent/mcp.py agent/tests/test_breakout_tools.py agent/README.md
+git add peer/superyak_peer/inbox.py peer/superyak_peer/lessons.py peer/tests/test_lessons_index.py agent/superyak_agent/station.py agent/superyak_agent/hook.py agent/superyak_agent/mcp.py agent/tests/test_breakout_tools.py agent/README.md
 git commit -m "First rail: unread with breakouts=mentions leaves the lessons room out and counts it on its own line" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -3257,6 +3485,7 @@ def test_lessons_units_install_and_remove_only_their_own_files(tmp_path):
     ('station-lessons-room', ['ID=ab12'], ['station-room', '--data-dir', 'S', '--id', 'ab12', '--as', 'andy', '--ship', 'rio-grande']),
     ('lessons-room', ['ID=x:y'], ['room', '--data-dir', 'L', '--id', 'x:y']),
     ('lessons-where', [], ['where', '--data-dir', 'L']),
+    ('lessons-list', [], ['list', '--data-dir', 'L']),
     ('lessons-ship', ['SHIP=tardis', 'OWNER=andy'], ['ship', '--data-dir', 'L', '--username', 'tardis', '--owner', 'andy']),
     ('lesson-receipts', [], ['receipts', '--data-dir', 'L']),
     ('lesson-segments', [], ['segments', '--data-dir', 'L']),
@@ -3287,7 +3516,7 @@ Expected: FAIL: `superyak-lessons-index.service` is not in `peer/systemd`, and `
 
 ```ini
 [Unit]
-Description=Superyak lessons index: the lessons room's chain into lessons-index.json (first rail, section 4)
+Description=Superyak lessons index: the lessons room's chain into lessons-index.bin (first rail, section 4)
 OnFailure=superyak-alert@%n.service
 
 [Service]
@@ -3363,26 +3592,34 @@ git commit -m "First rail: the lessons index timer, LimitDATA=512M, installed by
 
 **Files:**
 - Create: `peer/scripts/lessons_timing.py`, `peer/tests/test_lessons_timing.py`
-- Modify: `Makefile`, `peer/pyproject.toml`
+- Modify: `Makefile`, `peer/pyproject.toml`, `peer/tests/test_station_units.py`, `peer/tests/test_packaging.py`
 
 **Interfaces:**
-- Produces: `make lessons-timing`: section 5's measure at the bound, through the machine's own embedder, ending `PASS`
-  or `FAIL`. Its parts: `bound_lesson(ship, n) -> str`, `build_fixture(data_dir, socket_path, clock) -> dict`,
-  `requests() -> {'query', 'prompt'}`, `p95(values)`, `measure(command, payload, runs, run, timer) -> (first, rest, peak MiB)`,
-  `report(results) -> str`.
+- Produces: `make lessons-timing [RESTART=1]`: section 5's measure at the bound, through the machine's own embedder,
+  ending `PASS` or `FAIL`, and `make lessons-prompt-near NEAR=on|off` (C44). The script's parts: `bound_lesson(ship, n)`,
+  `build_fixture(data_dir, socket_path, clock)`, `requests() -> {'query', 'prompt'}`, `restart(unit, socket_path, …)`,
+  `QUERY` and `HOOK` (the code each timed process runs), `p95(values)`,
+  `measure(command, payload, runs, run, timer, wall) -> (first, rest, peak MiB)`, `measure_embed(socket_path, text, runs)`,
+  `report(results, embedded) -> str`.
 
 - [ ] **Step 1: Write the failing tests in `peer/tests/test_lessons_timing.py`**
 
 ```python
-import json, runpy, subprocess, sys
+"""The timing check's script (C37, review M2): its fixture is the bound, its measures and report, the embedder's
+restart, and the hook's in-process path run for real."""
+import json
+import runpy
+import subprocess
+import sys
 from pathlib import Path
 import pytest
+from superyak_peer import lessons
+from conftest import LESSON_TIME, lesson_body
 
 TIMING = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'scripts' / 'lessons_timing.py'))
 
 
 def test_the_fixture_is_the_bound(tmp_path, fake_embedder):
-    from superyak_peer import lessons
     clock = TIMING['Clock'](1_800_000_000.0)
     built = TIMING['build_fixture'](tmp_path / 'peer', fake_embedder.path, clock)
     assert built == {'status': 'written', 'lessons': 128, 'vectors': 128}
@@ -3396,15 +3633,54 @@ def test_the_fixture_is_the_bound(tmp_path, fake_embedder):
     assert len(request['prompt']['prompt']) == 2000
 
 
-def test_measure_and_report_without_a_clock():
-    ticks = iter(range(0, 10_000, 5))
-    fake = lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=b'{"lessons":[]}', stderr=b'peak-kib 20480\n')
-    first, rest, peak = TIMING['measure'](['q'], {'ship': 'x', 'prompt': 'p', 'seen': []}, 50, run=fake,
-                                    timer=lambda: next(ticks) / 1000)
-    assert first == 5 and len(rest) == 50 and peak == 20.0
+def test_measure_spawns_each_run_with_its_own_spawn_time_and_the_report_gates_the_hook_path():
+    ticks, seen = iter(range(0, 10_000, 5)), []
+    def fake(argv, **kwargs):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=b'{"lessons": []}', stderr=b'peak-kib 20480\n')
+    walls = iter(float(n) for n in range(100))
+    first, rest, peak = TIMING['measure'](['hook', TIMING['SPAWNED']], {'ship': 'x'}, 50, run=fake,
+                                          timer=lambda: next(ticks) / 1000, wall=lambda: next(walls))
+    assert first == 5 and len(rest) == 50 and peak == 20.0 and [a[1] for a in seen[:2]] == ['0.0', '1.0']
     assert TIMING['p95']([float(n) for n in range(1, 51)]) == 48.0
-    text = TIMING['report']({'query': (900.0, [100.0] * 50, 40.0), 'prompt': (90.0, [200.0] * 50, 20.0)})
-    assert text.splitlines()[1].endswith('p95 under 150 ms: NO') and text.endswith('FAIL')
+    text = TIMING['report']({'query': (900.0, [100.0] * 50, 40.0), 'hook': (90.0, [200.0] * 50, 20.0),
+                             'prompt': (300.0, [300.0] * 50, 20.0)}, (400.0, [120.0] * 50))
+    lines = text.splitlines()
+    assert lines[1].endswith('p95 under 150 ms: NO') and lines[2].endswith('not gated') and text.endswith('FAIL')
+    assert 'NEAR=off' in lines[4]
+    good = TIMING['report']({'query': (900.0, [100.0] * 50, 40.0), 'hook': (90.0, [90.0] * 50, 20.0),
+                             'prompt': (300.0, [300.0] * 50, 20.0)}, (90.0, [60.0] * 50))
+    assert good.endswith('PASS') and 'Near can finish' in good   # the subprocess path over 150 ms doesn't fail it
+
+
+def test_the_restart_waits_until_the_embedder_answers(fake_embedder):
+    calls, clock = [], [0.0]
+    TIMING['restart']('superyak-embedder', fake_embedder.path, run=lambda argv, check: calls.append(argv),
+                      clock=lambda: clock[0], sleep=lambda s: None)
+    assert calls == [['systemctl', '--user', 'restart', 'superyak-embedder']]
+    def later(seconds):
+        clock[0] += seconds
+    with pytest.raises(SystemExit, match='did not answer'):
+        TIMING['restart']('superyak-embedder', fake_embedder.path.with_name('gone'), run=lambda argv, check: None,
+                          clock=lambda: clock[0], sleep=later)
+
+
+def test_the_embedders_own_time_is_measured_on_the_prompt(fake_embedder):
+    ticks = iter(range(0, 1000, 7))
+    first, rest = TIMING['measure_embed'](fake_embedder.path, 'p' * 2000, 3, timer=lambda: next(ticks) / 1000)
+    assert first == pytest.approx(7) and rest == pytest.approx([7, 7, 7]) and [len(r['texts'][0]) for r in fake_embedder.requests] == [2000] * 4
+
+
+def test_the_hook_path_runs_in_a_fresh_interpreter_without_site_packages(lessons_station):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', error=('no matches found',)))
+    store.lessons_index(None)
+    pinned = repr(LESSON_TIME + 10)
+    hook = [sys.executable, '-I', '-S', '-B', '-c', TIMING['HOOK'], TIMING['SPAWNED'], str(TIMING['CHECKOUT']),
+            str(store.data_dir), '/nonexistent', pinned]
+    first, rest, peak = TIMING['measure'](hook, {'ship': 'rio-grande', 'prompt': 'why does it say no matches found', 'seen': []},
+                                          1, wall=lambda: LESSON_TIME + 10)
+    assert len(rest) == 1 and 0 < peak < 64
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -3414,23 +3690,34 @@ Expected: FAIL at collection: `scripts/lessons_timing.py` doesn't exist.
 
 - [ ] **Step 3: Write `peer/scripts/lessons_timing.py`**
 
-Each run is a whole query process, so Python's start and the imports count, as they will in the hook. The fixture is the
-bound: four ships × 32 lessons with every value at its byte limit; every field of the requests is at its cap. The
-requests carry no `budget_ms`, so Near has its own deadline. Each query prints its own peak, VmHWM, on its way out.
+Each run is a whole process timed from its spawn, so Python's start and the imports count. The fixture is the bound: four
+ships × 32 lessons with every value at its byte limit; every field of the requests is at its cap. Three paths (C50): the
+query at a failure (gated under 1 s); the hook's in-process path, where a fresh interpreter with no site-packages
+(`-I -S -B`) imports `lessons` from the checkout and calls `answer_prompt` with `budget_ms` set to what is left of
+100 ms since its spawn (gated under 150 ms); and the same prompt through the query command in its own interpreter,
+reported beside it. Each process prints its own peak, VmHWM. `--restart-unit` restarts the embedder after the build
+(C51), and the embedder's own p95 on the prompt says whether Near can finish at a prompt (C44).
 
 ```python
-"""First rail section 5's measure on this peer: p95 of 50 queries with every field at its cut, after one warm-up query
-(recorded beside it as the first), and the prompt path the same way with a 2,000-character prompt. It runs against a
-fixture at the bound, 4 ships x 32 lessons at the byte limits, in a new temporary data directory, through this
-machine's own embedder (runtime.json), and writes nothing anywhere else.
+"""First rail section 5's measure on this peer, against a fixture at the bound: 4 ships x 32 lessons at the byte limits,
+in a new temporary data directory, through this machine's own embedder (runtime.json). It writes nothing anywhere else.
 
-    peer/.venv/bin/python -I peer/scripts/lessons_timing.py [--runtime-config PATH] [--runs 50]
+Three paths, each p95 of 50 runs after one warm-up, the first recorded beside it:
+- query: the hook's `python -I -B -m superyak_peer.lessons query` at a failure, every field at its cap (under 1 s);
+- hook: the prompt path as the hook runs it (C42): a fresh interpreter, with no site-packages, imports
+  superyak_peer.lessons from the checkout and calls answer_prompt with budget_ms set to what is left of 100 ms since
+  the process was spawned, timed from the spawn (under 150 ms: Task 18's gate);
+- prompt: the same request through the query command in a second interpreter, reported beside it (not gated).
+It also reports the embedder's own p95 on a 2,000-character prompt: above 100 ms, Near can't finish at a prompt and
+only queues the next request behind it, so make lessons-prompt-near NEAR=off (C44).
 
-Restart the embedder just before, so the first query is the first after it starts."""
+    peer/.venv/bin/python -I scripts/lessons_timing.py [--runtime-config PATH] [--runs 50] [--restart-unit superyak-embedder]
+
+With --restart-unit, the embedder is restarted after the fixture is built (which embeds), so each path's first run is
+the first after the embedder starts (section 5)."""
 import argparse
 import json
 import math
-import os
 import subprocess
 import sys
 import tempfile
@@ -3439,8 +3726,11 @@ from pathlib import Path
 
 SHIPS = ('rio-grande', 'tardis', 'serenity', 'defiant')
 ASKING = 'rio-grande'
-LIMIT_MS = {'query': 1000, 'prompt': 150}
+LIMIT_MS = {'query': 1000, 'hook': 150}
 RSS_LIMIT_MIB = 64
+PROMPT_BUDGET_MS = 100
+SPAWNED = '<spawned>'  # replaced in each run's command by the wall time just before the spawn
+CHECKOUT = Path(__file__).resolve().parents[1]
 
 
 def value(kind, ship, n, i, size):
@@ -3486,11 +3776,55 @@ class Clock:
 
 
 def requests():
-    """Every field at its cut; nothing in them matches a fixture value, so each query runs Near."""
+    """Every field at its cap; nothing in them matches a fixture value, so each query runs Near."""
     context = {'ship': ASKING, 'cwd': '/w/' + 'd' * 197, 'branch': 'b' * 200, 'command': 'run ' + 'c' * 296,
                'error': 'Error: ' + 'e' * 293, 'words_only': False, 'seen': []}
     prompt = {'ship': ASKING, 'prompt': ('Why does this suite keep failing on the second run here ' * 40)[:2000], 'seen': []}
     return {'query': context, 'prompt': prompt}
+
+
+def restart(unit, socket_path, run=subprocess.run, clock=time.monotonic, sleep=time.sleep, wait=120.0):
+    """Restart the embedder's unit and wait until it answers again, so the next query is the first after it starts."""
+    from superyak_peer.lessons import EmbedderUnavailable, embedder_model
+    run(['systemctl', '--user', 'restart', unit], check=True)
+    until = clock() + wait
+    while True:
+        try:
+            return embedder_model(socket_path, clock() + 5, clock)
+        except EmbedderUnavailable:
+            if clock() >= until:
+                raise SystemExit(f'{unit} did not answer within {wait:.0f} s of its restart')
+            sleep(0.5)
+
+
+# Each process reports its own peak: Linux carries a parent's peak RSS across exec into ru_maxrss, so RUSAGE_CHILDREN
+# would report this script's. /proc/self/status VmHWM is the process's own; macOS has no /proc, so ru_maxrss (bytes).
+PEAK = ("import atexit, resource, sys\n"
+        "def _peak():\n"
+        "    try:\n"
+        "        kib = int(next(l for l in open('/proc/self/status') if l.startswith('VmHWM')).split()[1])\n"
+        "    except OSError:\n"
+        "        kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024\n"
+        "    print(f'peak-kib {kib}', file=sys.stderr)\n"
+        "atexit.register(_peak)\n")
+QUERY = PEAK + "from superyak_peer.lessons import main\nmain(sys.argv[1:])\n"
+# The hook's in-process path (C42): argv is spawned, checkout, data dir, runtime config ('' for the default), and a
+# wall time to pin (a test's; '' in a real run), set before the module binds time.time.
+HOOK = PEAK + ("import json, time\n"
+               "spawned, checkout, data_dir, config, pin = float(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4] or None, sys.argv[5]\n"
+               "if pin:\n"
+               "    time.time = lambda: float(pin)\n"
+               "sys.dont_write_bytecode = True\n"
+               "sys.path.insert(0, checkout)\n"
+               "from superyak_peer import lessons\n"
+               "request = json.loads(sys.stdin.buffer.read())\n"
+               f"request['budget_ms'] = max(0, int({PROMPT_BUDGET_MS} - (time.time() - spawned) * 1000))\n"
+               "answer = lessons.answer_prompt(lessons.read_request(json.dumps(request)), data_dir, lessons.embedder_socket(config))\n"
+               "sys.stdout.write(lessons.dumps(answer))\n")
+
+
+def peak_kib(stderr):
+    return int(stderr.decode().strip().splitlines()[-1].split()[1])
 
 
 def p95(values):
@@ -3499,57 +3833,62 @@ def p95(values):
     return ordered[math.ceil(0.95 * len(ordered)) - 1]
 
 
-def measure(command, payload, runs, run=subprocess.run, timer=time.perf_counter):
-    """(first, the next `runs`) in milliseconds, each a whole query process, and the largest peak in MiB. A request
-    carries no budget_ms, so Near has its own deadline (800 ms, or 100 ms at a prompt). A run that fails raises."""
+def measure(command, payload, runs, run=subprocess.run, timer=time.perf_counter, wall=time.time):
+    """(first, the next `runs`) in milliseconds, each a whole process from its spawn, and the largest peak in MiB. A
+    SPAWNED word in the command becomes the wall time just before each spawn. A run that fails raises."""
     data = json.dumps(payload).encode()
     times, peaks = [], []
     for _ in range(runs + 1):
+        argv = [repr(wall()) if part == SPAWNED else part for part in command]
         start = timer()
-        done = run(command, input=data, capture_output=True)
+        done = run(argv, input=data, capture_output=True)
         times.append((timer() - start) * 1000)
         if done.returncode != 0 or 'lessons' not in json.loads(done.stdout):
-            raise RuntimeError(f'query failed: {done.returncode} {done.stderr[-300:]!r}')
+            raise RuntimeError(f'run failed: {done.returncode} {done.stderr[-300:]!r}')
         peaks.append(peak_kib(done.stderr))
     return times[0], times[1:], max(peaks) / 1024
 
 
-# Each query reports its own peak: Linux carries a parent's peak RSS across exec into ru_maxrss, so RUSAGE_CHILDREN
-# would report this script's. /proc/self/status VmHWM is the query's own; macOS has no /proc, so ru_maxrss (bytes).
-PEAK = ("import atexit, resource, sys\n"
-        "def _peak():\n"
-        "    try:\n"
-        "        kib = int(next(l for l in open('/proc/self/status') if l.startswith('VmHWM')).split()[1])\n"
-        "    except OSError:\n"
-        "        kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024\n"
-        "    print(f'peak-kib {kib}', file=sys.stderr)\n"
-        "atexit.register(_peak)\n"
-        "from superyak_peer.lessons import main\n"
-        "main(sys.argv[1:])\n")
+def measure_embed(socket_path, text, runs, embed=None, timer=time.perf_counter):
+    """The embedder's own time for one prompt-sized request, in milliseconds: (first, the next `runs`)."""
+    if embed is None:
+        from superyak_peer.lessons import embed
+    times = []
+    for _ in range(runs + 1):
+        start = timer()
+        embed(socket_path, [text], 'search_query', time.monotonic() + 60)
+        times.append((timer() - start) * 1000)
+    return times[0], times[1:]
 
 
-def peak_kib(stderr):
-    return int(stderr.decode().strip().splitlines()[-1].split()[1])
-
-
-def report(results):
+def report(results, embedded=None):
+    """One line per path; the hook path and the query gate the PASS, the subprocess prompt path is reported only."""
     lines, ok = [], True
     rss = max(peak for _, _, peak in results.values())
     for path, (first, rest, _) in results.items():
-        good = p95(rest) < LIMIT_MS[path]
-        ok &= good
-        lines.append(f'{path}: first {first:.0f} ms; {len(rest)} runs p50 {sorted(rest)[len(rest) // 2]:.0f} ms, '
-                     f'p95 {p95(rest):.0f} ms, max {max(rest):.0f} ms; p95 under {LIMIT_MS[path]} ms: {"yes" if good else "NO"}')
+        line = f'{path}: first {first:.0f} ms; {len(rest)} runs p50 {sorted(rest)[len(rest) // 2]:.0f} ms, p95 {p95(rest):.0f} ms, max {max(rest):.0f} ms'
+        if path in LIMIT_MS:
+            good = p95(rest) < LIMIT_MS[path]
+            ok &= good
+            line += f'; p95 under {LIMIT_MS[path]} ms: {"yes" if good else "NO"}'
+        else:
+            line += '; reported beside the hook path, not gated'
+        lines.append(line)
     ok &= rss < RSS_LIMIT_MIB
-    lines.append(f'peak query process: {rss:.1f} MiB; under {RSS_LIMIT_MIB} MiB: {"yes" if rss < RSS_LIMIT_MIB else "NO"}')
+    lines.append(f'peak process: {rss:.1f} MiB; under {RSS_LIMIT_MIB} MiB: {"yes" if rss < RSS_LIMIT_MIB else "NO"}')
+    if embedded is not None:
+        slow = p95(embedded[1]) > PROMPT_BUDGET_MS
+        lines.append(f'embedder, one 2,000-character prompt: first {embedded[0]:.0f} ms, p95 {p95(embedded[1]):.0f} ms; '
+                     + ('over 100 ms: run make lessons-prompt-near NEAR=off' if slow else 'Near can finish at a prompt'))
     return '\n'.join(lines + ['PASS' if ok else 'FAIL'])
 
 
 def main(argv=None):
-    from superyak_peer.lessons import embedder_socket
+    from superyak_peer.lessons import INDEX_FILE, embedder_socket
     parser = argparse.ArgumentParser(prog='lessons_timing')
     parser.add_argument('--runtime-config', type=Path)
     parser.add_argument('--runs', type=int, default=50)
+    parser.add_argument('--restart-unit', help='Restart this user unit after the fixture is built (superyak-embedder)')
     args = parser.parse_args(argv)
     socket_path = embedder_socket(args.runtime_config)
     if socket_path is None:
@@ -3559,14 +3898,18 @@ def main(argv=None):
         built = build_fixture(data_dir, socket_path, Clock(time.time() - 3600))
         if built.get('vectors') != 128:
             parser.exit(1, f'The fixture index has {built.get("vectors")} vectors of 128: is the embedder answering?\n')
-        command = [sys.executable, '-I', '-c', PEAK, 'query', '--data-dir', str(data_dir)]
-        if args.runtime_config:
-            command += ['--runtime-config', str(args.runtime_config)]
-        results = {}
-        for path, payload in requests().items():
-            os.utime(data_dir / 'lessons-index.json')  # fresh for the prompt path, whatever the fixture's clock said
+        if args.restart_unit:
+            restart(args.restart_unit, socket_path)
+        config = [] if args.runtime_config is None else ['--runtime-config', str(args.runtime_config)]
+        query = [sys.executable, '-I', '-B', '-c', QUERY, 'query', '--data-dir', str(data_dir), *config]
+        hook = [sys.executable, '-I', '-S', '-B', '-c', HOOK, SPAWNED, str(CHECKOUT), str(data_dir), str(args.runtime_config or ''), '']
+        payloads, results = requests(), {}
+        for path, command, payload in (('query', query, payloads['query']), ('hook', hook, payloads['prompt']),
+                                       ('prompt', query, payloads['prompt'])):
+            (data_dir / INDEX_FILE).touch()  # fresh for the prompt path, whatever the fixture's clock said
             results[path] = measure(command, payload, args.runs)
-        print(report(results))
+        embedded = measure_embed(socket_path, payloads['prompt']['prompt'], args.runs)
+        print(report(results, embedded))
 
 
 if __name__ == '__main__':
@@ -3575,12 +3918,38 @@ if __name__ == '__main__':
 
 - [ ] **Step 4: Add the make target and the packaging lines**
 
-Add `lessons-timing` to `.PHONY`, the `help` line
-`	@echo "make lessons-timing     Section 5's measure at the bound, through this machine's embedder"`, and:
+Add `NEAR ?=` and `RESTART ?=` beside `FILE ?=`; add `lessons-prompt-near lessons-timing` to `.PHONY`; the `help` lines
+`	@echo "make lessons-prompt-near NEAR=on|off  Let Near run at a prompt on this peer, or not (make lessons-timing says which)"` and
+`	@echo "make lessons-timing [RESTART=1]  Section 5's measure at the bound, through this machine's embedder"`; and:
 
 ```make
+lessons-prompt-near:
+	@test "$(NEAR)" = on || test "$(NEAR)" = off || { echo 'Usage: make lessons-prompt-near NEAR=on|off [LESSONS_DATA=…]'; exit 2; }
+	if [ "$(NEAR)" = off ]; then install -m 600 /dev/null "$(LESSONS_DATA)/lessons-prompt-near-off"; else rm -f "$(LESSONS_DATA)/lessons-prompt-near-off"; fi
+
 lessons-timing:
-	cd peer && .venv/bin/python -I scripts/lessons_timing.py
+	cd peer && .venv/bin/python -I scripts/lessons_timing.py$(if $(RESTART), --restart-unit superyak-embedder)
+```
+
+Append to `peer/tests/test_station_units.py`:
+
+```python
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
+def test_lessons_prompt_near_switches_near_at_a_prompt_and_timing_can_restart_the_embedder(tmp_path):
+    """C44: NEAR=off leaves the switch file (0600) the prompt path looks for, NEAR=on removes it, anything else is
+    refused; RESTART=1 makes the timing check restart the embedder after it builds its fixture (review S4)."""
+    from superyak_peer.lessons import PROMPT_NEAR_OFF
+    data = tmp_path / 'peer data'
+    data.mkdir()
+
+    def make(near):
+        return subprocess.run(['make', '-s', 'lessons-prompt-near', f'NEAR={near}', f'LESSONS_DATA={data}'], cwd=REPO,
+                              capture_output=True, text=True, timeout=60)
+    assert make('maybe').returncode != 0 and not (data / PROMPT_NEAR_OFF).exists()
+    assert make('off').returncode == 0 and stat.S_IMODE((data / PROMPT_NEAR_OFF).stat().st_mode) == 0o600
+    assert make('on').returncode == 0 and not (data / PROMPT_NEAR_OFF).exists()
+    timing = subprocess.run(['make', '-n', '-s', 'lessons-timing', 'RESTART=1'], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert timing.stdout.strip().endswith('scripts/lessons_timing.py --restart-unit superyak-embedder')
 ```
 
 In `peer/pyproject.toml`'s sdist list, add `"scripts/lessons_timing.py",` before `"scripts/share_link.py",` and
@@ -3594,7 +3963,7 @@ In `peer/pyproject.toml`'s sdist list, add `"scripts/lessons_timing.py",` before
 
 - [ ] **Step 5: Run the tests, then the whole of both suites**
 
-Run: `cd peer && uv run --locked python -m pytest tests/test_lessons_timing.py tests/test_packaging.py -q`, then
+Run: `cd peer && uv run --locked python -m pytest tests/test_lessons_timing.py tests/test_station_units.py tests/test_packaging.py -q`, then
 `make check-peer` and `make check-agent`. The peer suite takes about 15 minutes on the Pi: run it in the background, with
 its output to a file, and read the file when it ends.
 Expected: PASS, every suite.
@@ -3602,7 +3971,7 @@ Expected: PASS, every suite.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add peer/scripts/lessons_timing.py peer/tests/test_lessons_timing.py Makefile peer/pyproject.toml peer/tests/test_packaging.py
+git add peer/scripts/lessons_timing.py peer/tests/test_lessons_timing.py peer/tests/test_station_units.py Makefile peer/pyproject.toml peer/tests/test_packaging.py
 git commit -m "First rail: make lessons-timing, section 5's measure at the bound" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -3615,8 +3984,8 @@ the checklist "A live station act" in `docs/checklists.md`; Andy's yes comes in 
 ### Task 16: Merge (Deploy gate: a section 2 verdict and an explicit yes)
 
 **Waits on:** Serenity's section 2 verdict on the branch's head (she reviews Rio Grande's branches), and an explicit yes.
-This diff is safety code: person data, every door, who may join a room. It never merges on silence
-(`docs/governance/ship-decisions.md`, 2026-10-27).
+This diff is safety code: person data, every door, who may join a room. It never merges on silence (the ships' decision
+of 2026-10-27, in `docs/governance/ship-decisions.md` on branch `trail-arrows-spec`; it is not on main yet).
 
 - [ ] **Step 1:** Merge main into `rio-grande/first-rail` (never a rebase). Run `make check-peer` and `make check-agent` on
   the merge commit, in the background with output to a file. Read the whole output; name any known failure.
@@ -3656,13 +4025,18 @@ on words until this gate.
   `peer/.venv/bin/python -I -c "import time; from superyak_peer.lessons import embedder_socket, embedder_model; print(embedder_model(embedder_socket(), time.monotonic() + 60))"`
   prints `nomic-ai/nomic-embed-text-v1.5`. If the unit doesn't start under the limit, remove the drop-in, stop the unit,
   and tell Andy. Don't raise the limit on your own.
-- [ ] **Step 4:** Restart the embedder (`systemctl --user restart superyak-embedder`), wait until Step 3's check answers,
-  then run `make lessons-timing`. Its first query is the first after the embedder starts (section 5). Pass: query p95
-  under 1,000 ms, prompt path p95 under 150 ms, peak under 64 MiB, and the last line `PASS`.
-- [ ] **Step 5:** Post the report in all hands with the date, main's commit, the embedder's resting memory
-  (`ps -o rss= -p $(systemctl --user show -p MainPID --value superyak-embedder)`), and that it measured the bound fixture
-  (C37). On `FAIL`, post the numbers and stop. A fix is a new task, reviewed like the others: never a changed bound or
-  threshold. The first remedy to try is the hook calling `answer_prompt` in process (C42).
+- [ ] **Step 4:** Run `make lessons-timing RESTART=1`. It builds the bound fixture (which embeds), then restarts the
+  embedder and waits until it answers, so each path's first run is the first after the embedder starts (C51, section 5).
+  Pass (C50): the query's p95 under 1,000 ms; the hook's in-process path p95 under 150 ms, timed from a fresh
+  interpreter's spawn with `budget_ms` set to what is left of 100 ms; the peak under 64 MiB; the last line `PASS`. The
+  subprocess prompt path is reported beside the hook path and gates nothing.
+- [ ] **Step 5:** If the report's embedder line says its p95 on a 2,000-character prompt is over 100 ms, run
+  `make lessons-prompt-near NEAR=off` (C44): Near can't finish at a prompt on this Pi, and an abandoned request would only
+  hold the embedder in front of the next query. Say which way it was set.
+- [ ] **Step 6:** Post the report in all hands with the date, main's commit, the embedder's resting memory
+  (`ps -o rss= -p $(systemctl --user show -p MainPID --value superyak-embedder)`), the Near switch, and that it measured
+  the bound fixture (C37). On `FAIL`, post the numbers and stop. A fix is a new task, reviewed like the others: never a
+  changed bound or threshold.
 
 ### Task 19: The lessons room, and the Pi's lessons (Deploy gate: Andy opens the room)
 
@@ -3685,12 +4059,18 @@ without it.
   - `learned from:` takes one value: `own`, `owner`, or the ship the lesson came from first.
   - Lesson 17 stays held back. Write each file with `printf '%s'`, so it has no final newline.
 - [ ] **Step 6:** For each file, `make lessons-check SHIP=rio-grande FILE=<file>` prints `ok: a lesson, lesson <short id>`.
-  Read each one again for person data: the ship's own check comes first (section 6).
-- [ ] **Step 7:** Lay them: with Serenity's `lay` if it is on main, otherwise each body with `station_post` into the
+  Read each one again for person data: the ship's own check comes first (section 6). Note each short id.
+- [ ] **Step 7 (Deploy gate, person: Andy's yes to the drafts, C52):** Show Andy every draft, whole, with its short id.
+  Section 2 says lessons are "chosen with its owner's knowledge", so nothing is laid until he says yes. Lay only those he
+  says yes to; a draft he wants changed goes back to Step 5, and he sees it again.
+- [ ] **Step 8:** Lay them: with Serenity's `lay` if it is on main, otherwise each body with `station_post` into the
   lessons room (C40). Say in all hands which way they were laid. The lesson the blind test uses is laid like the others,
   and its text is quoted nowhere in the repository (section 9).
-- [ ] **Step 8:** After a minute the index run logs `"lessons": N`, the number laid (with vectors once Task 18 is done).
-  `make lesson-receipts` prints `No receipts yet.`: a ship is never shown its own lessons.
+- [ ] **Step 9:** Run `make lessons-list`. It must show every short id noted in Step 6. `station_post` redacts its text,
+  so a missing id means the posted body differs from the one checked: tell Andy, retract that post with its `retract`
+  line, and lay the checked body another way. After a minute the index run logs `"lessons": N`, the number laid (with
+  vectors once Task 18 is done). `make lesson-receipts` prints `No receipts yet.`: a ship is never shown its own lessons.
+  Tell Andy that `make lessons-list` gives him each lesson's `retract` line whenever he wants to veto one (C45).
 
 ### Task 20: `PEERS` by pairing code (Deploy gate: the pairing code merged)
 
@@ -3706,6 +4086,7 @@ returning 32 hex characters. Adapt the import to what lands.
   `{**json.loads(peers.card), 'participant': {'id': user_id, 'name': name}}`. Assert that:
   - `run_lessons('station-room', …, '--peers', code)` lists the contact with its code in groups of four, and its confirm
     run records `lessons_peers` holding Tardis's peer id;
+  - the view's and the record's `full_id` is the origin's own `<peer id>:<room id>`, never a listed peer's (review M1);
   - a code with one character changed exits 1 with `No paired card here has the code`, and records nothing;
   - the code typed with spaces, dashes or capitals is the same code.
 - [ ] **Step 2: Run it to see it fail** (`unrecognized arguments: --peers`).
@@ -3760,19 +4141,61 @@ returning 32 hex characters. Adapt the import to what lands.
 - [ ] **Step 6:** Check the rail end to end. Tardis's index run logs the Pi's lessons. A lesson Tardis lays appears in the
   Pi's next index run. `make lesson-segments` runs on both. Then the blind test is Tardis's (section 9).
 
-### Task 22: The Mac's index as a `federate` step (Deploy gate: federation pull merged)
+### Task 22: The Mac's index as a `federate` step (Deploy gate: pull merged, and Tardis's and Serenity's yes)
 
-**Waits on:** federation pull on main. Its `federate` loop is the Mac's one sync process (section 4: "the Mac gains no new
-job").
+**Waits on:** federation pull on main, whose `federate` loop is the Mac's one sync process (section 4: "the Mac gains no
+new job"); and, since this edits Tardis's `federate`, each partner's explicit yes on this task's actual diff (C41, review
+S8). Tardis and Serenity said yes in principle on four conditions (C53). Each is a requirement here, with its test.
 
-- [ ] **Step 1: Write the failing test** beside pull's own `federate` tests, on a pinned clock. With `--lessons-index`, a pass
-  calls `store.lessons_index(embedder_socket())` when 60 s or more have passed since the last call, and a second pass
-  30 s later doesn't. An exception in it is caught and logged like the pass's other steps, and the pass goes on. Without
-  the flag, `lessons_index` is never called (C41).
-- [ ] **Step 2:** Run it to see it fail (`unrecognized arguments: --lessons-index`).
-- [ ] **Step 3:** Add the flag and the step to `federate`, where pull puts its pass, keeping the last call's time in the
-  process. Name nothing new in `lessons.py`: `Store.lessons_index` is the interface.
-- [ ] **Step 4:** Run pull's tests and the lessons tests. Expected: PASS. Commit; review as Task 16 does.
+**Requirements:**
+1. **Isolation.** The index step runs in its own pass with its own `try`. A failing lessons index never stops a push or a
+   pull, and a failing push or pull never stops the index step on a later pass.
+2. **Bounds.** It runs only after a pull that delivered something, at most once a minute, inside `federate`'s own process
+   (under its memory limit): it starts no process.
+3. **Separation (C54).** `federate`'s module imports nothing from `lessons` at load. The step reaches the index only
+   through `store.lessons_index`, and imports `embedder_socket` inside its own `try`, so a peer whose step finds nothing
+   to run still federates.
+4. **The Mac never listens (C55).** The step reads only what pull already landed in the Mac's own data directory. It
+   opens no TCP socket, loopback included, listens on nothing, and starts nothing from launchd. Its one connection is a
+   client to the machine's embedder over the Unix socket in `runtime.json`.
+
+- [ ] **Step 1: Write the failing tests**, beside pull's own `federate` tests, on a pinned clock (C41 gates them all on
+  `--lessons-index`):
+  - `test_the_lessons_step_runs_after_a_pull_that_delivered_at_most_once_a_minute`: a pass whose pull delivered 1 runs
+    `lessons_index` once; another 30 s later doesn't; one 60 s after the first does; a pass whose pull delivered 0 never does.
+  - `test_a_failing_lessons_step_never_stops_push_or_pull`: `lessons_index` raises; that pass's push still runs, and the
+    next pass's pull and push run. The step's failure is logged, once per kind.
+  - `test_a_failing_push_or_pull_never_stops_the_lessons_step`: the push raises; a later pass whose pull delivered still
+    runs the step.
+  - `test_federate_imports_nothing_from_lessons_at_load`: the `federate` module's AST has no import from `lessons`, and
+    importing it in a fresh interpreter leaves `superyak_peer.lessons` out of `sys.modules` until a step runs. With
+    `embedder_socket`'s import made to fail, a pass still pushes and pulls.
+  - `test_the_lessons_step_opens_no_network_socket_and_starts_nothing`: during the step, a patched `socket.socket` records
+    every family and every `bind` and `listen`; only `AF_UNIX` connects appear, and no `bind` or `listen`. A patched
+    `subprocess.Popen` and `os.posix_spawn` that raise are never called.
+- [ ] **Step 2:** Run them to see them fail (`unrecognized arguments: --lessons-index`).
+- [ ] **Step 3: Implement.** Add the flag to `federate`, and this function to its module, called once per pass after the
+  pass's push and pull, each of which keeps its own `try`. `delivered` is the number of envelopes the pass's pull applied.
+
+```python
+LESSONS_EVERY = 60  # seconds: the index at most once a minute (first rail section 4)
+
+
+def lessons_step(store, delivered, state, clock, log):
+    """Task 22: the Mac's lessons index, its own step of a federate pass. Only after a pull that delivered something, at
+    most once a minute, in this process; reads only this data directory; any failure is logged and the pass goes on."""
+    if not delivered or clock() - state.get('last', float('-inf')) < LESSONS_EVERY:
+        return
+    state['last'] = clock()
+    try:
+        from superyak_peer.lessons import embedder_socket  # never at module load (C54)
+        store.lessons_index(embedder_socket())
+    except Exception as error:  # noqa: BLE001 - the lessons index never stops push or pull
+        log(f'lessons index: {type(error).__name__}')
+```
+
+- [ ] **Step 4:** Run pull's tests and the lessons tests. Expected: PASS. Commit, then show Tardis and Serenity the actual
+  diff in City of AI and wait for each one's explicit yes. Then review it as Task 16 does.
 
 ### Task 23: The Mac joins (Deploy gate: Task 22 merged, and the Mac's `federate` loaded)
 
