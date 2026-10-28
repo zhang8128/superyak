@@ -3,6 +3,8 @@
 Standard library only: the hold imports this module and must stay on the light path.
 """
 import errno
+import hashlib
+import json
 import os
 import re
 import stat
@@ -197,3 +199,217 @@ def parse(name: str, data: bytes, own: bool) -> Checklist:
             found.append(_text(line[len(ITEM_PREFIX):], 'an item', ITEM_BYTES))
         items, body = tuple(found), ''
     return Checklist(list_id, title, moments, int(values['version']), owner, read, post, see, items, body, data)
+
+
+class Loaded(NamedTuple):
+    checklist: Checklist
+    directory: Path
+    key: str
+    location: Path | None
+    order: int
+
+
+class Found(NamedTuple):
+    lists: tuple[Loaded, ...]
+    overridden: tuple[Loaded, ...]
+    untrusted: int
+    notices: tuple[str, ...]
+
+
+def _real(path) -> str:
+    return os.path.realpath(path)
+
+
+def _clean(text) -> str:
+    return ''.join(c if c.isprintable() else '?' for c in str(text))
+
+
+def list_key(directory, list_id: str) -> str:
+    return hashlib.sha256(_real(directory).encode()).hexdigest()[:8] + '/' + list_id
+
+
+def _under(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip('/') + '/')
+
+
+def search_dirs(cwd: str | None, own_dir: Path, home: Path | None = None) -> list[tuple[Path, Path | None]]:
+    home_real = _real(home if home is not None else Path.home())
+    state = os.path.join(home_real, '.superyak')
+    found: list[tuple[Path, Path | None]] = []
+    if cwd:
+        here = _real(cwd)
+        chain = []
+        current = here
+        if here != home_real and _under(here, home_real):
+            while current != home_real and current != '/':
+                chain.append(current)
+                current = os.path.dirname(current)
+        elif here != '/' and not _under(here, home_real):
+            while current != '/':
+                chain.append(current)
+                if os.path.lexists(os.path.join(current, '.git')):
+                    break
+                current = os.path.dirname(current)
+            else:
+                chain = [here]
+        for holder in chain:
+            candidate = os.path.join(holder, '.superyak', 'checklists')
+            if not os.path.isdir(candidate):
+                continue
+            real = _real(candidate)
+            if _under(real, state):
+                continue
+            found.append((Path(real), Path(holder)))
+    own_real = _real(own_dir)
+    found = [(d, h) for d, h in found if str(d) != own_real]
+    if os.path.isdir(own_real):
+        found.append((Path(own_real), None))
+    return found
+
+
+def trusted(own_dir: Path) -> frozenset[str]:
+    try:
+        fd = os.open(Path(own_dir) / 'trusted.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return frozenset()
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return frozenset()
+        data = os.read(fd, 1 << 20)
+    except OSError:
+        return frozenset()
+    finally:
+        os.close(fd)
+    try:
+        value = json.loads(data.decode('utf-8'))
+        paths = value['trusted']
+        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+            return frozenset()
+        return frozenset(paths)
+    except (ValueError, KeyError, TypeError):
+        return frozenset()
+
+
+def trust_refusal(path: Path) -> str | None:
+    real = _real(path)
+    if os.path.basename(real) != 'checklists' or os.path.basename(os.path.dirname(real)) != '.superyak':
+        return 'it is not a checklists directory inside a .superyak directory'
+    uid = os.getuid()
+
+    def bad(full: str, what: str) -> str | None:
+        try:
+            st = os.lstat(full)
+        except OSError as error:
+            return f'{what} cannot be read ({error.strerror or "error"})'
+        if st.st_uid != uid:
+            return f'{what} belongs to another user'
+        if st.st_mode & 0o022:
+            return f'{what} is writable by its group or by others'
+        return None
+
+    try:
+        if not stat.S_ISDIR(os.lstat(real).st_mode):
+            return 'it is not a directory'
+    except OSError:
+        return 'it does not exist'
+    problem = bad(real, 'the directory')
+    if problem:
+        return problem
+    try:
+        names = sorted(os.listdir(real))
+    except OSError:
+        return 'the directory cannot be listed'
+    for name in names:
+        full = os.path.join(real, name)
+        label = _clean(name)
+        try:
+            mode = os.lstat(full).st_mode
+        except OSError:
+            return f'{label} cannot be read'
+        if stat.S_ISLNK(mode):
+            return f'{label} is a symlink'
+        if not stat.S_ISREG(mode):
+            return f'{label} is not a regular file'
+        problem = bad(full, label)
+        if problem:
+            return problem
+    return None
+
+
+def _load_dir(directory: Path, location: Path | None, own: bool, order: int, notices: list[str]) -> list[Loaded]:
+    shown = _clean(directory)
+    try:
+        names = sorted(n for n in os.listdir(directory) if n.endswith('.md'))
+    except OSError:
+        return []
+    good = [n for n in names if ID.fullmatch(n[:-3])]
+    odd = [n for n in names if not ID.fullmatch(n[:-3])]
+    for name in odd[:DIR_FILES]:
+        notices.append(f'Checklist {shown}/{_clean(name)} was skipped: the file name is not an id and .md.')
+    loaded: list[Loaded] = []
+    for name in good[:DIR_FILES]:
+        try:
+            checklist = parse(name, read_file(directory / name), own)
+        except ParseError as error:
+            notices.append(f'Checklist {shown}/{_clean(name)} was skipped: {_clean(error)}.')
+            continue
+        except OSError as error:
+            notices.append(f'Checklist {shown}/{_clean(name)} was skipped: {_clean(error.strerror or "unreadable")}.')
+            continue
+        where = location
+        if own:
+            where = None
+            for moment in checklist.moments:
+                if moment.kind == 'enter' and moment.path:
+                    where = Path(moment.path)
+        loaded.append(Loaded(checklist, directory, list_key(directory, checklist.id), where, order))
+    if len(good) > DIR_FILES:
+        notices.append(f'{len(good) - DIR_FILES} more checklist files in {shown} were not read: at most {DIR_FILES} a directory.')
+    return sorted(loaded, key=lambda l: l.checklist.id)
+
+
+def find(cwd: str | None, own_dir: Path, home: Path | None = None) -> Found:
+    own_real = _real(own_dir)
+    allowed = trusted(own_dir) | {own_real}
+    dirs = search_dirs(cwd, own_dir, home)
+    notices: list[str] = []
+    lists: list[Loaded] = []
+    overridden: list[Loaded] = []
+    seen: set[str] = set()
+    raws: dict[str, set[bytes]] = {}
+    untrusted_dirs: list[Path] = []
+    for order, (directory, location) in enumerate(dirs):
+        if str(directory) not in allowed:
+            untrusted_dirs.append(directory)
+            continue
+        for item in _load_dir(directory, location, str(directory) == own_real, order, notices):
+            raws.setdefault(item.checklist.id, set()).add(item.checklist.raw)
+            if item.checklist.id in seen:
+                overridden.append(item)
+            else:
+                seen.add(item.checklist.id)
+                lists.append(item)
+    count = 0
+    for directory in untrusted_dirs:
+        try:
+            names = sorted(n for n in os.listdir(directory) if n.endswith('.md') and ID.fullmatch(n[:-3]))
+        except OSError:
+            continue
+        for name in names[:DIR_FILES]:
+            try:
+                same = read_file(directory / name) in raws.get(name[:-3], ())
+            except (OSError, ParseError):
+                same = False
+            if not same:
+                count += 1
+    return Found(tuple(lists), tuple(overridden), count, tuple(notices))
+
+
+def notice_lines(found: Found) -> list[str]:
+    lines = list(found.notices)
+    if found.untrusted:
+        n = found.untrusted
+        what = '1 checklist that isn\'t' if n == 1 else f'{n} checklists that aren\'t'
+        lines.append(f"This directory has {what} trusted on this machine. Tell the person you work with. "
+                     "Don't trust them yourself.")
+    return lines

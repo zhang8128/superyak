@@ -59,3 +59,9 @@ def trust_dirs(own_dir, *dirs) -> None:
     path = own_dir / 'trusted.json'
     path.write_text(json.dumps({'trusted': [os.path.realpath(d) for d in dirs]}))
     os.chmod(path, 0o600)
+
+
+def loaded(list_id, when='start', *, order=0, directory=Path('/lists'), location=None, own=False, **kw):
+    from superyak_agent import checklists as cl
+    checklist = cl.parse(f'{list_id}.md', list_text(list_id, when, **kw), own)
+    return cl.Loaded(checklist, Path(directory), cl.list_key(directory, list_id), location, order)
