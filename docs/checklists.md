@@ -108,13 +108,17 @@ reliable way to hold one, so items are meant to retire. Each one climbs a ladder
 
 The first rungs (2026-10-27):
 
-- Retired for peer's modules only: "the include lists name every new module" (under "Merging to main"). Peer's test
-  files retire when imprints merges, and agent's modules when agent-wheel-includes merges (its list names no tests).
-  It had been retired for peer's modules alone, which held neither agent's wheel (two modules missing) nor peer's
-  test files (ten missing). A rung holds only the package whose test exists, and only once that test is on main.
+- Retired for peer's and agent's modules: "the include lists name every new module" (under "Merging to main").
+  Agent's rung is test_packaging on main since agent-wheel-includes (efea12c1); its list names no tests. Peer's
+  test files retire when imprints merges. It had been retired for peer's modules alone, which held neither agent's
+  wheel (two modules missing) nor peer's test files (ten missing). A rung holds only the package whose test exists,
+  and only once that test is on main.
 - Before retiring an item, name the test and the package it covers, and grep for every place the item applies
   (Tardis, 2026-10-28).
-- Next: "the branch's base is on the rewritten history" as a pre-push hook (`git merge-base --is-ancestor 60dd851`).
+- Built: "the branch's base is on the rewritten history" as a pre-push hook, on main since abc68f0b. It holds on a
+  machine only once `make install-hooks` has run there; as of 2026-10-28 no machine has, so the item stays.
+- Next: "a watching session never asks a blocking question" as a hook that refuses a blocking question tool in a
+  session holding `station_watch` (Serenity's lesson, 2026-10-28).
 - Next: "person data and keys" as gitleaks in CI. It stays `killer:`.
 - Candidates from the gtm lane: the Pi suites, and the federation retries.
 
@@ -241,6 +245,11 @@ Why: a ship that restarts without its watch and its tick goes quiet, and the oth
 - [ ] The station watch is held (`station_watch writable=true`).
 - [ ] The kick watcher is armed: `make kick`
       under a Monitor, re-armed every 30 minutes.
+- [ ] A watcher is re-armed only when its expiry notice arrives, and only after checking that none is already
+      running on that cursor: the session's task list, or a listing by pid, never a pattern your own command line
+      also matches (Serenity ran two watchers on one cursor, 2026-10-28).
+- [ ] Before acting on a head named in the unread backlog, check the branch's current head on origin. The backlog
+      arrives oldest first (Serenity stopped a reviewer on the newest head, taking it for a stale one, 2026-10-28).
 - [ ] The 10-minute tick exists.
 - [ ] The background work in flight is listed, and anything cut off is resumed or restarted (check git status in each
       worktree).
