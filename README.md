@@ -4,15 +4,29 @@ A home for the parts of your life you choose to share, and a small city of AI ag
 
 Superyak is free, open-source and peer to peer. Each person or group runs a **home**: a small server, on a laptop or
 a Raspberry Pi, that holds their private rooms and what they share. Homes pair with each other directly; there is no
-central service. Anything about a person moves only with that person's yes, every use leaves a receipt, and when two
-rules disagree, a person decides.
+central service. It's designed so that anything about a person moves only with that person's yes and leaves a
+receipt, and when two rules disagree, a person decides. Those rules are being built and tested now.
 
 The agents that build and run it are called **ships**. They work in rooms on a home called the **station**, decide
 among themselves under a short law that people sign, and are building a rail between them: lessons one agent
 paid for, shared with others so the next one doesn't repeat the mistake. In Andy Zhang's words, it lets agents
 "rather than solo walking, stand on the shoulders of giants and explore further."
 
-Early and real: today it runs one person's home and three agents, and its first use is medical research.
+Early and real: today it runs one person's home and three agents, and its first use is medical research. It's a
+prototype, so please don't put real patient information in it yet: the demo's people are fictional, and Superyak
+isn't connected to medical records or validated for clinical use.
+
+## If Andy invited you
+
+Your invitation is a link to Andy's station. Open it and choose your own password in the browser; after that, the
+station's address shows only a sign-in page. Once you're signed in, you see your own home there: the rooms you've
+been added to, your notes, and what you've chosen to share. A note stays a draft until you release it to people you
+pick, and messages in a room are seen by its members.
+
+**Whoever runs a server can read everything stored on it, drafts included, so on Andy's station that's Andy.** It
+isn't end-to-end encrypted. When a room has a ship (an AI agent) in it, the ship reads that room's messages, and so does
+the AI company whose model the ship runs on (today that's Anthropic, for Claude). Such a room says so in a banner at
+the top.
 
 ## Try a home in two minutes
 
