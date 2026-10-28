@@ -2,6 +2,8 @@
 
 Andy, 2026-10-27: "to not miss things, checklists where needed." These are the ones today showed we need. Each ship
 runs the list out loud: in its post, say which list it ran. Add a list when a mistake teaches one; keep each short.
+Lists serve the why, not the other way round: "How lists serve intent" below says when an item may be skipped, which
+items never are, and where a skip is logged.
 
 ## Why we build (read this first)
 
@@ -45,7 +47,47 @@ honest. A review that blames no one and changes nothing was skipped, not run.
 - [ ] **What did a person ask that we haven't answered or done?** Andy's open asks, and anyone's outside us.
 - [ ] **Do I still remember why?** Re-read "Why we build". Is my next hour aimed at it?
 
+## Each day, a checkpoint for Andy (Rio Grande posts it; any ship adds a line)
+
+Why: Andy reads five lines a day instead of a scroll, and nothing waiting on him hides in it. The hourly check-in
+stays; it's for the ships.
+
+- [ ] **Done:** what landed since yesterday, in the why's terms.
+- [ ] **Next:** what each ship takes next.
+- [ ] **Blocked:** what's stuck, and on what.
+- [ ] **Deviations:** every `skipped` on a list since yesterday, `killer:` items first, each with its reason.
+- [ ] **Waiting on Andy:** his decisions, one line each, oldest first.
+
+## How lists serve intent (deviations, killer items, one log)
+
+Serenity proposed it, Rio Grande adapted it, and the three ships agreed (2026-10-27). A list exists to protect the
+why, so each item, or its list, says what it protects. When an item doesn't fit the case in front of you, that's what
+shows you what to protect instead.
+
+- **A deviation is a `skipped`, with its reason.** An ordinary item may be skipped when following it would defeat its
+  own why. Record it through `checklist_run` as `skipped`; the reason names what the item protects and how this case
+  still protects it. That is the one log: there's no second place for deviations, and the reason is screened like
+  every reason.
+- **A `killer:` item isn't skipped by a ship alone.** An item whose text starts `killer: ` guards something that can't
+  be taken back: an unfixed hole made public, a person's data or a key pushed, safety code merged on silence, a broken
+  main left running, a live station act Andy didn't ask for. If one seems to need skipping, stop and ask Andy in the
+  room. The checklists report lists a killer skip first; making the tool refuse one waits for a spec revision after a
+  week of runs.
+- **The law isn't a checklist.** No deviation ever applies to a clause of signed law. Where an item restates the law
+  (merging, approving, station acts), the law binds whatever the list says. An item that conflicts with the law is a
+  bug in the list: ask in the room.
+- **The pause points are moments the lists already have.**
+  - Ready, on `claim`: "Before starting a piece of work".
+  - Build: "Before claiming a cause, a cost or a count" and "Shell commands", when they apply.
+  - QA round, on `command git push` for a branch: "Before any push", with "Running CI" and "Re-checking review
+    findings".
+  - Release: "Merging to main", "A live station act" and "Anything public".
+  - Learn: "Reflect", every 3 hours.
+  - Checkpoint: "Each day, a checkpoint for Andy", with the hourly check-in kept.
+
 ## Before starting a piece of work
+
+Why: the queue fills any hour nobody aims, and a full re-check on low-risk work costs the day vision work needed.
 
 - [ ] Name which purpose it serves: a person, the city or the rail. If none, say why now.
 - [ ] Say who will notice when it's done.
@@ -56,10 +98,11 @@ honest. A review that blames no one and changes nothing was skipped, not run.
 
 - [ ] The branch's base is on the rewritten history: `git merge-base --is-ancestor 60dd851 HEAD` (main after the
       2026-10-27 scrub). A branch built on the old history brings the scrubbed files back.
-- [ ] Nothing in the diff names a person with health, contact or identity details, or holds a key or token
-      (gitleaks, plus a read of every new doc).
-- [ ] Nothing in the diff describes a security hole that isn't fixed and live yet, in code, docs, lessons or commit
-      messages. Keep it in a members-only room until the fix ships. (Rio Grande pushed one in a lesson on
+- [ ] killer: Nothing in the diff names a person with health, contact or identity details, or holds a key or token
+      (gitleaks, plus a read of every new doc). Once pushed, it can't be pulled back: clones and caches keep what a
+      history rewrite removes.
+- [ ] killer: Nothing in the diff describes a security hole that isn't fixed and live yet, in code, docs, lessons or
+      commit messages. Keep it in a members-only room until the fix ships. (Rio Grande pushed one in a lesson on
       2026-10-27; Tardis caught it.)
 - [ ] The push is needed now: build branches go up once, when ready for review or merge (every push runs CI).
 - [ ] Each commit's message says which ship made it. Every ship commits as zhang8128, so the author field can't tell
@@ -67,6 +110,12 @@ honest. A review that blames no one and changes nothing was skipped, not run.
 
 ## Merging to main (law section 2)
 
+Why: main is what every lighthouse runs, so a bad merge breaks every ship at once. Section 2 of the law binds here;
+this list adds to it and never subtracts.
+
+- [ ] killer: A branch that changes safety code (authority, permissions, the public route, a person's data) merges
+      only on explicit yeses posted in the room, the section 2 approver's among them. No ship's silence counts as
+      consent for it (ships' decision, 2026-10-27).
 - [ ] A section 2 verdict is posted whole in the room: Serenity for Rio Grande's branches, Rio Grande for Serenity's,
       or a fresh Pi reviewer.
 - [ ] Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names.
@@ -76,19 +125,24 @@ honest. A review that blames no one and changes nothing was skipped, not run.
 - [ ] If the diff adds a module or test file to a package with explicit `only-include` lists (peer/pyproject.toml),
       the lists name it, and the package builds and imports in a clean venv. The Pi's editable checkout hides a
       missing module (room-moderators, 2026-10-27), so the whole suite with test_packaging is what shows it.
-- [ ] The station database is backed up (`make station-backup`).
-- [ ] Main is pushed once. The affected Pi services are restarted and checked; if a check fails, revert and restart.
+- [ ] The station database is backed up (`make station-backup`), so a migration that goes wrong can be undone.
+- [ ] killer: Main is pushed once. The affected Pi services are restarted and checked, and the public route is probed
+      from outside when the diff touches it; if a check fails, revert and restart.
 - [ ] The merge is announced in the room, and its board item is marked done.
 
 ## A live station act (bridge, add a ship, approve)
 
-- [ ] Andy asked for it, in a terminal or in the room as himself, and named the room or item.
-- [ ] For an approval, Andy confirmed that the short id matches what the requesting machine showed.
+Why: these acts change who can read, write or join, and text in a room never carries that authority (law section 1).
+
+- [ ] killer: Andy asked for it, in a terminal or in the room as himself, and named the room or item.
+- [ ] killer: For an approval, Andy confirmed that the short id matches what the requesting machine showed.
 - [ ] `make station-rooms` or `make station-pending` was read first, and the result was shown to Andy.
 - [ ] After the act, Andy is told the new short id, whether the brief came along, and how many board items came along.
 - [ ] The act is posted in the room. Titles and names are quoted data.
 
 ## Anything public (outreach, a public repo or route)
+
+Why: what's public can't be taken back.
 
 - [ ] A proposal goes in all hands first, and each ship gives an explicit yes.
 - [ ] It is checked for person data and secrets, as under "Before any push".
@@ -98,6 +152,8 @@ honest. A review that blames no one and changes nothing was skipped, not run.
       hand it to a colleague as is", 2026-10-27.)
 
 ## Copying a person's store (an imprint)
+
+Why: it copies a person's memories to another machine, and only the owner decides what goes.
 
 - [ ] The owner set the scope in his own words. The ship records it, with the exclude file's counts.
 - [ ] Right before the plan, the person-data and capture checks are run again for memories written since the file was
@@ -109,6 +165,8 @@ honest. A review that blames no one and changes nothing was skipped, not run.
       lands with the imprints branch).
 
 ## A session starting or restarting (any ship)
+
+Why: a ship that restarts without its watch and its tick goes quiet, and the others wait on it without knowing.
 
 - [ ] The station watch is held (`station_watch writable=true`).
 - [ ] The kick watcher is armed: scripts/kick_watch.py (on the kick-watch branch until the kick command replaces it)
@@ -130,6 +188,8 @@ honest. A review that blames no one and changes nothing was skipped, not run.
 
 ## Reviewing or building on the Mac
 
+Why: the main checkout is the code the live daemon runs (above).
+
 - [ ] Never check out a branch in `~/Projects/superyak`. Use a worktree under `.worktrees/` or a scratch clone.
 - [ ] Reviewers and probes write only in their own directories. To them, the clone is read-only.
 - [ ] Linux-only tests (`/proc`, systemd) fail on macOS. Name them and don't count them against the branch, for
@@ -137,12 +197,17 @@ honest. A review that blames no one and changes nothing was skipped, not run.
 
 ## Before claiming a cause, a cost or a count
 
+Why: a confident wrong number sends three ships the wrong way. (Tardis posted 14 minutes for a cost that was about 4,
+2026-10-27, and had to correct it.)
+
 - [ ] The claim comes from reading the content, not a keyword count.
 - [ ] The code path is traced from its callers. The function that does the costly thing may run only on a fallback
       path (the hook's `_run`, 2026-10-27).
 - [ ] The number was measured, and the post says how.
 
 ## A spec
+
+Why: law section 3 puts a fresh reviewer in Andy's place, so the review has to be a real one.
 
 - [ ] A fresh reviewer approves it (law section 3). Must-fix items are applied and re-checked.
 - [ ] The summary and decisions are posted in the room.
@@ -164,6 +229,8 @@ honest. A review that blames no one and changes nothing was skipped, not run.
       environmental and why. Tardis's CI never stands in for the Pi's suites at merge.
 
 ## Re-checking review findings on a new head
+
+Why: a finding marked fixed without a re-run is a guess that ships as a fact.
 
 - [ ] Every repro is re-run on the new head before posting. The fixed ones are listed apart, with the commit that
       fixed them.
