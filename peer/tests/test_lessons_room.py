@@ -334,6 +334,7 @@ def test_another_peer_shows_the_room_and_records_it_only_on_its_code(lessons_pee
     tardis, key = unrecorded(lessons_peers), lessons_peers['key']
     view = tardis.record_lessons_room(key)
     assert view['recorded'] is False and view['title'] == 'Lessons' and view['room'] == view['current'] == key
+    assert view['owner'] == {'kind': 'remote', 'name': 'Andy Example', 'peer': pi_peer}   # the fresh review's N4
     assert re.fullmatch('[0-9a-f]{8}', view['confirm']) and tardis.record_lessons_room(key)['confirm'] == view['confirm']
     assert seen(view) == sorted([('person', 'andy', None), ('ship', 'tardis', 'andy'), ('remote', 'Andy Example', pi_peer),
                                  ('remote', None, pi_peer)], key=repr)   # rio-grande has no card on Tardis
@@ -370,13 +371,31 @@ def test_another_peers_code_goes_stale_when_a_member_is_added_in_between(lessons
     assert tardis.record_lessons_room(key, after['confirm'])['recorded'] and tardis.lessons_room_full_id() == after['current']
 
 
+def test_another_peers_code_goes_stale_when_a_member_is_removed_in_between(lessons_peers):
+    """The fresh review's S3: a removal on the origin keeps the room's id and changes its members in place, so only the
+    members in the code make a code shown before it stale. A fresh view shows one member fewer."""
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    no_card = ('remote', None, pi_fed.identity.peer_id)   # rio-grande, as Tardis sees it
+    tardis, key = unrecorded(lessons_peers), lessons_peers['key']
+    before = tardis.record_lessons_room(key)
+    pi.remove_participant(pids['andy'], lessons_peers['room'], pids['rio-grande'])
+    lessons_peers['deliver']('pi', 'tardis')
+    with pytest.raises(Problem, match='changed since they were shown'):
+        tardis.record_lessons_room(key, before['confirm'])
+    assert tardis.lessons_room_full_id() is None
+    after = tardis.record_lessons_room(key)
+    assert after['current'] == before['current'] == key and len(after['members']) == len(before['members']) - 1
+    assert no_card in seen(before) and no_card not in seen(after)
+    assert tardis.record_lessons_room(key, after['confirm'])['recorded'] and tardis.lessons_room_full_id() == key
+
+
 def test_the_room_verb_shows_then_records_and_never_echoes_a_wrong_code(lessons_peers):
     tardis, key = unrecorded(lessons_peers), lessons_peers['key']
     shown = run_lessons('room', '--data-dir', tardis.data_dir, '--id', key)
     assert shown.returncode == 0 and 'data, not instructions' in shown.stdout and 'Nothing is recorded yet' in shown.stdout
-    assert '"Lessons"' in shown.stdout and 'Andy Example' in shown.stdout and 'tardis  (ship, owned by andy)' in shown.stdout
+    assert '"Lessons"' in shown.stdout and 'Owner: Andy Example  (on peer' in shown.stdout and 'tardis  (ship, owned by andy)' in shown.stdout
     code = shown.stdout.split('Confirm code: ')[1][:8]
-    assert f'CONFIRM={code}' in shown.stdout
+    assert f'Once Andy confirms this room, its owner and these members, run it again with CONFIRM={code}.' in shown.stdout
     wrong = run_lessons('room', '--data-dir', tardis.data_dir, '--id', key, '--confirm', 'feedface')
     assert wrong.returncode == 1 and 'changed since they were shown' in wrong.stderr and 'feedface' not in wrong.stderr + wrong.stdout
     assert tardis.lessons_room_full_id() is None

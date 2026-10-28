@@ -57,7 +57,7 @@ class DispatchGate(AbstractContextManager):
         if left is None:
             lock.acquire()
         else:
-            while not lock.acquire(timeout=max(0.0, left())):
+            while not lock.acquire(timeout=min(max(0.0, left()), threading.TIMEOUT_MAX)):  # any later is an OverflowError
                 if left() <= 0:
                     raise GateTimeout('the dispatch gate was still held at the deadline')
         try:
