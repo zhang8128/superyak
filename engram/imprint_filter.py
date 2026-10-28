@@ -898,6 +898,19 @@ def _instant_seconds(text: Any) -> float | None:
     return None if at is None else at.timestamp()
 
 
+def _register_instant(conn: sqlite3.Connection) -> None:
+    """``inst`` on this connection, defined once. SQLite refuses to redefine a function while any statement on the
+    connection is active ("Error creating function", GitHub CI on 7d46e2b6), but a new statement may run, so the
+    probe asks for ``inst`` and defines it only when the connection has none. A connection can't be weakly
+    referenced, so the connection itself is the only record."""
+    try:
+        conn.execute("SELECT inst(NULL)").fetchall()
+    except sqlite3.OperationalError as error:
+        if "no such function" not in str(error):
+            raise
+        conn.create_function("inst", 1, _instant_seconds, deterministic=True)
+
+
 def closed_sessions(conn: sqlite3.Connection, t1: int, *, scratch: Scratch | None = None) -> IdSet:
     """The sessions closed at t1: the newest of a session's rows before t1 (episodes by ``session_id``,
     ``memory_log`` by ``context.session_id`` of any event type, ``operation_log`` by ``session_id``) is older than
@@ -905,7 +918,7 @@ def closed_sessions(conn: sqlite3.Connection, t1: int, *, scratch: Scratch | Non
     groups stream into the scratch file's id set."""
     own = scratch if scratch is not None else Scratch(":memory:")
     closed = IdSet(own)
-    conn.create_function("inst", 1, _instant_seconds, deterministic=True)
+    _register_instant(conn)
     cur = conn.cursor()
     cur.row_factory = None
     for (sid,) in cur.execute(
