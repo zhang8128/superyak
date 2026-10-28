@@ -174,7 +174,8 @@ class Chats:
                 if existing['body'] != body or self._reply_to(db, existing['id']) != reply_to:
                     raise Problem(409, 'Message ID already used with different text')
                 return dict(existing, replayed=True)  # a retry: nothing new was posted
-            self._lessons_gate(db, key, actor, body, labelled=ticket_id is not None or reply_to is not None)  # first rail section 3
+            self._lessons_gate(db, key, actor, body, labelled=ticket_id is not None or reply_to is not None,
+                               client_id=client_message_id)  # first rail section 3
             self._refuse_closed_breakout(db, key)
             if reply_to is not None:
                 self._check_reply_to(db, key, reply_to)

@@ -456,3 +456,29 @@ def test_the_backfill_carries_live_lessons_once_to_a_new_peer(tmp_path, lessons_
     assert mac.lessons_index(None)['lessons'] == 2
     tardis.lessons_index(None)   # its own copy came back unverified and is skipped; the original stands
     assert len(lessons.read_index(tardis.data_dir / lessons.INDEX_FILE)['lessons']) == 2
+
+
+def test_no_door_takes_the_carry_client_id_so_only_the_backfill_writes_it(lessons_station):
+    """Final re-check, N4: a carried copy is marked by its client id, so a ship that chose one could hide its own lesson
+    from the unread count. Every door refuses it; only _carry_lessons writes it. Today's message inserts (grep 'INSERT
+    INTO messages\\|INSERT INTO peer_messages' in peer/superyak_peer): chats.py send (a door), federation.py receive (a
+    door), peer_store.py remote_send (a door, via the laying peer), lessons.py's backfill (the one writer),
+    room_claims.py (claim-, refused in the chain) and system_author.py (a server-chosen id)."""
+    store, clock, ids, room = lessons_station
+    with pytest.raises(Problem) as refused:
+        store.send_message(ids['tardis'], room, f'{lessons.CARRIED}mine', lesson_body())
+    assert (refused.value.status, refused.value.message) == (400, lessons.CARRY_ID)
+
+
+def test_neither_peer_door_takes_the_carry_client_id(lessons_peers):
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    tardis, tardis_fed, tids = lessons_peers['peers']['tardis']
+    with pytest.raises(Problem) as refused:
+        tardis.send_message(tids['tardis'], lessons_peers['key'], f'{lessons.CARRIED}laid', lesson_body())
+    assert refused.value.message == lessons.CARRY_ID
+    forged = tardis_fed.identity.envelope(destination=pi_fed.identity.peer_id, actor=tids['tardis'], resource_id=lessons_peers['room'],
+                                          revision=1, action='room.reply', recipients=[pids['andy']],
+                                          payload={'body': lesson_body(), 'client_message_id': f'{lessons.CARRIED}forged'})
+    with pytest.raises(Problem) as refused:
+        pi_fed.receive(forged)
+    assert refused.value.message == lessons.CARRY_ID

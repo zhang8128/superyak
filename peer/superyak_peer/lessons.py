@@ -65,6 +65,7 @@ CAP = 'This ship already has 32 live lessons in the room; retract one first'
 NO_SUCH_LESSON = 'No live lesson in this room has that id'
 WHO_RETRACTS = "Only a lesson's author or the room's owner retracts it"
 LABELS = 'The lessons room takes plain posts: no reply label and no ticket'
+CARRY_ID = 'A client message ID in the lessons room may not start with lesson-carry-; only the station carries copies'
 NOT_HERE = 'The lessons room takes no {what}'
 NO_IDENTITY = 'This peer has no identity.json yet, so its lessons have no peer id; federation makes it'
 NEW_LOCAL = 'The lessons room takes no new member from this station (first rail section 3)'
@@ -908,7 +909,7 @@ class Lessons:
             chain = self._lessons_chain(db)
             return chain[-1] if chain else None
 
-    def _lessons_gate(self, db, key, author, body, labelled=False):
+    def _lessons_gate(self, db, key, author, body, labelled=False, client_id=None):
         """Every door's checks for a post into a room of the lessons chain (sections 2, 3 and 6), in the caller's
         transaction. `author` is a local user id or a full `<peer>:<user>` id. Returns the lesson id, or None for a
         room outside the chain."""
@@ -916,6 +917,8 @@ class Lessons:
             return None
         if labelled:
             raise Problem(400, LABELS)
+        if isinstance(client_id, str) and client_id.startswith(CARRIED):  # final re-check N4: only the backfill marks a copy
+            raise Problem(400, CARRY_ID)
         snapshot = self._lessons_snapshot(db)
         full = author if ':' in author else f'{snapshot.peer}:{author}'
         post = parse_post(body)
