@@ -77,3 +77,28 @@ def test_the_index_door_skips_the_station_non_members_strangers_names_and_wrong_
     post(store, room, ids['tardis'], lesson_body(claim='Kept.'))
     with store.transaction() as db:
         assert [item.lesson.claim for item in lessons.chain_lessons(store._lessons_snapshot(db))[0]] == ['Kept.']
+
+
+# Fix round 1: a retraction counts from the accepted copy's author, and a recorded room the peer no longer holds is none
+def test_only_the_accepted_copys_author_retracts_never_a_refused_copys_poster(lessons_station):
+    store, clock, ids, room = lessons_station
+    peer = store._own_peer_id()
+    key = lessons.lesson_id(peer, lessons.parse_post(lesson_body(claim='Shared.')))
+    post(store, room, ids['rio-grande'], lesson_body(claim='Shared.'), LESSON_TIME)      # ship: tardis, by rio-grande: refused
+    post(store, room, ids['tardis'], lesson_body(claim='Shared.'), LESSON_TIME + 1)      # tardis's own: the accepted copy
+    post(store, room, ids['rio-grande'], 'retract ' + key, LESSON_TIME + 2)              # the refused copy's poster: no
+    with store.transaction() as db:
+        live, retracted = lessons.chain_lessons(store._lessons_snapshot(db))
+    assert [item.author for item in live] == [f"{peer}:{ids['tardis']}"] and retracted == set()
+    post(store, room, ids['tardis'], 'retract ' + key, LESSON_TIME + 3)                  # the accepted copy's author: yes
+    with store.transaction() as db:
+        live, retracted = lessons.chain_lessons(store._lessons_snapshot(db))
+    assert live == [] and retracted == {key}
+
+
+def test_a_recorded_room_this_peer_no_longer_holds_gives_no_snapshot(lessons_station):
+    store, clock, ids, room = lessons_station
+    with store.transaction() as db:
+        db.execute('UPDATE lessons_room SET room_key=?', (uid(),))  # hand edits only: room_key has no foreign key
+        assert store._lessons_snapshot(db) is None and store._lessons_chain(db) == []
+        assert not store._in_lessons_chain(db, room)

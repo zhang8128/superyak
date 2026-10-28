@@ -296,8 +296,10 @@ def lesson_refusal(snapshot, author, lesson, body, live_key):
 def chain_lessons(snapshot):
     """Section 4 step 2, and every door's view of the chain: (the live lessons in the order laid, the retracted ids).
     Copies collapse by lesson id and keep the earliest copy; each author keeps its first 32 live lessons. A post by
-    the system, one marked unverified, or one whose author isn't a member of the current room counts for nothing."""
-    first, authors, retractions = {}, {}, []
+    the system, one marked unverified, or one whose author isn't a member of the current room counts for nothing.
+    A lesson's author is the author of its earliest accepted copy, never the poster of a refused one, so only that
+    author or the room's owner retracts it."""
+    first, retractions = {}, []
     for post in snapshot.posts:
         if post.skip or post.author not in snapshot.members:
             continue
@@ -309,10 +311,9 @@ def chain_lessons(snapshot):
             retractions.append((post.author, parsed.lesson_id))
             continue
         key = lesson_id(post.author.partition(':')[0], parsed)
-        authors.setdefault(key, post.author)
         if key not in first and lesson_refusal(snapshot, post.author, parsed, post.body, post.live_key) is None:
             first[key] = Live(key, post.author, parsed, post.body)
-    retracted = {key for who, key in retractions if key in authors and who in (authors[key], snapshot.owner)}
+    retracted = {key for who, key in retractions if key in first and who in (first[key].author, snapshot.owner)}
     live, counts = [], {}
     for item in first.values():
         if item.id not in retracted and counts.get(item.author, 0) < LIVE_CAP:
@@ -343,13 +344,16 @@ class Lessons:
         return rooms
 
     def _lessons_chain(self, db):
-        """The recorded room's chain on this peer, oldest first, ending with the current room; [] when none is recorded.
-        A local room id on the origin, `<origin>:<room id>` elsewhere. Each peer follows linked_room_id forward."""
+        """The recorded room's chain on this peer, oldest first, ending with the current room; [] when none is recorded
+        or this peer no longer holds it. A local room id on the origin, `<origin>:<room id>` elsewhere. Each peer
+        follows linked_room_id forward."""
         record = self._lessons_record(db)
         if record is None:
             return []
         key = record['room_key']
         if ':' not in key:
+            if db.execute('SELECT 1 FROM rooms WHERE id=?', (key,)).fetchone() is None:
+                return []  # room_key has no foreign key (elsewhere it names a remote room), so a hand edit can orphan it
             seen = {key}
             while True:
                 row = db.execute('SELECT id FROM rooms WHERE linked_room_id=?', (key,)).fetchone()
