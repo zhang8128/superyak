@@ -2,10 +2,10 @@
 import argparse
 import sys
 from pathlib import Path
-from .station import CONFIG, HOME
 
 
 def build_parser():
+    from .station import CONFIG, HOME
     parser = argparse.ArgumentParser(prog='superyak-agent')
     commands = parser.add_subparsers(dest='command', required=True)
     mcp = commands.add_parser('mcp', help='Station tools over stdio (MCP)')
@@ -20,6 +20,9 @@ def build_parser():
     watch.add_argument('--once', action='store_true')
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
+    held = commands.add_parser('hold', help='Claude Code PreToolUse hook on Bash: checklists and lessons hold a '
+                               'command once (dispatched before this parser, which only describes it)')
+    held.add_argument('--config', type=Path, default=CONFIG)
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
     dock.add_argument('--station', required=True)
     dock.add_argument('--door')
@@ -123,9 +126,12 @@ def _dock_project(args, fields):
 
 
 def main(argv=None):
-    parser = build_parser()
     if argv is None:
         argv = sys.argv[1:]
+    if argv[:1] == ['hold']:  # before any station import: the hold stays light (N8)
+        from .hold import main as hold
+        return hold(argv[1:])
+    parser = build_parser()
     if argv[:1] == ['hook']:
         return _hook(parser, argv)
     args = parser.parse_args(argv)
