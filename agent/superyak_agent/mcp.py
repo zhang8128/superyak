@@ -1,7 +1,9 @@
 """Station tools for Claude Code and Codex sessions (MCP over stdio)."""
 import hashlib
 import json
+import math
 import os
+import re
 import queue
 import sys
 import threading
@@ -9,7 +11,7 @@ import time
 import uuid
 from pathlib import Path
 from superyak_team.teamlib import redact
-from . import claims
+from . import acting, checklist_firing as firing, checklists, claims, holds
 from .station import BREAKOUT_MARK, DEFERRED_MARK, MESSAGE_LIMIT, ON_WATCH_LINE, StationError, UNREADABLE_BOARD, authors, breakout_count_lines, breakout_note, brief_block, board_block, claims_block, client_for, client_version, fence_message, label, load_config, plain_id, presence_headers, quoted_title, read_hint, session_key, shown_id, source_label, utc_time, write_private
 
 DEFAULT_CHARS = 2000
@@ -191,13 +193,16 @@ def more_count(left, more):
 
 
 class Tools:
-    def __init__(self, client, quick_client=None, guard=None, sessions_dir=None):
+    def __init__(self, client, quick_client=None, guard=None, sessions_dir=None, home=None, clock=time.time):
         self.client, self.quick_client = client, quick_client or client
         self.guard = guard  # D7: why this ship may not act in this session, re-read on every call (claim_guard)
         self.sessions_dir = sessions_dir  # the ship's sessions folder, where this session's watch choice is recorded
         # Without a Claude Code session id (Codex, scripts) posts are keyed to this process, so two sessions'
         # identical posts never collapse into one; a retry within the process still posts once.
         self.salt, self.current, self.cancelled = f'proc-{uuid.uuid4().hex[:12]}', None, set()
+        self.home = Path(home) if home else (Path(sessions_dir).parent if sessions_dir else None)  # checklists live here
+        self.clock = clock
+        self.memory = {}  # the session record of a server with no session id, kept in memory (Ruling 24)
         self.named = None  # the name last passed as cursor to station_watch or station_unread (spec S1)
         self.stamp(None, {})
 
@@ -502,10 +507,192 @@ class Tools:
                 'again renews it. It blocks nothing but a second claim on that key in this room.')
         board = got.get('board')
         if board == 'open':
-            return text + f'\nThis takes the board item `{key}`; station_done marks it done when its outcome exists.'
+            text += f'\nThis takes the board item `{key}`; station_done marks it done when its outcome exists.'
+            lists = self._claim_lists(room_id, got['key'])
+            return text + '\n\n' + lists if lists else text
         if board in ('done', 'dropped'):
             return text + f"\nThe board item with this key is {board}; claiming doesn't reopen it, and new work needs a new key."
         return text
+
+    # --- checklists (spec, Running it out loud; claim, exactly) ---
+
+    def _session(self):
+        """The log name of this session: its hashed id, else this process's salt (Ruling 24)."""
+        session_id = os.environ.get('CLAUDE_CODE_SESSION_ID')
+        return acting.session_key(session_id) if session_id else self.salt
+
+    def _own_dir(self):
+        if self.home is None:
+            raise ValueError('Checklists are not available to this server: it has no ship home.')
+        return self.home / 'checklists'
+
+    def _fallback_cwd(self):
+        try:
+            return acting.session_project(os.getcwd())
+        except OSError:
+            return acting.session_project(None)
+
+    def _record_cwd(self):
+        """The cwd the hook recorded for this session, read without creating or locking the record."""
+        session_id = os.environ.get('CLAUDE_CODE_SESSION_ID')
+        if session_id and self.home is not None:
+            try:
+                data = json.loads(holds.record_path(self.home / 'sessions', session_id).read_text())
+                if isinstance(data, dict) and isinstance(data.get('cwd'), str) and data['cwd']:
+                    return data['cwd']
+            except (OSError, ValueError):
+                pass
+        return self._fallback_cwd()
+
+    def _find(self, cwd):
+        return checklists.find(cwd, self._own_dir())
+
+    def _log(self, name, line):
+        holds.append_line(self._own_dir() / name, line)
+
+    def _claim_lists(self, room_id, key):
+        """The `claim` lists due for this board item, fired once per item key per session (Ruling 15). Never fails
+        the claim, which has already happened."""
+        try:
+            if self.home is None:
+                return ''
+            now, item = self.clock(), firing.item_key(room_id, key)
+            session_id = os.environ.get('CLAUDE_CODE_SESSION_ID')
+            if session_id:
+                with holds.open_record(holds.record_path(self.home / 'sessions', session_id), time.monotonic() + 1.0) as rec:
+                    return self._claim_text(rec.data, rec.save, now, item)
+            return self._claim_text(self.memory, lambda: None, now, item)
+        except Exception:  # noqa: BLE001
+            return ''
+
+    def _claim_text(self, record, save, now, item):
+        cwd = record.get('cwd') if isinstance(record.get('cwd'), str) and record.get('cwd') else self._fallback_cwd()
+        due = firing.due_at_claim(self._find(cwd).lists, record, item, now)
+        blocks = [((loaded, kinds), loaded.checklist.id, checklists.render(loaded)) for loaded, kinds in due]
+        shown, _, text = checklists.fit(blocks, 0, holds.OUTPUT_CHARS, cap=firing.LISTS_PER_EVENT)
+        if not shown:
+            return ''
+        holds.touch(record, now, None)
+        firing.mark_fired(record, shown, now, item=item)
+        save()
+        session = self._session()
+        for loaded, kinds in shown:
+            self._log('fired.jsonl', firing.fired_line(now, session, loaded.key, loaded.checklist.version, 'claim'))
+        return text
+
+    def _checked_run(self, args):
+        """key, version, moment and answers, validated by format; a failing reason raises the one refusal text."""
+        key, version, moment, answers = args.get('key'), args.get('version'), args.get('moment'), args.get('answers')
+        if not (isinstance(key, str) and re.fullmatch(r'[0-9a-f]{8}/' + checklists.ID.pattern, key)):
+            raise ValueError('key must be the list key shown with the checklist.')
+        if not (isinstance(version, int) and not isinstance(version, bool) and checklists.VERSION.fullmatch(str(version))):
+            raise ValueError('version must be the integer shown with the checklist.')
+        kinds = ('start', 'every', 'enter', 'command', 'claim')
+        if moment not in kinds:
+            raise ValueError(f'moment must be one of: {", ".join(kinds)}.')
+        if not isinstance(answers, list) or len(answers) > 12:
+            raise ValueError('answers must be a list of at most 12 answers.')
+        clean = []
+        for entry in answers:
+            if not isinstance(entry, dict) or set(entry) - {'answer', 'reason'} or entry.get('answer') not in firing.ANSWERS:
+                raise ValueError(f'each answer is {{answer, reason}} with answer one of: {", ".join(firing.ANSWERS)}.')
+            answer = entry['answer']
+            if 'reason' in entry:
+                if answer not in ('skipped', 'caught'):
+                    raise ValueError('only skipped and caught take a reason.')
+                if not isinstance(entry['reason'], str) or not entry['reason'] or not firing.screen_reason(entry['reason']):
+                    raise ValueError(firing.REASON_REFUSED)
+            elif answer == 'skipped':
+                raise ValueError('skipped needs a reason.')
+            clean.append(dict(entry))
+        return key, version, moment, clean
+
+    def checklist_run(self, args):
+        key, version, moment, answers = self._checked_run(args)
+        found = self._find(self._record_cwd())
+        for loaded in found.lists:
+            c = loaded.checklist
+            if loaded.key == key and c.version == version:
+                want = 0 if c.read else len(c.items)
+                if len(answers) != want:
+                    raise ValueError(f'{key} v{version} has {want} items to answer; got {len(answers)} answers.')
+        self._log('runs.jsonl', firing.run_line(self.clock(), self._session(), key, version, moment, answers))
+        return f'Recorded the run of {key} v{version}.'
+
+    def refused_run(self, args):
+        """The guard refused checklist_run: record why (Ruling 22). Arguments that don't validate record nothing."""
+        key, version, moment, _ = self._checked_run(args if isinstance(args, dict) else {})
+        if os.environ.get('SUPERYAK_RUN'):
+            kind = 'run'
+        else:
+            try:
+                project = os.environ.get('CLAUDE_PROJECT_DIR')
+                if not project:
+                    try:
+                        project = os.getcwd()
+                    except OSError:
+                        project = None
+                kind = acting.verdict(self._home(), project)[0]
+            except Exception:  # noqa: BLE001
+                kind = 'unknown'
+            if kind not in ('unreadable', 'claimed', 'stale', 'elsewhere', 'unclaimed'):
+                kind = 'unknown'
+        self._log('runs.jsonl', firing.refused_line(self.clock(), self._session(), key, version, moment, kind))
+
+    def _home(self):
+        if self.home is None:
+            raise ValueError('no ship home')
+        return self.home
+
+    def checklist_propose(self, args):
+        key, change, reason = args.get('key'), args.get('change'), args.get('reason')
+        if not isinstance(key, str) or not key:
+            raise ValueError('key must be the list key shown with the checklist.')
+        if not (isinstance(change, str) and change and firing.screen_reason(change, 300)):
+            raise ValueError(firing.REASON_REFUSED.replace('200', '300'))
+        if not (isinstance(reason, str) and reason and firing.screen_reason(reason)):
+            raise ValueError(firing.REASON_REFUSED)
+        loaded = next((l for l in self._find(self._record_cwd()).lists if l.key == key), None)
+        if loaded is None:
+            raise ValueError(f'No checklist {label(key, 60)} is loaded here.')
+        c = loaded.checklist
+        deadline = math.ceil((self.clock() + 600) / 600) * 600
+        room = c.post or checklists.ALL_HANDS
+        owner = f'owner: {c.owner}'
+        return (f'Draft only; nothing was posted. Send it with station_post room={room} if you still want to:\n\n'
+                f'Proposal: {change} (checklist {key} v{c.version}, "{c.title}", {owner})\n'
+                f'Why: {reason}\n'
+                f'Runs: {self._runs_summary(key, c.version, len(c.items))}\n'
+                f'Default: adding an item or a moment is accepted if no one objects by {utc_time(deadline)}. Removing or '
+                'weakening anything needs an explicit yes: from a person, or from each ship when the list guards an '
+                'irreversible act; otherwise from one ship other than the proposer, or a person. Any person can veto.')
+
+    def _runs_summary(self, key, version, count):
+        runs = []
+        try:
+            for raw in (self._own_dir() / 'runs.jsonl').read_text(errors='replace').splitlines():
+                try:
+                    line = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(line, dict) and line.get('key') == key and line.get('version') == version and isinstance(line.get('answers'), list):
+                    runs.append(line['answers'])
+        except OSError:
+            pass
+        runs = runs[-10:]
+        if not runs:
+            return 'no runs yet'
+        n = f'last {len(runs)} run' + ('' if len(runs) == 1 else 's')
+        if not count:
+            return n
+        parts = []
+        for i in range(count):
+            tally = {}
+            for answers in runs:
+                if i < len(answers) and isinstance(answers[i], dict) and answers[i].get('answer') in firing.ANSWERS:
+                    tally[answers[i]['answer']] = tally.get(answers[i]['answer'], 0) + 1
+            parts.append(f'item {i + 1}: ' + (', '.join(f'{a} {tally[a]}' for a in firing.ANSWERS if a in tally) or 'none'))
+        return n + '; ' + '; '.join(parts)
 
     def station_claims(self, args):
         return claims_block({'claims': self.client.claims(resolve_room(self.client, args['room']))}) or '(no active claims in this room)'
@@ -717,6 +904,19 @@ TOOLS = [
     ('station_remove_member', REMOVE_MEMBER,
      {'room': {'type': 'string', 'description': 'Room id or exact title; a title names the one current room with it'},
       'member': {'type': 'string', 'description': 'The username of the person or ship to remove'}}, ['room', 'member']),
+    ('checklist_run', 'Record that you ran a checklist out loud: its key and version as shown with it, the moment it fired '
+     'for, and one answer per item (none for a list you read). Reasons are one short line with no email address, phone '
+     'number or key.',
+     {'key': {'type': 'string', 'description': 'The list key shown in its header'}, 'version': {'type': 'integer'},
+      'moment': {'type': 'string', 'enum': ['start', 'every', 'enter', 'command', 'claim']},
+      'answers': {'type': 'array', 'description': 'One per item, in order', 'items': {'type': 'object', 'properties': {
+          'answer': {'type': 'string', 'enum': list(firing.ANSWERS)},
+          'reason': {'type': 'string', 'description': 'Required for skipped; allowed for caught'}}, 'required': ['answer']}}},
+     ['key', 'version', 'moment', 'answers']),
+    ('checklist_propose', 'Draft a change to a checklist as a station post. It posts nothing; send the draft yourself '
+     'with station_post if you still want to.',
+     {'key': {'type': 'string'}, 'change': {'type': 'string', 'description': 'The change, one line, at most 300 bytes'},
+      'reason': {'type': 'string', 'description': 'Why, one line, at most 200 bytes'}}, ['key', 'change', 'reason']),
 ]
 
 
@@ -757,6 +957,11 @@ def handle(tools, msg):
             arguments = {}
         refused = _refusal(tools)
         if refused:
+            if name == 'checklist_run' and hasattr(tools, 'refused_run'):
+                try:
+                    tools.refused_run(arguments)
+                except Exception:  # noqa: BLE001 - recording is best effort; the refusal still stands
+                    pass
             return {'jsonrpc': '2.0', 'id': mid, 'result': {'content': [{'type': 'text', 'text': refused}], 'isError': True}}
         try:
             if not isinstance(arguments, dict):
@@ -804,7 +1009,7 @@ def claim_guard(config_path):
 def serve(config_path):
     config = load_config(config_path)
     serve_with(Tools(client_for(config), quick_client=client_for(config, timeout=3), guard=claim_guard(config_path),
-                     sessions_dir=Path(config_path).parent / 'sessions'),
+                     sessions_dir=Path(config_path).parent / 'sessions', home=Path(config_path).parent),
                sys.stdin, sys.stdout)
 
 
