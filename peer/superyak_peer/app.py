@@ -227,6 +227,13 @@ def ship_member(request: Request):
 def actor(request):
     return current_user(request)['id']
 
+def tailnet_only(request):
+    """Store-copy spec I 9: an imprint reaches the station over the tailnet only. The public route lets a request with
+    a valid ship key through, so the request, manifest, parts and complete routes refuse a public (Funnel) one here,
+    before the ship is looked up (review S5)."""
+    if is_public(request.scope):
+        raise Problem(403, 'Imprints go to the station over the tailnet only')
+
 def paging(query):
     """The paging query of GET /api/chats/{key}, validated; None when it has none (today's full read)."""
     page = {}
@@ -787,6 +794,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     if imprints_dir is not None:
         @app.post('/api/imprints', status_code=201)
         async def imprint_request(request: Request):
+            tailnet_only(request)
             ship = ship_member(request)
             raw = await request.body()
             if len(raw) > MAX_IMPRINT_REQUEST:
@@ -820,16 +828,19 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
         @app.put('/api/imprints/{request_id}/manifest')
         async def imprint_manifest(request_id: str, request: Request):
+            tailnet_only(request)
             ship = ship_member(request)
             return store.put_imprint_manifest(ship['id'], request_id, await request.body())
 
         @app.put('/api/imprints/{request_id}/parts/{n}')
         async def imprint_part(request_id: str, n: int, request: Request):
+            tailnet_only(request)
             ship = ship_member(request)
             return store.put_imprint_part(ship['id'], request_id, n, await request.body())
 
         @app.post('/api/imprints/{request_id}/complete')
         def imprint_complete(request_id: str, request: Request):
+            tailnet_only(request)
             return store.complete_imprint(ship_member(request)['id'], request_id)
 
         @app.post('/api/imprints/{request_id}/withdraw')

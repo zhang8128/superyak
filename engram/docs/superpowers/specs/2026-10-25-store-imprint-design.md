@@ -1452,7 +1452,10 @@ order, with one purpose that had to be equal, is gone: two purposes had no meet 
 
 The station is `https://smart.tail7db420.ts.net`. Port 443 is tailnet-only (DS9 spec, line 84), and shared users
 reach only `smart:443` (DS9 spec, lines 106-108). The public door serves only its two access-request routes (DS9
-spec, lines 80-86). Imprint routes must answer 404 there.
+spec, lines 80-86). Imprint routes must answer 404 there. The main app is public through Funnel too, and its
+public route lets a valid ship key through, so the request, manifest, parts and complete routes refuse a public
+request themselves with 403 "Imprints go to the station over the tailnet only", before the ship is looked up
+(section 2 review S5).
 
 The agent authenticates with the ship key in `~/.superyak/station.json` (DS9 spec, lines 117-119) and sends the
 station's `Origin`, as ship clients do (DS9 spec, lines 57-58).
