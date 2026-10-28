@@ -137,7 +137,11 @@ the username-and-source counter and gives back its other reservations; a tailnet
 also clears the username's public hold. A success sets `superyak_device` (random, HttpOnly,
 Secure, SameSite=Strict, 180 days, stored hashed, one row per browser, at most 20 per user,
 kept at logout): presented on a sign-in to its own username, it exempts that browser from
-the three holds, and its failures hold only its own token (eight in five minutes). Sign-ins
+the three holds, and its failures hold only its own token (eight in five minutes), as do
+its public sign-ins of any outcome (eight in five minutes; a held token gets 429 before
+entering a lane). A username's known browsers together are held after 24 public sign-ins
+of any outcome in five minutes, with the same 429 before a lane, since a cookieless sign-in
+mints a token for free; only a valid token's sign-in counts, and tailnet sign-ins never do. Sign-ins
 run in worker lanes of their own: public 2 at a time with 8 waiting, tailnet 1 with 4,
 known browsers 1 with 4; a full lane answers 429. One-use invitation redemption is atomic.
 
@@ -620,7 +624,7 @@ create_user(username, name, password, *, is_admin=False) -> user [trusted CLI on
 rename_user(actor, name) -> user
 account_corrections(actor) -> ordered actual self-correction records
 login(username, password, source, *, public=True, device=None) -> {user,csrf_token,token,device}
-session_is_valid(token); ship_key_is_valid(key); device_is_valid(device, username) -> bool, writing nothing
+session_is_valid(token); ship_key_is_valid(key); device_is_valid(device, username) -> bool, writing nothing; 429 for a held token
 session(token) -> user+csrf_token; logout(token) -> None
 accounts(actor); invite(actor, expires_in=86400); redeem(token,username,name,password)
 contacts(actor) -> [{id,name}]
@@ -686,6 +690,21 @@ uv run python -m superyak_peer card --data-dir /private/path/home --username own
 uv run python -m superyak_peer serve --data-dir /private/path/home --host 127.0.0.1 --port 7435 --peer-tls --origin https://localhost:7435 --federation-endpoint https://localhost:7435 --sync
 ```
 
+`card` writes `Pairing code: …` to its controlling terminal only; stdout stays exactly the
+card, and with no terminal (a ship's Bash) stderr says where to read the code. On the other
+peer, a person pairs it at a real terminal, typing that code off the exporting screen:
+
+```sh
+uv run python -m superyak_peer pair --data-dir /private/path/home --card owner-card.json --as admin
+uv run python -m superyak_peer connections --data-dir /private/path/home --as admin
+```
+
+`pair` checks `--as` (an admin, not pending activation) first, then reads the code from
+the controlling terminal only: never stdin, an argument or the environment. With no
+terminal (a pipe, a service, a Claude session or its `!` prompt) it refuses, exit 2; use
+an ordinary shell or a tmux pane. A wrong code exits 1. Neither command makes an identity
+(`card --endpoint` does, naming its host).
+
 For a remote hostname, use it in the **first** card export (or first `--peer-tls`
 serve) so its SAN is generated. Cards contain only public material. Browser setup
 must trust the generated certificate explicitly; peer transport uses imported exact
@@ -696,11 +715,12 @@ All origins used by browser/peer traffic must be repeated with `--origin`.
 
 | Method/path | Request | Response/authority |
 |---|---|---|
-| GET `/api/connections` | — | Array of `{id,peer_id,user_id,name,card,paired}`; local owner only |
+| GET `/api/connections` | — | Array of `{id,peer_id,user_id,name,card,paired,pairing_code,confirmed,held}`; `confirmed` while a typed code confirmed that very card, and `pairing_code` only then (null otherwise, so it can't be copied into a re-pair); `held` while the contact waits for its own code after a peer-wide disconnect; local owner only |
 | GET `/api/connections/card` | — | Current signed-in participant's public card |
-| POST `/api/connections/preview` | `{card}` | Validated public card; local owner only; no pairing or network |
-| POST `/api/connections/pair` | `{card,fingerprint}` | Remote contact `{id,peer_id,user_id,name}`, 201; local owner; fingerprint must equal reviewed card |
-| DELETE `/api/connections/{contact_id}` | — | `{ok:true}`; local owner; unpairs entire peer and hides its received content |
+| GET `/api/connections/code` | — | `{code}`: that card's pairing code, grouped; any signed-in participant; 409 without an endpoint |
+| POST `/api/connections/preview` | `{card}` | Validated public card, never its code; local owner only; no pairing or network |
+| POST `/api/connections/pair` | `{card,code}` | Remote contact `{id,peer_id,user_id,name,pairing_code,confirmed}`, 201; local owner (403 first); a missing or malformed code, or the old `fingerprint` alone, 400; a wrong code, 400 naming the card's code |
+| DELETE `/api/connections/{contact_id}` | — | `{ok:true}`; local owner; unpairs entire peer and hides its received content. Every contact of the peer is then held and loses its confirmation: pairing one participant again reconnects that one only, and each other one stays out of audiences, gets no delivery and has its events refused until its own code is typed |
 | GET `/api/sync` | — | `{enabled,deliveries:[...]}` for current author only |
 | POST `/api/sync` | none | Runs one bounded pass, returns same author-filtered status |
 | POST `/api/sync/{delivery_id}/retry` | none | `{ok:true}`; authorized local delivery controller; resets failed attempt budget, preserves event ID; nonfailed returns 409 |
@@ -793,7 +813,7 @@ from superyak_peer.identity import PeerIdentity
 identity = PeerIdentity.load_or_create(store.data_dir)
 fed = Federation(store, endpoint='https://peer.example:7435', identity=identity)
 fed.card(local_user_id)
-fed.pair(local_owner_id, validated_card)
+fed.pair(local_owner_id, validated_card, code=typed_code)  # the code a person typed; checked after the admin check
 fed.unpair(local_owner_id, contact_id)
 fed.collect()                  # bounded metadata-only event → outbox scan
 fed.sync_once()                # {delivered,withdrawn,failed,pending}, optional busy:true
