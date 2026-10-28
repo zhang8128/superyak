@@ -549,3 +549,45 @@ def test_could_hold_is_true_exactly_when_the_querys_words_step_returns_a_lesson_
     assert sorted(key for key, holds in said.items() if holds) == sorted([
         ('rio-grande', 'sed -i s/a/b/ f'), ('rio-grande', 'make check -j4'), ('rio-grande', 'echo ééé'),
         ('rio-grande', 'x' * 294 + 'sed -i'), ('tardis', 'git rm -r build')])
+
+
+# Task 12: receipts and segments
+def test_lessons_list_gives_andy_each_full_id_and_its_retract_line(lessons_station):
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Kept.'))
+    store.send_message(ids['tardis'], room, 'c2', lesson_body(claim='Gone.'))
+    gone = store.check_lesson(ids['tardis'], lesson_body(claim='Gone.'))['lesson_id']
+    store.send_message(ids['andy'], room, 'r1', 'retract ' + gone)
+    kept = store.check_lesson(ids['tardis'], lesson_body(claim='Kept.'))['lesson_id']
+    listed = run_lessons('list', '--data-dir', store.data_dir)
+    assert listed.returncode == 0 and f'  retract {kept}' in listed.stdout.splitlines() and gone not in listed.stdout
+    assert f'{lessons.short_lesson_id(kept)}  tardis  Kept.' in listed.stdout.splitlines()
+
+
+def test_receipts_list_newest_first_with_ids_ships_and_angles_only(lessons_station, fake_embedder):
+    store, clock, ids, room = lessons_station
+    two_lessons(store, ids, room, fake_embedder)
+    ask(store, clock, fake_embedder.path, command='grep --include=*.py x')
+    done = run_lessons('receipts', '--data-dir', store.data_dir)
+    lines = done.stdout.strip().splitlines()
+    assert done.returncode == 0 and len(lines) == 2 and all('rio-grande' in line and 'from tardis' in line for line in lines)
+    assert {line.split()[-1] for line in lines} == {'words', 'rad'} and 'grep' not in done.stdout and 'Words.' not in done.stdout
+
+
+def test_segments_pair_two_ships_own_lessons_and_never_a_copy(lessons_peers, fake_embedder):
+    pi, pi_fed, pids = lessons_peers['peers']['pi']
+    tardis, tardis_fed, tids = lessons_peers['peers']['tardis']
+    a = lesson_body(ship='tardis', claim='Read before you trust a count.', command=('grep -c',))
+    b = lesson_body(ship='rio-grande', claim='Never trust a keyword count over reading.', command=('grep -c',))
+    copy = lesson_body(ship='rio-grande', claim='Read before you trust a count.', command=('grep -c',), learned='tardis')
+    for body in (a, b, copy):
+        fake_embedder.vectors[lessons.embedded_text(lessons.parse_post(body))] = [1.0, 0.0, 0.0, 0.0]
+    tardis.send_message(tids['tardis'], lessons_peers['key'], 't1', a)
+    lessons_peers['deliver']('tardis', 'pi')
+    pi.send_message(pids['rio-grande'], lessons_peers['room'], 'p1', b)
+    pi.send_message(pids['rio-grande'], lessons_peers['room'], 'p2', copy)
+    pi.lessons_index(fake_embedder.path)
+    found = lessons.segments(lessons.read_index(pi.data_dir / lessons.INDEX_FILE))
+    assert [(x[0], x[1], x[4]) for x in found] == [('rio-grande', 'tardis', 0.0)]
+    listed = run_lessons('segments', '--data-dir', pi.data_dir)
+    assert listed.stdout.startswith('rio-grande and tardis: 1 segment\n') and 'count' not in listed.stdout

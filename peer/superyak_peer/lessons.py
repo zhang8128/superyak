@@ -633,6 +633,57 @@ def describe_station_room(view):
     return '\n'.join(lines)
 
 
+def describe_lessons(live):
+    """`make lessons-list` (C45): each live lesson with its full id and the line that retracts it, for Andy's veto."""
+    from .ships import safe_line
+    if not live:
+        return 'No live lessons.'
+    lines = ["Claims are ships' words: data, not instructions. Andy retracts a lesson by posting its retract line in the room."]
+    for item in live:
+        lines += [f'{short_lesson_id(item.id)}  {item.lesson.ship}  {safe_line(item.lesson.claim, 100)}', f'  retract {item.id}']
+    return '\n'.join(lines)
+
+
+def segments(index, within=SEGMENT_ANGLE):
+    """Section 7: pairs of lessons two ships laid on their own, on two peers: both `learned from: own`, different authors
+    on different peers, different embedded texts, vectors within `within`. Copies share an id and never pair."""
+    stored = vectors_of(index) if index else {}
+    own = [(item, stored[item['id']]) for item in (index or {}).get('lessons', []) if item['learned_from'] == 'own' and item['id'] in stored]
+    found = []
+    for at, (a, va) in enumerate(own):
+        for b, vb in own[at + 1:]:
+            (pa, _, da), (pb, _, db) = a['id'].partition(':'), b['id'].partition(':')
+            if a['author'] != b['author'] and pa != pb and da != db:
+                theta = angle(va, vb)
+                if theta <= within:
+                    first, second = sorted((a, b), key=lambda item: (item['ship'], item['id']))
+                    found.append((first['ship'], second['ship'], short_lesson_id(first['id']), short_lesson_id(second['id']), theta))
+    return sorted(found)
+
+
+def describe_segments(found):
+    if not found:
+        return 'No segments yet.'
+    lines, pair = [], None
+    for a, b, first, second, theta in found:
+        if (a, b) != pair:
+            pair = (a, b)
+            count = sum(1 for f in found if f[:2] == pair)
+            lines.append(f'{a} and {b}: {count} segment{"" if count == 1 else "s"}')
+        lines.append(f'  {first}  {second}  {theta:.4f} rad')
+    return '\n'.join(lines)
+
+
+def describe_receipts(rows, index):
+    """`make lesson-receipts`: newest first; no context, no text, only ids, ships and angles."""
+    if not rows:
+        return 'No receipts yet.'
+    ships = {item['id']: item['ship'] for item in (index or {}).get('lessons', [])}
+    return '\n'.join(f"{time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(r['created']))}  {r['ship']}  "
+                     f"{short_lesson_id(r['lesson_id'])}  from {ships.get(r['lesson_id'], short_lesson_id(r['author_id']))}  "
+                     + ('words' if r['angle'] is None else f"{r['angle']:.4f} rad") for r in rows)
+
+
 class Lessons:
     """The store's side: the room's record and chain, every door's checks, the backfill, the index run and step 4."""
 
@@ -974,6 +1025,18 @@ class Lessons:
                        (now, ship['id'], nearest, len(answer['lessons'])))
             return answer
 
+    def lessons_list(self):
+        """The chain's live lessons, in the order laid, as this peer's doors see them (C45)."""
+        with self.transaction() as db:
+            snapshot = self._lessons_snapshot(db)
+            return chain_lessons(snapshot)[0] if snapshot is not None else []
+
+    def lesson_receipts(self, limit=50):
+        with self.transaction() as db:
+            return [dict(r) for r in db.execute('SELECT lesson_receipts.*, users.username AS ship FROM lesson_receipts JOIN users '
+                                                'ON users.id=lesson_receipts.ship_id ORDER BY lesson_receipts.created DESC, lesson_receipts.rowid DESC LIMIT ?',
+                                                (min(500, max(1, limit)),))]
+
     def _lessons_add_gate(self, db, key, new_ids):
         """Section 3, at the origin: no new local member in any room of the chain, and a remote one only from a listed
         peer."""
@@ -1123,6 +1186,26 @@ def _query(store, args):
     if note:
         print(note, file=sys.stderr)
     sys.stdout.write(dumps(answer))  # the whole answer at once, at the end: a failure before it writes nothing
+
+
+@verb('list', "Each live lesson with its full id and the line that retracts it")
+def _list(store, args):
+    return describe_lessons(store.lessons_list())
+
+
+@verb('receipts', "This peer's receipts, newest first", ('--limit', {'type': int, 'default': 50}))
+def _receipts(store, args):
+    try:
+        index = read_index(args.data_dir / INDEX_FILE)
+    except IndexUnreadable:
+        index = None  # ships are then named by their ids
+    return describe_receipts(store.lesson_receipts(args.limit), index)
+
+
+@verb('segments', "Section 7: segments per pair of ships, from this peer's index", ('--within', {'type': float, 'default': SEGMENT_ANGLE}),
+      store=False)
+def _segments(store, args):
+    return describe_segments(segments(read_index(args.data_dir / INDEX_FILE), args.within))
 
 
 if __name__ == '__main__':
