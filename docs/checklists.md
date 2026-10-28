@@ -56,6 +56,8 @@ stays; it's for the ships.
 - [ ] **Next:** what each ship takes next.
 - [ ] **Blocked:** what's stuck, and on what.
 - [ ] **Deviations:** every `skipped` on a list since yesterday, `killer:` items first, each with its reason.
+- [ ] **Small signals:** any warning explained away since yesterday. Seen twice, it becomes a board item, not a
+      habit (learned_from: gtm, 2026-10-27).
 - [ ] **Waiting on Andy:** his decisions, one line each, oldest first.
 
 ## How lists serve intent (deviations, killer items, one log)
@@ -106,8 +108,13 @@ reliable way to hold one, so items are meant to retire. Each one climbs a ladder
 
 The first rungs (2026-10-27):
 
-- Retired: "the include lists name a new module" (under "Merging to main"). test_packaging holds it, and it failed
-  when it should on room-moderators.
+- Retired: "the include lists name every new module and test file" (under "Merging to main"), but only in a package
+  whose packaging test checks both: peer (modules, and test files once imprints merges) and agent (modules, once
+  agent-wheel-includes merges; its list names no tests). It had been retired for peer's modules alone, which held
+  neither agent's wheel (two modules missing) nor peer's test files (ten missing). A rung holds only the package
+  whose test exists, and only once that test is on main.
+- Before retiring an item, name the test and the package it covers, and grep for every place the item applies
+  (Tardis, 2026-10-28).
 - Next: "the branch's base is on the rewritten history" as a pre-push hook (`git merge-base --is-ancestor 60dd851`).
 - Next: "person data and keys" as gitleaks in CI. It stays `killer:`.
 - Candidates from the gtm lane: the Pi suites, and the federation retries.
@@ -132,6 +139,8 @@ What "bring in a person" means (Serenity, 2026-10-27):
 
 Why: the queue fills any hour nobody aims, and a full re-check on low-risk work costs the day vision work needed.
 
+- [ ] Is anyone waiting on something of mine that's done but not pushed? Push it first (Tardis, 2026-10-27: a
+      finished provider sat local for two hours while Serenity waited to build against it).
 - [ ] Name which purpose it serves: a person, the city or the rail. If none, say why now.
 - [ ] Say who will notice when it's done.
 - [ ] Size the review to the risk. Full re-check rounds are for safety code: authority, permissions, the public
@@ -161,7 +170,9 @@ this list adds to it and never subtracts.
       consent for it (ships' decision, 2026-10-27).
 - [ ] A section 2 verdict is posted whole in the room: Serenity for Rio Grande's branches, Rio Grande for Serenity's,
       or a fresh Pi reviewer.
-- [ ] Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names.
+- [ ] Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names. When a
+      partner tests a merge that isn't pushed yet, agree on it by tree: `git rev-parse <commit>^{tree}` printing the
+      same hash on both machines proves byte-identity without a CI run (Tardis, permissions-core, 2026-10-27).
 - [ ] The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named
       (the 3 Kuzu tests).
 - [ ] GitHub CI's result is read, including the jobs the Pi can't run.
@@ -170,7 +181,12 @@ this list adds to it and never subtracts.
   suites item above) is what shows it. If test_packaging breaks, this item comes back.
 - [ ] The station database is backed up (`make station-backup`), so a migration that goes wrong can be undone.
 - [ ] killer: Main is pushed once. The affected Pi services are restarted and checked, and the public route is probed
-      from outside when the diff touches it; if a check fails, revert and restart.
+      from outside when the diff touches it; if a check fails, revert and restart. A security fix to a live route
+      merges on the Pi, restarts and is probed before main is pushed, so its code is never public before the fix is
+      live (the public route, 2026-10-27).
+- [ ] If it breaks at 3 a.m., what tells us, and who? Name the check: a dying unit alerts Odo in Ops; a running
+      route is watched by route-watch once its timer is installed; anything else, say that nothing watches it yet
+      (learned_from: gtm, 2026-10-27).
 - [ ] The merge is announced in the room, and its board item is marked done.
 
 ## A live station act (bridge, add a ship, approve)
@@ -201,11 +217,16 @@ Why: it copies a person's memories to another machine, and only the owner decide
 - [ ] The owner set the scope in his own words. The ship records it, with the exclude file's counts.
 - [ ] Right before the plan, the person-data and capture checks are run again for memories written since the file was
       made.
+- [ ] The same run lists every semantic whose provenance touches an excluded id, live or in cold storage as far as
+      cold.db records it, and the owner decides on each. Excluding an episode doesn't exclude a summary once built
+      from it that still has other sources (imprints re-check, 2026-10-28).
 - [ ] The dry run is read, and its counts match what the owner expects.
 - [ ] The owner confirms in the browser on his own machine.
 - [ ] Andy approves the short id on the Pi, after matching it.
 - [ ] Admission's result is checked, and the owner's machine verifies the receipts (`make imprint-status`, which
-      lands with the imprints branch).
+      lands with the imprints branch). Run status before verify: the permission and receipts arrive only with
+      status (Tardis's test A).
+- [ ] A fresh checkout runs engram with `--extra dev` before the imprint end-to-end test can run.
 
 ## A session starting or restarting (any ship)
 
@@ -293,3 +314,6 @@ Why: a finding marked fixed without a re-run is a guess that ships as a fact.
       them against the working tree and silently drops files that exist only on the branch (2026-10-27, Tardis and
       Serenity both).
 - [ ] No `echo ====` and the like: zsh treats a leading `=` as a command lookup.
+- [ ] Never match processes by a pattern that's in your own command line: `pkill -f`, `pgrep -f` in a loop, or a
+      `case` on /proc cmdlines all match the shell running them. List pids first, or run a script that takes the
+      pattern as an argument (Rio Grande killed its own shell four times, 2026-10-27).
