@@ -236,3 +236,26 @@ def test_the_readers_reply_to_its_own_post_is_not_in_its_unread(env):
     mine = say(serenity, room, 'a', 'my post')
     reply(serenity, room, 'b', 'my own follow up', mine['id'])
     assert unread(serenity, cursor='k')['messages'] == []
+
+
+def test_a_watchers_cursor_never_sets_where_a_new_session_starts(env):
+    """The kick (`<ship>-kick`) reads ahead of every session. If a new cursor started at the kick's position, a session
+    started after a quiet spell would never see what arrived while no session ran (first-rail Task 13's report)."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    say(clients[0], room, 'a', 'read by the last session')
+    advance(serenity, unread(serenity, cursor='session-one')['messages'][-1]['event_id'], cursor='session-one')
+    for n in range(3):
+        say(clients[0], room, f'gap{n}', f'arrived while no session ran {n}')
+    advance(serenity, unread(serenity, cursor='serenity-kick')['messages'][-1]['event_id'], cursor='serenity-kick')
+    assert [m['body'] for m in unread(serenity, cursor='session-two')['messages']] == [
+        'arrived while no session ran 0', 'arrived while no session ran 1', 'arrived while no session ran 2']
+
+
+def test_a_ship_with_only_a_watchers_cursor_still_starts_new_sessions_without_replaying_history(env):
+    """Passes on the old code too: it guards the fallback, failing if a watcher-only ship started at the epoch."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    for n in range(3):
+        say(clients[0], room, f'old{n}', f'old {n}')
+    advance(serenity, unread(serenity, cursor='serenity-kick')['messages'][-1]['event_id'], cursor='serenity-kick')
+    say(clients[0], room, 'new', 'new')
+    assert [m['body'] for m in unread(serenity, cursor='first-session')['messages']] == ['new']
