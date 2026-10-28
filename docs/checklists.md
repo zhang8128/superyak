@@ -249,10 +249,11 @@ it too, since the words are a literal piece of the command. Its long form:
   from main, and each merge is clean: no conflict and no hand edit. A branch whose merge stops leaves the train,
   merges main in, and goes back to its approver. Every Pi suite that any member touches runs once at the train's
   tip, alone on the Pi; main fast-forwards to that tip and is pushed once, and the tip's GitHub CI is read after that
-  push, under the revert rule. "The merge commit is the one the verdict names" is answered with each reviewed head
-  beside its train merge in the post. A security fix in a train still merges, restarts and is probed on the Pi
-  before main is pushed (Rio Grande and Tardis, 2026-10-28: three peer runs, each made stale by the merge before it,
-  became one).
+  push, under the revert rule. A member that touches what only GitHub CI runs (the Lighthouse and interoperability
+  job) has its reviewed head's CI read green first, or merges on its own. "Main is merged into the branch, and the
+  merge commit is the one the verdict names" is answered with each reviewed head beside its train merge in the post.
+  A security fix in a train still merges, restarts and is probed on the Pi before main is pushed (Rio Grande and
+  Tardis, 2026-10-28: three peer runs, each made stale by the merge before it, became one).
 - GitHub CI's result is read, including the jobs the Pi can't run.
 - The `only-include` lists name every new module and test file, and the package builds and imports in a clean
   venv. The Pi's editable checkout hides a missing one. Peer's modules and test files and agent's modules are held
@@ -503,9 +504,10 @@ it, not only as its diff reads.
       In Claude Code's Bash, `find` and other commands can be shell functions (`type find`), so a check typed there
       can test a different tool (Serenity, 2026-10-28: macOS's find rejects `-perm /077`, the hook swallowed the
       error, and a 0644 terms file passed).
-- [ ] A check on what text says to a reader (a fence, a tag, a mention, a person-data screen) judges the text as
-      read: normalised (NFKC, case folded), with invisible and blank-rendering characters dropped. A byte pattern
-      alone is a must-fix (Serenity, 2026-10-28: the fence round found a disguise only the reader's view catches).
+- [ ] A check on what text says to a reader (a fence, a mention, a person-data screen) judges the text as read:
+      normalised (NFKC, case folded), with invisible and blank-rendering characters dropped. A byte pattern alone is
+      a must-fix (Serenity's lesson, 2026-10-28, from the fence fix's fresh Pi review, which found a disguise only
+      the reader's view catches).
       It never flags a line for holding letters outside ASCII, which flags everyone who writes in another language;
       it folds only the letters it looks for (Rio Grande's reader and Tardis, 2026-10-28: a rule marked 35 of 48
       ordinary non-English lines).
