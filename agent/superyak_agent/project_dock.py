@@ -265,6 +265,7 @@ class ProjectDock:
                                            None if backup_existed else backup.unlink(missing_ok=True))))
             settings.parent.mkdir(exist_ok=True)
             install.install_hooks(settings, self.config, messages=hook, backup=backup)
+            install.trust_checkout(self.home, self.out)
             if install.shutil.which('codex') or (Path.home() / '.codex').exists():
                 profile = Path.home() / '.codex' / f'{self.ship}.config.toml'
                 profile_before = profile.read_bytes() if profile.exists() else None
