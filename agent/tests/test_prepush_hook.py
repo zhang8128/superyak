@@ -73,6 +73,30 @@ def test_without_a_private_terms_file_every_push_is_refused(repo, tmp_path):
     assert push(repo, base, clean, terms)[0] == 1
 
 
+@pytest.mark.parametrize('mode, code', [(0o600, 0), (0o400, 0), (0o640, 1), (0o604, 1), (0o660, 1), (0o620, 1)])
+def test_only_an_owner_only_terms_file_is_accepted(repo, mode, code):
+    """macOS's /usr/bin/find rejects `-perm /077` as an illegal mode, and a check that swallowed its error passed
+    a 0644 file there (Serenity, 2026-10-28). The exact modes are POSIX on both finds."""
+    repo, base, terms = repo
+    terms.chmod(mode)
+    assert push(repo, base, commit(repo, 'notes.md', 'fine\n'), terms)[0] == code
+
+
+def test_a_find_that_fails_refuses_the_push(repo, tmp_path):
+    """A permission check that can't run refuses, never passes."""
+    repo, base, terms = repo
+    shim = tmp_path / 'bin'
+    shim.mkdir()
+    (shim / 'find').write_text('#!/bin/sh\necho "find: broken" >&2\nexit 1\n')
+    (shim / 'find').chmod(0o755)
+    clean = commit(repo, 'notes.md', 'fine\n')
+    env = {**os.environ, 'PATH': f'{shim}:{os.environ["PATH"]}', 'SUPERYAK_PREPUSH_BASE': base,
+           'SUPERYAK_SCRUB_TERMS': str(terms)}
+    run = subprocess.run([str(HOOK), 'origin', PUBLIC], input=f'refs/heads/t {clean} refs/heads/t {ZERO}\n', cwd=repo,
+                         env=env, capture_output=True, text=True)
+    assert run.returncode == 1
+
+
 def test_a_delete_pushes_no_history(repo):
     repo, base, terms = repo
     run = subprocess.run([str(HOOK), 'origin', PUBLIC], input=f'refs/heads/t {ZERO} refs/heads/t {base}\n', cwd=repo,

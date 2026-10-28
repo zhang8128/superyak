@@ -17,7 +17,7 @@ import hmac
 import json
 import os
 import sqlite3
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -57,6 +57,7 @@ class UseList:
     """Counts first (`total`, `local`, `imported`, and in a place view `filtered`), then at most USE_LIST_ROWS rows."""
     counts: dict
     rows: list
+    copies: list = field(default_factory=list)      # the owner's list: copies held at a station, shown first
 
 
 class UsesUnreadable(Exception):
@@ -460,8 +461,9 @@ class Uses:
         return out
 
     def owner_list(self, state: State, *, since=None, until=None, place=None, action=None, purpose=None,
-                   collection=None, obj=None, refused=False) -> UseList:
-        """P 9.3: the ledger owner's uses, counts first, then at most USE_LIST_ROWS rows, newest first. A recall that
+                   collection=None, obj=None, refused=False, copies: Sequence[dict] = ()) -> UseList:
+        """P 9.3: the ledger owner's uses, counts first, then at most USE_LIST_ROWS rows, newest first. `copies` are
+        the imprint copies held at a station (each a dict with a `line`), kept on the list to be shown first. A recall that
         returned nothing is no use of any memory (9.1), so it is not listed. Rows from another ledger are imported
         station receipts (R14): marked with their station and counted apart."""
         ledger_id = state.meta.get("ledger_id", "")
@@ -475,7 +477,8 @@ class Uses:
         rows = self._query(where, params).fetchall()
         claims = _self_claims(state)
         subjects = self._subjects_of_rows(rows, {obj for obj, _, _ in claims})
-        return UseList(counts, [_owner_row(state, r, subjects[r["seq"]], claims, ledger_id) for r in rows])
+        return UseList(counts, [_owner_row(state, r, subjects[r["seq"]], claims, ledger_id) for r in rows],
+                       [dict(c) for c in copies])
 
     def place_view(self, state: State, place: str, *, since=None, until=None, action=None, purpose=None,
                    collection=None, obj=None, refused=False) -> UseList:

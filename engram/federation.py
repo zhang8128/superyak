@@ -178,6 +178,8 @@ def sync_genome(genome_path: str, instance_storage, *, ledger=None) -> int:
     genome_conn.row_factory = sqlite3.Row
 
     try:
+        if store_identity.is_imprint(genome_conn):
+            raise store_identity.ImprintRefused("the genome is an imprint; imprints are never synced from")
         genome_instance_id = store_identity.effective_id(genome_conn)
         genome_rows = genome_conn.execute(
             "SELECT id, content, content_hash, source, created_at "

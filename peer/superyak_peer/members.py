@@ -81,12 +81,15 @@ class Members:
         new_ids = [m for m in dict.fromkeys(named) if m not in room['member_ids']]
         if not new_ids:
             raise Problem(409, NO_ONE_NEW.format(short=key[:6]))
+        self._lessons_add_gate(db, key, new_ids)  # first rail section 3: only Andy's, from listed peers
         carried = self._brief_to_carry(db, key, carry)
         new = self._create_room(db, owner_id, room['title'], ids(room['member_ids'] + new_ids), key)
         if carried is not None:  # the brief, under its own author; the old room's messages stay with their participants
             body, author = carried
             self._write_brief(db, new['id'], body, 1, author, carried_from=key)
         new['board_carried'] = self._carry_board(db, key, new['id'])  # work board 5.x
+        if self._in_lessons_chain(db, key):  # first rail section 3: the backfill, in the add's own transaction
+            new['lessons_carried'] = self._carry_lessons(db, key, new['id'], new_ids)
         logged = [self._record_change(db, 'add', key, m, actor_id, grant_id, new_room_id=new['id']) for m in new_ids]
         bridged = self._bridged(db, new['id'])
         by = self._account_name(db, actor_id) + (', a moderator,' if grant_id else '')

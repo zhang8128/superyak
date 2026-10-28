@@ -26,6 +26,7 @@ from .inbox import breakout_filter, wait_seconds, with_earlier_noise
 from .presence import parse_presence
 
 MAX_REQUEST = 6 * 1024 * 1024
+MAX_IMPRINT_REQUEST = 64 * 1024  # I 14: the largest request body
 COOKIE = 'superyak_session'
 DEVICE_COOKIE = 'superyak_device'  # public route spec 3: the known-device cookie, kept at logout
 DEFAULT_ORIGINS = ('http://127.0.0.1:7435', 'http://localhost:7435')
@@ -226,6 +227,13 @@ def ship_member(request: Request):
 def actor(request):
     return current_user(request)['id']
 
+def tailnet_only(request):
+    """Store-copy spec I 9: an imprint reaches the station over the tailnet only. The public route lets a request with
+    a valid ship key through, so the request, manifest, parts and complete routes refuse a public (Funnel) one here,
+    before the ship is looked up (review S5)."""
+    if is_public(request.scope):
+        raise Problem(403, 'Imprints go to the station over the tailnet only')
+
 def paging(query):
     """The paging query of GET /api/chats/{key}, validated; None when it has none (today's full read)."""
     page = {}
@@ -250,7 +258,7 @@ def paging(query):
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
-def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None):
+def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None, imprints_dir: Path | None = None):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
     demo_credentials = []
     if local_demo:
@@ -264,7 +272,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             if not loopback or parsed.scheme not in ('http', 'https'):
                 raise ValueError('Local demo requires loopback origins')
         demo_credentials = validate_demo(Path(data_dir))
-    from .peer_routes import federation_lifespan, install
+    from .peer_routes import federation_lifespan, install, sign_first
     from .federation import Federation
     if federation_endpoint and federation_endpoint not in allowed_origins:
         raise ValueError('Federation endpoint must be an explicitly allowed HTTPS origin')
@@ -275,6 +283,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.federation = Federation(store, endpoint=federation_endpoint)
     app.state.agent_history = agent_history  # version check V1: read once by `serve`; None means off
     app.state.sync_enabled = sync_enabled
+    app.state.imprints_dir = imprints_dir  # R8: None leaves the imprint routes out
     # public route spec 3: public sign-ins, tailnet ones (public requests never enter) and known browsers' public ones
     lanes = app.state.sign_in_lanes = SimpleNamespace(public=SignInLane(2, 8), tailnet=SignInLane(1, 4), known=SignInLane(1, 4))
     install(app)
@@ -315,11 +324,17 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             db.execute('SELECT 1 FROM system_meta').fetchone()
         return {'ok': True}
 
-    async def login_response(request, username, password):
+    async def sign_in_lane(request, username):
+        """Public route spec 3: the lane a sign-in runs in, and the `public` and `device` it counts with. /api/login and
+        the imprint confirm's password (R19) both take it, so a confirm is laned as a sign-in is (review S3)."""
         public, device = is_public(request.scope), request.cookies.get(DEVICE_COOKIE)
         lane = lanes.public if public else lanes.tailnet
         if public and device is not None and await run_in_threadpool(store.device_is_valid, device, username):
             lane = lanes.known  # the read writes nothing, runs before queueing and refuses a held token; Store.login checks again
+        return lane, public, device
+
+    async def login_response(request, username, password):
+        lane, public, device = await sign_in_lane(request, username)
         result = await lane.run(store.login, username, password, request.client.host if request.client else 'unknown',
                                 public=public, device=device)
         token, device = result.pop('token'), result.pop('device')
@@ -781,6 +796,87 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.delete('/api/chats/{key}/participants/{user_id}')
     def chat_remove(key: str, user_id: str, request: Request, grant_id: str | None = None):
         return store.remove_participant(actor(request), key, user_id, grant_id)
+
+    if imprints_dir is not None:
+        # Review S3: every store call, hash, write and fsync of these async routes runs in a worker, never on the event
+        # loop; the confirm's in a sign-in lane. The sync routes below already run in FastAPI's threadpool.
+        @app.post('/api/imprints', status_code=201)
+        async def imprint_request(request: Request):
+            tailnet_only(request)
+            ship = await run_in_threadpool(ship_member, request)
+            raw = await request.body()
+            if len(raw) > MAX_IMPRINT_REQUEST:
+                raise Problem(413, 'Imprint request too large')
+            made = await run_in_threadpool(store.create_imprint_request, ship['id'], raw,
+                                           staging=store.data_dir / 'imprints', root=imprints_dir)
+            return {'id': made['id'], 'code': made['code'], 'expires': made['expires'],
+                    'confirm_url': str(request.base_url).rstrip('/') + f'/#imprint?code={made["code"]}'}
+
+        @app.get('/api/imprints')
+        def imprint_list(request: Request):
+            user = member(request)
+            sign_first(store)
+            if user['kind'] == 'ship':
+                return store.imprint_context(user['id'])
+            return {'imprints': store.list_imprints(user['id'])}
+
+        @app.get('/api/imprints/code/{code}')
+        def imprint_view(code: str, request: Request):
+            return store.imprint_preview(actor(request), code)  # the ship's owner only; anyone else gets 404
+
+        @app.post('/api/imprints/{request_id}/confirm')
+        async def imprint_confirm(request_id: str, request: Request):
+            user = await run_in_threadpool(current_user, request)  # a person with CSRF; a ship key gets 403
+            data = await body(request)
+            lane, public, device = await sign_in_lane(request, user['username'])  # counted as /api/login counts (S2)
+            return await lane.run(store.confirm_imprint, user['id'], request_id, code=data.get('code'),
+                                  password=data.get('password'), attest=data.get('attest'),
+                                  source=request.client.host if request.client else 'unknown',
+                                  public=public, device=device)
+
+        @app.post('/api/imprints/{request_id}/decline')
+        def imprint_decline(request_id: str, request: Request):
+            return store.decline_imprint(actor(request), request_id)
+
+        @app.put('/api/imprints/{request_id}/manifest')
+        async def imprint_manifest(request_id: str, request: Request):
+            tailnet_only(request)
+            ship = await run_in_threadpool(ship_member, request)
+            raw = await request.body()
+            return await run_in_threadpool(store.put_imprint_manifest, ship['id'], request_id, raw)
+
+        @app.put('/api/imprints/{request_id}/parts/{n}')
+        async def imprint_part(request_id: str, n: int, request: Request):
+            tailnet_only(request)
+            ship = await run_in_threadpool(ship_member, request)
+            data = await request.body()
+            return await run_in_threadpool(store.put_imprint_part, ship['id'], request_id, n, data)
+
+        @app.post('/api/imprints/{request_id}/complete')
+        def imprint_complete(request_id: str, request: Request):
+            tailnet_only(request)
+            return store.complete_imprint(ship_member(request)['id'], request_id)
+
+        @app.post('/api/imprints/{request_id}/withdraw')
+        def imprint_withdraw(request_id: str, request: Request):
+            return store.withdraw_imprint(member(request), request_id, root=imprints_dir)  # the owner or the ship; else 404
+
+        @app.post('/api/imprints/{request_id}/shorten')
+        async def imprint_shorten(request_id: str, request: Request):
+            who = await run_in_threadpool(member, request)
+            try:
+                body = await request.json()
+            except ValueError:
+                body = None
+            if not isinstance(body, dict) or set(body) != {'valid_until'}:
+                raise Problem(400, 'Send {"valid_until": seconds}')
+            return await run_in_threadpool(store.shorten_imprint, who, request_id, body['valid_until'], root=imprints_dir)
+
+        @app.get('/api/imprints/{request_id}')
+        def imprint_one(request_id: str, request: Request):
+            who = member(request)['id']
+            sign_first(store)
+            return store.imprint_status(who, request_id)
 
     @app.get('/api/mentions')
     def mentions(request: Request, after: int = 0, limit: int = 50):

@@ -77,7 +77,7 @@ def test_sign_record_refuses_anything_but_this_stations_records(tmp_path):
 def test_each_record_kind_signs_and_verifies_with_exactly_its_keys(tmp_path):
     identity = PeerIdentity.load_or_create(tmp_path / 'a')
     card = card_of(identity)
-    assert set(RECORD_KEYS) == {'instructions-revision', 'grant', 'grant-revocation'}
+    assert set(RECORD_KEYS) == {'instructions-revision', 'grant', 'grant-revocation', 'imprint-permission', 'imprint-receipt'}
     for kind, keys in RECORD_KEYS.items():
         record = {key: None for key in keys} | {'kind': kind, 'station': identity.peer_id}
         assert verify_record(card, record, identity.sign_record(record)), kind

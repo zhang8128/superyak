@@ -161,18 +161,11 @@ class Auth:
                    '(SELECT token_hash FROM login_devices WHERE user_id=? ORDER BY expires DESC LIMIT ?)', (user_id, user_id, DEVICES_PER_USER))
         return device
 
-    def login(self, username, password, source, *, public=True, device=None):
-        """Public route spec 3, reserve first. Step 1 deletes expired counters, then refuses a held attempt (429,
-        without hashing) or counts it in every applicable counter, which reserves it. Step 2 hashes outside any
-        transaction, the dummy hash for an unknown name, so a 401 takes as long either way. Step 3 re-reads the user,
-        since an activation can change the hash in between: a failure keeps the reservation as the counted failure,
-        a success deletes the pair's counter and gives the others back. The answers are today's: 401 for a wrong name
-        or password, 429 when held, the same for unknown and known names.
-        `device` is the browser's superyak_device cookie. One valid for username exempts it from holds 1-3: its
-        failures count against its own token instead, and so do its public sign-ins of any outcome. A success returns
-        the token to set, the same one extended or a new one."""
-        text(username, 'username', 254)
-        text(password, 'password', 1024)
+    def _reserve(self, username, source, public, device):
+        """Step 1 of login below, shared with check_password_attempt (R19): deletes expired counters, then refuses a
+        held attempt (429, without hashing) or counts it in every applicable counter, which reserves it; a known
+        browser counts on its own token instead. Returns (user, known, reserved): the user's row or None, the known
+        device's row or None, and each reserved counter's reset."""
         bucket, kind = login_source(source, public), 'public' if public else 'tailnet'
         holds = {attempts_key('user-source', kind, bucket, username): PAIR_HOLD, attempts_key('source', kind, bucket): SOURCE_HOLD}
         if public:  # hold 3 counts and holds public sign-ins only
@@ -206,20 +199,68 @@ class Auth:
                 user = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
         if held:  # committed: the expired rows stay deleted
             raise Problem(429, 'Too many attempts; try again later')
+        return user, known, reserved
+
+    @staticmethod
+    def _hashed(user, password):
+        """Step 2 of login below: hashes outside any transaction, the dummy hash for an unknown name. Returns (salt,
+        stored, matches)."""
         salt, stored = (user['salt'], user['password_hash']) if user else (b'\0' * 16, b'\0' * 32)
-        matches = hmac.compare_digest(password_hash(password, salt), stored)
+        return salt, stored, hmac.compare_digest(password_hash(password, salt), stored)
+
+    def _settle(self, db, username, user, hashed, public, reserved):
+        """Step 3 of login below, inside the caller's transaction: re-reads the user, since an activation can change
+        the hash in between. A failure keeps the reservation as the counted failure and returns None; a success
+        deletes the pair's counter, gives the others back and returns the user's current row."""
+        salt, stored, matches = hashed
+        current = db.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone() if user else None
+        if not (matches and current and current['salt'] == salt and current['password_hash'] == stored
+                and not current['activation_pending'] and current['kind'] == 'person'):
+            return None
+        keys = list(reserved)  # the pair's first; none for a known browser, which reserved on its token only
+        if keys:
+            db.execute('DELETE FROM login_attempts WHERE key=?', (keys[0],))
+        for key in keys[1:]:  # given back only within the window it was reserved in, and never below zero
+            db.execute('UPDATE login_attempts SET count=max(count-1,0) WHERE key=? AND reset=?', (key, reserved[key]))
+        if not public:  # recovery: a tailnet sign-in clears the username's public hold
+            db.execute('DELETE FROM login_attempts WHERE key=?', (attempts_key('user', username),))
+        return current
+
+    def check_password_attempt(self, username, password, source, *, public=True, device=None):
+        """R19: a person's password typed again, checked and counted as /api/login checks it: login's steps 1 to 3
+        with the request's own `public` and browser `device`, which the caller passes as /api/login does (review
+        S2), so it shares the pair, source and user holds, or a known browser's own count. The defaults are login's
+        (a public sign-in, no known browser). True when right, False when wrong (the attempt stays counted); a held
+        attempt raises Problem(429). A success gives the counters back and resets a known browser's failures as a
+        sign-in does, but makes no session and no browser token, and extends none."""
+        text(username, 'username', 254)
+        text(password, 'password', 1024)
+        user, known, reserved = self._reserve(username, source, public, device)
+        hashed = self._hashed(user, password)
+        with self.transaction() as db:
+            current = self._settle(db, username, user, hashed, public, reserved)
+            if current is not None and known is not None:  # _device_signed_in's reset, without its new expiry
+                db.execute('UPDATE login_devices SET failures=0, failure_reset=0 WHERE token_hash=?', (known['token_hash'],))
+            return current is not None
+
+    def login(self, username, password, source, *, public=True, device=None):
+        """Public route spec 3, reserve first. Step 1 deletes expired counters, then refuses a held attempt (429,
+        without hashing) or counts it in every applicable counter, which reserves it. Step 2 hashes outside any
+        transaction, the dummy hash for an unknown name, so a 401 takes as long either way. Step 3 re-reads the user,
+        since an activation can change the hash in between: a failure keeps the reservation as the counted failure,
+        a success deletes the pair's counter and gives the others back. The answers are today's: 401 for a wrong name
+        or password, 429 when held, the same for unknown and known names.
+        `device` is the browser's superyak_device cookie. One valid for username exempts it from holds 1-3: its
+        failures count against its own token instead, and so do its public sign-ins of any outcome. A success returns
+        the token to set, the same one extended or a new one."""
+        text(username, 'username', 254)
+        text(password, 'password', 1024)
+        user, known, reserved = self._reserve(username, source, public, device)
+        hashed = self._hashed(user, password)
         result = None
         with self.transaction() as db:
-            current = db.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone() if user else None
-            if (matches and current and current['salt'] == salt and current['password_hash'] == stored
-                    and not current['activation_pending'] and current['kind'] == 'person'):
-                keys = list(reserved)  # the pair's first; none for a known browser, which reserved on its token only
-                if keys:
-                    db.execute('DELETE FROM login_attempts WHERE key=?', (keys[0],))
-                for key in keys[1:]:  # given back only within the window it was reserved in, and never below zero
-                    db.execute('UPDATE login_attempts SET count=max(count-1,0) WHERE key=? AND reset=?', (key, reserved[key]))
-                if not public:  # recovery: a tailnet sign-in clears the username's public hold
-                    db.execute('DELETE FROM login_attempts WHERE key=?', (attempts_key('user', username),))
+            current = self._settle(db, username, user, hashed, public, reserved)
+            if current is not None:
                 now, token, csrf = self.clock(), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
                 db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), current['id'], csrf, now + 86400))
                 result = {'user': public_user(current), 'csrf_token': csrf, 'token': token,

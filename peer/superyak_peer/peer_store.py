@@ -173,6 +173,7 @@ class PeerStore:
                     if data['body'] != body:
                         raise Problem(409, 'Message ID already used with different text')
                     return {**data['message'], 'state':old['status']}
+            self._lessons_gate(db, key, actor, body, client_id=client_message_id)  # first rail section 3: the laying peer's door
             message = {'id':uid(), 'room_id':key, 'author_id':own_peer+':'+actor, 'client_message_id':client_message_id, 'body':body, 'epoch':row['revision'], 'created':self.clock(), 'state':'pending'}
             meta = {'actor':actor, 'body':body, 'client_message_id':client_message_id, 'message':message}
             seq = self.emit(db, 'peer.reply', row['resource_id'], row['revision'])

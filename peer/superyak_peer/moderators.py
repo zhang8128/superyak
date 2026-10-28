@@ -54,6 +54,7 @@ class Moderators:
             raise Problem(404, MODERATE_ROOM_NOT_YOURS)
         if db.execute('SELECT owner_id FROM rooms WHERE id=?', (room,)).fetchone()['owner_id'] != issuer_id:
             raise Problem(403, MODERATE_NOT_OWNER)
+        self._refuse_in_lessons_room(db, room, 'moderator')  # first rail section 3: only Andy changes who is in it
         if db.execute(f'SELECT 1 WHERE ? IN ({REPLACED_ROOMS})', (room,)).fetchone():
             raise Problem(400, MODERATE_ROOM_REPLACED)
         if db.execute('SELECT 1 FROM remote_room_members WHERE room_id=?', (room,)).fetchone():
