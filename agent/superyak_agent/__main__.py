@@ -20,6 +20,8 @@ def build_parser():
     watch.add_argument('--once', action='store_true')
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
+    lessons = commands.add_parser('lessons-hook', help="Claude Code hook: lessons from Andy's ships (first rail)")
+    lessons.add_argument('--settings', type=Path, help='The hook\'s own settings (default ~/.superyak/lessons-hook.json)')
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
     dock.add_argument('--station', required=True)
     dock.add_argument('--door')
@@ -123,6 +125,9 @@ def main(argv=None):
         argv = sys.argv[1:]
     if argv[:1] == ['hook']:
         return _hook(parser, argv)
+    if argv[:1] == ['lessons-hook']:  # run_agent.py takes this path before importing this module
+        from .lessons_hook import main as lessons_hook
+        return lessons_hook(argv[1:])
     args = parser.parse_args(argv)
     if args.command == 'mcp':
         from .mcp import serve
