@@ -26,6 +26,7 @@ def ship():
                     ('before-push', {'when': 'command git push', 'version': 3, 'items': ('Base on 60dd851.',)}),
                     ('merging-to-main', {'when': 'command git push origin main', 'items': ('Verdict posted.',)}))
     trust_dirs(home / 'checklists', repo / '.superyak' / 'checklists')
+    (home / 'station.json').write_text('{}')                      # docked: the hold acts only in a ship home (Ruling 44)
     return SimpleNamespace(home=home, repo=repo)
 
 
@@ -249,16 +250,74 @@ def test_the_session_is_in_the_record_before_any_provider_is_asked(ship):
     assert seen[1] == {'id': 's1', 'transcript': None}
 
 
-@pytest.mark.parametrize('broken', ['raises', 'not holds'])
-def test_a_failing_lessons_provider_never_silences_a_checklist(ship, broken):
+BROKEN = ['raises', 'not holds', 'over its limit', 'over its bytes', 'empty text', 'SystemExit', 'KeyboardInterrupt',
+          'a set in the record']
+
+
+@pytest.mark.parametrize('broken', BROKEN)
+def test_a_failing_lessons_provider_never_silences_a_checklist(ship, broken):          # Ruling 44: dropped, never cut
     def lessons(command, record, now, limit):
         record.setdefault('lessons', []).append('half-done')
         if broken == 'raises':
             raise RuntimeError('lessons broke')
-        return [{'kind': 'lesson', 'key': 'k', 'text': 'not a Hold'}]
-    spec = decide(ship, 'git push origin x', lessons=lessons)['hookSpecificOutput']
-    assert spec['permissionDecision'] == 'deny' and spec['permissionDecisionReason'].startswith('Held once: checklist')
-    assert 'lessons' not in saved(ship) and saved(ship)['holds'] == 1
+        if broken == 'SystemExit':
+            raise SystemExit(2)
+        if broken == 'KeyboardInterrupt':
+            raise KeyboardInterrupt
+        if broken == 'not holds':
+            return [{'kind': 'lesson', 'key': 'k', 'text': 'not a Hold'}]
+        if broken == 'over its limit':
+            return [holds.Hold('lesson', f'k{n}', 'Lesson ' + 'z' * 1990) for n in range(5)]
+        if broken == 'over its bytes':
+            return [holds.Hold('lesson', 'k', 'Lesson ' + '\u00e9' * 997)]           # 1,004 characters, 2,001 bytes
+        if broken == 'empty text':
+            return [holds.Hold('lesson', 'k', '')]
+        record['lessons'] = {'heads': {1, 2}}                                     # not JSON
+        return [holds.Hold('lesson', 'k', 'Lesson L1 from tardis')]
+    assert decide(ship, 'npm test', now=9.0, lessons=lessons) is None
+    outs = [decide(ship, f'git push origin b{n}', now=10.0 + n, lessons=lessons)['hookSpecificOutput'] for n in range(5)]
+    assert [o.get('permissionDecision') for o in outs] == ['deny'] * 3 + [None] * 2
+    for out in outs[:3]:
+        reason = out['permissionDecisionReason']
+        assert reason.startswith('Held once: checklist before-push') and 'Lesson' not in reason and len(reason) <= 9500
+    assert 'lessons' not in saved(ship) and saved(ship)['holds'] == 3
+
+
+def test_a_lessons_provider_can_not_reset_the_cap(ship):                                   # Ruling 44
+    def lessons(command, record, now, limit):
+        record['holds'] = 0
+        return [holds.Hold('lesson', f'k{now}', 'Lesson L1 from tardis')]
+    outs = [decide(ship, f'git push origin b{n}', now=10.0 + n, lessons=lessons)['hookSpecificOutput'] for n in range(5)]
+    assert [o.get('permissionDecision') for o in outs] == ['deny'] * 3 + [None] * 2 and saved(ship)['holds'] == 3
+    assert all(o['permissionDecisionReason'].startswith('Held once: checklist') and len(o['permissionDecisionReason']) <= 9500
+               for o in outs[:3])
+
+
+@pytest.mark.parametrize('config', [None, '', 'station.json'])
+def test_an_undocked_machine_is_never_touched(config, tmp_path, monkeypatch):           # Ruling 44
+    repo = checkout(Path.home() / 'Projects' / 'superyak', ('before-push', {'when': 'command git push', 'items': ('x.',)}))
+    trust_dirs(tmp_path / 'elsewhere', repo / '.superyak' / 'checklists')
+    monkeypatch.chdir(tmp_path)
+    call = {'hook_event_name': 'PreToolUse', 'tool_name': 'Bash', 'session_id': 's1', 'cwd': str(repo),
+            'tool_input': {'command': 'git push origin x'}}
+    out = io.StringIO()
+    assert hold.main([] if config is None else ['--config', config], stdin=io.StringIO(json.dumps(call)), stdout=out) == 0
+    assert out.getvalue() == '' and not (Path.home() / '.superyak').exists() and sorted(tmp_path.iterdir()) == [tmp_path / 'elsewhere']
+
+
+def test_a_reader_that_closed_stdout_still_gets_exit_0(ship):                           # Ruling 44
+    proc = subprocess.Popen([sys.executable, str(RUN_AGENT), 'hold', '--config', str(ship.home / 'station.json')],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc.stdout.close()
+    proc.stdout = None
+    _, err = proc.communicate(json.dumps(payload(ship, 'git push origin x')).encode(), timeout=30)
+    assert proc.returncode == 0 and saved(ship)['holds'] == 1, err
+
+
+def test_the_hold_path_never_imports_argparse(ship):                                    # Ruling 44
+    done = subprocess.run([sys.executable, '-c', PROBE, str(RUN_AGENT), str(ship.home / 'station.json')],
+                          input=json.dumps(payload(ship, 'git push origin x')), capture_output=True, text=True, timeout=30)
+    assert done.stdout and 'argparse' not in done.stderr.split('MODULES ', 1)[1].split()
 
 
 def test_a_hold_logs_each_list_it_showed(ship):

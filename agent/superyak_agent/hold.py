@@ -49,16 +49,23 @@ def _output(**fields):
     return {'hookSpecificOutput': {'hookEventName': 'PreToolUse', **fields}}
 
 
+def _lesson(hold) -> bool:
+    return (isinstance(hold, holds.Hold) and hold.kind == 'lesson' and isinstance(hold.text, str)
+            and 0 < len(hold.text.encode('utf-8', 'surrogatepass')) <= holds.LESSON_BYTES)
+
+
 def _lessons(ask, command, record, now, limit):
-    """The lessons provider's Holds. One that raises or returns anything but lesson Holds of text gives none and leaves
-    the record as it was, so a lesson's failure never silences a checklist."""
+    """The lessons provider's Holds, checked against the seam, which only the entry can guarantee (Ruling 44): a list
+    of at most `limit` lesson Holds, each with text of 1 to LESSON_BYTES bytes, leaving a record that still serializes.
+    Anything else, a raise of any kind included, gives none and puts the record back as it was: a result is dropped,
+    never cut, and a lesson's failure never silences a checklist."""
     before = json.dumps(record)
     try:
         got = ask(command, record, now, limit)
-        if isinstance(got, list) and all(isinstance(h, holds.Hold) and h.kind == 'lesson' and isinstance(h.text, str)
-                                         for h in got):
+        if isinstance(got, list) and len(got) <= limit and all(_lesson(h) for h in got):
+            json.dumps(record)
             return got
-    except Exception:  # noqa: BLE001
+    except BaseException:  # noqa: BLE001 - another ship's code: SystemExit and KeyboardInterrupt are its failures too
         pass
     record.clear()
     record.update(json.loads(before))
@@ -75,6 +82,8 @@ def _log(path, lines):
 
 def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
     command, session, cwd, transcript = call
+    if not (home / 'station.json').is_file():   # an undocked machine gets no ship home and no sessions folder (Ruling 44)
+        return
     if acting.verdict(home, acting.session_project(cwd))[0] != 'act':   # inside the read window (M2)
         return
     lists_here = checklist_hold.provider(home, cwd, command)
@@ -86,7 +95,8 @@ def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
         record = opened.data
         holds.touch(record, now, cwd)
         record['session'] = {'id': session, 'transcript': transcript}
-        left = checklist_hold.held(record) < holds.HOLDS_PER_SESSION
+        count = checklist_hold.held(record)   # before any provider: one can't move the cap (Ruling 44)
+        left = count < holds.HOLDS_PER_SESSION
         lists = lists_here.candidates(command, record, now, fp.LISTS_PER_EVENT)
         got = _lessons(lessons or lessons_hold.candidates, command, record, now,
                        holds.HOLDS_PER_SESSION - len(lists)) if left else []
@@ -95,7 +105,7 @@ def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
         if left:
             parts = [checklist_hold.first_line(record, lists[0])] if lists else []
             parts += [h.text for h in lists + got] + [RERUN]
-            record['holds'] = checklist_hold.held(record) + 1
+            record['holds'] = count + 1
             result = _output(permissionDecision='deny', permissionDecisionReason='\n\n'.join(parts))
         else:   # past the cap: lists reach the model with the command's result; lessons don't (R2)
             result = _output(additionalContext='\n\n'.join(h.text for h in lists))
@@ -172,8 +182,24 @@ def main(argv: list[str], stdin=None, stdout=None, clock=time.time, monotonic=ti
             return 0
         result = decide(json.loads(stdin.read()), home, clock(), started, monotonic)
         if result is not None:
-            stdout.write(json.dumps(result) + '\n')
-            stdout.flush()
+            try:
+                stdout.write(json.dumps(result) + '\n')
+                stdout.flush()
+            except BaseException:  # noqa: BLE001 - the reader has gone
+                _quiet(stdout)
     except BaseException:  # noqa: BLE001 - a hook must never break a Bash call
         pass
     return 0
+
+
+def _quiet(stdout):
+    """Point stdout's descriptor at /dev/null after a failed write, so the interpreter's flush at exit can't fail too
+    and exit 120 (Ruling 44)."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, stdout.fileno())
+        finally:
+            os.close(devnull)
+    except Exception:  # noqa: BLE001 - not a real file (a test's StringIO): nothing to flush at exit
+        pass

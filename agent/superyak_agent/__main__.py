@@ -1,10 +1,10 @@
 """superyak-agent: dock this machine's ship, serve its station tools, watch its mentions."""
-import argparse
 import sys
 from pathlib import Path
 
 
 def build_parser():
+    import argparse  # here, not at the top: the hold path never loads it (Ruling 44)
     from .station import CONFIG, HOME
     parser = argparse.ArgumentParser(prog='superyak-agent')
     commands = parser.add_subparsers(dest='command', required=True)
