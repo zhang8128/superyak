@@ -457,11 +457,12 @@ class FakePeer:
     def read_request(self, raw):
         return json.loads(raw)
 
-    def embedder_socket(self, config):
-        return f'socket-for-{config!r}'
+    def embedder_socket(self):
+        return None  # no embedder on this machine: answer_prompt skips Near
 
-    def answer_prompt(self, request, data_dir, socket_path):
+    def answer_prompt(self, request, data_dir, socket_path, clock=time.time, monotonic=time.monotonic, started=None):
         self.calls.append((request, data_dir, socket_path))
+        self.started = started
         time.sleep(self.sleep)
         if self.raises:
             raise self.raises
@@ -473,9 +474,18 @@ def test_at_a_prompt_the_peer_answers_in_process_and_no_command_runs(rail):
     assert rail.run('UserPromptSubmit', peer=peer, prompt='quote a glob') == [A, B]
     assert rail.sent() == []  # the stub command records every request it gets: it got none
     [(request, data_dir, socket)] = peer.calls
-    assert data_dir == str(rail.data) and socket == "socket-for-''"
+    assert data_dir == str(rail.data) and socket is None
     assert request['prompt'] == 'quote a glob' and request['limit'] == 2 and request['ship'] == 'tardis'
-    assert 0 < request['budget_ms'] <= lh.LIMITS[lh.PROMPT] * 1000
+    assert abs(request['budget_ms'] - (lh.LIMITS[lh.PROMPT] - lh.PRINT_RESERVE) * 1000) <= 1  # the whole ceiling
+
+
+def test_the_budget_and_near_count_from_the_hook_s_start(rail):
+    """Spec section 5 (Rio Grande, fa9692db): answer_prompt gets the hook's `started`, not its own monotonic()."""
+    peer = FakePeer({'lessons': [lesson(A)]})
+    began = time.monotonic() - 0.01  # the hook started 10 ms before run() was called
+    text = lh.run(rail.event('UserPromptSubmit', prompt='p'), rail.settings, env={}, started=began, peer=peer)
+    assert text and peer.started == began
+    assert abs(peer.calls[0][0]['budget_ms'] - (lh.LIMITS[lh.PROMPT] - lh.PRINT_RESERVE) * 1000) <= 1
 
 
 @pytest.mark.parametrize('raises', [IndexUnreadable('damaged index'), ValueError('bad'), KeyError('x')])
@@ -513,8 +523,8 @@ def test_seen_lessons_are_dropped_from_an_in_process_answer_too(rail):
     ('def read_request(raw):\n    return raw\n', 'NOT HERE'),  # a lessons module without answer_prompt
     ('import json\n'
      'def read_request(raw):\n    return json.loads(raw)\n'
-     'def embedder_socket(config):\n    return None\n'
-     'def answer_prompt(request, data_dir, socket_path):\n'
+     'def embedder_socket():\n    return None\n'
+     'def answer_prompt(request, data_dir, socket_path, clock=None, monotonic=None, started=None):\n'
      '    return {"lessons": [{"id": "0123abcd-4567cdef", "ship": "serenity", "claim": "c", "why": "w",'
      ' "match": "words"}]}\n', '0123abcd-4567cdef'),
 ])
@@ -527,7 +537,7 @@ def test_the_checkout_s_lessons_module_is_imported_in_process_writing_no_bytecod
     code = ('import sys, time; from pathlib import Path; sys.path.insert(0, sys.argv[1]); '
             'from superyak_agent import lessons_hook as lh; lh.CHECKOUT = Path(sys.argv[2])\n'
             'try:\n'
-            '    got = lh.ask_in_process({"data_dir": "/d"}, {"prompt": "p"}, time.monotonic() + 0.5)\n'
+            '    got = lh.ask_in_process({"data_dir": "/d"}, {"prompt": "p"}, time.monotonic() + 0.5, time.monotonic())\n'
             '    print(" ".join(l["id"] for l in got))\n'
             'except lh.NotHere:\n'
             '    print("NOT HERE")\n')

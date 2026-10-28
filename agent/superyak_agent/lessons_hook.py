@@ -264,28 +264,31 @@ def load_peer_lessons():
     return lessons
 
 
-def ask_in_process(settings, request, deadline, monotonic=time.monotonic, peer=load_peer_lessons):
-    """The prompt path in process (C42, C49): `answer_prompt` with `budget_ms`, what is left before `deadline`, which it
-    keeps itself, down to the embedder's socket timeout. The checked lessons, or None for anything that fails or is
-    late, IndexUnreadable included: in process an exception is the CLI's exit 1. NotHere propagates, so the caller can
-    fall back to the command; a module that is there but fails never falls back."""
+def ask_in_process(settings, request, deadline, started, monotonic=time.monotonic, peer=load_peer_lessons):
+    """The prompt path in process (C42, C49): `answer_prompt` with `budget_ms`, the whole ceiling from the hook's
+    `started` to `deadline`, and `started` itself, so the budget and Near's 100 ms both count from the hook's start
+    (spec section 5), not from inside the call. It keeps the budget itself, down to the embedder's socket timeout;
+    `embedder_socket()` is None on a machine without an embedder, and Near is skipped. The checked lessons, or None
+    for anything that fails or is late, IndexUnreadable included: in process an exception is the CLI's exit 1.
+    NotHere propagates, so the caller can fall back to the command; a module that is there but fails never does."""
     module = peer()
     try:
-        budget_ms = int((deadline - monotonic()) * 1000)
-        if budget_ms <= 0:
+        budget_ms = int((deadline - started) * 1000)
+        if budget_ms <= 0 or monotonic() >= deadline:
             return None
         answer = module.answer_prompt(module.read_request(json.dumps({**request, 'budget_ms': budget_ms})),
-                                      settings['data_dir'], module.embedder_socket(settings.get('runtime_config', '')))
+                                      settings['data_dir'], module.embedder_socket(), monotonic=monotonic,
+                                      started=started)
         raw = json.dumps(answer, ensure_ascii=False, separators=(',', ':')).encode()
         return check_answer(raw) if monotonic() <= deadline else None
     except Exception:  # noqa: BLE001 - IndexUnreadable or anything else: the hook prints nothing
         return None
 
 
-def prompt_lessons(settings, request, deadline, monotonic=time.monotonic, peer=load_peer_lessons):
+def prompt_lessons(settings, request, deadline, started, monotonic=time.monotonic, peer=load_peer_lessons):
     """In process when the peer has the prompt path, else `lessons query` as a command."""
     try:
-        return ask_in_process(settings, request, deadline, monotonic, peer)
+        return ask_in_process(settings, request, deadline, started, monotonic, peer)
     except NotHere:
         return ask(settings, request, deadline, monotonic)
 
@@ -405,7 +408,7 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
         if not isinstance(prompt, str) or not prompt.strip():
             return ''
         request.update(prompt=prompt[:CUTS['prompt']], limit=REQUEST_LIMITS[PROMPT], seen=seen[-SEEN_MAX:])
-        lessons = [l for l in prompt_lessons(settings, request, deadline - PRINT_RESERVE, monotonic, peer) or ()
+        lessons = [l for l in prompt_lessons(settings, request, deadline - PRINT_RESERVE, started, monotonic, peer) or ()
                    if l['id'] not in seen]
         return _output(name, lessons[:REQUEST_LIMITS[PROMPT]]) if lessons else ''
     sent = {}
