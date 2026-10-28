@@ -185,6 +185,10 @@ ID_LINE = re.compile(r'^Lesson (\S+) from (\S+)$', re.MULTILINE)
 SERENITY = [lesson(A, ship='serenity'), lesson(B, ship='serenity'), lesson(C, ship='rio-grande'), lesson(D)]
 
 
+def no_peer():
+    raise lh.NotHere()
+
+
 class Rail:
     """One peer's lessons hook: its settings, the stub query's data directory, its state and a session transcript."""
     def __init__(self, root):
@@ -210,9 +214,10 @@ class Rail:
     def event(self, name, session='s1', **fields):
         return {'hook_event_name': name, 'session_id': session, 'transcript_path': str(self.transcript), **fields}
 
-    def run(self, name, env=None, **fields):
-        """The ids shown, in order, and the whole additionalContext, or None when the hook printed nothing."""
-        text = lh.run(self.event(name, **fields), self.settings, env={} if env is None else env)
+    def run(self, name, env=None, peer=None, **fields):
+        """The ids shown, in order, and the whole additionalContext, or None when the hook printed nothing. The prompt
+        path uses the stub command unless a `peer` lessons module is given, so the real one never answers a test."""
+        text = lh.run(self.event(name, **fields), self.settings, env={} if env is None else env, peer=peer or no_peer)
         if not text:
             return None
         output = json.loads(text)['hookSpecificOutput']
@@ -432,3 +437,101 @@ def test_superyak_run_other_than_hook_asks_nothing(rail, value, asks):
     assert (rail.run('UserPromptSubmit', env={'SUPERYAK_RUN': value}, prompt='a prompt') is not None) is asks
     assert (rail.run('SessionStart', env={'SUPERYAK_RUN': value}, session='s9', cwd='/') is not None) is asks
     assert len(rail.sent()) == (2 if asks else 0)
+
+
+# The prompt path in process (first rail C42, C49; Rio Grande's answer_prompt on first-rail)
+
+class IndexUnreadable(Exception):
+    pass
+
+
+class FakePeer:
+    """Stands for superyak_peer.lessons: read_request, embedder_socket and answer_prompt, recording each call."""
+
+    def __init__(self, answer=None, raises=None, sleep=0.0):
+        self.answer, self.raises, self.sleep, self.calls = answer, raises, sleep, []
+
+    def __call__(self):
+        return self
+
+    def read_request(self, raw):
+        return json.loads(raw)
+
+    def embedder_socket(self, config):
+        return f'socket-for-{config!r}'
+
+    def answer_prompt(self, request, data_dir, socket_path):
+        self.calls.append((request, data_dir, socket_path))
+        time.sleep(self.sleep)
+        if self.raises:
+            raise self.raises
+        return self.answer
+
+
+def test_at_a_prompt_the_peer_answers_in_process_and_no_command_runs(rail):
+    peer = FakePeer({'lessons': [lesson(A, ship='serenity'), lesson(B)]})
+    assert rail.run('UserPromptSubmit', peer=peer, prompt='quote a glob') == [A, B]
+    assert rail.sent() == []  # the stub command records every request it gets: it got none
+    [(request, data_dir, socket)] = peer.calls
+    assert data_dir == str(rail.data) and socket == "socket-for-''"
+    assert request['prompt'] == 'quote a glob' and request['limit'] == 2 and request['ship'] == 'tardis'
+    assert 0 < request['budget_ms'] <= lh.LIMITS[lh.PROMPT] * 1000
+
+
+@pytest.mark.parametrize('raises', [IndexUnreadable('damaged index'), ValueError('bad'), KeyError('x')])
+def test_a_raising_answer_prompt_prints_nothing_and_never_falls_back(rail, raises):
+    """Rio Grande: answer_prompt raises IndexUnreadable on a damaged index, the CLI's exit 1 in process."""
+    rail.answers(lesson(A))
+    assert rail.run('UserPromptSubmit', peer=FakePeer(raises=raises), prompt='a prompt') is None
+    assert rail.sent() == []
+
+
+def test_a_late_or_malformed_in_process_answer_prints_nothing(rail, monkeypatch):
+    monkeypatch.setitem(lh.LIMITS, lh.PROMPT, 0.150)  # the rail fixture's 5 s would make 0.2 s on time
+    assert rail.run('UserPromptSubmit', peer=FakePeer({'lessons': [lesson(A)]}, sleep=0.2), prompt='p') is None
+    monkeypatch.setitem(lh.LIMITS, lh.PROMPT, 5.0)
+    assert rail.run('UserPromptSubmit', peer=FakePeer({'nope': []}), prompt='p') is None
+    assert rail.run('UserPromptSubmit', peer=FakePeer({'lessons': [{'id': 'bad'}]}), prompt='p') is None
+    assert rail.sent() == []
+
+
+def test_a_checkout_without_the_prompt_path_falls_back_to_the_command(rail):
+    rail.answers(lesson(A))
+    assert rail.run('UserPromptSubmit', prompt='a prompt') == [A]  # Rail's default peer is "not here"
+    assert len(rail.sent()) == 1
+
+
+def test_seen_lessons_are_dropped_from_an_in_process_answer_too(rail):
+    rail.shown_at_prompt(lesson(A))
+    peer = FakePeer({'lessons': [lesson(A), lesson(B)]})
+    assert rail.run('UserPromptSubmit', peer=peer, prompt='p') == [B]
+    assert peer.calls[0][0]['seen'] == [A]
+
+
+@pytest.mark.parametrize('module, shown', [
+    (None, 'NOT HERE'),  # a checkout from before the first rail
+    ('def read_request(raw):\n    return raw\n', 'NOT HERE'),  # a lessons module without answer_prompt
+    ('import json\n'
+     'def read_request(raw):\n    return json.loads(raw)\n'
+     'def embedder_socket(config):\n    return None\n'
+     'def answer_prompt(request, data_dir, socket_path):\n'
+     '    return {"lessons": [{"id": "0123abcd-4567cdef", "ship": "serenity", "claim": "c", "why": "w",'
+     ' "match": "words"}]}\n', '0123abcd-4567cdef'),
+])
+def test_the_checkout_s_lessons_module_is_imported_in_process_writing_no_bytecode(tmp_path, module, shown):
+    package = tmp_path / 'peer' / 'superyak_peer'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    if module is not None:
+        (package / 'lessons.py').write_text(module)
+    code = ('import sys, time; from pathlib import Path; sys.path.insert(0, sys.argv[1]); '
+            'from superyak_agent import lessons_hook as lh; lh.CHECKOUT = Path(sys.argv[2])\n'
+            'try:\n'
+            '    got = lh.ask_in_process({"data_dir": "/d"}, {"prompt": "p"}, time.monotonic() + 0.5)\n'
+            '    print(" ".join(l["id"] for l in got))\n'
+            'except lh.NotHere:\n'
+            '    print("NOT HERE")\n')
+    done = subprocess.run([sys.executable, '-I', '-c', code, str(Path(__file__).resolve().parents[1]), str(tmp_path)],
+                          capture_output=True, text=True, timeout=60)
+    assert done.stdout.strip() == shown, done.stderr
+    assert not list(tmp_path.rglob('__pycache__'))

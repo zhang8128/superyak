@@ -244,6 +244,52 @@ def ask(settings, request, deadline, monotonic=time.monotonic):
     return check_answer(out) if process.returncode == 0 else None
 
 
+class NotHere(Exception):
+    """The checkout's peer has no `lessons.answer_prompt` yet (a checkout from before the first rail)."""
+
+
+def load_peer_lessons():
+    """The checkout's `superyak_peer.lessons`, imported in this process without writing bytecode (first rail C42, C56:
+    it imports only the standard library and `superyak_peer.common`). NotHere when it isn't there."""
+    sys.dont_write_bytecode = True
+    peer = str(CHECKOUT / 'peer')
+    if peer not in sys.path:
+        sys.path.append(peer)
+    try:
+        from superyak_peer import lessons
+    except ImportError:
+        raise NotHere() from None
+    if not callable(getattr(lessons, 'answer_prompt', None)):
+        raise NotHere()
+    return lessons
+
+
+def ask_in_process(settings, request, deadline, monotonic=time.monotonic, peer=load_peer_lessons):
+    """The prompt path in process (C42, C49): `answer_prompt` with `budget_ms`, what is left before `deadline`, which it
+    keeps itself, down to the embedder's socket timeout. The checked lessons, or None for anything that fails or is
+    late, IndexUnreadable included: in process an exception is the CLI's exit 1. NotHere propagates, so the caller can
+    fall back to the command; a module that is there but fails never falls back."""
+    module = peer()
+    try:
+        budget_ms = int((deadline - monotonic()) * 1000)
+        if budget_ms <= 0:
+            return None
+        answer = module.answer_prompt(module.read_request(json.dumps({**request, 'budget_ms': budget_ms})),
+                                      settings['data_dir'], module.embedder_socket(settings.get('runtime_config', '')))
+        raw = json.dumps(answer, ensure_ascii=False, separators=(',', ':')).encode()
+        return check_answer(raw) if monotonic() <= deadline else None
+    except Exception:  # noqa: BLE001 - IndexUnreadable or anything else: the hook prints nothing
+        return None
+
+
+def prompt_lessons(settings, request, deadline, monotonic=time.monotonic, peer=load_peer_lessons):
+    """In process when the peer has the prompt path, else `lessons query` as a command."""
+    try:
+        return ask_in_process(settings, request, deadline, monotonic, peer)
+    except NotHere:
+        return ask(settings, request, deadline, monotonic)
+
+
 def branch(cwd, deadline, monotonic=time.monotonic):
     """`git rev-parse --abbrev-ref HEAD` in cwd, or None outside a repository, or when git fails or is late."""
     left = min(deadline - monotonic() - RESERVE, GIT_SECONDS)
@@ -331,9 +377,10 @@ def _prune(folder, keep, now):
                 pass
 
 
-def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=time.time, started=None):
+def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=time.time, started=None,
+        peer=load_peer_lessons):
     """The JSON to print for one hook event (its stdin, decoded), or ''. `started` is when the hook began, on
-    `monotonic`: every limit counts from it."""
+    `monotonic`: every limit counts from it. `peer` loads the peer's lessons module for the prompt path."""
     started = monotonic() if started is None else started
     env = os.environ if env is None else env
     if env.get('SUPERYAK_RUN') not in (None, '', 'hook'):
@@ -358,7 +405,8 @@ def run(event, settings_path=None, env=None, monotonic=time.monotonic, clock=tim
         if not isinstance(prompt, str) or not prompt.strip():
             return ''
         request.update(prompt=prompt[:CUTS['prompt']], limit=REQUEST_LIMITS[PROMPT], seen=seen[-SEEN_MAX:])
-        lessons = [l for l in ask(settings, request, deadline - PRINT_RESERVE, monotonic) or () if l['id'] not in seen]
+        lessons = [l for l in prompt_lessons(settings, request, deadline - PRINT_RESERVE, monotonic, peer) or ()
+                   if l['id'] not in seen]
         return _output(name, lessons[:REQUEST_LIMITS[PROMPT]]) if lessons else ''
     sent = {}
     cwd = event.get('cwd') if isinstance(event.get('cwd'), str) and event.get('cwd') else None
