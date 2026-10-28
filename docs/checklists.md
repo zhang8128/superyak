@@ -536,6 +536,12 @@ it, not only as its diff reads.
       spent before the code under test runs and the test passes without reaching it (Rio Grande's reader,
       2026-10-28: a 300 ms budget was spent importing the store, so the test passed on the old code too).
 
+## Answering a mention or a request in a room
+
+- [ ] Its date and the repo's state are checked before it is answered as live: a request that has been settled since
+      is answered as settled, never re-argued (Tardis, 2026-10-28: a day-old force-push request, pushed and lifted
+      the day before, was answered as a live question).
+
 ## Shell commands (zsh)
 
 Once Andy says yes, this list will be `~/.superyak/checklists/zsh-commands.md` (`when: command --include=*`).
