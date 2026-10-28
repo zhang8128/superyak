@@ -1,0 +1,12 @@
+[Unit]
+Description=Superyak lessons index: the lessons room's chain into lessons-index.bin (first rail, section 4)
+OnFailure=superyak-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/superyak/peer
+EnvironmentFile=%h/.config/superyak/lessons.env
+ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer.lessons index --data-dir ${SUPERYAK_LESSONS_DATA}
+Nice=10
+TimeoutStartSec=5min
+LimitDATA=512M
