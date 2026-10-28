@@ -105,3 +105,21 @@ def test_a_push_by_url_scans_the_whole_branch_and_still_passes_a_clean_one(repo)
                          env={**os.environ, 'SUPERYAK_PREPUSH_BASE': base, 'SUPERYAK_SCRUB_TERMS': str(terms)},
                          capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
+
+
+def test_a_stale_remote_tracking_ref_on_old_history_vouches_for_nothing(repo):
+    """Serenity's second case: an old branch was pushed, the scrub rewrote the remote, and the clone kept its tracking
+    ref (no prune). A branch on the base merging that ref must still be refused: the ref no longer means GitHub has it."""
+    repo, base, terms = repo
+    git(repo, 'checkout', '-q', '--orphan', 'old-session')
+    git(repo, 'rm', '-rqf', '.')
+    commit(repo, 'docs/sessions/s.md', 'zebra-condition\n')
+    git(repo, 'rm', '-q', 'docs/sessions/s.md')
+    git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'removed')
+    stale = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'update-ref', 'refs/remotes/origin/old-session', stale)
+    git(repo, 'checkout', '-q', 'main')
+    git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'merge', '-q', '--allow-unrelated-histories', '-s', 'ours',
+        'refs/remotes/origin/old-session', '-m', 'merge a stale ref')
+    code, said = push(repo, base, git(repo, 'rev-parse', 'HEAD'), terms)
+    assert code == 1 and 'old history' in said

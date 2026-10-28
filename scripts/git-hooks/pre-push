@@ -29,7 +29,9 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     fi
     # Commits new to this remote that neither descend from the base nor are its ancestors: old history, whatever it
     # touched, even when a merge hides it (Serenity, 2026-10-28).
-    git rev-list "$local_sha" --not "$SCRUBBED_BASE" --remotes="$1" | sort > "$tmp/new"
+    # Only the base is excluded, never remote-tracking refs: a stale one left from before the scrub would vouch for old
+    # commits the remote no longer has (Serenity, 2026-10-28).
+    git rev-list "$local_sha" --not "$SCRUBBED_BASE" | sort > "$tmp/new"
     git rev-list --ancestry-path "$SCRUBBED_BASE..$local_sha" | sort > "$tmp/after"
     old=$(comm -23 "$tmp/new" "$tmp/after" | head -5 | cut -c1-8 | tr '\n' ' ')
     if [ -n "$old" ]; then
