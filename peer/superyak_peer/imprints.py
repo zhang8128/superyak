@@ -927,9 +927,10 @@ class Imprints:
                         "the end date."),
             'expires': found['expires']}
 
-    def confirm_imprint(self, actor, request_id, *, code, password, attest, source):
-        """The owner's yes (D1): the code, the ticked check and the password, counted as a login; then, in one
-        transaction, the permission is built, signed and stored and the request is `allowed`."""
+    def confirm_imprint(self, actor, request_id, *, code, password, attest, source, public=True, device=None):
+        """The owner's yes (D1): the code, the ticked check and the password, counted as a login (`public` and
+        `device` are the request's, as /api/login passes them); then, in one transaction, the permission is built,
+        signed and stored and the request is `allowed`."""
         with self.transaction() as db:
             self._owned_open_request(db, actor, code=code)
             found = db.execute('SELECT id FROM imprint_requests WHERE code_hash=?', (token_hash(code),)).fetchone()
@@ -938,7 +939,7 @@ class Imprints:
             username = db.execute('SELECT username FROM users WHERE id=?', (actor,)).fetchone()['username']
         if attest is not True:
             raise Problem(400, 'Tick the box to confirm')
-        if not self.check_password_attempt(username, password, source):
+        if not self.check_password_attempt(username, password, source, public=public, device=device):
             raise Problem(401, 'Invalid password')
         with self.transaction() as db:
             found = self._owned_open_request(db, actor, code=code)

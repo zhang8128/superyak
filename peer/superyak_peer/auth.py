@@ -185,17 +185,22 @@ class Auth:
             db.execute('DELETE FROM login_attempts WHERE key=?', (attempts_key('user', username),))
         return current
 
-    def check_password_attempt(self, username, password, source):
+    def check_password_attempt(self, username, password, source, *, public=True, device=None):
         """R19: a person's password typed again, checked and counted as /api/login checks it: login's steps 1 to 3
-        with login's defaults (a public sign-in, no known browser), so it shares the pair, source and user holds.
-        True when right, False when wrong (the attempt stays counted); a held attempt raises Problem(429). A success
-        gives the counters back as a sign-in does but makes no session and no browser token."""
+        with the request's own `public` and browser `device`, which the caller passes as /api/login does (review
+        S2), so it shares the pair, source and user holds, or a known browser's own count. The defaults are login's
+        (a public sign-in, no known browser). True when right, False when wrong (the attempt stays counted); a held
+        attempt raises Problem(429). A success gives the counters back and resets a known browser's failures as a
+        sign-in does, but makes no session and no browser token, and extends none."""
         text(username, 'username', 254)
         text(password, 'password', 1024)
-        user, _, reserved = self._reserve(username, source, True, None)
+        user, known, reserved = self._reserve(username, source, public, device)
         hashed = self._hashed(user, password)
         with self.transaction() as db:
-            return self._settle(db, username, user, hashed, True, reserved) is not None
+            current = self._settle(db, username, user, hashed, public, reserved)
+            if current is not None and known is not None:  # _device_signed_in's reset, without its new expiry
+                db.execute('UPDATE login_devices SET failures=0, failure_reset=0 WHERE token_hash=?', (known['token_hash'],))
+            return current is not None
 
     def login(self, username, password, source, *, public=True, device=None):
         """Public route spec 3, reserve first. Step 1 deletes expired counters, then refuses a held attempt (429,

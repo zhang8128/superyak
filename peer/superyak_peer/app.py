@@ -828,10 +828,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         async def imprint_confirm(request_id: str, request: Request):
             user = await run_in_threadpool(current_user, request)  # a person with CSRF; a ship key gets 403
             data = await body(request)
-            lane, _, _ = await sign_in_lane(request, user['username'])
+            lane, public, device = await sign_in_lane(request, user['username'])  # counted as /api/login counts (S2)
             return await lane.run(store.confirm_imprint, user['id'], request_id, code=data.get('code'),
                                   password=data.get('password'), attest=data.get('attest'),
-                                  source=request.client.host if request.client else 'unknown')
+                                  source=request.client.host if request.client else 'unknown',
+                                  public=public, device=device)
 
         @app.post('/api/imprints/{request_id}/decline')
         def imprint_decline(request_id: str, request: Request):
