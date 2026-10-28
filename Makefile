@@ -51,6 +51,17 @@ GRANT ?=
 HOURS = 720
 BUDGET = 10
 ACTIONS = add,remove
+# First rail (docs/superpowers/specs/2026-10-27-first-rail-lessons-design.md): the peer a lessons target reads (the
+# station's on the Pi; each other peer passes its own), the ship the origin's record names, and the lessons command.
+LESSONS_DATA ?= $(STATION_DATA)
+LESSONS_SHIP ?= rio-grande
+CONFIRM ?=
+OWNER ?=
+FILE ?=
+NEAR ?=
+RESTART ?=
+LESSONS_UNITS := superyak-lessons-index.service superyak-lessons-index.timer
+LESSONS = uv run --locked --project peer python -m superyak_peer.lessons
 # Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
 # and any project ship's watcher on this machine (a later one gets it when make station-units runs again).
 STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-imprint-sweep.service superyak-imprint-sweep.timer superyak-alert@.service
@@ -63,7 +74,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -86,6 +97,16 @@ help:
 	@echo "make station-restore-reconcile DB=… [REPLACED=…] [UNPAIR='id …']  On the Pi: runbook step 5 (docs/station-restore.md)"
 	@echo "make station-alerts     On the Pi: show the alert queue and what is held back"
 	@echo "make station-units      On the Pi: install the backup timers and the alert drop-ins; make station-units-remove undoes it"
+	@echo "make station-lessons-room ID=… [CONFIRM=…]  On the Pi: show, then record, the lessons room (first rail)"
+	@echo "make lessons-room ID=…  On another peer: record the lessons room by its full id (LESSONS_DATA=this peer)"
+	@echo "make lessons-where      This peer's lessons room, by its full id"
+	@echo "make lessons-ship SHIP=… OWNER=…  Andy only, on another peer: a ship account with no key"
+	@echo "make lessons-check SHIP=… FILE=…  Run this peer's checks on one lesson or retraction, without posting"
+	@echo "make lessons-list       Each live lesson with its full id and the line that retracts it"
+	@echo "make lesson-receipts / lesson-segments  This peer's receipts, newest first / its segments per pair of ships"
+	@echo "make lessons-units      Install the lessons index timer for LESSONS_DATA; make lessons-units-remove undoes it"
+	@echo "make lessons-prompt-near NEAR=on|off  Let Near run at a prompt on this peer, or not (make lessons-timing says which)"
+	@echo "make lessons-timing [RESTART=1]  Section 5's measure at the bound, through this machine's embedder"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
 	@echo "make wormhole-key KEY_FILE=…  On the Pi: authorize Stanley's sync key (a .pub file) for the station vault only"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
@@ -397,6 +418,61 @@ station-restore-reconcile:
 
 station-alerts:
 	uv run --locked --project peer python -m superyak_peer station-alerts --data-dir "$(STATION_DATA)"
+
+station-lessons-room:
+	@test -n "$(ID)" || { echo 'Usage: make station-lessons-room ID=<short id from make station-rooms> [CONFIRM=<the code it showed>] [LESSONS_SHIP=rio-grande] [APPROVER=andy]'; exit 2; }
+	$(LESSONS) station-room --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --ship "$(LESSONS_SHIP)"$(if $(CONFIRM), --confirm "$(CONFIRM)")
+
+lessons-room:
+	@test -n "$(ID)" || { echo 'Usage: make lessons-room ID=<origin peer id>:<room id> [LESSONS_DATA=<this peer data dir>]'; exit 2; }
+	$(LESSONS) room --data-dir "$(LESSONS_DATA)" --id "$(ID)"
+
+lessons-where:
+	$(LESSONS) where --data-dir "$(LESSONS_DATA)"
+
+lessons-ship:
+	@test -n "$(SHIP)" && test -n "$(OWNER)" || { echo 'Usage, Andy only: make lessons-ship SHIP=<ship username> OWNER=<his username on this peer> [LESSONS_DATA=…]'; exit 2; }
+	$(LESSONS) ship --data-dir "$(LESSONS_DATA)" --username "$(SHIP)" --owner "$(OWNER)"
+
+lessons-check:
+	@test -n "$(SHIP)" && test -n "$(FILE)" || { echo 'Usage: make lessons-check SHIP=<ship username> FILE=<one lesson or retraction, no final newline> [LESSONS_DATA=…]'; exit 2; }
+	$(LESSONS) check --data-dir "$(LESSONS_DATA)" --ship "$(SHIP)" < "$(FILE)"
+
+lessons-list:
+	$(LESSONS) list --data-dir "$(LESSONS_DATA)"
+
+lesson-receipts:
+	$(LESSONS) receipts --data-dir "$(LESSONS_DATA)"
+
+lesson-segments:
+	$(LESSONS) segments --data-dir "$(LESSONS_DATA)"
+
+# First rail section 4: the index timer on this peer. The directory is resolved in the shell: make's abspath splits a
+# path on its spaces.
+lessons-units:
+	@test -f "$(LESSONS_DATA)/peer.sqlite3" || { echo 'No peer database at $(LESSONS_DATA)/peer.sqlite3: set LESSONS_DATA to this peer data directory'; exit 2; }
+	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
+	for unit in $(LESSONS_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
+	test -d "$(HOME)/.config/superyak" || install -d -m 700 "$(HOME)/.config/superyak"
+	printf 'SUPERYAK_LESSONS_DATA=%s\n' "$$(cd "$(LESSONS_DATA)" && pwd)" > "$(HOME)/.config/superyak/lessons.env"
+	chmod 600 "$(HOME)/.config/superyak/lessons.env"
+	systemctl --user daemon-reload
+	systemctl --user enable --now superyak-lessons-index.timer
+
+lessons-units-remove:
+	-systemctl --user disable --now superyak-lessons-index.timer
+	-systemctl --user stop superyak-lessons-index.service
+	-systemctl --user reset-failed superyak-lessons-index.service
+	for unit in $(LESSONS_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
+	rm -f "$(HOME)/.config/superyak/lessons.env"
+	systemctl --user daemon-reload
+
+lessons-prompt-near:
+	@test "$(NEAR)" = on || test "$(NEAR)" = off || { echo 'Usage: make lessons-prompt-near NEAR=on|off [LESSONS_DATA=…]'; exit 2; }
+	if [ "$(NEAR)" = off ]; then install -m 600 /dev/null "$(LESSONS_DATA)/lessons-prompt-near-off"; else rm -f "$(LESSONS_DATA)/lessons-prompt-near-off"; fi
+
+lessons-timing:
+	cd peer && .venv/bin/python -I scripts/lessons_timing.py$(if $(RESTART), --restart-unit superyak-embedder)
 
 station-units:
 	@test -f "$(STATION_DATA)/peer.sqlite3" || { echo 'No station database at $(STATION_DATA)/peer.sqlite3: make station-units runs on the station host only'; exit 2; }

@@ -16,6 +16,7 @@ ROTATION = '%h/.local/share/superyak/backups/station'
 INSTALLED = ['superyak-backup.service', 'superyak-backup.timer', 'superyak-restore-test.service',
              'superyak-restore-test.timer', 'superyak-imprint-sweep.service', 'superyak-imprint-sweep.timer',
              'superyak-alert@.service']
+LESSONS_UNITS = ['superyak-lessons-index.service', 'superyak-lessons-index.timer']  # make lessons-units, on the Pi and Tardis
 EXPECTED = {
     'superyak-backup.service': {
         'Unit': {'After': 'superyak-lighthouse.service', 'OnFailure': 'superyak-alert@%n.service'},
@@ -58,6 +59,17 @@ EXPECTED = {
         'Service': {'Type': 'oneshot', 'TimeoutStartSec': '1min',
                     'ExecStart': f'{PYTHON} station-alert --data-dir {DATA} --unit %i --monitor'},
     },
+    'superyak-lessons-index.service': {  # first rail section 4; LimitDATA, since the Pi has no memory cgroup
+        'Unit': {'OnFailure': 'superyak-alert@%n.service'},
+        'Service': {'Type': 'oneshot', 'WorkingDirectory': '%h/superyak/peer', 'EnvironmentFile': '%h/.config/superyak/lessons.env',
+                    'ExecStart': '%h/superyak/peer/.venv/bin/python -I -m superyak_peer.lessons index --data-dir ${SUPERYAK_LESSONS_DATA}',
+                    'Nice': '10', 'TimeoutStartSec': '5min', 'LimitDATA': '512M'},
+    },
+    'superyak-lessons-index.timer': {
+        'Unit': {},
+        'Timer': {'OnBootSec': '1min', 'OnUnitInactiveSec': '60s', 'AccuracySec': '5s'},
+        'Install': {'WantedBy': 'timers.target'},
+    },
     '50-alerts.conf': {
         'Unit': {'OnFailure': 'superyak-alert@%n.service'},
         'Service': {'ExecStopPost': f'-{PYTHON} station-alert --data-dir {DATA} --unit %n'},
@@ -76,7 +88,7 @@ def sections(name):
 def test_units_say_what_the_spec_says():
     """R16: the timers (OnCalendar, Persistent=true, WantedBy=timers.target), the oneshots (OnFailure=, no Restart=),
     the alert template (%i, no OnFailure= of its own) and the drop-in (ExecStopPost=- with -I) are exactly S8's and S9's."""
-    assert sorted(path.name for path in UNITS.iterdir()) == sorted(INSTALLED + ['50-alerts.conf'])
+    assert sorted(path.name for path in UNITS.iterdir()) == sorted(INSTALLED + LESSONS_UNITS + ['50-alerts.conf'])
     for name, expected in EXPECTED.items():
         assert sections(name) == expected, name
 
@@ -94,7 +106,7 @@ def test_units_pass_systemd_analyze_verify(tmp_path):
     (probe / 'superyak-verifycheck.service').write_text('[Unit]\nDescription=Throwaway unit for the drop-in\n\n[Service]\nExecStart=/bin/true\n')
     (probe / 'superyak-verifycheck.service.d').mkdir()
     shutil.move(probe / '50-alerts.conf', probe / 'superyak-verifycheck.service.d' / '50-alerts.conf')
-    files = [str(probe / name) for name in INSTALLED + ['superyak-verifycheck.service']]
+    files = [str(probe / name) for name in INSTALLED + LESSONS_UNITS + ['superyak-verifycheck.service']]
     result = subprocess.run(['systemd-analyze', '--user', 'verify', *files], capture_output=True, text=True, timeout=120)
     assert result.returncode == 0 and result.stderr == '', result.stderr
 
@@ -158,7 +170,8 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     assert not (home / '.config').exists()
 
 
-@pytest.mark.parametrize('name', ['superyak-backup.service', 'superyak-restore-test.service', 'superyak-imprint-sweep.service'])
+@pytest.mark.parametrize('name', ['superyak-backup.service', 'superyak-restore-test.service', 'superyak-imprint-sweep.service',
+                                  'superyak-lessons-index.service'])
 def test_no_exit_code_is_masked(name):
     """Any non-zero exit is a failure: the backup exits 10-13, the restore test 20-24 and 1 for the unexpected. The units
     declare no SuccessExitStatus= (or Restart=), and ExecStart= has no '-', '@', ':', '+' or '!' prefix, so systemd's SERVICE_RESULT is non-success and station-alert fires for every non-zero exit."""
@@ -221,3 +234,83 @@ def test_station_moderate_ignores_exported_hours_budget_and_actions_but_takes_th
     assert '--hours "720" --budget "10" --actions "add,remove"' in plain
     typed = subprocess.run([*base, 'HOURS=5'], capture_output=True, text=True, env=env, check=True).stdout
     assert '--hours "5" --budget "10"' in typed
+
+
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
+def test_lessons_units_install_and_remove_only_their_own_files(tmp_path):
+    """First rail section 4: make lessons-units refuses without a peer database, installs the index service and timer,
+    writes the data directory into lessons.env (0600) and starts the timer; make lessons-units-remove takes back exactly
+    that. systemctl is shimmed on PATH and HOME is tmp_path."""
+    units, data, home, shim = tmp_path / 'systemd-user', tmp_path / 'tardis peer', tmp_path / 'home', tmp_path / 'bin'
+    for directory in (units, data, home, shim):
+        directory.mkdir()
+    (units / 'superyak-lighthouse.service').write_text('[Service]\nExecStart=/bin/true\n')
+    calls = tmp_path / 'systemctl.log'
+    (shim / 'systemctl').write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\n')
+    (shim / 'systemctl').chmod(0o755)
+    env = {**os.environ, 'HOME': str(home), 'PATH': f'{shim}:{os.environ["PATH"]}'}
+
+    def make(target):
+        return subprocess.run(['make', '-s', target, f'SYSTEMD_USER={units}', f'LESSONS_DATA={data}'], cwd=REPO, env=env,
+                              capture_output=True, text=True, timeout=60)
+    refused = make('lessons-units')
+    assert refused.returncode != 0 and 'No peer database' in refused.stdout + refused.stderr and not calls.exists()
+    (data / 'peer.sqlite3').write_bytes(b'')
+    installed = make('lessons-units')
+    assert installed.returncode == 0, installed.stderr
+    for name in LESSONS_UNITS:
+        assert (units / name).read_bytes() == (UNITS / name).read_bytes() and stat.S_IMODE((units / name).stat().st_mode) == 0o644
+    written = home / '.config' / 'superyak' / 'lessons.env'
+    assert written.read_text() == f'SUPERYAK_LESSONS_DATA={data}\n' and stat.S_IMODE(written.stat().st_mode) == 0o600
+    assert calls.read_text().splitlines() == ['--user daemon-reload', '--user enable --now superyak-lessons-index.timer']
+    calls.unlink()
+    removed = make('lessons-units-remove')
+    assert removed.returncode == 0, removed.stderr
+    assert sorted(path.name for path in units.iterdir()) == ['superyak-lighthouse.service'] and not written.exists()
+    assert calls.read_text().splitlines() == ['--user disable --now superyak-lessons-index.timer', '--user stop superyak-lessons-index.service',
+                                              '--user reset-failed superyak-lessons-index.service', '--user daemon-reload']
+
+
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
+@pytest.mark.parametrize('target, variables, verb', [
+    ('station-lessons-room', ['ID=ab12', 'CONFIRM=0f0f0f0f'], ['station-room', '--data-dir', 'S', '--id', 'ab12', '--as', 'andy',
+                                                             '--ship', 'rio-grande', '--confirm', '0f0f0f0f']),
+    ('station-lessons-room', ['ID=ab12'], ['station-room', '--data-dir', 'S', '--id', 'ab12', '--as', 'andy', '--ship', 'rio-grande']),
+    ('lessons-room', ['ID=x:y'], ['room', '--data-dir', 'L', '--id', 'x:y']),
+    ('lessons-where', [], ['where', '--data-dir', 'L']),
+    ('lessons-list', [], ['list', '--data-dir', 'L']),
+    ('lessons-ship', ['SHIP=tardis', 'OWNER=andy'], ['ship', '--data-dir', 'L', '--username', 'tardis', '--owner', 'andy']),
+    ('lesson-receipts', [], ['receipts', '--data-dir', 'L']),
+    ('lesson-segments', [], ['segments', '--data-dir', 'L']),
+])
+def test_lessons_targets_run_the_lessons_command(tmp_path, target, variables, verb):
+    """Each lessons target is one call of python -m superyak_peer.lessons; LESSONS_DATA defaults to STATION_DATA, and a
+    path with a space stays one argument."""
+    import shlex
+    station, lessons_data = tmp_path / 'station data', tmp_path / 'peer data'
+    done = subprocess.run(['make', '-n', '-s', target, *variables, f'STATION_DATA={station}', f'LESSONS_DATA={lessons_data}'],
+                          cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    command = shlex.split(done.stdout.strip().splitlines()[-1])
+    expected = [{'S': str(station), 'L': str(lessons_data)}.get(word, word) for word in verb]
+    assert command == ['uv', 'run', '--locked', '--project', 'peer', 'python', '-m', 'superyak_peer.lessons', *expected]
+    default = subprocess.run(['make', '-n', '-s', 'lessons-where', f'STATION_DATA={station}'], cwd=REPO, capture_output=True, text=True)
+    assert shlex.split(default.stdout.strip().splitlines()[-1])[-2:] == ['--data-dir', str(station)]   # on the Pi, the station's
+
+
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
+def test_lessons_prompt_near_switches_near_at_a_prompt_and_timing_can_restart_the_embedder(tmp_path):
+    """C44: NEAR=off leaves the switch file (0600) the prompt path looks for, NEAR=on removes it, anything else is
+    refused; RESTART=1 makes the timing check restart the embedder after it builds its fixture (review S4)."""
+    from superyak_peer.lessons import PROMPT_NEAR_OFF
+    data = tmp_path / 'peer data'
+    data.mkdir()
+
+    def make(near):
+        return subprocess.run(['make', '-s', 'lessons-prompt-near', f'NEAR={near}', f'LESSONS_DATA={data}'], cwd=REPO,
+                              capture_output=True, text=True, timeout=60)
+    assert make('maybe').returncode != 0 and not (data / PROMPT_NEAR_OFF).exists()
+    assert make('off').returncode == 0 and stat.S_IMODE((data / PROMPT_NEAR_OFF).stat().st_mode) == 0o600
+    assert make('on').returncode == 0 and not (data / PROMPT_NEAR_OFF).exists()
+    timing = subprocess.run(['make', '-n', '-s', 'lessons-timing', 'RESTART=1'], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert timing.stdout.strip().endswith('scripts/lessons_timing.py --restart-unit superyak-embedder')
