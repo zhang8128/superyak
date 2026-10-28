@@ -7,7 +7,9 @@ checklist_firing, holds and the two providers: never station, claims, hook, urll
 The main thread checks only the payload (plan review M2). A daemon worker runs the acting-ship check, finds and renders
 the lists, then takes the session record's lock, all within READ_SECONDS of `started`; under the lock it asks the
 providers and builds the output. It saves the record and publishes the output in one step under a small lock (S1), so
-an output the main thread takes was recorded, and one it gave up on by HOLD_SECONDS is never recorded.
+an output the main thread takes was recorded, and a worker not yet saving at HOLD_SECONDS is abandoned and never
+saves. A save already under way then gets SAVE_SECONDS more, and its output is printed once it lands (M3); only a save
+stalled past that too is recorded unseen.
 """
 import json
 import os
@@ -26,7 +28,9 @@ class _Run:
     def __init__(self):
         self.read = threading.Event()   # the record is taken, or the worker stopped early
         self.lock = threading.Lock()    # the save and the publish, against the main thread giving up
+        self.state = threading.Lock()   # decides, once, between the save going ahead and the main thread giving up
         self.abandoned = False
+        self.saving = False
         self.result = None
 
 
@@ -110,8 +114,10 @@ def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
         else:   # past the cap: lists reach the model with the command's result; lessons don't (R2)
             result = _output(additionalContext='\n\n'.join(h.text for h in lists))
         with run.lock:
-            if run.abandoned or monotonic() > hold_by:
-                return
+            with run.state:
+                if run.abandoned or monotonic() > hold_by:
+                    return
+                run.saving = True
             opened.save()
             run.result = result
     _log(home / 'checklists' / 'fired.jsonl', checklist_hold.fired_lines(record, lists, path.stem, now))
@@ -127,8 +133,15 @@ def _guarded(run, *args):
 
 
 def _take(run, hold_by, monotonic):
-    """The published output, or None after telling the worker it is abandoned."""
+    """The published output, or None after telling the worker it is abandoned. A save under way at the deadline gets
+    SAVE_SECONDS more, so what it records is printed (M3); a worker not yet saving is abandoned and never saves."""
     got = run.lock.acquire(timeout=max(0.0, hold_by - monotonic()))
+    if not got:
+        with run.state:
+            run.abandoned = True
+            saving = run.saving
+        if saving:
+            got = run.lock.acquire(timeout=fp.SAVE_SECONDS)
     try:
         if got and run.result is not None:
             return run.result

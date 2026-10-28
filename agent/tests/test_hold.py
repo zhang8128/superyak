@@ -167,6 +167,43 @@ def test_a_slow_log_append_never_hides_a_recorded_hold(ship, monkeypatch):      
     assert out['hookSpecificOutput']['permissionDecision'] == 'deny' and saved(ship)['holds'] == 1
 
 
+def join_workers():
+    for thread in threading.enumerate():
+        if thread.name == hold.WORKER:
+            thread.join(3)
+
+
+def fired(ship):
+    log = ship.home / 'checklists' / 'fired.jsonl'
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_a_save_under_way_at_one_second_is_printed_once_it_lands(ship, monkeypatch):     # the final review's M3
+    began, saves, real = time.monotonic(), [], holds.RecordFile.save
+
+    def stalled(record):              # begins before the 1 s deadline, under the lock, and lands 1.2 s after the start
+        saves.append(time.monotonic() - began)
+        time.sleep(max(0.0, began + 1.2 - time.monotonic()))
+        real(record)
+    monkeypatch.setattr(holds.RecordFile, 'save', stalled)
+    out = hold.decide(payload(ship, 'git push origin x'), ship.home, 10.0, began)
+    took = time.monotonic() - began
+    join_workers()
+    assert out['hookSpecificOutput']['permissionDecision'] == 'deny' and 1.0 < took < 1.5
+    assert len(saves) == 1 and saves[0] < 1.0 and saved(ship)['holds'] == 1 and len(fired(ship)) == 1
+
+
+def test_a_worker_still_asking_a_provider_at_one_second_prints_nothing_and_saves_nothing(ship):   # the final review's M3
+    def slow(command, record, now, limit):
+        time.sleep(1.1)               # done inside the half second a save under way would get, yet it was not saving
+        return []
+    began = time.monotonic()
+    assert hold.decide(payload(ship, 'git push origin x'), ship.home, 10.0, began, lessons=slow) is None
+    took = time.monotonic() - began
+    join_workers()
+    assert took < 1.2 and holds.record_path(ship.home / 'sessions', 's1').read_text() == '' and fired(ship) == []
+
+
 def test_a_list_edited_between_the_hold_and_the_re_run_lets_it_pass(ship):            # Review Focus 4
     assert decide(ship, 'git push origin x')
     write_list(ship.repo / '.superyak' / 'checklists', 'before-push', when='command git push', version=4,

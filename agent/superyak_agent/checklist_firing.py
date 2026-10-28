@@ -11,6 +11,7 @@ from superyak_agent.checklists import Loaded, command_matches, enter_applies
 LISTS_PER_EVENT = 2
 READ_SECONDS = 0.150
 HOLD_SECONDS = 1.0
+SAVE_SECONDS = 0.5   # more for a save already under way at HOLD_SECONDS (the final review's M3)
 START_SOURCES = ('startup', 'clear', 'fork')
 ANSWERS = ('done', 'done-before-asked', 'caught', 'n/a', 'skipped')
 REASON_BYTES = 200
