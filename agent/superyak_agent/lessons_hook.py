@@ -57,8 +57,10 @@ def default_settings():
 
 
 def default_query():
-    """`lessons query` in this checkout's peer (Rio Grande's command); the settings' `query` replaces it."""
-    return [str(CHECKOUT / 'peer' / '.venv' / 'bin' / 'python'), '-m', 'superyak_peer', 'lessons', 'query']
+    """`lessons query` in this checkout's peer, the way first-rail runs it: its own module and parser
+    (`python -I -B -m superyak_peer.lessons query`), not a superyak_peer subcommand. The settings' `query` replaces it.
+    (The integration run against first-rail fc31ec6f caught the old `-m superyak_peer lessons query`, which isn't one.)"""
+    return [str(CHECKOUT / 'peer' / '.venv' / 'bin' / 'python'), '-I', '-B', '-m', 'superyak_peer.lessons', 'query']
 
 
 def session_key(session_id):
@@ -286,7 +288,11 @@ def ask_in_process(settings, request, deadline, started, monotonic=time.monotoni
 
 
 def prompt_lessons(settings, request, deadline, started, monotonic=time.monotonic, peer=load_peer_lessons):
-    """In process when the peer has the prompt path, else `lessons query` as a command."""
+    """In process when the settings use this checkout's own peer (the default query) and it has the prompt path;
+    otherwise the settings' command. The in-process module is this checkout's, so a `query` the settings name
+    elsewhere is honored as named (found by the integration run against first-rail)."""
+    if settings['query'] != default_query():
+        return ask(settings, request, deadline, monotonic)
     try:
         return ask_in_process(settings, request, deadline, started, monotonic, peer)
     except NotHere:

@@ -199,6 +199,12 @@ class Rail:
         self.settings.write_text(json.dumps({'ship': 'tardis', 'data_dir': str(self.data), 'state_dir': str(self.state),
                                              'query': [sys.executable, '-S', '-B', str(STUB)]}))
 
+    def use_default_query(self):
+        """Settings without `query`: this checkout's own peer, the one case the prompt path runs in process."""
+        value = json.loads(self.settings.read_text())
+        value.pop('query', None)
+        self.settings.write_text(json.dumps(value))
+
     def answers(self, *lessons, kind=None):
         (self.data / (f'answer-{kind}.json' if kind else 'answer.json')).write_text(json.dumps(list(lessons)))
 
@@ -469,7 +475,12 @@ class FakePeer:
         return self.answer
 
 
+def no_command(*args, **kwargs):
+    raise AssertionError('the command ran')
+
+
 def test_at_a_prompt_the_peer_answers_in_process_and_no_command_runs(rail):
+    rail.use_default_query()
     peer = FakePeer({'lessons': [lesson(A, ship='serenity'), lesson(B)]})
     assert rail.run('UserPromptSubmit', peer=peer, prompt='quote a glob') == [A, B]
     assert rail.sent() == []  # the stub command records every request it gets: it got none
@@ -481,6 +492,7 @@ def test_at_a_prompt_the_peer_answers_in_process_and_no_command_runs(rail):
 
 def test_the_budget_and_near_count_from_the_hook_s_start(rail):
     """Spec section 5 (Rio Grande, fa9692db): answer_prompt gets the hook's `started`, not its own monotonic()."""
+    rail.use_default_query()
     peer = FakePeer({'lessons': [lesson(A)]})
     began = time.monotonic() - 0.01  # the hook started 10 ms before run() was called
     text = lh.run(rail.event('UserPromptSubmit', prompt='p'), rail.settings, env={}, started=began, peer=peer)
@@ -489,29 +501,42 @@ def test_the_budget_and_near_count_from_the_hook_s_start(rail):
 
 
 @pytest.mark.parametrize('raises', [IndexUnreadable('damaged index'), ValueError('bad'), KeyError('x')])
-def test_a_raising_answer_prompt_prints_nothing_and_never_falls_back(rail, raises):
+def test_a_raising_answer_prompt_prints_nothing_and_never_falls_back(rail, raises, monkeypatch):
     """Rio Grande: answer_prompt raises IndexUnreadable on a damaged index, the CLI's exit 1 in process."""
-    rail.answers(lesson(A))
+    rail.use_default_query()
+    monkeypatch.setattr(lh, 'ask', no_command)
     assert rail.run('UserPromptSubmit', peer=FakePeer(raises=raises), prompt='a prompt') is None
-    assert rail.sent() == []
 
 
 def test_a_late_or_malformed_in_process_answer_prints_nothing(rail, monkeypatch):
+    rail.use_default_query()
+    monkeypatch.setattr(lh, 'ask', no_command)
     monkeypatch.setitem(lh.LIMITS, lh.PROMPT, 0.150)  # the rail fixture's 5 s would make 0.2 s on time
     assert rail.run('UserPromptSubmit', peer=FakePeer({'lessons': [lesson(A)]}, sleep=0.2), prompt='p') is None
     monkeypatch.setitem(lh.LIMITS, lh.PROMPT, 5.0)
     assert rail.run('UserPromptSubmit', peer=FakePeer({'nope': []}), prompt='p') is None
     assert rail.run('UserPromptSubmit', peer=FakePeer({'lessons': [{'id': 'bad'}]}), prompt='p') is None
-    assert rail.sent() == []
 
 
-def test_a_checkout_without_the_prompt_path_falls_back_to_the_command(rail):
+def test_with_the_default_query_a_checkout_without_the_prompt_path_falls_back_to_the_command(rail, monkeypatch):
+    rail.use_default_query()
+    asked = []
+    monkeypatch.setattr(lh, 'ask', lambda settings, request, deadline, monotonic: asked.append(settings['query']) or [])
+    assert rail.run('UserPromptSubmit', prompt='a prompt') is None  # Rail's default peer is "not here"
+    assert asked == [lh.default_query()]
+
+
+def test_a_query_the_settings_name_is_honored_and_never_loads_the_checkout_s_module(rail):
+    """The in-process module is this checkout's; a `query` named elsewhere is run as named (the integration run)."""
+    def must_not_load():
+        raise AssertionError('loaded the checkout lessons module')
     rail.answers(lesson(A))
-    assert rail.run('UserPromptSubmit', prompt='a prompt') == [A]  # Rail's default peer is "not here"
+    assert rail.run('UserPromptSubmit', peer=must_not_load, prompt='a prompt') == [A]
     assert len(rail.sent()) == 1
 
 
 def test_seen_lessons_are_dropped_from_an_in_process_answer_too(rail):
+    rail.use_default_query()
     rail.shown_at_prompt(lesson(A))
     peer = FakePeer({'lessons': [lesson(A), lesson(B)]})
     assert rail.run('UserPromptSubmit', peer=peer, prompt='p') == [B]
