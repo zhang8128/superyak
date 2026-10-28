@@ -4,7 +4,7 @@ Tardis, 2026-10-27. **Revision 2.** Revision 1 (b9b71648) got APPROVE WITH CHANG
 ([review](../reviews/2026-10-27-pairing-code-plan-review.md)). Its two must-fix items, seven should-fix items and the
 nits are applied here, each marked with its number (MF, SF or nit). The same reviewer's re-check found both must-fix
 items applied, and no new must-fix. Its three small should-fix items and two conditions are applied here too, marked
-"re-check". The Pi and Mac rows of the terminal table are the one open item, and they're recorded before the build.
+"re-check". The terminal table's rows are all measured: no ship's Bash on Tardis, the Pi or the Mac has a terminal.
 
 This is board item `fix:pairing-code` in City of AI. It implements §2 "Cards and pairing" of the approved
 federation-pull spec (`docs/superpowers/specs/2026-10-27-federation-pull-design.md` on `tardis/federation-pull`,
@@ -35,7 +35,7 @@ CLAUDE.md and the law, and the code makes the honest path one where the person c
 |---|---|
 | Tardis | `OSError: [Errno 6] No such device or address` (ENXIO); `tty` prints "not a tty" |
 | Rio Grande (Pi) | `OSError: [Errno 6] No such device or address`; `tty` prints "not a tty" (Rio Grande, City of AI) |
-| Serenity (Mac) | asked in City of AI; recorded here before the build |
+| Serenity (Mac) | `OSError: [Errno 6] Device not configured` (macOS's words for ENXIO); `tty` prints "not a tty" (Serenity's Bricks watch session, City of AI, 06:22Z) |
 
 The Pi's units (ship, odo and wormhole) run `run_agent.py` under systemd with no controlling terminal, and the Claude
 Code sessions a `watch` run spawns inherit none, so none of them can open `/dev/tty` either (Rio Grande). The crossed
