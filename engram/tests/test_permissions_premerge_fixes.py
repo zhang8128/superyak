@@ -6,8 +6,12 @@ from collections import OrderedDict
 import pytest
 
 from permission_cli import main as cli_main
+from permission_ledger import ENFORCE_WAITS as SHIPPED_ENFORCE_WAITS
 from permission_ledger import Ledger, LedgerUnreadable, ledger_path
-from tests.permissions_support import ANDY, M2, M3, MEDICAL, do, e1_county_ledger, make_house, raise_gate
+from permissions import RuleError
+from tests.permissions_support import (  # noqa: F401
+    ANDY, M2, M3, MEDICAL, cli_home, cli_home_with_house, do, e1_county_ledger, fake_tty, make_house, raise_gate,
+    raised_ledger)
 from tests.test_permissions_recheck_fixes import _cut_last_row_and_head
 from tests.test_permissions_serenity_fixes import _revoked_r1, _sql, _state
 
@@ -214,3 +218,53 @@ def test_claims_a_tear_across_two_rows_of_one_column_still_reads_whole(tmp_path)
         return
     assert M2 in {r.object for r in state.collection_members.get(MEDICAL) if r.removed_seq is None}
     pytest.fail("a tear across two rows of one column read whole: m2 is a member again")
+
+
+# ---------------------------------------------------------------- item 5: `gate enforce` waits for the digest
+
+@pytest.fixture
+def enforce_waits(monkeypatch):
+    """The refusal as shipped, read when this module was imported (tests/conftest.py lifts it for each test)."""
+    import permission_ledger
+    assert SHIPPED_ENFORCE_WAITS and "projection digest" in SHIPPED_ENFORCE_WAITS
+    monkeypatch.setattr(permission_ledger, "ENFORCE_WAITS", SHIPPED_ENFORCE_WAITS)
+    return SHIPPED_ENFORCE_WAITS
+
+
+def test_item5_the_gate_act_refuses_enforce_until_the_digest_with_the_reason(tmp_path, enforce_waits):
+    led = raised_ledger(tmp_path, mode="shadow")
+    try:
+        before = led.seq()
+        with pytest.raises(RuleError, match="projection digest") as e:
+            raise_gate(led, "enforce", now="2026-11-03")
+        assert enforce_waits in str(e.value) and led.seq() == before          # nothing written
+        assert led.meta()["gate"] == "shadow"
+        for mode in ("off", "shadow"):                                         # unchanged
+            raise_gate(led, mode, now="2026-11-04")
+            assert led.meta()["gate"] == mode
+    finally:
+        led.close()
+
+
+def test_item5_gate_enforce_refuses_before_it_asks_for_a_yes(cli_home_with_house, fake_tty, capsys, enforce_waits):
+    shown = fake_tty.shown()
+    assert cli_main(["gate", "enforce"]) == 1
+    assert "refused: 12.3 the gate: enforce waits for the ledger's projection digest" in capsys.readouterr().err
+    assert fake_tty.shown() == shown                                           # no yes was asked
+    fake_tty.answer_the_printed_code()
+    assert cli_main(["gate", "shadow"]) == 0                                   # shadow is as before
+
+
+def test_item5_a_gate_already_at_enforce_reads_as_it_is_and_can_be_lowered(tmp_path, monkeypatch):
+    import permission_ledger
+    from permission_ledger import Gate, effective_gate, houses
+    led = raised_ledger(tmp_path, mode="enforce")                 # raised before the refusal (conftest lifts it)
+    monkeypatch.setattr(permission_ledger, "ENFORCE_WAITS", SHIPPED_ENFORCE_WAITS)
+    try:
+        assert effective_gate(tmp_path, houses(tmp_path)) == Gate("enforce", None)
+        with pytest.raises(RuleError, match="projection digest"):
+            raise_gate(led, "enforce", now="2026-11-03")
+        raise_gate(led, "shadow", now="2026-11-03")
+        assert effective_gate(tmp_path, houses(tmp_path)) == Gate("shadow", None)
+    finally:
+        led.close()

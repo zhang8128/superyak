@@ -2031,6 +2031,14 @@ def _make_end_grant(state, actor, args, auth, now):
 
 _GATE = "12.3 the gate"
 GATE_MODES = ("off", "shadow", "enforce")
+# Serenity's pre-merge item 5: the gate act refuses `enforce`, with this reason, until the ledger's projection digest
+# lands (R48's follow-up); then this is None. `off` and `shadow` are unchanged, and a gate already at `enforce` reads
+# as it is.
+ENFORCE_WAITS: str | None = (
+    "enforce waits for the ledger's projection digest, a follow-up to this branch. The ledger's tail checks catch a "
+    "copy of the file torn in one row per column, but one torn across several rows of one column, or a torn index "
+    "page, can still read whole, so a removal or revocation the log holds could read as never made and what it took "
+    "away be served. off and shadow are unchanged")
 PUBLISHED_HOUSE = Path(".engram") / "instances" / "lighthouse" / "graph.db"
 
 
@@ -2189,9 +2197,17 @@ def _prep_gate(state, actor, args):
     if set(args) - {"mode"}:
         raise RuleError(_GATE, "the gate act takes only mode: the houses are those on disk at the yes")
     mode = args.get("mode")
+    check_gate_mode(mode)
+    return {"mode": mode}
+
+
+def check_gate_mode(mode) -> None:
+    """The gate act's mode (P 12.3), which the CLI also checks before it asks for a yes: one of GATE_MODES, and not
+    `enforce` while ENFORCE_WAITS holds its reason."""
     if mode not in GATE_MODES:
         raise RuleError(_GATE, f"the gate is one of {', '.join(GATE_MODES)}")
-    return {"mode": mode}
+    if mode == "enforce" and ENFORCE_WAITS:
+        raise RuleError(_GATE, ENFORCE_WAITS)
 
 
 def _mark_house(db_path: Path, ledger_id: str) -> None:

@@ -244,7 +244,7 @@ memory, for what, and where. Four modules: `permissions.py` holds the pure rules
 `permission_uses.py` is the receipts file and the views over it; `permission_cli.py` is `engram-permissions`, the
 person's side. The ledger lives at `ENGRAM_HOME/.engram/permissions.db` and the receipts at
 `ENGRAM_HOME/.engram/permission-uses.db`, fixed paths. The gate is `off` until the owner raises it (`shadow`, then
-`enforce`). With no ledger, or with the gate `off`, engram behaves as before apart from these changes, each of which
+`enforce`; `gate enforce` refuses until the ledger's projection digest lands, plan R56). With no ledger, or with the gate `off`, engram behaves as before apart from these changes, each of which
 only refuses or narrows: the daemon never serves `group:outside-home`, `share` refuses that audience, and the policy
 generator refuses a group named `outside-home` in `groups.toml`; the daemon caps a recall's `k` at 20; and `share`
 refuses a new placement in a house that already holds 20,000. Once a ledger exists, these hold under `off` too, and

@@ -27,7 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
-                               check_retire_person, effective_gate, houses, ledger_path, make_private)
+                               check_gate_mode, check_retire_person, effective_gate, houses, ledger_path,
+                               make_private)
 from permissions import (CODE_CHARS, MAX_ACT_OBJECTS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse,
                          RuleError, Use, affected_joints, allow_words, check_id, decide, decide_bulk, disagreement_words, gluing,
                          home_of, parse_copy_ref, parse_object_ref, parse_selector, placement_still_counts, proposal_words,
@@ -671,6 +672,7 @@ def _on_proposal(kind: str):
             if body.get("needs") is not None:
                 notes.append(f"needs: {json.dumps(body['needs'], sort_keys=True)}")
             if kind == "sign" and inner.kind == "gate":
+                check_gate_mode(inner.args.get("mode"))
                 notes += gate_plan_lines(led.gate_plan(), marking=_marks_unmarked(inner.args.get("mode"), st.meta))
             return _perform(led, owner, [Act(kind, {"proposal": p.id})], notes, words=words)
     return run
@@ -702,6 +704,7 @@ def _marks_unmarked(mode, meta) -> bool:
 
 
 def _gate(a) -> int:
+    check_gate_mode(a.mode)             # refused before the yes is asked, not after (`enforce` waits, item 5)
     with _ledger() as led:
         meta = led.meta()
         notes = gate_plan_lines(led.gate_plan(), marking=_marks_unmarked(a.mode, meta))
