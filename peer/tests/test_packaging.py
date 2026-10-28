@@ -92,6 +92,7 @@ def test_fresh_extraction_builds_static_wheel_and_starts_without_parent_repo(arc
     python = installed / 'bin/python'
     state = tmp_path / 'private-demo'
     seeded = command(python, '-m', 'superyak_peer', 'demo', '--data-dir', state, cwd=tmp_path)
+    command(python, '-I', '-c', 'import superyak_peer.lessons', cwd=tmp_path)  # first rail: the module is in the wheel
     credentials = json.loads((state / 'demo-credentials.json').read_text())
     assert all(c['password'] not in seeded.stdout for c in credentials)
     with socket.socket() as sock:
@@ -142,6 +143,7 @@ def test_standard_build_excludes_private_state_and_unlisted_package_source(archi
         direct_wheel_files = {name: wheel.read(name) for name in wheel.namelist()}
     for files in (sdist, wheel_files, direct_wheel_files):
         assert {'superyak_peer/static/index.html', 'superyak_peer/static/app.js', 'superyak_peer/static/app.css', 'superyak_peer/static/research.js', 'superyak_peer/static/dashboard.js'} <= files.keys()
+        assert 'superyak_peer/lessons.py' in files  # first rail: a module the only-include lists must name
         assert any(name == 'LICENSE' or name.endswith('/LICENSE') for name in files)
         assert any(name == 'NOTICE' or name.endswith('/NOTICE') for name in files)
     assert {'scripts/source_bundle.py', 'scripts/two_peer_check.py', 'uv.lock', 'tests/test_packaging.py'} <= sdist.keys()

@@ -36,3 +36,24 @@ def env(tmp_path):
 @pytest.fixture
 def peer_clients(env):
     return env[1][:3]
+
+
+# First rail (docs/superpowers/specs/2026-10-27-first-rail-lessons-design.md): one peer with a recorded lessons room,
+# two peers federated in process, and a fake shared embedder that speaks engram/embedder_service.py's protocol.
+LESSON_TIME = 1_800_000_000.0
+
+
+def lesson_body(ship='tardis', claim='Quote a glob in zsh.', why='An unquoted glob cost a rerun.', error=(), command=('--include=*',),
+                file=(), learned='own'):
+    lines = ['lesson', f'ship: {ship}', f'claim: {claim}', f'why: {why}']
+    lines += [f'error: {v}' for v in error] + [f'command: {v}' for v in command] + [f'file: {v}' for v in file]
+    return '\n'.join(lines + [f'learned from: {learned}'])
+
+
+def run_lessons(*args, stdin='', now=LESSON_TIME):
+    """`python -m superyak_peer.lessons <verb>` in a child whose clock is pinned at `now`, set before anything binds
+    time.time (the store's default clock binds it at import)."""
+    import os, subprocess, sys
+    code = f'import time; time.time = lambda: {now!r}\nimport sys\nfrom superyak_peer.lessons import main\nmain(sys.argv[1:])'
+    return subprocess.run([sys.executable, '-c', code, *map(str, args)], input=stdin, capture_output=True, text=True,
+                          env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
