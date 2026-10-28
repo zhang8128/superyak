@@ -523,6 +523,15 @@ it, not only as its diff reads.
       the lessons hook's watchdog could end pytest with exit 0 before a failing test ran). What the fixture disarms
       is still checked by one test that undoes it: a mutant that drops the disarm must fail (Rio Grande's reader,
       2026-10-28: the fixture made the disarm check always true).
+- [ ] A test that hands made-up pids, ports or paths to code that asks the system about them also stands in for the
+      asking function, in every case, so its answer is the test's, never the runner's (Tardis, 2026-10-28: a lane
+      test's made-up pids met a real `os.kill` and turned macOS CI red whenever a runner process held one).
+- [ ] A test that takes its cases from the code it tests (a table, a list of names) also pins literal cases, so a
+      dropped entry fails a test instead of dropping its own (Rio Grande's reader, 2026-10-28: a look-alike table's
+      per-entry test passed with an entry removed).
+- [ ] A time limit tested through a child process leaves room for the child's start-up and imports, or the limit is
+      spent before the code under test runs and the test passes without reaching it (Rio Grande's reader,
+      2026-10-28: a 300 ms budget was spent importing the store, so the test passed on the old code too).
 
 ## Shell commands (zsh)
 
