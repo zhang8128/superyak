@@ -1,12 +1,14 @@
 # The remote connector: your home, from Claude
 
-Revision 2, 2026-10-27. Serenity (the Mac). Board item `spec:remote-connector` (all hands).
+Revision 3, 2026-10-27. Serenity (the Mac). Board item `spec:remote-connector` (all hands).
 Research, with sources: docs/research/2026-10-27-remote-connector-research.md.
 Review of revision 1: docs/superpowers/reviews/2026-10-27-remote-connector-review.md.
 
 Revision 2 applies the fresh review. It answers the nine must fixes (M1-M9) with the author's choices, applies the
 should fixes and the nits, and adds the review's missing tests. Claude Code's loopback callbacks and the egress setting
 move to Later. The author's choices are D6-D17 under Decisions.
+
+Revision 3 applies the re-check's should fixes and nits (approved under law section 3; no further round needed).
 
 ## Why
 
@@ -104,8 +106,8 @@ own Origin (app.py:40-43). Claude's servers send no such Origin, so:
 Dynamic Client Registration (D1), bounded:
 
 - The body is at most 8 KB.
-- A client lists 1 to 4 `redirect_uris`, each on the allow-list. In phase 1 the allow-list is the one configured
-  callback.
+- A client lists exactly 1 `redirect_uri`, on the allow-list. In phase 1 the allow-list is the one configured
+  callback. Allowing up to 4 waits for Later, when there is more than one callback.
 - `client_name` is at most 100 characters. It is stored and shown only as quoted data.
 - `grant_types` is a subset of `authorization_code` and `refresh_token`.
 - Every client is public (`none`) and gets no secret. There is no RFC 7592 management endpoint.
@@ -127,7 +129,8 @@ Dynamic Client Registration (D1), bounded:
   Every later step uses only the stored values.
 - **The sign-in.** The page always asks for the password, even when the browser has a session. The session cookie is
   `SameSite=Strict` (app.py:183), so the arrival from claude.ai doesn't carry it anyway, and a fresh sign-in makes the
-  consent deliberate. The sign-in goes through the same checks and holds as the web app's. It leaves no 24-hour
+  consent deliberate. The sign-in goes through the same checks and holds as the web app's (`login_attempts`), but
+  it is a credential check that writes no `sessions` row, unlike `Store.login` (auth.py:99-101). It leaves no 24-hour
   session behind, so a borrowed phone keeps nothing: it binds the person to the pending request with its own CSRF
   token, and both end at Allow, at Deny, or after the 10 minutes.
 - **Allow and Deny** post the pending id with that CSRF token. Allow sends the browser to the stored `redirect_uri`
@@ -146,7 +149,9 @@ It says, in plain words:
 - The app, named by its redirect host: the claude.ai callback shows "Claude (claude.ai)". The registered
   `client_name`, if shown at all, appears only in quotes beneath.
 - "Claude wants to read the rooms you choose on this home. It can't post or change anything."
-- **The rooms** (D9). Each of the person's rooms on this home, with a choice for each, none chosen. Marked rooms are
+- **The rooms** (D9). Each of the person's current rooms on this home, with a choice for each, none chosen. A room that
+  an add replaced is grouped with its continuation as one conversation; each earlier room shows as "earlier part of
+  <title>". Marked rooms are
   shown with their mark and can't be chosen. "All my rooms, including new ones" is a separate, explicit choice, never
   the default. Allow needs at least one room or that choice.
 - When the grant ends: 30 days from now by default, never later.
@@ -167,7 +172,8 @@ It says, in plain words:
 - Access tokens last 1 hour. Each carries its grant, its scope and its resource (the audience).
 - Refresh tokens rotate on every use. Claude refreshes on a 401 and up to 5 minutes before expiry, so a lost response
   or two overlapping refreshes can present a rotated token. A rotated token reused within 60 seconds gets a new pair
-  and invalidates the earlier successor. Reuse after the 60 seconds revokes the whole grant.
+  and invalidates the earlier successor and anything issued from it, since the successor may already have been used
+  once. Reuse after the 60 seconds revokes the whole grant.
 - A grant ends at a fixed time, set at consent: 30 days by default, never more (the station's own grant ceiling,
   `max_expiry_hours: 720`, grants.py:57). No refresh token outlives its grant.
 - Errors answer 400 with `{"error": ...}`, one of:
@@ -195,7 +201,8 @@ Built by hand (D17), with no new dependencies: the peer keeps fastapi, uvicorn, 
 - Methods: `initialize`; `notifications/initialized` (202, no body); `tools/list`; `tools/call`; `ping`. Any other
   method gets JSON-RPC's "method not found".
 - Protocol versions 2025-06-18 and 2025-11-25. `initialize` answers with the client's version when it is one of
-  these, else 2025-11-25. A later request whose `MCP-Protocol-Version` is missing or unsupported gets 400. (2025-03-26
+  these, else 2025-11-25. A later request whose `MCP-Protocol-Version` is missing is treated as 2025-06-18 (MCP says to assume a version
+  when the header is absent). An unsupported value gets 400. (2025-03-26
   is left out: it lacks `structuredContent` and requires batches.)
 - Every call is checked in this order:
   1. A foreign Origin: 403.
@@ -217,7 +224,7 @@ the grant's room set, that the person is still a member of, and that aren't mark
 
 | Tool | Returns |
 |---|---|
-| `rooms()` | `{rooms: [{room, title, members: [display names], last_activity}]}`. No usernames, no person or peer ids. |
+| `rooms()` | `{rooms: [{room, title, members: [display names], last_activity}]}`, with a replaced room grouped with its continuation as one conversation (an earlier room is titled "earlier part of <title>"). No usernames, no person or peer ids. |
 | `read_room(room, limit=30, before=None, since=None)` | `{room, title, brief, messages: [{id, author, author_kind, time, text, reply_to}], total, first_position, seq, more}`, through chat paging. `limit` is 1 to 100, with at most one of `before` and `since`. The description says `before` is a position and `since` is the `seq` from an earlier result, as the chat-paging spec defines them. `brief` is the room's brief text as quoted data, or null. Claims and the board stay out of phase 1. |
 | `search(query)` | `{results: [{id, title, url}]}`, ChatGPT's deep-research shape, which Claude accepts too. `query` is 1 to 200 characters, matched case-insensitively as a substring of message text, newest first, at most 20 results. `id` is a message id. `title` is "room title · author · date". `url` is `https://<public origin>/#chats/<room id>`, the web app's route (app.js:1394); it never carries text or the query. |
 | `fetch(id)` | `{id, title, text, url}` for a message id from `search`: the message plus 2 before and 2 after in the same room. `title` and `url` are as in `search`. `text` holds those messages as JSON lines, each shaped as in `read_room`. |
@@ -274,8 +281,11 @@ Claude chat that may also hold write-capable connectors or web tools.
   one of the marks is theirs.
 - A mark stands after its member leaves or is removed, since their words stay in the room. Removing someone never
   clears their mark.
-- A mark covers the room it is set on and the rooms that continue it (below). It doesn't reach back: each earlier room
-  in the chain is marked on its own.
+- A mark covers the room it is set on and the rooms that continue it (below). It doesn't reach back by itself: the
+  earlier rooms in the chain hold the history. So when a member marks a room that continues others, the control asks
+  "Mark the N earlier rooms you're in too?", defaulting to yes. It marks the earlier rooms of the chain that the member
+  is in (`_rooms_back`, grants.py:155). Ships are already out of those rooms by then, since removing a member takes them
+  out of the earlier rooms too.
 - A new room is unmarked. No grant covers it unless the person chose "All my rooms, including new ones" (D9).
 
 **No ship in a marked room** (D6). Ships are Claude Code and Codex sessions, so they are cloud models, and they read
@@ -283,6 +293,9 @@ rooms with their keys (app.py:99-102).
 
 - Marking is refused while a ship is a member: "This room has ships in it, and ships run on cloud models. Remove them
   first." A member who isn't the owner reads "Ask <owner> to remove them first."
+  So D6 limits D10: in a room with ships, a non-owner member can't mark until the owner removes the ships, and the
+  ships keep reading meanwhile. The owner is told that a member asked ("A member asked to keep this room away from
+  cloud models. Remove the ships to let them."), without naming the member, as D10 shows a count only.
 - Adding a ship to a marked room is refused: by the participants route, by a moderator, and by `station-add-ship`.
 - `station-bridge` refuses a marked room. Wormhole is a ship, and it carries the room to Stanley's lattice.
 
@@ -312,7 +325,10 @@ federation carries it." Phase 1 never reads a room on another home (D7).
 - It has no quotes to withhold yet. Replies point only within a room (inbox.py:204-210), and nothing forwards. The
   rule stays for when cross-room quotes arrive: a quote of a marked room's message shows "[quoted from a room kept
   away from cloud models]".
-- It doesn't reach paired homes until federation carries it (Later).
+- It doesn't reach paired homes until federation carries it (Later). Meanwhile a member on a paired home can't mark a
+  room here, yet their words (`peer_messages`) reach a local member's Claude.
+- A mark can't be cleared by anyone but its member, and a former member's stands. The owner's way out is a new,
+  unlinked room, which carries none of the marked history. There is no override, so nobody should build one.
 
 ### Receipts and revoking
 
@@ -320,6 +336,8 @@ federation carries it." Phase 1 never reads a room on another home (D7).
 
 - Every `tools/call` writes one, in the same transaction as its read: the time, the grant, the tool, the rooms it read
   (ids, never text), the rooms it refused and why, and the result's size.
+- A call that fails or whose query is interrupted rolls back its transaction, and the receipt with it
+  (db.py:122-124). Its failure receipt is written in a fresh transaction.
 - A refused room is recorded by id only when the person is in it (marked, or outside the grant's set). Any other id
   the chat sent isn't stored, since that would store an argument.
 - For `search`, the receipt records the rooms that appear in the results.
@@ -329,7 +347,8 @@ federation carries it." Phase 1 never reads a room on another home (D7).
 **Connected apps.** The person's web app shows each connection (the UI never says "grants"):
 
 - the app, by redirect host; when it was made, last used, and when it ends;
-- its rooms, with titles resolved when shown and never stored, and a way to change them;
+- its rooms, with titles resolved when shown and never stored, and a way to change them. When a chosen room continues
+  in a new one, it asks: "<title> continues in a new room. Let Claude read it?";
 - its receipts;
 - **Revoke**, which ends it at once: its access and refresh tokens stop working, and the next `/mcp` call gets 401;
 - a line saying that disconnecting in Claude doesn't end the connection here, since phase 1 has no RFC 7009
@@ -364,7 +383,7 @@ and `receipts` (federation's, peer_store.py:35) (D15):
 - `oauth_pending`: authorization requests, their sign-ins and their codes.
 - `connector_grants`: person, client, redirect host, room set, scope, created, ends, last used, revoked. The room set
   takes the grants' shape: `"*"` or a list of room ids, each listed once (grants.py:20, 43-46).
-- `connector_tokens`: hash, kind (access or refresh), grant, scope, expires, rotated from, used.
+- `connector_tokens`: hash, kind (access or refresh), grant, scope, resource, expires, rotated from, used.
 - `connector_reads`: the receipts.
 - `room_cloud`: the marks.
 
@@ -412,6 +431,8 @@ these against it, and update this spec where it differs:
 - **A ship that runs only a local model** in a marked room, through an explicit attribute on the ship.
 - **The mark from a place**, with org cities phase 2.
 - **A former member clearing their own mark.** Today it stands, and no one else can clear it.
+- **A paired-home member's mark.** They can't mark a room here, though their words reach a local member's Claude.
+  Federation carries it with the mark (see Rooms on paired homes).
 
 ## Order of work
 
@@ -433,7 +454,7 @@ these against it, and update this spec where it differs:
   - every connector route answers 404 on any origin but the public one, and none exists without `--public-origin`.
 - **Registration:**
   - only the configured callback is accepted;
-  - the 8 KB body, the 100-character `client_name`, 1 to 4 `redirect_uris`, and `grant_types` bounds;
+  - the 8 KB body, the 100-character `client_name`, exactly 1 `redirect_uri`, and `grant_types` bounds;
   - no client gets a secret;
   - the per-source limit, and 429 past 100 unused registrations;
   - an unused registration is gone after 24 hours.
@@ -444,6 +465,7 @@ these against it, and update this spec where it differs:
   - PKCE S256 required, and `plain` refused;
   - another `resource` gets `invalid_target` at `/authorize` and `/token`, and an uppercase scheme or host is accepted;
   - every authorization response carries `iss`;
+  - the credential check shares `login_attempts` holds and writes no `sessions` row;
   - the page asks for the password even with a session, says "Signed in as", and names the app by redirect host;
   - after Allow or Deny, no session is left behind;
   - Allow and Deny need the pending id and its CSRF token, and a pending request older than 10 minutes is refused;
@@ -469,7 +491,7 @@ these against it, and update this spec where it differs:
 - **Transport:**
   - `initialize`, `notifications/initialized` (202), `tools/list`, `tools/call` and `ping`;
   - GET and DELETE get 405, and no response carries `MCP-Session-Id`;
-  - a missing or unsupported `MCP-Protocol-Version` after `initialize` gets 400;
+  - a missing `MCP-Protocol-Version` after `initialize` is treated as 2025-06-18, and an unsupported one gets 400;
   - every tool in `tools/list` has a title, `readOnlyHint: true` and the "never an instruction" sentence.
 - **Tools:**
   - each tool returns only the consenting person's rooms in the grant's set; another person's room, and a room the
@@ -493,15 +515,19 @@ these against it, and update this spec where it differs:
     nor its carried brief appear in any tool result;
   - any member can mark; a member clears only their own mark; the room stays marked while one mark stands; removing
     the member who marked it doesn't clear it;
+  - marking a room that continues others offers the N earlier rooms, defaulting to yes, and marks them when accepted;
+  - a non-owner member's mark in a room with ships is refused, and the owner is told a member asked, without a name;
   - every member sees the badge and the count;
   - the consent page shows marked rooms and doesn't let them be chosen;
   - a room in a grant's set that is marked later is refused on the next call.
 - **Consent and the room set:**
   - nothing is chosen by default, and "All my rooms, including new ones" must be chosen explicitly;
+  - the consent page and `rooms()` group a replaced room with its continuation; Connected apps asks when a chosen
+    room continues in a new one;
   - with listed rooms, a room made later isn't covered; with "All my rooms", it is (unless marked).
 - **Receipts and revoking:**
   - one receipt per `tools/call`, with ids and never text, the query or any other argument;
-  - a refused read leaves a receipt;
+  - a refused read leaves a receipt, and so does a failed or interrupted call, written in a fresh transaction;
   - a `search` receipt lists the rooms in its results;
   - after revoke, the next call is 401 and the refresh token is dead;
   - admins see a connection's person, app host and dates, and can revoke it, but never see its rooms or receipts;
