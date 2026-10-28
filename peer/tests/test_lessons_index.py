@@ -257,6 +257,24 @@ def test_a_vector_of_another_size_is_near_unavailable_never_a_crash(lessons_stat
     assert fake_embedder.requests[-1]['texts'] == ['why does grep --include=* skip it']   # Near was asked, and its answer set aside
 
 
+def test_an_index_with_a_model_and_no_vectors_is_embedder_unavailable_without_asking(lessons_station, fake_embedder):
+    """Final review N5 (C24): an index that names a model but holds no vectors (its embeds failed after the model was
+    known) gives Near nothing, so the query says "embedder unavailable" when its answer is empty, and neither path asks
+    the embedder to embed the context."""
+    store, clock, ids, room = lessons_station
+    store.send_message(ids['tardis'], room, 'c1', lesson_body(claim='Words.', command=('--include=*',)))
+    fake_embedder.default = [0.0, 0.0, 0.0, 0.0]   # a zero vector: each embed fails, after info named the model
+    assert store.lessons_index(fake_embedder.path) == {'status': 'written', 'lessons': 1, 'vectors': 0}
+    index = lessons.read_index(store.data_dir / lessons.INDEX_FILE)
+    assert index['model'] == 'fake-model' and index['dimension'] is None
+    fake_embedder.default, asked = [0.0, 0.0, 0.0, 1.0], len(fake_embedder.requests)
+    assert ask(store, clock, fake_embedder.path, command='nothing here') == ({'lessons': []}, 'embedder unavailable')
+    answer, note = ask(store, clock, fake_embedder.path, command='grep --include=*.py x')
+    assert [e['claim'] for e in answer['lessons']] == ['Words.'] and note is None   # words found it: nothing to say
+    assert prompt(store, clock, 'why does this suite fail on the second run', fake_embedder.path) == {'lessons': []}
+    assert len(fake_embedder.requests) == asked   # no embed was asked for
+
+
 def test_seen_the_asking_ships_own_and_its_learned_from_are_skipped(lessons_station, fake_embedder):
     store, clock, ids, room = lessons_station
     two_lessons(store, ids, room, fake_embedder)

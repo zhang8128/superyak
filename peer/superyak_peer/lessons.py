@@ -498,8 +498,8 @@ def prompt_answer(request, index, age, socket_path, deadline, monotonic):
     matched.sort(key=lambda m: m[:2])
     picked = [shown(item, 'words', command) for _, _, item, command in matched[:limit]]
     taken = {item['id'] for _, _, item, _ in matched[:limit]}
-    if (len(picked) < limit and len(prompt.split()) >= PROMPT_WORDS and index.get('model') and socket_path
-            and deadline is not None and deadline > monotonic()):
+    if (len(picked) < limit and len(prompt.split()) >= PROMPT_WORDS and index.get('model') and index.get('dimension')
+            and socket_path and deadline is not None and deadline > monotonic()):  # no vectors: nothing to embed for
         try:
             model, (vector,) = embed(socket_path, [prompt], 'search_query', deadline, monotonic)
         except EmbedderUnavailable:
@@ -600,7 +600,7 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
     text, deadline = context_text(request), near_deadline(request, started, NEAR_SECONDS)
     if not request['words_only'] and len(candidates) < request['limit'] and text and pool:
         model = None
-        if not (index.get('model') and socket_path):
+        if not (index.get('model') and index.get('dimension') and socket_path):  # C24: no model, no vectors or no socket
             unavailable = True
         elif deadline > monotonic():  # a budget of 0, or spent: words only, said nowhere
             try:
