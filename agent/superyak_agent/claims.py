@@ -9,42 +9,14 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import NamedTuple
 from .station import write_private
-
-NAME = re.compile(r'[a-z][a-z0-9-]{1,31}')  # the station's own rule for ship usernames (peer ships.py)
+from .acting import (  # noqa: F401 - the acting-ship rule moved to acting.py; re-exported so callers and patches keep working
+    FIELDS, NAME, Repo, Unreadable, _gitdir_of, _real, _valid, claim_files, kind_of, machine_home, match, project_home,
+    project_root, read_json_quiet, read_registry, registry_path, session_project, ships_root, verdict)
 
 
 class Refused(Exception):
     """A check that stops dock before it asks the station for anything or writes anything."""
-
-
-def machine_home():
-    """~/.superyak, read at call time so a test's HOME applies."""
-    return Path.home() / '.superyak'
-
-
-def ships_root():
-    return machine_home() / 'ships'
-
-
-def project_home(name):
-    return ships_root() / name
-
-
-def _real(path):
-    return Path(os.path.realpath(os.path.expanduser(str(path))))
-
-
-def kind_of(home):
-    """'machine' for ~/.superyak, 'project' for ~/.superyak/ships/<name>, None for anything else (a custom --config,
-    which the hook and the MCP server treat as the machine ship, as before D7)."""
-    home = _real(home)
-    if home == _real(machine_home()):
-        return 'machine'
-    if home.parent == _real(ships_root()) and NAME.fullmatch(home.name):
-        return 'project'
-    return None
 
 
 def local_ships():
@@ -108,110 +80,11 @@ def check_mode(ship, home, project):
     return home, kind
 
 
-# ---------- which repository a directory is in (S6, R17). Never runs git: no repository config, hook or fsmonitor can
-# run, and the hook stays inside its time budget. ----------
-
-class Repo(NamedTuple):
-    root: Path      # the main checkout's root, a real path
-    common: Path    # its .git directory, a real path
-
-
-def _gitdir_of(dotgit):
-    """The gitdir a `.git` file names, resolved against the folder holding it; None if it can't be read."""
-    text = dotgit.read_text()
-    line = next((ln for ln in text.splitlines() if ln.startswith('gitdir:')), None)
-    if line is None:
-        return None
-    named = line[len('gitdir:'):].strip()
-    return Path(os.path.realpath(dotgit.parent / named)) if named else None
-
-
-def project_root(start):
-    """S6: walk up from the real path of `start` to the first `.git`, which decides. A directory is a main checkout;
-    a file is a worktree whose gitdir must link back to it and whose common dir comes from `commondir`. The common
-    dir must be named `.git` and the root is its parent, so a submodule, a bare repository's worktree and a
-    --separate-git-dir checkout are "no repository" (None), as is anything that can't be read."""
-    try:
-        here = Path(os.path.realpath(start))
-        for folder in (here, *here.parents):
-            dotgit = folder / '.git'
-            if not os.path.lexists(dotgit):
-                continue
-            if dotgit.is_dir() and not dotgit.is_symlink():
-                common = Path(os.path.realpath(dotgit))
-            elif dotgit.is_file() and not dotgit.is_symlink():
-                gitdir = _gitdir_of(dotgit)
-                if gitdir is None:
-                    return None
-                back = (gitdir / 'gitdir').read_text().strip()
-                if os.path.realpath(back) != os.path.realpath(dotgit):
-                    return None
-                commondir = gitdir / 'commondir'
-                common = Path(os.path.realpath(gitdir / commondir.read_text().strip())) if commondir.exists() else gitdir
-            else:
-                return None
-            if common.name != '.git' or not common.is_dir():
-                return None
-            return Repo(common.parent, common)
-    except (OSError, ValueError):
-        return None
-    return None
-
-
 # ---------- the claims registry (S6, R8, R16) ----------
-
-FIELDS = {'ship': str, 'home': str, 'root': str, 'dev': int, 'ino': int}
-
-
-class Unreadable(Exception):
-    """The registry can't be trusted: every hook goes quiet and every station tool refuses until it's fixed."""
-
-
-def registry_path():
-    return machine_home() / 'projects.json'
 
 
 def lock_path():
     return machine_home() / 'projects.lock'
-
-
-def claim_files():
-    root = ships_root()
-    return sorted(p / 'claim.json' for p in root.iterdir() if (p / 'claim.json').exists()) if root.is_dir() else []
-
-
-def _valid(entries):
-    if not isinstance(entries, list):
-        return False
-    for item in entries:
-        if not isinstance(item, dict) or set(item) != set(FIELDS):
-            return False
-        if any(type(item[key]) is not kind for key, kind in FIELDS.items()):     # True is no inode
-            return False
-    return (len({e['ship'] for e in entries}) == len(entries) and len({e['root'] for e in entries}) == len(entries))
-
-
-def read_registry():
-    """The claims, as a list of {ship, home, root, dev, ino}. Unreadable when the file can't be read, isn't JSON or
-    fails the schema, and when it's missing while some ships/*/claim.json exists (a claim was written, so the
-    registry was too, and it has been lost). Missing with no claim.json means no claims."""
-    path = registry_path()
-    try:
-        text = path.read_text()
-    except FileNotFoundError:
-        found = claim_files()
-        if found:
-            raise Unreadable(f'{path} is missing, but {found[0]} says a claim was made') from None
-        return []
-    except OSError as error:
-        raise Unreadable(f'{path} can\'t be read ({type(error).__name__})') from error
-    try:
-        entries = json.loads(text)
-    except ValueError:
-        raise Unreadable(f'{path} isn\'t valid JSON') from None
-    if not _valid(entries):
-        raise Unreadable(f'{path} doesn\'t hold a list of claims ({", ".join(FIELDS)})')
-    return entries
 
 
 @contextmanager
@@ -267,67 +140,14 @@ def unclaim(home, held=False):
         return remove()
 
 
-def read_json_quiet(path):
-    try:
-        return json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return None
-
-
 def registry_line(error):
     """status's line for an unreadable registry (R16): the file, why, and what it means."""
     return (f"Superyak: {registry_path()} can't be read ({error}), so the station hooks on this machine are off and "
             'every station tool refuses. Fix or remove it (remove only with no ships/*/claim.json left), then dock again.')
 
 
-def match(entry, root):
-    """S6: 'full' when the claim's root and (dev, ino) both equal the session root's, 'partial' when exactly one does
-    (a moved repository, a re-clone at the same path, a remount), None otherwise. Claude Code keys local tools by path
-    (M7), so path and inode must agree for the hooks and the tools to stay on one ship."""
-    try:
-        st = os.stat(root)
-    except OSError:
-        return None
-    path_ok = entry['root'] == str(Path(os.path.realpath(root)))
-    inode_ok = (entry['dev'], entry['ino']) == (st.st_dev, st.st_ino)
-    return 'full' if path_ok and inode_ok else 'partial' if path_ok or inode_ok else None
-
-
 LOUD = ("Superyak: ~/.superyak/projects.json can't be read, so the station hooks on this machine are off. "
         "Run `make dock` for your ship to see why.")
-
-
-def session_project(cwd=None):
-    """The session's project directory: CLAUDE_PROJECT_DIR (where it started, M4, M8), else the cwd given (the
-    hook's stdin cwd, or the MCP server's own)."""
-    return os.environ.get('CLAUDE_PROJECT_DIR') or cwd
-
-
-def verdict(home, project_dir):
-    """Whether the ship whose home this is acts in a session started in `project_dir` (S6, R14, R15, R16):
-    ('act', claim or None), ('claimed', claim) for the machine ship in another ship's project, ('stale', claim) for a
-    partial match, ('elsewhere', claim) for a project ship outside its claim, ('unclaimed', None) for a project ship
-    whose claim.json isn't also, equal, in the registry, or ('unreadable', reason). Never runs git."""
-    try:
-        entries = read_registry()
-    except Unreadable as error:
-        return 'unreadable', str(error)
-    repo = project_root(project_dir) if project_dir else None
-    if kind_of(home) != 'project':
-        for entry in entries if repo is not None else []:
-            found = match(entry, repo.root)
-            if found == 'full':
-                return 'claimed', entry
-            if found == 'partial':
-                return 'stale', entry
-        return 'act', None
-    own = read_json_quiet(Path(home) / 'claim.json')
-    if not isinstance(own, dict) or own not in entries:
-        return 'unclaimed', None
-    found = match(own, repo.root) if repo is not None else None
-    if found == 'full':
-        return 'act', own
-    return ('stale', own) if found == 'partial' else ('elsewhere', own)
 
 
 def stale_claims(entries):
@@ -345,12 +165,17 @@ def stale_claims(entries):
     return stale
 
 
+def inside_run():
+    """Whether this process runs inside a teamd worker or a watcher run (SUPERYAK_RUN set to anything but `hook`)."""
+    return os.environ.get('SUPERYAK_RUN') not in (None, '', 'hook')
+
+
 def refusal(home, project_dir):
     """S7: why the station MCP server of the ship whose home this is refuses a call from a session in `project_dir`,
     or None when it may act. In order: inside a teamd worker or a watcher run; an unreadable registry; the machine
     ship in another ship's project (with the codex -p hint) or at a stale claim; a project ship at its stale claim,
     outside its claim, or with no claim."""
-    if os.environ.get('SUPERYAK_RUN') not in (None, '', 'hook'):
+    if inside_run():
         return ('The station tools are off inside teamd workers and watcher runs (SUPERYAK_RUN is set): those act for '
                 'the person through their own channels, never as a ship.')
     acts, detail = verdict(home, project_dir)
