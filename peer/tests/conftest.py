@@ -38,6 +38,29 @@ def peer_clients(env):
     return env[1][:3]
 
 
+_ROUTE_AS_SHIPPED = {}
+
+
+@pytest.fixture(autouse=True, scope='session')
+def route_open_as_for_trails():
+    """Route waits until trails ships (`imprints.ROUTE_OPEN`, Serenity's condition S1). Every test here runs with route
+    open unless it takes `route_closed`; production never does. So the route code stays tested for the day trails
+    lands. Opening it per test was weighed (Serenity's note 1): 96 test functions in 12 files need it, because the
+    shared `request_doc` asks with route, so the opening stays session-wide."""
+    from superyak_peer import imprints
+    _ROUTE_AS_SHIPPED['value'] = imprints.ROUTE_OPEN
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(imprints, 'ROUTE_OPEN', True)
+        yield
+
+
+@pytest.fixture
+def route_closed(monkeypatch):
+    """`imprints.ROUTE_OPEN` as it ships, put back for one test."""
+    from superyak_peer import imprints
+    monkeypatch.setattr(imprints, 'ROUTE_OPEN', _ROUTE_AS_SHIPPED['value'])
+
+
 # First rail (docs/superpowers/specs/2026-10-27-first-rail-lessons-design.md): one peer with a recorded lessons room,
 # two peers federated in process, and a fake shared embedder that speaks engram/embedder_service.py's protocol.
 LESSON_TIME = 1_800_000_000.0

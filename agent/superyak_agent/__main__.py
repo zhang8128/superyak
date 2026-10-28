@@ -164,7 +164,8 @@ def _dock_project(args, fields):
 
 
 def _imprint(args):
-    """`imprint context|send|status|withdraw|shorten`: prints `STATUS: <value>` last; a send still waiting for the owner exits 3, as dock does."""
+    """`imprint context|send|status|withdraw|shorten`: prints `STATUS: <value>` last; a send still waiting for the owner exits 3, as dock does,
+    and one whose code has expired exits 1 (`code-expired`: nobody can allow it; the owner plans again after the sweep)."""
     from .imprint import Imprint, ImprintRefused
     from .station import StationError, client_for, label, load_config
     imprint = Imprint(args.home, client_for(load_config(args.home / 'station.json'), timeout=120))
@@ -182,13 +183,13 @@ def _imprint(args):
             return 0
         status = imprint.send(args.plan, wait=args.wait)
     except ImprintRefused as error:
-        print(error)
+        print(error, flush=True)
         return error.code
     except (StationError, OSError) as error:
-        print(f'imprint: {label(str(error), 300)}')     # a station's message is data: one printable line (review I2)
+        print(f'imprint: {label(str(error), 300)}', flush=True)     # a station's message is data: one printable line (review I2)
         return 1
-    print(f'STATUS: {label(status)}')
-    return 3 if status == 'waiting-for-you' else 0
+    print(f'STATUS: {label(status)}', flush=True)
+    return {'waiting-for-you': 3, 'code-expired': 1}.get(status, 0)
 
 
 def main(argv=None):

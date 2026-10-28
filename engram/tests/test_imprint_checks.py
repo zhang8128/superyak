@@ -43,7 +43,7 @@ def test_a_vec_mismatch_names_the_remedy(tmp_path):
     ("rowid_gap", 15), ("fts_orphan", 16), ("non_zero_invalid_vec0_slot", 17),
     ("subject_row_for_a_missing_memory", 10), ("subject_row_naming_the_owner", 10),
     ("subject_row_in_a_copy_leaving_home", 12), ("others_disagree_with_the_rows", 13)])
-def test_each_later_check_fails(tmp_path, change, step):        # P33: not test_each_check_fails, which checks 1 to 9 own
+def test_each_later_check_fails(tmp_path, change, step, route_open):        # P33: not test_each_check_fails, which checks 1 to 9 own
     root, imprint_id = tampered(tmp_path, change)
     failure = verify(root / imprint_id, verify_cmd=stub_verify(ok=True), migrations_dir=MIGRATIONS, scratch=tmp_path / "s")
     assert failure is not None and failure.step == step and failure.message == CHECK_MESSAGES[step]
@@ -55,7 +55,7 @@ def test_a_session_id_set_by_hand_also_fails_the_digest(tmp_path):
     assert check_12(conn, manifest) is not None and check_13(conn, manifest) is not None
 
 
-def test_a_clean_package_passes_all_17(tmp_path):
+def test_a_clean_package_passes_all_17(tmp_path, route_open):
     for route, cos in ((False, None), (True, None), (True, {"e1": "person:jenn"})):     # the last: andy's copy at home
         d = tmp_path / f"{route}-{bool(cos)}"
         built = built_package(d, route=route, owner="andy" if cos else "sam", cosubjects=cos)
@@ -63,14 +63,14 @@ def test_a_clean_package_passes_all_17(tmp_path):
         assert verify(root / imprint_id, verify_cmd=stub_verify(ok=True), migrations_dir=MIGRATIONS, scratch=d / "s") is None
 
 
-def test_log_rows_under_a_permission_without_route_fail_the_scope(tmp_path):
+def test_log_rows_under_a_permission_without_route_fail_the_scope(tmp_path, route_open):
     built = built_package(tmp_path, route=True)
     root, imprint_id = handed_off(tmp_path, built, route=False, valid_until=FAR, owner="sam")
     failure = verify(root / imprint_id, verify_cmd=stub_verify(ok=True), migrations_dir=MIGRATIONS, scratch=tmp_path / "s")
     assert failure is not None and failure.step == 12
 
 
-def test_admission_leaves_nothing_in_its_scratch_directory(tmp_path):
+def test_admission_leaves_nothing_in_its_scratch_directory(tmp_path, route_open):
     built = built_package(tmp_path, route=True)
     root, imprint_id = handed_off(tmp_path, built, route=True, valid_until=FAR, owner="sam")
     assert verify(root / imprint_id, verify_cmd=stub_verify(ok=True), migrations_dir=MIGRATIONS, scratch=tmp_path / "s") is None
