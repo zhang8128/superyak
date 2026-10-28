@@ -188,3 +188,97 @@ def test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock(pulling):
     a[2].serve_pull(canonical(early))
     clock.at += 598
     refused(lambda: a[2].serve_pull(canonical(early)), 409, 'Replay')
+
+
+# Federation pull, plan Task 6: the per-envelope boundary (spec §4, M3; tests 8a and 8b) and the walk's bounds (§4, SF8,
+# check 3 SF6; P5 and RG)
+
+def two_layers(a, contact):
+    first, second = share(a, contact, 'first'), share(a, contact, 'second')
+    a[2].collect()
+    by_layer = {r['resource_id']: r['id'] for r in outbox(a)}
+    return first, second, by_layer[first], by_layer[second]
+
+
+def test_8a_a_withdrawal_committed_before_a_row_is_prepared_comes_back_withdrawn(pulling):
+    clock, a, peers, contacts = pulling
+    mac = peers['mac']
+    first, second, row1, row2 = two_layers(a, contacts['mac'])
+
+    def between(key):
+        if key == row2:
+            a[0].withdraw_layer(a[1], second)  # committed while the walk runs, before row 2 is prepared
+    a[2]._between_rows = between
+    got = pull(mac, a, clock)
+    assert [json.loads(e)['event_id'] for e in got['envelopes']] == [row1]
+    states = {r['id']: r['status'] for r in outbox(a)}
+    assert states[row2] == 'withdrawn'
+
+
+def test_8b_a_withdrawal_committed_after_a_row_was_prepared_arrives_as_the_next_pulls_withdraw(pulling):
+    """The pull boundary is per envelope: a release prepared before the withdrawal stays in this response, and the
+    withdrawal goes out as the next pull's own event (layer.withdraw here, room.withdraw for a room)."""
+    clock, a, peers, contacts = pulling
+    mac = peers['mac']
+    first, second, row1, row2 = two_layers(a, contacts['mac'])
+
+    def between(key):
+        if key == row2:
+            a[0].withdraw_layer(a[1], first)  # row 1 was already prepared and is in this response
+    a[2]._between_rows = between
+    got = pull(mac, a, clock)
+    sent = {json.loads(e)['event_id']: json.loads(e)['action'] for e in got['envelopes']}
+    assert sent == {row1: 'layer.release', row2: 'layer.release'}
+    a[2]._between_rows = lambda key: None
+    after = pull(mac, a, clock, ack=[row1, row2])
+    actions = [(json.loads(e)['resource_id'], json.loads(e)['action']) for e in after['envelopes']]
+    assert actions == [(first, 'layer.withdraw')]
+
+
+def test_300_obsolete_rows_examine_200_hold_the_gate_per_row_and_leave_more(pulling):
+    """Spec §4 (SF8): at most 200 rows examined per pull, each under its own hold of the gate, never one across rows."""
+    clock, a, peers, contacts = pulling
+    mac = peers['mac']
+    layer = share(a, contacts['mac'], 'current')
+    a[2].collect()
+    with a[0].transaction() as db:  # 300 rows ahead of it for a revision the layer no longer has: each is obsolete
+        for n in range(300):
+            db.execute("INSERT INTO outbox(id,event_seq,contact_id,resource_id,revision,action,metadata,status) "
+                       "VALUES(?,?,?,?,0,'layer.release','{}','pending')", (uuid.uuid4().hex, -300 + n, contacts['mac'], layer))
+    lock, local = a[0].dispatch_gate.state
+    depths = []
+    a[2]._between_rows = lambda key: depths.append(getattr(local, 'depth', 0))
+    got = pull(mac, a, clock)
+    assert got['envelopes'] == [] and got['more'] is True
+    assert len(depths) == 200 and set(depths) == {0}
+    assert sum(r['status'] == 'withdrawn' for r in outbox(a)) == 200
+
+
+def test_the_walk_stops_at_its_time_and_says_more(pulling):
+    clock, a, peers, contacts = pulling
+    mac = peers['mac']
+    for n in range(10):
+        share(a, contacts['mac'], f'slow {n}')
+    a[2].pull_walk_seconds = 0.3
+    a[2]._between_rows = lambda key: __import__('time').sleep(0.1)
+    got = pull(mac, a, clock)
+    assert 1 <= len(got['envelopes']) < 10 and got['more'] is True
+
+
+def test_an_envelope_too_large_to_pull_is_refused_where_it_waits_and_its_owner_sees_why(pulling, monkeypatch):
+    """Plan P5 and RG: an envelope whose JSON-string form alone can't fit the transport's cap is refused, "413 Too large to
+    pull", the row behind it arrives in the same pull, and the release's owner sees why in status()."""
+    from superyak_peer.transport import PULL_CAP
+    clock, a, peers, contacts = pulling
+    mac = peers['mac']
+    first, second, row1, row2 = two_layers(a, contacts['mac'])
+    real = a[2]._prepare_in
+
+    def huge(db, key):
+        body = real(db, key)
+        return body + b' ' * PULL_CAP if key == row1 else body  # test-only: a body the cap can't carry
+    monkeypatch.setattr(a[2], '_prepare_in', huge)
+    got = pull(mac, a, clock)
+    assert [json.loads(e)['event_id'] for e in got['envelopes']] == [row2]
+    seen = {s['id']: (s['status'], s['last_error']) for s in a[2].status(a[1])}
+    assert seen[row1] == ('refused', '413 Too large to pull')

@@ -537,7 +537,12 @@ class Federation:
                     if status in ('pending','failed') and sent_action != action:
                         status = 'withdrawn'
                     action = sent_action
-                result.append({**{k:row[k] for k in ('id','resource_id','revision','contact_id','attempts','next_attempt')},
+                # federation pull spec §7-8: the peer's delivery mode and next attempt (the row's own is no longer used),
+                # and why a refused row wasn't delivered, which its owner sees (plan RG)
+                peer = db.execute('SELECT mode, next_attempt FROM peer_delivery WHERE peer_id=?', (contact['peer_id'],)).fetchone()
+                result.append({**{k:row[k] for k in ('id','resource_id','revision','contact_id','attempts')},
+                               'next_attempt': peer['next_attempt'] if peer else None, 'peer_mode': peer['mode'] if peer else None,
+                               'last_error': row['last_error'] if status == 'refused' else None,
                                'action':action, 'status':status, 'resource_title':title,
                                'contact_name':contact['name'], 'peer_id':contact['peer_id'], **correlation})
             return result
