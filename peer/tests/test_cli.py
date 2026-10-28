@@ -285,8 +285,11 @@ def test_card_prints_the_card_on_stdout_as_before_and_without_a_terminal_no_code
     out, err = capsys.readouterr()
     card = json.loads(out)
     assert out == json.dumps(card, indent=2) + '\n'  # stdout stays exactly a card
-    assert err.startswith('Pairing code: not shown here')
+    assert err == cli.NO_TERMINAL_CODE + '\n'
     assert pairing_code(card) not in err and show_code(pairing_code(card)) not in err
+    # Serenity's re-check, minor 2: a distributable CLI names no person, and a line that holds no code doesn't
+    # begin like the line that did
+    assert 'Andy' not in cli.NO_TERMINAL_CODE and not cli.NO_TERMINAL_CODE.startswith('Pairing code:')
 
 
 def test_card_shows_its_code_on_its_terminal_only(tmp_path):

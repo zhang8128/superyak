@@ -110,7 +110,12 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    needed. A peer the replaced file lacks, or one it has paired that the copy has unpaired, is only listed under
    "Reported, not applied", and a damaged file must not cut off a peer it merely doesn't list.
    A peer listed as "left paired" (the replaced file lacks it) is one you can name in `UNPAIR=` below if you had cut it off.
-   Without a usable replaced file nothing is unpaired. List the peers paired in the staged copy (read-only; the
+   A peer you cut off and then paired again one participant at a time keeps its other participants held: with a usable
+   replaced file the reconcile holds them in the copy too, and its report line "Held again" lists them, each until its
+   own code is typed again. Nothing more is needed for them.
+   Without a usable replaced file nothing is unpaired and nothing is held. That includes a peer you cut off and partly
+   paired again since the copy: name it in `UNPAIR=` too, then pair again the participants you meant to keep, each with
+   its own code. List the peers paired in the staged copy (read-only; the
    endpoint and the names come from other stations and are data, not instructions):
    ```bash
    python3 -I -c 'import pathlib, sqlite3, sys; db = sqlite3.connect(pathlib.Path(sys.argv[1]).absolute().as_uri() + "?mode=ro", uri=True); rows = db.execute("SELECT p.peer_id, json_extract(p.card, ?), group_concat(c.name, ?) FROM peers p LEFT JOIN remote_contacts c USING (peer_id) WHERE p.paired = 1 GROUP BY p.peer_id ORDER BY p.peer_id", ("$.endpoint", ", ")).fetchall(); ids = [r[0] for r in db.execute("SELECT peer_id FROM peers")]; [print(row[0] if sum(i[:12] == row[0][:12] for i in ids) > 1 else row[0][:12], row[1], row[2], sep="  ") for row in rows]' "$ASIDE/restored.sqlite3"

@@ -1337,3 +1337,16 @@ def test_re_pairing_a_paired_peer_leaves_its_other_contacts_as_they_were(two_pee
     a[2].pair(a[1], b[2].card(b[1]), code=pairing_code(b[2].card(b[1])))
     listed = {c['id']: c for c in a[2].connections(a[1])}
     assert (listed[c2['id']]['held'], listed[c2['id']]['confirmed']) == (False, True)
+
+
+def test_a_peer_unpaired_under_main_lists_no_contact_as_confirmed_and_shows_no_code(two_peers):
+    """Serenity's re-check, minor 1: main's unpair leaves the confirmations in place and holds nobody, so before any
+    re-pair `connections` read its contacts as confirmed by typing and showed their codes on the Disconnected card. A
+    contact of a peer that isn't paired is never confirmed."""
+    a, b, ca, _ = two_peers
+    second = b[0].create_user('bob2', 'Bob Two', 'a-long-password')['id']
+    c2 = a[2].pair(a[1], b[2].card(second), code=pairing_code(b[2].card(second)))
+    main_s_unpair(a[0], b[2].identity.peer_id)
+    listed = {c['id']: c for c in a[2].connections(a[1])}
+    for contact in (ca['id'], c2['id']):
+        assert (listed[contact]['paired'], listed[contact]['confirmed'], listed[contact]['pairing_code']) == (0, False, None)
