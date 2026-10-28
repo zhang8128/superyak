@@ -159,6 +159,14 @@ def send_pinned(card, prepare, *, gate=None, timeout=TIMEOUT):
         conn.close()
 
 
+def pull_answer_ok(result):
+    """A pull response's shape (spec §5): exactly `ok` (true), `envelopes` (a list of strings) and `more` (a bool). The
+    puller checks an in-process answer with it too, so both paths refuse the same bodies (plan SF7)."""
+    return (isinstance(result, dict) and set(result) == {'ok', 'envelopes', 'more'} and result['ok'] is True
+            and type(result['more']) is bool and isinstance(result['envelopes'], list)
+            and all(isinstance(e, str) for e in result['envelopes']))
+
+
 def pull_pinned(card, body, *, header_timeout=10.0, rate=PULL_RATE):
     """Spec §5: POST a signed pull request to /federation/pull over the same pinned dial. The headers must come within
     header_timeout; then the body gets its declared Content-Length / rate, so a large response on a slow link has time
@@ -190,8 +198,7 @@ def pull_pinned(card, body, *, header_timeout=10.0, rate=PULL_RATE):
             result = parse(raw, limit=PULL_CAP)
         except Problem:
             raise PeerAnswer(response.status, 'Peer pull response is malformed') from None
-        if set(result) != {'ok', 'envelopes', 'more'} or result['ok'] is not True or type(result['more']) is not bool \
-                or not isinstance(result['envelopes'], list) or not all(isinstance(e, str) for e in result['envelopes']):
+        if not pull_answer_ok(result):
             raise PeerAnswer(response.status, 'Peer pull response is malformed')
         return result
     finally:

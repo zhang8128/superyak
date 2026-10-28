@@ -2,11 +2,13 @@
 import base64
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 import threading
+import time
 from .identity import (PeerIdentity, validate_card, verify_envelope, verify_pull, pull_shape_ok, canonical, parse,
-                       pairing_code, show_code, typed_code)
+                       pairing_code, show_code, typed_code, HEX32)
 from .common import Problem, require, uid, encode, text, linked_room_ok
 
 class Obsolete(Exception):
@@ -21,6 +23,10 @@ class Local(Exception):
 
 # Spec §7: the answers that are about the peer, not the row. Every other 4xx is the peer's answer about this row.
 PULL_ROWS, PULL_SECONDS = 200, 5.0  # spec §4: a pull examines at most 200 rows, for about 5 s
+# The puller (spec §6, plan P12, nit 25): what it asks for, how many rounds a pull may take, and when it pulls again.
+PULL_LIMIT, PULL_ASK, PULL_ROUNDS, PULL_AGAIN, PULL_NO_ROUTE = 20, 1024 * 1024, 10, 60, 300
+CLOCKS_DIFFER = 'Clocks differ by more than 5 minutes'
+log = logging.getLogger(__name__)
 PEER_SCOPED_STATUS = frozenset({401, 404, 408, 421, 425, 429})
 PEER_SCOPED_403 = frozenset({'Unknown or unpaired peer', 'Peer authentication failed', 'Unrecognized host',
                              'Same-origin request required', 'Federation requires HTTPS'})
@@ -70,6 +76,7 @@ class Federation:
         self._pull_locks, self._pull_guard = {}, threading.Lock()  # spec §4, check 7: one pull per origin at a time
         self.pull_walk_seconds = PULL_SECONDS  # a test may shorten it (plan Task 6)
         self._between_rows = lambda key: None  # a test hook between the walk's rows (plan Task 6, 8a and 8b)
+        self._pull_owed = {}  # the puller's acks and refusals per listener, until a pull carries them (spec §6)
 
     def card(self, actor):
         """A v1 card with this peer's endpoint, or a v2 card with none once its mode is pull (federation-pull spec §2)."""
@@ -444,6 +451,127 @@ class Federation:
             left = db.execute(f"SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed') AND {theirs}",
                               (origin,)).fetchone()[0]
         return {'ok': True, 'envelopes': envelopes, 'more': left > len(envelopes)}
+
+    def pull_once(self, card, *, send=None, sleep=time.sleep):
+        """Spec §6, the puller: one pull from the listener `card` names. Rounds follow plan P12, and every answer to the
+        pull itself follows P7's table. The acks and refusals owed to that listener stay in memory until a pull that
+        carries them succeeds, so a failed pull loses none. An in-process `send=` (the listener's serve_pull) takes
+        HTTP's path, its Problem raised as the PeerAnswer HTTP would give (plan SF7). Returns what came and `next`, the
+        seconds until federate pulls this peer again, which stays in federate's memory, never in peer_delivery (P4)."""
+        from .transport import PeerAnswer, pull_answer_ok, pull_pinned
+        peer_id = card['peer_id']
+        owed = self._pull_owed.setdefault(peer_id, {'ack': [], 'refused': []})
+        got = {'received': 0, 'refused': 0, 'dropped': 0, 'unreadable': 0, 'rounds': 0, 'next': PULL_AGAIN,
+               'answer': 'ok', 'clock': False}
+        asked, fetch = set(), True
+        while True:
+            limit = PULL_LIMIT if fetch else 0
+            ack, refused = owed['ack'][:100], owed['refused'][:100]
+            body = canonical(self.identity.sign_pull({
+                'version': 1, 'kind': 'pull', 'origin': self.identity.peer_id, 'destination': peer_id, 'nonce': uid(),
+                'at': int(self.store.clock()), 'limit': limit, 'budget': PULL_ASK, 'ack': ack, 'refused': refused}))
+            try:
+                if send:
+                    try:
+                        answer = send(card, body)
+                    except Problem as problem:
+                        raise PeerAnswer(problem.status, problem.message) from None
+                    if not pull_answer_ok(answer):
+                        raise PeerAnswer(200, 'Peer pull response is malformed')
+                else:
+                    answer = pull_pinned(card, body)
+            except Exception as error:  # noqa: BLE001 - every answer is P7's; nothing escapes a pull
+                if self._pull_answer(peer_id, error, asked, got, sleep):
+                    continue  # asked again with a new nonce and `at`
+                return got
+            del owed['ack'][:len(ack)], owed['refused'][:len(refused)]  # the listener applied them, in one transaction
+            now = self.store.clock()
+            with self.store.transaction() as db:
+                self._peer_outcome(db, peer_id, 'reset', None, now)  # a successful pull resets the row; pushes go again
+                db.execute('UPDATE peer_delivery SET last_success=? WHERE peer_id=?', (now, peer_id))
+            if limit == 0:
+                return got
+            got['rounds'] += 1
+            new = self._take_pulled(peer_id, answer['envelopes'], owed, got)
+            stuck = answer['envelopes'] and not new  # P12: what it can neither ack nor refuse won't spend 10 rounds
+            if answer['more'] and not stuck:
+                if got['rounds'] < PULL_ROUNDS:
+                    continue
+                got['next'] = 0  # bounded at 10 rounds with more to come: the next pass goes on at once
+            if not owed['ack'] and not owed['refused']:
+                return got
+            fetch = False  # then limit 0, to carry the acks that remain (spec §6, nit 20)
+
+    def _pull_answer(self, peer_id, error, asked, got, sleep):
+        """Plan P7, for an answer to the pull that isn't a valid 2xx. True when the request goes again: a first "busy"
+        after 5 s, a first "replay" at once. Otherwise False, with `got['next']` set. Only the answers P7 names count
+        against the peer. A 404's 5 minutes stay out of peer_delivery, where they would also delay pushes to a listener
+        that just has no pull route."""
+        from .transport import PeerAnswer
+        status = error.status if isinstance(error, PeerAnswer) else None
+        words = f'{status} {error.message}'.strip() if status is not None else None
+        if status == 409 and error.message in ('Busy', 'Replay') and error.message not in asked:
+            asked.add(error.message)
+            if error.message == 'Busy':
+                sleep(5)
+            return True
+        if status == 404:
+            got.update(answer=words, next=PULL_NO_ROUTE)
+        elif status == 403:
+            with self.store.transaction() as db:
+                db.execute('UPDATE peer_delivery SET last_problem=? WHERE peer_id=?', (words, peer_id))
+            got.update(answer=words, next=PULL_AGAIN, clock=error.message == CLOCKS_DIFFER)
+        elif status is not None and 400 <= status < 500 and status not in PEER_SCOPED_STATUS:
+            log.warning('A pull to %s was answered %s: a bug on one side; its acks are kept', peer_id[:8], words)
+            got.update(answer=words, next=PULL_AGAIN)
+        else:
+            words = classify(error)[2]
+            now = self.store.clock()
+            with self.store.transaction() as db:
+                self._peer_outcome(db, peer_id, 'failure', words, now)
+                failures = db.execute('SELECT failures FROM peer_delivery WHERE peer_id=?', (peer_id,)).fetchone()
+            got.update(answer=words, next=min(PULL_NO_ROUTE, 2 ** min(failures[0] if failures else 1, 12)))
+        return False
+
+    def _take_pulled(self, peer_id, envelopes, owed, got):
+        """Spec §6: each envelope a pull brought from this listener, received here. `ok` and `duplicate` are acked; a
+        row-scoped refusal is refused with its status; a peer-scoped answer, or any other fault, is neither, so the row
+        stays. One with another origin is dropped and logged. One that doesn't parse still goes to receive, which
+        refuses it, since its origin can't be read (nit 23). Returns how many new acks and refusals it made."""
+        new = 0
+        for text in envelopes:
+            raw = text.encode()
+            try:
+                value = parse(raw)
+            except Problem:
+                value = None
+            origin, event = (value.get('origin'), value.get('event_id')) if isinstance(value, dict) else (None, None)
+            named = isinstance(event, str) and HEX32.fullmatch(event)
+            if origin is not None and origin != peer_id:
+                got['dropped'] += 1
+                log.warning('A pull from %s carried an envelope from another origin; it was dropped', peer_id[:8])
+                continue
+            try:
+                self.receive(raw)
+            except Problem as answer:
+                scoped = answer.status in PEER_SCOPED_STATUS or (answer.status == 403 and answer.message in PEER_SCOPED_403)
+                if named and 400 <= answer.status < 500 and not scoped:
+                    owed['refused'].append({'event_id': event, 'code': answer.status})
+                    got['refused'] += 1
+                    new += 1
+                elif not named:
+                    got['unreadable'] += 1
+                continue
+            except Exception:  # noqa: BLE001 - a local fault leaves the row where it waits
+                log.exception('Receiving an envelope pulled from %s failed', peer_id[:8])
+                continue
+            if named:
+                owed['ack'].append(event)
+                got['received'] += 1
+                new += 1
+            else:
+                got['unreadable'] += 1
+        return new
 
     def _walk_row(self, db, key, cap):
         """One row of the walk: its envelope text, or None when it was marked withdrawn or refused here, in the
