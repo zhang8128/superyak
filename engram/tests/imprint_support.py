@@ -493,6 +493,23 @@ _LAUNCHER = ("import os, resource, signal, subprocess, sys, time\n"
              "print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024, time.monotonic() - t, code)\n")
 
 
+_USER_SCOPE: list[bool] = []
+
+
+def user_scope_runs() -> bool:
+    """True when ``systemd-run --user --scope`` runs here: a user manager answers. A CI runner has the binary but no
+    user session ("Failed to connect to bus"), so there the child runs without the scope, under its ``RLIMIT_DATA``
+    and wall-clock kill, as where ``systemd-run`` is missing. Asked once per process."""
+    if not _USER_SCOPE:
+        try:
+            ran = subprocess.run(["systemd-run", "--user", "--scope", "--quiet", "true"],
+                                 capture_output=True, timeout=30)
+            _USER_SCOPE.append(ran.returncode == 0)
+        except (OSError, subprocess.TimeoutExpired):
+            _USER_SCOPE.append(False)
+    return _USER_SCOPE[0]
+
+
 def memory_cap_enforced(controllers: str | None = None) -> bool:
     """True when ``systemd-run --user --scope -p MemoryMax=…`` is applied here: the user manager must hold the
     ``memory`` controller. On a Pi whose user cgroup lists only ``cpu pids`` the property is accepted and ignored."""
@@ -518,7 +535,7 @@ def child_peak_rss(code: str | None = None, *, src=None, timed: bool = False, cm
     else:
         preamble = _PREAMBLE.format(engram=str(ENGRAM_DIR), src=str(src)) + (_RUN_ONE if "run_one" in code else "")
         argv = [sys.executable, "-c", preamble + code]
-    if shutil.which("systemd-run"):
+    if shutil.which("systemd-run") and user_scope_runs():
         argv = ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0"] + argv
         if not memory_cap_enforced():
             warnings.warn("MemoryMax=512M is not applied here (the user manager has no memory controller); "

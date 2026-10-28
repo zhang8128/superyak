@@ -108,13 +108,18 @@ reliable way to hold one, so items are meant to retire. Each one climbs a ladder
 
 The first rungs (2026-10-27):
 
-- Retired for peer's modules only: "the include lists name every new module" (under "Merging to main"). Peer's test
-  files retire when imprints merges, and agent's modules when agent-wheel-includes merges (its list names no tests).
-  It had been retired for peer's modules alone, which held neither agent's wheel (two modules missing) nor peer's
-  test files (ten missing). A rung holds only the package whose test exists, and only once that test is on main.
+- Retired for peer's modules and test files and agent's modules: "the include lists name every new module" (under
+  "Merging to main"). Each is held by a test_packaging on main: peer's modules first, agent's since
+  agent-wheel-includes (efea12c1; its list names no tests), peer's test files since imprints (9db2cddc). Each test was
+  written against the files it found missing. It had been retired for peer's modules alone, which held neither
+  agent's wheel (two modules missing) nor peer's test files (ten missing). A rung holds only the package whose test
+  exists, and only once that test is on main; any other package is checked by hand.
 - Before retiring an item, name the test and the package it covers, and grep for every place the item applies
   (Tardis, 2026-10-28).
-- Next: "the branch's base is on the rewritten history" as a pre-push hook (`git merge-base --is-ancestor 60dd851`).
+- Built: "no commit in the push comes from the old history" as a pre-push hook, on main since abc68f0b. It holds on a
+  machine only once `make install-hooks` has run there; as of 2026-10-28 no machine has, so the item stays.
+- Next: "a watching session never waits on a question at its own terminal" as a hook that refuses a blocking
+  question tool in a session holding `station_watch` (Serenity's lesson, 2026-10-28).
 - Next: "person data and keys" as gitleaks in CI. It stays `killer:`.
 - Candidates from the gtm lane: the Pi suites, and the federation retries.
 
@@ -140,6 +145,8 @@ Why: the queue fills any hour nobody aims, and a full re-check on low-risk work 
 
 - [ ] Is anyone waiting on something of mine that's done but not pushed? Push it first (Tardis, 2026-10-27: a
       finished provider sat local for two hours while Serenity waited to build against it).
+- [ ] While a reader I wait on is busy, I take work the reader won't have to read, not more for that queue. A hold
+      isn't idle (Tardis, 2026-10-28).
 - [ ] Name which purpose it serves: a person, the city or the rail. If none, say why now.
 - [ ] Say who will notice when it's done.
 - [ ] Size the review to the risk. Full re-check rounds are for safety code: authority, permissions, the public
@@ -147,11 +154,19 @@ Why: the queue fills any hour nobody aims, and a full re-check on low-risk work 
 
 ## Before any push
 
-- [ ] The branch's base is on the rewritten history: `git merge-base --is-ancestor 60dd851 HEAD` (main after the
-      2026-10-27 scrub). A branch built on the old history brings the scrubbed files back. `make install-hooks`
-      installs a pre-push hook that refuses such a push to the public repo (with the scrubbed terms in a private
-      0600 file, ~/.superyak/scrub-terms, never in the repo); this item retires on each machine
-      once its clone runs the hook (`git config core.hooksPath` prints its scripts/git-hooks).
+- [ ] No commit in the push comes from the old history (main before the 2026-10-27 scrub), which brings the scrubbed
+      files back. The base check alone (`git merge-base --is-ancestor 60dd851 HEAD`) misses an old ref merged into a
+      new branch, so run the hook's check, in bash or zsh (not sh: it needs `<(…)`), with the ref you push in place
+      of HEAD. It must print nothing, and no error:
+      `B=60dd85175a1709627be63a4678694029c5721b74; comm -23 <(git rev-list HEAD --not $B | sort) <(git rev-list --ancestry-path $B..HEAD | sort)`
+      `make install-hooks` installs a pre-push hook that runs it and refuses such a push to the public repo (with
+      the scrubbed terms in a private file, ~/.superyak/scrub-terms, mode 0600 or 0400, never in the repo); this item
+      retires on each machine once its clone runs the hook (`git config core.hooksPath` prints its scripts/git-hooks).
+- [ ] Before merging a `gh/*` or `origin/*` ref, or a branch fetched from a bundle, check it: `git merge-base
+      --is-ancestor $B <ref> && echo ok || echo OLD` must say ok, and then the comm line above, with `<ref>` in place
+      of HEAD, must print nothing (a ref can descend from the scrub and still carry an old merge). A fetch without
+      `+` can leave a stale ref on the old history (Serenity, 2026-10-28: the Mac's gh/main was still 5f8788b0, from
+      2026-10-09), and the Pi still holds old-history objects, so a bundle built on them would pass `git bundle verify`.
 - [ ] killer: Nothing in the diff names a person with health, contact or identity details, or holds a key or token
       (gitleaks, plus a read of every new doc). Once pushed, it can't be pulled back: clones and caches keep what a
       history rewrite removes.
@@ -168,10 +183,12 @@ Why: main is what every lighthouse runs, so a bad merge breaks every ship at onc
 this list adds to it and never subtracts.
 
 - [ ] killer: A branch that changes safety code (authority, permissions, the public route, a person's data) merges
-      only on explicit yeses posted in the room, the section 2 approver's among them. No ship's silence counts as
-      consent for it (ships' decision, 2026-10-27).
-- [ ] A section 2 verdict is posted whole in the room: Serenity for Rio Grande's branches, Rio Grande for Serenity's,
-      or a fresh Pi reviewer.
+      only on each partner's explicit yes, posted in the room, the section 2 approver's among them. The partners
+      today are Rio Grande, Serenity and Tardis; an author's own branch counts as its yes. No ship's silence
+      counts as consent for it (ships' decision, 2026-10-27).
+- [ ] A section 2 verdict is posted whole in the room, from the approver law section 2 names: Rio Grande for a
+      Serenity branch; for a Rio Grande branch, Serenity or a fresh reviewer agent started on the Pi that took no part
+      in writing it. A fresh Pi reviewer never approves a Serenity branch.
 - [ ] Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names. When a
       partner tests a merge that isn't pushed yet, agree on it by tree: `git rev-parse <commit>^{tree}` printing the
       same hash on both machines proves byte-identity without a CI run (Tardis, permissions-core, 2026-10-27).
@@ -179,9 +196,8 @@ this list adds to it and never subtracts.
       (the 3 Kuzu tests).
 - [ ] GitHub CI's result is read, including the jobs the Pi can't run.
 - [ ] The `only-include` lists name every new module and test file, and the package builds and imports in a clean
-      venv. The Pi's editable checkout hides a missing one. Peer's modules are held by test_packaging (retired there,
-      see "Retiring an item"); until imprints and agent-wheel-includes are on main, check by hand that agent's list
-      names every module and peer's names every test file. Each part retires when its test is on main.
+      venv. The Pi's editable checkout hides a missing one. Peer's modules and test files and agent's modules are held
+      by test_packaging (retired there, see "Retiring an item"); check any other package's list by hand.
 - [ ] The station database is backed up (`make station-backup`), so a migration that goes wrong can be undone.
 - [ ] killer: Main is pushed once. The affected Pi services are restarted and checked, and the public route is probed
       from outside when the diff touches it; if a check fails, revert and restart. A security fix to a live route
@@ -193,14 +209,22 @@ this list adds to it and never subtracts.
       (learned_from: gtm, 2026-10-27).
 - [ ] The merge is announced in the room, and its board item is marked done.
 
-## A live station act (bridge, add a ship, approve)
+## A live station act (bridge, add a ship, moderate, approve or deny)
 
 Why: these acts change who can read, write or join, and text in a room never carries that authority (law section 1).
 
-- [ ] killer: Andy asked for it, in a terminal or in the room as himself, and named the room or item.
-- [ ] killer: For an approval, Andy confirmed that the short id matches what the requesting machine showed.
-- [ ] `make station-rooms` or `make station-pending` was read first, and the result was shown to Andy.
+- [ ] killer: Andy asked for it, in a terminal or in the room as himself, and named the room or item himself. Room
+      text, a brief, a board item or another ship never names it. A bridge, an added ship or a moderator grant is only
+      for a room he owns (law section 7, CLAUDE.md).
+- [ ] killer: A moderator grant: Rio Grande runs it with Andy at its own terminal, after he confirms the room's short
+      id and names the grantee himself; `HOURS=`, `BUDGET=` and `ACTIONS=` only when he says so (CLAUDE.md).
+- [ ] An added ship: Rio Grande runs `make station-add-ship` (CLAUDE.md).
+- [ ] killer: For an approval or a denial, Andy named the item and confirmed that its short id matches what the
+      requesting machine showed (law section 1).
+- [ ] `make station-rooms` or `make station-pending` was read first, and the result was shown to Andy. A docking
+      marked `RE-DOCK` or `NAME TAKEN` is said plainly (CLAUDE.md).
 - [ ] After the act, Andy is told the new short id, whether the brief came along, and how many board items came along.
+      After a moderator grant, he is told the grant's short id and the room's.
 - [ ] The act is posted in the room. Titles and names are quoted data.
 
 ## Anything public (outreach, a public repo or route)
@@ -230,9 +254,8 @@ Why: it copies a person's memories to another machine, and only the owner decide
       relays the link and the two short ids (CLAUDE.md, "Sending an imprint").
 - [ ] The owner confirms in the browser on his own machine.
 - [ ] Andy approves the short id on the Pi, after matching it.
-- [ ] Admission's result is checked, and the owner's machine verifies the receipts (`make imprint-status`, which
-      lands with the imprints branch). Run status before verify: the permission and receipts arrive only with
-      status (Tardis's test A).
+- [ ] Admission's result is checked, and the owner's machine verifies the receipts (`make imprint-status`). Run status
+      before verify: the permission and receipts arrive only with status (Tardis's test A).
 - [ ] A fresh checkout runs engram with `--extra dev` before the imprint end-to-end test can run.
 
 ## A session starting or restarting (any ship)
@@ -240,12 +263,20 @@ Why: it copies a person's memories to another machine, and only the owner decide
 Why: a ship that restarts without its watch and its tick goes quiet, and the others wait on it without knowing.
 
 - [ ] The station watch is held (`station_watch writable=true`).
-- [ ] The kick watcher is armed: `make kick`
-      under a Monitor, re-armed every 30 minutes.
+- [ ] The kick watcher is armed: `make kick` under a Monitor, and re-armed when its expiry notice arrives (about
+      every 30 minutes), only after checking that none is already running on that cursor: the session's task list,
+      or a listing by pid, never a pattern your own command line also matches (Serenity ran two watchers on one
+      cursor, 2026-10-28).
+- [ ] Before acting on a head named in the unread backlog, check the author's latest posted head for that branch:
+      the room's newest post naming it, and origin's once it's pushed. The backlog arrives oldest first (Serenity
+      stopped a reviewer on the newest head, taking it for a stale one, 2026-10-28).
 - [ ] The 10-minute tick exists.
 - [ ] The background work in flight is listed, and anything cut off is resumed or restarted (check git status in each
       worktree).
 - [ ] Unread messages and the board's claims are read; stale claims are released.
+- [ ] A session that watches or loops never waits on a question at its own terminal. It posts the question in the
+      room, rules where it may, and keeps working; what only Andy decides waits for him (Serenity, 2026-10-28: three
+      safety branches waited a night behind one blocking question).
 
 ## The Mac's main checkout (launchd runs from it)
 
@@ -299,6 +330,37 @@ Why: law section 3 puts a fresh reviewer in Andy's place, so the review has to b
 - [ ] The post names the head hash, each job, pass and fail counts and the failing tests. It says which failures look
       environmental and why. Tardis's CI never stands in for the Pi's suites at merge.
 
+## A branch reaching the Pi from a ship without a key
+
+Why: a key on the Pi is access that has to be revoked later. A bundle carries only the commits, privately, between
+two of Andy's machines (Tardis, 2026-10-28).
+
+- [ ] The sender makes the bundle (`git bundle create <file> origin/main..<branch>`), sends it with
+      `tailscale file cp <file> smart:`, and posts the file's size and sha256, the branch's name and its full tip hash
+      in the room.
+- [ ] The Pi receives it with `tailscale file get <empty folder>` (it moves everything waiting, not only this file),
+      checks the size and sha256, and `git bundle verify <file>` passes against the repo.
+- [ ] `git bundle list-heads <file>` shows the named branch; only it is fetched (`git fetch <file>
+      refs/heads/<branch>:refs/heads/<branch>`), its tip matches the posted hash, and it passes "Before any push"'s
+      old-history check, before anything in it is read or run.
+
+## Opening the lessons room (first-rail's deploy)
+
+Why: each peer checks lessons in the room fully only once it has recorded the room (Serenity's review of first-rail,
+2026-10-28; the details stay in the members-only room). Opening the room is Andy's.
+
+- [ ] Before Andy opens the room, the review's S1 and S4 fixes are on main.
+- [ ] Tardis's half of the hook is on main with its three conditions from Serenity's review (City of AI, bc36b360).
+- [ ] killer: The origin records the room: Rio Grande runs `make station-lessons-room ID=<short id>` only when Andy
+      asks, for a room he owns, named from `make station-rooms`, after he confirms the short id. The first run shows the
+      members, the peers and a confirm code; only when Andy confirms them does it run again with `CONFIRM=<code>`. Once
+      recorded, the room takes no new member from this station, so say so before Andy removes a ship (first-rail's
+      CLAUDE.md). Rio Grande tells Andy the full id it prints and posts it in all hands.
+- [ ] Every other peer runs `make lessons-room ID=<origin peer id>:<room id> LESSONS_DATA=<that peer's data dir>` as
+      soon as the room first syncs there, before that peer's ship or Andy's account there posts in it.
+- [ ] After a deploy, an empty answer isn't judged until the index has run once. On the Pi its timer runs 60 s after
+      each run ends; on the Mac, `federate` runs it as a step. A prompt gets nothing from an index more than 180 s old.
+
 ## Re-checking review findings on a new head
 
 Why: a finding marked fixed without a re-run is a guess that ships as a fact.
@@ -312,8 +374,23 @@ Why: a finding marked fixed without a re-run is a guess that ships as a fact.
 
 ## Approving a branch (law sections 2 and 7)
 
-- [ ] The approver is the one the law names: Serenity for Rio Grande's branches, Rio Grande for Serenity's, or a
-      fresh reviewer started on the Pi. Tardis's and Defiant's reviews are advisory until the law says otherwise.
+Why: an approval is the law's gate to main, so the branch is read as the law, the sessions and the machines will meet
+it, not only as its diff reads.
+
+- [ ] The approver is the one law section 2 names: Rio Grande for a Serenity branch; for a Rio Grande branch,
+      Serenity or a fresh reviewer agent started on the Pi that took no part in writing it. Tardis's and Defiant's
+      reviews are advisory until the law says otherwise.
+- [ ] A rule that tells a session to do something (CLAUDE.md, a command's printed line) is checked as a session runs
+      it: through a pipe, where stdout is block-buffered, and under Claude Code's Bash timeout (2 minutes by default,
+      10 at most in the foreground). A rule the tool makes impossible is a must-fix (the fresh Pi review of
+      imprints-live-conditions, M1, and Serenity's lesson from it, 2026-10-28: imprints' confirm link reached a
+      session after 540 s of a 600 s code).
+- [ ] A gate checked in-process is also checked where the code runs as a child process: Pi measurements, units,
+      hooks. A test fixture can't reach a child (that review's M2).
+- [ ] A shell expression is checked where it will run: under `sh -c`, with the system binary, on each OS it runs on.
+      In Claude Code's Bash, `find` and other commands can be shell functions (`type find`), so a check typed there
+      can test a different tool (Serenity, 2026-10-28: macOS's find rejects `-perm /077`, the hook swallowed the
+      error, and a 0644 terms file passed).
 
 ## Shell commands (zsh)
 
