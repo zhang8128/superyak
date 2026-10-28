@@ -27,7 +27,8 @@ class ChecklistProvider:
         """The due lists placed in this hold, at most `limit`, each whole (Ruling 34): the placed lists' texts, the
         fixed lines and room for a lesson in each hold left over must fit in OUTPUT_CHARS; past the cap only the lists'
         texts count. The placed lists are marked fired with the command's digest and every other due list passed, so
-        the re-run passes (Rulings 15, 16, 33)."""
+        the re-run passes (Rulings 15, 16, 33). Past the cap nothing is held, so no digest is kept: a list shows as
+        context at every matching command (section 2's M1)."""
         due, digest = fp.due_at_command(self.matching, record, command, now)
         past = held(record) >= holds.HOLDS_PER_SESSION
         placed, passed = [], []
@@ -40,9 +41,15 @@ class ChecklistProvider:
                 placed.append((loaded, kinds))
             else:
                 passed.append((loaded, kinds))
-        fp.mark_fired(record, placed, now, digest=digest)
-        fp.mark_passed(record, passed, digest)
+        fp.mark_fired(record, placed, now, digest=None if past else digest)
+        if not past:
+            fp.mark_passed(record, passed, digest)
         return [holds.Hold('checklist', loaded.key, self.texts[loaded.key]) for loaded, _ in placed]
+
+    def spend(self, command: str, record: dict) -> bool:
+        """The command goes through unheld: every matching list's pass for it is spent, the re-run's included, so a
+        later identical command is held again, or shown as context past the cap (section 2's M1)."""
+        return fp.spend(record, self.matching, fp.command_digest(command))
 
 
 def provider(home: Path, cwd: str | None, command: str) -> ChecklistProvider:

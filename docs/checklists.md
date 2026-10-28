@@ -9,8 +9,9 @@ items never are, and where a skip is logged.
 
 - Each list is a file in this repository's `.superyak/checklists/`, or in a ship's own `~/.superyak/checklists/`.
 - A list fires at its moments: a session's start, every few hours, a board claim, entering a directory (`enter`; only
-  a ship's own list names the path), or a matching command, which it holds once (re-run the command to go on; at most
-  3 holds a session). The ship runs it out loud and records the run with `checklist_run`.
+  a ship's own list names the path), or a matching command, which it holds once (re-run the command to go on; the
+  same command later is held again; at most 3 holds a session, then the list comes with the command's result). The
+  ship runs it out loud and records the run with `checklist_run`.
 - The law comes first, then the person at the terminal, then a checklist.
 - `make dock` trusts this checkout's lists. `python3 agent/run_agent.py checklists list` shows what loads from where,
   and `checklists report` what the runs suggest; the report proposes and never changes a list.

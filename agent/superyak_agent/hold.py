@@ -104,15 +104,19 @@ def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
         lists = lists_here.candidates(command, record, now, fp.LISTS_PER_EVENT)
         got = _lessons(lessons or lessons_hold.candidates, command, record, now,
                        holds.HOLDS_PER_SESSION - len(lists)) if left else []
-        if not lists and not got:
-            return
-        if left:
+        if left and (lists or got):
             parts = [checklist_hold.first_line(record, lists[0])] if lists else []
             parts += [h.text for h in lists + got] + [RERUN]
             record['holds'] = count + 1
             result = _output(permissionDecision='deny', permissionDecisionReason='\n\n'.join(parts))
-        else:   # past the cap: lists reach the model with the command's result; lessons don't (R2)
-            result = _output(additionalContext='\n\n'.join(h.text for h in lists))
+        else:   # the command goes through, and spends its passes: a re-run's is saved though nothing prints (M1)
+            spent = lists_here.spend(command, record)
+            if lists:   # past the cap: lists reach the model with the command's result; lessons don't (R2)
+                result = _output(additionalContext='\n\n'.join(h.text for h in lists))
+            elif spent:
+                result = None
+            else:
+                return
         with run.lock:
             with run.state:
                 if run.abandoned or monotonic() > hold_by:

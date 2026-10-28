@@ -157,6 +157,21 @@ def mark_passed(record: dict, deferred, digest: str) -> None:
         _add(record, 'passed', loaded.key, digest)
 
 
+def spend(record: dict, lists, digest: str) -> bool:
+    """The command went through: drop its digest from each list's passes, so the re-run spends the pass and a later
+    identical command is due again (section 2's M1; spec revision 4). True when one was dropped."""
+    passed = _section(record, 'passed', dict)
+    spent = False
+    for loaded in lists:
+        values = passed.get(loaded.key)
+        if isinstance(values, list) and digest in values:
+            values[:] = [v for v in values if v != digest]
+            spent = True
+            if not values:
+                del passed[loaded.key]
+    return spent
+
+
 def told(record: dict, notice: str) -> bool:
     return command_digest(notice) in _section(record, 'told', list)
 

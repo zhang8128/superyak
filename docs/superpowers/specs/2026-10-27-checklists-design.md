@@ -1,6 +1,13 @@
 # Checklists: rules that fire at moments, renegotiated in the open
 
-Revision 3, 2026-10-27. Serenity (the Mac). Asked for by Andy.
+Revision 4, 2026-10-28. Serenity (the Mac). Asked for by Andy.
+
+**Revision 4** applies section 2's fix round (Rio Grande's APPROVE WITH CHANGES at 7dc96f8a; Ruling 53):
+- the re-run spends the pass. Revision 3 said both that a list that has held "passes every later command whose digest
+  it held" and that "Merging to main" "shows at `git push origin main` however many pushes came before it"; the
+  second wins. A hold keeps the command's digest only until that command next goes through, so a later identical
+  command is held again, or shown as context once the 3 holds are spent. Past the cap no digest is kept, since nothing
+  was held.
 
 **Revision 3** applies the re-check's R1 to R4 as written (APPROVE WITH CHANGES, no further round needed):
 - `unshown` is dropped;
@@ -162,10 +169,12 @@ checkout's `enter` list doesn't fire in its `.worktrees/<name>`.
   regular expression, case-sensitive, at least 6 bytes, with no `;`. A match must begin at the start of the command,
   after whitespace, or after one of `;&|(` or a backtick.
 - A `command` list holds once for each distinct command (by SHA-256), with at most 3 holds a session across all lists.
-  A list that has held passes every later command whose digest it held.
+  A list that has held passes the re-run, the next command with that digest, and the re-run spends the pass: the same
+  command later is held again, or shown as context past the cap (revision 4).
 - Past the cap, a matching list is still shown: the hook adds it as `additionalContext` with no `permissionDecision`,
-  so it reaches the model with the command's result, and records it as fired. It is still never `allow`, `ask` or
-  `updatedInput`. So "Merging to main" shows at `git push origin main` however many pushes came before it.
+  so it reaches the model with the command's result, and records it as fired, with no digest: nothing was held, so no
+  re-run is passed. It is still never `allow`, `ask` or `updatedInput`. So "Merging to main" shows at
+  `git push origin main` however many pushes came before it.
 
 **`claim`, exactly.**
 - The MCP server finds lists from the last cwd in the session's record (Firing, below), found by
@@ -182,8 +191,8 @@ checkout's `enter` list doesn't fire in its `.worktrees/<name>`.
   server update it under `flock`. `_prune`'s `STATE_NAME` gains the suffix (`hook.py:96`). A session start that shows
   no law, which makes the station hook forget the session, leaves this record alone.
 - A cap of 2 lists applies per hook event, and per `station_claim` result, across every moment kind.
-- A list named but not shown isn't fired. It's due again at the next event (for a `command` list, the next distinct
-  command it matches), and due lists show in the order of the longest wait first, then nearest.
+- A list named but not shown isn't fired. It's due again at the next event (for a `command` list, the next command it
+  matches after the held one's re-run), and due lists show in the order of the longest wait first, then nearest.
 - `start` fires on `startup`, `clear` and `fork`, not on `resume` or `compact`.
 - `every <N>h` first fires N hours after the session's first event, then at most once each N hours.
 - `start` and `enter` fire a list at most once a session. `command` and `claim` fire as above.

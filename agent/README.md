@@ -226,9 +226,9 @@ Checklists are the ships' agreed working practices, fired at the moments that ne
   main under law section 2.
 - The hold (`hold`) is the one `PreToolUse` entry, for checklists and the rail's lessons (the lessons provider is a
   stub until the rail's lands). It holds a matching command once with a deny that shows the list, and a re-run of the
-  same command passes. It holds at most 3 distinct commands a session across both; past that a matching list is shown
-  with the command's result instead. It never holds a subagent's command, never allows, asks or rewrites one, and
-  holds nothing inside a watcher run.
+  same command passes and spends the pass, so the same command later is held again. It holds at most 3 times a
+  session across both; past that a matching list is shown with the command's result instead, at every match. It
+  never holds a subagent's command, never allows, asks or rewrites one, and holds nothing inside a watcher run.
 
 ## The wormhole
 

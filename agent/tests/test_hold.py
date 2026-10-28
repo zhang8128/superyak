@@ -70,6 +70,48 @@ def test_past_the_cap_merging_to_main_still_shows_at_git_push_origin_main(ship):
     assert '- [ ] Verdict posted.' in context and BASE in context
 
 
+def test_the_re_run_spends_the_pass_so_the_same_command_later_is_held_again(ship):      # section 2's M1
+    assert decide(ship, 'git push origin main')['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert decide(ship, 'git push origin main', now=11.0) is None                         # the re-run passes
+    again = decide(ship, 'git push origin main', now=20.0)['hookSpecificOutput']
+    assert again['permissionDecision'] == 'deny' and '- [ ] Verdict posted.' in again['permissionDecisionReason']
+    assert decide(ship, 'git push origin main', now=21.0) is None and saved(ship)['holds'] == 2
+    assert not any(saved(ship).get('passed', {}).values())                               # every pass spent, and saved
+
+
+def test_past_the_cap_the_same_command_shows_its_lists_every_time(ship):                 # section 2's M1: spec :168
+    assert decide(ship, 'git push origin main')['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert decide(ship, 'git push origin main', now=11.0) is None
+    for n in (1, 2):
+        assert decide(ship, f'git push origin b{n}', now=11.0 + n)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert decide(ship, 'git push origin b2', now=14.0) is None                          # the third hold's re-run passes
+    for n in range(3):
+        context = decide(ship, 'git push origin main', now=20.0 + n)['hookSpecificOutput']
+        assert set(context) == {'hookEventName', 'additionalContext'} and '- [ ] Verdict posted.' in context['additionalContext']
+    assert BASE in decide(ship, 'git push origin b2', now=30.0)['hookSpecificOutput']['additionalContext']
+    left = {d for values in saved(ship)['passed'].values() for d in values}
+    assert saved(ship)['holds'] == 3 and left == {fp.command_digest('git push origin b1')}   # held, never re-run
+
+
+def test_a_deferred_list_passes_the_re_run_and_shows_at_the_next_distinct_command(ship):    # Ruling 15 beside M1
+    write_list(ship.repo / '.superyak' / 'checklists', 'third', when='command git push origin', items=('Third.',))
+    first = decide(ship, 'git push origin main')['hookSpecificOutput']['permissionDecisionReason']
+    assert first.count('\nChecklist ') == 2 and '- [ ] Third.' not in first
+    assert decide(ship, 'git push origin main', now=11.0) is None                         # the deferred list passes too
+    nxt = decide(ship, 'git push origin x', now=12.0)['hookSpecificOutput']['permissionDecisionReason']
+    assert '- [ ] Third.' in nxt and BASE in nxt
+
+
+def test_a_command_that_goes_through_unheld_keeps_no_pass(ship):                         # section 2's M1
+    from checklist_fakes import loaded
+    lists = (loaded('l0', 'command git push', order=0), loaded('l1', 'command git push', order=1))
+    provider = hold.checklist_hold.ChecklistProvider(lists, {lists[0].key: big(5301), lists[1].key: big(10)})
+    record = {'first': 0.0, 'holds': 0}
+    assert [h.key for h in provider.candidates('git push origin x', record, 10.0, 2)] == [lists[1].key]
+    assert provider.spend('git push origin x', record) is True and not any(record['passed'].values())
+    assert provider.spend('git push origin x', record) is False
+
+
 def test_lessons_share_the_cap_and_get_three_minus_the_checklists_in_the_deny(ship):     # the ships' seam
     asked = []
 
@@ -191,6 +233,23 @@ def test_a_save_under_way_at_one_second_is_printed_once_it_lands(ship, monkeypat
     join_workers()
     assert out['hookSpecificOutput']['permissionDecision'] == 'deny' and 1.0 < took < 1.5
     assert len(saves) == 1 and saves[0] < 1.0 and saved(ship)['holds'] == 1 and len(fired(ship)) == 1
+
+
+def test_a_save_stalled_past_its_half_second_is_recorded_unseen_and_main_returns_by_1_6_s(ship, monkeypatch):  # S6
+    real = holds.RecordFile.save
+
+    def stalled(record):              # begins well before the 1 s deadline and lands 3 s later
+        time.sleep(3.0)
+        real(record)
+    monkeypatch.setattr(holds.RecordFile, 'save', stalled)
+    out, began = io.StringIO(), time.monotonic()
+    code = hold.main(['--config', str(ship.home / 'station.json')], stdin=io.StringIO(json.dumps(payload(ship, 'git push origin x'))),
+                     stdout=out)
+    took = time.monotonic() - began
+    join_workers()
+    # HOLD_SECONDS + SAVE_SECONDS is 1.5 s, never the 3 s stall; the slack is a timed wait's late wake on a busy machine
+    assert code == 0 and out.getvalue() == '' and 1.45 < took < 1.7, took
+    assert saved(ship)['holds'] == 1                                        # recorded unseen, as the module says
 
 
 def test_a_worker_still_asking_a_provider_at_one_second_prints_nothing_and_saves_nothing(ship):   # the final review's M3
@@ -384,7 +443,8 @@ def test_lists_are_placed_whole_in_the_rest_of_the_budget(sizes, past, shown):  
     got = provider.candidates('git push origin x', record, 10.0, 2)
     assert [h.kind for h in got] == ['checklist'] * shown and [h.key for h in got] == [l.key for l in lists[:shown]]
     digest = fp.command_digest('git push origin x')
-    assert all(record['passed'][l.key] == [digest] for l in lists)           # placed or passed: the re-run passes
+    passes = record.get('passed', {})               # placed or passed, the re-run passes; past the cap none is held (M1)
+    assert all(passes.get(l.key, []) == ([] if past else [digest]) for l in lists)
     assert [l.key in record.get('fired', {}) for l in lists] == [n < shown for n in range(len(lists))]
 
 
