@@ -54,19 +54,17 @@ STATE_DAYS = 14
 STATE_NAME = re.compile(r'[0-9a-f]{16}\.(?:json|lock)')
 STATE_TEMP = re.compile(r'\.[0-9a-f]{16}\.json\..+\.tmp')  # write_private's temporary file, left by a killed write
 CHECKOUT = Path(__file__).resolve().parents[2]
-# In the transcript (JSON lines), the hook's id line stands between escaped line breaks. The hold's first line starts a
-# tool result's string, after Claude Code's own words: `"PreToolUse:Bash hook error: Held once: ...` in `content`, and
-# `"Error: PreToolUse:...` in `toolUseResult`. A quote inside quoted text is escaped, so fenced text can't pose as
-# either (Serenity's nit). Either one can only hide a lesson.
+# In the transcript (JSON lines), the hook's id line stands between escaped line breaks. Every lesson the hook shows,
+# at a prompt, at the 2 s events or in a hold, has one, so reading back never depends on Claude Code's own wording
+# around a deny (Serenity's nit), and the scan starts at a literal (Rio Grande's R1). It can only hide a lesson.
 ID_LINE = re.compile(rb'Lesson ([0-9a-f]{8}-[0-9a-f]{8}) from [a-z][a-z0-9-]{1,31}(?=\\[nr]|["\r\n])')
-HOLD_LINE = re.compile(rb'(?<!\\)"(?:Error: )?PreToolUse:Bash hook error: '
-                       rb'Held once: lesson ([0-9a-f]{8}-[0-9a-f]{8}) from [a-z][a-z0-9-]{1,31} applies\.(?=\\[nr]|["\r\n])')
 
 
 def default_settings():
-    """The one settings file the hook and the hold before each command both read. `make dock` copies the file given
-    with `--lessons` here, and undock removes it (Rio Grande's S2)."""
-    return Path.home() / '.superyak' / 'lessons-hook.json'
+    """The one settings file the hook and the hold before each command both read: dock's own copy of the file given
+    with `--lessons` (Rio Grande's S2). Its name is dock's, so undock removes only what dock made, never the file a
+    person named (both reviewers' nit)."""
+    return Path.home() / '.superyak' / 'lessons-hook.installed.json'
 
 
 def default_query():
@@ -167,17 +165,17 @@ def render(lessons):
 
 def hold_reason(lesson, first=True):
     """One lesson's block in the shared hold entry's deny (section 8; the seam's Ruling 35). The deny's first block
-    starts with section 8's `Held once` line, which says it is a lesson, not a refusal; a lesson after a checklist or
-    another lesson has its own `Lesson <id> from <ship>` line instead. The entry ends the deny with its re-run line."""
-    if first:
-        return f'Held once: lesson {lesson["id"]} from {lesson["ship"]} applies.\n{HEADING}\n{_fenced(lesson)}'
-    return f'{HEADING}\nLesson {lesson["id"]} from {lesson["ship"]}\n{_fenced(lesson)}'
+    starts with section 8's `Held once` line, which says it is a lesson, not a refusal. Every block has the lesson's own
+    `Lesson <id> from <ship>` line, which is how the transcript is read back. The entry ends the deny with its re-run
+    line."""
+    block = f'{HEADING}\nLesson {lesson["id"]} from {lesson["ship"]}\n{_fenced(lesson)}'
+    return f'Held once: lesson {lesson["id"]} from {lesson["ship"]} applies.\n{block}' if first else block
 
 
 def transcript_ids(path, deadline, window=WINDOW, monotonic=time.monotonic):
     """The short ids on the hook's own lines in the session's transcript, in the order they first appear:
-    `Lesson <id> from <ship>` lines of the exact shape, and the hold's first line. They only ever join `seen`, so text
-    inside a fence can at most hide a lesson, never show one; `seen`'s newest SEEN_MAX are the latest shown. An empty
+    `Lesson <id> from <ship>` lines of the exact shape. They only ever join `seen`, so text inside a fence can at most
+    hide a lesson, never show one; `seen`'s newest SEEN_MAX are the latest shown. An empty
     list without a transcript; None when it is there but can't be read to its end (as it stood when opened) by
     `deadline`: then the event adds nothing and holds nothing (section 8)."""
     if not path or not isinstance(path, str):
@@ -199,13 +197,10 @@ def transcript_ids(path, deadline, window=WINDOW, monotonic=time.monotonic):
             for start in range(0, info.st_size, window):
                 if monotonic() > deadline:
                     return None
-                end, here = min(info.st_size, start + window + OVERLAP), []
-                for match in ID_LINE.finditer(data, start, end):
+                for match in ID_LINE.finditer(data, start, min(info.st_size, start + window + OVERLAP)):
                     at = match.start()
                     if at == 0 or data[at - 1:at] in (b'"', b'\n', b'\r') or data[max(at - 2, 0):at] in (b'\\n', b'\\r'):
-                        here.append((at, match.group(1).decode()))
-                here += [(match.start(), match.group(1).decode()) for match in HOLD_LINE.finditer(data, start, end)]
-                found.update((id_, None) for _, id_ in sorted(here))
+                        found.setdefault(match.group(1).decode(), None)
         return list(found) if monotonic() <= deadline else None
     except (OSError, ValueError):
         return None

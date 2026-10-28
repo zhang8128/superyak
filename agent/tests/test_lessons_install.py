@@ -45,8 +45,9 @@ def test_the_switch_installs_the_lessons_hook_beside_the_room_hook(monkeypatch, 
     path = lessons_settings(machine.home / '.superyak')
     machine.install(adna=False, lessons=path)
     settings = machine.home / '.claude' / 'settings.json'
+    copy = str(machine.home / '.superyak' / 'lessons-hook.installed.json')   # dock's copy, which the hold reads too
     wanted = ('SUPERYAK_RUN=${SUPERYAK_RUN:-hook} '
-              + shlex.join([sys.executable, '-B', str(install.RUN_AGENT), 'lessons-hook', '--settings', str(path)]) + ' || true')
+              + shlex.join([sys.executable, '-B', str(install.RUN_AGENT), 'lessons-hook', '--settings', copy]) + ' || true')
     for event, matcher in LESSONS_EVENTS.items():
         [ours] = [e for e in entries(settings, event) if 'lessons-hook' in e['hooks'][0]['command']]
         assert ours == ({'matcher': matcher} if matcher else {}) | {'hooks': [{'type': 'command', 'command': wanted, 'timeout': 5}]}
@@ -151,7 +152,7 @@ def test_a_settings_file_elsewhere_is_copied_to_the_one_file_the_hook_and_the_ho
     monkeypatch.chdir(tmp_path / 'mine')
     machine.install(adna=False, lessons=Path('deep') / 'lessons-hook.json')
     copy, settings = lh.default_settings(), machine.home / '.claude' / 'settings.json'
-    assert copy == machine.home / '.superyak' / 'lessons-hook.json'
+    assert copy == machine.home / '.superyak' / 'lessons-hook.installed.json'
     assert json.loads(copy.read_text()) == json.loads(elsewhere.read_text()) and oct(copy.stat().st_mode & 0o777) == '0o600'
     assert [settings_named(c) for c in lessons_commands(settings)] == [str(copy)] * 3
     assert any(str(copy) in line and str(elsewhere) in line for line in machine.out)
@@ -183,3 +184,29 @@ def test_undock_removes_the_lessons_hook_and_its_settings_and_keeps_the_persons_
     install.uninstall_all(machine.config, out=machine.out.append)
     assert lessons_commands(settings) == [] and not lh.default_settings().exists()
     assert entries(settings, 'UserPromptSubmit') == [mine]
+
+
+def test_undock_never_deletes_the_file_the_person_named(monkeypatch, tmp_path):
+    """Both reviewers' nit: with --lessons naming ~/.superyak/lessons-hook.json itself, undock deleted the person's
+    original. The copy now has dock's own name, so undock removes only the copy, and naming the copy is refused."""
+    from types import SimpleNamespace
+    from superyak_agent import lessons_hook as lh
+    machine = Machine(monkeypatch, tmp_path)
+    mine = lessons_settings(machine.home / '.superyak')
+    before = mine.read_text()
+    machine.install(adna=False, lessons=mine)
+    assert lh.default_settings().exists() and lh.default_settings() != mine
+    monkeypatch.setattr(install, 'client_for', lambda config: SimpleNamespace(revoke_key=lambda: None))
+    install.uninstall_all(machine.config, out=machine.out.append)
+    assert not lh.default_settings().exists() and mine.read_text() == before
+
+
+def test_naming_dock_s_own_copy_is_refused(monkeypatch, tmp_path):
+    from superyak_agent import lessons_hook as lh
+    machine = Machine(monkeypatch, tmp_path)
+    copy = lessons_settings(tmp_path / 'x')
+    lh.default_settings().parent.mkdir(parents=True, exist_ok=True)
+    lh.default_settings().write_text(copy.read_text())
+    machine.install(adna=False, lessons=lh.default_settings())
+    assert lessons_commands(machine.home / '.claude' / 'settings.json') == []
+    assert any('is the copy dock makes' in line for line in machine.out)

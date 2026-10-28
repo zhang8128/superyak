@@ -515,15 +515,19 @@ def start_at_newest_mention(config_path, state_path, client, out):
 def install_lessons(lessons_settings, out=print):
     """The lessons hook, when its settings are ones it can use; says what it did. Never raises. The settings are
     copied to lessons_hook.default_settings(), the one file both the hook and the hold before each command read, and
-    the hook is installed naming that file (Rio Grande's S2). The hook goes in first: if the copy then fails, both
+    the hook is installed naming that file (Rio Grande's S2). The copy has dock's own name, so a `--lessons` naming
+    it is refused, and undock never deletes the person's file. The hook goes in first: if the copy then fails, both
     find no settings and stay silent, rather than the hold holding for a hook that isn't there."""
     from .lessons_hook import default_settings, read_settings
-    given = Path(lessons_settings).expanduser().resolve()
+    given, copy = Path(lessons_settings).expanduser().resolve(), default_settings()
+    if given == copy.resolve():
+        out(f'The lessons hook was not installed: {given} is the copy dock makes and undock removes. Keep your '
+            'settings in a file of your own and give that to --lessons.')
+        return
     if read_settings(given) is None:
         out(f'The lessons hook was not installed: {given} needs `ship` (a ship name) and `data_dir` (the '
             "peer's data directory), and `query`, if it has one, as a list of words. Fix it and run make dock again.")
         return
-    copy = default_settings()
     try:
         value = json.loads(given.read_text())
         changes = install_lessons_hooks(Path.home() / '.claude' / 'settings.json', copy)
@@ -540,9 +544,8 @@ def install_lessons(lessons_settings, out=print):
     if changes:
         out("Added the lessons hook: lessons from Andy's ships can appear at a prompt, at session start, after a "
             'failed command and before a command.')
-    if given != copy:
-        out(f'The lessons hook and the hold read {copy}, a copy of {given}. Run make dock again after changing it; '
-            'undock removes the copy.')
+    out(f'The lessons hook and the hold read {copy}, a copy of {given}. Run make dock again after changing it; '
+        'undock removes the copy and leaves yours.')
 
 
 def install_all(config_path, *, hook=False, adna=True, service=True, out=print, client=None, lessons=None):

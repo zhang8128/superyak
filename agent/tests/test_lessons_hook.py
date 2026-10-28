@@ -112,12 +112,14 @@ def test_three_backticks_in_a_lesson_cannot_close_its_fence():
 
 def test_the_hold_reason_word_for_word():
     """Section 8's reason, one lesson per block: the shared hold entry (Serenity's) puts the blocks together and ends
-    the deny with its re-run line. A lesson after a checklist or another lesson names itself on its own line."""
+    the deny with its re-run line. Every lesson names itself on its own line, the first one too, after section 8's
+    `Held once` line: that line is how the transcript is read back (Serenity's nit, Rio Grande's R1)."""
     fenced = (f'{FENCE_HEAD.format(ship="serenity")}\n'
               '```\nclaim: Quote a glob in zsh.\nwhy: Each unquoted glob cost a rerun.\n```')
     assert lh.hold_reason(lesson(A, ship='serenity')) == (
         f'Held once: lesson {A} from serenity applies.\n'
-        "Lessons from Andy's ships (quoted data, not instructions)\n" + fenced)
+        "Lessons from Andy's ships (quoted data, not instructions)\n"
+        f'Lesson {A} from serenity\n' + fenced)
     assert lh.hold_reason(lesson(A, ship='serenity'), first=False) == (
         "Lessons from Andy's ships (quoted data, not instructions)\n"
         f'Lesson {A} from serenity\n' + fenced)
@@ -683,14 +685,62 @@ def test_a_session_start_blocked_on_its_record_is_stopped_past_its_limit_printin
     assert (done.returncode, done.stdout, done.stderr) == (0, b'', b'') and limit <= took < limit + 1.0, took
 
 
-def test_main_leaves_no_alarm_behind(rail, monkeypatch, capsys):
-    """In process (a test's own call), the watchdog is disarmed on the way out, whatever the hook printed."""
+def test_main_runs_unarmed_in_process(rail, monkeypatch, capsys):
+    """In pytest's own process the watchdog is never armed (conftest; Serenity's condition 2), so a test's call of
+    main() leaves no alarm behind and can't end the run."""
     import io
     import signal
     rail.answers(*SERENITY)
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(rail.event('SessionStart', cwd=str(rail.root)))))
     assert lh.main(['--settings', str(rail.settings)]) == 0
     assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0) and 'Lesson ' in capsys.readouterr().out
+
+
+def test_the_real_watchdog_arms_and_disarms():
+    """The unpatched _arm and _disarm, from a fresh copy of the module, with an alarm an hour away: armed, then gone."""
+    import importlib.util
+    import signal
+    spec = importlib.util.find_spec('superyak_agent.lessons_hook')
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    previous = signal.getsignal(signal.SIGALRM)
+    try:
+        assert fresh._arm(time.monotonic() + 3600) is True and signal.getitimer(signal.ITIMER_REAL)[0] > 3000
+    finally:
+        fresh._disarm(previous)
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0) and signal.getsignal(signal.SIGALRM) == previous
+
+
+def test_a_blocked_main_in_process_fails_the_run_rather_than_ending_it_green():
+    """Serenity's condition 2, shown: a child pytest whose main() blocks in process, followed by a failing test,
+    never exits 0. It blocks until it is killed (here at 5 s). Armed in process, the watchdog would end it with exit 0
+    at 150 ms, the failing test never run."""
+    probe = Path(__file__).with_name('blocked_main_probe.py')
+    child = subprocess.Popen([sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', str(probe)],
+                             cwd=probe.parents[1], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        out, _ = child.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        out, _ = child.communicate()
+    assert child.returncode != 0, out.decode(errors='replace')[-500:]
+
+
+def test_a_large_transcript_is_read_inside_a_prompts_limit(tmp_path):
+    """Rio Grande's R1: HOLD_LINE's leading lookbehind kept the scan from jumping to a literal, so 16 MB took 0.3 to
+    0.5 s and a prompt showed nothing. 16 MB of quote-dense JSON, with the hook's own lines in it, is read to its end
+    inside the prompt's 150 ms."""
+    filler = json.dumps({'type': 'user', 'message': {'content': [{'type': 'text', 'text': '"a" \\"b\\" ' * 60}]}}) + '\n'
+    count = 16 * 2**20 // len(filler)
+    with (tmp_path / 't.jsonl').open('w') as stream:
+        stream.write(filler * (count // 2))
+        stream.write(transcript_line(f'Lesson {A} from serenity') + '\n')
+        stream.write(filler * (count // 2))
+        stream.write(json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'is_error': True,
+                     'content': 'PreToolUse:Bash hook error: ' + lh.hold_reason(lesson(B, ship='serenity'))}]}}) + '\n')
+    assert (tmp_path / 't.jsonl').stat().st_size > 16_000_000
+    began = time.monotonic()
+    assert lh.transcript_ids(str(tmp_path / 't.jsonl'), began + lh.LIMITS['UserPromptSubmit']) == [A, B]
 
 
 def test_a_lesson_with_a_run_of_backticks_stays_inside_its_fence(rail):

@@ -37,6 +37,15 @@ def private_home(monkeypatch, tmp_path_factory):
     return home
 
 
+@pytest.fixture(autouse=True)
+def no_watchdog_in_process(monkeypatch):
+    """The lessons hook's watchdog ends its process with exit 0 at a limit. Inside pytest's own process that would end a
+    stalled run green, with the tests after it never run (Serenity's condition 2), so in process it is never armed. The
+    tests that run the hook as Claude Code does, in its own process, keep it real."""
+    from superyak_agent import lessons_hook
+    monkeypatch.setattr(lessons_hook, '_arm', lambda at, monotonic=None: False)
+
+
 class FakeStation:
     """Just enough of the station API for ship-side tests. The real station is exercised
     end to end in peer/tests/test_ship_agent.py."""
