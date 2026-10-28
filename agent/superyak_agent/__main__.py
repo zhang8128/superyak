@@ -1,11 +1,11 @@
 """superyak-agent: dock this machine's ship, serve its station tools, watch its mentions."""
-import argparse
 import sys
 from pathlib import Path
-from .station import CONFIG, HOME
 
 
 def build_parser():
+    import argparse  # here, not at the top: the hold path never loads it (Ruling 44)
+    from .station import CONFIG, HOME
     parser = argparse.ArgumentParser(prog='superyak-agent')
     commands = parser.add_subparsers(dest='command', required=True)
     mcp = commands.add_parser('mcp', help='Station tools over stdio (MCP)')
@@ -28,6 +28,20 @@ def build_parser():
     route.add_argument('--dry-run', action='store_true', help='Print each check; post nothing and write no state')
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
+    held = commands.add_parser('hold', help='Claude Code PreToolUse hook on Bash: checklists and lessons hold a '
+                               'command once (dispatched before this parser, which only describes it)')
+    held.add_argument('--config', type=Path, default=CONFIG)
+    lists = commands.add_parser('checklists', help='Which checklists load from where; trust a directory of lists '
+                                '(a person at a terminal); propose changes from the run logs')
+    which = lists.add_subparsers(dest='checklists_command', required=True)
+    shown = which.add_parser('list', help='Show what loads from where, and when each list last fired')
+    shown.add_argument('--cwd')
+    shown.add_argument('--home', type=Path, help="The ship's home (default: the ship that acts at the cwd)")
+    trust = which.add_parser('trust', help='Trust a checklists directory (needs a terminal)')
+    trust.add_argument('path')
+    trust.add_argument('--home', type=Path, help="The ship's home (default: the ship that acts where the lists are)")
+    proposed = which.add_parser('report', help='Propose changes to lists from the run and firing logs; changes nothing')
+    proposed.add_argument('--home', type=Path, help="The ship's home (default: the ship that acts at the cwd)")
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
     dock.add_argument('--station', required=True)
     dock.add_argument('--door')
@@ -99,9 +113,14 @@ def _hook(parser, argv):
         import os
         from . import hook
         args, _ = parser.parse_known_args(argv)
-        session_id, cwd, mode = (None, None, None) if sys.stdin.isatty() else hook.hook_fields(sys.stdin)
-        event = {'session-start': 'session-start', 'session-end': 'session-end'}.get(os.environ.get('SUPERYAK_HOOK_EVENT'), 'prompt')
-        text = hook.run(args.config, session_id=session_id, cwd=cwd, mode=mode, event=event,
+        got = hook.HookInput(None, None, None, None, None) if sys.stdin.isatty() else hook.read_hook_input(sys.stdin)
+        if got.event:  # Ruling 6: Claude Code's own name for the event decides; any other value prints nothing
+            if got.event not in hook.EVENTS:
+                return 0
+            event = hook.EVENTS[got.event]
+        else:
+            event = {'session-start': 'session-start', 'session-end': 'session-end'}.get(os.environ.get('SUPERYAK_HOOK_EVENT'), 'prompt')
+        text = hook.run(args.config, session_id=got.session, cwd=got.cwd, mode=got.mode, event=event, source=got.source,
                         messages=os.environ.get('SUPERYAK_HOOK_MESSAGES') != '0')
         if text:
             print(text)
@@ -169,12 +188,18 @@ def _imprint(args):
 
 
 def main(argv=None):
-    parser = build_parser()
     if argv is None:
         argv = sys.argv[1:]
+    if argv[:1] == ['hold']:  # before any station import: the hold stays light (N8)
+        from .hold import main as hold
+        return hold(argv[1:])
+    parser = build_parser()
     if argv[:1] == ['hook']:
         return _hook(parser, argv)
     args = parser.parse_args(argv)
+    if args.command == 'checklists':
+        from .checklist_cli import main as checklists
+        return checklists(args)
     if args.command == 'mcp':
         from .mcp import serve
         serve(args.config)

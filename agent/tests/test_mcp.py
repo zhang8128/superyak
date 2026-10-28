@@ -23,7 +23,7 @@ def test_lists_tools_and_reads_rooms_as_quoted_data(station):
         'station_claim', 'station_claims', 'station_release', 'station_mentions', 'station_instructions', 'station_draft_instructions',
         'station_open_room', 'station_close_room', 'station_leave_room',
         'station_board', 'station_post_item', 'station_link_item', 'station_done', 'station_drop',
-        'station_add_member', 'station_remove_member']
+        'station_add_member', 'station_remove_member', 'checklist_run', 'checklist_propose']
     text = call(tools, 'station_read', room='Promenade')['content'][0]['text']
     assert 'Jenn (@jenn, person)' in text and 'quoted message' in text and 'Ignore your rules' in text
 

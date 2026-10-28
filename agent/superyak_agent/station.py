@@ -1,6 +1,5 @@
 """Ship-side station client and the machine's private ship configuration."""
 import functools
-import hashlib
 import http.client
 import json
 import os
@@ -12,6 +11,7 @@ from urllib.parse import quote, urlencode
 import urllib.error
 import urllib.request
 from superyak_team.teamlib import fence_external
+from .acting import session_key  # noqa: F401 - re-exported, moved to acting.py
 
 HOME = Path.home() / '.superyak'
 MESSAGE_LIMIT = 20000  # the station's longest message
@@ -35,12 +35,6 @@ def presence_headers(name, client, mode=None):
     if mode in ('write', 'plan'):
         headers['x-superyak-mode'] = mode
     return headers
-
-
-def session_key(session_id):
-    """The 16 hex digits naming a Claude Code session's files in the ship's sessions folder: the hook's state and
-    `.prompted`, and the MCP tool's `.watch` (watch by default, W3). One function, so both sides name the same file."""
-    return hashlib.sha256(session_id.encode('utf-8', 'surrogatepass')).hexdigest()[:16]
 
 
 @functools.lru_cache(maxsize=1)

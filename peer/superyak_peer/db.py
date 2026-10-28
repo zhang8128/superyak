@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS account_corrections(id INTEGER PRIMARY KEY AUTOINCREM
 CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), csrf TEXT NOT NULL, expires REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS login_attempts_reset ON login_attempts(reset);
-CREATE TABLE IF NOT EXISTS login_devices(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires REAL NOT NULL, failures INTEGER NOT NULL DEFAULT 0, failure_reset REAL NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS login_devices(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires REAL NOT NULL, failures INTEGER NOT NULL DEFAULT 0, failure_reset REAL NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, attempt_reset REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS invitations(token_hash TEXT PRIMARY KEY, creator_id TEXT NOT NULL REFERENCES users(id), expires REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS account_activations(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS account_role_changes(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id), actor_id TEXT NOT NULL REFERENCES users(id), old_role TEXT, new_role TEXT NOT NULL, role_version INTEGER NOT NULL, created REAL NOT NULL);
@@ -87,6 +87,10 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             ticket_columns = {row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
             if 'first_deferred' not in ticket_columns:  # ship-status fixes F3: the deferral a run resolved, on its ticket
                 db.execute('ALTER TABLE tickets ADD COLUMN first_deferred REAL')
+            device_columns = {row['name'] for row in db.execute('PRAGMA table_info(login_devices)')}
+            for name in ('attempts', 'attempt_reset'):  # public route follow-up: a store from a3ade5e6 has the table without them
+                if name not in device_columns:
+                    db.execute(f'ALTER TABLE login_devices ADD COLUMN {name} {"INTEGER" if name == "attempts" else "REAL"} NOT NULL DEFAULT 0')
             # remote room fields: a received room stored before inbox_received existed gets a time once: the first start that finds it without one, this start's
             db.execute("INSERT OR IGNORE INTO inbox_received SELECT origin, resource_id, recipient, ? FROM inbox "
                        "WHERE kind='room' AND payload IS NOT NULL", (self.clock(),))

@@ -54,7 +54,7 @@ def test_the_installed_session_end_command_reaches_the_station(station, ship_con
 @pytest.mark.parametrize('messages', [True, False])
 def test_the_session_end_hook_is_installed_and_removed_with_the_others(tmp_path, messages):
     settings = tmp_path / 'settings.json'
-    assert sorted(install.install_hooks(settings, CONFIG, messages=messages)) == ['SessionEnd', 'SessionStart', 'UserPromptSubmit']
+    assert sorted(install.install_hooks(settings, CONFIG, messages=messages)) == ['PreToolUse', 'SessionEnd', 'SessionStart', 'UserPromptSubmit']
     base = install.hook_command(CONFIG)
     assert hook_commands(settings, 'SessionEnd') == [f'SUPERYAK_RUN=${{SUPERYAK_RUN:-hook}} SUPERYAK_HOOK_EVENT=session-end {base} || true']
     assert install.install_hooks(settings, CONFIG, messages=messages) == []
