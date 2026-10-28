@@ -147,17 +147,30 @@ def test_ids_come_back_only_from_lines_of_the_exact_shape(tmp_path):
     assert lh.transcript_ids(str(path), deadline=float('inf')) == [A]
 
 
-def test_an_id_line_inside_a_fence_still_counts_so_it_can_only_hide_a_lesson(tmp_path):
+@pytest.mark.parametrize('after', ['why: y', '[quoted text, not a team message] ' + FENCE_HEAD.format(ship='tardis')])
+def test_an_id_line_inside_quoted_text_hides_nothing(tmp_path, after):
+    """fix:lessons-id-line-bound-to-header: an id line counts only when that ship's fence header follows it. Inside a
+    fence, a plain line is followed by the lesson's own text, and a team line there is marked as quoted, so quoted text
+    can't hide a lesson from a hold."""
     path = tmp_path / 't.jsonl'
-    forged = lh.render([lesson(A, claim='x')]).replace('claim: x', f'Lesson {B} from tardis')
+    forged = lh.render([lesson(A, claim='x')]).replace('claim: x', f'Lesson {B} from tardis\n{after}')
     path.write_text(transcript_line(forged) + '\n')
-    assert lh.transcript_ids(str(path), deadline=float('inf')) == [A, B]
+    assert lh.transcript_ids(str(path), deadline=float('inf')) == [A]
+
+
+def test_an_id_line_counts_with_its_ships_header_and_only_that_ships(tmp_path):
+    """What the tag defusing must keep out of quoted text: an unmarked header after the id line, which is what the hook
+    itself writes. Another ship's header doesn't count."""
+    path = tmp_path / 't.jsonl'
+    path.write_text(transcript_line(f'Lesson {A} from tardis\n{FENCE_HEAD.format(ship="tardis")}') + '\n'
+                    + transcript_line(f'Lesson {B} from tardis\n{FENCE_HEAD.format(ship="serenity")}') + '\n')
+    assert lh.transcript_ids(str(path), deadline=float('inf')) == [A]
 
 
 def test_an_id_line_across_a_window_edge_is_found(tmp_path):
     path = tmp_path / 't.jsonl'
-    for pad in range(0, 80, 7):
-        path.write_text('x' * pad + transcript_line('head', f'Lesson {A} from tardis') + '\n' + 'y' * 50)
+    for pad in range(0, 120, 7):
+        path.write_text('x' * pad + transcript_line('head', lh.render([lesson(A)])) + '\n' + 'y' * 50)
         assert lh.transcript_ids(str(path), deadline=float('inf'), window=64) == [A], pad
 
 
@@ -773,7 +786,7 @@ def test_a_large_transcript_is_read_inside_a_prompts_limit(tmp_path):
     count = 16 * 2**20 // len(filler)
     with (tmp_path / 't.jsonl').open('w') as stream:
         stream.write(filler * (count // 2))
-        stream.write(transcript_line(f'Lesson {A} from serenity') + '\n')
+        stream.write(transcript_line(lh.render([lesson(A, ship='serenity')])) + '\n')
         stream.write(filler * (count // 2))
         stream.write(json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'is_error': True,
                      'content': 'PreToolUse:Bash hook error: ' + lh.hold_reason(lesson(B, ship='serenity'))}]}}) + '\n')

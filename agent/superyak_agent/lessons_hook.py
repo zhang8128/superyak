@@ -56,8 +56,18 @@ STATE_TEMP = re.compile(r'\.[0-9a-f]{16}\.json\..+\.tmp')  # write_private's tem
 CHECKOUT = Path(__file__).resolve().parents[2]
 # In the transcript (JSON lines), the hook's id line stands between escaped line breaks. Every lesson the hook shows,
 # at a prompt, at the 2 s events or in a hold, has one, so reading back never depends on Claude Code's own wording
-# around a deny (Serenity's nit), and the scan starts at a literal (Rio Grande's R1). It can only hide a lesson.
-ID_LINE = re.compile(rb'Lesson ([0-9a-f]{8}-[0-9a-f]{8}) from [a-z][a-z0-9-]{1,31}(?=\\[nr]|["\r\n])')
+# around a deny (Serenity's nit), and the scan starts at a literal (Rio Grande's R1). An id line counts only when the
+# very next line is that ship's fence header, as the hook always writes it: quoted text can't add one, since the tag
+# defusing marks a team line inside quoted text, so a plain line there can't hide a lesson from a hold
+# (fix:lessons-id-line-bound-to-header).
+ID_LINE = re.compile(rb'Lesson ([0-9a-f]{8}-[0-9a-f]{8}) from ([a-z][a-z0-9-]{1,31})(?=\\[nr]|["\r\n])')
+
+
+def _fence_follows(data, end, ship):
+    """Whether the line after an id line, at `end` (an escaped or a real line break), is `ship`'s fence header."""
+    header = b'[team] from ' + ship + b' (quoted message;'
+    tail = data[end:end + 2 + len(header)]
+    return tail.startswith(b'\\n' + header) or tail.startswith(b'\n' + header)
 
 
 def default_settings():
@@ -174,10 +184,10 @@ def hold_reason(lesson, first=True):
 
 def transcript_ids(path, deadline, window=WINDOW, monotonic=time.monotonic):
     """The short ids on the hook's own lines in the session's transcript, in the order they first appear:
-    `Lesson <id> from <ship>` lines of the exact shape. They only ever join `seen`, so text inside a fence can at most
-    hide a lesson, never show one; `seen`'s newest SEEN_MAX are the latest shown. An empty
-    list without a transcript; None when it is there but can't be read to its end (as it stood when opened) by
-    `deadline`: then the event adds nothing and holds nothing (section 8)."""
+    `Lesson <id> from <ship>` lines of the exact shape, each followed by that ship's fence header. They only ever join
+    `seen`; text inside a fence can't make one, since its team lines are marked; `seen`'s newest SEEN_MAX are the latest
+    shown. An empty list without a transcript; None when it is there but can't be read to its end (as it stood when
+    opened) by `deadline`: then the event adds nothing and holds nothing (section 8)."""
     if not path or not isinstance(path, str):
         return []
     try:
@@ -199,7 +209,8 @@ def transcript_ids(path, deadline, window=WINDOW, monotonic=time.monotonic):
                     return None
                 for match in ID_LINE.finditer(data, start, min(info.st_size, start + window + OVERLAP)):
                     at = match.start()
-                    if at == 0 or data[at - 1:at] in (b'"', b'\n', b'\r') or data[max(at - 2, 0):at] in (b'\\n', b'\\r'):
+                    starts = at == 0 or data[at - 1:at] in (b'"', b'\n', b'\r') or data[max(at - 2, 0):at] in (b'\\n', b'\\r')
+                    if starts and _fence_follows(data, match.end(), match.group(2)):
                         found.setdefault(match.group(1).decode(), None)
         return list(found) if monotonic() <= deadline else None
     except (OSError, ValueError):

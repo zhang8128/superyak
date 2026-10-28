@@ -122,7 +122,7 @@ def test_the_oldest_of_129_seen_is_held_again_rather_than_receipted_and_dropped(
     long_id = short_id(store, 'Long value.')
     others = [f'{n:08x}-{n:08x}' for n in range(128)]
     transcript = tmp_path / 'transcript.jsonl'
-    transcript.write_text(''.join(json.dumps({'type': 'attachment', 'attachment': {'content': [f'Lesson {i} from serenity']}})
+    transcript.write_text(''.join(json.dumps({'type': 'attachment', 'attachment': {'content': [lessons_hold.lh.render([{'id': i, 'ship': 'serenity', 'claim': 'c', 'why': 'w', 'match': 'words'}])]}})
                                   + '\n' for i in [long_id] + others))
     held = lessons_hold.candidates(COMMAND, {'session': {'id': 's9', 'transcript': str(transcript)}}, time.time(), 3,
                                    settings=settings, env={})

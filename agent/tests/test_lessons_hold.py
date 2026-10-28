@@ -290,7 +290,7 @@ def test_the_seen_sent_are_the_newest_shown(rail):
     """`seen`'s order past SEEN_MAX (Rio Grande's nit): the transcript's ids in the order they appeared, so the newest
     SEEN_MAX are the ones sent, to the query and to could_hold alike."""
     ids = [f'{n:08x}-{n:08x}' for n in range(lh.SEEN_MAX + 5)]
-    rail.transcript.write_text(''.join(transcript_line(f'Lesson {i} from serenity') + '\n' for i in reversed(ids)))
+    rail.transcript.write_text(''.join(transcript_line(lh.render([lesson(i, ship='serenity')])) + '\n' for i in reversed(ids)))
     rail.answers(lesson(A, command=GLOB))
     asked = []
     ask(rail, could_hold=lambda *a: asked.append(a[3:]) or True)
@@ -451,7 +451,7 @@ def test_a_lesson_shown_before_the_newest_seen_max_is_held_not_dropped_after_its
     seen, the oldest isn't among them, so the query may answer it and write its receipt; dropping it then would leave
     a receipt for a lesson never shown, and take a slot. It holds again instead, as the 128 cap accepts."""
     others = [f'{n:08x}-{n:08x}' for n in range(lh.SEEN_MAX)]
-    rail.transcript.write_text(''.join(transcript_line(f'Lesson {i} from serenity') + '\n' for i in [A] + others))
+    rail.transcript.write_text(''.join(transcript_line(lh.render([lesson(i, ship='serenity')])) + '\n' for i in [A] + others))
     found = lesson(A, ship='serenity', command=GLOB)
     rail.answers(found)
     assert ask(rail) == [holds.Hold('lesson', key(COMMAND, A), lh.hold_reason(found))]
