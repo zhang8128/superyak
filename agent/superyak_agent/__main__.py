@@ -20,6 +20,12 @@ def build_parser():
     watch.add_argument('--once', action='store_true')
     kick = commands.add_parser('kick', help='Print one line per mention of this ship or reply to its post (run under a Monitor)')
     kick.add_argument('--config', type=Path, default=CONFIG)
+    route = commands.add_parser('route-watch', help="Check the station's public route once from here, read-only; post "
+                                'to a room when a check changes (run by a timer)')
+    route.add_argument('--config', type=Path, default=CONFIG)
+    route.add_argument('--room', help='The room that gets the lines (not needed with --dry-run)')
+    route.add_argument('--state', type=Path, default=HOME / 'route-watch.json')
+    route.add_argument('--dry-run', action='store_true', help='Print each check; post nothing and write no state')
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
@@ -208,6 +214,14 @@ def main(argv=None):
         except ValueError as error:  # a config naming no ship
             print(f'superyak kick: {error}', file=sys.stderr)
             return 2
+    if args.command == 'route-watch':
+        from .route_watch import run_once
+        from .station import client_for, load_config
+        if not (args.room or args.dry_run):
+            parser.error('route-watch needs --room, or --dry-run')
+        config = load_config(args.config)
+        run_once(config, args.room, args.state, None if args.dry_run else client_for(config), dry_run=args.dry_run)
+        return 0
     if args.command == 'dock':
         from .claims import Refused, check_mode
         from .dock import Dock
