@@ -40,7 +40,7 @@ def refused(tmp_path, exclude):
 
 def test_a_typo_is_refused(tmp_path):
     text = refused(tmp_path, {"e9"})
-    assert text.startswith("1 id in --exclude names no memory in this store or its cold storage")
+    assert text.startswith("The one id in --exclude names no memory in this store or its cold storage")
     assert "'e9'" in text and "nothing was planned" in text
 
 
@@ -64,12 +64,18 @@ def test_a_mix_of_good_and_bad_ids_is_refused_naming_only_the_bad(tmp_path):
     for bad in ("'e2 '", "'S1'", "'e7'"):
         assert bad in text, bad
     assert "'e1'" not in text and "'s1'" not in text
-    assert text.startswith("3 ids in --exclude name no memory")
+    assert text.startswith("3 of the 5 ids in --exclude name no memory")  # the whole file's count, at a glance
+
+
+def test_one_bad_id_among_several_is_counted_against_the_whole_file(tmp_path):
+    text = refused(tmp_path, {"e1", "s1", "e7"})
+    assert text.startswith("1 of the 3 ids in --exclude names no memory") and "'e7'" in text
 
 
 def test_a_long_list_of_bad_ids_names_twenty_and_counts_the_rest(tmp_path):
     text = refused(tmp_path, {f"x{i:03d}" for i in range(503)})
     assert "'x000'" in text and "'x019'" in text and "'x020'" not in text and "and 483 more" in text
+    assert text.startswith("503 of the 503 ids in --exclude name no memory")
 
 
 def test_matching_is_exact_by_id_in_either_layer(tmp_path):
