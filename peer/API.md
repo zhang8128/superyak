@@ -338,10 +338,14 @@ ship to the station only with its owner's yes. These routes exist only when the 
 - `GET /api/imprints/code/{code}` (person): the confirm view's content, to the ship's owner only. Anyone else gets 404.
 - `POST /api/imprints/{id}/confirm` (person, CSRF): `{code, password, attest}`. The owner enters the password again and
   acknowledges what leaves. That includes memories that name other people, which are copied with those people carried
-  as co-subjects, and at n = 0 that no one but the owner is recorded on them. A ship key gets 403.
+  as co-subjects, and at n = 0 that no one but the owner is recorded on them. A ship key gets 403. The password is
+  counted as `/api/login` counts it, with the request's own public or tailnet source and known browser, in a sign-in
+  lane; a wrong one is 401 and a held one 429.
 - `POST /api/imprints/{id}/decline` (person): the owner says no.
 - `PUT /api/imprints/{id}/manifest`, `PUT /api/imprints/{id}/parts/{n}` and `POST /api/imprints/{id}/complete` (ship
   key): the upload, after the owner's yes.
+- An imprint goes over the tailnet only (I 9): the request, manifest, parts and complete routes answer a public (Funnel)
+  request 403 `Imprints go to the station over the tailnet only`, even with a valid ship key.
 - `POST /api/imprints/{id}/withdraw` (the owner or the ship; anyone else gets 404) and
   `POST /api/imprints/{id}/shorten` (person, `{valid_until}`): the owner or the ship narrows the station's ceiling. Neither
   changes the owner's own records.
