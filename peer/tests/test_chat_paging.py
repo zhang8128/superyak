@@ -136,7 +136,8 @@ def test_the_no_parameter_response_keeps_its_key_order(env):
     app, users, key = mixed_room(env)
     body = env[1][0].get(f'/api/chats/{key}').json()
     assert list(body) == ['id', 'owner_id', 'title', 'epoch', 'linked_room_id', 'member_ids', 'created', 'last_activity',
-                          'messages', 'members', 'brief', 'brief_revision', 'system_author', 'claims']
+                          'messages', 'members', 'brief', 'brief_revision', 'system_author', 'claims',
+                          'moderators']  # main's own order, moderators included
     local = [m for m in body['messages'] if 'source' in m]
     peer = [m for m in body['messages'] if 'source' not in m]
     assert len(local) + len(peer) == len(body['messages']) and len(peer) == 3

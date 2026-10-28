@@ -357,6 +357,7 @@ def test_the_door_and_the_station_commands_work_while_the_identity_is_damaged(tm
     assert code == 0 and out.startswith('Added serenity to a new room'), err
     with Store(store.data_dir, signing=False).transaction() as db:
         assert db.execute('SELECT count(*) FROM revision_signatures WHERE layer_id=?', (late['id'],)).fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM messages WHERE client_message_id LIKE 'member-%'").fetchone()[0] == 3  # bridge, unbridge, add-ship
 
 
 def test_the_door_holds_no_key_even_when_the_identity_is_sound(tmp_path):

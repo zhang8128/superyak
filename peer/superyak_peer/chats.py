@@ -1,5 +1,5 @@
 """Member-only rooms, linked new audiences, epoch-rechecked messages."""
-from .common import REPLACED_ADD, REPLACED_ROOMS, Problem, text, ids, uid, require
+from .common import Problem, text, ids, uid, require
 from .tickets import DEFER_BOUND_SECONDS
 
 # The `since` read's query: it walks the existing events_kind_room_id index (kind, resource_id, id) in id order.
@@ -45,6 +45,10 @@ class Chats:
     def list_rooms(self, actor):
         with self.transaction() as db:
             rooms = [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=?', (actor,)).fetchall()]
+            moderating = self._moderating(db, actor)
+            for room in rooms:
+                if room['id'] in moderating:
+                    room['moderating'] = moderating[room['id']]
         rooms = [room for room in rooms if not self._off_the_lists(room)]  # breakouts S12: still readable by id
         return sorted(rooms + self.remote_rooms(actor), key=lambda room: (-room['last_activity'], room['id']))
 
@@ -55,6 +59,7 @@ class Chats:
                 message['source'] = None  # a paired peer's payload is passed through: a label in it is never ours
                 message['reply_to'] = None
             room['brief'], room['brief_revision'] = None, 0  # briefs never cross stations
+            room['moderators'] = []  # moderators never cross stations
             return room
         with self.transaction() as db:
             room = self._room(db, actor, key)
@@ -149,6 +154,7 @@ class Chats:
         if db.execute('SELECT 1 FROM messages WHERE room_id=? AND author_id=? LIMIT 1', (key, system)).fetchone():
             room['system_author'] = self.system_author_public(db)
         room['claims'] = self._active_claims(db, key)
+        room['moderators'] = list({m['id']: {'id': m['id'], 'name': m['name']} for m in self._moderators(db, key)}.values())  # a holder once, however many grants
         return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):
@@ -192,38 +198,6 @@ class Chats:
                 if waiting:  # R35: present only when it has something to say
                     sent['deferred_here'] = waiting
             return sent
-
-    def add_participants(self, actor, key, member_ids, carry_brief=None):
-        if carry_brief is not None and type(carry_brief) is not int:
-            raise Problem(400, 'carry_brief is the revision of the brief you saw, or null')
-        with self.transaction() as db:
-            room = self._room(db, actor, key)
-            if room['owner_id'] != actor:
-                raise Problem(403, 'Room owner required')
-            if db.execute(f'SELECT 1 FROM rooms WHERE id=? AND id IN ({REPLACED_ROOMS})', (key,)).fetchone():
-                raise Problem(409, REPLACED_ADD)  # one replacement per room, so the chain never forks (work board 8.4)
-            carried = self._brief_to_carry(db, key, carry_brief)
-            new = self._create_room(db, actor, room['title'], ids(room['member_ids'] + ids(member_ids)), key)
-            if carried is not None:  # the brief, under its own author; open board items move too (below), but the old room's messages stay with their participants
-                body, author = carried
-                self._write_brief(db, new['id'], body, 1, author, carried_from=key)
-            new['board_carried'] = self._carry_board(db, key, new['id'])  # work board 5.x: open items, with claims whose holder is in the new room
-            return new
-
-    def remove_participant(self, actor, key, user_id):
-        text(user_id, 'user ID', 100)
-        with self.transaction() as db:
-            room = self._room(db, actor, key)
-            if room['owner_id'] != actor:
-                raise Problem(403, 'Room owner required')
-            if user_id == actor:
-                raise Problem(400, 'Cannot remove the room owner')
-            if user_id in room['member_ids']:
-                db.execute('DELETE FROM room_members WHERE room_id=? AND user_id=?', (key, user_id))
-                db.execute('DELETE FROM remote_room_members WHERE room_id=? AND contact_id=?', (key, user_id))
-                db.execute('UPDATE rooms SET epoch=epoch+1 WHERE id=?', (key,))
-                self.emit(db, 'chat.membership', key, room['epoch'] + 1, {'removed_user_id': user_id})
-            return self._room(db, actor, key)
 
     def can_deliver_message(self, message_id, recipient_id, epoch):
         """Trusted transport hook: rejects messages queued under obsolete room epochs."""

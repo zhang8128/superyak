@@ -1,6 +1,8 @@
 """Durable session drafts and their automatically refreshed publication views."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
+import itertools
 import json
 import os
 from pathlib import Path
@@ -12,6 +14,18 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+# Inside the fixture views' policy window (2026-09-07 to 2026-10-07), so these tests never depend on today's date.
+PINNED_START = datetime(2026, 9, 8, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _pinned_clock(monkeypatch):
+    """Evaluate the fixture views at a fixed instant, ticking a microsecond per call. A test that sets its own
+    clock with monkeypatch still wins."""
+    from workbench import automation
+    ticks = itertools.count()
+    monkeypatch.setattr(automation, "_now",
+                        lambda: (PINNED_START + timedelta(microseconds=next(ticks))).isoformat(timespec="microseconds"))
 
 
 @pytest.fixture
@@ -285,6 +299,7 @@ def test_missing_or_changed_overlap_report_invalidates_generation(project, draft
         path.unlink()
     else:
         report = json.loads(path.read_text())
+        assert report["record_pairs"], "the pinned clock keeps the fixture's allow rule in force"
         report["record_pairs"] = []
         path.write_text(json.dumps(report))
     assert inbox.status()["publication_status"] == "invalid"
