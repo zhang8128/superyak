@@ -3,7 +3,7 @@
 import pytest
 from superyak_peer import lessons
 from superyak_peer.common import Problem, uid
-from conftest import LESSON_TIME, lesson_body, lesson_ship, run_lessons
+from conftest import LESSON_TIME, lesson_body, lesson_ship, paired, run_lessons
 
 
 def post(store, room, author, body, created=None):
@@ -441,15 +441,15 @@ def test_the_backfill_carries_live_lessons_once_to_a_new_peer(tmp_path, lessons_
     mac = Store(tmp_path / 'mac', clock=lambda: clock[0])
     mac_fed = Federation(mac, endpoint='https://mac:7437')
     andy_m = mac.create_user('andy', 'Andy Example', 'a-long-password', is_admin=True)['id']
-    contact = pi_fed.pair(pids['andy'], mac_fed.card(mac.lessons_ship('serenity', 'andy')['id']))['id']
-    mac_fed.pair(andy_m, pi_fed.card(pids['andy']))
+    contact = paired(pi_fed, pids['andy'], mac_fed.card(mac.lessons_ship('serenity', 'andy')['id']))['id']
+    paired(mac_fed, andy_m, pi_fed.card(pids['andy']))
     with pytest.raises(Problem, match='not listed'):
         pi.add_participants(pids['andy'], room, [contact])
     both = [tardis_fed.identity.peer_id, mac_fed.identity.peer_id]
     pi.station_lessons_room('andy', room[:6], 'rio-grande', both, pi.station_lessons_room('andy', room[:6], 'rio-grande', both)['confirm'])
     new = pi.add_participants(pids['andy'], room, [contact])
     assert new['lessons_carried'] == 2   # not the retracted one
-    later = pi_fed.pair(pids['andy'], mac_fed.card(andy_m))['id']
+    later = paired(pi_fed, pids['andy'], mac_fed.card(andy_m))['id']
     assert pi.add_participants(pids['andy'], new['id'], [later])['lessons_carried'] == 0   # the Mac already had them
     pi_fed.sync_once(send=lambda card, prepare: (mac_fed if card['peer_id'] == mac_fed.identity.peer_id else tardis_fed).receive(prepare()))
     mac.record_lessons_room(pi.lessons_room_full_id())

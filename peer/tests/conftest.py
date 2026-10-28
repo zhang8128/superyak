@@ -107,6 +107,12 @@ def fake_embedder():
     shutil.rmtree(folder, ignore_errors=True)
 
 
+def paired(fed, actor, card):
+    """Pair `card` as an admin does since fix:pairing-code: typing the code the other machine shows, its own."""
+    from superyak_peer.identity import pairing_code
+    return fed.pair(actor, card, code=pairing_code(card))
+
+
 def lesson_ship(store, owner_id, username):
     with store.transaction() as db:
         return store._new_ship(db, username, username.title(), owner_id)
@@ -143,9 +149,9 @@ def lessons_peers(tmp_path):
     rio = lesson_ship(pi, andy, 'rio-grande')['id']
     andy_t = tardis.create_user('andy', 'Andy Example', 'a-long-password', is_admin=True)['id']
     ship_t = tardis.lessons_ship('tardis', 'andy')['id']
-    contact_ship = pi_fed.pair(andy, tardis_fed.card(ship_t))['id']
-    contact_andy = pi_fed.pair(andy, tardis_fed.card(andy_t))['id']
-    tardis_fed.pair(andy_t, pi_fed.card(andy))
+    contact_ship = paired(pi_fed, andy, tardis_fed.card(ship_t))['id']
+    contact_andy = paired(pi_fed, andy, tardis_fed.card(andy_t))['id']
+    paired(tardis_fed, andy_t, pi_fed.card(andy))
     room = pi.create_room(andy, 'Lessons', [rio, contact_ship, contact_andy])['id']
     view = pi.station_lessons_room('andy', room[:6], 'rio-grande', [tardis_fed.identity.peer_id])
     recorded = pi.station_lessons_room('andy', room[:6], 'rio-grande', [tardis_fed.identity.peer_id], view['confirm'])
