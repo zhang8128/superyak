@@ -1062,6 +1062,47 @@ def _resolve_peers(db, names):
 MARK_KEY = 'restore_reconcile'
 
 
+class CarryRefused(ValueError):
+    """station-carry-nonces won't touch these files; nothing was changed."""
+
+
+def _has_nonces(db, schema='main'):
+    return db.execute(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='table' AND name='pull_nonces'").fetchone() is not None
+
+
+def carry_pull_nonces(data_dir, source):
+    """Runbook 10.3, after a rollback (fix:pull-floor-after-rollback, Rio Grande's reader's better way): the file put back
+    lacks the pull nonces the restored station recorded while it was live, so a pull it served could be replayed. This
+    copies them in from that station's set-aside file, `INSERT OR IGNORE` from a read-only attach: exact, depending on no
+    clock, and a second run adds nothing. Run with the station stopped (10.1). Refused, with nothing changed: a live
+    file that is missing, a symlink, or has no pull_nonces (it never makes one), and a source that is missing or isn't a
+    station's file. Returns how many nonces were added."""
+    live, source = Path(data_dir) / 'peer.sqlite3', Path(source)
+    if live.is_symlink() or not live.is_file():
+        raise CarryRefused(f'No peer database at {live} (or it is a symlink): nothing to carry into')
+    if source.is_symlink() or not source.is_file():
+        raise CarryRefused(f'No set-aside database at {source} (or it is a symlink): nothing to carry from')
+    if source.samefile(live):  # also a hard link to it
+        raise CarryRefused('The source is the live database itself')
+    # URIs: the live file opened `mode=rw` is never created, and the source attached `mode=ro` is never changed
+    with closing(sqlite3.connect(live.absolute().as_uri() + '?mode=rw', uri=True, timeout=30, isolation_level=None)) as db:
+        if not _has_nonces(db):
+            raise CarryRefused(f'{live} has no pull_nonces table, so it is not a station database')
+        db.execute('ATTACH DATABASE ? AS restored', (source.absolute().as_uri() + '?mode=ro',))
+        try:
+            if not _has_nonces(db, 'restored'):
+                raise CarryRefused(f'{source} has no pull_nonces table, so it is not a station database')
+            db.execute('BEGIN IMMEDIATE')
+            added = db.execute('INSERT OR IGNORE INTO main.pull_nonces(origin, nonce, at) '
+                               'SELECT origin, nonce, at FROM restored.pull_nonces').rowcount
+            db.execute('COMMIT')
+        finally:
+            if db.in_transaction:
+                db.execute('ROLLBACK')
+            db.execute('DETACH DATABASE restored')
+    return added
+
+
 def _write_mark(db, old, now, path):
     """Follow-up 1: the proof, inside the staged copy, that the reconcile ran on it. It is a system_meta row (the station's
     own key/value table, which a copy from before the system author lacks, so it is created here), written in the

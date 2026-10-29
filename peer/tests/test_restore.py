@@ -480,6 +480,95 @@ def test_the_pull_listener_reads_the_reconciles_own_mark_as_its_replay_floor(tmp
             assert abs(Federation._restored_at(db) - time.time()) < 60, args
 
 
+def carry(capsys, *args):
+    """station-carry-nonces; returns (exit code, stdout, stderr)."""
+    try:
+        cli(['station-carry-nonces', *map(str, args)])
+        code = 0
+    except SystemExit as stopped:
+        code = stopped.code
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def nonces(path):
+    with closing(sqlite3.connect(path)) as db:
+        return set(db.execute('SELECT origin, nonce, at FROM pull_nonces'))
+
+
+def test_carry_nonces_adds_the_restored_stations_nonces_once_and_says_how_many(tmp_path, capsys):
+    """fix:pull-floor-after-rollback: runbook 10.3's carry adds the nonces the set-aside station recorded that the file
+    put back lacks, keeps the ones it has, and a second run adds nothing (10.2's resume note runs it again). The
+    set-aside file is not changed. Mutation: INSERT OR REPLACE (each run counts every nonce)."""
+    live, restored = Store(tmp_path / 'live'), Store(tmp_path / 'restored-live')
+    with live.transaction() as db:
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'kept', 5)")
+    with restored.transaction() as db:
+        db.executemany('INSERT INTO pull_nonces VALUES(?, ?, ?)', [('o', 'kept', 5), ('o', 'served', 6), ('p', 'served', 7)])
+    source = restored.db_path.read_bytes()
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--from', restored.db_path)
+    assert code == 0, err
+    assert out == 'Carried 2 pull nonces from the restored station: its served pulls are replays now\n'
+    assert nonces(live.db_path) == {('o', 'kept', 5), ('o', 'served', 6), ('p', 'served', 7)}
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--from', restored.db_path)
+    assert code == 0 and out.startswith('Carried 0 pull nonces'), err
+    assert restored.db_path.read_bytes() == source
+
+
+def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
+    """Each refusal exits 1 saying nothing was changed and leaves every file as it was: no live file (a mistyped
+    --data-dir), a live symlink, a missing or symlinked source, the live file as its own source (by path or a hard
+    link), and either side without pull_nonces. Mutations: each check dropped (the carry follows the symlink, or
+    SQLite's own error stands in for the reason)."""
+    live, restored = Store(tmp_path / 'live'), Store(tmp_path / 'restored-live')
+    with restored.transaction() as db:
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'served', 6)")
+    other = tmp_path / 'other'
+    other.mkdir()
+    with closing(sqlite3.connect(other / 'peer.sqlite3')) as db:
+        db.execute('CREATE TABLE notes(x)')
+        db.commit()
+    linked = tmp_path / 'linked'
+    linked.mkdir()
+    (linked / 'peer.sqlite3').symlink_to(live.db_path)
+    (tmp_path / 'source-link.sqlite3').symlink_to(restored.db_path)
+    os.link(live.db_path, tmp_path / 'hard.sqlite3')
+    files = [live.db_path, restored.db_path, other / 'peer.sqlite3']
+    before = [path.read_bytes() for path in files]
+    for data_dir, source, reason in (
+            (tmp_path / 'typo', restored.db_path, 'No peer database'),
+            (linked, restored.db_path, 'No peer database'),
+            (live.data_dir, tmp_path / 'missing.sqlite3', 'No set-aside database'),
+            (live.data_dir, tmp_path / 'source-link.sqlite3', 'No set-aside database'),
+            (live.data_dir, live.db_path, 'the live database itself'),
+            (live.data_dir, tmp_path / 'hard.sqlite3', 'the live database itself'),
+            (other, restored.db_path, 'has no pull_nonces table'),
+            (live.data_dir, other / 'peer.sqlite3', 'has no pull_nonces table')):
+        code, out, err = carry(capsys, '--data-dir', data_dir, '--from', source)
+        assert code == 1 and out == '' and 'nothing was changed' in err and reason in err, (data_dir, source, err)
+        assert [path.read_bytes() for path in files] == before, (data_dir, source)
+    assert not (tmp_path / 'typo').exists() and not (tmp_path / 'missing.sqlite3').exists()
+
+
+def test_carry_nonces_rolls_back_on_a_database_error_and_exits_cleanly(tmp_path, capsys):
+    """A source that isn't a database, or whose pull_nonces lacks a column, fails inside SQLite: the CLI exits 1 with the
+    error's name, and the live file is unchanged (the insert's transaction rolled back). Mutation: no sqlite3.Error
+    handler (a traceback)."""
+    live = Store(tmp_path / 'live')
+    junk = tmp_path / 'junk.sqlite3'
+    junk.write_bytes(b'not a database' * 100)
+    narrow = tmp_path / 'narrow.sqlite3'
+    with closing(sqlite3.connect(narrow)) as db:
+        db.execute('CREATE TABLE pull_nonces(origin, nonce)')
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'n')")
+        db.commit()
+    before = live.db_path.read_bytes()
+    for source, error in ((junk, 'DatabaseError'), (narrow, 'OperationalError')):
+        code, out, err = carry(capsys, '--data-dir', live.data_dir, '--from', source)
+        assert code == 1 and out == '' and f'nothing was changed: {error}' in err, err
+        assert live.db_path.read_bytes() == before
+
+
 def test_reconcile_unpair_refuses_an_ambiguous_id_and_changes_no_byte(tmp_path, capsys):
     """--unpair with a short id two peers share is refused (exit 2) and the staged copy is byte for byte unchanged, also when
     the refusal comes after other work. A full id picks the one peer even if another shares its prefix, and the report does

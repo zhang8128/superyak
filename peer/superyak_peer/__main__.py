@@ -571,6 +571,11 @@ def main(argv=None):
     reconcile_cmd.add_argument('--replaced', type=Path, help='The peer.sqlite3 the restore replaces (runbook step 4 set it aside), opened read-only; any other name is refused')
     reconcile_cmd.add_argument('--unpair', action='append', default=[], metavar='PEER', help="Unpair this peer (12-character id or full id) in the copy as the browser does; repeatable; the only way without a usable --replaced")
     reconcile_cmd.add_argument('--live-data-dir', type=Path, help='The live data directory, which is refused (make passes STATION_DATA)')
+    carry_cmd = commands.add_parser('station-carry-nonces', help='Trusted local, with the station stopped: after a rollback '
+                                    "(runbook 10.3), copy the restored station's pull nonces into the file put back")
+    carry_cmd.add_argument('--data-dir', type=Path, required=True, help='The live data directory (make passes STATION_DATA)')
+    carry_cmd.add_argument('--from', dest='source', type=Path, required=True,
+                           help="The restored station's set-aside database: $ASIDE/restored-live/peer.sqlite3 (runbook 10.2)")
     restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
     restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
     restore_cmd.add_argument('--backup', type=Path, help='Test this copy instead of the newest one')
@@ -737,6 +742,15 @@ def main(argv=None):
             except BackupError as failed:
                 parser.exit(failed.code, f'station-backup: {failed.reason}\n')
             print(f'Checked copy: {written}')
+        elif args.command == 'station-carry-nonces':
+            from .backups import CarryRefused, carry_pull_nonces
+            try:
+                added = carry_pull_nonces(args.data_dir, args.source)
+            except CarryRefused as refused:
+                parser.exit(1, f'station-carry-nonces: nothing was changed: {refused}\n')
+            except sqlite3.Error as error:  # the transaction rolled back, so neither file changed
+                parser.exit(1, f'station-carry-nonces: nothing was changed: {type(error).__name__}: {safe_line(error, 200)}\n')
+            print(f'Carried {added} pull nonces from the restored station: its served pulls are replays now')
         elif args.command == 'station-restore-reconcile':
             from .backups import (ReconcileRefused, UnpairRefused, describe_reconcile, reconcile, refuse_misnamed_replaced,
                                   refuse_unstaged_db)
