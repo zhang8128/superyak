@@ -81,7 +81,8 @@ def test_throwaway_store_a(tmp_path, monkeypatch):
     env = clean_env(tmp_path)
     (tmp_path / 'user-home').mkdir()
     home, engram_home = tmp_path / 'superyak', tmp_path / 'engram-home'
-    made = run(['uv', 'run', '--locked', 'python', '-c', 'import sys; sys.path.insert(0, "."); exec(sys.argv.pop(1))',
+    made = run(['uv', 'run', '--locked', '--extra', 'dev', 'python', '-c',
+                'import sys; sys.path.insert(0, "."); exec(sys.argv.pop(1))',
                 MAKE_SOURCE, str(tmp_path), TAG, ','.join(EXCLUDED)], ENGRAM, env)
     assert made.returncode == 0, made.stderr
     source = tmp_path / 'src.db'
@@ -162,7 +163,8 @@ def test_throwaway_store_a(tmp_path, monkeypatch):
     verify = run([sys.executable, '-m', 'superyak_peer', 'verify-imprint', '--dir', str(folder), '--home', str(home)],
                  PEER, env)
     report['verify_after_delete'] = {'exit': verify.returncode, 'said': (verify.stdout + verify.stderr).strip()[-800:]}
-    ledger = run(['uv', 'run', '--locked', 'python', '-c', 'import sys; sys.path.insert(0, "."); exec(sys.argv.pop(1))',
+    ledger = run(['uv', 'run', '--locked', '--extra', 'dev', 'python', '-c',
+                  'import sys; sys.path.insert(0, "."); exec(sys.argv.pop(1))',
                   MAKE_LEDGER, str(engram_home)], ENGRAM, env)
     assert ledger.returncode == 0, ledger.stderr
     imported = engram('import-receipts', '--id', imprint_id[:8], '--superyak-home', str(home),
