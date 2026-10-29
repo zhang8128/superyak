@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS federation_cursor(id INTEGER PRIMARY KEY CHECK(id=1),
 INSERT OR IGNORE INTO federation_cursor VALUES(1,0);
 CREATE TABLE IF NOT EXISTS peer_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pull_nonces(origin TEXT NOT NULL, nonce TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(origin, nonce));
+CREATE INDEX IF NOT EXISTS pull_nonces_at ON pull_nonces(at);
 CREATE TABLE IF NOT EXISTS peer_delivery(peer_id TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('push','pull')), failures INTEGER NOT NULL DEFAULT 0, next_attempt REAL, last_success REAL, last_pull REAL, failing_since REAL, last_problem TEXT);
 '''
 # Federation pull (plan P2, P3): peer_meta holds federation's own settings, apart from system_meta, which belongs to the

@@ -27,6 +27,12 @@ PULL_ROWS, PULL_SECONDS = 200, 5.0  # spec §4: a pull examines at most 200 rows
 # The puller (spec §6, plan P12, nit 25): what it asks for, how many rounds a pull may take, and when it pulls again.
 PULL_LIMIT, PULL_ASK, PULL_ROUNDS, PULL_AGAIN, PULL_NO_ROUTE = 20, 1024 * 1024, 10, 60, 300
 CLOCKS_DIFFER = 'Clocks differ by more than 5 minutes'
+# A listener keeps a pull nonce a day by the request's own `at`, not the 600 s a replay needs: pruned by the local
+# clock, a clock that ran ahead and was set back would otherwise drop a nonce whose request still passes the 300 s
+# check (fix:pull-nonces-prune-margin). The likely case is an unclean reboot of the Pi, whose clock comes back from
+# fake-hwclock's hourly save before time sync. At least 1,440 rows a day per pull peer pulling each minute (every
+# round and retry signs its own nonce), pruned through the index on `at`.
+NONCE_KEEP = 86400
 log = logging.getLogger(__name__)
 PROBLEM_CAP = 200  # characters of last_problem kept; a peer's words can be 64 KiB (Rio Grande's SF3)
 PEER_SCOPED_STATUS = frozenset({401, 404, 408, 421, 425, 429})
@@ -395,8 +401,9 @@ class Federation:
         floor is the mark plus 300 s, whatever the copy's age or a peer's clock, and pulls wait out those 5 minutes
         once after a restore. A damaged mark falls back to this listener's own start, which follows every restore
         (runbook step 8): closed for 300 s, and no longer. Not covered: a rollback, which puts back a file with no newer
-        mark (runbook 10.4 waits more than 10 minutes instead, until fix:pull-floor-after-rollback writes one), and the
-        Pi's clock stepping backward between the stop and the reconcile."""
+        mark (runbook 10.4 waits more than 10 minutes instead, until fix:pull-floor-after-rollback writes one); the
+        Pi's clock stepping backward between the stop and the reconcile; and a clock stepping back more than
+        NONCE_KEEP - 300 s between a prune and a replay, which a per-origin floor would close."""
         restored = self._restored_at(db)
         return (self._started if restored is None else restored) + 300
 
@@ -424,8 +431,9 @@ class Federation:
         if abs(value['at'] - now) > 300:
             raise Problem(403, 'Clocks differ by more than 5 minutes')
         with self.store.transaction() as db:
-            # pruned by the request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock
-            db.execute('DELETE FROM pull_nonces WHERE at<?', (now - 600,))
+            # pruned by the request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock, by
+            # a margin no clock excursion shorter than NONCE_KEEP undoes (fix:pull-nonces-prune-margin)
+            db.execute('DELETE FROM pull_nonces WHERE at<?', (now - NONCE_KEEP,))
             replay = (value['at'] <= self._replay_floor(db)
                       or db.execute('SELECT 1 FROM pull_nonces WHERE origin=? AND nonce=?',
                                     (origin, value['nonce'])).fetchone())

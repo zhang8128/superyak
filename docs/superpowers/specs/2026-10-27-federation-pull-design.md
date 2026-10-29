@@ -165,8 +165,9 @@ known identity's mode.
 3. **Origin** is a paired peer with a v2 card. Otherwise 403 "unknown or unpaired peer", or 403 "not a pull peer".
 4. **Signature.** Otherwise 403.
 5. **Clock:** `at` within 300 s. Otherwise 403 "clocks differ by more than 5 minutes".
-6. **Nonce:** inserted under the primary key `(origin, nonce)`. If it is already there, 409 "replay". Rows older than
-   600 s are pruned.
+6. **Nonce:** inserted under the primary key `(origin, nonce)`. If it is already there, 409 "replay". Rows whose `at`
+   is more than a day old are pruned, through an index on `at` (fix:pull-nonces-prune-margin: 600 s is all a replay
+   needs, and the day covers a listener clock that ran ahead and was set back).
 7. **Busy:** a per-origin lock. If a pull from this origin is already running, 409 "busy". Only a request that passed
    checks 4-6 can be busy, and there is no time spacing.
 

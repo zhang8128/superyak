@@ -273,7 +273,8 @@ Only new `peer/` application state is affected. POSIX locking targets macOS/Linu
 SQL writers, operator-edited private files and other implementations are outside
 this coordination boundary. Disk growth is durable and operator-managed; there is
 no automatic retention cleanup or replay-expiry shortcut in this slice, except pull
-nonces, pruned by their `at` once 600 s old.
+nonces, pruned by their `at` once a day old (a replay needs only 600 s; the day covers
+a listener clock that ran ahead and was set back, fix:pull-nonces-prune-margin).
 
 Browser status collection materializes local events without opening any transport
 connection. Status remains author-filtered, includes resource/destination
