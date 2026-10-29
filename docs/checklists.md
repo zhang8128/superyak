@@ -533,6 +533,12 @@ it, not only as its diff reads.
 - [ ] A test that hands made-up pids, ports or paths to code that asks the system about them also stands in for the
       asking function, in every case, so its answer is the test's, never the runner's (Tardis, 2026-10-28: a lane
       test's made-up pids met a real `os.kill` and turned macOS CI red whenever a runner process held one).
+- [ ] A test never counts or checks state after a fixed sleep: it waits for the condition under a generous deadline,
+      so a loaded runner is slow, not red (Serenity, 2026-10-28: a sudo keeper test counted calls in a fixed 0.3 s and
+      got 2 of 3 on macOS CI; her sweep of all 21 test sleeps found one more).
+- [ ] Before a mutant result is trusted, it is shown that the mutant changed the file (`cmp` against the kept copy)
+      and that the test written for it ran; a mutant counts as caught only when its own test fails (Serenity and
+      Tardis, 2026-10-28: a `sed` that didn't apply and a `-k` that selected nothing each made a false survivor).
 - [ ] A rule that replaces another is judged against the one it replaces in both directions, from sources independent
       of the rule: what it newly misses, and what it newly flags. A table measured against the data it was built
       from proves nothing (Serenity, 2026-10-28: the old tag rule marked 35 of 48 ordinary lines and nobody counted;
