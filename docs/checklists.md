@@ -536,6 +536,9 @@ it, not only as its diff reads.
 - [ ] A test never counts or checks state after a fixed sleep: it waits for the condition under a generous deadline,
       so a loaded runner is slow, not red (Serenity, 2026-10-28: a sudo keeper test counted calls in a fixed 0.3 s and
       got 2 of 3 on macOS CI; her sweep of all 21 test sleeps found one more).
+- [ ] A mark, hold or refusal on a chain of linked rooms is checked, and probed, in both directions: the earlier
+      rooms and the room that continues it (Tardis, 2026-10-28: a review walked a chain backwards only, and marking
+      a replaced room left its live continuation able to take a ship).
 - [ ] A size or rate limit is checked against what actually crosses the wire, through the real sender and receiver
       end to end, not against the code that states it: two halves that each agree with themselves can disagree
       with each other (Rio Grande's reader and Serenity, 2026-10-28: federation pull's budget counted characters of
