@@ -1,6 +1,6 @@
 # The remote connector: your home, from Claude
 
-Revision 3, 2026-10-27. Serenity (the Mac). Board item `spec:remote-connector` (all hands).
+Revision 4, 2026-10-29. Serenity (the Mac). Board item `spec:remote-connector` (all hands).
 Research, with sources: docs/research/2026-10-27-remote-connector-research.md.
 Review of revision 1: docs/superpowers/reviews/2026-10-27-remote-connector-review.md.
 
@@ -9,6 +9,11 @@ should fixes and the nits, and adds the review's missing tests. Claude Code's lo
 move to Later. The author's choices are D6-D17 under Decisions.
 
 Revision 3 applies the re-check's should fixes and nits (approved under law section 3; no further round needed).
+
+Revision 4 replaces stored registrations with stateless client ids (D18), from the section 2 of Task 4's build: a
+limit counted over rows that eviction deletes stopped nothing once the table was full, and Claude's servers share
+one egress range, so any per-source limit could lock the owner out. The registration section, its tests and the
+clients' store change; nothing else does.
 
 ## Why
 
@@ -105,19 +110,29 @@ own Origin (app.py:40-43). Claude's servers send no such Origin, so:
 
 #### Registration (`/register`)
 
-Dynamic Client Registration (D1), bounded:
+Dynamic Client Registration (D1), bounded and **stateless** (D18): `/register` checks what it's sent and writes
+nothing.
 
-- The body is at most 8 KB.
-- A client lists exactly 1 `redirect_uri`, on the allow-list. In phase 1 the allow-list is the one configured
-  callback. Allowing up to 4 waits for Later, when there is more than one callback.
-- `client_name` is at most 100 characters. It is stored and shown only as quoted data.
+- The body is at most 8 KB, counted in bytes.
+- A client lists exactly 1 `redirect_uri`, equal character for character to the allow-list's. In phase 1 the
+  allow-list is the one configured callback. Allowing up to 4 waits for Later, when there is more than one callback.
+- `client_name` is at most 100 characters, with no Unicode control or format character (Cc, Cf) and no lone
+  surrogate. It is shown only as quoted data, the client's own unverified words.
 - `grant_types` is a subset of `authorization_code` and `refresh_token`.
 - Every client is public (`none`) and gets no secret. There is no RFC 7592 management endpoint.
-- A per-source rate limit, **and** a global cap of 100 unused registrations. At the cap, the oldest unused
-  registration is evicted, never the new one refused. Every phase 1 client has the same single redirect URI and no
-  secret, so unused ones are interchangeable. A flood costs the attacker only their own registrations, and can't
-  block the owner from connecting.
-- An unused registration is deleted after 24 hours. A client whose grants have all ended is deleted after 30 days.
+- **The client id carries its registration.** It is `base64url(payload) "." base64url(HMAC-SHA256(key, payload))`,
+  where the payload is the canonical JSON of `{"v": 1, "callback", "name", "grant_types", "issued_at"}`. RFC 7591 lets
+  the server choose its ids, so nothing changes for a client. `/authorize` and `/token` check the HMAC in constant
+  time, then the payload, and an id whose `callback` isn't the configured one is unknown.
+- **An unused id is valid for 30 days** from `issued_at`, so a client that cached it can still use it. A row is made
+  only when a code is first issued to it (`oauth_clients`), and from then on the row, not the age, says it exists. A
+  client whose grants have all ended is deleted after 30 days.
+- **No limit is needed, and none is kept.** Nothing is stored, so there is nothing to fill, evict or sweep, and a
+  flood costs only CPU bounded by the 8 KB body. Claude's servers share one egress range, so any per-source limit here
+  could lock the owner out (D18).
+- **The key** is 32 random bytes in `system_meta`, made at first start. It protects only what an id says (its name,
+  callback and age), not a secret: a public client's id isn't one, and anyone can register any `client_name`. So the
+  key goes into backups like the rest of the store, and rotating it voids only the unused ids.
 
 #### The authorization request (`/authorize`)
 
@@ -377,14 +392,14 @@ private chats" (app.js:979).
 - `/mcp` allows 60 `tools/call` a minute and 2,000 a day per grant. `initialize`, `tools/list` and `ping` don't count.
   Over the limit, it answers 429 with `Retry-After`.
 - A tool call takes at most 30 seconds ("The time cap", above).
-- `/register` is limited per source and globally (above).
+- `/register` stores nothing and needs no limit; its 8 KB body bounds the work (D18).
 
 ### Stores
 
 New tables, named apart from the existing `grants` (person-to-person ship grants, grants.py:10-14, and `/api/grants`)
 and `receipts` (federation's, peer_store.py:35) (D15):
 
-- `oauth_clients`: registered clients.
+- `oauth_clients`: clients a code has been issued to (D18), keyed by their stateless id.
 - `oauth_pending`: authorization requests, their sign-ins and their codes.
 - `connector_grants`: person, client, redirect host, room set, scope, created, ends, last used, revoked. The room set
   takes the grants' shape: `"*"` or a list of room ids, each listed once (grants.py:20, 43-46).
@@ -461,12 +476,12 @@ these against it, and update this spec where it differs:
   - both protected-resource documents and the authorization-server document, with the exact values above;
   - every connector route answers 404 on any origin but the public one, and none exists without `--public-origin`.
 - **Registration:**
-  - only the configured callback is accepted;
-  - the 8 KB body, the 100-character `client_name`, exactly 1 `redirect_uri`, and `grant_types` bounds;
-  - no client gets a secret;
-  - the per-source limit, and at 100 unused registrations the oldest unused one is evicted (a 101st registration
-    succeeds, and the first is gone);
-  - an unused registration is gone after 24 hours.
+  - only the configured callback is accepted, character for character (an upper-case host is refused);
+  - the 8 KB body in bytes (a body under 8,192 characters but over 8,192 bytes is refused), the 100-character
+    `client_name` with no Cc, Cf or lone surrogate, exactly 1 `redirect_uri`, and `grant_types` bounds;
+  - no client gets a secret, and `/register` writes nothing (the store is unchanged after a thousand registrations);
+  - an id with a changed byte, another home's key, another callback, or an `issued_at` over 30 days old is unknown at
+    `/authorize`; a used client's id is accepted past 30 days.
 - **Authorization:**
   - a bad `client_id` or `redirect_uri` shows an error page and never redirects;
   - redirect tricks are refused: `http://localhost.evil.example/callback`, `http://127.0.0.1@evil.example/`, a
@@ -592,3 +607,8 @@ and the person revokes the connection when they're done.
   Funnel.
 - D17 (should fix 11): Streamable HTTP is built by hand as stateless JSON-RPC over POST, adding no dependencies,
   because it's small and the SDK's auth API is a release candidate.
+- D18 (Task 4's section 2, MF1 and S1): client ids are stateless HMACs over their registration, and a row exists only
+  once a code is issued. A limit counted over stored registrations was refunded by its own eviction (11 senders made
+  1,100 registrations against a limit of 110), and Claude's servers register from one shared egress range, so a
+  per-source limit could lock the owner out. Stateless ids remove the table to fill, the eviction, the sweep and the
+  public write, at the cost of an unused id that can't be revoked, which grants nothing and lapses in 30 days.
