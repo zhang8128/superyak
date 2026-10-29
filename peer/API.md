@@ -365,6 +365,25 @@ The `admitted` receipt's detail is `{checks, report_sha256, skipped, roads_and_t
 scope's lanes. A use's own evaluation runs one lane with no `--as-of`, so N, the count admission made, can exceed what
 one evaluation derives (YN1). `sessions_too_large` is the number of sessions left out of that count for their size.
 
+## Remote connector
+
+A person's home, read from Claude (spec `docs/superpowers/specs/2026-10-27-remote-connector-design.md`, plan
+`docs/superpowers/plans/2026-10-28-remote-connector.md`). These routes exist only when the station runs with
+`serve --public-origin URL`, which must be one of the `--origin` values: one lowercase https origin with no path.
+`--connector-callback URL` names the one redirect accepted, claude.ai's by default. On any other origin each route
+answers 404. Each is reachable by a public request with no session and checks what it needs itself; none sends CORS
+headers. `POST /register`, `/token` and `/mcp` skip the same-origin write check, since Claude's servers send no home
+Origin; the consent page's posts keep it.
+
+- `GET /.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp` (RFC 9728):
+  `{resource, authorization_servers: [issuer], bearer_methods_supported: ["header"], scopes_supported: ["rooms.read"]}`.
+  The issuer is the public origin, and the resource is the public origin + `/mcp`.
+- `GET /.well-known/oauth-authorization-server` (RFC 8414): the issuer, its authorization, token and registration
+  endpoints, `code` responses, the `authorization_code` and `refresh_token` grants, `none` client authentication,
+  `S256` only, the scopes `rooms.read` and `offline_access`, and `authorization_response_iss_parameter_supported`.
+- `POST /register`, `GET /authorize`, `POST /authorize/request`, `/authorize/signin`, `/authorize/decision`,
+  `POST /token`, and `GET`, `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
+
 ## Grants
 
 A grant lets a person direct some of their own ships in some rooms, for some hours, with a daily budget of builds
