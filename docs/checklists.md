@@ -536,6 +536,9 @@ it, not only as its diff reads.
 - [ ] A test never counts or checks state after a fixed sleep: it waits for the condition under a generous deadline,
       so a loaded runner is slow, not red (Serenity, 2026-10-28: a sudo keeper test counted calls in a fixed 0.3 s and
       got 2 of 3 on macOS CI; her sweep of all 21 test sleeps found one more).
+- [ ] A file:line cited in a plan or review, including one copied from a spec, is checked against the current code
+      before it is relied on: a copied citation is a claim, not a fact (Serenity, 2026-10-28: the connector plan
+      carried a spec's stale pointers, and one instruction read against the real code would have turned logs on).
 - [ ] Before a mutant result is trusted, it is shown that the mutant changed the file (`cmp` against the kept copy)
       and that the test written for it ran; a mutant counts as caught only when its own test fails (Serenity and
       Tardis, 2026-10-28: a `sed` that didn't apply and a `-k` that selected nothing each made a false survivor).
