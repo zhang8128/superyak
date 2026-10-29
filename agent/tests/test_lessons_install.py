@@ -27,9 +27,26 @@ def entries(settings, event):
 
 
 def lessons_commands(settings):
+    """The lessons hook's commands, found as dock and undock find them (install.is_lessons_hook), not by a substring a
+    checkout path can hold (fix:lessons-install-test-helper-matches-by-word)."""
     data = json.loads(Path(settings).read_text())
     return [h['command'] for event in data.get('hooks', {}).values() for entry in event for h in entry['hooks']
-            if 'lessons-hook' in h['command']]
+            if install.is_lessons_hook(h['command'])]
+
+
+def test_a_checkout_path_holding_lessons_hook_counts_only_the_lessons_hooks(monkeypatch, tmp_path):
+    """Rio Grande's run from `.worktrees/lessons-hook-pi`: every station hook's command holds the checkout's path, so
+    a substring count took the room hooks for lessons hooks (7 where 3 are)."""
+    checkout = tmp_path / 'lessons-hook-pi' / 'agent'
+    checkout.mkdir(parents=True)
+    monkeypatch.setattr(install, 'RUN_AGENT', checkout / 'run_agent.py')
+    machine = Machine(monkeypatch, tmp_path)
+    machine.install(adna=False, hook=True, lessons=lessons_settings(tmp_path / 'mine'))
+    settings = machine.home / '.claude' / 'settings.json'
+    commands = [h['command'] for event in json.loads(settings.read_text())['hooks'].values() for entry in event
+                for h in entry['hooks']]
+    assert sum('lessons-hook' in c for c in commands) > 3  # the room hooks hold the path too
+    assert len(lessons_commands(settings)) == 3
 
 
 def test_dock_installs_no_lessons_hook_unless_asked(monkeypatch, tmp_path):
