@@ -357,4 +357,5 @@ more with a new nonce; 409 "Replay" takes a new nonce at once; 400 is logged as 
 acks kept; 403 is logged with its words and shown in `connections`; 404 means no pull
 route yet, so it waits 5 minutes; a 5xx, a network failure or a pin mismatch goes into
 the per-peer backoff. It pulls each listener every 60 s, at once at start, after a
-recovery, after "Check delivery now", and after a sleep overrun.
+recovery and after a sleep overrun. ("Check delivery now" makes every pull due too, but only
+`serve` offers it, and a pull peer such as the Mac runs none.)

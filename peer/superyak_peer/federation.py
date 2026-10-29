@@ -520,6 +520,8 @@ class Federation:
             return True
         if status == 404:
             got.update(answer=words, next=PULL_NO_ROUTE)
+        elif status == 409 and error.message in ('Busy', 'Replay'):  # a second one: the next pull, not a bug (RG's N6)
+            got.update(answer=words, next=PULL_AGAIN)
         elif status == 403:
             with self.store.transaction() as db:
                 db.execute('UPDATE peer_delivery SET last_problem=? WHERE peer_id=?', (words and words[:PROBLEM_CAP], peer_id))

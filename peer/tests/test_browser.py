@@ -3548,6 +3548,13 @@ def test_a_pull_peer_reads_fetches_from_us_and_its_rows_wait_for_pull(browser_pe
             page.get_by_role('button', name='Turn on version 2').click()
             page.get_by_role('link', name='Connections', exact=True).click()
             expect(page.locator('.item', has_text='For the Mac → Mo Mac').get_by_text('Share update · Waiting for pull')).to_be_visible()
+            # RG's N5: a pull peer's failed row (a walk's local fault) is still its next pull's: no "Retrying", no Retry.
+            # Rendered directly, since the page shows the same before and after a refresh, so a wait couldn't tell them apart.
+            failed = {'status': 'failed', 'peer_mode': 'pull', 'action': 'layer.release', 'id': 'k', 'resource_id': 'r',
+                      'peer_id': 'p', 'revision': 2, 'attempts': 1, 'resource_title': 'For the Mac', 'contact_name': 'Mo Mac',
+                      'next_attempt': None}
+            html = page.evaluate('row => deliveryCard(row)', failed)
+            assert 'Share update · Waiting for pull' in html and 'retry-delivery' not in html, html
             with store.transaction() as db:  # what a served pull records (federation.py's _serve_pull)
                 db.execute('UPDATE peer_delivery SET last_pull=? WHERE mode=?', (time.time(), 'pull'))
             page.get_by_role('button', name='Check delivery now').click()  # never dials here: no --sync, no pull peer to dial

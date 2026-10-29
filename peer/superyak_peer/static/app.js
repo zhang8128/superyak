@@ -1002,8 +1002,13 @@ function nextAttempt(delivery) {
   return delivery.next_attempt ? `, next attempt ${formatDate(delivery.next_attempt)}` : "";
 }
 
+// A pull peer's row waits for its next pull, failed or not: a failure there is a walk's local fault (Rio Grande's N5)
+function waitsForPull(delivery) {
+  return delivery.peer_mode === "pull" && (delivery.status === "pending" || delivery.status === "failed");
+}
+
 function deliveryState(delivery) {
-  if (delivery.status === "pending" && delivery.peer_mode === "pull") return "Waiting for pull";
+  if (waitsForPull(delivery)) return "Waiting for pull";
   if (delivery.status === "failed") return `Retrying${nextAttempt(delivery)}`;
   if (tooLargeToPull(delivery)) return "Too large to deliver by pull: make the release smaller";
   if (delivery.status === "refused") return `Not delivered${refusedCode(delivery)}`;
@@ -1013,7 +1018,7 @@ function deliveryState(delivery) {
 function deliveryDescription(delivery) {
   const withdrawal = delivery.action.endsWith("withdraw");
   const person = delivery.contact_name || contactName(delivery.contact_id);
-  const unknown = delivery.status === "failed" ? "; remote acknowledgement unknown" : "";
+  const unknown = delivery.status === "failed" && !waitsForPull(delivery) ? "; remote acknowledgement unknown" : "";
   if (delivery.status === "withdrawn") return "Canceled obsolete queued content; this is not a remote acknowledgement";
   if (withdrawal) {
     if (delivery.status === "delivered") return `Remote withdrawal acknowledged by ${person}'s peer. Existing copies may remain.`;
@@ -1021,7 +1026,7 @@ function deliveryDescription(delivery) {
     const waiting = delivery.status === "pending" && delivery.peer_mode !== "pull" ? "" : ` — ${shown[0].toLowerCase()}${shown.slice(1)}${unknown}`;
     return `Access stopped here; waiting for ${person}'s peer to acknowledge withdrawal${waiting}.`;
   }
-  return `${deliveryState(delivery)}${delivery.status === "failed" ? " — remote acknowledgement unknown" : ""}`;
+  return `${deliveryState(delivery)}${delivery.status === "failed" && !waitsForPull(delivery) ? " — remote acknowledgement unknown" : ""}`;
 }
 
 function deliveryOperation(action) {
@@ -1029,7 +1034,7 @@ function deliveryOperation(action) {
 }
 
 function deliveryCard(delivery) {
-  return `<div class="item"><div class="item-main"><strong>${escapeHtml(delivery.resource_title || "Shared item")} → ${escapeHtml(delivery.contact_name || contactName(delivery.contact_id))}</strong><span>${escapeHtml(deliveryOperation(delivery.action))} · ${escapeHtml(deliveryDescription(delivery))}</span><details><summary>Connection details</summary><p class="fingerprint meta">Item ${escapeHtml(delivery.resource_id)}<br>Peer ${escapeHtml(delivery.peer_id)}<br>Revision ${escapeHtml(delivery.revision)} · ${escapeHtml(delivery.attempts)} attempts</p></details></div>${delivery.status === "failed" || (delivery.status === "refused" && !tooLargeToPull(delivery)) ? `<button class="button secondary" data-action="retry-delivery" data-id="${escapeHtml(delivery.id)}">Retry</button>` : ""}</div>`;
+  return `<div class="item"><div class="item-main"><strong>${escapeHtml(delivery.resource_title || "Shared item")} → ${escapeHtml(delivery.contact_name || contactName(delivery.contact_id))}</strong><span>${escapeHtml(deliveryOperation(delivery.action))} · ${escapeHtml(deliveryDescription(delivery))}</span><details><summary>Connection details</summary><p class="fingerprint meta">Item ${escapeHtml(delivery.resource_id)}<br>Peer ${escapeHtml(delivery.peer_id)}<br>Revision ${escapeHtml(delivery.revision)} · ${escapeHtml(delivery.attempts)} attempts</p></details></div>${(delivery.status === "failed" && !waitsForPull(delivery)) || (delivery.status === "refused" && !tooLargeToPull(delivery)) ? `<button class="button secondary" data-action="retry-delivery" data-id="${escapeHtml(delivery.id)}">Retry</button>` : ""}</div>`;
 }
 
 function resourceDelivery(id) {

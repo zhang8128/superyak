@@ -545,7 +545,7 @@ half, 3, 11, 12 and 13:
    - Andy runs `init` on Tardis's peer data directory himself; Tardis has none today.
    - Rio Grande checks that the Pi's lighthouse unit has no `--sync`. Otherwise whichever of it and `federate` starts
      second exits 1 (nit 16).
-   - **Andy runs `card --endpoint https://<tailnet name>:7437`** on each machine (nit 15). Its stderr carries the code
+   - **Andy runs `card --endpoint https://<tailnet name>:7437`** on each machine (nit 15). Its own terminal shows the code
      he will type on the Mac, and a ship never sees a code. Identities are unchanged.
    - `make federation-units FEDERATION_DATA=<dir>` on each machine, then the two units enabled (SF11).
    - `tailscale serve --tcp 7437 tcp://127.0.0.1:7437`, a passthrough, so the pinned certificate is the one served.
@@ -558,6 +558,8 @@ half, 3, 11, 12 and 13:
    - Pairings are kept (§9). Main's `send_pinned` refuses a stored v2 card with 400, so those rows go `failed`. After
      rolling forward, the pull takes `failed` rows.
    - `refused` rows sit untouched under main, whose UI has no label for them (Risks).
+   - Rows whose attempts reached 8 under this code are skipped by main's `attempts < 8` after a rollback; the
+     author's Retry resets their count (Rio Grande's N7).
 
 ## Risks
 

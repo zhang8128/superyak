@@ -423,7 +423,7 @@ def test_a_pin_mismatch_on_a_pull_is_a_peer_failure_that_says_certificate_differ
     assert (delivery(mac, a)['failures'], delivery(mac, a)['last_problem']) == (1, 'certificate differs')
 
 
-def test_busy_is_asked_again_after_5_s_with_a_new_nonce_and_a_second_busy_waits_60_s(pulling):
+def test_busy_is_asked_again_after_5_s_with_a_new_nonce_and_a_second_busy_waits_60_s(pulling, caplog):
     clock, a, peers, contacts = pulling
     mac = peers['mac']
     share(a, contacts['mac'])
@@ -433,6 +433,7 @@ def test_busy_is_asked_again_after_5_s_with_a_new_nonce_and_a_second_busy_waits_
     again = mac[2].pull_once(listener_card(mac, a), send=Wire(a, Problem(409, 'Busy'), Problem(409, 'Busy')),
                              sleep=slept.append)
     assert again['next'] == 60 and slept == [5, 5] and delivery(mac, a)['failures'] == 0
+    assert not [r for r in caplog.records if 'a bug on one side' in r.getMessage()]  # Rio Grande's N6: no bug, the next pull
 
 
 def test_replay_is_asked_again_at_once_once(pulling):
