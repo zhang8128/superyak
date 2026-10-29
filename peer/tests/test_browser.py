@@ -1715,6 +1715,28 @@ def test_docking_link_confirms_ship_lists_and_revokes_it_and_rooms_show_the_ship
             expect(page.get_by_text("Key revoked", exact=True)).to_be_visible()
 
 
+def test_the_ship_banner_says_what_crosses_the_bridge_and_never_counts_wormhole_as_claude(browser_peer):
+    """Break caught: a bridged room's banner names only Claude, or a room whose only ship is Wormhole says Claude reads it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    wormhole = store.create_station_ship("wormhole", "Wormhole")
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    only_bridge = store.create_room(users["patient"]["id"], "Lattice", [wormhole["id"]])
+    both = store.create_room(users["patient"]["id"], "Ops", [ship["id"], wormhole["id"]])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto(f"{base}/#chats/{only_bridge['id']}")
+        page.reload()
+        banner = page.locator(".ship-banner")
+        expect(banner).to_contain_text("Wormhole bridges this room to Stanley's aDNA lattice.")
+        expect(banner).to_contain_text("copied there with its author's name and this room's title, outside this station")
+        expect(banner).not_to_contain_text("Claude")
+        page.goto(f"{base}/#chats/{both['id']}")
+        page.reload()
+        expect(banner).to_contain_text("Ships in this room send its text to Claude.")
+        expect(banner).to_contain_text("Aboard: Serenity.")
+        expect(banner).to_contain_text("Wormhole bridges this room to Stanley's aDNA lattice.")
+
+
 def test_a_room_shows_which_ship_messages_came_from_runs(browser_peer):
     """Break caught: a run's reply and a ship's own post look the same to people."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
