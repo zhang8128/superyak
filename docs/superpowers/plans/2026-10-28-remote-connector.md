@@ -223,7 +223,8 @@ def test_discovery_documents_carry_the_exact_values(home):
                   'bearer_methods_supported': ['header'], 'scopes_supported': ['rooms.read']}
     # the path-less document is equal; the AS document has exactly the spec's nine keys and values
 
-def test_connector_routes_are_404_off_the_public_origin(home): ...  # every route via the tailnet client: 404
+def test_connector_routes_are_404_on_any_other_origin(home): ...  # every route at the 'testserver' origin: 404. A
+    # tailnet client using the public name is served, as on the Pi, where Funnel and the tailnet share one name
 def test_no_connector_route_exists_without_a_public_origin(env): ...  # every path: 404 from the router
 def test_register_token_and_mcp_pass_the_boundary_without_an_origin(home): ...  # not 403 'Same-origin request required'
 def test_the_consent_posts_still_need_the_homes_origin(home): ...  # /authorize/signin without Origin: 403
@@ -514,8 +515,9 @@ def test_another_person_cant_see_or_revoke_my_connection(connected): ...  # 404
 - [ ] The whole peer suite on the Mac; Rio Grande runs the peer suite on the Pi (law section 2).
 - [ ] A fresh reviewer reads the branch; Rio Grande's section 2; every partner's explicit yes (spec, Order of work 5).
 - [ ] Before the push, on the Pi: a backup, the merge, `serve` restarted with `--public-origin https://smart.tail7db420.ts.net`
-  and its usual `--origin` and `--proxy-headers`, then Tardis's off-tailnet probe re-run with the new routes: each
-  connector route answers as specified, and every other route still refuses a public request.
+  and its usual `--origin` and `--proxy-headers`, then Tardis's probe re-run with the new routes from both paths (off
+  the tailnet through Funnel, and on the tailnet by the same name): each connector route answers as specified, every
+  other route still refuses a public request, and a connector route on an off-name origin is 404.
 - [ ] Measure (spec, Andy's goal 4): a person Andy invited, not a ship, adds the home to their own claude.ai account,
   from the Mac and from a phone, chooses rooms, asks about them, sees a marked room stay hidden, reads the receipts and
   revokes. Then ChatGPT with a real account on Andy's plan; write down what worked.

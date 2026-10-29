@@ -93,3 +93,16 @@ Each claim was checked against the code before any change; all held.
 - **S5:** rotation walks forward through `rotated_from`, revoking each successor and the access tokens issued with it.
 - **S6:** `cloud` is set in `_room` (chats.py:14), and `_add_members` sets it again after copying the marks.
 - **Nits:** `_refuse_ship_in_marked` takes `new_ids`; earlier rooms reuse `_earlier_with`; 10 an hour stands.
+
+## Re-check of b07a265d (the same reviewer)
+
+Every item fixed, each confirmed against the code again: M1 (__main__.py:816 is unconditional; the new wording can't
+be read as "make it conditional"), S2 (the side-path item leads Review Focus, with one test for all three paths), S3 (no
+`grants.py:155` or `app.js:877` left; `_rooms_back` is at grants.py:199, `roomDetail` at app.js:931 with its
+`room-management` div at 937), S4 (the time-bearing key and the separate window check work around `_post_as_system`'s
+permanent key), S5 (the walk is explicit), S6 (`cloud` in `_room`, and again after the copy), and all three nits.
+Nothing broken elsewhere. **Verdict: APPROVE.**
+
+Afterwards, two wording changes from Tardis's advisory boundary read (all hands): Task 3's test is
+`test_connector_routes_are_404_on_any_other_origin`, since a tailnet client on the public name is served (Funnel and
+the tailnet share one name on the Pi), and the deploy probe runs from both paths plus an off-name 404.
