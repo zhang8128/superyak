@@ -932,7 +932,7 @@ function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members (409)
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
@@ -1017,7 +1017,7 @@ function dockingDialog() {
 
 function cloudBadge(room) {
   // Never to a cloud model: only a marked room carries `cloud`, its count and whether one of the marks is this person's
-  return room.cloud ? `<span class="badge cloud-badge">Never to a cloud model · ${room.cloud.count}${room.cloud.mine ? " (yours)" : ""}</span>` : "";
+  return room.cloud ? `<span class="badge cloud-badge">Never to a cloud model · ${Number(room.cloud.count) || 0}${room.cloud.mine ? " (yours)" : ""}</span>` : "";  // a number only, whoever sent it
 }
 
 function earlierRoomsWithMe(room) {
@@ -1035,12 +1035,16 @@ function earlierRoomsWithMe(room) {
   return found;
 }
 
-function cloudControl(room) {
-  if (room.origin) return "";
-  if (room.cloud?.mine) return `<div class="cloud-control"><p class="meta">You keep this room away from cloud models. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p><button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+function cloudControl(room, replaced) {
+  if (room.origin) return "";  // a received room's mark is its home's to keep
+  // This home can't tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
+  const elsewhere = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
+    ? `<p class="meta">This mark holds on this home. Members' homes get it once federation carries it.</p>` : "";
+  if (room.cloud?.mine) return `<div class="cloud-control"><p class="meta">You keep this room away from cloud models. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+  if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
   const earlier = earlierRoomsWithMe(room).length;
   const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
-  return `<div class="cloud-control"><p class="meta">Keep this room's text away from Claude and other cloud models. Ships can't be in a marked room, and each member's mark is their own.</p>${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from cloud models</button></div>`;
+  return `<div class="cloud-control"><p class="meta">Keep this room's text away from Claude and other cloud models. Ships can't be in a marked room, and each member's mark is their own.</p>${elsewhere}${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from cloud models</button></div>`;
 }
 
 async function markRoom(room, earlier) {

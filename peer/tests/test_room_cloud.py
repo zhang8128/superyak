@@ -217,6 +217,8 @@ def test_the_quiet_day_is_per_room(city):
     refused(c.store.mark_room, c.jenn['id'], c.room)
     refused(c.store.mark_room, c.jenn['id'], other)
     assert len(notices(c.store, c.room, 'cloud-ask-')) == 1 and len(notices(c.store, other, 'cloud-ask-')) == 1
+
+
 def test_the_cloud_routes_mark_and_clear(city):
     c = city
     room = people_room(c, 'jenn', 'doctor')
@@ -244,5 +246,14 @@ def test_a_ship_key_cant_mark_or_clear(city):
     c = city
     ship = TestClient(c.app, base_url='http://testserver')
     ship.headers.update({'origin': 'http://testserver', 'authorization': f'Bearer {c.rio_key}'})
-    assert ship.post(f'/api/chats/{c.room}/cloud', json={}).status_code == 403
-    assert ship.delete(f'/api/chats/{c.room}/cloud').status_code == 403
+    for response in (ship.post(f'/api/chats/{c.room}/cloud', json={}), ship.delete(f'/api/chats/{c.room}/cloud')):
+        assert (response.status_code, response.json()) == (403, {'error': 'Ship keys cannot use this route'})
+
+
+def test_the_route_marks_the_earlier_rooms_by_default(city):
+    """Rio Grande's section 2 of room-cloud-ui, S1: an empty body marks the room and the earlier rooms the person is in."""
+    c = city
+    first = people_room(c, 'jenn')
+    second = c.store.add_participants(c.andy['id'], first, [c.doctor['id']])['id']
+    marked = login(c.app, 'jenn').post(f'/api/chats/{second}/cloud', json={})
+    assert marked.status_code == 200 and set(marked.json()['marked']) == {first, second}
