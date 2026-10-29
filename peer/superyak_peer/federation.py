@@ -22,6 +22,9 @@ class _NoIdentity:
 NO_IDENTITY = _NoIdentity()
 TRUST_KEYS = ('signing_key', 'certificate', 'fingerprint', 'endpoint')  # a known peer's, never replaced
 HELD = 'SELECT 1 FROM contact_holds WHERE contact_id=remote_contacts.id'  # a contact waiting for its own code (SF3)
+# A paired home makes a card's participant one of its remote contacts and can't tell a ship from a person, so a card
+# names an active person only (fix:card-refuses-ship-accounts).
+CARD_FOR_PEOPLE = 'A card names a person: a paired home takes its participant for one, so a ship never has a card'
 
 class Federation:
     def __init__(self, store, *, endpoint, identity=None):
@@ -31,8 +34,10 @@ class Federation:
 
     def card(self, actor):
         with self.store.transaction() as db:
-            user = require(db.execute('SELECT id,name FROM users WHERE id=?', (actor,)).fetchone())
-            return self.identity.card(self.endpoint, dict(user))
+            user = require(db.execute('SELECT id,name,kind,activation_pending FROM users WHERE id=?', (actor,)).fetchone())
+            if user['kind'] != 'person' or user['activation_pending']:
+                raise Problem(403, CARD_FOR_PEOPLE)  # every caller: the card command and the browser's route
+            return self.identity.card(self.endpoint, {'id': user['id'], 'name': user['name']})
 
     def pair(self, actor, card, *, code):
         """fix:pairing-code (federation-pull spec §2): an admin pairs a card only with the other side's code, typed off

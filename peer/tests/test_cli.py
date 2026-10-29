@@ -138,6 +138,26 @@ def test_demo_refuses_incomplete_or_mismatched_identity_without_repair(tmp_path,
     assert (database.read_bytes() if database.exists() else None) == before_database
 
 
+def test_a_card_names_a_person_never_a_ship(tmp_path, capsys):
+    """fix:card-refuses-ship-accounts: a paired home makes a card's participant one of its remote contacts and can't tell
+    a ship from a person, so a card only ever names an active person. `card --username` refuses a ship's account, with
+    nothing on stdout, and Federation.card refuses one for every caller (the browser's route already takes people only)."""
+    from superyak_peer.__main__ import main
+    from superyak_peer.common import Problem
+    from superyak_peer.db import Store
+    from superyak_peer.federation import CARD_FOR_PEOPLE, Federation
+    store = Store(tmp_path / 'state')
+    store.create_user('owner', 'Owner', 'long-password', is_admin=True)
+    odo = store.create_station_ship('odo', 'Odo')
+    with pytest.raises(SystemExit) as stopped:
+        main(['card', '--data-dir', str(store.data_dir), '--username', 'odo', '--endpoint', 'https://localhost:7435'])
+    out, err = capsys.readouterr()
+    assert (stopped.value.code, out, err) == (1, '', CARD_FOR_PEOPLE + '\n')
+    with pytest.raises(Problem) as refused:
+        Federation(store, endpoint='https://localhost:7435').card(odo['id'])
+    assert (refused.value.status, refused.value.message) == (403, CARD_FOR_PEOPLE)
+
+
 def test_card_cli_and_peer_tls_options(tmp_path, capsys):
     from superyak_peer.__main__ import main
     from superyak_peer.db import Store
