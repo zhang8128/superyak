@@ -78,6 +78,7 @@ class Federation:
         self.pull_walk_seconds = PULL_SECONDS  # a test may shorten it (plan Task 6)
         self._between_rows = lambda key: None  # a test hook between the walk's rows (plan Task 6, 8a and 8b)
         self._pull_owed = {}  # the puller's acks and refusals per listener, until a pull carries them (spec §6)
+        self._started = store.clock()  # the replay floor's fallback for a damaged restore mark (_replay_floor)
 
     def card(self, actor):
         """A v1 card with this peer's endpoint, or a v2 card with none once its mode is pull (federation-pull spec §2)."""
@@ -374,21 +375,31 @@ class Federation:
     @staticmethod
     def _restored_at(db):
         """When the restore reconcile last ran on this store, from the mark it leaves in system_meta (backups.py
-        `_write_mark`, kept after install), or -inf. A copy's nonces end where it was taken, so a request signed before
-        the restore may be one this listener already answered: it counts as a replay (fix:restore-keeps-pull-nonces),
-        whatever the copy's age. A damaged mark is no floor."""
+        `_write_mark`, kept after install): -inf if it never ran, None if the mark is damaged."""
         row = db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()
-        try:
-            return float(json.loads(row[0])['at']) if row else float('-inf')
-        except (TypeError, ValueError, KeyError):
+        if row is None:
             return float('-inf')
+        try:
+            return float(json.loads(row[0])['at'])
+        except (TypeError, ValueError, KeyError):
+            return None
+
+    def _replay_floor(self, db):
+        """The `at` at or below which a pull request counts as a replay (fix:restore-keeps-pull-nonces). A copy's nonces
+        end where it was taken, and the runbook stops the listener before the reconcile, so a nonce lost to a restore
+        was used before the mark, by a request whose `at` passed the clock then: at most the mark plus 300 s. So the
+        floor is the mark plus 300 s, whatever the copy's age or a peer's clock, and pulls wait out those 5 minutes
+        once after a restore. A damaged mark falls back to this listener's own start, which follows every restore
+        (runbook step 8): closed for 300 s, and no longer."""
+        restored = self._restored_at(db)
+        return (self._started if restored is None else restored) + 300
 
     def serve_pull(self, raw):
         """POST /federation/pull (spec §4), on federation-listen only. Checks, in order: the shape (400); the destination
         (403, before any nonce is stored, so one listener can't replay a puller's request at another); a paired pull
         peer as origin (403); its signature (403); `at` within 300 s (403); a fresh nonce, committed before the busy
-        check, and an `at` after the last restore (409 "Replay"); one pull per origin at a time (409 "Busy"). Only a
-        verified request can be busy."""
+        check, and an `at` past the last restore's floor (409 "Replay"); one pull per origin at a time (409 "Busy").
+        Only a verified request can be busy."""
         value = parse(raw)
         if not pull_shape_ok(value):
             raise Problem(400, 'Invalid pull request')
@@ -409,7 +420,7 @@ class Federation:
         with self.store.transaction() as db:
             # pruned by the request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock
             db.execute('DELETE FROM pull_nonces WHERE at<?', (now - 600,))
-            replay = (value['at'] <= self._restored_at(db)
+            replay = (value['at'] <= self._replay_floor(db)
                       or db.execute('SELECT 1 FROM pull_nonces WHERE origin=? AND nonce=?',
                                     (origin, value['nonce'])).fetchone())
             if not replay:

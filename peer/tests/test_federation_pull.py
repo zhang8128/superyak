@@ -190,19 +190,38 @@ def test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock(pulling):
     refused(lambda: a[2].serve_pull(canonical(early)), 409, 'Replay')
 
 
-def test_a_request_signed_before_a_restore_is_a_replay(pulling):
-    """fix:restore-keeps-pull-nonces: a restored copy's nonces end where it was taken, so a request signed at or before
-    the reconcile counts as a replay even though its nonce isn't there; one signed after it is served. The puller asks
-    again at once on a Replay, with a fresh `at`. Mutation: no floor, or `<` for `<=`."""
+def mark_restored(a, value):
+    """The mark the restore reconcile leaves in system_meta (backups.py _write_mark)."""
+    with a[0].transaction() as db:
+        db.execute("INSERT OR REPLACE INTO system_meta VALUES('restore_reconcile', ?)", (value,))
+
+
+def test_a_request_signed_before_a_restore_is_a_replay_even_from_a_fast_clock(pulling):
+    """fix:restore-keeps-pull-nonces: a restored copy's nonces end where it was taken, and a request used before the
+    restore had an `at` of at most the mark plus 300 s (Rio Grande's reader: a peer whose clock runs ahead). So up to
+    there it counts as a replay even though its nonce isn't there; past it, a request is served. The puller asks again
+    on a Replay, so pulls wait out those 5 minutes once. Mutations: no floor, the mark alone, `<` for `<=`."""
     clock, a, peers, contacts = pulling
     signed = request(peers['mac'], a, clock)  # within the 300 s, its nonce unseen
-    with a[0].transaction() as db:  # the mark the restore reconcile leaves (backups.py _write_mark)
-        db.execute("INSERT OR REPLACE INTO system_meta VALUES('restore_reconcile', ?)",
-                   (json.dumps({'at': float(int(clock())), 'replaced': True, 'path': '/x'}),))
+    restored = int(clock())
+    mark_restored(a, json.dumps({'at': float(restored), 'replaced': True, 'path': '/x'}))
     refused(lambda: a[2].serve_pull(canonical(signed)), 409, 'Replay')
-    refused(lambda: pull(peers['mac'], a, clock, at=int(clock()) - 100), 409, 'Replay')
+    refused(lambda: pull(peers['mac'], a, clock, at=restored - 100), 409, 'Replay')
+    refused(lambda: pull(peers['mac'], a, clock, at=restored + 300), 409, 'Replay')  # a peer 300 s ahead
     clock.at += 1
-    assert pull(peers['mac'], a, clock)['more'] is False
+    assert pull(peers['mac'], a, clock, at=restored + 301)['more'] is False
+
+
+def test_a_damaged_restore_mark_holds_pulls_for_300_s_from_the_listeners_start(pulling):
+    """A damaged mark can't say when the restore was, and the listener restarts after every restore (runbook step 8),
+    so the floor falls back to its start plus 300 s: closed for 5 minutes, and no longer. Mutation: a damaged mark as
+    no floor."""
+    clock, a, peers, contacts = pulling
+    started = a[2]._started
+    mark_restored(a, 'not json')
+    refused(lambda: pull(peers['mac'], a, clock, at=int(started) + 300), 409, 'Replay')
+    clock.at = started + 301
+    assert pull(peers['mac'], a, clock, at=int(started) + 301)['more'] is False
 
 
 # Federation pull, plan Task 6: the per-envelope boundary (spec §4, M3; tests 8a and 8b) and the walk's bounds (§4, SF8,
