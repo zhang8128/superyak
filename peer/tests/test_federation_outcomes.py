@@ -298,3 +298,50 @@ def fed_contact(peer, a):
     """The contact id `peer` holds for Alice."""
     with peer[0].transaction() as db:
         return db.execute('SELECT id FROM remote_contacts WHERE peer_id=?', (a[2].identity.peer_id,)).fetchone()[0]
+
+
+# Plan Task 9: the two Ops notices (spec §8, nit 22). Each id names its episode, so Odo, which announces an id once,
+# announces a peer again after it recovers and goes quiet or fails again.
+
+DAY = 86400
+
+
+def notices(a, kind):
+    return [n for n in a[0].station_notices() if n['id'].startswith(kind)]
+
+
+def test_ops_notices_a_push_peer_failing_for_a_day_but_not_a_first_failure_after_a_quiet_day(world):
+    """failing_since starts when failures goes from 0 to 1, so the notice means a day of failing, not a day since the
+    last success: a peer quiet for two days that fails once is not announced (nit 22)."""
+    clock, a, peers, contacts = world
+    share(a, contacts['live'])
+    a[2].sync_once(send=receiver(peers))
+    clock.at += 2 * DAY
+    share(a, contacts['live'], 'after a quiet day')
+    a[2].sync_once(send=answering(peers, OSError('connection refused')))
+    assert delivery(a, peer_of(peers, 'live'))['failing_since'] == clock() and notices(a, 'push-failing-') == []
+    clock.at += DAY
+    assert notices(a, 'push-failing-') == []
+    clock.at += 1
+    [notice] = notices(a, 'push-failing-')
+    assert notice['text'].startswith('Delivery to Lena has failed for a day.') and '@' not in notice['text']
+    assert all('Lena' not in n['text'] for n in notices(a, 'pull-quiet-'))  # Mo, the pull peer, is quiet too by now
+    assert a[2].sync_once(send=receiver(peers))['delivered'] == 1  # its retry is long due: it delivers, and recovers
+    assert notices(a, 'push-failing-') == []
+
+
+def test_ops_notices_a_pull_peer_quiet_for_a_day_from_its_last_pull_or_else_its_pairing(world):
+    from test_federation_pull import pull
+    clock, a, peers, contacts = world
+    assert notices(a, 'pull-quiet-') == []              # paired just now, never pulled
+    clock.at += DAY
+    assert notices(a, 'pull-quiet-') == []
+    clock.at += 1
+    [first] = notices(a, 'pull-quiet-')                 # a day since the pairing's confirmation
+    assert first['text'].startswith("Mo hasn't fetched from this station for a day.") and '@' not in first['text']
+    pull(peers['mac'], a, clock)
+    assert notices(a, 'pull-quiet-') == []
+    clock.at += DAY + 1
+    [second] = notices(a, 'pull-quiet-')                # a day since its last pull: a new episode, a new id
+    assert second['id'] != first['id']
+    assert notices(a, 'push-failing-') == []
