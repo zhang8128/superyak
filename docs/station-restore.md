@@ -53,15 +53,16 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    running, crashed or stopped, in `$ASIDE/watchers.txt` (empty when there are none), each with whether it was enabled
    and whether it was running; step 8 puts each back as it was, so a watcher you had stopped stays stopped. Running these
    lines again, after a restart or from steps 6 and 10, keeps the list from the first run. The ship, odo, wormhole, the
-   listed watchers and both timers are disabled as well as stopped, so a restart starts none of them before step 8
-   does. The lighthouse and the door stay enabled: step 8 starts them first anyway.
+   listed watchers, federate, the federation listener and both timers are disabled as well as stopped, so a restart
+   starts none of them before step 8 does: federate and the listener would write into a half-restored database. The
+   lighthouse and the door stay enabled: step 8 starts them first anyway.
    ```bash
    if [ ! -d "$ASIDE" ]; then echo 'NOT stopped: ASIDE is not set; set it again (see the top), then run these lines again'
    else
      test -e "$ASIDE/watchers.txt" || { units=$(systemctl --user list-units --all --plain --no-legend 'superyak-ship-*') && for unit in $(printf '%s\n' "$units" | awk '{print $1}'); do echo "$unit enabled=$(systemctl --user is-enabled "$unit") active=$(systemctl --user is-active "$unit")"; done > "$ASIDE/watchers.new" && mv "$ASIDE/watchers.new" "$ASIDE/watchers.txt"; }; cat "$ASIDE/watchers.txt"
      systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer   # a restart must not run a catch-up backup on a half-restored station
-     for unit in superyak-ship superyak-odo superyak-wormhole $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user disable --now "$unit"; done
-     systemctl --user stop superyak-backup.service superyak-door superyak-odo superyak-wormhole superyak-ship superyak-lighthouse
+     for unit in superyak-ship superyak-odo superyak-wormhole superyak-federate superyak-federation-listen $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user disable --now "$unit"; done
+     systemctl --user stop superyak-backup.service superyak-door superyak-odo superyak-wormhole superyak-ship superyak-federate superyak-federation-listen superyak-lighthouse
      systemctl --user list-units 'superyak-*'
    fi
    ```
@@ -188,16 +189,18 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    enable and start ship and odo, run `make station-rooms` and check the `bridged` column before enabling and starting
    wormhole: if a room shows bridged that should not be, run `make station-unbridge ID=<short id>`. Put the watchers
    step 3 saved back as they were: enable again those that were enabled, and start again those that were running (a
-   crashed one restarting counts as running). Check each started unit with `is-active`, then enable both timers again.
+   crashed one restarting counts as running). Enable and start federate and the federation listener, after the
+   lighthouse. Check each started unit with `is-active`, then enable both timers again.
    ```bash
    systemctl --user start superyak-lighthouse superyak-door
    # now the law layers, in the browser
+   systemctl --user enable --now superyak-federate superyak-federation-listen
    for unit in superyak-ship superyak-odo; do systemctl --user enable --now "$unit"; done
    make station-rooms                                   # check the bridged column first
    systemctl --user enable --now superyak-wormhole
    for unit in $(awk '$2 == "enabled=enabled" {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done   # the watchers step 3 saved as enabled
    for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done   # and those it saved as running
-   for unit in superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do printf '%s ' "$unit"; systemctl --user is-active "$unit"; done
+   for unit in superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole superyak-federate superyak-federation-listen $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do printf '%s ' "$unit"; systemctl --user is-active "$unit"; done
    systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer   # as make station-units does
    ```
 9. **Say in the room** what was restored and from when. Everything said after the copy's time is gone.
