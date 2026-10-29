@@ -282,9 +282,12 @@ in_the_repo = pytest.mark.skipif(not (REPO / '.git').exists(), reason='the repo 
 def test_every_list_in_the_repo_parses(path):
     """A list the ships see at their acts must load, or its hold never fires (checklists-oct29's re-read: a split item
     made merging-to-main 13 items and one 213 bytes, and every test here still passed)."""
-    assert cl.parse(path.name, path.read_bytes(), True).id == path.stem  # a read list (why-we-build) has no items
+    # own=False, as find() loads a repo's lists; a read list (why-we-build) has no items, so check its id
+    assert cl.parse(path.name, path.read_bytes(), False).id == path.stem
 
 
 @in_the_repo
-def test_the_repo_lists_are_found():
-    assert len(list(REPO_LISTS.glob('*.md'))) >= 9
+def test_the_repo_lists_are_the_nine():
+    assert sorted(path.name for path in REPO_LISTS.glob('*.md')) == [
+        'before-push.md', 'before-work.md', 'each-hour.md', 'imprint-act.md', 'live-station-act.md',
+        'merging-to-main.md', 'reflect.md', 'session-start.md', 'why-we-build.md']
