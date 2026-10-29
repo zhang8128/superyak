@@ -2,7 +2,7 @@
 from fastapi import Request
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
-from .app import actor, body
+from .app import actor, body, caller, current_user
 from .common import Problem, text
 from .interchange import Interchange
 from .data_sources import DataSources
@@ -19,8 +19,8 @@ def install(app):
 
     @app.post('/api/data-sources', status_code=201)
     async def data_source_create(request: Request):
-        who, data = actor(request), await body(request)
-        return manager.create(who, data)
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(manager.create, who, data)
 
     @app.get('/api/data-sources/{key}')
     def data_source_get(key: str, request: Request):
@@ -28,8 +28,8 @@ def install(app):
 
     @app.patch('/api/data-sources/{key}')
     async def data_source_update(key: str, request: Request):
-        who, data = actor(request), await body(request)
-        return manager.update(who, key, data)
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(manager.update, who, key, data)
 
     @app.get('/api/data-sources/{key}/items')
     def data_source_items(key: str, request: Request, limit: int = 50, offset: int = 0):
@@ -41,7 +41,7 @@ def install(app):
 
     @app.post('/api/data-sources/{key}/imports', status_code=201)
     async def data_source_import(key: str, request: Request):
-        who, data = actor(request), await body(request)
+        who, data = await caller(current_user, request), await body(request)
         return await run_in_threadpool(manager.import_items, who, key, data)
 
     @app.get('/api/assistant')
@@ -51,13 +51,13 @@ def install(app):
 
     @app.post('/api/assistant')
     async def assist(request: Request):
-        who, data = actor(request), await body(request)
+        who, data = await caller(current_user, request), await body(request)
         if set(data) - {'text', 'layer_id', 'version'}:
             raise Problem(400, 'Unknown assistant field')
         draft = None
         if data.get('layer_id') is not None:
             text(data['layer_id'], 'layer ID', 100)
-            draft = store.get_layer(who, data['layer_id'])
+            draft = await run_in_threadpool(store.get_layer, who, data['layer_id'])
             if type(data.get('version')) is not int or data['version'] != draft['version']:
                 raise Problem(409, 'Selected saved draft changed; review its version again')
         elif 'version' in data:
@@ -71,12 +71,12 @@ def install(app):
 
     @app.post('/api/interchange/export')
     async def source_export(request: Request):
-        who, data = actor(request), await body(request)
-        return sources.export(who, data)
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(sources.export, who, data)
 
     @app.post('/api/interchange/import', status_code=201)
     async def source_import(request: Request):
-        who, data = actor(request), await body(request)
+        who, data = await caller(current_user, request), await body(request)
         return await run_in_threadpool(manager.import_default, who, data)
 
     @app.get('/api/interchange/adna/{key}')

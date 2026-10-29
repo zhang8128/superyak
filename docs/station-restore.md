@@ -49,16 +49,18 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    good: go back to step 1 and choose the next older one. Step 1 then makes a new directory, which is fine, since nothing
    has been moved yet; the old one keeps only the failed `chosen.sqlite3`, and setting `ASIDE` again finds the new one.
 3. **Stop everything.** The lines do nothing, and print why, when `ASIDE` is not set: set it again (see the top) and
-   run them again. Their first line saves every project ship's watcher (`superyak-ship-…`) that systemd has loaded,
-   running, crashed or stopped, in `$ASIDE/watchers.txt` (empty when there are none), each with whether it was enabled
-   and whether it was running; step 8 puts each back as it was, so a watcher you had stopped stays stopped. Running these
-   lines again, after a restart or from steps 6 and 10, keeps the list from the first run. The ship, odo, wormhole, the
-   listed watchers and both timers are disabled as well as stopped, so a restart starts none of them before step 8
-   does. The lighthouse and the door stay enabled: step 8 starts them first anyway.
+   run them again. Their first line saves every project ship's watcher (`superyak-ship-…`) and every federation unit
+   (`superyak-federate`, `superyak-federation-listen`) that systemd has loaded, running, crashed or stopped, in
+   `$ASIDE/watchers.txt` (empty when there are none), each with whether it was enabled and whether it was running; step 8
+   puts each back as it was, so a unit you had stopped stays stopped, and one that isn't installed is never named.
+   Running these lines again, after a restart or from steps 6 and 10, keeps the list from the first run. The ship, odo,
+   wormhole, the listed units and both timers are disabled as well as stopped, so a restart starts none of them before
+   step 8 does: federate and the listener would write into a half-restored database. The lighthouse and the door stay
+   enabled: step 8 starts them first anyway.
    ```bash
    if [ ! -d "$ASIDE" ]; then echo 'NOT stopped: ASIDE is not set; set it again (see the top), then run these lines again'
    else
-     test -e "$ASIDE/watchers.txt" || { units=$(systemctl --user list-units --all --plain --no-legend 'superyak-ship-*') && for unit in $(printf '%s\n' "$units" | awk '{print $1}'); do echo "$unit enabled=$(systemctl --user is-enabled "$unit") active=$(systemctl --user is-active "$unit")"; done > "$ASIDE/watchers.new" && mv "$ASIDE/watchers.new" "$ASIDE/watchers.txt"; }; cat "$ASIDE/watchers.txt"
+     test -e "$ASIDE/watchers.txt" || { units=$(systemctl --user list-units --all --plain --no-legend 'superyak-ship-*' 'superyak-federat*') && for unit in $(printf '%s\n' "$units" | awk '{print $1}'); do echo "$unit enabled=$(systemctl --user is-enabled "$unit") active=$(systemctl --user is-active "$unit")"; done > "$ASIDE/watchers.new" && mv "$ASIDE/watchers.new" "$ASIDE/watchers.txt"; }; cat "$ASIDE/watchers.txt"
      systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer   # a restart must not run a catch-up backup on a half-restored station
      for unit in superyak-ship superyak-odo superyak-wormhole $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user disable --now "$unit"; done
      systemctl --user stop superyak-backup.service superyak-door superyak-odo superyak-wormhole superyak-ship superyak-lighthouse
@@ -113,6 +115,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    A peer you cut off and then paired again one participant at a time keeps its other participants held: with a usable
    replaced file the reconcile holds them in the copy too, and its report line "Held again" lists them, each until its
    own code is typed again. Nothing more is needed for them.
+   **Marks that keep a room away from cloud models.** With a usable replaced file, every mark it holds is kept in the copy,
+   one cleared since the copy included (failing closed), and the report counts them as "cloud marks kept". Without one,
+   marks set since the copy are gone, and the report says so: see step 7.
    Without a usable replaced file nothing is unpaired and nothing is held. That includes a peer you cut off and partly
    paired again since the copy: name it in `UNPAIR=` too, then pair again the participants you meant to keep, each with
    its own code. List the peers paired in the staged copy (read-only; the
@@ -174,7 +179,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
 7. **Act on the report.** Change again any password it lists that was changed for a reason. Read each room brief it lists
    ("room briefs that differ"; the report never shows brief text) in the browser, and save again the one you want. Issue again any invitation
    still wanted. Tell the owners of ships whose keys were revoked to dock again. Ask the issuers of the grants the report lists as missing from the replaced file, or revoked with no usable replaced file, to make again any still wanted; a grant made after the copy is gone too. Requests and dockings since the copy
-   were expired; their senders ask again, and nothing is approved from memory. The peers the report says it
+   were expired; their senders ask again, and nothing is approved from memory. If the report says marks set since the
+   copy were not kept, ask the members of the rooms that matter to check their "never to a cloud model" marks in the
+   browser before any ship is added to those rooms. The peers the report says it
    unpaired need nothing more; pair again, in the browser after the start, only a peer you want that the report lists as
    paired in the replaced file but not here. If your own account comes back waiting for
    activation, renew it (the file must not exist yet; the command writes it mode 0600, and the link is never put in a
@@ -186,9 +193,10 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
 8. **Start the lighthouse and the door.** Set the law layers the report listed as they should be, in the browser, and
    check by hand the members, admins and law layers step 5 said weren't compared (not peers: those were done in step 5). Then
    enable and start ship and odo, run `make station-rooms` and check the `bridged` column before enabling and starting
-   wormhole: if a room shows bridged that should not be, run `make station-unbridge ID=<short id>`. Put the watchers
-   step 3 saved back as they were: enable again those that were enabled, and start again those that were running (a
-   crashed one restarting counts as running). Check each started unit with `is-active`, then enable both timers again.
+   wormhole: if a room shows bridged that should not be, run `make station-unbridge ID=<short id>`. Put the units
+   step 3 saved, the watchers and the federation units, back as they were, after the lighthouse: enable again those that
+   were enabled, and start again those that were running (a crashed one restarting counts as running). Check each
+   started unit with `is-active`, then enable both timers again.
    ```bash
    systemctl --user start superyak-lighthouse superyak-door
    # now the law layers, in the browser

@@ -457,4 +457,22 @@ class Ships:
                             WHERE dockings.status IN ('confirmed','collected') ORDER BY dockings.created""")]
             notices += [{'id': f'imprint-{r["id"]}', 'text': "An imprint is waiting for Andy's review. He decides with make station-pending on the Pi."}
                         for r in db.execute("SELECT id FROM imprint_requests WHERE status='received' ORDER BY created, rowid")]
+            # federation pull spec §8 (plan nit 22): a paired pull peer that hasn't fetched from us for a day, counted from
+            # its last pull or else its pairing's confirmation, and a push peer failing for a day (failing_since starts
+            # at its first failure). Each id names its episode, so Odo announces the peer again after a recovery.
+            day_ago = now - 86400
+            for r in db.execute("""SELECT peer_delivery.peer_id, mode, failing_since,
+                    COALESCE(last_pull, (SELECT MAX(confirmed) FROM pairing_confirmations JOIN remote_contacts AS c
+                        ON c.id=pairing_confirmations.contact_id WHERE c.peer_id=peer_delivery.peer_id)) AS quiet_since,
+                    (SELECT group_concat(name, ', ') FROM (SELECT name FROM remote_contacts
+                        WHERE peer_id=peer_delivery.peer_id ORDER BY name)) AS names
+                    FROM peer_delivery JOIN peers USING(peer_id) WHERE peers.paired=1 ORDER BY peer_delivery.peer_id"""):
+                if r['mode'] == 'pull' and r['quiet_since'] is not None and r['quiet_since'] < day_ago:
+                    notices.append({'id': f'pull-quiet-{r["peer_id"][:16]}-{int(r["quiet_since"])}',
+                                    'text': f"{safe_line(r['names'])} hasn't fetched from this station for a day. What waits "
+                                            "for it stays queued here until it does."})
+                elif r['mode'] == 'push' and r['failing_since'] is not None and r['failing_since'] < day_ago:
+                    notices.append({'id': f'push-failing-{r["peer_id"][:16]}-{int(r["failing_since"])}',
+                                    'text': f'Delivery to {safe_line(r["names"])} has failed for a day. It keeps retrying; '
+                                            'check that peer and its address under Connections.'})
             return notices

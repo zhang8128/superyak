@@ -17,6 +17,7 @@ INSTALLED = ['superyak-backup.service', 'superyak-backup.timer', 'superyak-resto
              'superyak-restore-test.timer', 'superyak-imprint-sweep.service', 'superyak-imprint-sweep.timer',
              'superyak-alert@.service']
 LESSONS_UNITS = ['superyak-lessons-index.service', 'superyak-lessons-index.timer']  # make lessons-units, on the Pi and Tardis
+FEDERATION_UNITS = ['superyak-federate.service', 'superyak-federation-listen.service']  # make federation-units (plan SF10, SF11)
 EXPECTED = {
     'superyak-backup.service': {
         'Unit': {'After': 'superyak-lighthouse.service', 'OnFailure': 'superyak-alert@%n.service'},
@@ -70,6 +71,20 @@ EXPECTED = {
         'Timer': {'OnBootSec': '1min', 'OnUnitInactiveSec': '60s', 'AccuracySec': '5s'},
         'Install': {'WantedBy': 'timers.target'},
     },
+    'superyak-federate.service': {  # federation pull plan SF10: long-running, restarted; the data dir from a drop-in
+        'Unit': {'After': 'network-online.target superyak-lighthouse.service', 'Wants': 'network-online.target'},
+        'Service': {'Type': 'simple', 'WorkingDirectory': '%h/superyak/peer', 'Environment': 'FEDERATION_DATA=%h/.local/share/superyak/lighthouse OPENBLAS_NUM_THREADS=1',
+                    'ExecStart': f'{PYTHON} federate --data-dir ${{FEDERATION_DATA}}',
+                    'Restart': 'on-failure', 'RestartSec': '30', 'MemoryMax': '256M', 'MemorySwapMax': '0'},
+        'Install': {'WantedBy': 'default.target'},
+    },
+    'superyak-federation-listen.service': {
+        'Unit': {'After': 'network-online.target superyak-lighthouse.service', 'Wants': 'network-online.target'},
+        'Service': {'Type': 'simple', 'WorkingDirectory': '%h/superyak/peer', 'Environment': 'FEDERATION_DATA=%h/.local/share/superyak/lighthouse OPENBLAS_NUM_THREADS=1',
+                    'ExecStart': f'{PYTHON} federation-listen --data-dir ${{FEDERATION_DATA}} --host 127.0.0.1 --port 7437',
+                    'Restart': 'on-failure', 'RestartSec': '30', 'MemoryMax': '256M', 'MemorySwapMax': '0'},
+        'Install': {'WantedBy': 'default.target'},
+    },
     '50-alerts.conf': {
         'Unit': {'OnFailure': 'superyak-alert@%n.service'},
         'Service': {'ExecStopPost': f'-{PYTHON} station-alert --data-dir {DATA} --unit %n'},
@@ -88,7 +103,7 @@ def sections(name):
 def test_units_say_what_the_spec_says():
     """R16: the timers (OnCalendar, Persistent=true, WantedBy=timers.target), the oneshots (OnFailure=, no Restart=),
     the alert template (%i, no OnFailure= of its own) and the drop-in (ExecStopPost=- with -I) are exactly S8's and S9's."""
-    assert sorted(path.name for path in UNITS.iterdir()) == sorted(INSTALLED + LESSONS_UNITS + ['50-alerts.conf'])
+    assert sorted(path.name for path in UNITS.iterdir()) == sorted(INSTALLED + LESSONS_UNITS + FEDERATION_UNITS + ['50-alerts.conf'])
     for name, expected in EXPECTED.items():
         assert sections(name) == expected, name
 
@@ -106,7 +121,7 @@ def test_units_pass_systemd_analyze_verify(tmp_path):
     (probe / 'superyak-verifycheck.service').write_text('[Unit]\nDescription=Throwaway unit for the drop-in\n\n[Service]\nExecStart=/bin/true\n')
     (probe / 'superyak-verifycheck.service.d').mkdir()
     shutil.move(probe / '50-alerts.conf', probe / 'superyak-verifycheck.service.d' / '50-alerts.conf')
-    files = [str(probe / name) for name in INSTALLED + LESSONS_UNITS + ['superyak-verifycheck.service']]
+    files = [str(probe / name) for name in INSTALLED + LESSONS_UNITS + FEDERATION_UNITS + ['superyak-verifycheck.service']]
     result = subprocess.run(['systemd-analyze', '--user', 'verify', *files], capture_output=True, text=True, timeout=120)
     assert result.returncode == 0 and result.stderr == '', result.stderr
 
@@ -120,7 +135,7 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     for directory in (units, data, home, shim):
         directory.mkdir()
     services = ['superyak-lighthouse', 'superyak-door', 'superyak-ship', 'superyak-odo', 'superyak-wormhole',
-                'superyak-ship-serenity-bricks']
+                'superyak-ship-serenity-bricks', 'superyak-federate', 'superyak-federation-listen']  # the last two: plan SF10
     for service in services:
         (units / f'{service}.service').write_text('[Service]\nExecStart=/bin/true\n')
     andys = units / 'superyak-door.service.d' / '10-andy.conf'
@@ -318,3 +333,72 @@ def test_lessons_prompt_near_switches_near_at_a_prompt_and_timing_can_restart_th
     assert make('on').returncode == 0 and not (data / PROMPT_NEAR_OFF).exists()
     timing = subprocess.run(['make', '-n', '-s', 'lessons-timing', 'RESTART=1'], cwd=REPO, capture_output=True, text=True, timeout=60)
     assert timing.stdout.strip().endswith('scripts/lessons_timing.py --restart-unit superyak-embedder')
+
+
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
+def test_federation_units_install_and_remove_only_their_own_files(tmp_path):
+    """Federation pull plan SF10, SF11: make federation-units refuses without a peer database, installs the two units and
+    a drop-in naming the data dir (a space kept in one argument), adds the alert drop-in only where the station's alert
+    unit is installed (its ExecStopPost writes into the station's database), and enables nothing: which unit runs where
+    is the deploy's step. make federation-units-remove takes back exactly that, and leaves the alert unit."""
+    units, data, home, shim = tmp_path / 'systemd-user', tmp_path / 'tardis peer', tmp_path / 'home', tmp_path / 'bin'
+    for directory in (units, data, home, shim):
+        directory.mkdir()
+    (units / 'superyak-lighthouse.service').write_text('[Service]\nExecStart=/bin/true\n')
+    calls = tmp_path / 'systemctl.log'
+    (shim / 'systemctl').write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\n')
+    (shim / 'systemctl').chmod(0o755)
+    env = {**os.environ, 'HOME': str(home), 'PATH': f'{shim}:{os.environ["PATH"]}'}
+
+    def make(target):
+        return subprocess.run(['make', '-s', target, f'SYSTEMD_USER={units}', f'FEDERATION_DATA={data}'], cwd=REPO, env=env,
+                              capture_output=True, text=True, timeout=60)
+
+    def listing():
+        return sorted(str(path.relative_to(units)) for path in units.rglob('*'))
+    refused = make('federation-units')
+    assert refused.returncode != 0 and 'No peer database' in refused.stdout + refused.stderr and not calls.exists()
+    assert listing() == ['superyak-lighthouse.service']
+    (data / 'peer.sqlite3').write_bytes(b'')
+    installed = make('federation-units')
+    assert installed.returncode == 0, installed.stderr
+    for name in FEDERATION_UNITS:
+        assert (units / name).read_bytes() == (UNITS / name).read_bytes() and stat.S_IMODE((units / name).stat().st_mode) == 0o644
+        drop = units / f'{name}.d' / '20-federation-data.conf'
+        assert drop.read_text() == f'[Service]\nEnvironment="FEDERATION_DATA={data}"\n' and stat.S_IMODE(drop.stat().st_mode) == 0o644
+        assert not (units / f'{name}.d' / '50-alerts.conf').exists()        # not the station: no alert unit here
+    assert calls.read_text().splitlines() == ['--user daemon-reload']      # nothing enabled
+    (units / 'superyak-alert@.service').write_text('[Service]\nType=oneshot\nExecStart=/bin/true\n')
+    assert make('federation-units').returncode == 0
+    for name in FEDERATION_UNITS:
+        assert (units / f'{name}.d' / '50-alerts.conf').read_bytes() == (UNITS / '50-alerts.conf').read_bytes()
+    calls.unlink()
+    removed = make('federation-units-remove')
+    assert removed.returncode == 0, removed.stderr
+    assert listing() == ['superyak-alert@.service', 'superyak-lighthouse.service']
+    assert calls.read_text().splitlines() == ['--user disable --now superyak-federate.service superyak-federation-listen.service',
+                                              '--user reset-failed superyak-federate.service superyak-federation-listen.service',
+                                              '--user daemon-reload']
+
+
+def test_the_restore_runbook_puts_the_federation_units_back_as_they_were():
+    """Federation pull plan SF10 and Rio Grande's SF5: step 3 saves each federation unit's state with the watchers'
+    (by pattern, so only installed ones), then disables and stops it, so a restart mid-restore can't start one writing
+    into a half-restored database. Step 8 puts each back as it was, after the lighthouse. Nothing names the units
+    elsewhere, so nothing enables one that isn't installed, or one Andy turned off."""
+    lines = (REPO / 'docs' / 'station-restore.md').read_text().splitlines()
+    [capture] = [text for text in lines if 'list-units --all --plain --no-legend' in text]
+    assert "'superyak-ship-*'" in capture and "'superyak-federat*'" in capture
+    assert [text for text in lines if 'superyak-federat' in text and 'systemctl' in text] == [capture]  # commands only
+    lighthouse = lines.index('   systemctl --user start superyak-lighthouse superyak-door')
+    restored = [n for n, text in enumerate(lines) if 'watchers.txt' in text and 'systemctl --user start "$unit"' in text]
+    assert restored and restored[0] > lighthouse
+
+
+def test_the_launchd_template_runs_federate_and_is_restarted_only_after_a_crash():
+    """Federation pull plan SF10: the Mac's template, which Andy fills in and loads himself (law section 7)."""
+    import plistlib
+    plist = plistlib.loads((UNITS.parent / 'launchd' / 'superyak-federate.plist').read_bytes())
+    assert plist['ProgramArguments'] == ['USER_HOME/superyak/peer/.venv/bin/python', '-I', '-m', 'superyak_peer', 'federate',
+                                         '--data-dir', 'PEER_DATA']
+    assert (plist['KeepAlive'], plist['ThrottleInterval'], plist['RunAtLoad']) == ({'SuccessfulExit': False}, 30, True)

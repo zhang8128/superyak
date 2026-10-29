@@ -27,6 +27,7 @@ from .moderators import Moderators, MODERATE_SCHEMA
 from .members import Members
 from .lessons import Lessons, LESSON_SCHEMA
 from .imprints import Imprints, IMPRINT_SCHEMA
+from .room_cloud import RoomCloud, ROOM_CLOUD_SCHEMA
 from .common import encode, Problem
 from .peer_store import PeerStore, PEER_SCHEMA
 from .dispatch import DispatchGate
@@ -53,7 +54,7 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL R
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
 '''
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
 
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True, busy_until=None,
@@ -74,7 +75,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         os.close(fd)
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
-            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA)
+            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA + ROOM_CLOUD_SCHEMA)
         # Additive migration preserves every existing identity and credential.
         with self.transaction() as db:
             columns = {row['name'] for row in db.execute('PRAGMA table_info(users)')}
@@ -101,6 +102,12 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             # remote room fields: a received room stored before inbox_received existed gets a time once: the first start that finds it without one, this start's
             db.execute("INSERT OR IGNORE INTO inbox_received SELECT origin, resource_id, recipient, ? FROM inbox "
                        "WHERE kind='room' AND payload IS NOT NULL", (self.clock(),))
+            if 'last_error' not in {row['name'] for row in db.execute('PRAGMA table_info(outbox)')}:  # federation pull (spec §7)
+                db.execute('ALTER TABLE outbox ADD COLUMN last_error TEXT')
+            # federation pull (spec §7, check 3 MF2): pairings made before the upgrade, and stores restored from older copies,
+            # get their delivery row at every start, so they keep sending. A card that isn't JSON gets none (plan nit 4).
+            db.execute("INSERT OR IGNORE INTO peer_delivery(peer_id, mode, failures) SELECT peer_id, "
+                       "COALESCE(json_extract(card, '$.delivery'), 'push'), 0 FROM peers WHERE json_valid(card)")
         self._ensure_system_author()  # after the migration, where users.kind surely exists (spec S11)
         self._backfill_brief_history()  # ship briefs S5: after the schema, at every start
         if signing:  # G4a: the door and the station commands that never sign hold no key, check none and backfill nothing

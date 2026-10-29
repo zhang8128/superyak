@@ -365,6 +365,26 @@ The `admitted` receipt's detail is `{checks, report_sha256, skipped, roads_and_t
 scope's lanes. A use's own evaluation runs one lane with no `--as-of`, so N, the count admission made, can exceed what
 one evaluation derives (YN1). `sessions_too_large` is the number of sessions left out of that count for their size.
 
+## Remote connector
+
+A person's home, read from Claude (spec `docs/superpowers/specs/2026-10-27-remote-connector-design.md`, plan
+`docs/superpowers/plans/2026-10-28-remote-connector.md`). These routes exist only when the station runs with
+`serve --public-origin URL`, which must be one of the `--origin` values: one lowercase https origin with no path.
+`--connector-callback URL` names the one redirect accepted, claude.ai's by default. On any other origin (another
+name, scheme or port) each route answers 404; a tailnet client using the public name is served, since the connector
+authenticates by OAuth, not by where a request comes from. A public origin that isn't canonical stops `serve`. Each is reachable by a public request with no session and checks what it needs itself; none sends CORS
+headers. `POST /register`, `/token` and `/mcp` skip the same-origin write check, since Claude's servers send no home
+Origin; the consent page's posts keep it.
+
+- `GET /.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp` (RFC 9728):
+  `{resource, authorization_servers: [issuer], bearer_methods_supported: ["header"], scopes_supported: ["rooms.read"]}`.
+  The issuer is the public origin, and the resource is the public origin + `/mcp`.
+- `GET /.well-known/oauth-authorization-server` (RFC 8414): the issuer, its authorization, token and registration
+  endpoints, `code` responses, the `authorization_code` and `refresh_token` grants, `none` client authentication,
+  `S256` only, the scopes `rooms.read` and `offline_access`, and `authorization_response_iss_parameter_supported`.
+- `POST /register`, `GET /authorize`, `POST /authorize/request`, `/authorize/signin`, `/authorize/decision`,
+  `POST /token`, and `GET`, `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
+
 ## Grants
 
 A grant lets a person direct some of their own ships in some rooms, for some hours, with a daily budget of builds
@@ -715,16 +735,17 @@ All origins used by browser/peer traffic must be repeated with `--origin`.
 
 | Method/path | Request | Response/authority |
 |---|---|---|
-| GET `/api/connections` | — | Array of `{id,peer_id,user_id,name,card,paired,pairing_code,confirmed,held}`; `confirmed` while a typed code confirmed that very card, and `pairing_code` only then (null otherwise, so it can't be copied into a re-pair); `held` while the contact waits for its own code after a peer-wide disconnect; local owner only |
+| GET `/api/connections` | — | Array of `{id,peer_id,user_id,name,card,paired,pairing_code,confirmed,held,mode,failures,next_attempt,last_success,last_pull,failing_since,last_problem}`; `confirmed` while a typed code confirmed that very card, and `pairing_code` only then (null otherwise, so it can't be copied into a re-pair); `held` while the contact waits for its own code after a peer-wide disconnect. The rest is the contact's peer's delivery (federation pull, PROTOCOL.md): `mode` `push` or `pull`; `failures`, `next_attempt` and `failing_since` its backoff; `last_success`; `last_pull`, last pulled from us on a listener and last pulled from it on a pull peer; `last_problem`, this side's own phrase such as "certificate differs", or a peer's answer, status code first (at most 200 characters; the page and the CLI show only the code, since the words after it come from the peer). Local owner only |
 | GET `/api/connections/card` | — | Current signed-in participant's public card |
 | GET `/api/connections/code` | — | `{code}`: that card's pairing code, grouped; any signed-in participant; 409 without an endpoint |
 | POST `/api/connections/preview` | `{card}` | Validated public card, never its code; local owner only; no pairing or network |
 | POST `/api/connections/pair` | `{card,code}` | Remote contact `{id,peer_id,user_id,name,pairing_code,confirmed}`, 201; local owner (403 first); a missing or malformed code, or the old `fingerprint` alone, 400; a wrong code, 400 naming the card's code |
 | DELETE `/api/connections/{contact_id}` | — | `{ok:true}`; local owner; unpairs entire peer and hides its received content. Every contact of the peer is then held and loses its confirmation: pairing one participant again reconnects that one only, and each other one stays out of audiences, gets no delivery and has its events refused until its own code is typed |
-| GET `/api/sync` | — | `{enabled,deliveries:[...]}` for current author only |
-| POST `/api/sync` | none | Runs one bounded pass, returns same author-filtered status |
-| POST `/api/sync/{delivery_id}/retry` | none | `{ok:true}`; authorized local delivery controller; resets failed attempt budget, preserves event ID; nonfailed returns 409 |
-| POST `/federation/events` | Signed envelope | HTTPS, independent pairing/signature authentication; see PROTOCOL.md |
+| GET `/api/sync` | — | `{enabled,deliveries:[...]}` for current author only. Each delivery has its `status` (`pending`, `delivered`, `failed`, `refused` or `withdrawn`), its peer's `next_attempt` and `peer_mode`, and for a `refused` row its `last_error` (the status code first; the words after it can come from the other peer) |
+| POST `/api/sync` | none | "Check delivery now": makes every peer due. In a `serve --sync` process it wakes that process's worker and answers after the pass it woke, about 10 s at most; without `--sync` it never dials (`federate` syncs). Returns the same author-filtered status |
+| POST `/api/sync/{delivery_id}/retry` | none | `{ok:true}`; authorized local delivery controller; takes a `failed` or `refused` row, clears its `last_error`, makes its peer due and preserves its event ID and envelope; any other status returns 409 |
+| POST `/federation/events` | Signed envelope | HTTPS, independent pairing/signature authentication; see PROTOCOL.md. Served by `serve` and by `federation-listen` |
+| POST `/federation/pull` | Signed pull request | `federation-listen` only: a paired pull peer fetches what waits for it, and acks or refuses what it took; see PROTOCOL.md's Pull section |
 
 Delivery metadata is `{id,resource_id,revision,contact_id,action,status,attempts,
 next_attempt,resource_title,contact_name,peer_id}`. Message/reply deliveries additionally include `message_id` and

@@ -412,6 +412,38 @@ def test_a_routes_own_error_still_reaches_the_500_handler(env, monkeypatch, wher
     assert answer(client.get('/api/chats')) == (500, {'error': 'Request could not be completed'})
 
 
+CONNECTOR_ALLOWED = {('/.well-known/oauth-protected-resource', 'GET'), ('/.well-known/oauth-protected-resource/mcp', 'GET'),
+                     ('/.well-known/oauth-authorization-server', 'GET'), ('/register', 'POST'), ('/authorize', 'GET'),
+                     ('/authorize/request', 'POST'), ('/authorize/signin', 'POST'), ('/authorize/decision', 'POST'),
+                     ('/token', 'POST'), ('/mcp', 'GET'), ('/mcp', 'POST'), ('/mcp', 'DELETE')}
+
+
+@pytest.mark.parametrize('credentials', [{}, {'authorization': 'Bearer made-up-ship-key'}], ids=['anonymous', 'made-up-key'])
+def test_every_route_with_the_connector_on_refuses_a_public_request(tmp_path, monkeypatch, credentials):
+    """The remote connector plan, Task 3: the walk again, at the public origin of a station with the connector on.
+    Only spec 2's routes and the connector's own answer; no handler reaches a session or a ship key, and nothing changes."""
+    from superyak_peer.app import create_app
+    app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver', 'https://home.example'],
+                     public_origin='https://home.example')
+    reached = []
+    for name in ('session', 'ship_for_key'):
+        def fail(*args, name=name, **kwargs):
+            reached.append(name)
+            raise AssertionError(f'a route handler ran and called store.{name}')
+        monkeypatch.setattr(app.state.store, name, fail)
+    walked = every_route(app)
+    assert {(template, method) for template, method, _ in walked} >= CONNECTOR_ALLOWED
+    client = TestClient(app, base_url='https://home.example', client=PUBLIC_CLIENT,
+                        headers={'origin': 'https://home.example', **credentials})
+    before = rows(app)
+    for template, method, path in walked:
+        if (template, method) in ALLOWED | CONNECTOR_ALLOWED:
+            continue
+        response = client.request(method, path, json={} if method in ('POST', 'PUT', 'PATCH') else None)
+        assert refused(response), (method, path, response.status_code, response.text)
+    assert reached == [] and rows(app) == before
+
+
 IMPRINT_TEMPLATES = {'/api/imprints', '/api/imprints/code/{code}', '/api/imprints/{request_id}',
                      *(f'/api/imprints/{{request_id}}/{action}' for action in
                        ('confirm', 'decline', 'manifest', 'parts/{n}', 'complete', 'withdraw', 'shorten'))}

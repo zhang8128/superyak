@@ -35,12 +35,37 @@ CREATE TABLE IF NOT EXISTS peer_messages(id TEXT PRIMARY KEY, room_id TEXT NOT N
 CREATE TABLE IF NOT EXISTS inbox(origin TEXT NOT NULL, resource_id TEXT NOT NULL, kind TEXT NOT NULL, recipient TEXT NOT NULL REFERENCES users(id), revision INTEGER NOT NULL, actor TEXT NOT NULL, payload TEXT, PRIMARY KEY(origin,resource_id,kind,recipient));
 CREATE TABLE IF NOT EXISTS inbox_received(origin TEXT NOT NULL, resource_id TEXT NOT NULL, recipient TEXT NOT NULL, received REAL NOT NULL, PRIMARY KEY(origin,resource_id,recipient));
 CREATE TABLE IF NOT EXISTS receipts(origin TEXT NOT NULL,event_id TEXT NOT NULL,digest TEXT NOT NULL,created REAL NOT NULL, PRIMARY KEY(origin,event_id));
-CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY, event_seq INTEGER NOT NULL, contact_id TEXT NOT NULL, resource_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL, envelope TEXT, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,next_attempt REAL NOT NULL DEFAULT 0, UNIQUE(event_seq,contact_id,action));
+CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY, event_seq INTEGER NOT NULL, contact_id TEXT NOT NULL, resource_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL, envelope TEXT, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,next_attempt REAL NOT NULL DEFAULT 0, last_error TEXT, UNIQUE(event_seq,contact_id,action));
 CREATE TABLE IF NOT EXISTS federation_cursor(id INTEGER PRIMARY KEY CHECK(id=1), seq INTEGER NOT NULL);
 INSERT OR IGNORE INTO federation_cursor VALUES(1,0);
+CREATE TABLE IF NOT EXISTS peer_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS pull_nonces(origin TEXT NOT NULL, nonce TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(origin, nonce));
+CREATE TABLE IF NOT EXISTS peer_delivery(peer_id TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('push','pull')), failures INTEGER NOT NULL DEFAULT 0, next_attempt REAL, last_success REAL, last_pull REAL, failing_since REAL, last_problem TEXT);
 '''
+# Federation pull (plan P2, P3): peer_meta holds federation's own settings, apart from system_meta, which belongs to the
+# system author and which the restore reconcile writes. pull_nonces is a listener's replay guard (spec §4, check 6).
+# peer_delivery is each paired peer's delivery mode and backoff (spec §7), with failing_since and last_problem beside
+# the spec's columns, so `connections` in another process can say why and since when.
 
 class PeerStore:
+    def federation_mode(self):
+        """`push`, `pull`, or None before any card or federation endpoint (federation-pull spec §1)."""
+        with self.transaction() as db:
+            row = db.execute("SELECT value FROM peer_meta WHERE key='federation_mode'").fetchone()
+            return row[0] if row else None
+
+    def claim_federation_mode(self, mode):
+        """Plan P2 (review MF3): the first card or federation endpoint sets the mode, and the same mode again is a no-op,
+        so re-exports and restarts work. A different mode is refused, so one identity never exports both kinds of card."""
+        if mode not in ('push', 'pull'):
+            raise ValueError('The federation mode is push or pull')
+        with self.transaction() as db:
+            db.execute("INSERT OR IGNORE INTO peer_meta VALUES('federation_mode', ?)", (mode,))
+            stored = db.execute("SELECT value FROM peer_meta WHERE key='federation_mode'").fetchone()[0]
+        if stored != mode:
+            raise ValueError(f'This peer delivers by {stored}, so it cannot export a {mode} card: one identity never '
+                             'exports both kinds. A peer of the other kind is a new data directory with a new identity.')
+
     def _known_contacts(self, db, members):
         for key in members:
             if db.execute("SELECT 1 FROM users WHERE id=? AND kind!='system'", (key,)).fetchone():  # R34: never an audience

@@ -4,6 +4,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from .app import body
 from .common import Problem
 from .db import Store
@@ -69,7 +70,8 @@ def create_door(data_dir, *, clock=time.time):
     @app.post('/api/access-requests', status_code=201)
     async def request_access(request: Request):
         data = await body(request)
-        return store.request_access(data.get('name'), data.get('contact'), data.get('note', ''))
+        return await run_in_threadpool(store.request_access, data.get('name'), data.get('contact'),
+                                       data.get('note', ''))
 
     @app.get('/api/access-requests/{key}')
     def access_request_status(key: str, secret: str = ''):

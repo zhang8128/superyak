@@ -482,6 +482,7 @@ function messageDelivery(message, room) {
   if (room?.origin) return null;  // a received room: only the station's own state, never a guess from client ids
   const matches = state.sync.deliveries.filter((delivery) => delivery.message_id === message.id || (delivery.client_message_id && delivery.client_message_id === message.client_message_id));
   if (!matches.length) return "saved";
+  if (matches.some((item) => item.status === "refused")) return "refused";
   if (matches.some((item) => item.status === "failed")) return "failed";
   if (matches.some((item) => item.status === "pending")) return "pending";
   if (matches.every((item) => item.status === "withdrawn")) return "withdrawn";
@@ -489,7 +490,8 @@ function messageDelivery(message, room) {
 }
 
 function deliveryText(status) {
-  return { saved: "Saved here", pending: "Pending delivery", delivered: "Delivered", failed: "Failed to send", withdrawn: "Canceled" }[status] || "Saved here";
+  // federation pull spec §8: an unknown status is never shown as "Saved here", which would claim nothing was owed
+  return { saved: "Saved here", pending: "Pending delivery", delivered: "Delivered", failed: "Retrying", refused: "Not delivered", withdrawn: "Canceled" }[status] || "Delivery status unknown";
 }
 
 function isSelf(authorId) {
@@ -932,7 +934,7 @@ function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members (409)
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
@@ -944,12 +946,12 @@ function chatDialog() {
   const existing = new Set(state.chatDialog === "linked" ? room?.member_ids || [] : []);
   const picked = new Set(state.chatPicked || []);
   const title = state.chatDialog === "new" ? "Start a private chat" : "Start a new linked chat";
-  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts with no messages."}</p>${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? `<div class="carry-help-slot">${carryHelp(room)}</div>` + carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts with no messages."}</p>${state.chatDialog === "linked" && room?.cloud ? '<p class="meta">The new room keeps the mark: no ship, and no one on another home, can join it.</p>' : ""}${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? `<div class="carry-help-slot">${carryHelp(room)}</div>` + carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
 }
 
 function chatsView() {
   return `<header class="page-head"><div><p class="eyebrow">Private conversation</p><h1>Chats</h1><p class="lede">Personal, direct, and group rooms work without an assistant or model.</p></div><button class="button" data-action="new-chat">New private chat</button></header>
-    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong><span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
+    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong>${cloudBadge(room)}<span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
 }
 
 function contactState(contact) {
@@ -958,21 +960,73 @@ function contactState(contact) {
   return contact.confirmed ? "Confirmed by typing" : "No typed code on record";
 }
 
+// federation pull spec §8 (plan nit 20): how this peer receives, and how delivery to it is going
+function connectionDelivery(connection) {
+  if (connection.mode === "pull" || connection.card?.delivery === "pull") {
+    return `<p class="meta">Fetches from us · ${connection.last_pull ? `last pull ${escapeHtml(formatDate(connection.last_pull))}` : "no pull yet"}</p>`;
+  }
+  const endpoint = `<p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p>`;
+  // a pull peer's view of a listener: its last pull from it, apart from its last delivery to it (Rio Grande's SF2)
+  const pulled = connection.last_pull ? `<p class="meta">Last pulled ${escapeHtml(formatDate(connection.last_pull))}</p>` : "";
+  if (connection.failures) {
+    const problem = connection.last_problem ? ` · ${escapeHtml(problemShown(connection.last_problem))}` : "";
+    const next = connection.next_attempt ? ` · next attempt ${escapeHtml(formatDate(connection.next_attempt))}` : "";
+    return `${endpoint}${pulled}<p class="meta">Failing since ${escapeHtml(formatDate(connection.failing_since))} · ${escapeHtml(connection.failures)} ${connection.failures === 1 ? "failure" : "failures"}${next}${problem}</p>`;
+  }
+  return `${endpoint}${pulled}<p class="meta">${connection.last_success ? `Last delivered ${escapeHtml(formatDate(connection.last_success))}` : "Nothing delivered yet"}</p>`;
+}
+
+// Rio Grande's SF3: a status code alone, since the words after it come from the peer; otherwise this side's own phrase
+function problemShown(problem) {
+  const code = /^\d{3}\b/.exec(problem);
+  return code ? code[0] : problem.slice(0, 80);
+}
+
 function connectionGroup(connection) {
   const peers = state.connections.filter((item) => item.peer_id === connection.peer_id);
   if (peers[0]?.id !== connection.id) return "";
-  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3><p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p><p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><ul class="meta">${peers.map((item) => `<li><span>${escapeHtml(item.name)}</span> <span>${item.pairing_code ? `Pairing code: ${escapeHtml(item.pairing_code)}` : "No code shown"}</span> <span>${contactState(item)}</span></li>`).join("")}</ul>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
+  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3>${connectionDelivery(connection)}<p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><ul class="meta">${peers.map((item) => `<li><span>${escapeHtml(item.name)}</span> <span>${item.pairing_code ? `Pairing code: ${escapeHtml(item.pairing_code)}` : "No code shown"}</span> <span>${contactState(item)}</span></li>`).join("")}</ul>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
+}
+
+// federation pull spec §8. A refusal shows its status code only: the words after it can come from the other peer.
+function refusedCode(delivery) {
+  const code = /^\d{3}\b/.exec(delivery.last_error || "");
+  return code ? ` (${code[0]})` : "";
+}
+
+function tooLargeToPull(delivery) {
+  return delivery.status === "refused" && delivery.last_error === "413 Too large to pull";
+}
+
+function nextAttempt(delivery) {
+  return delivery.next_attempt ? `, next attempt ${formatDate(delivery.next_attempt)}` : "";
+}
+
+// A pull peer's row waits for its next pull, failed or not: a failure there is a walk's local fault (Rio Grande's N5)
+function waitsForPull(delivery) {
+  return delivery.peer_mode === "pull" && (delivery.status === "pending" || delivery.status === "failed");
+}
+
+function deliveryState(delivery) {
+  if (waitsForPull(delivery)) return "Waiting for pull";
+  if (delivery.status === "failed") return `Retrying${nextAttempt(delivery)}`;
+  if (tooLargeToPull(delivery)) return "Too large to deliver by pull: make the release smaller";
+  if (delivery.status === "refused") return `Not delivered${refusedCode(delivery)}`;
+  return deliveryText(delivery.status);
 }
 
 function deliveryDescription(delivery) {
   const withdrawal = delivery.action.endsWith("withdraw");
   const person = delivery.contact_name || contactName(delivery.contact_id);
+  const unknown = delivery.status === "failed" && !waitsForPull(delivery) ? "; remote acknowledgement unknown" : "";
   if (delivery.status === "withdrawn") return "Canceled obsolete queued content; this is not a remote acknowledgement";
   if (withdrawal) {
     if (delivery.status === "delivered") return `Remote withdrawal acknowledged by ${person}'s peer. Existing copies may remain.`;
-    return `Access stopped here; waiting for ${person}'s peer to acknowledge withdrawal${delivery.status === "failed" ? " — delivery failed; remote acknowledgement unknown" : ""}.`;
+    const shown = deliveryState(delivery);
+    const waiting = delivery.status === "pending" && delivery.peer_mode !== "pull" ? "" : ` — ${shown[0].toLowerCase()}${shown.slice(1)}${unknown}`;
+    return `Access stopped here; waiting for ${person}'s peer to acknowledge withdrawal${waiting}.`;
   }
-  return `${deliveryText(delivery.status)}${delivery.status === "failed" ? " — remote acknowledgement unknown" : ""}`;
+  return `${deliveryState(delivery)}${delivery.status === "failed" && !waitsForPull(delivery) ? " — remote acknowledgement unknown" : ""}`;
 }
 
 function deliveryOperation(action) {
@@ -980,7 +1034,7 @@ function deliveryOperation(action) {
 }
 
 function deliveryCard(delivery) {
-  return `<div class="item"><div class="item-main"><strong>${escapeHtml(delivery.resource_title || "Shared item")} → ${escapeHtml(delivery.contact_name || contactName(delivery.contact_id))}</strong><span>${escapeHtml(deliveryOperation(delivery.action))} · ${escapeHtml(deliveryDescription(delivery))}</span><details><summary>Connection details</summary><p class="fingerprint meta">Item ${escapeHtml(delivery.resource_id)}<br>Peer ${escapeHtml(delivery.peer_id)}<br>Revision ${escapeHtml(delivery.revision)} · ${escapeHtml(delivery.attempts)} attempts</p></details></div>${delivery.status === "failed" ? `<button class="button secondary" data-action="retry-delivery" data-id="${escapeHtml(delivery.id)}">Retry</button>` : ""}</div>`;
+  return `<div class="item"><div class="item-main"><strong>${escapeHtml(delivery.resource_title || "Shared item")} → ${escapeHtml(delivery.contact_name || contactName(delivery.contact_id))}</strong><span>${escapeHtml(deliveryOperation(delivery.action))} · ${escapeHtml(deliveryDescription(delivery))}</span><details><summary>Connection details</summary><p class="fingerprint meta">Item ${escapeHtml(delivery.resource_id)}<br>Peer ${escapeHtml(delivery.peer_id)}<br>Revision ${escapeHtml(delivery.revision)} · ${escapeHtml(delivery.attempts)} attempts</p></details></div>${(delivery.status === "failed" && !waitsForPull(delivery)) || (delivery.status === "refused" && !tooLargeToPull(delivery)) ? `<button class="button secondary" data-action="retry-delivery" data-id="${escapeHtml(delivery.id)}">Retry</button>` : ""}</div>`;
 }
 
 function resourceDelivery(id) {
@@ -1013,6 +1067,60 @@ function dockingDialog() {
   const docking = state.docking;
   if (!docking) return "";
   return `<dialog aria-labelledby="docking-title"><div class="dialog-content"><h2 id="docking-title">${docking.redock ? "Re-dock" : "Dock"} ${escapeHtml(docking.ship_name)}</h2><p>From <strong>${escapeHtml(docking.machine)}</strong>. Confirm only if you just ran <code>make dock</code> there.</p><p>${docking.redock ? "This replaces the ship’s old key." : "The ship will be yours. It reads and posts only in rooms a room owner adds it to."}</p><div class="button-row"><button class="button" data-action="confirm-docking">Confirm docking</button><button class="button secondary" data-action="cancel-docking">Cancel</button></div></div></dialog>`;
+}
+
+function cloudBadge(room) {
+  // Never to a cloud model: only a marked room carries `cloud`, its count and whether one of the marks is this person's
+  return room.cloud ? `<span class="badge cloud-badge">Never to a cloud model · ${Number(room.cloud.count) || 0}${room.cloud.mine ? " (yours)" : ""}</span>` : "";  // a number only, whoever sent it
+}
+
+function earlierRoomsWithMe(room) {
+  // The rooms this one continues that this person is still in, walking linked_room_id through their own rooms. The
+  // station marks the same ones (_earlier_with); a room they've left isn't listed here, so the walk ends there.
+  const mine = new Map((state.home?.chats || []).filter((item) => !item.origin).map((item) => [item.id, item]));
+  const found = [];
+  const seen = new Set();
+  let key = room.linked_room_id;
+  while (key && !seen.has(key) && mine.has(key)) {
+    seen.add(key);
+    found.push(mine.get(key));
+    key = mine.get(key).linked_room_id;
+  }
+  return found;
+}
+
+function cloudControl(room, replaced) {
+  if (room.origin) return "";  // a received room's mark is its home's to keep
+  // This home can't tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
+  const elsewhere = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
+    ? `<p class="meta">This mark holds on this home. Members' homes get it once federation carries it.</p>` : "";
+  if (room.cloud?.mine) return `<div class="cloud-control"><p class="meta">You keep this room away from cloud models. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+  if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
+  const earlier = earlierRoomsWithMe(room).length;
+  const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
+  return `<div class="cloud-control"><p class="meta">Keep this room's text away from Claude and other cloud models. Ships can't be in a marked room, and each member's mark is their own.</p>${elsewhere}${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from cloud models</button></div>`;
+}
+
+async function markRoom(room, earlier) {
+  try {
+    await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "POST", json: { earlier } });
+  } catch (error) {
+    setFlash(error.message, true);
+    render();
+    return;
+  }
+  await refresh("This room is kept away from cloud models.");
+}
+
+async function clearMark(room) {
+  try {
+    await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
+  } catch (error) {
+    setFlash(error.message, true);
+    render();
+    return;
+  }
+  await refresh("Your mark is cleared. Other members' marks still stand.");
 }
 
 function shipBanner(room) {
@@ -1199,7 +1307,7 @@ function connectionsView() {
     ${state.myCode ? `<p class="notice" data-testid="my-pairing-code"><strong>Your pairing code:</strong> <code>${escapeHtml(state.myCode)}</code>. Type this on the other machine. Never send it with the card.</p>` : ""}
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and type the code the other machine shows.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
-    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${escapeHtml(state.pairPreview.endpoint)}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form"><div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
+    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${state.pairPreview.endpoint ? escapeHtml(state.pairPreview.endpoint) : "Fetches from us: it has no address, and pulls what we hold for it"}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form"><div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
     ${shipsSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
 }
 
@@ -2121,6 +2229,8 @@ document.addEventListener("click", async (event) => {
     else if (state.grantAsk?.id === target.dataset.id) document.querySelector('.grant-ask [data-action="grant-revoke-confirm"]')?.focus();
   }
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
+  if (action === "cloud-mark" && state.room) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
+  if (action === "cloud-clear" && state.room) await clearMark(state.room);
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
     // S4: the editor warns when the text it opens with is a ship's; saving would make all of it the owner's.
