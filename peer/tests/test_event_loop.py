@@ -37,7 +37,7 @@ def dotted(node):
 
 
 def reaches_the_store(name, services):
-    return name.split('.')[0] in services or name.startswith(('app.state.', 'request.app.state.'))
+    return name.split('.')[0] in services or name.startswith(('app.state.', 'request.app.state.', 'self.store.'))
 
 
 def services_in(tree):
@@ -57,39 +57,72 @@ def services_in(tree):
     return services
 
 
-def blocking_helpers(tree, services):
-    """The identity checks, plus every sync function in the module that calls one, the store or another such helper."""
-    functions = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
-    blocking, grew = set(IDENTITY), True
+def sync_functions(tree):
+    """(the name a call uses, the function) for each sync function: a method is called as `self.<name>`."""
+    methods = {id(node) for cls in ast.walk(tree) if isinstance(cls, ast.ClassDef) for node in cls.body
+               if isinstance(node, ast.FunctionDef)}
+    return [('self.' + node.name if id(node) in methods else node.name, node)
+            for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+
+
+def blocking_helpers(tree, services, imported=frozenset()):
+    """The identity checks and `imported` (blocking helpers this module imports), plus every sync function or method
+    in the module that calls one of them, the store or another such helper."""
+    functions = sync_functions(tree)
+    blocking, grew = set(IDENTITY) | set(imported), True
     while grew:
         grew = False
-        for function in functions:
-            if function.name in blocking:
+        for called_as, function in functions:
+            if called_as in blocking:
                 continue
             for node in ast.walk(function):
                 name = dotted(node.func) if isinstance(node, ast.Call) else None
                 if name is not None and name not in ON_THE_LOOP and (name in blocking or reaches_the_store(name, services)):
-                    blocking.add(function.name)
+                    blocking.add(called_as)
                     grew = True
                     break
     return blocking
 
 
+def on_the_loop(function):
+    """The nodes of an async function that run on the loop. A nested function is walked on its own, and a lambda handed
+    to run_in_threadpool runs on a worker."""
+    stack = list(ast.iter_child_nodes(function))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        yield node
+        handed_over = isinstance(node, ast.Call) and (dotted(node.func) or '').endswith('run_in_threadpool')
+        stack.extend(child for child in ast.iter_child_nodes(node) if not (handed_over and isinstance(child, ast.Lambda)))
+
+
+def imports_from_siblings(tree):
+    """(sibling module, name) for each `from .module import name`."""
+    return [(node.module, alias.asname or alias.name) for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module for alias in node.names]
+
+
 def calls_on_the_loop(read=Path.read_text):
     """(module, async function, line, call) for each call that reads the store on the event loop."""
+    trees = {path: ast.parse(read(path)) for path in sorted(PACKAGE.rglob('*.py'))}
+    services = {path: services_in(tree) for path, tree in trees.items()}
+    blocking = {path: blocking_helpers(tree, services[path]) for path, tree in trees.items()}
+    for _ in range(3):  # a helper imported from a sibling module counts as that module's blocking helper
+        for path, tree in trees.items():
+            imported = {name for module, name in imports_from_siblings(tree)
+                        if name in blocking.get(path.parent / f'{module.replace(".", "/")}.py', set())}
+            blocking[path] = blocking_helpers(tree, services[path], imported)
     found = []
-    for path in sorted(PACKAGE.rglob('*.py')):
-        tree = ast.parse(read(path))
-        services = services_in(tree)
-        blocking = blocking_helpers(tree, services)
+    for path, tree in trees.items():
         for function in ast.walk(tree):
             if not isinstance(function, ast.AsyncFunctionDef):
                 continue
-            for node in ast.walk(function):
+            for node in on_the_loop(function):
                 name = dotted(node.func) if isinstance(node, ast.Call) else None
                 if name is None or name in ON_THE_LOOP:
                     continue
-                if name in blocking or reaches_the_store(name, services):
+                if name in blocking[path] or reaches_the_store(name, services[path]):
                     found.append((path.name, function.name, node.lineno, name))
     return found
 
@@ -119,6 +152,12 @@ def test_each_waiting_exception_is_still_needed():
      'admin_check(await caller(current_user, request))', ('peer_routes.py', 'preview', 'admin_check')),
     ('peer_routes.py', 'await run_in_threadpool(fed.sync_once)\n',
      'await run_in_threadpool(fed.sync_once)\n        fed.connections(who)\n', ('peer_routes.py', 'sync', 'fed.connections')),
+    # the re-check's: a method reached through self, and a helper imported from a sibling module
+    ('app.py', 'await run_in_threadpool(self.valid, key, token)', 'self.valid(key, token)',
+     ('app.py', 'refusal', 'self.valid')),
+    ('app.py', 'return await run_in_threadpool(store.shorten_imprint, ',
+     'sign_first(store)\n            return await run_in_threadpool(store.shorten_imprint, ',
+     ('app.py', 'imprint_shorten', 'sign_first')),
 ])
 def test_the_walk_sees_a_call_put_back_on_the_loop(module, fixed, broken, expected):
     def read(path):
@@ -129,6 +168,17 @@ def test_the_walk_sees_a_call_put_back_on_the_loop(module, fixed, broken, expect
         return source.replace(fixed, broken)
     assert expected not in WAITING
     assert expected in {(module, function, name) for module, function, _, name in calls_on_the_loop(read)}
+
+
+def test_a_lambda_handed_to_the_threadpool_is_off_the_loop():
+    def read(path):
+        source = path.read_text()
+        if path.name != 'app.py':
+            return source
+        fixed = "return await run_in_threadpool(store.drop_item, who, key, data.get('key'))"
+        assert source.count(fixed) == 1
+        return source.replace(fixed, "return await run_in_threadpool(lambda: store.drop_item(who, key, data.get('key')))")
+    assert not [found for found in calls_on_the_loop(read) if found[1] == 'chat_board_drop']
 
 
 # Routes that take no identity: signing in, redeeming an invitation, asking for access, starting a docking, and a
@@ -149,7 +199,8 @@ def test_every_async_write_checks_identity_before_it_reads_the_body(tmp_path):
     """Anonymous, with a body that isn't JSON: a route that reads the body first answers 400, not 401 or 403. The app
     has the imprint routes on, and the peer router's routes are walked too."""
     app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'], imprints_dir=tmp_path / 'imprints')
-    anonymous = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'})
+    anonymous = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'},
+                           client=('127.0.0.1', 50000))  # tailnet, so PublicRoute lets it reach the route
     answers, seen = {}, set()
     for route in routes_of(app):
         if not inspect.iscoroutinefunction(route.endpoint):
