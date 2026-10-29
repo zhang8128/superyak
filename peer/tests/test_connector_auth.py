@@ -55,13 +55,14 @@ def test_every_connector_route_answers_a_public_request(home):
         response = client.request(method, path, json={} if method == 'POST' else None)
         # {} is no registration or sign-in, and /authorize with no client shows its page
         expected = (200 if path.startswith('/.well-known/') else
-                    400 if path in ('/register', '/authorize', '/authorize/signin', '/authorize/decision') else 501)
+                    400 if path in ('/register', '/authorize', '/authorize/signin', '/authorize/decision', '/token')
+                    else 501)
         assert response.status_code == expected, (method, path, response.status_code, response.text)
 
 
 def test_register_token_and_mcp_pass_the_boundary_without_an_origin(home):
     client = public_client(home.app)
-    for path, ran in (('/register', 400), ('/token', 501), ('/mcp', 501)):
+    for path, ran in (('/register', 400), ('/token', 400), ('/mcp', 501)):
         response = client.post(path)
         assert response.status_code == ran, (path, response.text)  # the handler ran: never 'Same-origin request required'
 
@@ -908,3 +909,335 @@ def test_a_sign_in_that_lands_during_anothers_password_check_keeps_the_request(h
         store.pending_sign_in(request, 'jenn@example.org', 'long-password-jenn', '203.0.113.5')
     assert (refused.value.status, refused.value.error) == (403, 'invalid_request')
     assert [row['person_id'] for row in table(home, 'oauth_pending')] == [sam['id']]
+
+
+# ---- Task 6: /token, rotation and the bearer check (plan revision 2; spec "Tokens"; RFC 6749 4.1.3, 5.1, 6, 10.4,
+# and Rio Grande's five, given before the build) ----
+
+VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'  # RFC 7636's example verifier for CHALLENGE
+from superyak_peer.connector import REGISTER_BODY_MAX  # noqa: E402
+
+
+def token(home, form, *, content_type='application/x-www-form-urlencoded', raw=None, **headers):
+    """POST /token as Claude sends it: form-encoded, from a public address, with no Origin."""
+    from urllib.parse import urlencode
+    return public_client(home.app, **headers).post('/token', content=raw if raw is not None else urlencode(form),
+                                                   headers={'content-type': content_type})
+
+
+def allowed(home, client=None, rooms='*', state='st-1', **override):
+    """A real Allow: (client id, code, the grant's rooms as sent). Sam signs in on a fresh request and allows."""
+    if not table(home, 'users') or not any(row['username'] == 'sam@example.org' for row in table(home, 'users')):
+        person(home)
+    client, view = signed_in(home, client, state=state, **override)
+    _, query = sent_back(decide(home, view, rooms=rooms))
+    return client, query['code']
+
+
+def exchange(home, for_client, the_code, **override):
+    """The code exchange as Claude sends it; `override` replaces (or, as None, drops) any field, `code` included."""
+    form = {'grant_type': 'authorization_code', 'code': the_code, 'redirect_uri': CALLBACK, 'client_id': for_client,
+            'code_verifier': VERIFIER, 'resource': RESOURCE_URL} | override
+    return token(home, {k: v for k, v in form.items() if v is not None})
+
+
+def refresh(home, client, refresh_token, **override):
+    form = {'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': client,
+            'resource': RESOURCE_URL} | override
+    return token(home, {k: v for k, v in form.items() if v is not None})
+
+
+def bearer(home, access):
+    return home.store.bearer(access, RESOURCE_URL)
+
+
+def no_store(response):
+    return response.headers.get('cache-control') == 'no-store' and response.headers.get('pragma') == 'no-cache'
+
+
+def test_a_good_code_gets_a_bearer_pair(home):
+    client, code = allowed(home)
+    got = exchange(home, client, code)
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert set(body) == {'access_token', 'token_type', 'expires_in', 'refresh_token', 'scope'} and no_store(got)
+    assert body['access_token'].startswith('syc_at_') and body['refresh_token'].startswith('syc_rt_')
+    assert (body['token_type'], body['expires_in'], body['scope']) == ('Bearer', 3600, 'rooms.read offline_access')
+    sam = [row for row in table(home, 'users') if row['username'] == 'sam@example.org'][0]
+    seen = bearer(home, body['access_token'])
+    assert (seen['person_id'], seen['rooms'], seen['scope']) == (sam['id'], '*', 'rooms.read offline_access')
+    assert bearer(home, body['refresh_token']) is None  # a refresh token is no bearer
+    assert home.store.bearer(body['access_token'], 'https://other.example/mcp') is None  # its audience only
+    assert all(row['hash'] not in (body['access_token'], body['refresh_token']) for row in table(home, 'connector_tokens'))
+
+
+def test_a_code_is_single_use_and_bound(home):
+    """RFC 6749 4.1.3 and Rio Grande's 2: the code's client, redirect and verifier exactly. A refused redemption leaves
+    the code good for the right one."""
+    client, code = allowed(home)
+    other_client = register(home.app, {**REGISTRATION, 'client_name': 'Other'}).json()['client_id']  # same second, own id
+    for override in ({'client_id': other_client}, {'redirect_uri': CALLBACK + '/'}, {'code_verifier': VERIFIER[:-1] + 'A'},
+                     {'code_verifier': 'short'}, {'code': code[:-1] + ('A' if code[-1] != 'A' else 'B')}):
+        refused = exchange(home, client, code, **override)
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_grant'}), override
+        assert no_store(refused)
+    for missing in ('code', 'code_verifier', 'redirect_uri', 'client_id'):  # RFC 6749 5.2: a missing one is a bad request
+        refused = exchange(home, client, code, **{missing: None})
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), missing
+    assert exchange(home, client, code).status_code == 200
+
+
+def test_a_code_lasts_60_seconds_by_the_wall_clock(home):
+    client, code = allowed(home)
+    home.clock[0] += 60
+    assert exchange(home, client, code).json() == {'error': 'invalid_grant'}
+
+
+def test_a_second_use_of_a_code_revokes_what_it_issued(home):
+    """RFC 6749 4.1.2: the code's second use is refused and revokes everything issued from it."""
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    again = exchange(home, client, code)
+    assert (again.status_code, again.json()) == (400, {'error': 'invalid_grant'})
+    assert bearer(home, first['access_token']) is None
+    assert refresh(home, client, first['refresh_token']).json() == {'error': 'invalid_grant'}
+
+
+def test_a_thousand_bad_codes_write_nothing(home):
+    """Rio Grande's 4: a refused redemption writes nothing, so every write /token can cause needs a code a signed-in
+    owner's Allow minted."""
+    client, _ = allowed(home)
+    before = everything(home.store)
+    for n in range(1000):
+        assert exchange(home, client, f'syc-not-a-code-{n}').json() == {'error': 'invalid_grant'}
+    assert everything(home.store) == before
+
+
+def test_token_takes_only_a_strict_form(home):
+    """Rio Grande's 1: anything but application/x-www-form-urlencoded (a charset is fine) is refused before parsing; so
+    is a name sent twice, and a body that isn't a strict form."""
+    client, code = allowed(home)
+    form = f'grant_type=authorization_code&code={code}&redirect_uri={CALLBACK}&client_id={client}&code_verifier={VERIFIER}'
+    for content_type in ('application/json', 'multipart/form-data; boundary=x', 'text/plain', ''):
+        refused = token(home, None, content_type=content_type, raw=form)
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), content_type
+    for raw in (form + '&code=again', form + '&&', 'not a form', form.encode() + b'\xff'):
+        refused = token(home, None, raw=raw)
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), raw
+    for grant_type in ('password', 'client_credentials', 'implicit'):
+        assert token(home, {'grant_type': grant_type}).json() == {'error': 'unsupported_grant_type'}
+    assert token(home, {'code': code}).json() == {'error': 'invalid_request'}
+    assert token(home, None, content_type='application/x-www-form-urlencoded; charset=UTF-8', raw=form).status_code == 200
+    assert token(home, None, raw='x' * (REGISTER_BODY_MAX + 1)).status_code == 413
+
+
+def test_an_unknown_client_is_401(home):
+    """Rio Grande's 5: a bad client is 401 invalid_client; a known client with another client's code is invalid_grant."""
+    client, code = allowed(home)
+    refused = exchange(home, 'not-a-client-id', code)
+    assert (refused.status_code, refused.json()) == (401, {'error': 'invalid_client'}) and no_store(refused)
+
+
+def test_each_token_error_is_a_bare_error_code(home):
+    client, code = allowed(home)
+    for response in (exchange(home, client, 'nope'), token(home, {'grant_type': 'x'}), exchange(home, 'nope', code),
+                     exchange(home, client, code, resource='https://other.example/mcp')):
+        assert set(response.json()) == {'error'} and no_store(response), response.text
+
+
+def test_a_token_for_another_home_is_refused(home):
+    client, code = allowed(home)
+    for resource in ('https://other.example/mcp', PUBLIC_ORIGIN, 'https://[', RESOURCE_URL + '/'):
+        assert exchange(home, client, code, resource=resource).json() == {'error': 'invalid_target'}, resource
+    assert exchange(home, client, code, resource='HTTPS://HOME.EXAMPLE/mcp').status_code == 200  # MCP: case-insensitive
+
+
+def test_refresh_rotates(home):
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    home.clock[0] += 10
+    second = refresh(home, client, first['refresh_token'])
+    assert second.status_code == 200 and no_store(second)
+    second = second.json()
+    assert second['refresh_token'] != first['refresh_token'] and bearer(home, second['access_token'])
+    assert second['expires_in'] == 3600
+
+
+def test_a_rotated_token_reused_within_60_seconds_gets_a_new_pair_and_kills_the_earlier_successor(home):
+    """Spec "Tokens": Claude refreshes on a 401 and before expiry, so a lost answer can bring the old token back. Within
+    60 s of its use it gets a new pair, and the successor it had, with everything issued from it, is revoked."""
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    successor = refresh(home, client, first['refresh_token']).json()
+    home.clock[0] += 30
+    again = refresh(home, client, first['refresh_token'])
+    assert again.status_code == 200
+    again = again.json()
+    assert bearer(home, successor['access_token']) is None
+    assert refresh(home, client, successor['refresh_token']).json() == {'error': 'invalid_grant'}
+    assert bearer(home, again['access_token']) and refresh(home, client, again['refresh_token']).status_code == 200
+
+
+def test_reuse_after_60_seconds_revokes_the_grant(home):
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    successor = refresh(home, client, first['refresh_token']).json()
+    home.clock[0] += 61
+    assert refresh(home, client, first['refresh_token']).json() == {'error': 'invalid_grant'}
+    assert bearer(home, successor['access_token']) is None
+    assert refresh(home, client, successor['refresh_token']).json() == {'error': 'invalid_grant'}
+    assert [grant['revoked'] for grant in table(home, 'connector_grants')] == [home.clock[0]]
+
+
+def test_a_refresh_token_from_another_client_is_refused(home):
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    other = register(home.app, {**REGISTRATION, 'client_name': 'Other'}).json()['client_id']
+    assert refresh(home, other, first['refresh_token']).json() == {'error': 'invalid_grant'}
+    assert refresh(home, client, first['refresh_token']).status_code == 200  # a refused one wrote nothing
+
+
+def test_no_refresh_past_the_grant_end(home):
+    person(home)
+    client, view = signed_in(home)
+    _, query = sent_back(decide(home, view, rooms='*', days=1))
+    first = exchange(home, client, query['code']).json()
+    home.clock[0] += 86400
+    assert bearer(home, first['access_token']) is None
+    assert refresh(home, client, first['refresh_token']).json() == {'error': 'invalid_grant'}
+
+
+def test_an_access_token_at_its_expiry_second(home):
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    home.clock[0] += 3600
+    assert bearer(home, first['access_token']) is None
+    assert refresh(home, client, first['refresh_token']).status_code == 200
+
+
+def test_an_access_token_never_outlives_its_grant(home):
+    """An access token's expiry is the earlier of an hour and the grant's end."""
+    person(home)
+    client, view = signed_in(home)
+    _, query = sent_back(decide(home, view, rooms='*', days=1))
+    home.clock[0] += 86400 - 600
+    got = exchange(home, client, query['code'])
+    assert got.json() == {'error': 'invalid_grant'}  # the code had long expired; a fresh flow shows the cap
+    client, view = signed_in(home, client, state='st-late')
+    _, query = sent_back(decide(home, view, rooms='*', days=1))
+    with home.store.transaction() as db:
+        db.execute('UPDATE connector_grants SET ends=? WHERE id=(SELECT grant_id FROM oauth_pending WHERE state=?)',
+                   (home.clock[0] + 600, 'st-late'))
+    assert exchange(home, client, query['code']).json()['expires_in'] == 600
+
+
+def test_a_person_made_activation_pending_loses_access(home):
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    with home.store.transaction() as db:
+        db.execute("UPDATE users SET activation_pending=1 WHERE username='sam@example.org'")
+    assert bearer(home, first['access_token']) is None
+    assert refresh(home, client, first['refresh_token']).json() == {'error': 'invalid_grant'}
+
+
+def test_a_revoked_or_endless_grant_isnt_live(home):
+    """A revoked grant refuses the exchange, the bearer and a refresh. A grant is live only while now < ends, so an
+    end that isn't a finite number (only a hand edit makes one) reads as ended (Tardis)."""
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    with home.store.transaction() as db:
+        db.execute('UPDATE connector_grants SET ends=?', (float('inf'),))
+    assert bearer(home, first['access_token']) is None
+    client, code = allowed(home, client, state='st-2')
+    with home.store.transaction() as db:
+        db.execute('UPDATE connector_grants SET revoked=?', (home.clock[0],))
+    assert exchange(home, client, code).json() == {'error': 'invalid_grant'}
+
+
+def test_no_refresh_token_without_offline_access_or_the_grant_type(home):
+    client, code = allowed(home, scope='rooms.read')
+    assert set(exchange(home, client, code).json()) == {'access_token', 'token_type', 'expires_in', 'scope'}
+    plain = register(home.app, {'redirect_uris': [CALLBACK]}).json()['client_id']  # authorization_code only
+    _, code = allowed(home, plain, state='st-2')
+    body = exchange(home, plain, code).json()
+    assert 'refresh_token' not in body and body['scope'] == 'rooms.read offline_access'
+
+
+def test_token_ignores_a_session_cookie(home):
+    """Tardis: /token never takes a session as identity; a signed-in browser's cookie with a bad code is still refused."""
+    client, _ = allowed(home)
+    login = consent(home).post('/api/login', json={'username': 'sam@example.org', 'password': 'long-password-sam'})
+    cookie = f'superyak_session={login.cookies.get("superyak_session")}'
+    refused = token(home, {'grant_type': 'authorization_code', 'code': 'nope', 'client_id': client,
+                           'redirect_uri': CALLBACK, 'code_verifier': VERIFIER}, cookie=cookie)
+    assert refused.json() == {'error': 'invalid_grant'}
+
+
+def test_two_redemptions_of_one_code_at_once_mint_one_pair(home):
+    """Tardis: the check for tokens from a code and the mint are one transaction under the store's gate, so two at once
+    can't both mint. The second is a reuse: invalid_grant, and the grant it made is revoked (RFC 6749 4.1.2)."""
+    import threading
+    from superyak_peer.connector import OAuthError
+    client, code = allowed(home)
+    form = {'grant_type': 'authorization_code', 'code': code, 'redirect_uri': CALLBACK, 'client_id': client,
+            'code_verifier': VERIFIER}
+    results, start = [], threading.Barrier(2)
+
+    def redeem():
+        start.wait()
+        try:
+            results.append(home.store.exchange_code(dict(form), RESOURCE_URL, CALLBACK))
+        except OAuthError as refused:
+            results.append(refused.error)
+    threads = [threading.Thread(target=redeem) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert sorted(type(result).__name__ for result in results) == ['dict', 'str'] and 'invalid_grant' in results
+    assert len([row for row in table(home, 'connector_tokens') if row['kind'] == 'access']) == 1
+    assert [grant['revoked'] for grant in table(home, 'connector_grants')] == [home.clock[0]]
+
+
+def test_two_refreshes_of_one_token_at_once_leave_one_live_successor(home):
+    import threading
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    form = {'grant_type': 'refresh_token', 'refresh_token': first['refresh_token'], 'client_id': client}
+    results, start = [], threading.Barrier(2)
+
+    def rotate():
+        start.wait()
+        results.append(home.store.refresh_tokens(dict(form), RESOURCE_URL, CALLBACK))
+    threads = [threading.Thread(target=rotate) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    live = [result for result in results if bearer(home, result['access_token'])]
+    assert len(results) == 2 and len(live) == 1  # the later one revoked the earlier one's successor
+
+
+def test_a_refresh_after_the_grant_is_revoked_mints_nothing(home):
+    """Tardis: a refresh checks the grant is live before minting, so a revoke stops it at once, not at the next read."""
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    with home.store.transaction() as db:
+        db.execute('UPDATE connector_grants SET revoked=?', (home.clock[0],))
+    before = len(table(home, 'connector_tokens'))
+    assert refresh(home, client, first['refresh_token']).json() == {'error': 'invalid_grant'}
+    assert len(table(home, 'connector_tokens')) == before
+
+
+def test_a_good_exchange_sweeps_clients_whose_grants_ended_30_days_ago(home):
+    """Plan revision 2's Task 5 line, built here: a client whose grants have all ended 30 days ago loses its row, and
+    its id then works again as an unused one."""
+    old_client, code = allowed(home, state='st-old')
+    exchange(home, old_client, code)
+    with home.store.transaction() as db:
+        db.execute('UPDATE connector_grants SET ends=? WHERE client_id=?', (home.clock[0] - 30 * 86400 - 1, old_client))
+    client, code = allowed(home, register(home.app, {**REGISTRATION, 'client_name': 'New'}).json()['client_id'], state='st-new')
+    exchange(home, client, code)
+    assert [row['client_id'] for row in table(home, 'oauth_clients')] == [client]
+    with home.store.transaction() as db:
+        assert home.store.known_client(db, old_client, CALLBACK) is not None  # as an unused id again

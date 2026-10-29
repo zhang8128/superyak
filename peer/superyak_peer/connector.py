@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import re
 import secrets
 import unicodedata
@@ -36,6 +37,9 @@ def issuer_metadata(issuer):
 OAUTH_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY, name TEXT, grant_types TEXT NOT NULL, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS connector_grants(id TEXT PRIMARY KEY, person_id TEXT NOT NULL REFERENCES users(id), client_id TEXT NOT NULL, redirect_host TEXT NOT NULL, rooms TEXT NOT NULL, scope TEXT NOT NULL, created REAL NOT NULL, ends REAL NOT NULL, last_used REAL, revoked REAL);
+CREATE TABLE IF NOT EXISTS connector_tokens(hash TEXT PRIMARY KEY, kind TEXT NOT NULL, grant_id TEXT NOT NULL REFERENCES connector_grants(id), scope TEXT NOT NULL, resource TEXT NOT NULL, expires REAL NOT NULL, rotated_from TEXT, used REAL, code_hash TEXT);
+CREATE INDEX IF NOT EXISTS connector_tokens_by_code ON connector_tokens(code_hash);
+CREATE INDEX IF NOT EXISTS connector_tokens_by_parent ON connector_tokens(rotated_from);
 CREATE TABLE IF NOT EXISTS oauth_pending(id TEXT PRIMARY KEY, request TEXT NOT NULL UNIQUE, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, state TEXT, challenge TEXT NOT NULL, resource TEXT NOT NULL, scope TEXT NOT NULL, at INTEGER NOT NULL, person_id TEXT NOT NULL, csrf TEXT NOT NULL, decided REAL, code_hash TEXT, code_expires REAL, grant_id TEXT);
 '''
 # oauth_pending (Task 5): a request from its sign-in on, keyed by `request`, the SHA-256 of its fragment's tag, so one
@@ -73,6 +77,9 @@ CHALLENGE = re.compile(r'[A-Za-z0-9_-]{43}')  # an S256 challenge: base64url of 
 
 APP_NAMES = {'claude.ai': 'Claude', 'claude.com': 'Claude'}  # the consent page names an app by its redirect host
 CODE_SECONDS = 60
+ACCESS_SECONDS = 3600  # an access token's hour, never past its grant's end (spec, "Tokens")
+REUSE_SECONDS = 60  # a rotated refresh token presented again within this gets a new pair; later revokes the grant
+VERIFIER_FORM = re.compile(r'[A-Za-z0-9._~-]{43,128}')  # RFC 7636 4.1
 DAYS_MAX = 30  # a connection lasts 1 to 30 days, 30 by default, never more (spec, "Tokens")
 PENDING_FIELDS = ('v', 'client_id', 'redirect_uri', 'state', 'challenge', 'resource', 'scope', 'at')
 
@@ -358,6 +365,141 @@ class Connector:
                        (now, token_hash(code), now + CODE_SECONDS, grant, pending))
         return row['redirect_uri'] + '?' + urlencode({'code': code} | back | {'iss': issuer})
 
+    # ---- Task 6: /token (spec "Tokens"; RFC 6749 4.1.3, 5.1, 6 and 10.4). A token is stored only as its hash. A
+    # revoked one has its `expires` set to now, so the restore keeps one rule: the earlier end and any `used` mark win.
+    # An access token's `rotated_from` names the refresh token minted with it, a refresh token's the one it replaced. ----
+
+    @staticmethod
+    def _live_grant(db, grant_id, now):
+        """The grant, if it is live: not revoked, `now < ends` with a finite end (a NaN or infinite one reads as ended,
+        Tardis), and its person still an active person. None otherwise."""
+        grant = db.execute('SELECT connector_grants.*, users.kind, users.activation_pending FROM connector_grants '
+                           'JOIN users ON users.id=connector_grants.person_id WHERE connector_grants.id=?',
+                           (grant_id,)).fetchone()
+        if grant is None or grant['revoked'] is not None or grant['kind'] != 'person' or grant['activation_pending']:
+            return None
+        ends = grant['ends']
+        return grant if type(ends) in (int, float) and math.isfinite(ends) and now < ends else None
+
+    def _mint(self, db, grant, scope, resource, now, *, rotated_from=None, code_hash=None):
+        """An access token, and a refresh token when the scope has offline_access and the client registered the
+        refresh_token grant. Returns RFC 6749 5.1's answer."""
+        from .auth import token_hash
+        client = db.execute('SELECT grant_types FROM oauth_clients WHERE client_id=?', (grant['client_id'],)).fetchone()
+        refreshes = 'offline_access' in scope.split(' ') and client is not None and 'refresh_token' in client['grant_types'].split()
+        access, refresh = 'syc_at_' + secrets.token_urlsafe(32), 'syc_rt_' + secrets.token_urlsafe(32) if refreshes else None
+        expires = min(now + ACCESS_SECONDS, grant['ends'])
+        if refresh:
+            db.execute('INSERT INTO connector_tokens VALUES(?,?,?,?,?,?,?,?,?)', (token_hash(refresh), 'refresh', grant['id'],
+                       scope, resource, grant['ends'], rotated_from, None, code_hash))
+        db.execute('INSERT INTO connector_tokens VALUES(?,?,?,?,?,?,?,?,?)', (token_hash(access), 'access', grant['id'], scope,
+                   resource, expires, token_hash(refresh) if refresh else None, None, code_hash))
+        return {'access_token': access, 'token_type': 'Bearer', 'expires_in': int(expires - now), 'scope': scope} \
+            | ({'refresh_token': refresh} if refresh else {})
+
+    @staticmethod
+    def _token_resource(form, resource):
+        """RFC 8707: a `resource` sent must be this home's, any case in its scheme and host (MCP); absent is this one."""
+        if 'resource' in form and canonical_resource(form['resource']) != resource:
+            raise OAuthError(400, 'invalid_target')
+
+    def exchange_code(self, form, resource, callback):
+        """grant_type=authorization_code (RFC 6749 4.1.3, RFC 7636 4.6). A guessed or wrong code writes nothing (Rio
+        Grande's 4). A real code presented again is refused and revokes the grant it made, so everything issued from it
+        goes (4.1.2): the only write /token can cause without a pair is one that needs a code an Allow minted."""
+        from .auth import token_hash
+        if not all(isinstance(form.get(name), str) and form[name] for name in ('code', 'client_id', 'redirect_uri',
+                                                                                  'code_verifier')):
+            raise OAuthError(400, 'invalid_request')
+        self._token_resource(form, resource)
+        refused = None
+        with self.transaction() as db:
+            now = self.clock()
+            if self.known_client(db, form['client_id'], callback) is None:
+                raise OAuthError(401, 'invalid_client')
+            row = db.execute('SELECT * FROM oauth_pending WHERE code_hash=?', (token_hash(form['code']),)).fetchone()
+            if row is None:
+                raise OAuthError(400, 'invalid_grant')
+            if db.execute('SELECT 1 FROM connector_tokens WHERE code_hash=? LIMIT 1', (row['code_hash'],)).fetchone():
+                db.execute('UPDATE connector_grants SET revoked=? WHERE id=? AND revoked IS NULL', (now, row['grant_id']))
+                db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?', (now, row['grant_id'], now))
+                refused = OAuthError(400, 'invalid_grant')  # raised after the commit, so the revoke stays
+            else:
+                challenge = _b64(hashlib.sha256(form['code_verifier'].encode()).digest())
+                if (not now < row['code_expires'] or row['client_id'] != form['client_id']
+                        or row['redirect_uri'] != form['redirect_uri'] or not VERIFIER_FORM.fullmatch(form['code_verifier'])
+                        or not hmac.compare_digest(challenge, row['challenge'])):
+                    raise OAuthError(400, 'invalid_grant')
+                grant = self._live_grant(db, row['grant_id'], now)
+                if grant is None:
+                    raise OAuthError(400, 'invalid_grant')
+                answer = self._mint(db, grant, row['scope'], row['resource'], now, code_hash=row['code_hash'])
+                self._connector_sweep(db)
+        if refused is not None:
+            raise refused
+        return answer
+
+    def refresh_tokens(self, form, resource, callback):
+        """grant_type=refresh_token (RFC 6749 6, 10.4; spec "Tokens"). It rotates on every use. A rotated token presented
+        again within REUSE_SECONDS of its use gets a new pair, and the successor it had, with everything issued from it,
+        is revoked, since Claude may have lost the answer that carried it. Later than that, the grant is revoked."""
+        from .auth import token_hash
+        if not all(isinstance(form.get(name), str) and form[name] for name in ('refresh_token', 'client_id')):
+            raise OAuthError(400, 'invalid_request')
+        self._token_resource(form, resource)
+        refused = None
+        with self.transaction() as db:
+            now = self.clock()
+            if self.known_client(db, form['client_id'], callback) is None:
+                raise OAuthError(401, 'invalid_client')
+            presented = token_hash(form['refresh_token'])
+            row = db.execute("SELECT * FROM connector_tokens WHERE hash=? AND kind='refresh'", (presented,)).fetchone()
+            owner = db.execute('SELECT client_id FROM connector_grants WHERE id=?', (row['grant_id'],)).fetchone() \
+                if row is not None else None
+            if row is None or owner is None or owner['client_id'] != form['client_id'] or not now < row['expires']:
+                raise OAuthError(400, 'invalid_grant')
+            grant = self._live_grant(db, row['grant_id'], now)
+            if grant is None:
+                raise OAuthError(400, 'invalid_grant')
+            if row['used'] is not None and now - row['used'] >= REUSE_SECONDS:
+                db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (now, grant['id']))
+                db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?', (now, grant['id'], now))
+                refused = OAuthError(400, 'invalid_grant')
+            else:
+                if row['used'] is not None:  # within the window: the successor it had, and all from it, are revoked
+                    walk = [presented]
+                    while walk:
+                        parent = walk.pop()
+                        for child in db.execute('SELECT hash, kind FROM connector_tokens WHERE rotated_from=?',
+                                                (parent,)).fetchall():
+                            db.execute('UPDATE connector_tokens SET expires=? WHERE hash=? AND expires>?',
+                                       (now, child['hash'], now))
+                            if child['kind'] == 'refresh':
+                                walk.append(child['hash'])
+                else:
+                    db.execute('UPDATE connector_tokens SET used=? WHERE hash=?', (now, presented))
+                answer = self._mint(db, grant, row['scope'], row['resource'], now, rotated_from=presented)
+                self._connector_sweep(db)
+        if refused is not None:
+            raise refused
+        return answer
+
+    def bearer(self, token, resource):
+        """An access token's grant, checked on every call: its hash known and unexpired, its resource this one, its grant
+        live and its person active. {grant_id, person_id, rooms, scope}, or None. A refresh token is no bearer."""
+        from .auth import token_hash
+        if not isinstance(token, str) or not token.startswith('syc_at_'):
+            return None
+        with self.transaction() as db:
+            now = self.clock()
+            row = db.execute("SELECT * FROM connector_tokens WHERE hash=? AND kind='access'", (token_hash(token),)).fetchone()
+            if row is None or not now < row['expires'] or row['resource'] != resource:
+                return None
+            grant = self._live_grant(db, row['grant_id'], now)
+            if grant is None:
+                return None
+            return {'grant_id': grant['id'], 'person_id': grant['person_id'], 'rooms': grant['rooms'], 'scope': row['scope']}
+
     def _consent_rooms(self, db, person_id):
         """The person's rooms on this home as the consent page offers them: each current room, its earlier parts
         grouped under it as `earlier_of` (spec D9), and `cloud` where a member keeps it away from cloud models."""
@@ -375,11 +517,18 @@ class Connector:
         return shown + [entry for rest in earlier.values() for entry in rest]
 
     def _connector_sweep(self, db):
-        """Pending requests past their 10 minutes, unless a code issued from one is still live. Called only after a good
-        sign-in, never by a request nobody signed in for (D18). Task 6 and Task 8 extend it."""
+        """Called only after a good sign-in or a good /token, never by a request nobody signed in for (D18). Pending
+        requests past their 10 minutes, unless a code issued from one is still live; access tokens past their end; and
+        (Task 5's line of the plan, which its build left out until here) the client rows of clients whose grants have
+        all ended 30 days ago, whose ids then work again as unused ones. Task 8 adds the receipts."""
         now = self.clock()
         db.execute('DELETE FROM oauth_pending WHERE at<=? AND (code_expires IS NULL OR code_expires<=?)',
                    (now - PENDING_SECONDS, now))
+        db.execute("DELETE FROM connector_tokens WHERE kind='access' AND expires<=?", (now,))
+        db.execute('DELETE FROM oauth_clients WHERE NOT EXISTS (SELECT 1 FROM connector_grants WHERE '
+                   'connector_grants.client_id=oauth_clients.client_id AND '
+                   'coalesce(min(connector_grants.revoked, connector_grants.ends), connector_grants.ends) > ?)',
+                   (now - 30 * 86400,))
 
     def known_client(self, db, client_id, callback):
         """Spec revision 4's one check, in order: a row with exactly this id is that client (so a key rotation or a

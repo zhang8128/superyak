@@ -392,7 +392,8 @@ COMPARED = ('users.id', 'users.is_admin', 'users.is_super_admin', 'users.salt', 
             # fix:restore-keeps-connector-revocations, the section 2's M1: a replaced file damaged in a connection column
             # is treated as absent, so every connection is revoked, never one left open as only "not compared"
             'connector_grants.id', 'connector_grants.person_id', 'connector_grants.client_id',
-            'connector_grants.redirect_host', 'connector_grants.rooms', 'connector_grants.ends', 'connector_grants.revoked')
+            'connector_grants.redirect_host', 'connector_grants.rooms', 'connector_grants.ends', 'connector_grants.revoked',
+            'connector_tokens.hash', 'connector_tokens.expires', 'connector_tokens.used')  # Task 6's tokens, the same way
 
 
 class ReconcileRefused(ValueError):
@@ -965,6 +966,37 @@ def _clear_connector_sign_ins(db, old, now, report):
         report['counts']['connector sign-ins cleared'] = db.execute('DELETE FROM oauth_pending').rowcount
 
 
+TOKEN_COMPARED = ('connector_tokens.hash', 'connector_tokens.expires', 'connector_tokens.used')
+
+
+def _keep_tokens_like_replaced(db, old, now, report):
+    """Task 6, with a usable replaced file (Rio Grande, on the restore design): a refresh token rotated since the copy
+    must not come back unrotated, nor one revoked since come back live. Each token the copy has takes the replaced
+    file's earlier expiry and any use it records; one the replaced file lacks (an access token swept after it ended) is
+    revoked. It only takes power away."""
+    if not _usable(db, old, report, *TOKEN_COMPARED):
+        return
+    there = {row[0]: row[1:] for row in old.execute('SELECT hash, expires, used FROM connector_tokens')}
+    taken = 0
+    for row in db.execute('SELECT hash, expires, used FROM connector_tokens WHERE expires>?', (now,)).fetchall():
+        theirs = there.get(row['hash'])
+        expires, used = (now, row['used']) if theirs is None else (theirs[0], theirs[1] if row['used'] is None else row['used'])
+        if type(expires) not in (int, float) or not math.isfinite(expires):
+            expires = now  # a value the replaced file can't give: fail closed
+        if expires < row['expires'] or used != row['used']:
+            db.execute('UPDATE connector_tokens SET expires=?, used=? WHERE hash=?',
+                       (min(expires, row['expires']), used, row['hash']))
+            taken += 1
+    report['counts']['connector tokens taken back'] = taken
+
+
+def _revoke_every_token(db, old, now, report):
+    """Task 6, without a usable replaced file: every token is revoked, as every connection is."""
+    if _usable(db, None, report, *TOKEN_COMPARED):
+        report['counts']['connector tokens taken back'] = db.execute(
+            'UPDATE connector_tokens SET expires=? WHERE expires>?', (now, now)).rowcount
+
+
 def _revoke_every_connection(db, old, now, report):
     """fix:restore-keeps-connector-revocations, without a usable replaced file: fail closed, as _revoke_every_grant
     does. Every connection is revoked, and the connector key is made new, since the copy's key may be the one that leaked
@@ -1210,12 +1242,13 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 _revoke_owned_ship_keys(db, old, now, report)
                 _revoke_every_grant(db, old, now, report)
                 _revoke_every_connection(db, old, now, report)
+                _revoke_every_token(db, old, now, report)
             else:
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
                              _add_member_changes_like_replaced,
                              _unpair_like_replaced, _hold_like_replaced, _keep_marks_like_replaced,
-                             _keep_connections_like_replaced, _report_differences):
+                             _keep_connections_like_replaced, _keep_tokens_like_replaced, _report_differences):
                     step(db, old, now, report)
             _unpair_named(db, old, named, report)
             _write_mark(db, old, now, db_path)

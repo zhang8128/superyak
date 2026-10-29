@@ -1393,6 +1393,7 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'room_cloud',  # never to a cloud model: every mark either file holds is kept (fix:restore-keeps-every-cloud-mark)
     'connector_grants',  # connections: every revocation, end and narrowing either file holds (fix:restore-keeps-connector-revocations)
     'oauth_pending',  # connector sign-ins: every one cleared, so none decided or redeemed since the copy comes back (Tardis)
+    'connector_tokens',  # Task 6: the earlier expiry and any use either file holds, so no rotated token comes back unused
     'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
@@ -1927,3 +1928,61 @@ def test_a_narrowed_room_set_keeps_the_copys_order(tmp_path, capsys):
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
     assert code == 0, err
     assert json.loads(grants_in(copy)[grant]['rooms']) == [r1, r2]
+
+
+
+def a_token(store, grant, kind='refresh', *, used=None, expires=None):
+    import secrets as _secrets
+    from superyak_peer.auth import token_hash
+    value = token_hash(_secrets.token_urlsafe(16))
+    with store.transaction() as db:
+        db.execute('INSERT INTO connector_tokens VALUES(?,?,?,?,?,?,?,?,?)', (value, kind, grant, 'rooms.read', 'https://home.example/mcp',
+                   expires or store.clock() + 86400, None, used, None))
+    return value
+
+
+def tokens_in(path):
+    with closing(sqlite3.connect(path)) as db:
+        db.row_factory = sqlite3.Row
+        return {row['hash']: dict(row) for row in db.execute('SELECT * FROM connector_tokens')}
+
+
+def test_a_restore_keeps_every_token_use_and_revoke_the_replaced_file_had(tmp_path, capsys):
+    """Rio Grande, on the restore design: a refresh token rotated after the copy must not come back unrotated, and one
+    revoked since must not come back live. Each token the copy has takes the replaced file's earlier expiry and any use
+    it records; one the replaced file lacks is revoked. Without a replaced file every token is revoked, as its grant is."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    t = {name: a_token(store, grant) for name in ('used_since', 'revoked_since', 'gone_since', 'untouched')}
+    copy = staged(tmp_path, store)
+    before = tokens_in(copy)
+    later = store.clock() + 5
+    with store.transaction() as db:
+        db.execute('UPDATE connector_tokens SET used=? WHERE hash=?', (later, t['used_since']))
+        db.execute('UPDATE connector_tokens SET expires=? WHERE hash=?', (later, t['revoked_since']))
+        db.execute('DELETE FROM connector_tokens WHERE hash=?', (t['gone_since'],))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    after = tokens_in(copy)
+    assert after[t['used_since']]['used'] == later
+    assert after[t['revoked_since']]['expires'] == later
+    assert after[t['gone_since']]['expires'] < before[t['gone_since']]['expires']
+    assert after[t['untouched']] == before[t['untouched']]
+    assert 'connector tokens taken back (3)' in out
+
+
+def test_without_a_replaced_file_every_token_is_revoked(tmp_path, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    for kind in ('refresh', 'access'):
+        a_token(store, grant, kind)
+    copy = staged(tmp_path, store)
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        assert db.execute('SELECT count(*) FROM connector_tokens WHERE expires > ?', (time.time(),)).fetchone()[0] == 0
+    assert 'connector tokens taken back (2)' in out

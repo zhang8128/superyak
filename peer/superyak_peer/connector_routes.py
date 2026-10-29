@@ -3,7 +3,7 @@ on any other origin, needs no session, and checks what it needs itself; none sen
 later tasks build answer 501 until then. An async route here runs every identity check and store call in the
 threadpool, never on the event loop (fix:actor-off-the-event-loop); a sync one runs there anyway."""
 import json
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -20,6 +20,22 @@ REFUSED_PAGE = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><met
                 'content="width=device-width, initial-scale=1"><title>This connection can\'t be used</title></head>'
                 '<body><main><h1>This connection can\'t be used</h1><p>The request to connect to this home isn\'t '
                 'one it can check, so nothing was shared. Go back to Claude and connect again.</p></main></body></html>')
+
+
+# RFC 6749 5.1, on every /token answer (Rio Grande's 3): the app's security headers already carry Cache-Control:
+# no-store on every response, so /token adds only the Pragma.
+NO_STORE = {'pragma': 'no-cache'}
+
+
+def parse_form(raw):
+    """A strict application/x-www-form-urlencoded body, or None: ASCII on the wire, UTF-8 in its escapes, every pair a
+    name and a value, no name twice (Task 6: the peer ships no form parser, and the plan adds no dependency)."""
+    try:
+        pairs = parse_qsl(raw.decode('ascii'), keep_blank_values=True, strict_parsing=True, errors='strict')
+    except (UnicodeDecodeError, ValueError):
+        return None
+    names = [name for name, _ in pairs]
+    return dict(pairs) if len(set(names)) == len(names) else None
 
 
 def install(app, public_origin, callback):
@@ -152,9 +168,37 @@ def install(app, public_origin, callback):
             return JSONResponse({'error': refused.error}, refused.status)
         return JSONResponse({'redirect': url})
 
+    @app.post('/token')
+    async def token(request: Request):
+        """RFC 6749's token endpoint: form-encoded only, refused before parsing otherwise (Rio Grande's 1), with RFC 6749
+        5.1's no-store on every answer and nothing but {error} when it refuses. Its identity is in its body (the code and
+        verifier, or the refresh token), so it can't refuse before reading it; the event-loop guard lists it as
+        ANONYMOUS for that reason. A session cookie is never read."""
+        if not on_public_origin(request):
+            return JSONResponse({'error': 'Not found'}, 404)
+
+        def answer(body, status=200):
+            return JSONResponse(body, status, headers=NO_STORE)
+        kind = request.headers.get('content-type', '').split(';')[0].strip().lower()
+        if kind != 'application/x-www-form-urlencoded':
+            return answer({'error': 'invalid_request'}, 400)
+        raw = await request.body()
+        if len(raw) > REGISTER_BODY_MAX:
+            return answer({'error': 'invalid_request'}, 413)
+        form = parse_form(raw)
+        if form is None or 'grant_type' not in form:
+            return answer({'error': 'invalid_request'}, 400)
+        how = {'authorization_code': store.exchange_code, 'refresh_token': store.refresh_tokens}.get(form['grant_type'])
+        if how is None:
+            return answer({'error': 'unsupported_grant_type'}, 400)
+        try:
+            made = await run_in_threadpool(how, form, public_origin + '/mcp', callback)
+        except OAuthError as refused:
+            return answer({'error': refused.error}, refused.status)
+        return answer(made)
+
     def not_yet(request: Request):
         return answer(request, {'error': NOT_YET}, 501)
 
-    for path, methods in (('/token', ['POST']),
-                          ('/mcp', ['GET', 'POST', 'DELETE'])):
+    for path, methods in (('/mcp', ['GET', 'POST', 'DELETE']),):
         app.add_api_route(path, not_yet, methods=methods)

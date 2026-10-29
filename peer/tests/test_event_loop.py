@@ -332,7 +332,8 @@ ANONYMOUS = {('POST', '/api/login'), ('POST', '/api/invitations/redeem'), ('POST
              ('POST', '/api/dockings'), ('POST', '/federation/events'),
              ('POST', '/register'),  # the connector's registration is public by design (spec r4, D18)
              ('POST', '/authorize/signin'),  # its identity is in its body: the signed request and the password
-             ('POST', '/authorize/decision')}  # and so is this one's: the pending id and its CSRF token
+             ('POST', '/authorize/decision'),  # and so is this one's: the pending id and its CSRF token
+             ('POST', '/token')}  # and /token's: the code and verifier, or the refresh token (Task 6)
 
 
 def routes_of(app):
@@ -402,7 +403,7 @@ def test_the_connector_routes_are_walked_too(tmp_path, monkeypatch):
     origin = 'https://home.example'
     app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver', origin], public_origin=origin)
     answers, seen = anonymous_answers(app, origin, monkeypatch)
-    assert {'register', 'signin', 'decision'} <= set(seen)
+    assert {'register', 'signin', 'decision', 'token'} <= set(seen)
     assert {route: answer for route, answer in answers.items() if answer[0] not in (401, 403) or answer[1]} == {}
 
 
