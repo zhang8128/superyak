@@ -54,9 +54,13 @@ async def federation_lifespan(app):
                 await running
 
 def install(app):
-    from .app import actor, body
+    from .app import actor, body, caller, current_user
     router = APIRouter()
     fed = app.state.federation
+
+    def admin_check(who):
+        with fed.store.transaction() as db:
+            fed.store._admin(db, who)
 
     @router.get('/api/connections')
     def connections(request: Request):
@@ -79,16 +83,15 @@ def install(app):
 
     @router.post('/api/connections/preview')
     async def preview(request: Request):
-        who = actor(request)
-        with fed.store.transaction() as db:
-            fed.store._admin(db, who)
+        await run_in_threadpool(admin_check, await caller(current_user, request))
         return validate_card((await body(request)).get('card'))
 
     @router.post('/api/connections/pair', status_code=201)
     async def pair(request: Request):
-        who = actor(request)
+        who = await caller(current_user, request)
         data = await body(request)
-        return fed.pair(who, data.get('card'), code=data.get('code'))  # the one check is in pair()
+        # the one check is in pair()
+        return await run_in_threadpool(fed.pair, who, data.get('card'), code=data.get('code'))
 
     @router.delete('/api/connections/{contact_id}')
     def unpair(contact_id: str, request: Request):
