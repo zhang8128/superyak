@@ -7,18 +7,23 @@ registers routes (app, door, peer and source routes), as Tardis asked.
 """
 import ast
 import asyncio
+import inspect
+import re
 from pathlib import Path
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 import superyak_peer.app
+from superyak_peer.app import create_app
 
 PACKAGE = Path(superyak_peer.app.__file__).parent
 IDENTITY = {'actor', 'member', 'ship_member', 'current_user'}
 SERVICES = {'store', 'fed', 'manager', 'sources'}  # the names route modules reach the store through
 ON_THE_LOOP = {'store.inbox_wait_slot'}  # an in-memory count of a ship's waits, with no store read
-WAITING = {'peer_routes.py:sync'}  # federation-pull rewrites it in this shape (Tardis, 2026-10-29); goes when it lands
+# federation-pull rewrites `sync` in this shape (Tardis, 2026-10-29). These two calls, and no new one, wait for it.
+WAITING = {('peer_routes.py', 'sync', 'actor'), ('peer_routes.py', 'sync', 'fed.status')}
 
 
 def dotted(node):
@@ -31,36 +36,89 @@ def dotted(node):
     return '.'.join([node.id, *reversed(parts)])
 
 
+def reaches_the_store(name, services):
+    return name.split('.')[0] in services or name.startswith(('app.state.', 'request.app.state.'))
+
+
+def services_in(tree):
+    """The service names, plus any name the module binds to one: `s = app.state.store` makes `s` one too."""
+    services, grew = set(SERVICES), True
+    while grew:
+        grew = False
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                source = dotted(node.value)
+                if source is not None and reaches_the_store(source, services):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    for target in targets:
+                        if isinstance(target, ast.Name) and target.id not in services:
+                            services.add(target.id)
+                            grew = True
+    return services
+
+
+def blocking_helpers(tree, services):
+    """The identity checks, plus every sync function in the module that calls one, the store or another such helper."""
+    functions = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+    blocking, grew = set(IDENTITY), True
+    while grew:
+        grew = False
+        for function in functions:
+            if function.name in blocking:
+                continue
+            for node in ast.walk(function):
+                name = dotted(node.func) if isinstance(node, ast.Call) else None
+                if name is not None and name not in ON_THE_LOOP and (name in blocking or reaches_the_store(name, services)):
+                    blocking.add(function.name)
+                    grew = True
+                    break
+    return blocking
+
+
 def calls_on_the_loop(read=Path.read_text):
+    """(module, async function, line, call) for each call that reads the store on the event loop."""
     found = []
-    for path in sorted(PACKAGE.glob('*.py')):
-        for function in ast.walk(ast.parse(read(path))):
+    for path in sorted(PACKAGE.rglob('*.py')):
+        tree = ast.parse(read(path))
+        services = services_in(tree)
+        blocking = blocking_helpers(tree, services)
+        for function in ast.walk(tree):
             if not isinstance(function, ast.AsyncFunctionDef):
                 continue
             for node in ast.walk(function):
                 name = dotted(node.func) if isinstance(node, ast.Call) else None
                 if name is None or name in ON_THE_LOOP:
                     continue
-                if name in IDENTITY or name.split('.')[0] in SERVICES or name.startswith('app.state.'):
-                    found.append(f'{path.name}:{function.name}:{node.lineno} calls {name}()')
+                if name in blocking or reaches_the_store(name, services):
+                    found.append((path.name, function.name, node.lineno, name))
     return found
 
 
 def test_no_async_function_in_the_package_calls_the_store_or_an_identity_check_on_the_loop():
-    assert [found for found in calls_on_the_loop() if found.rsplit(':', 1)[0] not in WAITING] == []
+    assert [found for found in calls_on_the_loop() if (found[0], found[1], found[3]) not in WAITING] == []
 
 
 def test_each_waiting_exception_is_still_needed():
-    """When federation-pull lands, `sync` runs its calls on the threadpool, this fails, and its WAITING entry goes."""
-    assert WAITING <= {found.rsplit(':', 1)[0] for found in calls_on_the_loop()}
+    """When federation-pull lands, `sync` runs these calls on the threadpool, this fails, and WAITING goes."""
+    assert WAITING <= {(module, function, name) for module, function, _, name in calls_on_the_loop()}
 
 
 @pytest.mark.parametrize('module,fixed,broken,expected', [
-    ('app.py', 'return await run_in_threadpool(store.rename_user, ', 'return store.rename_user(', 'app.py:rename_me:'),
+    ('app.py', 'return await run_in_threadpool(store.rename_user, ', 'return store.rename_user(',
+     ('app.py', 'rename_me', 'store.rename_user')),
     ('source_routes.py', 'return await run_in_threadpool(manager.create, ', 'return manager.create(',
-     'source_routes.py:data_source_create:'),
+     ('source_routes.py', 'data_source_create', 'manager.create')),
     ('peer_routes.py', 'who = await caller(current_user, request)\n        data = await body(request)',
-     'who = actor(request)\n        data = await body(request)', 'peer_routes.py:pair:'),
+     'who = actor(request)\n        data = await body(request)', ('peer_routes.py', 'pair', 'actor')),
+    # the review's survivors: an alias, the store through the request, a helper on the loop, a new call in sync
+    ('app.py', "return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
+     "db = store\n        return db.drop_item(who, key, data.get('key'))", ('app.py', 'chat_board_drop', 'db.drop_item')),
+    ('app.py', 'return await run_in_threadpool(store.link_item, ', 'return request.app.state.store.link_item(',
+     ('app.py', 'chat_board_link', 'request.app.state.store.link_item')),
+    ('peer_routes.py', 'await run_in_threadpool(admin_check, await caller(current_user, request))',
+     'admin_check(await caller(current_user, request))', ('peer_routes.py', 'preview', 'admin_check')),
+    ('peer_routes.py', 'await run_in_threadpool(fed.sync_once)\n',
+     'await run_in_threadpool(fed.sync_once)\n        fed.connections(who)\n', ('peer_routes.py', 'sync', 'fed.connections')),
 ])
 def test_the_walk_sees_a_call_put_back_on_the_loop(module, fixed, broken, expected):
     def read(path):
@@ -69,7 +127,42 @@ def test_the_walk_sees_a_call_put_back_on_the_loop(module, fixed, broken, expect
             return source
         assert source.count(fixed) == 1
         return source.replace(fixed, broken)
-    assert any(found.startswith(expected) for found in calls_on_the_loop(read))
+    assert expected not in WAITING
+    assert expected in {(module, function, name) for module, function, _, name in calls_on_the_loop(read)}
+
+
+# Routes that take no identity: signing in, redeeming an invitation, asking for access, starting a docking, and a
+# federation delivery, which is checked by its signature.
+ANONYMOUS = {('POST', '/api/login'), ('POST', '/api/invitations/redeem'), ('POST', '/api/access-requests'),
+             ('POST', '/api/dockings'), ('POST', '/federation/events')}
+
+
+def routes_of(app):
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            yield route
+        elif hasattr(route, 'original_router'):  # FastAPI keeps an included router as one object (Serenity, Task 3)
+            yield from (inner for inner in route.original_router.routes if isinstance(inner, APIRoute))
+
+
+def test_every_async_write_checks_identity_before_it_reads_the_body(tmp_path):
+    """Anonymous, with a body that isn't JSON: a route that reads the body first answers 400, not 401 or 403. The app
+    has the imprint routes on, and the peer router's routes are walked too."""
+    app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'], imprints_dir=tmp_path / 'imprints')
+    anonymous = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'})
+    answers, seen = {}, set()
+    for route in routes_of(app):
+        if not inspect.iscoroutinefunction(route.endpoint):
+            continue
+        for method in sorted(route.methods - {'GET', 'HEAD'}):
+            if (method, route.path) in ANONYMOUS:
+                continue
+            url = re.sub(r'\{[^}]+\}', '1', route.path)
+            response = anonymous.request(method, url, content=b'not json', headers={'content-type': 'application/json'})
+            answers[(method, route.path)] = response.status_code
+            seen.add(route.endpoint.__name__)
+    assert {'ship_brief', 'chat_send', 'grant_make', 'assist', 'preview', 'pair', 'sync', 'imprint_part'} <= seen
+    assert {route: status for route, status in answers.items() if status not in (401, 403)} == {}
 
 
 def ship_client(app, key):
@@ -143,12 +236,3 @@ def test_an_anonymous_write_runs_on_a_worker(env, monkeypatch):
     assert client.post('/api/access-requests', json={'name': 'Willa', 'contact': 'w@example.org'}).status_code == 201
     assert client.post('/api/dockings', json={'ship_name': 'defiant', 'machine': 'host'}).status_code == 201
     assert seen == [('request_access', 'worker'), ('start_docking', 'worker')]
-
-
-def test_the_identity_check_still_comes_before_the_body(env):
-    """The order holds: a ship key on a person's route gets 403 for the key, not 400 for a body that isn't JSON."""
-    app, _, users, _ = env
-    _, key = docked(app.state.store, users[0]['id'], 'serenity')
-    response = ship_client(app, key).post('/api/grants', content=b'not json', headers={'content-type': 'application/json'})
-    assert response.status_code == 403
-    assert response.json()['error'] == 'Ship keys cannot use this route'
