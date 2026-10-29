@@ -2,6 +2,7 @@
 and the Host header stay on the station's name. A Mac's resolver can answer Funnel's public pair for that name, and
 every call then went out to the internet and back in (health 299 ms against 36 ms on the tailnet, 2026-10-29)."""
 import http.server
+import json
 import shutil
 import socket
 import ssl
@@ -30,7 +31,7 @@ def certificate(tmp_path, name):
 class Station:
     """An HTTPS server on 127.0.0.1 that records each request's SNI name and Host header."""
 
-    def __init__(self, cert, key, redirect=None):
+    def __init__(self, cert, key, redirect=None, delay=0):
         self.seen = []
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cert, key)
@@ -41,6 +42,7 @@ class Station:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 seen.append((sni[-1] if sni else None, self.headers.get('Host'), self.path))
+                time.sleep(delay)
                 if redirect and self.path == '/redirect':
                     self.send_response(302)
                     self.send_header('Location', redirect)
@@ -95,6 +97,27 @@ def test_a_ts_net_station_is_reached_at_its_pinned_address_with_tls_on_the_name(
     assert send('GET', f'https://{NAME}:{trusted.port}/api/me', {}, None)[0] == 200
     assert trusted.seen == [(NAME, f'{NAME}:{trusted.port}', '/api/health'), (NAME, f'{NAME}:{trusted.port}', '/api/me')]
     assert len(built) == 1
+
+
+def test_a_pinned_station_that_answers_slowly_still_answers(tmp_path, monkeypatch):
+    """Rio Grande's section 2, S1: the pinned connect gets PIN_CONNECT, but the reads after it get the call's own
+    timeout. An answer 1.5 s in, with timeout=5, arrives; imprint-send waits up to 120 s. Mutation: no settimeout."""
+    cert, key = certificate(tmp_path, NAME)
+    monkeypatch.setenv('SSL_CERT_FILE', str(cert))
+    served = Station(cert, key, delay=station.PIN_CONNECT + 0.5)
+    try:
+        send = urllib_transport(timeout=5, pin=lambda host: '127.0.0.1')
+        assert send('GET', f'https://{NAME}:{served.port}/api/health', {}, None)[0] == 200
+    finally:
+        served.close()
+
+
+def test_a_station_named_in_capitals_is_pinned_too(trusted):
+    """Rio Grande's section 2, S3 (Tardis's catch): urlsplit's hostname is lowercase while the request keeps the name's
+    case, so a station configured as Station.tail0000.ts.net was asked for and then never pinned."""
+    upper = NAME.replace('station', 'Station')
+    send = urllib_transport(timeout=5, pin=lambda host: '127.0.0.1' if host == NAME else None)
+    assert send('GET', f'https://{upper}:{trusted.port}/api/health', {}, None)[0] == 200  # the name alone can't resolve
 
 
 def test_a_pinned_address_still_needs_the_names_certificate(tmp_path, monkeypatch):
@@ -260,6 +283,8 @@ class FakeDns:
     (lambda q: dns_answer(q, records=[(5, '1.2.3.4'), (1, '100.64.0.1')]), '100.64.0.1'),  # another type first
     (lambda q: dns_answer(q, records=[(1, '208.111.35.209')]), None),   # Funnel's public address
     (lambda q: dns_answer(q, records=[(1, '100.128.0.1')]), None),      # just past 100.64.0.0/10
+    (lambda q: dns_answer(q, records=[(1, '100.63.255.255')]), None),   # just before it (Rio Grande's S2)
+    (lambda q: dns_answer(q, records=[(5, '100.70.202.124')]), None),   # four bytes in 100.64/10, but not an A record
     (lambda q: dns_answer(q, records=[]), None),
     (lambda q: dns_answer(q, rcode=3, records=[(1, '100.70.202.124')]), None),  # an error code, whatever follows
     (lambda q: dns_answer(q, flags=0x0100, records=[(1, '100.70.202.124')]), None),  # not a response (no QR)
@@ -269,7 +294,8 @@ class FakeDns:
     (lambda q: dns_answer(q, records=[(1, '100.70.202.124')])[:-3], None),  # cut short
     (lambda q: b'\x00' * 5, None),
     (lambda q: None, None),                                             # no answer within the timeout
-], ids=['tailnet', 'tailnet-no-pointer', 'cname-first', 'public', 'past-the-range', 'empty', 'error-code',
+], ids=['tailnet', 'tailnet-no-pointer', 'cname-first', 'public', 'past-the-range', 'before-the-range', 'not-a-record',
+        'empty', 'error-code',
         'not-a-response', 'other-question', 'other-id',
         'cut-short', 'garbage', 'silent'])
 def test_magicdns_address_takes_only_a_tailnet_answer_to_its_own_question(respond, expected):
@@ -280,6 +306,17 @@ def test_magicdns_address_takes_only_a_tailnet_answer_to_its_own_question(respon
         ident, flags, questions = struct.unpack('>HHH', query[:6])
         assert flags == 0x0100 and questions == 1  # a standard query, recursion desired
         assert query[12:] == b'\x07station\x08tail0000\x02ts\x03net\x00' + struct.pack('>HH', 1, 1)
+    finally:
+        served.close()
+
+
+def test_each_query_has_its_own_id():
+    """An answer must carry its query's id, so the id is drawn fresh each time (Rio Grande's N2: a fixed one survived)."""
+    served = FakeDns(lambda q: None)
+    try:
+        for _ in range(4):
+            magicdns_address(NAME, server=served.address, timeout=0.05)
+        assert len({struct.unpack('>H', query[:2])[0] for query in served.queries}) > 1
     finally:
         served.close()
 
@@ -302,11 +339,17 @@ def test_a_hook_run_keeps_a_pin_miss_on_disk_for_the_next_prompt(tmp_path):
     pin, unpin = _pinning(marker, lambda: clock[0], ask=ask)
     assert pin(NAME) == '100.70.202.124' and not marker.exists()  # an answer writes nothing
     unpin(NAME)                                                    # that address wouldn't connect
-    assert marker.exists() and oct(marker.stat().st_mode & 0o777) == '0o600'
+    assert oct(marker.stat().st_mode & 0o777) == '0o600'
+    assert json.loads(marker.read_text()) == {'at': 1000.0, 'host': NAME}  # a time and a host, never an address
     pin, unpin = _pinning(marker, lambda: clock[0] + 30, ask=ask)  # the next prompt, a new process
     assert pin(NAME) is None and asked == [NAME]                   # by the name, without asking
+    assert pin('other.tail0000.ts.net') == '100.70.202.124'        # another name's miss is its own
     pin, unpin = _pinning(marker, lambda: clock[0] + 61, ask=ask)  # a minute on
-    assert pin(NAME) == '100.70.202.124' and asked == [NAME, NAME]
+    assert pin(NAME) == '100.70.202.124' and asked == [NAME, 'other.tail0000.ts.net', NAME]
+    for damaged in ('not json', '{"at": "x", "host": "%s"}' % NAME, '{"host": "%s"}' % NAME, '[]',
+                    '{"at": 99999999, "host": "%s"}' % NAME):  # damaged, or from the future: as if absent
+        marker.write_text(damaged)
+        assert _pinning(marker, lambda: clock[0], ask=ask)[0](NAME) == '100.70.202.124', damaged
 
 
 def test_a_hook_run_keeps_a_magicdns_miss_too_but_never_for_another_name(tmp_path):

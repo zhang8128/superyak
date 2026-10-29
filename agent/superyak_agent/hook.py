@@ -156,30 +156,47 @@ class _Link:
         return self.inner or urllib_transport(timeout, limit, pin=self.pin, unpin=self.unpin)
 
 
+def _recently_missed(marker, host, now):
+    """Whether `host`'s tailnet pin missed less than UNREACHABLE_SECONDS ago, by the rules of _recently_unreachable: a
+    damaged marker, or one from the future, counts as absent, and an expired one is deleted."""
+    try:
+        missed = json.loads(marker.read_text())
+        age, name = now - float(missed['at']), missed['host']
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if math.isfinite(age) and age >= UNREACHABLE_SECONDS:
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return name == host and math.isfinite(age) and 0 <= age < UNREACHABLE_SECONDS
+
+
 def _pinning(marker, clock, ask=None):
     """A hook run's tailnet pin and unpin, which keep a miss on disk at `marker` for UNREACHABLE_SECONDS: a *.ts.net name
-    MagicDNS didn't answer, or an address that wouldn't connect. Meanwhile the run goes by the name, so the next prompts
-    pay neither the query nor the connect again. A marker that can't be written costs only that saving."""
+    MagicDNS didn't answer, or an address that wouldn't connect. The marker holds the time and the host, never an
+    address, and only the hook reads it. Meanwhile that host goes by its name, so the next prompts pay neither the
+    query nor the connect again. A marker that can't be written costs only that saving."""
     pins = {}
     kwargs = {'ask': ask} if ask else {}
 
-    def note():
+    def note(host):
         try:
-            write_private_text(marker, repr(float(clock())))
+            write_private_text(marker, json.dumps({'at': float(clock()), 'host': host}))
         except OSError:
             pass
 
     def pin(host):
-        if _recently_unreachable(marker, clock()):  # the same minute's rule as the unreachable marker
+        if _recently_missed(marker, host, clock()):
             return None
         address = tailnet_pin(host, pins=pins, **kwargs)
         if address is None and host and host.endswith('.ts.net'):
-            note()
+            note(host)
         return address
 
     def unpin(host):
         tailnet_unpin(host, pins=pins)
-        note()
+        note(host)
     return pin, unpin
 
 

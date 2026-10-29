@@ -151,7 +151,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
     def __init__(self, host, *args, address, pinned, **kwargs):
         super().__init__(host, *args, **kwargs)
-        if self.host != pinned:
+        if self.host.lower() != pinned.lower():  # urlsplit's hostname is lowercase; a request keeps the name's case
             return
 
         def connect(where, timeout=None, source=None):
