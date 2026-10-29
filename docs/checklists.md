@@ -248,7 +248,10 @@ it too, since the words are a literal piece of the command. Its long form:
   partner tests a merge that isn't pushed yet, agree on it by tree: `git rev-parse <commit>^{tree}` printing the
   same hash on both machines proves byte-identity without a CI run (Tardis, permissions-core, 2026-10-27).
 - The Pi suites pass at that commit: engram, peer and agent, whichever the diff touches. Known failures are named
-  (the 3 Kuzu tests).
+  (the 3 Kuzu tests in engram's test_knowledge.py: the Pi's kernel uses 16 KB pages, `getconf PAGESIZE`, and Kuzu
+  0.11.3 can't release a frame on them; `ops:kuzu-on-16k-pages`). A failure counts as known only after the same
+  test fails the same way on main, on the same machine; read this line before re-deriving one (Rio Grande,
+  2026-10-29, re-derived the Kuzu three).
 - Several branches may merge as a train, each with its own section 2 verdict from the approver the law names and,
   where it changes safety code, each partner's yes. Each reviewed head is merged `--no-ff`, in order, on a branch
   from main, and each merge is clean: no conflict and no hand edit. A branch whose merge stops leaves the train,
@@ -259,7 +262,9 @@ it too, since the words are a literal piece of the command. Its long form:
   merge commit is the one the verdict names" is answered with each reviewed head beside its train merge in the post.
   A security fix in a train still merges, restarts and is probed on the Pi before main is pushed (Rio Grande and
   Tardis, 2026-10-28: three peer runs, each made stale by the merge before it, became one).
-- GitHub CI's result is read, including the jobs the Pi can't run.
+- GitHub CI's result is read, including the jobs the Pi can't run: a pushed head's before its merge, and main's after
+  the push. A red job's failing test is named and fixed or put on the board (Tardis's T5, 2026-10-29: a comment-only
+  head went red on an engram flake, and no one read it).
 - The `only-include` lists name every new module and test file, and the package builds and imports in a clean
   venv. The Pi's editable checkout hides a missing one. Peer's modules and test files and agent's modules are held
   by test_packaging (retired there, see "Retiring an item"); check any other package's list by hand.
@@ -423,6 +428,9 @@ Why: a confident wrong number sends three ships the wrong way. (Tardis posted 14
 - [ ] A speed claim names its route (tailnet, Funnel relay, loopback), runs interleaved rounds, and reports the
       spread, not only a median. A target measured on another route is reported as unmeasured (2026-10-27:
       chat paging timed on conference Wi-Fi through the relay, 3x between rooms for no reason in the code).
+- [ ] A cause, or how far a rule reaches, goes in the room with what was checked. Otherwise it goes as "untested:"
+      with the split that would settle it (Serenity, 2026-10-29: "load", "your sampler" and the body-first probe on
+      `/token` were each stated as fact, and each was disproved by the next split).
 
 ## A spec
 
@@ -556,6 +564,8 @@ it, not only as its diff reads.
 - [ ] Before a mutant result is trusted, it is shown that the mutant changed the file (`cmp` against the kept copy)
       and that the test written for it ran; a mutant counts as caught only when its own test fails (Serenity and
       Tardis, 2026-10-28: a `sed` that didn't apply and a `-k` that selected nothing each made a false survivor).
+      Mutants are applied in a scratch copy, never in a worktree whose suite is running: a subprocess test there
+      imports the mutated file (Rio Grande, 2026-10-29, threw away a whole run for it).
 - [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
       one from before the last migration (Tardis, 2026-10-29: removing the lost-identity check (G4b) looked harmless
       on a current store, but a store from before federation pull was migrated when it opened, before the refusal).
@@ -602,5 +612,7 @@ Once Andy says yes, this list will be `~/.superyak/checklists/zsh-commands.md` (
       Serenity both).
 - [ ] No `echo ====` and the like: zsh treats a leading `=` as a command lookup.
 - [ ] Never match processes by a pattern that's in your own command line: `pkill -f`, `pgrep -f` in a loop, or a
-      `case` on /proc cmdlines all match the shell running them. List pids first, or run a script that takes the
-      pattern as an argument (Rio Grande killed its own shell four times, 2026-10-27).
+      `case` on /proc cmdlines all match the shell running them. List pids first, run a script that takes the
+      pattern as an argument, or bracket one letter, `pgrep -f '[p]ytest'`, so the pattern can't match its own text
+      (Rio Grande killed its own shell four times, 2026-10-27, and twice more on 2026-10-29: two waiters that waited
+      on themselves, and a `pkill` that ended its own shell).
