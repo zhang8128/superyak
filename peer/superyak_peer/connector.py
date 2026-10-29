@@ -514,11 +514,6 @@ class Connector:
                 return None
             return {'grant_id': grant['id'], 'person_id': grant['person_id'], 'rooms': grant['rooms'], 'scope': row['scope']}
 
-    def connector_call(self, grant, name, arguments):
-        """One tools/call for a grant as `bearer` gave it: the tool's result, or ToolRefused. Task 8 builds the four
-        tools here; until then every call answers {'ok': True}."""
-        return {'ok': True}
-
     def _consent_rooms(self, db, person_id):
         """The person's rooms on this home as the consent page offers them: each current room, its earlier parts
         grouped under it as `earlier_of` (spec D9), and `cloud` where a member keeps it away from cloud models."""

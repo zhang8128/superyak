@@ -1,4 +1,5 @@
 """Remote connector, Task 7: `/mcp`, stateless JSON-RPC over POST (spec "`/mcp`: Streamable HTTP, by hand")."""
+import json
 import math
 
 import pytest
@@ -32,8 +33,10 @@ def test_initialize_list_call_ping_and_initialized(connected):
     assert [tool['name'] for tool in listed['result']['tools']] == ['rooms', 'read_room', 'search', 'fetch']
     called = mcp(connected, rpc('tools/call', {'name': 'rooms', 'arguments': {}}, id='three'), access(connected)).json()
     assert called['id'] == 'three' and called['result']['isError'] is False
-    assert called['result']['structuredContent'] == {'ok': True}  # Task 8's tools; a stub here
-    assert called['result']['content'] == [{'type': 'text', 'text': '{"ok":true}'}]  # as structuredContent is sent
+    listed = called['result']['structuredContent']
+    assert sorted(room['title'] for room in listed['rooms']) == ['Care plan', 'Lab notes']
+    assert called['result']['content'] == [{'type': 'text', 'text': json.dumps(listed, ensure_ascii=False,
+                                                                                 separators=(',', ':'))}]  # byte for byte
     assert mcp(connected, rpc('ping', id=4), access(connected)).json() == {'jsonrpc': '2.0', 'id': 4, 'result': {}}
 
 
@@ -283,7 +286,6 @@ def test_a_tool_call_gets_the_grant_bearer_gave(connected, monkeypatch):
         (grant['person_id'], grant['rooms'], name, arguments)) or {'ok': True})
     mcp(connected, rpc('tools/call', {'name': 'search', 'arguments': {'query': 'plan'}}), access(connected))
     mcp(connected, rpc('tools/call', {'name': 'rooms'}), access(connected))  # no arguments: an empty object
-    import json
     assert seen == [(connected.person['id'], json.dumps(connected.rooms), 'search', {'query': 'plan'}),
                     (connected.person['id'], json.dumps(connected.rooms), 'rooms', {})]
 
