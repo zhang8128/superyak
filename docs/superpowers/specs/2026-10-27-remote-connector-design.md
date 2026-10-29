@@ -26,6 +26,9 @@ at once, and the first week's revokes are read by their reason. Lines change und
 Revision 4 is amended a third time by Task 7's section 2: a connector token on another route gets 401, and "Limits"
 says why `/mcp` counts only `tools/call`, from the reader's measurement on the Pi.
 
+Revision 4 is amended a fourth time by Task 8's build: a receipt names its person and app, a restore takes the replaced
+file's receipts as they are, and the limit is counted from them. Lines change under "Receipts" and "Limits".
+
 ## Why
 
 Andy, 2026-10-27: "is superyak something that can be run from claude or chatgpt…", "or scientists or doctors". He is
@@ -408,15 +411,20 @@ federation carries it." Phase 1 never reads a room on another home (D7).
 
 **Receipts** (`connector_reads`, D4).
 
-- Every `tools/call` writes one, in the same transaction as its read: the time, the grant, the tool, the rooms it read
-  (ids, never text), the rooms it refused and why, and the result's size.
+- Every `tools/call` writes one, in the same transaction as its read: the time, the grant, the person, the app (its
+  redirect host), the tool, the rooms it read (ids, never text), the rooms it refused and why, and the result's size.
+  It names its person and app itself, with no foreign key to the grant, so it can be shown after a restore removed
+  the grant.
 - A call that fails or whose query is interrupted rolls back its transaction, and the receipt with it
   (db.py:122-124). Its failure receipt is written in a fresh transaction.
 - A refused room is recorded by id only when the person is in it (marked, or outside the grant's set). Any other id
   the chat sent isn't stored, since that would store an argument.
 - For `search`, the receipt records the rooms that appear in the results.
 - A receipt never holds the query or any other argument.
-- Receipts are kept while the grant lives, plus one year.
+- Receipts are kept while the grant lives, plus one year; one whose grant is gone, a year from when it was made.
+- A restore takes the replaced file's receipts as they are, since a receipt grants nothing (Rio Grande and Tardis, on
+  Task 8's design): one made since the copy comes back, and one a person cleared since stays cleared. Without a usable
+  replaced file, the copy's stay and the report says what was lost.
 
 **Connected apps.** The person's web app shows each connection (the UI never says "grants"):
 
@@ -444,7 +452,9 @@ private chats" (app.js:979).
 ### Limits
 
 - `/mcp` allows 60 `tools/call` a minute and 2,000 a day per grant. `initialize`, `tools/list` and `ping` don't count.
-  Over the limit, it answers 429 with `Retry-After`.
+  Over the limit, it answers 429 with `Retry-After`. The calls are counted from the receipts, in the call's own
+  transaction, so a restart doesn't empty the count. A call the limit refuses writes no receipt, so a 429 spends
+  nothing; a tool's own refusal writes one and counts.
 - Each `/mcp` request makes one store read (about 1 ms on the Pi) before its grant is known, as PublicRoute's key check
   does, so no per-grant count can bound it. A bound before any lookup belongs to the public route (board
   `fix:public-route-bound-before-lookup`).

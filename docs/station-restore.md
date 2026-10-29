@@ -190,7 +190,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    approved from memory. If the report says marks set since the
    copy were not kept, ask the members of the rooms that matter to check their "never to a cloud model" marks in the
    browser before any ship is added to those rooms. Tell the people whose connections the report lists as revoked to
-   connect again from their app if they still want it; a connection made after the copy is gone too. The peers the report says it
+   connect again from their app if they still want it; a connection made after the copy is gone too. If the report says read
+   receipts made since the copy could not be kept, tell the people with connections that Connected apps no longer shows
+   what was read between the copy and the restore. The peers the report says it
    unpaired need nothing more; pair again, in the browser after the start, only a peer you want that the report lists as
    paired in the replaced file but not here. If your own account comes back waiting for
    activation, renew it (the file must not exist yet; the command writes it mode 0600, and the link is never put in a
