@@ -212,13 +212,26 @@ def test_a_request_signed_before_a_restore_is_a_replay_even_from_a_fast_clock(pu
     assert pull(peers['mac'], a, clock, at=restored + 301)['more'] is False
 
 
-def test_a_damaged_restore_mark_holds_pulls_for_300_s_from_the_listeners_start(pulling):
+def test_a_restore_mark_in_the_past_holds_only_until_it_plus_300_s(pulling):
+    """The floor follows the mark, not the listener's clock (the reader's M5: `now` for the mark survived a test whose
+    mark was now). Mutation: the floor taken from now."""
+    clock, a, peers, contacts = pulling
+    restored = int(clock()) - 200
+    mark_restored(a, json.dumps({'at': float(restored), 'replaced': False, 'path': '/x'}))
+    refused(lambda: pull(peers['mac'], a, clock, at=restored + 300), 409, 'Replay')
+    assert pull(peers['mac'], a, clock, at=restored + 301)['more'] is False
+
+
+@pytest.mark.parametrize('mark', ['not json', '{"at": 1e999}', '{"at": NaN}', '{"at": 1%s}' % ('0' * 400), '{}'],
+                         ids=['not-json', 'infinite', 'nan', 'overflow', 'no-at'])
+def test_a_damaged_restore_mark_holds_pulls_for_300_s_from_the_listeners_start(pulling, mark):
     """A damaged mark can't say when the restore was, and the listener restarts after every restore (runbook step 8),
-    so the floor falls back to its start plus 300 s: closed for 5 minutes, and no longer. Mutation: a damaged mark as
-    no floor."""
+    so the floor falls back to its start plus 300 s: closed for 5 minutes, and no longer. A time that isn't a finite
+    number is damaged too: 1e999 used to refuse every pull for good, NaN set no floor, 10**400 raised (the reader's
+    should-fix 2). Mutations: a damaged mark as no floor, or as +inf."""
     clock, a, peers, contacts = pulling
     started = a[2]._started
-    mark_restored(a, 'not json')
+    mark_restored(a, mark)
     refused(lambda: pull(peers['mac'], a, clock, at=int(started) + 300), 409, 'Replay')
     clock.at = started + 301
     assert pull(peers['mac'], a, clock, at=int(started) + 301)['more'] is False

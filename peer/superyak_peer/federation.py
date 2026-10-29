@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import re
 import sqlite3
 import threading
@@ -375,14 +376,17 @@ class Federation:
     @staticmethod
     def _restored_at(db):
         """When the restore reconcile last ran on this store, from the mark it leaves in system_meta (backups.py
-        `_write_mark`, kept after install): -inf if it never ran, None if the mark is damaged."""
+        `_write_mark`, kept after install): -inf if it never ran, None if the mark is damaged. A time that isn't a finite
+        number is damaged too (Rio Grande's reader: an integer of 10**400 overflowed, 1e999 refused every pull for
+        good, NaN set no floor), and only a hand edit makes one."""
         row = db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()
         if row is None:
             return float('-inf')
         try:
-            return float(json.loads(row[0])['at'])
-        except (TypeError, ValueError, KeyError):
+            at = float(json.loads(row[0])['at'])
+        except (TypeError, ValueError, KeyError, OverflowError):
             return None
+        return at if math.isfinite(at) else None
 
     def _replay_floor(self, db):
         """The `at` at or below which a pull request counts as a replay (fix:restore-keeps-pull-nonces). A copy's nonces
