@@ -322,6 +322,20 @@ def test_a_followed_room_is_kept_so_the_next_run_posts_there_at_once(tmp_path):
     assert sent and station.posts[-1][0] == 'room-city-2'
 
 
+def test_a_followed_room_is_forgotten_when_the_timer_names_another_room(tmp_path):
+    """The section 2 review's surviving mutant: no test changed the configured room, so a run that kept posting where
+    an old --room led passed. A new --room is where the lines go, and the old follow is dropped."""
+    station = ReplacedStation([{'id': ROOM}, {'id': 'room-city-2', 'linked_room_id': ROOM}])
+    run(tmp_path, Route(), station=station)
+    assert json.loads((tmp_path / 'route-watch.json').read_text())['followed'] == [ROOM, 'room-city-2']
+    later = Clock()
+    later.now += rw.DAY + 1  # the daily line, so this run has something to post
+    sent = rw.run_once(CONFIG, 'room-ops', tmp_path / 'route-watch.json', station, now=later,
+                       resolve=lambda host: '203.0.113.9', request=Route())
+    assert sent and station.posts[-1][0] == 'room-ops'
+    assert 'followed' not in json.loads((tmp_path / 'route-watch.json').read_text())
+
+
 def test_a_continuation_this_ship_is_not_in_gets_one_attempt(tmp_path):
     """Serenity's point: the station says replaced, but the listed rooms lead nowhere new (the ship isn't in the room
     that continues it), so continued() hands back the same room. One attempt, the line kept, no second post."""
