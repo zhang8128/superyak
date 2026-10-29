@@ -345,10 +345,13 @@ def test_a_restore_also_ends_items_that_ran_out_on_their_own_just_before_it(tmp_
     andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     request = store.request_access('Eve', 'eve@example.org', '')
     waiting = store.start_docking('defiant', 'bazzite')
+    old_request, old_docking = store.request_access('Old', 'old@example.org', ''), store.start_docking('voyager', 'delta')
     just_now = time.time() - 2
-    with store.transaction() as db:  # both ran out on their own two seconds ago
+    with store.transaction() as db:  # two ran out on their own two seconds ago, two long ago (the re-check's R6)
         db.execute('UPDATE access_requests SET expires=? WHERE id=?', (just_now, request['id']))
         db.execute('UPDATE dockings SET expires=? WHERE id=?', (just_now, waiting['id']))
+        db.execute('UPDATE access_requests SET expires=1000.0 WHERE id=?', (old_request['id'],))
+        db.execute('UPDATE dockings SET expires=1000.0 WHERE id=?', (old_docking['id'],))
     copy = staged(tmp_path, store)
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
     assert code == 0, err
@@ -359,6 +362,9 @@ def test_a_restore_also_ends_items_that_ran_out_on_their_own_just_before_it(tmp_
     with pytest.raises(Problem):
         live.confirm_docking(andy['id'], waiting['id'], waiting['code'])
     assert 'pending access requests expired (0)' in out and 'waiting dockings expired (0)' in out
+    with live.transaction() as db:  # however long ago it ran out, it ends as the fact, not at some margin back
+        ends = db.execute('SELECT expires FROM access_requests UNION ALL SELECT expires FROM dockings').fetchall()
+    assert [row[0] for row in ends] == [backups.ENDED] * 4
 
 
 def peer_station(tmp_path):
