@@ -381,21 +381,18 @@ def test_federation_units_install_and_remove_only_their_own_files(tmp_path):
                                               '--user daemon-reload']
 
 
-def test_the_restore_runbook_stops_and_starts_the_federation_units():
-    """Federation pull plan SF10: a restart mid-restore must not start federate or the listener writing into a half-restored
-    database, so step 3 disables and stops them, and step 8 starts them after the lighthouse and checks them."""
-    runbook = (REPO / 'docs' / 'station-restore.md').read_text().splitlines()
-
-    def line(start):
-        [found] = [text for text in runbook if text.strip().startswith(start)]
-        return found
-    disable = line('for unit in superyak-ship superyak-odo superyak-wormhole superyak-federate')
-    stop = line('systemctl --user stop superyak-backup.service')
-    enable = line('systemctl --user enable --now superyak-federate')
-    active = line('for unit in superyak-lighthouse superyak-door')
-    for unit in ('superyak-federate', 'superyak-federation-listen'):
-        assert all(unit in text for text in (disable, stop, enable, active)), unit
-    assert runbook.index('   ' + enable.strip()) > runbook.index('   systemctl --user start superyak-lighthouse superyak-door')
+def test_the_restore_runbook_puts_the_federation_units_back_as_they_were():
+    """Federation pull plan SF10 and Rio Grande's SF5: step 3 saves each federation unit's state with the watchers'
+    (by pattern, so only installed ones), then disables and stops it, so a restart mid-restore can't start one writing
+    into a half-restored database. Step 8 puts each back as it was, after the lighthouse. Nothing names the units
+    elsewhere, so nothing enables one that isn't installed, or one Andy turned off."""
+    lines = (REPO / 'docs' / 'station-restore.md').read_text().splitlines()
+    [capture] = [text for text in lines if 'list-units --all --plain --no-legend' in text]
+    assert "'superyak-ship-*'" in capture and "'superyak-federat*'" in capture
+    assert [text for text in lines if 'superyak-federat' in text and 'systemctl' in text] == [capture]  # commands only
+    lighthouse = lines.index('   systemctl --user start superyak-lighthouse superyak-door')
+    restored = [n for n, text in enumerate(lines) if 'watchers.txt' in text and 'systemctl --user start "$unit"' in text]
+    assert restored and restored[0] > lighthouse
 
 
 def test_the_launchd_template_runs_federate_and_is_restarted_only_after_a_crash():
