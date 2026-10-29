@@ -432,8 +432,9 @@ class Federation:
         if abs(value['at'] - now) > 300:
             raise Problem(403, 'Clocks differ by more than 5 minutes')
         with self.store.transaction() as db:
-            # pruned by the request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock, by
-            # a margin no clock excursion shorter than NONCE_KEEP undoes (fix:pull-nonces-prune-margin)
+            # pruned by the request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock,
+            # unless the clock steps back more than NONCE_KEEP - 300 s between a prune and the replay, as _replay_floor
+            # says (fix:pull-nonces-prune-margin)
             db.execute(PRUNE_NONCES, (now - NONCE_KEEP,))
             replay = (value['at'] <= self._replay_floor(db)
                       or db.execute('SELECT 1 FROM pull_nonces WHERE origin=? AND nonce=?',

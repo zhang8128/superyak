@@ -235,6 +235,22 @@ def test_the_nonce_prune_uses_an_index_on_at(pulling):
     assert 'SEARCH' in plan and 'pull_nonces_at' in plan, plan
 
 
+def test_serve_pull_prunes_with_prune_nonces_itself(pulling, monkeypatch):
+    """The index test pins PRUNE_NONCES's plan, so serve_pull must run that text and no copy of its own (the re-check's
+    R3: a literal at the call site scanned and passed every other test). With the constant made a no-op, a nonce a day
+    and a second old stays. Mutation: a literal prune at the call site."""
+    from superyak_peer import federation
+    monkeypatch.setattr(federation, 'PRUNE_NONCES', 'DELETE FROM pull_nonces WHERE 0 AND at<?')
+    clock, a, peers, contacts = pulling
+    start = clock.at
+    first = request(peers['mac'], a, clock)
+    a[2].serve_pull(canonical(first))
+    clock.at = start + 86401
+    pull(peers['mac'], a, clock)
+    with a[0].transaction() as db:
+        assert db.execute('SELECT 1 FROM pull_nonces WHERE nonce=?', (first['nonce'],)).fetchone() is not None
+
+
 def mark_restored(a, value):
     """The mark the restore reconcile leaves in system_meta (backups.py _write_mark)."""
     with a[0].transaction() as db:
