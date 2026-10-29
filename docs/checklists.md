@@ -571,6 +571,11 @@ it, not only as its diff reads.
       Tardis, 2026-10-28: a `sed` that didn't apply and a `-k` that selected nothing each made a false survivor).
       Mutants are applied in a scratch worktree, never in one whose suite is running: a subprocess test there
       imports the mutated file (Rio Grande, 2026-10-29, threw away a whole run for it).
+- [ ] No file in a worktree is edited while a suite runs there (check with `pgrep -fa pytest` first): the run then
+      tests a mix of two heads and proves neither (Rio Grande, 2026-10-29, twice, and both runs were thrown away).
+- [ ] Each reviewer agent gets a scratch folder of its own for its scripts, worktree and verdict, named in its brief:
+      two reviewers sharing one `run.sh` overwrote each other, and one had to rerun every mutant (Rio Grande's
+      readers, 2026-10-29).
 - [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
       one from before the last migration (Tardis, 2026-10-29: removing the lost-identity check (G4b) looked harmless
       on a current store, but a store from before federation pull was migrated when it opened, before the refusal).
