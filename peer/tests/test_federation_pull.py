@@ -190,6 +190,20 @@ def test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock(pulling):
     refused(lambda: a[2].serve_pull(canonical(early)), 409, 'Replay')
 
 
+def test_a_clock_that_runs_ahead_and_is_set_back_prunes_no_nonce_a_replay_needs(pulling):
+    """fix:pull-nonces-prune-margin (the restore reader's adjacent note): the prune reads the listener's own clock. If
+    it runs 20 minutes ahead while a pull comes in, then is set right, a request served before the jump still passes
+    the 300 s check, so its nonce must still be there. Mutation: the prune back at 600 s."""
+    clock, a, peers, contacts = pulling
+    start = clock.at
+    first = request(peers['mac'], a, clock)
+    a[2].serve_pull(canonical(first))
+    clock.at = start + 1200  # the clock jumps ahead, and a pull in that time prunes by it
+    pull(peers['mac'], a, clock)
+    clock.at = start + 10  # and is set right
+    refused(lambda: a[2].serve_pull(canonical(first)), 409, 'Replay')
+
+
 def mark_restored(a, value):
     """The mark the restore reconcile leaves in system_meta (backups.py _write_mark)."""
     with a[0].transaction() as db:
