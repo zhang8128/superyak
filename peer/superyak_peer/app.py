@@ -242,6 +242,11 @@ def ship_member(request: Request):
 def actor(request):
     return current_user(request)['id']
 
+async def caller(check, request):
+    """The caller's id, from `current_user`, `member` or `ship_member` run on the threadpool. Each reads the store, and
+    every route shares this event loop, so an async route never runs one on it (Tardis's nit, 2026-10-29)."""
+    return (await run_in_threadpool(check, request))['id']
+
 def tailnet_only(request):
     """Store-copy spec I 9: an imprint reaches the station over the tailnet only. The public route lets a request with
     a valid ship key through, so the request, manifest, parts and complete routes refuse a public (Funnel) one here,
@@ -301,6 +306,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         raise ValueError('Federation requires HTTPS')
     app = FastAPI(title='Superyak', docs_url=None, redoc_url=None, openapi_url=None, lifespan=federation_lifespan)
     store = app.state.store = Store(data_dir, clock=clock, share_link_file=share_link_file)
+    if federation_endpoint:
+        store.claim_federation_mode('push')  # federation pull spec §1: at every start; the same mode again is a no-op
     app.state.federation = Federation(store, endpoint=federation_endpoint)
     app.state.agent_history = agent_history  # version check V1: read once by `serve`; None means off
     app.state.sync_enabled = sync_enabled
@@ -397,7 +404,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             if credential is None:
                 raise Problem(400, 'Choose one of the demo accounts')
             response = await login_response(request, credential['username'], credential['password'])
-            store.logout(request.cookies.get(COOKIE))
+            await run_in_threadpool(store.logout, request.cookies.get(COOKIE))
             return response
 
     @app.get('/api/me')
@@ -424,8 +431,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/ships/me/drafts', status_code=201)
     async def ship_draft(request: Request):
-        who, data = ship_member(request)['id'], await body(request)
-        return store.ship_draft(who, data)
+        who, data = await caller(ship_member, request), await body(request)
+        return await run_in_threadpool(store.ship_draft, who, data)
 
     @app.get('/api/ships/directory')
     def ship_directory(request: Request):
@@ -437,18 +444,19 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/ships/me/tickets')
     async def ticket_issue(request: Request):
-        who, data = ship_member(request)['id'], await body(request)
+        who, data = await caller(ship_member, request), await body(request)
         asked = data.get('decisions')
         decisions = isinstance(asked, list) and {'defer', 'answered'} <= {d for d in asked if isinstance(d, str)}
-        return store.issue_ticket(who, data.get('message_id'), app.state.federation.identity.peer_id, decisions=decisions)
+        return await run_in_threadpool(store.issue_ticket, who, data.get('message_id'),
+                                       app.state.federation.identity.peer_id, decisions=decisions)
 
     @app.post('/api/ships/me/unread')
     async def inbox_unread(request: Request, breakouts: str | None = None):
-        who, data = ship_member(request)['id'], await body(request)
+        who, data = await caller(ship_member, request), await body(request)
         cursor, limit, wait = data.get('cursor'), data.get('limit', 30), wait_seconds(data.get('wait'))
         only_mentions = breakout_filter(breakouts)  # breakouts S6: the query's opt-in breakouts=mentions
         if not wait:
-            return store.unread(who, cursor, limit, breakouts=only_mentions)
+            return await run_in_threadpool(store.unread, who, cursor, limit, breakouts=only_mentions)
         # Every route shares this event loop, so a wait sleeps with await and holds no transaction across a sleep.
         # Store calls take the process lock and write (last_used, the cursor touch), so in a wait they run on the
         # threadpool: a busy store delays only this waiter, never the event loop the other routes share.
@@ -466,19 +474,19 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/ships/me/unread/advance')
     async def inbox_advance(request: Request):
-        who, data = ship_member(request)['id'], await body(request)
-        return store.advance(who, data.get('cursor'), data.get('to'))
+        who, data = await caller(ship_member, request), await body(request)
+        return await run_in_threadpool(store.advance, who, data.get('cursor'), data.get('to'))
 
     @app.post('/api/ships/me/watch')
     async def ship_watch(request: Request):
-        who, data = ship_member(request)['id'], await body(request)
-        return store.station_watch(who, parse_presence(request.headers), data.get('minutes'),
-                                   data.get('writable', False), data.get('label'))
+        who, data = await caller(ship_member, request), await body(request)
+        return await run_in_threadpool(store.station_watch, who, parse_presence(request.headers), data.get('minutes'),
+                                       data.get('writable', False), data.get('label'))
 
     @app.post('/api/ships/me/rooms', status_code=201)
     async def breakout_open(request: Request):
-        who, data = ship_member(request)['id'], await body(request)
-        return store.open_breakout(who, data.get('title'), data.get('ships'))
+        who, data = await caller(ship_member, request), await body(request)
+        return await run_in_threadpool(store.open_breakout, who, data.get('title'), data.get('ships'))
 
     @app.post('/api/ships/me/rooms/{key}/leave')
     def breakout_leave(key: str, request: Request):
@@ -490,13 +498,14 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.put('/api/ships/me/rooms/{key}/brief')
     async def ship_brief(key: str, request: Request):
-        who, data = ship_member(request)['id'], await body(request)  # ship briefs S3: a ship key only; a person gets 403
-        return store.save_ship_brief(who, key, data.get('body'), data.get('revision'))
+        # ship briefs S3: a ship key only; a person gets 403
+        who, data = await caller(ship_member, request), await body(request)
+        return await run_in_threadpool(store.save_ship_brief, who, key, data.get('body'), data.get('revision'))
 
     @app.post('/api/ships/me/rooms/{key}/members', status_code=201)
     async def ship_member_add(key: str, request: Request):
-        who, data = ship_member(request)['id'], await body(request)  # room moderators §6: a ship key only
-        return store.ship_add_member(who, key, data.get('member'), data.get('grant_id'))
+        who, data = await caller(ship_member, request), await body(request)  # room moderators §6: a ship key only
+        return await run_in_threadpool(store.ship_add_member, who, key, data.get('member'), data.get('grant_id'))
 
     @app.delete('/api/ships/me/rooms/{key}/members/{member}')
     def ship_member_remove(key: str, member: str, request: Request, grant_id: str | None = None):
@@ -508,8 +517,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.patch('/api/me')
     async def rename_me(request: Request):
-        who, data = actor(request), await body(request)
-        return store.rename_user(who, data.get('name'))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.rename_user, who, data.get('name'))
 
     @app.get('/api/me/corrections')
     def my_corrections(request: Request):
@@ -529,11 +538,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.patch('/api/accounts/{user_id}/role')
     async def account_role(request: Request, user_id: str):
-        who = actor(request)
+        who = await caller(current_user, request)
         data = await body(request)
         if set(data) != {'role', 'expected_version'}:
             raise Problem(400, 'Provide only the role and saved version')
-        return store.change_account_role(who, user_id, data['role'], data['expected_version'])
+        return await run_in_threadpool(store.change_account_role, who, user_id, data['role'], data['expected_version'])
 
     @app.get('/api/account-role-changes')
     def role_changes(request: Request):
@@ -541,9 +550,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/invitations')
     async def invite(request: Request):
-        who = actor(request)
+        who = await caller(current_user, request)
         data = await body(request)
-        return store.invite(who, data.get('expires_in', 86400))
+        return await run_in_threadpool(store.invite, who, data.get('expires_in', 86400))
 
     @app.post('/api/invitations/redeem', status_code=201)
     async def redeem(request: Request):
@@ -554,7 +563,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/access-requests', status_code=201)
     async def request_access(request: Request):
         data = await body(request)
-        return store.request_access(data.get('name'), data.get('contact'), data.get('note', ''))
+        return await run_in_threadpool(store.request_access, data.get('name'), data.get('contact'),
+                                       data.get('note', ''))
 
     @app.get('/api/ships')
     def ships(request: Request):
@@ -583,7 +593,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/dockings', status_code=201)
     async def docking_start(request: Request):
         data = await body(request)
-        started = store.start_docking(data.get('ship_name'), data.get('machine'))
+        started = await run_in_threadpool(store.start_docking, data.get('ship_name'), data.get('machine'))
         return {**started, 'confirm_url': str(request.base_url).rstrip('/') + f'/#dock?code={started["code"]}'}
 
     @app.get('/api/dockings/code/{code}')
@@ -592,8 +602,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/dockings/{key}/confirm')
     async def docking_confirm(key: str, request: Request):
-        who, data = actor(request), await body(request)
-        return store.confirm_docking(who, key, data.get('code'))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.confirm_docking, who, key, data.get('code'))
 
     @app.get('/api/dockings/{key}')
     def docking_status(key: str, request: Request, secret: str = ''):
@@ -617,8 +627,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/spaces', status_code=201)
     async def space_create(request: Request):
-        who, data = actor(request), await body(request)
-        return store.create_space(who, data.get('name'), data.get('kind'), data.get('member_ids', []))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.create_space, who, data.get('name'), data.get('kind'),
+                                       data.get('member_ids', []))
 
     @app.get('/api/spaces/{key}')
     def space_get(key: str, request: Request):
@@ -626,13 +637,13 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.patch('/api/spaces/{key}')
     async def space_rename(key: str, request: Request):
-        who, data = actor(request), await body(request)
-        return store.rename_space(who, key, data.get('name'))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.rename_space, who, key, data.get('name'))
 
     @app.post('/api/spaces/{key}/members')
     async def space_member_add(key: str, request: Request):
-        who, data = actor(request), await body(request)
-        return store.change_space_member(who, key, data.get('user_id'))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.change_space_member, who, key, data.get('user_id'))
 
     @app.delete('/api/spaces/{key}/members/{user_id}')
     def space_member_remove(key: str, user_id: str, request: Request):
@@ -644,8 +655,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/layers', status_code=201)
     async def layer_create(request: Request):
-        who, data = actor(request), await body(request)
-        return store.create_layer(who, data)
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.create_layer, who, data)
 
     @app.get('/api/layers/{key}')
     def layer_get(key: str, request: Request):
@@ -653,8 +664,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.put('/api/layers/{key}')
     async def layer_save(key: str, request: Request):
-        who, data = actor(request), await body(request)
-        return store.save_layer(who, key, data)
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.save_layer, who, key, data)
 
     @app.get('/api/layers/{key}/preview')
     def layer_preview(key: str, request: Request):
@@ -662,8 +673,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/layers/{key}/activate')
     async def layer_activate(key: str, request: Request):
-        who, data = actor(request), await body(request)
-        return store.activate_layer(who, key, data.get('version'), data.get('space_versions'))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.activate_layer, who, key, data.get('version'), data.get('space_versions'))
 
     @app.post('/api/layers/{key}/withdraw')
     def layer_withdraw(key: str, request: Request):
@@ -671,8 +682,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/layers/{key}/revoke')
     async def layer_revoke(key: str, request: Request):
-        who, data = actor(request), await body(request)
-        return store.revoke_layer_routes(who, key, data)
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.revoke_layer_routes, who, key, data)
 
     @app.get('/api/layers/{key}/revisions')
     def revisions(key: str, request: Request):
@@ -688,15 +699,17 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/grants', status_code=201)
     async def grant_make(request: Request):
-        who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403 (G14)
-        return store.make_grant(who, data.get('grantee'), data.get('targets'), data.get('rooms'), data.get('hours'),
-                                data.get('budget'))
+        # a person with CSRF; a ship key gets 403 (G14)
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.make_grant, who, data.get('grantee'), data.get('targets'),
+                                       data.get('rooms'), data.get('hours'), data.get('budget'))
 
     @app.post('/api/grants/moderate', status_code=201)
     async def grant_moderate(request: Request):
-        who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403 (G14); no depth (M13)
-        return store.make_moderate_grant(who, data.get('grantee'), data.get('room'), data.get('hours'),
-                                         data.get('budget'), data.get('actions'))
+        # a person with CSRF; a ship key gets 403 (G14); no depth (M13)
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.make_moderate_grant, who, data.get('grantee'), data.get('room'),
+                                       data.get('hours'), data.get('budget'), data.get('actions'))
 
     @app.get('/api/grants/people')
     def grant_people(request: Request):
@@ -704,8 +717,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/grants/{key}/revoke')
     async def grant_revoke(key: str, request: Request):
-        who, data = actor(request), await body(request)
-        return store.revoke_grant(who, key, data.get('reason'))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.revoke_grant, who, key, data.get('reason'))
 
     @app.get('/api/grants/{key}/signed')
     def grant_signed(key: str, request: Request):
@@ -729,8 +742,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/files', status_code=201)
     async def file_upload(request: Request):
-        who, data = actor(request), await body(request)
-        return store.upload_file(who, data.get('name'), data.get('media_type'), data.get('content_base64'))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.upload_file, who, data.get('name'), data.get('media_type'),
+                                       data.get('content_base64'))
 
     @app.get('/api/files/{key}')
     def file_get(key: str, request: Request):
@@ -750,8 +764,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/chats', status_code=201)
     async def chat_create(request: Request):
-        who, data = actor(request), await body(request)
-        return store.create_room(who, data.get('title', 'Private chat'), data.get('member_ids', []))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.create_room, who, data.get('title', 'Private chat'),
+                                       data.get('member_ids', []))
 
     @app.get('/api/chats/{key}')
     def chat_get(key: str, request: Request):
@@ -759,8 +774,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/chats/{key}/messages', status_code=201)
     async def chat_send(key: str, request: Request):
-        who, data = member(request)['id'], await body(request)
-        return store.send_message(who, key, data.get('client_message_id'), data.get('body'), data.get('ticket_id'), data.get('reply_to'))
+        who, data = await caller(member, request), await body(request)
+        return await run_in_threadpool(store.send_message, who, key, data.get('client_message_id'), data.get('body'),
+                                       data.get('ticket_id'), data.get('reply_to'))
 
     @app.get('/api/chats/{key}/claims')
     def chat_claims(key: str, request: Request):
@@ -768,13 +784,13 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/chats/{key}/claims', status_code=201)
     async def chat_claim(key: str, request: Request):
-        who, data = member(request)['id'], await body(request)
-        return store.claim(who, key, data.get('key'), data.get('note'), data.get('minutes'))
+        who, data = await caller(member, request), await body(request)
+        return await run_in_threadpool(store.claim, who, key, data.get('key'), data.get('note'), data.get('minutes'))
 
     @app.post('/api/chats/{key}/claims/release')
     async def chat_release(key: str, request: Request):
-        who, data = member(request)['id'], await body(request)
-        return store.release(who, key, data.get('key'))
+        who, data = await caller(member, request), await body(request)
+        return await run_in_threadpool(store.release, who, key, data.get('key'))
 
     @app.get('/api/chats/{key}/board')
     def chat_board(key: str, request: Request):
@@ -782,23 +798,24 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/chats/{key}/board', status_code=201)
     async def chat_board_post(key: str, request: Request):
-        who, data = member(request)['id'], await body(request)  # the key travels in the body: it can hold `/` (R40)
-        return store.post_item(who, key, data.get('key'), data.get('title'), data.get('kind'))
+        # the key travels in the body: it can hold `/` (R40)
+        who, data = await caller(member, request), await body(request)
+        return await run_in_threadpool(store.post_item, who, key, data.get('key'), data.get('title'), data.get('kind'))
 
     @app.post('/api/chats/{key}/board/link')
     async def chat_board_link(key: str, request: Request):
-        who, data = member(request)['id'], await body(request)
-        return store.link_item(who, key, data.get('key'), data.get('link'))
+        who, data = await caller(member, request), await body(request)
+        return await run_in_threadpool(store.link_item, who, key, data.get('key'), data.get('link'))
 
     @app.post('/api/chats/{key}/board/done')
     async def chat_board_done(key: str, request: Request):
-        who, data = member(request)['id'], await body(request)
-        return store.done_item(who, key, data.get('key'), data.get('outcome'))
+        who, data = await caller(member, request), await body(request)
+        return await run_in_threadpool(store.done_item, who, key, data.get('key'), data.get('outcome'))
 
     @app.post('/api/chats/{key}/board/drop')
     async def chat_board_drop(key: str, request: Request):
-        who, data = member(request)['id'], await body(request)
-        return store.drop_item(who, key, data.get('key'))
+        who, data = await caller(member, request), await body(request)
+        return await run_in_threadpool(store.drop_item, who, key, data.get('key'))
 
     @app.get('/api/board')
     def person_board(request: Request):
@@ -806,8 +823,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.put('/api/chats/{key}/brief')
     async def chat_brief(key: str, request: Request):
-        who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403
-        return store.save_brief(who, key, data.get('body'), data.get('revision'))
+        who, data = await caller(current_user, request), await body(request)  # a person with CSRF; a ship key gets 403
+        return await run_in_threadpool(store.save_brief, who, key, data.get('body'), data.get('revision'))
 
     @app.get('/api/chats/{key}/brief/revisions')
     def chat_brief_revisions(key: str, request: Request):
@@ -815,8 +832,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.post('/api/chats/{key}/participants', status_code=201)
     async def chat_add(key: str, request: Request):
-        who, data = actor(request), await body(request)
-        return store.add_participants(who, key, data.get('member_ids', []), data.get('carry_brief'), data.get('grant_id'))
+        who, data = await caller(current_user, request), await body(request)
+        return await run_in_threadpool(store.add_participants, who, key, data.get('member_ids', []),
+                                       data.get('carry_brief'), data.get('grant_id'))
 
     @app.delete('/api/chats/{key}/participants/{user_id}')
     def chat_remove(key: str, user_id: str, request: Request, grant_id: str | None = None):
@@ -825,7 +843,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/chats/{key}/cloud')
     async def chat_cloud_mark(key: str, request: Request):
         """Never to a cloud model: the person's own mark on a room they're in (persons only; a ship key gets 403)."""
-        who, data = actor(request), await body(request)
+        who, data = await caller(current_user, request), await body(request)
         return await run_in_threadpool(store.mark_room, who, key, data.get('earlier', True))
 
     @app.delete('/api/chats/{key}/cloud')

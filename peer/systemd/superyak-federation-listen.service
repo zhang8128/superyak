@@ -1,0 +1,17 @@
+[Unit]
+Description=Superyak federation listener: a push peer's events and pulls on 127.0.0.1:7437, behind its own certificate (federation pull, plan P9)
+After=network-online.target superyak-lighthouse.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/superyak/peer
+Environment=FEDERATION_DATA=%h/.local/share/superyak/lighthouse OPENBLAS_NUM_THREADS=1
+ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer federation-listen --data-dir ${FEDERATION_DATA} --host 127.0.0.1 --port 7437
+Restart=on-failure
+RestartSec=30
+MemoryMax=256M
+MemorySwapMax=0
+
+[Install]
+WantedBy=default.target

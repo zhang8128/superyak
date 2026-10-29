@@ -1,0 +1,17 @@
+[Unit]
+Description=Superyak federate: pulls from paired push peers, then pushes what this peer owes (federation pull, plan P4)
+After=network-online.target superyak-lighthouse.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/superyak/peer
+Environment=FEDERATION_DATA=%h/.local/share/superyak/lighthouse OPENBLAS_NUM_THREADS=1
+ExecStart=%h/superyak/peer/.venv/bin/python -I -m superyak_peer federate --data-dir ${FEDERATION_DATA}
+Restart=on-failure
+RestartSec=30
+MemoryMax=256M
+MemorySwapMax=0
+
+[Install]
+WantedBy=default.target

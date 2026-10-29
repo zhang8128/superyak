@@ -68,7 +68,10 @@ LESSONS = uv run --locked --project peer python -m superyak_peer.lessons
 # Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
 # and any project ship's watcher on this machine (a later one gets it when make station-units runs again).
 STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-imprint-sweep.service superyak-imprint-sweep.timer superyak-alert@.service
-ALERTED_SERVICES = superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(patsubst %.service,%,$(notdir $(wildcard $(SYSTEMD_USER)/superyak-ship-*.service)))
+ALERTED_SERVICES = superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole superyak-federate superyak-federation-listen $(patsubst %.service,%,$(notdir $(wildcard $(SYSTEMD_USER)/superyak-ship-*.service)))
+# Federation pull plan SF10, SF11: make federation-units installs these on any peer, apart from station-units, which
+# would start the station's own backups and restore tests on Tardis.
+FEDERATION_UNITS := superyak-federate.service superyak-federation-listen.service
 HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
 HOME_PORT ?= 7435
 HOME_ARGS ?=
@@ -77,7 +80,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats
+.PHONY: imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -501,6 +504,23 @@ station-units-remove:
 	-systemctl --user reset-failed superyak-backup.service superyak-restore-test.service superyak-imprint-sweep.service 'superyak-alert@*'
 	for unit in $(STATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
 	for service in $(ALERTED_SERVICES); do dir="$(SYSTEMD_USER)/$$service.service.d"; if [ -d "$$dir" ]; then rm -f "$$dir/50-alerts.conf"; rmdir "$$dir" 2>/dev/null || true; fi; done
+	systemctl --user daemon-reload
+
+# The data dir goes in a drop-in, a % doubled for systemd. The alert drop-in goes only where the station's alert unit is
+# installed, since its ExecStopPost writes into the station's database. Nothing is enabled: the deploy says which unit
+# runs where.
+federation-units:
+	@test -f "$(FEDERATION_DATA)/peer.sqlite3" || { echo 'No peer database at $(FEDERATION_DATA)/peer.sqlite3: set FEDERATION_DATA to this peer data directory'; exit 2; }
+	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
+	for unit in $(FEDERATION_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
+	data="$$(cd "$(FEDERATION_DATA)" && pwd | sed 's/%/%%/g')" && for unit in $(FEDERATION_UNITS); do d="$(SYSTEMD_USER)/$$unit.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && printf '[Service]\nEnvironment="FEDERATION_DATA=%s"\n' "$$data" > "$$d/20-federation-data.conf" && chmod 644 "$$d/20-federation-data.conf" || exit 1; done
+	if [ -f "$(SYSTEMD_USER)/superyak-alert@.service" ]; then for unit in $(FEDERATION_UNITS); do install -m 644 peer/systemd/50-alerts.conf "$(SYSTEMD_USER)/$$unit.d/50-alerts.conf" || exit 1; done; fi
+	systemctl --user daemon-reload
+
+federation-units-remove:
+	-systemctl --user disable --now $(FEDERATION_UNITS)
+	-systemctl --user reset-failed $(FEDERATION_UNITS)
+	for unit in $(FEDERATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit" "$(SYSTEMD_USER)/$$unit.d/20-federation-data.conf" "$(SYSTEMD_USER)/$$unit.d/50-alerts.conf"; rmdir "$(SYSTEMD_USER)/$$unit.d" 2>/dev/null || true; done
 	systemctl --user daemon-reload
 
 wormhole-personas:

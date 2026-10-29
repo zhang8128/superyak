@@ -139,7 +139,7 @@ source=root/'source/superyak-peer'
 state=root/'state'
 def start():
     with (root/'server.log').open('ab') as log:
-        p=subprocess.Popen([sys.executable,'-m','superyak_peer','serve','--data-dir',str(state),'--port',{str(rp)!r},'--peer-tls','--origin',{f'https://127.0.0.1:{rp}'!r},'--origin',{b_url!r},'--federation-endpoint',{b_url!r}],cwd=source,stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
+        p=subprocess.Popen([sys.executable,'-m','superyak_peer','serve','--data-dir',str(state),'--port',{str(rp)!r},'--peer-tls','--origin',{f'https://127.0.0.1:{rp}'!r},'--origin',{b_url!r},'--federation-endpoint',{b_url!r},'--sync'],cwd=source,stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
     (root/'server.pid').write_text(str(p.pid))
     return p.pid
 def stop():
@@ -212,7 +212,8 @@ print(json.dumps({{'card':card,'host':socket.gethostname(),'python':sys.version.
             (output / f'{name}-card.json').write_text(json.dumps(card, indent=2))
         assert card_a['peer_id'] != card_b['peer_id']
         result['checks']['distinct_origins'] = True
-        command = [sys.executable, '-m', 'superyak_peer', 'serve', '--data-dir', str(state), '--port', str(ap), '--peer-tls', '--origin', a_url, '--origin', a_card_url, '--federation-endpoint', a_card_url]
+        # Both serve with --sync: "Check delivery now" dials only from a sync worker (federation pull P11)
+        command = [sys.executable, '-m', 'superyak_peer', 'serve', '--data-dir', str(state), '--port', str(ap), '--peer-tls', '--origin', a_url, '--origin', a_card_url, '--federation-endpoint', a_card_url, '--sync']
         def start_local():
             with (output / 'server.log').open('ab') as log:
                 process = subprocess.Popen(command, cwd=source, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
@@ -297,7 +298,8 @@ print(json.dumps({{'card':card,'host':socket.gethostname(),'python':sys.version.
         assert b.login('host_b', passwords['b'])['peer_id'] == card_b['peer_id']
         assert a.request('GET', layer_path)['body'] == saved['body']
         assert any(d['id'] == queued['id'] for d in a.request('GET', '/api/sync')['deliveries'])
-        a.request('POST', '/api/sync/' + queued['id'] + '/retry')
+        # A's own worker may already have retried it once its backoff ran out. "Check delivery now" makes it due either
+        # way and answers after that pass (P11), so a Retry, which a delivered row would refuse, isn't sent here.
         assert any(d['id'] == queued['id'] and d['status'] == 'delivered' for d in a.request('POST', '/api/sync')['deliveries'])
         with store.transaction() as db:
             wire_after = db.execute('SELECT envelope FROM outbox WHERE id=?', (queued['id'],)).fetchone()[0]
@@ -307,23 +309,25 @@ print(json.dumps({{'card':card,'host':socket.gethostname(),'python':sys.version.
         assert send_pinned(card_b, lambda: wire_after.encode())['duplicate']
         # Deliver over real pinned HTTPS, then inject loss of the acknowledgement
         # before the sender can record success. Retry must preserve signed bytes.
-        a.request('POST', room_path + '/messages', {'client_message_id': 'lost-ack', 'body': 'One accepted message despite a lost acknowledgement.'}, 201)
+        # A is stopped first: its own sync worker would otherwise deliver "lost-ack" before this checker's sync_once can
+        # lose the acknowledgement. The message is queued through the store for the same reason.
+        stop(local)
+        store.send_message(me_a['id'], room['id'], 'lost-ack', 'One accepted message despite a lost acknowledgement.')
         federation = Federation(store, endpoint=a_card_url, identity=identity)
         def lose_ack(card, prepare):
             send_pinned(card, prepare, gate=store.dispatch_gate)
             raise OSError('Acceptance-check injected acknowledgement loss')
         assert federation.sync_once(send=lose_ack)['failed'] == 1
-        lost = next(d for d in a.request('GET', '/api/sync')['deliveries'] if d.get('client_message_id') == 'lost-ack')
+        lost = next(d for d in federation.status(me_a['id']) if d.get('client_message_id') == 'lost-ack')
         with store.transaction() as db:
             signed_before = db.execute('SELECT envelope FROM outbox WHERE id=?', (lost['id'],)).fetchone()[0]
-        stop(local)
         local = start_local()
         assert remote(remote_prefix + "\nprint(json.dumps({'stopped':stop()}))")['stopped']
         result['remote']['ack_restart_pid'] = remote(remote_prefix + "\nprint(json.dumps({'pid':start()}))")['pid']
         a, b = Client(a_url, card_a['certificate']), Client(b_url, card_b['certificate'])
         a.ready(); b.ready()
         a.login('host_a', passwords['a']); b.login('host_b', passwords['b'])
-        a.request('POST', '/api/sync/' + lost['id'] + '/retry')
+        # As above: A's worker may have resent it already; either way the receiver's answer is a duplicate receipt
         assert next(d for d in a.request('POST', '/api/sync')['deliveries'] if d['id'] == lost['id'])['status'] == 'delivered'
         with store.transaction() as db:
             signed_after = db.execute('SELECT envelope FROM outbox WHERE id=?', (lost['id'],)).fetchone()[0]
