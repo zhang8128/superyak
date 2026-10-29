@@ -371,11 +371,24 @@ class Federation:
         finally:
             self._sync_lock.release()
 
+    @staticmethod
+    def _restored_at(db):
+        """When the restore reconcile last ran on this store, from the mark it leaves in system_meta (backups.py
+        `_write_mark`, kept after install), or -inf. A copy's nonces end where it was taken, so a request signed before
+        the restore may be one this listener already answered: it counts as a replay (fix:restore-keeps-pull-nonces),
+        whatever the copy's age. A damaged mark is no floor."""
+        row = db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()
+        try:
+            return float(json.loads(row[0])['at']) if row else float('-inf')
+        except (TypeError, ValueError, KeyError):
+            return float('-inf')
+
     def serve_pull(self, raw):
         """POST /federation/pull (spec §4), on federation-listen only. Checks, in order: the shape (400); the destination
         (403, before any nonce is stored, so one listener can't replay a puller's request at another); a paired pull
         peer as origin (403); its signature (403); `at` within 300 s (403); a fresh nonce, committed before the busy
-        check (409 "Replay"); one pull per origin at a time (409 "Busy"). Only a verified request can be busy."""
+        check, and an `at` after the last restore (409 "Replay"); one pull per origin at a time (409 "Busy"). Only a
+        verified request can be busy."""
         value = parse(raw)
         if not pull_shape_ok(value):
             raise Problem(400, 'Invalid pull request')
@@ -396,7 +409,9 @@ class Federation:
         with self.store.transaction() as db:
             # pruned by the request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock
             db.execute('DELETE FROM pull_nonces WHERE at<?', (now - 600,))
-            replay = db.execute('SELECT 1 FROM pull_nonces WHERE origin=? AND nonce=?', (origin, value['nonce'])).fetchone()
+            replay = (value['at'] <= self._restored_at(db)
+                      or db.execute('SELECT 1 FROM pull_nonces WHERE origin=? AND nonce=?',
+                                    (origin, value['nonce'])).fetchone())
             if not replay:
                 db.execute('INSERT INTO pull_nonces VALUES(?,?,?)', (origin, value['nonce'], value['at']))
         if replay:

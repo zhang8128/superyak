@@ -190,6 +190,21 @@ def test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock(pulling):
     refused(lambda: a[2].serve_pull(canonical(early)), 409, 'Replay')
 
 
+def test_a_request_signed_before_a_restore_is_a_replay(pulling):
+    """fix:restore-keeps-pull-nonces: a restored copy's nonces end where it was taken, so a request signed at or before
+    the reconcile counts as a replay even though its nonce isn't there; one signed after it is served. The puller asks
+    again at once on a Replay, with a fresh `at`. Mutation: no floor, or `<` for `<=`."""
+    clock, a, peers, contacts = pulling
+    signed = request(peers['mac'], a, clock)  # within the 300 s, its nonce unseen
+    with a[0].transaction() as db:  # the mark the restore reconcile leaves (backups.py _write_mark)
+        db.execute("INSERT OR REPLACE INTO system_meta VALUES('restore_reconcile', ?)",
+                   (json.dumps({'at': float(int(clock())), 'replaced': True, 'path': '/x'}),))
+    refused(lambda: a[2].serve_pull(canonical(signed)), 409, 'Replay')
+    refused(lambda: pull(peers['mac'], a, clock, at=int(clock()) - 100), 409, 'Replay')
+    clock.at += 1
+    assert pull(peers['mac'], a, clock)['more'] is False
+
+
 # Federation pull, plan Task 6: the per-envelope boundary (spec §4, M3; tests 8a and 8b) and the walk's bounds (§4, SF8,
 # check 3 SF6; P5 and RG)
 

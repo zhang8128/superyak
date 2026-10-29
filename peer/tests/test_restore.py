@@ -406,6 +406,23 @@ def test_reconcile_unpairs_nothing_without_a_replaced_file(tmp_path, capsys):
     assert peer_rows(copy) == before and 'Unpaired' not in out
 
 
+def test_the_pull_listener_reads_the_reconciles_own_mark_as_its_replay_floor(tmp_path, capsys):
+    """fix:restore-keeps-pull-nonces: a copy's nonces end where it was taken, so the listener counts a pull request signed
+    before the reconcile as a replay. Its floor is the mark the reconcile leaves in system_meta, with or without a
+    replaced file, so no coordination table changes. Mutation: the listener reading another key, or the mark renamed."""
+    import time
+    from superyak_peer.federation import Federation
+    for args in ((), ('--replaced',)):
+        store, peers = peer_station(tmp_path / f'run{len(args)}')
+        copy = staged(tmp_path / f'run{len(args)}', store)
+        with closing(sqlite3.connect(copy)) as db:
+            assert Federation._restored_at(db) == float('-inf')  # never restored: no floor
+        code, out, err = reconcile(capsys, '--db', copy, *((args[0], store.db_path) if args else ()))
+        assert code == 0, err
+        with closing(sqlite3.connect(copy)) as db:
+            assert abs(Federation._restored_at(db) - time.time()) < 60, args
+
+
 def test_reconcile_unpair_refuses_an_ambiguous_id_and_changes_no_byte(tmp_path, capsys):
     """--unpair with a short id two peers share is refused (exit 2) and the staged copy is byte for byte unchanged, also when
     the refusal comes after other work. A full id picks the one peer even if another shares its prefix, and the report does
@@ -1403,8 +1420,9 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
     'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries',  # first rail: coordination; the add gate also needs a paired peer
     'lesson_repeats',  # first rail 7.1: a local record beside the receipts, never federated
-    # federation pull (plan SF9): copied as they are. Restored nonces are pruned by `at` on the next pull, and a restore
-    # takes longer than the 300 s replay window; the backfill covers a copy older than peer_delivery.
+    # federation pull (plan SF9): copied as they are. A copy's nonces end where it was taken, so the listener reads the
+    # reconcile's mark in system_meta and counts a request signed before it as a replay (fix:restore-keeps-pull-nonces,
+    # not "a restore takes longer than 300 s"). The backfill covers a copy older than peer_delivery.
     'peer_meta', 'pull_nonces', 'peer_delivery',
     'oauth_clients',  # the connector's registrations: public and interchangeable, they grant nothing
     'oauth_pending',  # connector sign-ins: every row ends within 10 minutes, and a restore takes longer
