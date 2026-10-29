@@ -1739,8 +1739,9 @@ def test_the_ship_banner_says_what_crosses_the_bridge_and_never_counts_wormhole_
 
 def test_the_banner_says_a_room_with_members_on_another_home_is_copied_there(browser_peer):
     """fix:banner-room-with-remote-members (the banner review's outside note): a room with members on another home
-    copies its text to their homes, and no banner said so. It names them, escaped; a received room's home is the
-    other one, so it says nothing there."""
+    copies its title and messages to their homes, and no banner said so. It names them, escaped, says what crosses and
+    what stays, and that this home can't tell a person there from a ship that sends text to Claude (the section 2's
+    MF1). Two members on one home aren't called two homes (S2). A received room says its home is the other one (S4)."""
     base, store = browser_peer["base_url"], browser_peer["app"].state.store
     patient, family = (browser_peer["users"][name]["id"] for name in ("patient", "family"))
     with store.transaction() as db:  # a member on another home, as federation stores one (no pairing in a test)
@@ -1748,21 +1749,30 @@ def test_the_banner_says_a_room_with_members_on_another_home_is_copied_there(bro
         db.execute("INSERT INTO remote_contacts VALUES(?,?,?,?)", ("remote_willa", "b" * 64, "willa", "Willa <b>Away</b>"))
     across = store.create_room(patient, "Across homes", [family, "remote_willa"])["id"]
     local = store.create_room(patient, "At home", [family])["id"]
+    one = ("Willa <b>Away</b>: this room's title and messages are copied to their home; its brief and board stay here. "
+           "That home keeps its own copy under its own rules, and this home can't tell whether the member is a person or "
+           "a ship that sends text to Claude.")
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
         page.goto(f"{base}/#chats/{across}")
         page.reload()
         banner = page.locator(".ship-banner")
-        expect(banner).to_contain_text("Someone in this room is on another home.")
-        expect(banner).to_contain_text("Willa <b>Away</b> is on another home: this room's text is copied there")
-        expect(banner).not_to_contain_text("Claude")
+        expect(banner).to_contain_text("A member of this room isn't on this home.")
+        expect(banner).to_contain_text(one)
+        expect(banner).not_to_contain_text("Ships in this room send its text to Claude.")
         page.goto(f"{base}/#chats/{local}")
         page.reload()
         expect(page.get_by_role("heading", name="At home")).to_be_visible()
         expect(page.locator(".ship-banner")).to_have_count(0)
+        two = page.evaluate("shipBanner({member_ids: ['remote_willa', 'remote_omar'], members: []})")
+        assert "Some members of this room aren't on this home." in two and "Willa &lt;b&gt;Away&lt;/b&gt;, " in two
+        assert ("this room's title and messages are copied to each one's home; its brief and board stay here. Each home "
+                "keeps its own copy under its own rules, and this home can't tell whether a member there is a person or "
+                "a ship that sends text to Claude.") in two
+        assert "other homes" not in two  # both may be on one home
         received = page.evaluate("shipBanner({origin: 'a-peer', member_ids: ['remote_willa'], members: []})")
-        assert received == ""
-        two = page.evaluate("shipBanner({member_ids: ['remote_willa', 'remote_other'], members: []})")
-        assert 'Some people in this room are on other homes.' in two and 'Willa &lt;b&gt;Away&lt;/b&gt;, ' in two
+        assert "This room's home is another home." in received and "Willa" not in received
+        assert ("What you write here is copied there and to each member's home, under their rules. This home can't see "
+                "whether ships there send it to Claude.") in received
 
 
 def test_a_room_shows_which_ship_messages_came_from_runs(browser_peer):
