@@ -536,6 +536,10 @@ it, not only as its diff reads.
 - [ ] A test never counts or checks state after a fixed sleep: it waits for the condition under a generous deadline,
       so a loaded runner is slow, not red (Serenity, 2026-10-28: a sudo keeper test counted calls in a fixed 0.3 s and
       got 2 of 3 on macOS CI; her sweep of all 21 test sleeps found one more).
+- [ ] A size or rate limit is checked against what actually crosses the wire, through the real sender and receiver
+      end to end, not against the code that states it: two halves that each agree with themselves can disagree
+      with each other (Rio Grande's reader and Serenity, 2026-10-28: federation pull's budget counted characters of
+      one encoding while the listener sent the bytes of another).
 - [ ] A file:line cited in a plan or review, including one copied from a spec, is checked against the current code
       before it is relied on: a copied citation is a claim, not a fact (Serenity, 2026-10-28: the connector plan
       carried a spec's stale pointers, and one instruction read against the real code would have turned logs on).
