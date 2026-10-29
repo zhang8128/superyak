@@ -3,6 +3,7 @@ D4). Each tool builds its own result from the fields the spec lists and never pa
 only rooms on this home that are in the grant's set, that the person is still a member of and that aren't marked,
 checked at every read. Every call writes one receipt: room ids, never text and never an argument."""
 import json
+import math
 import secrets
 import sqlite3
 import time
@@ -51,6 +52,7 @@ BAD_QUERY = '`query` must be text of 1 to 200 characters.'
 TEXT_CAP = 100_000  # characters of a result's JSON (Claude takes about 150,000); cut at a message or room boundary
 QUERY_SECONDS = 5  # SQLite's progress handler ends a connector query past this: it holds the store's lock while it runs
 DEFAULT_LIMIT, MAX_LIMIT = 30, 100
+CALLS_PER_MINUTE, CALLS_PER_DAY = 60, 2000  # tools/call per grant (spec "Limits"); the other methods don't count
 
 
 def iso(when):
@@ -78,6 +80,14 @@ def whole(value, low, high=None):
     return type(value) is int and value >= low and (high is None or value <= high)
 
 
+class CallLimited(Exception):
+    """A tools/call over its grant's minute or day: /mcp answers 429 with Retry-After `seconds`. Nothing is written."""
+
+    def __init__(self, seconds):
+        super().__init__(seconds)
+        self.seconds = seconds
+
+
 class _Seen:
     """What one call read and refused, for its receipt."""
 
@@ -97,6 +107,9 @@ class ConnectorReads:
         seen, refusal = _Seen(), None
         try:
             with self.transaction() as db:
+                wait = self._limited(db, grant['grant_id'], self.clock())  # in the call's own transaction: no race
+                if wait is not None:
+                    raise CallLimited(wait)
                 deadline = time.monotonic() + QUERY_SECONDS
                 db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
                 try:
@@ -107,6 +120,8 @@ class ConnectorReads:
                     db.set_progress_handler(None, 0)
                 self._receipt(db, grant, tool, seen, 'refused' if refusal else 'ok',
                               len(str(refusal)) if refusal else size(result))
+        except CallLimited:
+            raise
         except sqlite3.OperationalError as error:
             self._failed(grant, tool, seen)
             if 'interrupted' in str(error):
@@ -118,6 +133,22 @@ class ConnectorReads:
         if refusal is not None:
             raise refusal
         return result
+
+    def connector_limited(self, grant_id):
+        """None, or the whole seconds until the grant may make one more tools/call."""
+        with self.transaction() as db:
+            return self._limited(db, grant_id, self.clock())
+
+    def _limited(self, db, grant_id, now):
+        """Counted from the receipts, so a restart doesn't empty it, and a refused call (which writes none) spends
+        nothing. Each window is read by its oldest receipt, so a clock set back only makes it stricter, and every wait
+        is above 0, since every receipt counted is inside its window."""
+        for window, most in ((86400, CALLS_PER_DAY), (60, CALLS_PER_MINUTE)):
+            count, oldest = db.execute('SELECT count(*), min(at) FROM connector_reads WHERE grant_id=? AND at>?',
+                                       (grant_id, now - window)).fetchone()
+            if count >= most:
+                return math.ceil(oldest + window - now)
+        return None
 
     def _receipt(self, db, grant, tool, seen, outcome, length):
         row = db.execute('SELECT redirect_host FROM connector_grants WHERE id=?', (grant['grant_id'],)).fetchone()

@@ -281,3 +281,102 @@ def test_remote_authors_are_named_and_kinded(connected):
     messages = ok(call(connected, 'read_room', room=connected.rooms[0]))['messages']
     assert [(m['author'], m['author_kind']) for m in messages] == [('Remy Remote', 'remote')]
     assert ok(call(connected, 'rooms'))['rooms'][0]['members'] == ['Remy Remote', 'Sam Example']
+
+
+# ---- receipts and the limit ----
+
+def receipts(connected):
+    with connected.store.transaction() as db:
+        return [dict(row) | {'rooms_read': json.loads(row['rooms_read']), 'rooms_refused': json.loads(row['rooms_refused'])}
+                for row in db.execute('SELECT * FROM connector_reads ORDER BY at, rowid')]
+
+
+def test_one_receipt_per_call_with_ids_and_never_arguments(connected):
+    say(connected, connected.rooms[0], 'the zebra-query text')
+    ok(call(connected, 'search', query='zebra-query'))
+    ok(call(connected, 'read_room', room=connected.rooms[0], limit=5))
+    rows = receipts(connected)
+    assert [(r['tool'], r['outcome'], r['rooms_read']) for r in rows] == [
+        ('search', 'ok', [connected.rooms[0]]), ('read_room', 'ok', [connected.rooms[0]])]
+    assert rows[0]['person_id'] == connected.person['id'] and rows[0]['app'] == 'claude.ai' and rows[0]['size'] > 0
+    assert 'zebra-query' not in json.dumps(rows)  # neither the query nor any other argument is kept
+
+
+def test_a_refused_call_leaves_a_receipt_naming_only_a_room_the_person_is_in(connected):
+    andy = person(connected, 'andy@example.org', 'Andy Example')
+    andys = connected.store.create_room(andy['id'], 'Andy alone', [])['id']
+    diary = connected.store.create_room(connected.person['id'], 'Diary', [])['id']
+    connected.store.mark_room(connected.person['id'], connected.rooms[1])
+    for room in (andys, diary, connected.rooms[1], 'peer-1:room-1'):
+        refused(call(connected, 'read_room', room=room))
+    assert [(r['outcome'], r['rooms_refused']) for r in receipts(connected)] == [
+        ('refused', []), ('refused', [{'room': diary, 'why': 'not_shared'}]),
+        ('refused', [{'room': connected.rooms[1], 'why': 'marked'}]), ('refused', [])]
+
+
+def test_a_failed_call_leaves_a_receipt_in_a_fresh_transaction(connected, monkeypatch):
+    from superyak_peer import connector_reads
+
+    def broken(self, db, grant, args, seen):
+        seen.reading(connected.rooms[0])
+        db.execute('INSERT INTO connector_reads VALUES(?,?,?,?,?,?,?,?,?,?)',
+                   ('half', grant['grant_id'], grant['person_id'], 'x', 0, 'rooms', '[]', '[]', 0, 'ok'))
+        raise RuntimeError('a bug')
+    monkeypatch.setitem(connector_reads.TOOLS, 'rooms', broken)
+    assert mcp(connected, rpc('tools/call', {'name': 'rooms', 'arguments': {}}), connected.tokens['access_token'],
+               raise_server_exceptions=False).status_code == 500
+    assert [(r['id'] == 'half', r['outcome'], r['rooms_read']) for r in receipts(connected)] == [(False, 'failed', [connected.rooms[0]])]
+
+
+def test_a_query_past_5_seconds_is_ended(connected, monkeypatch):
+    """SQLite's progress handler ends a connector query that runs past QUERY_SECONDS, since it holds the store's lock."""
+    from superyak_peer import connector_reads
+    for n in range(50):
+        say(connected, connected.rooms[0], f'line {n}')
+    ticks = iter(range(0, 10 ** 6, 3))  # each look at the clock, 3 s later
+    monkeypatch.setattr(connector_reads.time, 'monotonic', lambda: next(ticks))
+    assert refused(call(connected, 'search', query='line')) == connector_reads.TOO_LONG
+    assert [r['outcome'] for r in receipts(connected)] == ['failed']
+
+
+def test_a_429_writes_no_receipt(connected):
+    for _ in range(60):
+        ok(call(connected, 'rooms'))
+    answer = mcp(connected, rpc('tools/call', {'name': 'rooms', 'arguments': {}}), connected.tokens['access_token'])
+    assert answer.status_code == 429 and len(receipts(connected)) == 60
+
+
+def test_the_limit_holds_across_a_restart(connected):
+    """The limit counts receipts, so a restart doesn't empty it (Task 8 replaces Task 7's in-memory count)."""
+    from types import SimpleNamespace
+    from superyak_peer.app import create_app
+    from connector_support import PUBLIC_ORIGIN
+    for _ in range(60):
+        ok(call(connected, 'rooms'))
+    again = create_app(connected.store.data_dir, clock=lambda: connected.clock[0],
+                       allowed_origins=['http://testserver', PUBLIC_ORIGIN], public_origin=PUBLIC_ORIGIN)
+    answer = mcp(SimpleNamespace(app=again), rpc('tools/call', {'name': 'rooms', 'arguments': {}}),
+                 connected.tokens['access_token'])
+    assert answer.status_code == 429 and answer.headers['retry-after'] == '60'
+
+
+def test_receipts_are_kept_while_the_grant_lives_plus_a_year(connected):
+    """Spec "Receipts": kept while the grant lives, plus one year; one whose grant is gone (a restore removed it) is
+    kept a year from when it was made. The sweep runs after a good /token."""
+    from connector_support import allowed, exchange
+    ok(call(connected, 'rooms'))
+    with connected.store.transaction() as db:
+        grant = db.execute('SELECT grant_id FROM connector_reads').fetchone()[0]
+        db.execute('INSERT INTO connector_reads VALUES(?,?,?,?,?,?,?,?,?,?)',
+                   ('orphan', 'gone', connected.person['id'], 'claude.ai', connected.clock[0], 'rooms', '[]', '[]', 1, 'ok'))
+        db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (connected.clock[0], grant))
+
+    def sweep(state):  # another connection's good /token runs the sweep
+        client, code = allowed(connected, state=state)
+        assert exchange(connected, client, code).status_code == 200
+    connected.clock[0] += 365 * 86400 - 10
+    sweep('st-before')
+    assert {r['id'] for r in receipts(connected)} >= {'orphan'} and len(receipts(connected)) == 2
+    connected.clock[0] += 20
+    sweep('st-after')
+    assert receipts(connected) == []

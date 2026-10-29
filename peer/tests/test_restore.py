@@ -1462,6 +1462,7 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'connector_grants',  # connections: every revocation, end and narrowing either file holds (fix:restore-keeps-connector-revocations)
     'oauth_pending',  # connector sign-ins: every one cleared, so none decided or redeemed since the copy comes back (Tardis)
     'connector_tokens',  # Task 6: the earlier expiry and any use either file holds, so no rotated token comes back unused
+    'connector_reads',  # Task 8: the replaced file's receipts as they are, so a restore hides no read and revives no clear
     'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
@@ -2114,3 +2115,99 @@ def test_a_token_value_the_replaced_file_cant_give_revokes_it(tmp_path, capsys, 
     assert code == 0, err
     after = tokens_in(copy)
     assert after[damaged]['expires'] == REVOKED and after[fine]['expires'] > time.time()
+
+
+def a_receipt(store, grant, person_id, at=None, receipt=None):
+    """A read receipt as Task 8's connector_call writes one, written directly: the restore reads only the row."""
+    import uuid
+    receipt = receipt or uuid.uuid4().hex
+    with store.transaction() as db:
+        db.execute('INSERT INTO connector_reads VALUES(?,?,?,?,?,?,?,?,?,?)',
+                   (receipt, grant, person_id, 'claude.ai', at or store.clock(), 'read_room', '["r1"]', '[]', 120, 'ok'))
+    return receipt
+
+
+def receipts_in(path):
+    with closing(sqlite3.connect(path)) as db:
+        return {row[0] for row in db.execute('SELECT id FROM connector_reads')}
+
+
+def test_a_restore_takes_the_replaced_files_receipts_as_they_are(tmp_path, capsys):
+    """Rio Grande and Tardis, on the restore design: a receipt grants nothing, so the replaced file, the newer and whole
+    record, wins whole. A receipt made since the copy comes back, one whose grant was made since the copy too (it names
+    its person and app itself), and one a person cleared since stays cleared."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    cleared, kept = a_receipt(store, grant, sam['id']), a_receipt(store, grant, sam['id'])
+    copy = staged(tmp_path, store)
+    since = a_receipt(store, grant, sam['id'])
+    later_grant = connection(store, sam['id'])
+    on_later = a_receipt(store, later_grant, sam['id'])
+    with store.transaction() as db:
+        db.execute('DELETE FROM connector_reads WHERE id=?', (cleared,))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert receipts_in(copy) == {kept, since, on_later}
+    assert 'read receipts as in the replaced file (3)' in out
+
+
+def test_the_day_limit_counts_the_restored_receipts(tmp_path, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    copy = staged(tmp_path, store)
+    for _ in range(60):  # made since the copy
+        a_receipt(store, grant, sam['id'])
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert go_live(copy, tmp_path / 'live').connector_limited(grant) is not None
+
+
+def test_without_a_replaced_file_the_copys_receipts_stay_and_the_loss_is_said(tmp_path, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    kept = a_receipt(store, grant, sam['id'])
+    copy = staged(tmp_path, store)
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    assert receipts_in(copy) == {kept} and backups.RECEIPTS_NOT_KEPT in out
+
+
+def test_a_replaced_file_damaged_in_a_receipt_column_is_treated_as_absent(tmp_path, capsys):
+    """Every receipt column is in COMPARED, so a replaced file lacking one is absent: the copy's receipts stay, the
+    loss is said, and every connection is revoked, as for any damaged connector column."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    kept = a_receipt(store, grant, sam['id'])
+    copy = staged(tmp_path, store)
+    a_receipt(store, grant, sam['id'])
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute('ALTER TABLE connector_reads DROP COLUMN size')
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert 'treated as absent' in out and backups.RECEIPTS_NOT_KEPT in out and receipts_in(copy) == {kept}
+
+
+def test_a_copy_from_before_receipts_takes_the_replaced_files(tmp_path, capsys):
+    """A copy taken before Task 8 has no receipts table; skipped, the receipts made since the deploy would be lost."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('DROP TABLE connector_reads')
+        db.commit()
+    since = a_receipt(store, grant, sam['id'])
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert receipts_in(copy) == {since}
+
