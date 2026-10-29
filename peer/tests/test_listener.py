@@ -135,3 +135,21 @@ def test_federation_listen_refuses_before_it_serves(tmp_path):
     bare.claim_federation_mode('push')
     done = listen('--data-dir', bare.data_dir, '--port', '0')
     assert done.returncode == 1 and 'identity.json' in done.stderr and not (bare.data_dir / 'identity.json').exists()
+
+
+def test_every_server_waits_only_a_moment_on_open_requests_when_stopped(tmp_path, monkeypatch):
+    """fix:lighthouse-shutdown-gap: a restart waited on every open long-poll (an unread waits up to 25 s), so each deploy
+    answered 502 for 25 to 41 s. The lighthouse, the door and the listener each pass a short graceful-shutdown timeout."""
+    import uvicorn
+    from superyak_peer import __main__ as cli
+    ran = []
+    monkeypatch.setattr(uvicorn, 'run', lambda app, **options: ran.append(options))
+    push = station(tmp_path / 'push', 'pat', Clock())
+    push[2].card(push[1])
+    push[0].claim_federation_mode('push')
+    cli.main(['federation-listen', '--data-dir', str(push[0].data_dir), '--port', '0'])
+    cli.main(['door', '--data-dir', str(tmp_path / 'door'), '--port', '7999'])
+    cli.main(['serve', '--data-dir', str(tmp_path / 'lighthouse')])
+    assert [options.get('timeout_graceful_shutdown') for options in ran] == [cli.SHUTDOWN_GRACE] * 3
+    assert 0 < cli.SHUTDOWN_GRACE <= 5
+
