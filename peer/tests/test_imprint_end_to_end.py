@@ -58,7 +58,8 @@ def test_an_imprint_end_to_end(tmp_path, monkeypatch):
     (tmp_path / 'user-home').mkdir()
     home, engram_home = tmp_path / 'superyak', tmp_path / 'engram-home'
     canary = 'canary-' + uuid.uuid4().hex
-    made = run(['uv', 'run', '--locked', 'python', '-c', 'import sys; sys.path.insert(0, "."); exec(sys.argv.pop(1))',
+    made = run(['uv', 'run', '--locked', '--extra', 'dev', 'python', '-c',
+                'import sys; sys.path.insert(0, "."); exec(sys.argv.pop(1))',
                 MAKE_SOURCE, str(tmp_path), canary], ENGRAM, env)
     assert made.returncode == 0, made.stderr
     source = tmp_path / 'src.db'

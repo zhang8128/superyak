@@ -20,7 +20,7 @@ TABLE = {
     'imprint-act': '; '.join(f'command make station-{t}' for t in IMPRINT_ACTS),
 }
 
-VERSIONS = {'imprint-act': 2}   # F1: its content changed after it was on main
+VERSIONS = {'imprint-act': 2, 'before-push': 2}   # F1: its content changed after it was on main
 
 
 def seed(list_id):

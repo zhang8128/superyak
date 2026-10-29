@@ -56,8 +56,60 @@ STATE_TEMP = re.compile(r'\.[0-9a-f]{16}\.json\..+\.tmp')  # write_private's tem
 CHECKOUT = Path(__file__).resolve().parents[2]
 # In the transcript (JSON lines), the hook's id line stands between escaped line breaks. Every lesson the hook shows,
 # at a prompt, at the 2 s events or in a hold, has one, so reading back never depends on Claude Code's own wording
-# around a deny (Serenity's nit), and the scan starts at a literal (Rio Grande's R1). It can only hide a lesson.
-ID_LINE = re.compile(rb'Lesson ([0-9a-f]{8}-[0-9a-f]{8}) from [a-z][a-z0-9-]{1,31}(?=\\[nr]|["\r\n])')
+# around a deny (Serenity's nit), and the scan starts at a literal (Rio Grande's R1). An id line counts only when the
+# very next line is that ship's fence header, as the hook always writes it, and only inside a record Claude Code writes
+# from a hook's own output (_hook_texts): a prompt, a model's words, a tool's output, a file or a web page can't mark a
+# lesson seen (fix:lessons-id-line-bound-to-header; Rio Grande's review M1). Inside the hooks' own output, quoted text's
+# team lines are marked by the tag defusing, so a room message can't add the header either. A record whose shape Claude
+# Code changes is read as no one's: its lessons show again, never stay hidden.
+ID_LINE = re.compile(rb'Lesson ([0-9a-f]{8}-[0-9a-f]{8}) from ([a-z][a-z0-9-]{1,31})(?=\\[nr]|["\r\n])')
+DENY = 'PreToolUse:Bash hook error: '  # Claude Code's own words before a PreToolUse hook's deny reason
+
+
+def _fence_follows(data, end, ship):
+    """Whether the line after an id line, at `end` (an escaped line break, \\n or \\r\\n), is `ship`'s fence header."""
+    header = b'[team] from ' + ship + b' (quoted message;'
+    tail = data[end:end + 4 + len(header)]
+    return tail.startswith(b'\\n' + header) or tail.startswith(b'\\r\\n' + header)
+
+
+def _hook_texts(record):
+    """The texts of a transcript record that Claude Code writes from a hook's own output: a hook's added context at the
+    lessons hook's three events, and the hold's deny, in a tool result or toolUseResult, in this session's own records,
+    not a subagent's sidechain. Nothing else is the hook's."""
+    texts = []
+    if not isinstance(record, dict) or record.get('isSidechain') is True:
+        return texts
+    attachment = record.get('attachment')
+    if isinstance(attachment, dict) and attachment.get('type') == 'hook_additional_context' \
+            and attachment.get('hookEvent') in LIMITS:
+        content = attachment.get('content')
+        texts += [c for c in (content if isinstance(content, list) else [content]) if isinstance(c, str)]
+    result = record.get('toolUseResult')
+    if isinstance(result, str) and result.startswith('Error: ' + DENY):
+        texts.append(result)
+    message = record.get('message')
+    items = message.get('content') if isinstance(message, dict) else None
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and item.get('type') == 'tool_result' and item.get('is_error') is True \
+                and isinstance(item.get('content'), str) and item['content'].startswith(DENY):
+            texts.append(item['content'])
+    return texts
+
+
+def _in_hook_output(data, at, id_, ship, records):
+    """Whether the id line at `at`, followed by `ship`'s header, stands in a record from a hook's own output. Each record
+    is parsed once, and only when such a pair is in it, so the scan stays at a literal's speed (R1)."""
+    start = data.rfind(b'\n', 0, at) + 1
+    if start not in records:
+        end = data.find(b'\n', at)
+        try:
+            records[start] = _hook_texts(json.loads(data[start:len(data) if end < 0 else end]))
+        except (ValueError, RecursionError):
+            records[start] = []
+    block = f'Lesson {id_} from {ship}'
+    header = f'[team] from {ship} (quoted message;'
+    return any(f'{block}\n{header}' in text or f'{block}\r\n{header}' in text for text in records[start])
 
 
 def default_settings():
@@ -174,8 +226,8 @@ def hold_reason(lesson, first=True):
 
 def transcript_ids(path, deadline, window=WINDOW, monotonic=time.monotonic):
     """The short ids on the hook's own lines in the session's transcript, in the order they first appear:
-    `Lesson <id> from <ship>` lines of the exact shape. They only ever join `seen`, so text inside a fence can at most
-    hide a lesson, never show one; `seen`'s newest SEEN_MAX are the latest shown. An empty
+    `Lesson <id> from <ship>` lines of the exact shape, each followed by that ship's fence header, in a record Claude Code
+    writes from a hook's own output. They only ever join `seen`; `seen`'s newest SEEN_MAX are the latest shown. An empty
     list without a transcript; None when it is there but can't be read to its end (as it stood when opened) by
     `deadline`: then the event adds nothing and holds nothing (section 8)."""
     if not path or not isinstance(path, str):
@@ -192,15 +244,17 @@ def transcript_ids(path, deadline, window=WINDOW, monotonic=time.monotonic):
             return None
         if info.st_size == 0:
             return []
-        found = {}
+        found, records = {}, {}
         with mmap.mmap(fd, info.st_size, access=mmap.ACCESS_READ) as data:
             for start in range(0, info.st_size, window):
                 if monotonic() > deadline:
                     return None
                 for match in ID_LINE.finditer(data, start, min(info.st_size, start + window + OVERLAP)):
-                    at = match.start()
-                    if at == 0 or data[at - 1:at] in (b'"', b'\n', b'\r') or data[max(at - 2, 0):at] in (b'\\n', b'\\r'):
-                        found.setdefault(match.group(1).decode(), None)
+                    at, id_, ship = match.start(), match.group(1).decode(), match.group(2)
+                    starts = at == 0 or data[at - 1:at] in (b'"', b'\n', b'\r') or data[max(at - 2, 0):at] in (b'\\n', b'\\r')
+                    if starts and id_ not in found and _fence_follows(data, match.end(), ship) \
+                            and _in_hook_output(data, at, id_, ship.decode(), records):
+                        found[id_] = None
         return list(found) if monotonic() <= deadline else None
     except (OSError, ValueError):
         return None

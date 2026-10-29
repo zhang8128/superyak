@@ -4796,7 +4796,7 @@ def lead_messages(team, label):
 def test_a_stopped_turn_that_ignores_sigterm_is_killed(env, lanes, tmp_path, monkeypatch):
     fake_claude(tmp_path, monkeypatch, "trap '' TERM\n"
                 "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n"
-                "i=0; while [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done\n")
+                "i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done\n")
     team, now = browser_team(env)
     team.spawn("check the login page", "claude", browser=True)
     proc = team.procs["kaylee"]
@@ -4806,6 +4806,10 @@ def test_a_stopped_turn_that_ignores_sigterm_is_killed(env, lanes, tmp_path, mon
             now[0] += 61
             team.monitor_once()
             time.sleep(0.2)
+        try:    # a loaded runner can land the kill late; the turn's own end is 60 s away, so only the kill ends it
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
         alive = proc.poll() is None
     finally:
         if proc.poll() is None:
