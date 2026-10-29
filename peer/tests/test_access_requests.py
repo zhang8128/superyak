@@ -175,3 +175,18 @@ def test_the_door_sweep_command_says_how_many_it_cleared(tmp_path):
                           capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == 'Cleared the contact and note of 0 access requests past their retention.'
+
+
+def test_the_door_sweep_refuses_a_data_dir_without_a_database(tmp_path):
+    """Serenity, on door-request-retention: a moved or mistyped --data-dir must fail the unit, so OnFailure alerts,
+    not sweep a new empty database, print 0 and leave §1's promise broken in silence. Nothing is created there."""
+    import subprocess
+    import sys
+    moved, empty = tmp_path / 'moved', tmp_path / 'empty'
+    empty.mkdir()
+    for data_dir in (moved, empty):
+        done = subprocess.run([sys.executable, '-m', 'superyak_peer', 'station-door-sweep', '--data-dir', str(data_dir)],
+                              capture_output=True, text=True, timeout=60)
+        assert done.returncode == 1 and str(data_dir / 'peer.sqlite3') in done.stderr, done.stderr
+        assert done.stdout == ''
+    assert not moved.exists() and list(empty.iterdir()) == []

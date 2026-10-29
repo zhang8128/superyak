@@ -196,6 +196,15 @@ def describe_add_ship(room, ship):
     return f'Added {safe_line(ship)} to a new {named_room(room)} with the same members; {carried_along(room)}'
 
 
+def swept_store(data_dir, command):
+    """A timer's sweep opens the station's database, never a new one (Serenity, on door-request-retention): with a moved
+    or mistyped --data-dir, Store() would create an empty database, the sweep would print 0 and exit 0, and OnFailure
+    would never fire. Refused before anything is created, so the unit fails and alerts."""
+    if not (data_dir / 'peer.sqlite3').is_file():
+        raise ValueError(f'No peer database at {data_dir / "peer.sqlite3"}: {command} sweeps nothing and creates nothing there')
+    return Store(data_dir, signing=False)
+
+
 def private_json(path, value):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as stream:
@@ -614,14 +623,14 @@ def main(argv=None):
             result = Store(args.data_dir, signing=False).station_imprint_sync(root=args.imprints_dir)
             print(f'Imprint admissions: {result["admitted"]} admitted, {result["failed"]} failed and deleted, {result["waiting"]} waiting; {result["finished"]} uses finished.')
         elif args.command == 'station-imprint-sweep':
-            result = Store(args.data_dir, signing=False).station_imprint_sweep(root=args.imprints_dir)
+            result = swept_store(args.data_dir, args.command).station_imprint_sweep(root=args.imprints_dir)
             print(f'Imprint sweep: {result["ended"]} ended, {result["windows"]} past a window, {result["expired"]} requests expired, '
                   f'{result["retried"]} removals retried, {result["reconciled"]} reconciled, {result["removed"]} stray directories removed, '
                   f'{result["purged"]} rows past their retention removed.')
             if result['errors']:
                 parser.exit(1, f'station-imprint-sweep: these steps failed (see the log): {", ".join(result["errors"])}\n')
         elif args.command == 'station-door-sweep':
-            cleared = Store(args.data_dir, signing=False).sweep_access_requests()
+            cleared = swept_store(args.data_dir, args.command).sweep_access_requests()
             print(f'Cleared the contact and note of {cleared} access requests past their retention.')
         elif args.command == 'station-imprints':
             store = Store(args.data_dir, signing=False)

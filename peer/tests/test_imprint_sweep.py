@@ -306,6 +306,19 @@ def test_the_command_runs_the_sweep(tmp_path, capsys):
     assert "Imprint sweep" in capsys.readouterr().out
 
 
+def test_the_command_refuses_a_data_dir_without_a_database(tmp_path):
+    """fix:station-sweeps-refuse-missing-store: a wrong --data-dir fails the hourly unit instead of sweeping a new empty
+    database; neither the data dir nor the imprints root gains a file."""
+    import subprocess
+    import sys
+    moved, root = tmp_path / "moved", tmp_path / "imprints"
+    root.mkdir()
+    done = subprocess.run([sys.executable, "-m", "superyak_peer", "station-imprint-sweep", "--data-dir", str(moved),
+                           "--imprints-dir", str(root)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 1 and str(moved / "peer.sqlite3") in done.stderr, done.stderr
+    assert not moved.exists() and list(root.iterdir()) == []
+
+
 def staged_copy(tmp_path, st):
     aside = tmp_path / "aside"
     aside.mkdir(mode=0o700)
