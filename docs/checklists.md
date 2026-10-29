@@ -271,14 +271,15 @@ it too, since the words are a literal piece of the command. Its long form:
   venv. The Pi's editable checkout hides a missing one. Peer's modules and test files and agent's modules are held
   by test_packaging (retired there, see "Retiring an item"); check any other package's list by hand.
 - The station database is backed up (`make station-backup`), so a migration that goes wrong can be undone.
-- killer: Main is pushed once. The affected Pi services are restarted and checked, and the public route is probed
-  from outside when the diff touches it; if a check fails, revert and restart. A security fix to a live route
-  merges on the Pi, restarts and is probed before main is pushed, so its code is never public before the fix is
-  live (the public route, 2026-10-27).
-- Each restart's stop is read, not only health after it: `systemctl --user show --timestamp=us <unit> -p
-  ActiveExitTimestamp -p InactiveEnterTimestamp`. A stop over about 6 s means the 5 s grace (SHUTDOWN_GRACE) isn't
-  holding. Health checked once `restart` returns can't see the 502s while the unit was stopping (Serenity,
-  2026-10-29: stops of up to 25 s on the unit, 41 s by her read of health over the tailnet, and none of it seen).
+- killer: Main is pushed once. The affected Pi services are restarted and checked, each stop read from the unit (the
+  next item), and the public route is probed from outside when the diff touches it; if a check fails, revert and
+  restart. A security fix to a live route merges on the Pi, restarts and is probed before main is pushed, so its
+  code is never public before the fix is live (the public route, 2026-10-27).
+- Each restart's stop is read, not only health after it:
+  `systemctl --user show --timestamp=us <unit> -p ActiveExitTimestamp -p InactiveEnterTimestamp`.
+  A stop over about 6 s means the 5 s grace (SHUTDOWN_GRACE) isn't holding. Health checked once `restart` returns
+  can't see the 502s while the unit was stopping (Serenity, 2026-10-29: stops of up to 25 s on the unit, 41 s by
+  her read of health over the tailnet, and none of it seen).
 - If it breaks at 3 a.m., what tells us, and who? Name the check: a dying unit alerts Odo in Ops; a running
   route is watched by route-watch once its timer is installed (Tardis says so in the room; `systemctl --user
   list-timers` on Tardis shows it); anything else, say that nothing watches it yet
