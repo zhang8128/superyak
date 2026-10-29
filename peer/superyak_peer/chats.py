@@ -22,6 +22,7 @@ class Chats:
         breakout = self._breakout_mark(db, key)
         if breakout is not None:  # S6: only a breakout carries the key, so every other room is unchanged (R10)
             room['breakout'] = breakout
+        room.update(self._cloud_view(db, key, actor))  # never to a cloud model: a marked room only, as for breakouts
         return room
 
     def _create_room(self, db, actor, title, members, linked_room_id=None):

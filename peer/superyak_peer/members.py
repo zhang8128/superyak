@@ -81,9 +81,11 @@ class Members:
         new_ids = [m for m in dict.fromkeys(named) if m not in room['member_ids']]
         if not new_ids:
             raise Problem(409, NO_ONE_NEW.format(short=key[:6]))
+        self._refuse_ship_in_marked(db, key, new_ids)  # D6: never a ship in a marked room, by any add path
         self._lessons_add_gate(db, key, new_ids)  # first rail section 3: only Andy's, from listed peers
         carried = self._brief_to_carry(db, key, carry)
         new = self._create_room(db, owner_id, room['title'], ids(room['member_ids'] + new_ids), key)
+        self._carry_cloud(db, key, new['id'])  # D8: the marks go with the room
         if carried is not None:  # the brief, under its own author; the old room's messages stay with their participants
             body, author = carried
             self._write_brief(db, new['id'], body, 1, author, carried_from=key)
@@ -102,6 +104,8 @@ class Members:
             added.append({'id': m, 'username': user['username'] if user else None,
                           'name': user['name'] if user else self._account_name(db, m)})
         new.update(short=new['id'][:6], added=added, brief_carried=carried is not None, bridged=bridged)
+        new.pop('cloud', None)
+        new.update(self._cloud_view(db, new['id'], actor_id))  # after the carry, as the one who added sees it
         return new
 
     def add_participants(self, actor, key, member_ids, carry_brief=None, grant_id=None):
