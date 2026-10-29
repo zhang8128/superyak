@@ -90,7 +90,8 @@ def _pinned_socket(card, url, deadline):
             failure = exc
     else:
         raise failure or OSError('No peer addresses')
-    if hashlib.sha256(tls.getpeercert(binary_form=True)).hexdigest() != card['fingerprint']:
+    der = tls.getpeercert(binary_form=True)  # None if the peer showed no certificate: a mismatch too (Serenity)
+    if not der or hashlib.sha256(der).hexdigest() != card['fingerprint']:
         tls.close()
         raise PinMismatch('Peer certificate differs from its card')
     return tls

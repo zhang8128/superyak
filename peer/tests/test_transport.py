@@ -531,3 +531,17 @@ def test_a_card_that_cant_be_dialled_is_refused_before_anything_resolves(tmp_pat
             transport.send_pinned(card, lambda: b'{}')
         with pytest.raises(ValueError):
             transport.pull_pinned(card, b'{}')
+
+
+def test_a_handshake_with_no_certificate_is_a_pin_mismatch(tmp_path, monkeypatch):
+    """Serenity's read of 13766378: a peer that shows no certificate is "certificate differs", a peer failure with its
+    reason, never a TypeError from hashing nothing."""
+    import ssl
+    from superyak_peer import transport
+    card, stop = pull_server(tmp_path, lambda handler: None)
+    monkeypatch.setattr(ssl.SSLSocket, 'getpeercert', lambda self, binary_form=False: None)
+    try:
+        with pytest.raises(transport.PinMismatch):
+            transport.pull_pinned(card, b'{}')
+    finally:
+        stop()
