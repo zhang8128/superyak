@@ -539,14 +539,16 @@ def test_one_message_over_the_cap_is_kept_cut_and_the_cursor_moves(connected):
     back = call(connected, 'read_room', room=connected.rooms[0])
     assert len(back['content'][0]['text']) <= TEXT_CAP
     back = ok(back)
-    assert [m['id'] for m in back['messages']] == [huge['id']] and back['messages'][0]['text_cut'] is True
+    cut = back['messages'][0]
+    assert [m['id'] for m in back['messages']] == [huge['id']] and cut['text_cut'] == 20000 - len(cut['text']) > 0
     assert back['truncated'] is True and back['before'] == 1 and back['more'] is True
     earlier = ok(call(connected, 'read_room', room=connected.rooms[0], before=back['before']))
     assert [m['text'] for m in earlier['messages']] == ['before it']
     alone = connected.store.send_message(connected.person['id'], connected.rooms[1], 'c-huge-2', chr(1) * 20000)
     connected.store.send_message(connected.person['id'], connected.rooms[1], 'c-after', 'after it')
     forward = ok(call(connected, 'read_room', room=connected.rooms[1], since=0))
-    assert [m['id'] for m in forward['messages']] == [alone['id']] and forward['messages'][0]['text_cut'] is True
+    first = forward['messages'][0]
+    assert [m['id'] for m in forward['messages']] == [alone['id']] and first['text_cut'] == 20000 - len(first['text']) > 0
     assert forward['more'] is True
     following = ok(call(connected, 'read_room', room=connected.rooms[1], since=forward['seq']))
     assert [m['text'] for m in following['messages']] == ['after it']
@@ -567,7 +569,7 @@ def test_fetch_stays_under_the_cap_measured_on_its_whole_json(connected):
     result = call(connected, 'fetch', id=alone)
     assert len(result['content'][0]['text']) <= TEXT_CAP
     line = json.loads(ok(result)['text'])
-    assert line['id'] == alone and line['text_cut'] is True
+    assert line['id'] == alone and line['text_cut'] == 20000 - len(line['text']) > 0
 
 
 def test_a_revoke_or_a_narrowing_mid_call_is_seen_inside_the_read(connected, monkeypatch):

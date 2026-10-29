@@ -67,19 +67,20 @@ def size(value):
 
 
 def fitted(message, fits):
-    """The message whole when `fits` takes it; else with its text cut to the longest start that fits, and `text_cut`.
-    A message alone past the cap is kept this way, so a read's cursor always moves past it (the reader's must-fix 3:
-    one hostile message stalled read_room both ways)."""
+    """The message whole when `fits` takes it; else with its text cut to the longest start that fits, and `text_cut`,
+    the number of characters left out, so Claude knows it holds part (Rio Grande). A message alone past the cap is kept
+    this way, so a read's cursor always moves past it (the reader's must-fix 3: one hostile message stalled read_room
+    both ways)."""
     if fits(message):
         return message
     text, low, high = message['text'], 0, len(message['text'])
     while low < high:
         middle = (low + high + 1) // 2
-        if fits(message | {'text': text[:middle], 'text_cut': True}):
+        if fits(message | {'text': text[:middle], 'text_cut': len(text) - middle}):
             low = middle
         else:
             high = middle - 1
-    return message | {'text': text[:low], 'text_cut': True}
+    return message | {'text': text[:low], 'text_cut': len(text) - low}
 
 
 def day(when):
@@ -375,7 +376,7 @@ class ConnectorReads:
         if whole('\n'.join(lines[i] for i in kept)) > TEXT_CAP:  # the message alone past the cap: its text is cut
             lines[here] = line(fitted(shaped[here], lambda m: whole(line(m)) <= TEXT_CAP))
         result['text'] = '\n'.join(lines[i] for i in kept)
-        if len(kept) < len(lines) or '"text_cut":true' in lines[here]:
+        if len(kept) < len(lines) or '"text_cut":' in lines[here]:
             result['truncated'] = True
         seen.reading(room_id)
         return result

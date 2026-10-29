@@ -441,7 +441,9 @@ Origin; the consent page's posts keep it.
   tools (`rooms`, `read_room`, `search`, `fetch`) are read-only and read only rooms on this home that the connection's
   person chose, is still in, and nobody has marked, asked again at every call. A refusal is one sentence: the room is
   kept away from cloud models, isn't shared, is on another home, or "No such room.". Every call writes a receipt
-  (room ids, never an argument), and the limit is counted from them, so it holds across a restart.
+  (room ids, never an argument), and the limit is counted from them, so it holds across a restart. A result is cut at a
+  message or room boundary at 100,000 characters with `truncated` and the cursor to continue; one message alone past
+  that is kept with its text cut and `text_cut`, the number of characters left out.
 
 ## Grants
 
