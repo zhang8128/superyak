@@ -17,7 +17,7 @@ from pathlib import Path
 import time
 from typing import NamedTuple
 from . import checklist_firing as firing, checklists, claims, holds
-from .station import BREAKOUT_MARK, CHECKOUT, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, lesson_count_line, plain_id, presence_headers, quoted_title, read_hint, read_json, session_key, shown_id, source_label, urllib_transport, write_private, write_private_text
+from .station import BREAKOUT_MARK, CHECKOUT, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, lesson_count_line, plain_id, presence_headers, quoted_title, read_hint, read_json, session_key, shown_id, source_label, tailnet_pin, tailnet_unpin, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -51,6 +51,10 @@ BOARD_BYTES = 1 << 20  # work board 5.4: the count answer is a few KB; a longer 
 BOARD_THREAD = 'superyak-board'  # the board call's daemon thread, which dies with the process if it is still running
 UNREACHABLE = 'station-unreachable'  # in the sessions folder; holds the time the station last failed to answer
 UNREACHABLE_SECONDS = 60
+# fix:docked-ships-over-tailnet: in the sessions folder too, the time a tailnet pin last missed (MagicDNS gave no answer,
+# or its address wouldn't connect). A hook run is a new process each prompt, so a miss kept in memory would be paid on
+# every prompt; this keeps it UNREACHABLE_SECONDS, and the run goes by the name meanwhile (Tardis).
+PIN_MISS = 'station-pin-miss'
 SESSION_END_TIMEOUT = 3  # spec S4: best effort; a watch this call misses runs out within its declared minutes
 
 
@@ -126,12 +130,14 @@ HEX12 = re.compile(r'[0-9a-f]{12}')
 
 class _Link:
     """The station transports of one hook run, which remember whether the station answered or could not be reached.
-    Only an OSError from a transport counts as unreachable; a local file error or an HTTP error does not."""
-    def __init__(self, transport):
+    Only an OSError from a transport counts as unreachable; a local file error or an HTTP error does not. Each takes the
+    run's tailnet pin (`_pinning`)."""
+    def __init__(self, transport, pin=tailnet_pin, unpin=tailnet_unpin):
         self.inner, self.failed, self.answered = transport, False, False
+        self.pin, self.unpin = pin, unpin
 
     def __call__(self, timeout):
-        inner = self.inner or urllib_transport(timeout)
+        inner = self.inner or urllib_transport(timeout, pin=self.pin, unpin=self.unpin)
 
         def send(*args):
             try:
@@ -147,7 +153,34 @@ class _Link:
         """A transport outside this run's reachability: what it meets never writes or clears the marker. The board call
         runs only after the instructions call in the same run answered, and a board-only failure must not silence every
         hook on the machine for a minute (step 3 review M2)."""
-        return self.inner or urllib_transport(timeout, limit)
+        return self.inner or urllib_transport(timeout, limit, pin=self.pin, unpin=self.unpin)
+
+
+def _pinning(marker, clock, ask=None):
+    """A hook run's tailnet pin and unpin, which keep a miss on disk at `marker` for UNREACHABLE_SECONDS: a *.ts.net name
+    MagicDNS didn't answer, or an address that wouldn't connect. Meanwhile the run goes by the name, so the next prompts
+    pay neither the query nor the connect again. A marker that can't be written costs only that saving."""
+    pins = {}
+    kwargs = {'ask': ask} if ask else {}
+
+    def note():
+        try:
+            write_private_text(marker, repr(float(clock())))
+        except OSError:
+            pass
+
+    def pin(host):
+        if _recently_unreachable(marker, clock()):  # the same minute's rule as the unreachable marker
+            return None
+        address = tailnet_pin(host, pins=pins, **kwargs)
+        if address is None and host and host.endswith('.ts.net'):
+            note()
+        return address
+
+    def unpin(host):
+        tailnet_unpin(host, pins=pins)
+        note()
+    return pin, unpin
 
 
 def _recently_unreachable(marker, now):
@@ -207,7 +240,7 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
     if _recently_unreachable(marker, clock()):
         _forget_unless(False, config_path, event, session_id, sessions_dir)
         return _place('', pending, monotonic)
-    link = _Link(transport)
+    link = _Link(transport, *_pinning(Path(sessions_dir or config_path.parent / 'sessions') / PIN_MISS, clock))
     try:
         if event == 'session-end':
             if _end_watch(config_path, link(SESSION_END_TIMEOUT), presence) and session_id:

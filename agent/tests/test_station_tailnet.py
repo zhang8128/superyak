@@ -287,3 +287,45 @@ def test_magicdns_address_takes_only_a_tailnet_answer_to_its_own_question(respon
 def test_magicdns_address_refuses_a_name_it_cant_ask_for():
     assert magicdns_address('a' * 64 + '.ts.net', server=('127.0.0.1', 9)) is None
     assert magicdns_address('caf\u00e9.ts.net', server=('127.0.0.1', 9)) is None
+
+
+def test_a_hook_run_keeps_a_pin_miss_on_disk_for_the_next_prompt(tmp_path):
+    """Tardis: the prompt hook is a new process each prompt, so a miss kept in memory was paid again every prompt (a
+    1 s connect, or a 50 ms query off the tailnet). Each hook run's pin keeps a miss on disk beside the unreachable
+    marker, for the same minute. Mutation: no marker written, or the marker not read."""
+    from superyak_agent.hook import PIN_MISS, _pinning
+    marker, clock, asked = tmp_path / PIN_MISS, [1000.0], []
+
+    def ask(host):
+        asked.append(host)
+        return '100.70.202.124'
+    pin, unpin = _pinning(marker, lambda: clock[0], ask=ask)
+    assert pin(NAME) == '100.70.202.124' and not marker.exists()  # an answer writes nothing
+    unpin(NAME)                                                    # that address wouldn't connect
+    assert marker.exists() and oct(marker.stat().st_mode & 0o777) == '0o600'
+    pin, unpin = _pinning(marker, lambda: clock[0] + 30, ask=ask)  # the next prompt, a new process
+    assert pin(NAME) is None and asked == [NAME]                   # by the name, without asking
+    pin, unpin = _pinning(marker, lambda: clock[0] + 61, ask=ask)  # a minute on
+    assert pin(NAME) == '100.70.202.124' and asked == [NAME, NAME]
+
+
+def test_a_hook_run_keeps_a_magicdns_miss_too_but_never_for_another_name(tmp_path):
+    from superyak_agent.hook import PIN_MISS, _pinning
+    marker, asked = tmp_path / PIN_MISS, []
+    pin, _ = _pinning(marker, lambda: 1000.0, ask=lambda host: asked.append(host))
+    assert pin('example.com') is None and not marker.exists() and asked == []  # not a tailnet name: nothing kept
+    assert pin(NAME) is None and marker.exists() and asked == [NAME]          # off the tailnet: kept
+    pin, _ = _pinning(marker, lambda: 1010.0, ask=lambda host: asked.append(host))
+    assert pin(NAME) is None and asked == [NAME]
+
+
+def test_the_hook_builds_its_transports_with_its_runs_pin(tmp_path, monkeypatch):
+    """Every transport a hook run makes, the board's apart from the rest included, takes that run's pin and unpin."""
+    from superyak_agent import hook
+    made = []
+    monkeypatch.setattr(hook, 'urllib_transport', lambda *args, **kwargs: made.append(kwargs) or (lambda *a: (200, b'{}')))
+    pin, unpin = (lambda host: None), (lambda host: None)
+    link = hook._Link(None, pin, unpin)
+    link(5)
+    link.apart(5, 100)
+    assert made == [{'pin': pin, 'unpin': unpin}, {'pin': pin, 'unpin': unpin}]

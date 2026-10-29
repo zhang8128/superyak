@@ -314,7 +314,7 @@ def test_the_hook_command_reads_event_and_messages_from_the_environment(monkeypa
     import io
     fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
     law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
-    monkeypatch.setattr(hook, 'urllib_transport', lambda timeout=5: fake)
+    monkeypatch.setattr(hook, 'urllib_transport', lambda timeout=5, **_: fake)  # **_: the run's pin and unpin
     monkeypatch.setattr('sys.stdin', io.StringIO('{"session_id": "abc"}'))
     monkeypatch.setenv('SUPERYAK_HOOK_EVENT', 'session-start')
     monkeypatch.setenv('SUPERYAK_HOOK_MESSAGES', '0')
@@ -560,7 +560,7 @@ def test_the_hook_command_runs_through_main_with_no_arguments(monkeypatch, capsy
     import io
     fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
     law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
-    monkeypatch.setattr(hook, 'urllib_transport', lambda timeout=5: fake)
+    monkeypatch.setattr(hook, 'urllib_transport', lambda timeout=5, **_: fake)  # **_: the run's pin and unpin
     monkeypatch.setattr('sys.argv', ['run_agent.py', 'hook', '--config', str(config_path)])
     monkeypatch.setattr('sys.stdin', io.StringIO('{"session_id": "abc"}'))
     monkeypatch.setenv('SUPERYAK_HOOK_EVENT', 'session-start')
@@ -728,7 +728,7 @@ def test_the_hook_board_lines_need_a_working_station(monkeypatch, capsys, statio
     assert hook.BOARD_LINE not in start(no_law, config_path, 's9', sessions)
     assert not any(r['path'] == '/api/ships/me/board' for r in fake.requests)
     made = []
-    monkeypatch.setattr(hook, 'urllib_transport', lambda timeout=5, limit=None: made.append((timeout, limit)) or fake)
+    monkeypatch.setattr(hook, 'urllib_transport', lambda timeout=5, limit=None, **_: made.append((timeout, limit)) or fake)
     monkeypatch.setenv('SUPERYAK_HOOK_MESSAGES', '0')
     for messages in (True, False):
         for word in install._hook_commands(config_path, messages)['SessionStart'].split():
