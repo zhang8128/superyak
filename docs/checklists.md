@@ -559,6 +559,9 @@ it, not only as its diff reads.
 - [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
       one from before the last migration (Tardis, 2026-10-29: G4b's removal looked harmless on a current store, and on a
       pre-pull store Store() migrated it before refusing).
+- [ ] When a bound depends on several limits, solve for the input that maximizes it (the corners of the limits) and
+      test that input; trying each kind of input alone doesn't find it (Tardis, 2026-10-29: a client name of 67 `"` and
+      33 emoji fits 100 characters and 200 bytes yet makes a 523-character id, while each kind alone made 435).
 - [ ] A rule that replaces another is judged against the one it replaces in both directions, from sources independent
       of the rule: what it newly misses, and what it newly flags. A table measured against the data it was built
       from proves nothing (Serenity, 2026-10-28: the old tag rule marked 35 of 48 ordinary lines and nobody counted;
