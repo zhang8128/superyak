@@ -446,23 +446,44 @@ def test_a_pull_response_faster_than_the_minimum_rate_arrives(tmp_path):
         stop()
 
 
+def test_a_small_answer_after_a_pause_still_arrives(tmp_path):
+    """Rio Grande's section 2, SF1: the body's deadline is its length at the minimum rate, but never less than the
+    header deadline. An idle 40-byte answer got about 0.6 ms after its headers, so a 50 ms pause ended every such pull."""
+    from superyak_peer.identity import canonical
+    from superyak_peer.transport import pull_pinned
+    body = canonical({'ok': True, 'envelopes': [], 'more': False})
+    def respond(handler):
+        handler.send_response(200)
+        handler.send_header('Content-Length', str(len(body)))
+        handler.end_headers()
+        handler.wfile.flush()
+        time.sleep(.05)
+        handler.wfile.write(body)
+    card, stop = pull_server(tmp_path, respond)
+    try:
+        assert pull_pinned(card, b'{}') == {'ok': True, 'envelopes': [], 'more': False}
+    finally:
+        stop()
+
 def test_a_stalled_pull_response_ends_by_the_scaled_deadline(tmp_path):
     """Spec §5: headers within the header deadline, then Content-Length / rate for the body. At 2,000 B/s a 3 KB body
-    gets about 1.5 s; one that stops after 100 bytes ends then, as a network failure (plan SF3)."""
+    gets about 1.5 s; one that trickles ends then, as a network failure (plan SF3). The body's deadline is never under
+    the header deadline (Rio Grande's SF1), so this one is set below 1.5 s."""
     from superyak_peer.transport import pull_pinned
     body = pull_body()
     def respond(handler):
         handler.send_response(200)
         handler.send_header('Content-Length', str(len(body)))
         handler.end_headers()
-        handler.wfile.write(body[:100])
-        handler.wfile.flush()
-        time.sleep(4)
+        for at in range(13):  # a byte every 0.3 s: never idle as long as the socket's own 0.5 s, so only the body's
+            handler.wfile.write(body[at:at + 1])  # deadline can end it
+            handler.wfile.flush()
+            time.sleep(.3)
     card, stop = pull_server(tmp_path, respond)
     started = time.monotonic()
     try:
         with pytest.raises(OSError):  # TimeoutError, or the shut-down socket's own error: a network failure either way
-            pull_pinned(card, b'{}', rate=2000)
+            pull_pinned(card, b'{}', header_timeout=0.5, rate=2000)
         assert 1.2 < time.monotonic() - started < 3
     finally:
         stop()

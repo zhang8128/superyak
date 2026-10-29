@@ -191,7 +191,8 @@ def pull_pinned(card, body, *, header_timeout=10.0, rate=PULL_RATE):
         if declared is None or not declared.isdigit() or int(declared) > PULL_CAP:
             raise PeerAnswer(response.status, 'Pull response has no Content-Length within the cap')
         length = int(declared)
-        timer = _expire(wire, time.monotonic()+length/rate)
+        # never less than the header deadline: a small answer after a short pause still arrives (Rio Grande's SF1)
+        timer = _expire(wire, time.monotonic()+max(header_timeout, length/rate))
         raw = response.read(length)
         if len(raw) < length:
             raise TimeoutError('Peer pull response stalled')
