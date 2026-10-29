@@ -5,6 +5,9 @@
 
 const root = document.getElementById("consent");
 const request = location.hash.slice(1);
+// Read once, then gone from the address and its history: on a shared browser profile a request left there could be
+// signed into by someone else within its ten minutes, and a second sign-in takes the consent over (Tardis).
+if (request) history.replaceState(null, "", location.pathname);
 const DAYS = 30;  // a connection lasts 1 to 30 days, 30 by default, never more (spec, "Tokens")
 const ENDED = {
   request_expired: "This request has expired. Go back to Claude and connect again.",

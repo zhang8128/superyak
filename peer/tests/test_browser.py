@@ -3804,7 +3804,10 @@ def test_the_consent_page_as_a_stranger_sees_it_on_a_phone(connector_home):
             start_connecting(page, home)
             expect(page.get_by_role('heading', name='Connect an app to your home')).to_be_visible()
             expect(page.get_by_text('Care plan')).to_have_count(0)
-            assert page.url.startswith(CONSENT_ORIGIN + '/assets/consent.html#') and fits_the_phone(page)
+            # read once, then cleared from the address and its history: on a shared profile a request left there could be
+            # signed into by someone else within its ten minutes, and the rebind would take the consent over (Tardis)
+            assert page.url == CONSENT_ORIGIN + '/assets/consent.html' and page.evaluate('location.hash') == ''
+            assert fits_the_phone(page)
             sign_in_to_consent(page)
             expect(page.get_by_role('heading', name='Claude (claude.ai)')).to_be_visible()
             expect(page.get_by_text('It calls itself "Claude".')).to_be_visible()

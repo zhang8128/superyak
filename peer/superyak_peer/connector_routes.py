@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from .common import Problem
-from .connector import (DAYS_MAX, REGISTER_BODY_MAX, OAuthError, RedirectError, check_callback, issuer_metadata,
+from .connector import (DAYS_MAX, REGISTER_BODY_MAX, STATE_MAX, OAuthError, RedirectError, check_callback, issuer_metadata,
                         resource_metadata)
 
 NOT_YET = 'Not built yet'
@@ -86,7 +86,9 @@ def install(app, public_origin, callback):
             return HTMLResponse(REFUSED_PAGE, 400)
 
         def back(error):
-            answer = {'error': error} | ({'state': params['state']} if params.get('state') is not None else {})
+            state = params.get('state')
+            # a state refused as too long isn't sent back either (Tardis): only a bounded one goes in the Location
+            answer = {'error': error} | ({'state': state} if state is not None and len(state) <= STATE_MAX else {})
             return RedirectResponse(callback + '?' + urlencode(answer | {'iss': public_origin}), 303)
         if len(names) != len(set(names)):
             return back('invalid_request')

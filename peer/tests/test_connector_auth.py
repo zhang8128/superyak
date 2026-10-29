@@ -443,7 +443,8 @@ def test_every_authorization_error_carries_iss_and_the_state_as_sent(home):
     assert query == {'error': 'unsupported_response_type', 'state': 'a b&c', 'iss': PUBLIC_ORIGIN}
     _, query, _ = redirected(authorize(home, state=None, response_type='token'))
     assert query == {'error': 'unsupported_response_type', 'iss': PUBLIC_ORIGIN}
-    assert redirected(authorize(home, state='x' * 513))[1]['error'] == 'invalid_request'  # bounded, so the fragment is
+    _, query, _ = redirected(authorize(home, state='x' * 513))  # bounded, so the fragment is
+    assert query == {'error': 'invalid_request', 'iss': PUBLIC_ORIGIN}  # and a state refused as too long isn't sent back (Tardis)
 
 
 def test_authorize_request_is_gone(home):
