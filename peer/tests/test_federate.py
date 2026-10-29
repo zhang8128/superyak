@@ -304,3 +304,23 @@ def test_end_to_end_over_real_https_pull_push_and_withdrawal(tmp_path):
         loop.run_pass()                                   # the next pull carries the withdrawal
         assert mo[0].list_rooms(mo[1]) == []
         assert [layer['body'] for layer in mo[0].shared_layers(mo[1])] == ['from pat']
+
+
+@pytest.mark.parametrize('char', ['\x01', '\U0001F600'], ids=['control', 'astral'])
+def test_the_largest_release_arrives_by_pull_end_to_end(tmp_path, char):
+    """Rio Grande's MF2, end to end as Serenity asked: a real federation-listen process, its TLS and pull_pinned's cap,
+    so the bytes P5 counts are the bytes that cross the wire. The largest release the limits allow, in U+0001 (P5's worst
+    case) and in emoji, which answered over PULL_CAP while the listener sent ASCII escapes, arrives at the pull peer."""
+    import time
+    from superyak_peer.federate import Federate
+    from superyak_peer.identity import pairing_code
+    from test_federation_outcomes import station
+    from test_listener import largest_release
+    mo = station(tmp_path / 'mo', 'mo', time.time, mode='pull')
+    with listening_peer(tmp_path / 'a', 'alice') as a:
+        mine, card = mo[2].card(mo[1]), a[2].card(a[1])
+        contact = a[2].pair(a[1], mine, code=pairing_code(mine))['id']
+        mo[2].pair(mo[1], card, code=pairing_code(card))
+        largest_release(a, contact, char)
+        Federate(mo[2]).run_pass()
+        assert [(layer['title'], layer['body']) for layer in mo[0].shared_layers(mo[1])] == [(char * 200, char * 100_000)]
