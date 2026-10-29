@@ -480,6 +480,28 @@ def test_the_pull_listener_reads_the_reconciles_own_mark_as_its_replay_floor(tmp
             assert abs(Federation._restored_at(db) - time.time()) < 60, args
 
 
+def test_station_pull_floor_marks_a_rolled_back_store_for_the_listener(tmp_path, capsys):
+    """fix:pull-floor-after-rollback (runbook 10.3): the command writes the rollback's mark into the live data directory's
+    database, the listener's floor reads it, and a data directory with no peer.sqlite3 is refused with nothing made.
+    Mutations: the mark written under another key, or a missing database created."""
+    import time
+    from superyak_peer.__main__ import main
+    from superyak_peer.federation import Federation
+    store, peers = peer_station(tmp_path)
+    with closing(sqlite3.connect(store.db_path)) as db:
+        assert Federation._restored_at(db) == float('-inf')
+    main(['station-pull-floor', '--data-dir', str(store.data_dir)])
+    assert 'Pull floor marked at' in capsys.readouterr().out
+    with closing(sqlite3.connect(store.db_path)) as db:
+        assert abs(Federation._restored_at(db) - time.time()) < 60
+    empty = tmp_path / 'empty'
+    empty.mkdir()
+    with pytest.raises(SystemExit) as stopped:
+        main(['station-pull-floor', '--data-dir', str(empty)])
+    assert stopped.value.code != 0 and not (empty / 'peer.sqlite3').exists()
+    assert 'No peer database' in capsys.readouterr().err
+
+
 def test_reconcile_unpair_refuses_an_ambiguous_id_and_changes_no_byte(tmp_path, capsys):
     """--unpair with a short id two peers share is refused (exit 2) and the staged copy is byte for byte unchanged, also when
     the refusal comes after other work. A full id picks the one peer even if another shares its prefix, and the report does

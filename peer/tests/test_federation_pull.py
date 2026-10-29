@@ -280,6 +280,38 @@ def test_a_damaged_restore_mark_holds_pulls_for_300_s_from_the_listeners_start(p
     assert pull(peers['mac'], a, clock, at=int(started) + 301)['more'] is False
 
 
+def mark_rolled_back(a, value):
+    """The mark `station-pull-floor` writes at runbook 10.3 (backups.write_pull_floor)."""
+    with a[0].transaction() as db:
+        db.execute("INSERT OR REPLACE INTO system_meta VALUES('pull_floor', ?)", (value,))
+
+
+def test_a_rollbacks_mark_floors_pulls_like_a_restores_and_the_later_of_the_two_wins(pulling):
+    """fix:pull-floor-after-rollback: a rollback puts back a file without the nonces the restored station recorded, so
+    its mark floors pulls the same way, and with both marks present the later one does. Mutations: the rollback's mark
+    unread, or the earlier of the two taken."""
+    clock, a, peers, contacts = pulling
+    now = int(clock())
+    mark_restored(a, json.dumps({'at': float(now - 250), 'replaced': True, 'path': '/x'}))
+    mark_rolled_back(a, json.dumps({'at': float(now - 100), 'why': 'rollback'}))
+    refused(lambda: pull(peers['mac'], a, clock, at=now + 200), 409, 'Replay')  # past the restore's floor, not this one
+    assert pull(peers['mac'], a, clock, at=now + 201)['more'] is False
+
+
+@pytest.mark.parametrize('mark', ['not json', '{"at": 1e999}', '{"at": NaN}', '{}'],
+                         ids=['not-json', 'infinite', 'nan', 'no-at'])
+def test_a_damaged_rollback_mark_falls_back_to_the_listeners_start(pulling, mark):
+    """A damaged rollback mark, beside a good restore mark, can't say when the rollback was, so the floor falls back to
+    the listener's start plus 300 s, as a damaged restore mark does. Mutation: a damaged second mark skipped."""
+    clock, a, peers, contacts = pulling
+    started = a[2]._started
+    mark_restored(a, json.dumps({'at': float(started - 1000), 'replaced': True, 'path': '/x'}))
+    mark_rolled_back(a, mark)
+    refused(lambda: pull(peers['mac'], a, clock, at=int(started) + 300), 409, 'Replay')
+    clock.at = started + 301
+    assert pull(peers['mac'], a, clock, at=int(started) + 301)['more'] is False
+
+
 # Federation pull, plan Task 6: the per-envelope boundary (spec §4, M3; tests 8a and 8b) and the walk's bounds (§4, SF8,
 # check 3 SF6; P5 and RG)
 

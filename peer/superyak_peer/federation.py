@@ -33,6 +33,7 @@ CLOCKS_DIFFER = 'Clocks differ by more than 5 minutes'
 # fake-hwclock's hourly save before time sync. At least 1,440 rows a day per pull peer pulling each minute (every
 # round and retry signs its own nonce), pruned through the index on `at`.
 NONCE_KEEP = 86400
+PULL_FLOOR_KEY = 'pull_floor'  # system_meta: a rollback's mark, {"at": the time it was written} (_restored_at)
 log = logging.getLogger(__name__)
 PROBLEM_CAP = 200  # characters of last_problem kept; a peer's words can be 64 KiB (Rio Grande's SF3)
 PEER_SCOPED_STATUS = frozenset({401, 404, 408, 421, 425, 429})
@@ -381,29 +382,35 @@ class Federation:
 
     @staticmethod
     def _restored_at(db):
-        """When the restore reconcile last ran on this store, from the mark it leaves in system_meta (backups.py
-        `_write_mark`, kept after install): -inf if it never ran, None if the mark is damaged. A time that isn't a finite
-        number is damaged too (Rio Grande's reader: an integer of 10**400 overflowed, 1e999 refused every pull for
-        good, NaN set no floor), and only a hand edit makes one."""
-        row = db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()
-        if row is None:
-            return float('-inf')
-        try:
-            at = float(json.loads(row[0])['at'])
-        except (TypeError, ValueError, KeyError, OverflowError):
-            return None
-        return at if math.isfinite(at) else None
+        """When this store last had its pull nonces cut short: the later of the restore reconcile's mark (backups.py
+        `_write_mark`, kept after install) and a rollback's (PULL_FLOOR_KEY, which `station-pull-floor` writes at runbook
+        10.3). -inf if neither was ever written, None if either is damaged. A time that isn't a finite number is damaged
+        too (Rio Grande's reader: an integer of 10**400 overflowed, 1e999 refused every pull for good, NaN set no
+        floor), and only a hand edit makes one."""
+        times = []
+        for key in ('restore_reconcile', PULL_FLOOR_KEY):
+            row = db.execute('SELECT value FROM system_meta WHERE key=?', (key,)).fetchone()
+            if row is None:
+                continue
+            try:
+                at = float(json.loads(row[0])['at'])
+            except (TypeError, ValueError, KeyError, OverflowError):
+                return None
+            if not math.isfinite(at):
+                return None
+            times.append(at)
+        return max(times, default=float('-inf'))
 
     def _replay_floor(self, db):
         """The `at` at or below which a pull request counts as a replay (fix:restore-keeps-pull-nonces). A copy's nonces
         end where it was taken, and the runbook stops the listener before the reconcile, so a nonce lost to a restore
         was used before the mark, by a request whose `at` passed the clock then: at most the mark plus 300 s. So the
         floor is the mark plus 300 s, whatever the copy's age or a peer's clock, and pulls wait out those 5 minutes
-        once after a restore. A damaged mark falls back to this listener's own start, which follows every restore
-        (runbook step 8): closed for 300 s, and no longer. Not covered: a rollback, which puts back a file with no newer
-        mark (runbook 10.4 waits more than 10 minutes instead, until fix:pull-floor-after-rollback writes one); the
-        Pi's clock stepping backward between the stop and the reconcile; and a clock stepping back more than
-        NONCE_KEEP - 300 s between a prune and a replay, which a per-origin floor would close."""
+        once after a restore. A rollback puts back a file that lacks the nonces the restored station recorded, so runbook
+        10.3 writes its own mark the same way (fix:pull-floor-after-rollback). A damaged mark falls back to this
+        listener's own start, which follows every restore and rollback (runbook steps 8 and 10.4): closed for 300 s,
+        and no longer. Not covered: the Pi's clock stepping backward between the stop and the mark; and a clock
+        stepping back more than NONCE_KEEP - 300 s between a prune and a replay, which a per-origin floor would close."""
         restored = self._restored_at(db)
         return (self._started if restored is None else restored) + 300
 

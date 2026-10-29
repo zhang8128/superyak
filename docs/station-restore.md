@@ -251,12 +251,13 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        ```
        If a `peer.sqlite3` file is in the data directory: when 10.2 ran, it is a stray, so set it aside with step 6's
        stray-case lines and run 10.3 again; when 10.2 didn't run, run 10.2 first.
+
+       Then mark the file put back, still with everything stopped: `make station-pull-floor`. It lacks the pull nonces
+       the restored station recorded, so a federation listener now counts every pull signed before this mark, plus
+       300 s, as a replay (fix:pull-floor-after-rollback). It prints the time it marked; running it again only moves
+       the mark later.
     4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and
        wormhole, put the watchers step 3 saved back as they were, and enable the timers again. Step 8's checks that act
        on step 5's report (the law layers, the members and admins, the `bridged` column) are for a restored copy and
-       don't apply to a rollback. If a federation unit was running, note the time 10.1 stopped it, and start it again
-       more than 10 minutes after that: the file put back lacks the pull nonces the restored station recorded and
-       carries no newer restore mark, and a pull it served just before the stop, from a peer whose clock ran 300 s
-       ahead, could pass the clock check for 10 minutes after the stop (fix:restore-keeps-pull-nonces). The lighthouse,
-       the door, the ships and the timers needn't wait. Until `fix:pull-floor-after-rollback` writes a mark at 10.3,
-       this wait is the guard.
+       don't apply to a rollback. With 10.3's mark written, the federation units need no wait. A pull peer's deliveries
+       resume about 5 minutes after the mark, answered "Replay" until then, with no failure counted and acks kept.

@@ -571,6 +571,10 @@ def main(argv=None):
     reconcile_cmd.add_argument('--replaced', type=Path, help='The peer.sqlite3 the restore replaces (runbook step 4 set it aside), opened read-only; any other name is refused')
     reconcile_cmd.add_argument('--unpair', action='append', default=[], metavar='PEER', help="Unpair this peer (12-character id or full id) in the copy as the browser does; repeatable; the only way without a usable --replaced")
     reconcile_cmd.add_argument('--live-data-dir', type=Path, help='The live data directory, which is refused (make passes STATION_DATA)')
+    floor_cmd = commands.add_parser('station-pull-floor', help='Trusted local, with the station stopped: after a rollback '
+                                    '(runbook 10.3), mark the database so a federation listener counts every pull signed '
+                                    'before now as a replay')
+    floor_cmd.add_argument('--data-dir', type=Path, required=True, help='The live data directory (make passes STATION_DATA)')
     restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
     restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
     restore_cmd.add_argument('--backup', type=Path, help='Test this copy instead of the newest one')
@@ -737,6 +741,11 @@ def main(argv=None):
             except BackupError as failed:
                 parser.exit(failed.code, f'station-backup: {failed.reason}\n')
             print(f'Checked copy: {written}')
+        elif args.command == 'station-pull-floor':
+            from .backups import write_pull_floor
+            at = write_pull_floor(args.data_dir)
+            print(f'Pull floor marked at {datetime.fromtimestamp(at, timezone.utc):%Y-%m-%d %H:%M:%SZ}: '
+                  'a federation listener counts every pull signed before it, plus 300 s, as a replay')
         elif args.command == 'station-restore-reconcile':
             from .backups import (ReconcileRefused, UnpairRefused, describe_reconcile, reconcile, refuse_misnamed_replaced,
                                   refuse_unstaged_db)

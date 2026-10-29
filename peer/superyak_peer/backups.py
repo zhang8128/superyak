@@ -1062,6 +1062,26 @@ def _resolve_peers(db, names):
 MARK_KEY = 'restore_reconcile'
 
 
+def write_pull_floor(data_dir, now=None):
+    """Runbook 10.3, after a rollback (fix:pull-floor-after-rollback): the file put back lacks the pull nonces the
+    restored station recorded while it was live, and carries no newer restore mark. This writes the rollback's own mark
+    into system_meta, so a federation listener counts every pull request signed before it, plus 300 s, as a replay
+    (Federation._restored_at) and the federation units need no wait. Run with the station stopped (10.1); refused for a
+    data directory with no peer.sqlite3, so it never makes one. Returns the time written."""
+    from .federation import PULL_FLOOR_KEY
+    path = Path(data_dir) / 'peer.sqlite3'
+    if not path.is_file():
+        raise ValueError(f'No peer database at {path}: nothing to mark')
+    now = time.time() if now is None else now
+    with closing(sqlite3.connect(path, timeout=30, isolation_level=None)) as db:
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('CREATE TABLE IF NOT EXISTS system_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        db.execute('INSERT OR REPLACE INTO system_meta(key, value) VALUES(?, ?)',
+                   (PULL_FLOOR_KEY, json.dumps({'at': now, 'why': 'rollback'})))
+        db.execute('COMMIT')
+    return now
+
+
 def _write_mark(db, old, now, path):
     """Follow-up 1: the proof, inside the staged copy, that the reconcile ran on it. It is a system_meta row (the station's
     own key/value table, which a copy from before the system author lacks, so it is created here), written in the

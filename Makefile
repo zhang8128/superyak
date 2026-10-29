@@ -80,7 +80,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats
+.PHONY: imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-pull-floor station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -101,6 +101,7 @@ help:
 	@echo "make station-backup [OUTPUT=…]  On the Pi: a checked copy of the station database (the rotation, or OUTPUT)"
 	@echo "make station-restore-test [BACKUP=…]  On the Pi: boot a throwaway station from the newest copy (or BACKUP)"
 	@echo "make station-restore-reconcile DB=… [REPLACED=…] [UNPAIR='id …']  On the Pi: runbook step 5 (docs/station-restore.md)"
+	@echo "make station-pull-floor  On the Pi, after a rollback: runbook step 10.3's pull floor (docs/station-restore.md)"
 	@echo "make station-alerts     On the Pi: show the alert queue and what is held back"
 	@echo "make station-units      On the Pi: install the backup timers and the alert drop-ins; make station-units-remove undoes it"
 	@echo "make station-lessons-room ID=… [CONFIRM=…]  On the Pi: show, then record, the lessons room (first rail)"
@@ -423,6 +424,9 @@ station-restore-test:
 station-restore-reconcile:
 	@test -n "$(DB)" || { echo 'Usage: make station-restore-reconcile DB=<the staged restored.sqlite3> [REPLACED=<the set-aside peer.sqlite3>] [UNPAIR="<peer id> …"]'; exit 2; }
 	uv run --locked --project peer python -m superyak_peer station-restore-reconcile --db "$(DB)" --live-data-dir "$(STATION_DATA)"$(if $(REPLACED), --replaced "$(REPLACED)")$(foreach peer,$(UNPAIR), --unpair "$(peer)")
+
+station-pull-floor:
+	uv run --locked --project peer python -m superyak_peer station-pull-floor --data-dir "$(STATION_DATA)"
 
 station-alerts:
 	uv run --locked --project peer python -m superyak_peer station-alerts --data-dir "$(STATION_DATA)"
