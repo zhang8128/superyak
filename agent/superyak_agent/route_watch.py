@@ -163,6 +163,9 @@ def run_once(config, room, state_path, client=None, now=time.time, resolve=publi
         return lines
     pending = [line for line in state.get('pending') or [] if isinstance(line, str)] + lines
     dropped = state.get('dropped') if type(state.get('dropped')) is int else 0
+    configured, followed = room, state.get('followed')
+    if isinstance(followed, list) and len(followed) == 2 and followed[0] == configured and isinstance(followed[1], str):
+        room = followed[1]  # where an earlier run followed the configured room to, so no extra 409 each run
     queue = ([DROPPED.format(dropped)] if dropped else []) + pending  # the count of lines lost goes first
     sent = 0
     for line in queue:
@@ -170,7 +173,8 @@ def run_once(config, room, state_path, client=None, now=time.time, resolve=publi
             try:
                 client.post(room, line, f'route-watch-{uuid.uuid4().hex}')
             except StationError as error:  # the room was replaced: its lines go on in the room that continues it
-                if error.status != 409 or error.message != REPLACED_SEND or not (current := continued(client.rooms(), room)):
+                current = continued(client.rooms(), room) if error.status == 409 and error.message == REPLACED_SEND else None
+                if not current or current == room:  # not a replacement, or a fork, or a continuation without this ship
                     raise
                 room = current
                 client.post(room, line, f'route-watch-{uuid.uuid4().hex}')
@@ -181,5 +185,9 @@ def run_once(config, room, state_path, client=None, now=time.time, resolve=publi
     dropped = 0 if dropped and sent else dropped
     over = max(0, len(left) - PENDING_MAX)  # the oldest go, and are counted
     state.update(reported=reported, seen=results, pending=left[over:], dropped=dropped + over)
+    if room != configured:
+        state['followed'] = [configured, room]
+    else:
+        state.pop('followed', None)
     write_private(state_path, state)
     return queue[:sent]
