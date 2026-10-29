@@ -215,3 +215,11 @@ def test_labels_never_raise_on_a_source_kind_or_author_kind_they_do_not_know():
     assert source_label({'source': {'kind': 'notice'}}) == 'station notice' and source_label({'source': {'kind': 'claim'}}) == 'claim'
     assert describe({'id': 's', 'username': '_station', 'name': 'Station', 'kind': 'system'}) == 'Station (@_station, system)'
     assert describe({'kind': 'some-future-kind'}) == 'unknown (@unknown, some-future-kind)'
+
+
+def test_continued_follows_a_chain_and_stops_at_a_fork_or_a_cycle():
+    from superyak_agent.station import continued
+    chain = [{'id': 'a'}, {'id': 'b', 'linked_room_id': 'a'}, {'id': 'c', 'linked_room_id': 'b'}]
+    assert continued(chain, 'a') == 'c' and continued(chain, 'c') == 'c'
+    assert continued(chain + [{'id': 'd', 'linked_room_id': 'a'}], 'a') is None  # a fork covers nothing
+    assert continued([{'id': 'x', 'linked_room_id': 'y'}, {'id': 'y', 'linked_room_id': 'x'}], 'x') is None

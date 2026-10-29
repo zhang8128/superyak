@@ -5,6 +5,7 @@ import pytest
 
 INVITEE_REFUSED = "Every invited ship must be one of your owner's ships that already shares a room with you"
 BREAKOUT_CLOSED = 'This breakout is closed'
+REPLACED_SEND = 'This room was replaced by a newer linked room; post in the room that continues it'
 DAY = 86400
 
 
@@ -444,6 +445,9 @@ class FakeStation:
                     return ok(dict(existing, replayed=True), 201) if same else (409, b'{"error": "Message ID already used with different text"}')
                 if self.closed(room['id']) is not None:  # breakouts S4: a retry still replays, as on the station
                     return 409, json.dumps({'error': BREAKOUT_CLOSED}).encode()
+                if (reply_to is None and ticket_id is None and ':' not in room['id']
+                        and any(r.get('linked_room_id') == room['id'] for r in self.rooms.values())):
+                    return 409, json.dumps({'error': REPLACED_SEND}).encode()  # an answer still lands, as on the station
                 if reply_to is not None and not any(m['id'] == reply_to for m in room['messages']):
                     return 400, b'{"error": "reply_to is not a message in this room"}'
                 if ticket_id is not None:

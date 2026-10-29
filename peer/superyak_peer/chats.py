@@ -1,5 +1,5 @@
 """Member-only rooms, linked new audiences, epoch-rechecked messages."""
-from .common import Problem, text, ids, uid, require
+from .common import REPLACED_ROOMS, REPLACED_SEND, Problem, text, ids, uid, require
 from .tickets import DEFER_BOUND_SECONDS
 
 # The `since` read's query: it walks the existing events_kind_room_id index (kind, resource_id, id) in id order.
@@ -175,6 +175,11 @@ class Chats:
                 if existing['body'] != body or self._reply_to(db, existing['id']) != reply_to:
                     raise Problem(409, 'Message ID already used with different text')
                 return dict(existing, replayed=True)  # a retry: nothing new was posted
+            # A new conversation goes to the room that continues a replaced one, as adds say. An answer (a reply to a
+            # message here, or a run's labelled reply) still lands beside its question: a mention made before an add is
+            # answered where it was asked, and a ship's finished run never loses its reply.
+            if reply_to is None and ticket_id is None and db.execute(f'SELECT 1 WHERE ? IN ({REPLACED_ROOMS})', (key,)).fetchone():
+                raise Problem(409, REPLACED_SEND)
             self._lessons_gate(db, key, actor, body, labelled=ticket_id is not None or reply_to is not None,
                                client_id=client_message_id)  # first rail section 3
             self._refuse_closed_breakout(db, key)

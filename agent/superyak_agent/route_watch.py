@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from .station import label, read_json, write_private
+from .station import REPLACED_SEND, StationError, continued, label, read_json, write_private
 
 SIGN_IN = (401, {'error': 'Sign in required'})
 SHIP_REFUSED = (403, {'error': 'Ship keys cannot use this route'})
@@ -167,7 +167,13 @@ def run_once(config, room, state_path, client=None, now=time.time, resolve=publi
     sent = 0
     for line in queue:
         try:
-            client.post(room, line, f'route-watch-{uuid.uuid4().hex}')
+            try:
+                client.post(room, line, f'route-watch-{uuid.uuid4().hex}')
+            except StationError as error:  # the room was replaced: its lines go on in the room that continues it
+                if error.status != 409 or error.message != REPLACED_SEND or not (current := continued(client.rooms(), room)):
+                    raise
+                room = current
+                client.post(room, line, f'route-watch-{uuid.uuid4().hex}')
         except Exception:  # noqa: BLE001 - the station unreachable: kept for the next run
             break
         sent += 1

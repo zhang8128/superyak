@@ -124,6 +124,25 @@ def test_a_reply_with_its_ticket_is_labelled_as_that_run(env):
     assert got['@serenity add notes'] is None
 
 
+def test_an_answer_still_lands_in_a_room_replaced_after_its_question(env):
+    """fix:send-message-refuses-replaced-room, its review's must-fix: Andy mentions a ship, a run starts, and Andy adds
+    someone meanwhile. The run's labelled reply, and a plain reply to a message there, still land beside the question;
+    only a new message, answering nothing, is refused and sent on to the room that continues it."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    owner = say(clients[0], room, 'a', '@serenity add notes')
+    other = say(clients[1], room, 'b', '@serenity what is this?')
+    build = ticket(serenity, owner['id']).json()
+    added = clients[0].post(f'/api/chats/{room}/participants', json={'member_ids': [users[2]['id']]})
+    assert added.status_code == 201, added.text
+    assert post(serenity, room, f'reply-{owner["id"]}', 'Added notes', build['id']).status_code == 201
+    replied = serenity.post(f'/api/chats/{room}/messages', json={'client_message_id': f'reply-{other["id"]}',
+                                                                 'body': 'It is a station', 'reply_to': other['id']})
+    assert replied.status_code == 201, replied.text
+    new = post(serenity, room, 'post-1', 'Hello from my session')
+    assert (new.status_code, new.json()['error']) == (
+        409, 'This room was replaced by a newer linked room; post in the room that continues it')
+
+
 def test_a_ticket_labels_one_message_only_and_never_a_finished_or_foreign_one(env):
     app, clients, users, clock, ship, serenity, room = setup(env)
     owner = say(clients[0], room, 'a', '@serenity add notes')
