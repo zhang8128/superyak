@@ -1,19 +1,37 @@
 """Browser-authorized pairing and separately signed federation ingress."""
 from contextlib import asynccontextmanager
 import asyncio
+import logging
 from fastapi import APIRouter, Request
 from starlette.concurrency import run_in_threadpool
 from .common import Problem
 from .identity import validate_card, pairing_code, show_code
+from .signatures import LOST_IDENTITY
+
+log = logging.getLogger(__name__)
+_LOST_START = LOST_IDENTITY.split('{path}')[0]
+
+
+def sign_first(store):
+    """Signs the receipts key-less commands left. An error is logged (its class; for a lost identity also the fixed
+    sentence, which names only the identity file) and never stops the caller: a read answers with what is there."""
+    try:
+        return store.sign_imprint_receipts()
+    except Exception as error:  # noqa: BLE001 - signing must not stop the loop or a read
+        if isinstance(error, ValueError) and str(error).startswith(_LOST_START):
+            log.error('Signing imprint receipts failed (ValueError): %s', str(error))
+        else:
+            log.error('Signing imprint receipts failed (%s)', type(error).__name__)
+        return 0
+
 
 SYNC_SECONDS = 5
 
 @asynccontextmanager
 async def federation_lifespan(app):
     """serve --sync's worker (federation pull plan P11): federate's pass every SYNC_SECONDS, or at once when "Check
-    delivery now" wakes it. Passes are counted, so the button can answer after the pass it woke. A pass that raises is logged and
-    the worker goes on (nit 9): one OperationalError used to end it silently."""
-    import logging
+    delivery now" wakes it. Passes are counted, so the button can answer after the pass it woke. A pass that raises
+    is logged and the worker goes on (nit 9): one OperationalError used to end it silently."""
     from .federate import Federate
     stop, app.state.sync_wake = asyncio.Event(), asyncio.Event()
     app.state.sync_started = app.state.sync_finished = 0
@@ -25,19 +43,29 @@ async def federation_lifespan(app):
             try:
                 await asyncio.to_thread(loop.run_pass)
             except Exception:  # noqa: BLE001 - logged; the next pass goes on
-                logging.getLogger(__name__).exception('A delivery pass failed')
+                log.exception('A delivery pass failed')
             app.state.sync_finished += 1
             waits = [asyncio.create_task(stop.wait()), asyncio.create_task(app.state.sync_wake.wait())]
             await asyncio.wait(waits, timeout=SYNC_SECONDS, return_when=asyncio.FIRST_COMPLETED)
             for waiting in waits:
                 waiting.cancel()
+    async def signer():
+        from . import imprints
+        while not stop.is_set():
+            await asyncio.to_thread(sign_first, app.state.store)
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=imprints.SIGN_INTERVAL)
+            except asyncio.TimeoutError:
+                pass
     task = asyncio.create_task(worker()) if app.state.sync_enabled else None
+    signing = asyncio.create_task(signer()) if app.state.imprints_dir is not None else None
     try:
         yield
     finally:
         stop.set()
-        if task:
-            await task
+        for running in (task, signing):
+            if running:
+                await running
 
 def install(app):
     from .app import actor, body

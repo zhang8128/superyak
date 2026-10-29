@@ -17,8 +17,12 @@ def password_hash(password, salt):
     return hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
 
 # Public route spec 3, the holds: (limit, window in seconds). A pair is a username from one source; a device is a
-# browser's known-device token, whose failures count against it instead of holds 1-3.
-PAIR_HOLD, SOURCE_HOLD, USER_HOLD, DEVICE_HOLD = (8, 300), (40, 300), (30, 3600), (8, 300)
+# browser's known-device token, whose failures count against it instead of holds 1-3. Its public sign-ins count against
+# it too, successes included (section 2 review should-fix 1), so one browser can't keep the known browsers' lane full.
+PAIR_HOLD, SOURCE_HOLD, USER_HOLD, DEVICE_HOLD, DEVICE_ATTEMPTS_HOLD = (8, 300), (40, 300), (30, 3600), (8, 300), (8, 300)
+# And per username across all its known browsers (section 2 review of 581cea18, should-fix 1): a cookieless success
+# mints a token for free, so the per-token count alone holds a browser, not an account holder.
+KNOWN_USER_HOLD = (24, 300)
 INVITATION_TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')  # what secrets.token_urlsafe(32) makes, for both kinds
 DEVICE_LIFETIME = 180 * 86400
 DEVICES_PER_USER = 20
@@ -39,8 +43,29 @@ def login_source(host, public):
     return str(address)
 
 
+def counted(count, reset, now, window):
+    """A count and its window's end after one more attempt: a window that has ended starts again now."""
+    return (count + 1, reset) if reset > now else (1, now + window)
+
+
+def device_held(known, now, public):
+    """Whether a known browser's token is held: eight failures in five minutes, or, on a public sign-in, eight public
+    sign-ins of any outcome in five minutes. A count whose window has ended is zero."""
+    failures = known['failures'] if known['failure_reset'] > now else 0
+    attempts = known['attempts'] if known['attempt_reset'] > now else 0
+    return failures >= DEVICE_HOLD[0] or public and attempts >= DEVICE_ATTEMPTS_HOLD[0]
+
+
+def known_user_held(db, username, now):
+    """Whether username's known browsers are held: 24 public known-browser sign-ins of any outcome in five minutes, over
+    all its tokens. Only a valid token's sign-in raises the count, so nobody without one can hold anyone's browsers."""
+    row = db.execute('SELECT count,reset FROM login_attempts WHERE key=?', (attempts_key('known', username),)).fetchone()
+    return row is not None and row['reset'] > now and row['count'] >= KNOWN_USER_HOLD[0]
+
+
 def attempts_key(*parts):
-    """A login_attempts key: a JSON array such as ["user-source", source, username], unambiguous for any username."""
+    """A login_attempts key: a JSON array such as ["user-source", "public", source, username], unambiguous for any
+    username. A source's keys name the request's class, so a public and a tailnet failure never share a row."""
     return json.dumps(parts)
 
 
@@ -111,12 +136,20 @@ class Auth:
 
     def device_is_valid(self, device, username):
         """Public route spec 3: whether a superyak_device token is valid for username, read without writing. It picks
-        the known browsers' sign-in lane; Store.login checks again in its own transaction."""
+        the known browsers' sign-in lane for a public sign-in; Store.login checks again in its own transaction. A valid
+        token that is held answers 429 here, so it enters no lane (section 2 review should-fix 1), and so does one whose
+        username's known browsers are held (the review of 581cea18, should-fix 1)."""
         with self.transaction() as db:
-            return self._known_device(db, device, username, self.clock()) is not None
+            now = self.clock()
+            known = self._known_device(db, device, username, now)
+            user_held = known is not None and known_user_held(db, username, now)
+        if known is not None and (device_held(known, now, public=True) or user_held):
+            raise Problem(429, 'Too many attempts; try again later')
+        return known is not None
 
     def _device_signed_in(self, db, user_id, device, now):
-        """After a success: the presented token's row, kept and extended (its failures reset), or a new token's row.
+        """After a success: the presented token's row, kept and extended (its failures reset, its attempts kept), or a
+        new token's row.
         Expired rows go, and a user keeps at most DEVICES_PER_USER, the oldest going first. Returns the token."""
         if device is not None and db.execute('UPDATE login_devices SET expires=?, failures=0, failure_reset=0 WHERE token_hash=?',
                                              (now + DEVICE_LIFETIME, token_hash(device))).rowcount:
@@ -128,20 +161,13 @@ class Auth:
                    '(SELECT token_hash FROM login_devices WHERE user_id=? ORDER BY expires DESC LIMIT ?)', (user_id, user_id, DEVICES_PER_USER))
         return device
 
-    def login(self, username, password, source, *, public=True, device=None):
-        """Public route spec 3, reserve first. Step 1 deletes expired counters, then refuses a held attempt (429,
-        without hashing) or counts it in every applicable counter, which reserves it. Step 2 hashes outside any
-        transaction, the dummy hash for an unknown name, so a 401 takes as long either way. Step 3 re-reads the user,
-        since an activation can change the hash in between: a failure keeps the reservation as the counted failure,
-        a success deletes the pair's counter and gives the others back. The answers are today's: 401 for a wrong name
-        or password, 429 when held, the same for unknown and known names.
-        `device` is the browser's superyak_device cookie. One valid for username exempts it from holds 1-3: its
-        failures count against its own token instead. A success returns the token to set, the same one extended or a
-        new one."""
-        text(username, 'username', 254)
-        text(password, 'password', 1024)
-        bucket = login_source(source, public)
-        holds = {attempts_key('user-source', bucket, username): PAIR_HOLD, attempts_key('source', bucket): SOURCE_HOLD}
+    def _reserve(self, username, source, public, device):
+        """Step 1 of login below, shared with check_password_attempt (R19): deletes expired counters, then refuses a
+        held attempt (429, without hashing) or counts it in every applicable counter, which reserves it; a known
+        browser counts on its own token instead. Returns (user, known, reserved): the user's row or None, the known
+        device's row or None, and each reserved counter's reset."""
+        bucket, kind = login_source(source, public), 'public' if public else 'tailnet'
+        holds = {attempts_key('user-source', kind, bucket, username): PAIR_HOLD, attempts_key('source', kind, bucket): SOURCE_HOLD}
         if public:  # hold 3 counts and holds public sign-ins only
             holds[attempts_key('user', username)] = USER_HOLD
         held, reserved = False, {}
@@ -150,11 +176,19 @@ class Auth:
             db.execute('DELETE FROM login_attempts WHERE reset<=?', (now,))
             known = self._known_device(db, device, username, now)
             if known is not None:
-                failures = known['failures'] if known['failure_reset'] > now else 0
-                held = failures >= DEVICE_HOLD[0]
-                if not held:
-                    holds, reset = {}, known['failure_reset'] if known['failure_reset'] > now else now + DEVICE_HOLD[1]
-                    db.execute('UPDATE login_devices SET failures=?, failure_reset=? WHERE token_hash=?', (failures + 1, reset, known['token_hash']))
+                held = device_held(known, now, public) or public and known_user_held(db, username, now)
+                if not held:  # a success resets the failures (_device_signed_in) and keeps the attempts
+                    holds, failures = {}, counted(known['failures'], known['failure_reset'], now, DEVICE_HOLD[1])
+                    attempts = (counted(known['attempts'], known['attempt_reset'], now, DEVICE_ATTEMPTS_HOLD[1]) if public
+                                else (known['attempts'], known['attempt_reset']))
+                    db.execute('UPDATE login_devices SET failures=?, failure_reset=?, attempts=?, attempt_reset=? WHERE token_hash=?',
+                               (*failures, *attempts, known['token_hash']))
+                    if public:  # and per username, in this same transaction; a success never gives it back
+                        key = attempts_key('known', username)
+                        row = db.execute('SELECT count,reset FROM login_attempts WHERE key=?', (key,)).fetchone()
+                        db.execute('INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)',
+                                   (key, *(counted(row['count'], row['reset'], now, KNOWN_USER_HOLD[1]) if row
+                                           else (1, now + KNOWN_USER_HOLD[1]))))
             rows = {key: db.execute('SELECT count,reset FROM login_attempts WHERE key=?', (key,)).fetchone() for key in holds}
             if held or any(rows[key] and rows[key]['count'] >= limit for key, (limit, _) in holds.items()):
                 held = True
@@ -165,20 +199,68 @@ class Auth:
                 user = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
         if held:  # committed: the expired rows stay deleted
             raise Problem(429, 'Too many attempts; try again later')
+        return user, known, reserved
+
+    @staticmethod
+    def _hashed(user, password):
+        """Step 2 of login below: hashes outside any transaction, the dummy hash for an unknown name. Returns (salt,
+        stored, matches)."""
         salt, stored = (user['salt'], user['password_hash']) if user else (b'\0' * 16, b'\0' * 32)
-        matches = hmac.compare_digest(password_hash(password, salt), stored)
+        return salt, stored, hmac.compare_digest(password_hash(password, salt), stored)
+
+    def _settle(self, db, username, user, hashed, public, reserved):
+        """Step 3 of login below, inside the caller's transaction: re-reads the user, since an activation can change
+        the hash in between. A failure keeps the reservation as the counted failure and returns None; a success
+        deletes the pair's counter, gives the others back and returns the user's current row."""
+        salt, stored, matches = hashed
+        current = db.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone() if user else None
+        if not (matches and current and current['salt'] == salt and current['password_hash'] == stored
+                and not current['activation_pending'] and current['kind'] == 'person'):
+            return None
+        keys = list(reserved)  # the pair's first; none for a known browser, which reserved on its token only
+        if keys:
+            db.execute('DELETE FROM login_attempts WHERE key=?', (keys[0],))
+        for key in keys[1:]:  # given back only within the window it was reserved in, and never below zero
+            db.execute('UPDATE login_attempts SET count=max(count-1,0) WHERE key=? AND reset=?', (key, reserved[key]))
+        if not public:  # recovery: a tailnet sign-in clears the username's public hold
+            db.execute('DELETE FROM login_attempts WHERE key=?', (attempts_key('user', username),))
+        return current
+
+    def check_password_attempt(self, username, password, source, *, public=True, device=None):
+        """R19: a person's password typed again, checked and counted as /api/login checks it: login's steps 1 to 3
+        with the request's own `public` and browser `device`, which the caller passes as /api/login does (review
+        S2), so it shares the pair, source and user holds, or a known browser's own count. The defaults are login's
+        (a public sign-in, no known browser). True when right, False when wrong (the attempt stays counted); a held
+        attempt raises Problem(429). A success gives the counters back and resets a known browser's failures as a
+        sign-in does, but makes no session and no browser token, and extends none."""
+        text(username, 'username', 254)
+        text(password, 'password', 1024)
+        user, known, reserved = self._reserve(username, source, public, device)
+        hashed = self._hashed(user, password)
+        with self.transaction() as db:
+            current = self._settle(db, username, user, hashed, public, reserved)
+            if current is not None and known is not None:  # _device_signed_in's reset, without its new expiry
+                db.execute('UPDATE login_devices SET failures=0, failure_reset=0 WHERE token_hash=?', (known['token_hash'],))
+            return current is not None
+
+    def login(self, username, password, source, *, public=True, device=None):
+        """Public route spec 3, reserve first. Step 1 deletes expired counters, then refuses a held attempt (429,
+        without hashing) or counts it in every applicable counter, which reserves it. Step 2 hashes outside any
+        transaction, the dummy hash for an unknown name, so a 401 takes as long either way. Step 3 re-reads the user,
+        since an activation can change the hash in between: a failure keeps the reservation as the counted failure,
+        a success deletes the pair's counter and gives the others back. The answers are today's: 401 for a wrong name
+        or password, 429 when held, the same for unknown and known names.
+        `device` is the browser's superyak_device cookie. One valid for username exempts it from holds 1-3: its
+        failures count against its own token instead, and so do its public sign-ins of any outcome. A success returns
+        the token to set, the same one extended or a new one."""
+        text(username, 'username', 254)
+        text(password, 'password', 1024)
+        user, known, reserved = self._reserve(username, source, public, device)
+        hashed = self._hashed(user, password)
         result = None
         with self.transaction() as db:
-            current = db.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone() if user else None
-            if (matches and current and current['salt'] == salt and current['password_hash'] == stored
-                    and not current['activation_pending'] and current['kind'] == 'person'):
-                keys = list(reserved)  # the pair's first; none for a known browser, which reserved on its token only
-                if keys:
-                    db.execute('DELETE FROM login_attempts WHERE key=?', (keys[0],))
-                for key in keys[1:]:  # given back only within the window it was reserved in, and never below zero
-                    db.execute('UPDATE login_attempts SET count=max(count-1,0) WHERE key=? AND reset=?', (key, reserved[key]))
-                if not public:  # recovery: a tailnet sign-in clears the username's public hold
-                    db.execute('DELETE FROM login_attempts WHERE key=?', (attempts_key('user', username),))
+            current = self._settle(db, username, user, hashed, public, reserved)
+            if current is not None:
                 now, token, csrf = self.clock(), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
                 db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (token_hash(token), current['id'], csrf, now + 86400))
                 result = {'user': public_user(current), 'csrf_token': csrf, 'token': token,

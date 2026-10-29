@@ -33,7 +33,17 @@ def private_home(monkeypatch, tmp_path_factory):
     home = tmp_path_factory.mktemp('home')
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.delenv('CLAUDE_PROJECT_DIR', raising=False)
+    monkeypatch.delenv('CLAUDE_CODE_SESSION_ID', raising=False)
     return home
+
+
+@pytest.fixture(autouse=True)
+def no_watchdog_in_process(monkeypatch):
+    """The lessons hook's watchdog ends its process with exit 0 at a limit. Inside pytest's own process that would end a
+    stalled run green, with the tests after it never run (Serenity's condition 2), so in process it is never armed. The
+    tests that run the hook as Claude Code does, in its own process, keep it real."""
+    from superyak_agent import lessons_hook
+    monkeypatch.setattr(lessons_hook, '_arm', lambda at, monotonic=None: False)
 
 
 class FakeStation:

@@ -1,11 +1,11 @@
 """superyak-agent: dock this machine's ship, serve its station tools, watch its mentions."""
-import argparse
 import sys
 from pathlib import Path
-from .station import CONFIG, HOME
 
 
 def build_parser():
+    import argparse  # here, not at the top: the hold path never loads it (Ruling 44)
+    from .station import CONFIG, HOME
     parser = argparse.ArgumentParser(prog='superyak-agent')
     commands = parser.add_subparsers(dest='command', required=True)
     mcp = commands.add_parser('mcp', help='Station tools over stdio (MCP)')
@@ -28,6 +28,23 @@ def build_parser():
     route.add_argument('--dry-run', action='store_true', help='Print each check; post nothing and write no state')
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
+    lessons = commands.add_parser('lessons-hook', help="Claude Code hook: lessons from Andy's ships (first rail)")
+    lessons.add_argument('--settings', type=Path, help='The hook\'s own settings (default '
+                         '~/.superyak/lessons-hook.installed.json, the copy dock makes of --lessons)')
+    held = commands.add_parser('hold', help='Claude Code PreToolUse hook on Bash: checklists and lessons hold a '
+                               'command once (dispatched before this parser, which only describes it)')
+    held.add_argument('--config', type=Path, default=CONFIG)
+    lists = commands.add_parser('checklists', help='Which checklists load from where; trust a directory of lists '
+                                '(a person at a terminal); propose changes from the run logs')
+    which = lists.add_subparsers(dest='checklists_command', required=True)
+    shown = which.add_parser('list', help='Show what loads from where, and when each list last fired')
+    shown.add_argument('--cwd')
+    shown.add_argument('--home', type=Path, help="The ship's home (default: the ship that acts at the cwd)")
+    trust = which.add_parser('trust', help='Trust a checklists directory (needs a terminal)')
+    trust.add_argument('path')
+    trust.add_argument('--home', type=Path, help="The ship's home (default: the ship that acts where the lists are)")
+    proposed = which.add_parser('report', help='Propose changes to lists from the run and firing logs; changes nothing')
+    proposed.add_argument('--home', type=Path, help="The ship's home (default: the ship that acts at the cwd)")
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
     dock.add_argument('--station', required=True)
     dock.add_argument('--door')
@@ -42,6 +59,8 @@ def build_parser():
     dock.add_argument('--note', default='')
     dock.add_argument('--wait', type=int, default=540)
     dock.add_argument('--hook', action='store_true', help='Show new room messages at each Claude Code turn')
+    dock.add_argument('--lessons', type=Path, help="The machine ship only: also install the lessons hook, with its own "
+                      'settings in this file (ship, data_dir)')
     dock.add_argument('--no-adna', action='store_true')
     dock.add_argument('--no-service', action='store_true')
     run_mcp = commands.add_parser('run-mcp', help='Write the MCP config used by watcher runs')
@@ -52,6 +71,21 @@ def build_parser():
         sub = commands.add_parser(name)
         sub.add_argument('--config', type=Path, default=CONFIG)
         sub.add_argument('--home', type=Path, help="The ship's home, instead of --config")
+    imprint = commands.add_parser('imprint', help='Send a copy of your store to the station (see make imprint-send)')
+    imprint_commands = imprint.add_subparsers(dest='imprint_command', required=True)
+    for name in ('context', 'send'):
+        sub = imprint_commands.add_parser(name)
+        sub.add_argument('--home', type=Path, default=HOME, help="The ship's home (default ~/.superyak)")
+        if name == 'send':
+            sub.add_argument('--plan', required=True, help='The first characters of a built plan')
+            sub.add_argument('--wait', type=int, default=540)
+    for name, help_ in (('status', 'What the station says of your imprints'), ('withdraw', 'Ask the station to delete an imprint now'),
+                        ('shorten', 'Ask the station to end an imprint sooner')):
+        sub = imprint_commands.add_parser(name, help=help_)
+        sub.add_argument('--home', type=Path, default=HOME, help="The ship's home (default ~/.superyak)")
+        sub.add_argument('--id', required=name != 'status', help='The first 4 or more characters of the imprint id')
+        if name == 'shorten':
+            sub.add_argument('--days', type=int, required=True, help='Days from now')
     worm = commands.add_parser('wormhole', help='Relay bridged rooms and the Station.aDNA vault (runs as a service)')
     worm.add_argument('--config', type=Path, required=True)
     worm.add_argument('--state', type=Path, required=True)
@@ -84,9 +118,14 @@ def _hook(parser, argv):
         import os
         from . import hook
         args, _ = parser.parse_known_args(argv)
-        session_id, cwd, mode = (None, None, None) if sys.stdin.isatty() else hook.hook_fields(sys.stdin)
-        event = {'session-start': 'session-start', 'session-end': 'session-end'}.get(os.environ.get('SUPERYAK_HOOK_EVENT'), 'prompt')
-        text = hook.run(args.config, session_id=session_id, cwd=cwd, mode=mode, event=event,
+        got = hook.HookInput(None, None, None, None, None) if sys.stdin.isatty() else hook.read_hook_input(sys.stdin)
+        if got.event:  # Ruling 6: Claude Code's own name for the event decides; any other value prints nothing
+            if got.event not in hook.EVENTS:
+                return 0
+            event = hook.EVENTS[got.event]
+        else:
+            event = {'session-start': 'session-start', 'session-end': 'session-end'}.get(os.environ.get('SUPERYAK_HOOK_EVENT'), 'prompt')
+        text = hook.run(args.config, session_id=got.session, cwd=got.cwd, mode=got.mode, event=event, source=got.source,
                         messages=os.environ.get('SUPERYAK_HOOK_MESSAGES') != '0')
         if text:
             print(text)
@@ -125,13 +164,51 @@ def _dock_project(args, fields):
     return 0
 
 
+def _imprint(args):
+    """`imprint context|send|status|withdraw|shorten`: prints `STATUS: <value>` last; a send still waiting for the owner exits 3, as dock does,
+    and one whose code has expired exits 1 (`code-expired`: nobody can allow it; the owner plans again after the sweep)."""
+    from .imprint import Imprint, ImprintRefused
+    from .station import StationError, client_for, label, load_config
+    imprint = Imprint(args.home, client_for(load_config(args.home / 'station.json'), timeout=120))
+    try:
+        if args.imprint_command == 'context':
+            found = imprint.context()
+            print(f'{len(found.get("imprints") or [])} imprint(s) for {label(found.get("ship"))}; saved in {args.home}/imprints/context.json.')
+            return 0
+        if args.imprint_command == 'status':
+            imprint.status(args.id)
+            return 0
+        if args.imprint_command in ('withdraw', 'shorten'):
+            done = imprint.withdraw(args.id) if args.imprint_command == 'withdraw' else imprint.shorten(args.id, args.days)
+            print(f'STATUS: {label(done.get("status", "shortened"))}')
+            return 0
+        status = imprint.send(args.plan, wait=args.wait)
+    except ImprintRefused as error:
+        print(error, flush=True)
+        return error.code
+    except (StationError, OSError) as error:
+        print(f'imprint: {label(str(error), 300)}', flush=True)     # a station's message is data: one printable line (review I2)
+        return 1
+    print(f'STATUS: {label(status)}', flush=True)
+    return {'waiting-for-you': 3, 'code-expired': 1}.get(status, 0)
+
+
 def main(argv=None):
-    parser = build_parser()
     if argv is None:
         argv = sys.argv[1:]
+    if argv[:1] == ['hold']:  # before any station import: the hold stays light (N8)
+        from .hold import main as hold
+        return hold(argv[1:])
+    parser = build_parser()
     if argv[:1] == ['hook']:
         return _hook(parser, argv)
+    if argv[:1] == ['lessons-hook']:  # run_agent.py takes this path before importing this module
+        from .lessons_hook import main as lessons_hook
+        return lessons_hook(argv[1:])
     args = parser.parse_args(argv)
+    if args.command == 'checklists':
+        from .checklist_cli import main as checklists
+        return checklists(args)
     if args.command == 'mcp':
         from .mcp import serve
         serve(args.config)
@@ -188,6 +265,10 @@ def main(argv=None):
             if not (args.name and args.contact):
                 parser.error('--request needs --name and --contact')
             fields = {'name': args.name, 'contact': args.contact, 'note': args.note}
+        if args.lessons is not None and args.project is not None:
+            print('dock: --lessons is for the machine ship; the lessons hook goes in ~/.claude/settings.json',
+                  file=sys.stderr)
+            return 2
         try:
             home, kind = check_mode(args.ship, args.home, args.project)   # S2: before any network call or write
         except Refused as error:
@@ -198,7 +279,8 @@ def main(argv=None):
         workspace = args.workspace or str(Path(__file__).resolve().parents[2])
         code = Dock(args.station, door=args.door, ship=args.ship, workspace=workspace, home=home).run(fields, wait=args.wait)
         if code == 0:
-            install_all(home / 'station.json', hook=args.hook, adna=not args.no_adna, service=not args.no_service)
+            lessons = {} if args.lessons is None else {'lessons': args.lessons}  # without the flag, today's call exactly
+            install_all(home / 'station.json', hook=args.hook, adna=not args.no_adna, service=not args.no_service, **lessons)
         return code
     if args.command == 'run-mcp':
         from .install import run_mcp_config
@@ -255,6 +337,8 @@ def main(argv=None):
         from .install import uninstall_all
         uninstall_all(args.config)
         return 0
+    if args.command == 'imprint':
+        return _imprint(args)
     if args.command == 'wormhole':
         import logging
         import time

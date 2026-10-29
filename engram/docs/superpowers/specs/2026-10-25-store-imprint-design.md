@@ -284,7 +284,7 @@ section 14). The first imprint creates `~/.engram/imprints/`, and nothing else.
 | D13 | A store's lineage is its id plus its stored ancestry. Two stores are independent only when their lineages don't meet and both ancestries are complete. Siblings are never independent. A store older than store identity (origin `retroactive`) is never complete, since nothing recorded the copies made of it then. | Rio Grande's call |
 | D14 | Transport is the station's HTTPS over the tailnet with the ship key, in 4 MiB parts hashed in the manifest. | Rio Grande's call |
 | D15 | Staged and admitted bytes, and a request's contents, live outside `peer.sqlite3`, so station backups never hold them. Tombstones survive a restore. | Rio Grande's call |
-| D16 | Admission is 17 checks plus calibration with a content-free report, and, with `route`, a count of the roads and trails (section 10). Calibration runs without its paths analysis, since the trails are kept only for the trail evaluation (section 10). Any failure deletes the package. | Rio Grande's call (the paths part: option (a) of the final check's FS1; the count: the cross-check's XS2) |
+| D16 | Admission is 17 checks plus calibration with a content-free report, and, with `route`, a count of the roads and trails (section 10). Calibration runs without its paths analysis, since the trails are kept only for the trail evaluation (section 10). When other people are carried, the report holds no memory id (section 10, `no_ids`). Any failure deletes the package. | Rio Grande's call (the paths part: option (a) of the final check's FS1; the count: the cross-check's XS2) |
 | D17 | The owner can withdraw at any time in the browser, which revokes the records. The owner's ship can ask the station to refuse at any time, which deletes the copy the same way and edits none of the owner's records, since an agent edits a person's layer only under a grant (permissions spec P10, 7.1). The ship's withdrawal and shortening are receipts, which the station's ceiling reads (D38). Deletion is immediate, never waits for Andy, and wins over a running admission. The station may also delete. | Rio Grande's call |
 | D18 | An end date is required, at most 365 days out. It can be shortened, never lengthened. | Rio Grande's call (the permissions spec's P13 allows 366) |
 | D19 | Receipts are hash-chained and hold no content. Station commands that hold no key write them unsigned, and the running lighthouse signs them within 60 seconds. | Rio Grande's call |
@@ -346,7 +346,10 @@ A selection is σ = (L, Λ, t₀, t₁, A, X, U):
   the plan joins it.
 - A is an audience or ⊥ (`--shared-with`, optional). Its grammar is `sharing.validate_audience`
   (`sharing.py:41-46`).
-- X is a finite set of ids to leave out (`--exclude FILE`, one id per line).
+- X is a finite set of ids to leave out (`--exclude FILE`, one id per line). Each must be an episode's or a
+  semantic's id exactly as stored, in any lane or time, or an episode's in the store's `cold.db` (a pruned
+  episode can be revived with its id, and X still leaves it out): the plan refuses one that names no memory (a
+  typo, another case, a `mem:` ref) and lists it, and the dry run counts what X leaves out (section 2 review S4).
 - U is true or false (`--include-unsourced-semantics`, default false).
 
 **Times.** For a row, τ is its stored time (`created_at`, or a log row's `timestamp`) read with ISO-8601 rules. A
@@ -1450,7 +1453,10 @@ order, with one purpose that had to be equal, is gone: two purposes had no meet 
 
 The station is `https://smart.tail7db420.ts.net`. Port 443 is tailnet-only (DS9 spec, line 84), and shared users
 reach only `smart:443` (DS9 spec, lines 106-108). The public door serves only its two access-request routes (DS9
-spec, lines 80-86). Imprint routes must answer 404 there.
+spec, lines 80-86). Imprint routes must answer 404 there. The main app is public through Funnel too, and its
+public route lets a valid ship key through, so the request, manifest, parts and complete routes refuse a public
+request themselves with 403 "Imprints go to the station over the tailnet only", before the ship is looked up
+(section 2 review S5).
 
 The agent authenticates with the ship key in `~/.superyak/station.json` (DS9 spec, lines 117-119) and sends the
 station's `Origin`, as ship clients do (DS9 spec, lines 57-58).
@@ -1522,6 +1528,9 @@ plus what the station knows itself:
 - "This store is about you. Allow sends this copy to Deep Space 9. Andy then decides whether the station takes it.
   You can withdraw it at any time, and it is deleted on the end date."
 
+Beside the password field it says "Type your own station password. Don't accept a password your browser suggests."
+The field is `autocomplete="new-password"`, so a saved password isn't filled in (S5; Serenity's note 2).
+
 **Lifecycle.**
 
 | Status | On the station | Next |
@@ -1574,8 +1583,10 @@ requests, read from its `request.json`:
 
 - Requester text goes through `safe_line` (`ships.py:33`), as for other items.
 - An imprint whose `others.memories` is above 0 (only Andy's own, D27) gains a line, so Andy sees it before he
-  approves: `      37 memories have other people recorded on them (3 people); copied in andy's home as co-subjects`.
-  Until gate "Other people inside the home" in section 18 is passed, he doesn't approve such an item.
+  approves: `      37 memories have other people recorded on them (3 people); copied in andy's home as co-subjects
+  hold: G18, approve none with this count above 0 until gate G18 is passed` (one line). Until gate "Other people inside
+  the home" in section 18 (the plan's G18) is passed, he doesn't approve such an item; the line marks it, as a docking
+  line marks `RE-DOCK`.
 - Odo's notices (`ships.py:380-393`) gain one line: "An imprint is waiting for Andy's review. He decides with make
   station-pending on the Pi." Ops is shared, and that someone is sharing their memories is about them (D25).
 - Andy approves with `make station-approve ID=4f1c` or refuses with `make station-deny ID=4f1c`, after confirming
@@ -1594,7 +1605,8 @@ requests, read from its `request.json`:
 4. The Makefile then starts admission as a detached user unit and returns at once (D29):
 
        systemd-run --user --unit=superyak-imprint-admit-<imprint id> --collect \
-           -p MemoryMax=512M -p MemorySwapMax=0 -p RuntimeMaxSec=3600 \
+           -p MemoryMax=512M -p MemorySwapMax=0 -p LimitDATA=512M --setenv=OPENBLAS_NUM_THREADS=1 \
+           -p RuntimeMaxSec=3600 -p TimeoutStopSec=60 \
            flock -n <root>/.jobs.lock make -C <repository> station-imprint-admit ID=<imprint id>
 
    The unit is named by the full imprint id, so two imprints whose short ids match never share a unit (the re-check's
@@ -1721,6 +1733,17 @@ Those rest on the source build, its L1 and L4, and its tests.
   create_parents=False)`, inside the unit's limits (`MemoryMax=512M`).
 - `no_content` removes every `content` key at any depth before the report is written. Today the cohesion and
   persistence sections carry content excerpts (`calibrate.py:172`; `persistence.py:392`, `:415`).
+- **No memory ids when other people are carried** (gate "Other people inside the home"; Rio Grande's call). When
+  `manifest.others.memories` is above 0, admission also passes `no_ids`. Before either file is written and hashed,
+  calibration removes every memory id from the report at any depth, and a list of ids becomes its length: today
+  `first_open.would_prune_ids`, the `semantic_id` of `cohesion.hottest` and `coolest` and of `persistence.hubs`, the
+  `event_id` and `parent_id` of `persistence.conjunct_audit`, and the `id` of `persistence.redundant_cores`. (The
+  built code also drops the `worst_edges` pairs of episode ids and cuts a skipped set's name to its kind, since
+  `hub:<id>` and `event:<id>` carry an id.) The
+  report is shown to the owner through the station (section 12) and is readable on the Pi. A memory named to an
+  agent is a `recall` answer use, which the permissions spec's P36 doesn't cover (its 6.3, "What it never covers",
+  and 6.4, "Which uses may be bulk"), so for a memory of objects°(I) it would need every carried co-subject's yes.
+  With `no_ids`, admission names no object, and section 8's bulk uses are exact.
 - **No n × n matrix that grows with the store** (D31, D42). Revision 6 bounded every dense set at 7,500 episodes. Its
   reason: `build_filtration` holds `D`, the diagonal and `off` at once (`persistence.py:63-64`), and `_mst_edges` adds
   `floored` and a dense-to-sparse copy (`persistence.py:41-46`), a measured peak of 7.16 to 7.54 times n² × 8 bytes
@@ -1760,6 +1783,17 @@ Those rest on the source build, its L1 and L4, and its tests.
   bytes, 128 MiB, plus the vectors, 1,024 × 6,144 = 6,291,456 bytes, 6 MiB. The Pi test measures both at their
   bounds against the 384 MiB design peak, and measures the ratio for the dense sets (section 16). If either fails,
   the bound is lowered in a revision, never sampled.
+  **Revision to this budget (Task 50, D42).** `classify_hubs` is the exception to the 16. Unbounded, ripser's H1 on a
+  1,024-source hub of random 768-dimension vectors reached 14.3 GiB (every distance nearly equal, so the Rips
+  complex fills at once). `persistence.h1_persistence` therefore hands ripser only the `H1_EDGES_PER_POINT * n`
+  (16 n) shortest distances, which caps its triangles at about (2E)^1.5 / 6 whatever the data; nothing is sampled,
+  every row is in every distance. Measured on the Pi at n = 1,024, `classify_hubs` peaks at 18.48 × n² × 8 bytes
+  (cohesion_energy 9.14, split_band 9.74), so it is budgeted at 20 × n² × 8 bytes, 160 MiB, plus the vectors; the
+  other two stay at 16. The sum stays far under the 384 MiB design peak. **What `classify_hubs` now means:** a
+  bar still alive at that scale counts to it, so the H1 figure is exact when every bar dies inside the scale and a
+  lower bound otherwise. A "looped" verdict is sound (the loop is there); it is no longer complete: a loop born
+  beyond the 16 n shortest distances reads "diffuse" where unbounded ripser said "looped". Sets of 33 or fewer
+  sources are read whole.
 - **Time** (Rio Grande's call, from the check's S3). Prim's algorithm reads the n × 768 float64 matrix once per point:
   6,144·n² bytes, 1.57 × 10¹² bytes at n = 16,000. Revision 7's first draft gave each 16,000-episode lane 600 s, so
   two lanes and the core set took 3 × 600 = 1,800 s, all of the unit's `RuntimeMaxSec=1800`, and left nothing for
@@ -1770,7 +1804,7 @@ Those rest on the source build, its L1 and L4, and its tests.
   most 3,300 s), with its peak (section 16). An admission killed at the limit still fails closed (D16). The use's
   unit keeps `RuntimeMaxSec=1800` (section 12).
 - **The rest of calibration streams** (D42). `first_open_preview` iterates its cursor instead of `fetchall`
-  (`calibrate.py:90-93`) and keeps two float arrays, a count, the first 50 ids and the latest touch. `generativity_scores` iterates the
+  (`calibrate.py:90-93`) and keeps two float arrays, a count, the first 50 ids (their count alone under `no_ids`) and the latest touch. `generativity_scores` iterates the
   resonances (`persistence.py:172-174`). `evaluate_prune` iterates its candidates (`:274-277`) and, for calibration,
   keeps only the two counts the report prints (`calibrate.py:207-208`). `cohesion_report` measures one semantic at a
   time and keeps only the five-bin histogram, the 15 hottest and the 5 coolest (`calibrate.py:165-180`), never the
@@ -2045,7 +2079,8 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
   does (section 10), with calibration's limits:
 
       systemd-run --user --unit=superyak-imprint-use-<imprint id> --collect \
-          -p MemoryMax=512M -p MemorySwapMax=0 -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 \
+          -p MemoryMax=512M -p MemorySwapMax=0 -p LimitDATA=512M --setenv=OPENBLAS_NUM_THREADS=1 \
+          -p RuntimeMaxSec=1800 -p TimeoutStopSec=60 \
           [--setenv=ENGRAM_EMBEDDER_SOCKET=<path>] \
           flock -n <root>/.jobs.lock \
           make -C <repository> station-imprint-use-run ID=<imprint id> USE=trail-evaluation [LANE=<lane>]
@@ -2111,7 +2146,7 @@ Readers use `Storage.open_read_only` (`storage.py:128-161`) or `store_reader.con
 |---|---|
 | `received` | bytes, SHA-256 and parts of `imprint.db`; `manifest_sha256` |
 | `approved`, `denied` | none; `actor_id` is the operator |
-| `admitted` | checks passed (17), the report's SHA-256, skipped analyses, `roads_and_trails`: N, admission's count of R(I), and `sessions_too_large`: K, the sessions that count left out, both 0 without `route` (section 10) |
+| `admitted` | checks passed (17), the report's SHA-256, skipped analyses (each its kind, `core`, `hub`, `cohesion` or `event`, or `lane:<lane>`, with its size and bound, never an id; the final review's I1), `roads_and_trails`: N, admission's count of R(I), and `sessions_too_large`: K, the sessions that count left out, both 0 without `route` (section 10) |
 | `failed` | check number and fixed message |
 | `use-started`, `use-finished` | use, its `use_id`, actions, purpose, objects as `{"imprint": <imprint id>, "count": n, "roads_and_trails": N}`, with N copied from the `admitted` receipt; when finished, the run's `end` (`report`, `withdrawn`, `ended`, `deleted`, `allow changed`, `not evaluable: limit` or `failed`), with the report's SHA-256 for `report`, the reason for `deleted` and the exit status, or the error class, for `failed` (D41) |
 | `refused` | use, actions, purpose, the failing term, and `roads_and_trails` from the `admitted` receipt when there is one |
@@ -2163,7 +2198,7 @@ The effective end is the earliest of the records' `valid_until` and every shorte
   restore that brings such a row back has it removed again at the next sweep.
 
 The sweep's service carries `MemoryMax=512M` and `MemorySwapMax=0`, as the backup's carries `MemoryMax=512M`
-(`peer/systemd/superyak-backup.service:14`) (D42). It reads rows in batches of 100, hashes each file 1 MiB at a time,
+(`peer/systemd/superyak-backup.service:14`), and `LimitDATA=512M` with `OPENBLAS_NUM_THREADS=1` (D42, 14.1). It reads rows in batches of 100, hashes each file 1 MiB at a time,
 and lists the imprints root one entry at a time, skipping `tombstones/` and `.jobs.lock`. It never takes the job lock
 (section 10).
 
@@ -2255,9 +2290,9 @@ the second limit. Encrypted imprints (step 7) narrow the first.
 
 ```
 make imprint-plan IMPRINT_ARGS='--lanes work --layers episode,semantic --since 2026-01-01 \
-    --audience place:home/andy --actions imprint,route --purposes calibration,trail-evaluation --days 90'
+    --audience place:home/andy --actions imprint --purposes calibration --days 90'
 make imprint-read PLAN=7c41                 # optional: read what would leave
-make imprint-send PLAN=7c41                 # build, print and send the request, wait for the browser yes, upload
+make imprint-send PLAN=7c41                 # build, send the request and print the link; after the yes: upload
 make imprint-status [ID=c0a8]
 make imprint-withdraw ID=c0a8
 make imprint-shorten ID=c0a8 DAYS=30
@@ -2272,9 +2307,14 @@ start, and semantics with no recorded source:
 
 ```
 make imprint-plan IMPRINT_ARGS='--store <his graph.db> --lanes personal,work --layers episode,semantic \
-    --include-unsourced-semantics --audience place:home/andy --actions imprint,route \
-    --purposes calibration,trail-evaluation --days 90'
+    --include-unsourced-semantics --audience place:home/andy --actions imprint --purposes calibration --days 90'
 ```
+
+`route` waits until trails ships (the safety review's S1, 2026-10-28). Without `trails.py`, admission of a route
+imprint fails at step `count`, after its session ids and recall and operation logs have reached the station. So
+`imprint_filter.ROUTE_OPEN` and the station's `imprints.ROUTE_OPEN` are false: the plan refuses `--actions
+imprint,route`, a plan saved with route before the gate neither reads nor builds ("Run the plan again without
+route."; the fresh review's S-1), and the station refuses such a request before staging it. Trails opens both.
 
 Even then, instincts, dream residue, task contexts, the knowledge graph and the other files of 6.3 stay home (D8,
 the permissions spec's 5.2), as do memories whose text names something that stays (D23), those whose lane change
@@ -2287,15 +2327,25 @@ refuses a store of more than 100,000 memories
 `make imprint-send` behaves like `make dock`:
 
 - It builds the package, prints the request in words with the ancestry and what the station keeps (7.1), sends it,
-  prints the imprint's short id (`c0a8`), the request's short id (`4f1c`, which Andy confirms at approval), the code
-  and the confirm link, and waits up to 9 minutes per run.
-- While it waits, it ends with `STATUS: waiting-for-you` and make reports `Error 3`. That is expected.
-- After the yes it sends the manifest and the parts with progress, and ends with `STATUS: received` (waiting for
-  Andy).
+  and prints the imprint's short id (`c0a8`), the request's short id (`4f1c`, which Andy confirms at approval), the
+  code and the confirm link. The first run returns once it has printed the link, so a session can relay it at once
+  (the fresh review's M1, 2026-10-28): the code lives 10 minutes, and a session sees a command's output only when it
+  ends. Every line is flushed.
+- Later runs wait up to 9 minutes per run. One that finds the request still `requested` prints the link and the two
+  short ids again first.
+- A run that finds the code expired (send.json's `expires`, the station's own test) says so in one line, without the
+  code: the request ends at the station's next hourly sweep, and then the owner plans again. It returns at once,
+  without polling, with `STATUS: code-expired`, and make reports `Error 1`: nobody can allow that request any more.
+  A run after the sweep reports `STATUS: expired` and deletes the local `imprint.db` (D24).
+- A run that ends before the yes ends with `STATUS: waiting-for-you` and make reports `Error 3`. That is expected.
+- After the yes, the next run sends the manifest and the parts with progress, and ends with `STATUS: received`
+  (waiting for Andy).
 - Rerunning it resumes. Later runs report `STATUS: admitted`, or `declined`, `denied`, `failed` or `deleted` with the
   reason.
-- Claude relays the link. The owner opens it, reads the view, ticks the check about other people, and types their own
-  password. Claude never types the password and never ticks the check.
+- Claude relays the link and the two short ids at once. The owner opens it, reads the view, ticks the check about
+  other people, and types their own password, not one the browser suggests. After the owner says they allowed it,
+  Claude runs `make imprint-send` again to upload. Claude never opens the confirm page, never types the password and
+  never ticks the check.
 
 **On the Pi** (Andy, or Claude when he asks):
 
@@ -2335,7 +2385,7 @@ Pi's shell can set it. The station checks only that it names a person (`ships.py
 | Closed session | newest row before t₁ older than t₁ − 3,600 s | the trail spec's closed session (its section 4) |
 | Ancestry | at most 64 ids | bounds `meta`; a longer chain is marked incomplete |
 | Memories per imprint | 100,000 | the permissions spec's collection bound (its 5.4), since r_M names them as one collection (D36) |
-| Calibration | `MemoryMax=512M`, `MemorySwapMax=0`; admission's unit 60 minutes (`RuntimeMaxSec=3600`), each blocked set at most 600 s and a whole admission at its bounds at most 3,300 s (section 10, "Time"); lane and core sets in blocks of 256 rows, at most 16,000 episodes each; per-semantic sets dense, at most 1,024 each (D31) | 8,704 bytes per episode in blocks, 16 × n² × 8 bytes dense, under the 384 MiB design peak (section 10, 14.1) |
+| Calibration | `MemoryMax=512M`, `MemorySwapMax=0`; admission's unit 60 minutes (`RuntimeMaxSec=3600`), each blocked set at most 600 s and a whole admission at its bounds at most 3,300 s (section 10, "Time"); lane and core sets in blocks of 256 rows, at most 16,000 episodes each; per-semantic sets dense, at most 1,024 each (D31) | 8,704 bytes per episode in blocks, 16 × n² × 8 bytes dense (20 for `classify_hubs`, whose H1 reads 16 n edges and so reads "looped" soundly but not completely), under the 384 MiB design peak (section 10, 14.1) |
 | Memory per process | under 512 MiB resident on the Pi; 384 MiB design peak at the bounds, asserted by the Pi tests (D42) | a 2 GB Pi (A4) |
 | Units this work adds | `MemoryMax=512M`, `MemorySwapMax=0`: admission's, the use's and the sweep's (D42) | `512M` is 512 MiB (systemd.resource-control(5): suffixes are base 1024) |
 | Imprint jobs at once | 1 (`flock -n <root>/.jobs.lock`; D42) | two at 512 MiB each would take half of a 2 GB Pi |
@@ -2382,6 +2432,17 @@ holds the system, the lighthouse, the shared embedder when it runs, and one impr
 process this work adds has a design peak of 384 MiB at the bounds, which the Pi tests assert (section 16). That leaves
 128 MiB of its unit's 512 MiB cap for the page cache that SQLite reads through, which the kernel charges to the unit
 and reclaims under pressure, and for slack.
+
+**The cap that holds on this kernel** (the final review's I4; Rio Grande's call). The Pi's user manager has no memory
+controller (its `cgroup.controllers` lists only `cpu pids`), so `MemoryMax=512M` is accepted and does nothing there.
+Every unit this work adds therefore also sets `LimitDATA=512M`: each process's private writable memory, reserved or
+touched, is held at 512 MiB, and an allocation past it fails in that process alone, with no OOM kill. It counts what a
+resident figure leaves out. numpy's and scipy's OpenBLAS each reserve 32 MiB of buffers per thread and an 8 MiB stack
+for each extra one: 430 MiB after the imports alone on the Pi's 4 cores (measured 2026-10-27), and the lane and core
+filtrations then raised `MemoryError`. So the units, admission's re-exec and the trail child set
+`OPENBLAS_NUM_THREADS=1`, which leaves 185 MiB after the imports. One admission at its bounds then ran every analysis
+under the data limit, peaking at 284.4 MiB resident in 294 s. The Pi tests run each child under the same data limit
+and the same variable.
 
 **What a process starts with.** Measured on this Pi on 2026-10-26, with its system Python 3.11: the interpreter with
 `sqlite3` imported peaked at 13,712 KiB (13.4 MiB), and with numpy 1.24.2 imported too at 30,832 KiB (30.1 MiB). Engram
@@ -2671,6 +2732,8 @@ embedder" while the route gate still runs (section 12).
   invalid vec0 slot, an `imprint_subjects` row naming a memory the package lacks or the owner (10), such a row in a
   copy that leaves its owner's home (12), and `others` that disagree with the rows (13).
 - **vec0 reading.** The verifier opens the package immutable with sqlite-vec loaded, and creates no side file.
+- **Calibration under `no_ids`.** No shipped memory's id occurs in `report.json` or `report.md`, as a substring, on a
+  fixture whose prune, cohesion, hub and redundant-core sections are not empty.
 - **Calibration.** No `content` key and no text value from the imprint in `report.json`. `source_unchanged`. No side
   files. Copies deleted. A lane and a core set over 16,000, and a cohesion set, a hub and a subdivision event over
   1,024, each record a skip, and no larger matrix is built. On random vectors with no ties, at sizes where today's
@@ -2741,8 +2804,8 @@ embedder" while the route gate still runs (section 12).
   measured and reported beside the allowance of section 14.1.
 - **Calibration at its bounds.** A 16,000-episode lane on random vectors: `build_filtration_blocked` peaks under
   384 MiB and finishes within 600 s. A 1,024-source semantic: `cohesion_energy`, `classify_hubs` (ripser included)
-  and `split_band` each peak under 384 MiB, and each one's peak, as a ratio to n² × 8 bytes, is reported against the
-  16 assumed in section 10.
+  and `split_band` each peak under 384 MiB, and each one's peak, as a ratio to n² × 8 bytes, is reported and asserted
+  against the 16 assumed in section 10 (20 for `classify_hubs`, the revision to that section: 18.48 measured).
 - **One admission at its bounds, timed** (the check's S3). The cap fixture's lanes are over 16,000, so every set
   there is skipped. This fixture keeps every set at its bound: two lanes and a core set of 16,000 episodes each, a
   1,024-source hub and resonances on every episode, with `route` and a stub count. `imprint.py admit` runs whole in

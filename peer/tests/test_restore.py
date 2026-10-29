@@ -1388,13 +1388,15 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
-    'account_role_changes', 'room_briefs', 'grants', 'budget_uses', 'member_changes',
+    'account_role_changes', 'room_briefs', 'grants', 'budget_uses', 'member_changes', 'imprint_requests', 'imprint_receipts',
     'contact_holds', 'pairing_confirmations'}  # fix:pairing-code (Serenity's review MF1): held as in the replaced file
 COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
     'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'login_devices', 'files', 'room_activity',
     'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
     'inbox_received', 'receipts', 'peer_messages', 'federation_cursor', 'layer_revisions',
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
+    'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries',  # first rail: coordination; the add gate also needs a paired peer
+    'lesson_repeats',  # first rail 7.1: a local record beside the receipts, never federated
     # federation pull (plan SF9): copied as they are. Restored nonces are pruned by `at` on the next pull, and a restore
     # takes longer than the 300 s replay window; the backfill covers a copy older than peer_delivery.
     'peer_meta', 'pull_nonces', 'peer_delivery'}

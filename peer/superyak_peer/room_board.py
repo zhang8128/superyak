@@ -153,7 +153,10 @@ class RoomBoard:
         transaction, with their ids, keys, posters, created times and links unchanged. Each takes its active claim along
         when the holder is a member of the new room, the same row with its holder, note and expiry: nothing is claimed
         anew and nothing is posted in anyone's name. Done and dropped items stay as the record. The new room is empty,
-        so UNIQUE(room_id, key) is the guard: a collision would roll the whole add back. Returns how many moved."""
+        so UNIQUE(room_id, key) is the guard: a collision would roll the whole add back. Returns how many moved. Nothing
+        moves into the lessons room's chain (first rail section 2): there the items and claims stay where they were."""
+        if self._in_lessons_chain(db, new):
+            return 0
         now = self.clock()
         members = {r[0] for r in db.execute('SELECT user_id FROM room_members WHERE room_id=?', (new,))}
         keys = [r[0] for r in db.execute("SELECT key FROM board_items WHERE room_id=? AND state='open'", (old,))]
@@ -231,6 +234,7 @@ class RoomBoard:
         no_at_name(title)
         with self.transaction() as db:
             room = self._board_room(db, actor, room_id, write=True)
+            self._refuse_in_lessons_room(db, room_id, 'board item')  # first rail section 2
             if not self._board_writer(db, room, actor):  # before the key's 409, so a non-writer learns nothing of used keys (5.1)
                 raise Problem(403, WRITER)
             used = self._key_used(db, room_id, key)

@@ -176,7 +176,8 @@ class Federation:
                 code = pairing_code(card)
             except Problem:  # a stored card that no longer validates has no code to show
                 code = None
-            confirmed = code is not None and r['confirmed_code'] == code
+            # a contact of a peer that isn't paired is never confirmed: main's unpair kept confirmations (re-check minor 1)
+            confirmed = code is not None and r['confirmed_code'] == code and bool(r['paired'])
             listed.append({**fields, 'card': card, 'pairing_code': show_code(code) if confirmed else None,
                            'confirmed': confirmed, 'held': bool(r['held'])})
         return listed
@@ -839,6 +840,7 @@ class Federation:
             if old['body'] != p['body']:
                 raise Problem(409, 'Message ID already used')
             return
+        self.store._lessons_gate(db, rid, author, p['body'], client_id=p['client_message_id'])  # first rail section 3: the origin's reply door
         key = uid()
         db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (key,rid,author,p['client_message_id'],p['body'],room['epoch'],self.store.clock()))
         self.store.emit(db,'chat.message',rid,room['epoch'],{'message_id':key,'author_id':author})

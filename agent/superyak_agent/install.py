@@ -1,4 +1,5 @@
 """Register the station tools, the optional hook and the watcher service on this machine."""
+import errno
 import json
 import os
 from pathlib import Path
@@ -67,7 +68,7 @@ def _write_settings(settings_path, settings):
 
 def is_station_hook(command, wanted=None):
     """The hook this agent installs, whichever interpreter it was installed with: the same command, or any
-    command in which this checkout's run_agent.py is one word and the next word is `hook`."""
+    command in which this checkout's run_agent.py is one word and the next word is `hook` or `hold`."""
     if wanted is not None and command == wanted:
         return True
     if not isinstance(command, str):
@@ -76,12 +77,13 @@ def is_station_hook(command, wanted=None):
         words = shlex.split(command)
     except ValueError:
         return False
-    return any(word == str(RUN_AGENT) and following == 'hook' for word, following in zip(words, words[1:]))
+    return any(word == str(RUN_AGENT) and following in ('hook', 'hold') for word, following in zip(words, words[1:]))
 
 
 ENV_RUN = 'SUPERYAK_RUN=${SUPERYAK_RUN:-hook}'  # unquoted on purpose: the shell expands it
 GUARD = ' || true'  # python exits 2 when run_agent.py is gone, and a prompt hook's exit 2 blocks and erases the prompt
-HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit', 'SessionEnd')
+HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit', 'SessionEnd', 'PreToolUse')
+HOLD_TIMEOUT = 5  # seconds: the hold runs before every Bash call
 
 
 def _hook_words(command):
@@ -97,7 +99,9 @@ def _hook_commands(config_path, messages):
     base = hook_command(config_path)
     return {'SessionStart': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-start {base}{GUARD}',
             'UserPromptSubmit': f'{base}{GUARD}' if messages else f'{ENV_RUN} SUPERYAK_HOOK_MESSAGES=0 {base}{GUARD}',
-            'SessionEnd': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-end {base}{GUARD}'}
+            'SessionEnd': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-end {base}{GUARD}',
+            # exit 2 from a PreToolUse hook blocks the Bash call, and an older checkout rejects `hold` with exit 2
+            'PreToolUse': f'{hold_command(config_path)}{GUARD}'}
 
 
 def messages_installed(settings_path, config_path):
@@ -122,9 +126,18 @@ def _same_hook(command, wanted):
     A command without the guard is a different hook, so docking again upgrades it."""
     def kind(c):
         words = _hook_words(c)
-        return ('SUPERYAK_HOOK_EVENT=session-start' in words, 'SUPERYAK_HOOK_EVENT=session-end' in words,
+        return ('hold' in words, 'SUPERYAK_HOOK_EVENT=session-start' in words, 'SUPERYAK_HOOK_EVENT=session-end' in words,
                 'SUPERYAK_HOOK_MESSAGES=0' in words, words[-2:] == ['||', 'true'])
     return command == wanted or kind(command) == kind(wanted)
+
+
+def _hold_entry_current(entries):
+    """Whether every installed station hold sits in a Bash-matcher entry with the hold's timeout (N10)."""
+    for entry in entries:
+        for h in entry.get('hooks', []):
+            if is_station_hook(h.get('command')) and (entry.get('matcher') != 'Bash' or h.get('timeout') != HOLD_TIMEOUT):
+                return False
+    return True
 
 
 def install_hooks(settings_path, config_path, messages, backup=None):
@@ -138,7 +151,7 @@ def install_hooks(settings_path, config_path, messages, backup=None):
     for event, wanted in _hook_commands(config_path, messages).items():
         entries = settings.setdefault('hooks', {}).setdefault(event, [])
         ours = [h.get('command') for entry in entries for h in entry.get('hooks', []) if is_station_hook(h.get('command'), wanted)]
-        if len(ours) == 1 and _same_hook(ours[0], wanted):
+        if len(ours) == 1 and _same_hook(ours[0], wanted) and (event != 'PreToolUse' or _hold_entry_current(entries)):
             continue
         if event == 'UserPromptSubmit' and not messages and any('SUPERYAK_HOOK_MESSAGES=0' not in _hook_words(c) for c in ours):
             changes.append('messages-off')
@@ -147,29 +160,95 @@ def install_hooks(settings_path, config_path, messages, backup=None):
             hooks = [h for h in entry.get('hooks', []) if not is_station_hook(h.get('command'), wanted)]
             if hooks:
                 kept.append({**entry, 'hooks': hooks} if len(hooks) != len(entry.get('hooks', [])) else entry)
-        kept.append({'hooks': [{'type': 'command', 'command': wanted, 'timeout': 10}]})
+        if event == 'PreToolUse':
+            kept.append({'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': wanted, 'timeout': HOLD_TIMEOUT}]})
+        else:
+            kept.append({'hooks': [{'type': 'command', 'command': wanted, 'timeout': 10}]})
         settings['hooks'][event] = kept
         changes.append(event)
     if changes:
-        backup = Path(backup) if backup is not None else settings_path.with_name(settings_path.name + '.bak-superyak')
-        if settings_path.exists() and not backup.exists():
-            backup.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            shutil.copy2(settings_path, backup)
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_settings(settings_path, settings)
+        _save_settings(settings_path, settings, backup)
     return changes
+
+
+def _save_settings(settings_path, settings, backup):
+    """The first time it changes an existing file it copies it to `backup` (default: beside it)."""
+    backup = Path(backup) if backup is not None else settings_path.with_name(settings_path.name + '.bak-superyak')
+    if settings_path.exists() and not backup.exists():
+        backup.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shutil.copy2(settings_path, backup)
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_settings(settings_path, settings)
+
+
+# The lessons hook (first rail spec section 8) has its own switch, apart from the room hook's: a session can have it
+# with the room hook and the station tools off. Before a command the shared hold entry runs, not this hook.
+LESSONS_EVENTS = (('SessionStart', None), ('UserPromptSubmit', None), ('PostToolUseFailure', 'Bash'))
+LESSONS_TIMEOUT = 5  # seconds: the hook keeps its own limits (150 ms at a prompt, 2 s otherwise) well inside
+
+
+def lessons_hook_command(lessons_settings):
+    """`python -B`: at a prompt the hook writes nothing at all, not even bytecode (section 8). Guarded as the room
+    hook is, so a moved checkout exits 0."""
+    return (f'{ENV_RUN} ' + shlex.join([sys.executable, '-B', str(RUN_AGENT), 'lessons-hook', '--settings',
+                                         str(lessons_settings)]) + GUARD)
+
+
+def is_lessons_hook(command):
+    """A command in which this checkout's run_agent.py is one word and the next word is `lessons-hook`."""
+    if not isinstance(command, str):
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return any(word == str(RUN_AGENT) and following == 'lessons-hook' for word, following in zip(words, words[1:]))
+
+
+def install_lessons_hooks(settings_path, lessons_settings, backup=None):
+    """Install the lessons hook for LESSONS_EVENTS, replacing any earlier one, and nothing else. Returns the events it
+    changed."""
+    settings_path = Path(settings_path)
+    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    wanted, changes = lessons_hook_command(lessons_settings), []
+    for event, matcher in LESSONS_EVENTS:
+        entries = settings.setdefault('hooks', {}).setdefault(event, [])
+        entry = ({'matcher': matcher} if matcher else {}) | {
+            'hooks': [{'type': 'command', 'command': wanted, 'timeout': LESSONS_TIMEOUT}]}
+        if [e for e in entries if any(is_lessons_hook(h.get('command')) for h in e.get('hooks', []))] == [entry]:
+            continue
+        kept = []
+        for old in entries:
+            hooks = [h for h in old.get('hooks', []) if not is_lessons_hook(h.get('command'))]
+            if hooks:
+                kept.append({**old, 'hooks': hooks} if len(hooks) != len(old.get('hooks', [])) else old)
+        settings['hooks'][event] = kept + [entry]
+        changes.append(event)
+    if changes:
+        _save_settings(settings_path, settings, backup)
+    return changes
+
+
+def remove_lessons_hooks(settings_path):
+    """Remove the lessons hook from every event, as remove_hooks removes the room hook's."""
+    return _remove_matching(settings_path, None, is_lessons_hook)
 
 
 def remove_hooks(settings_path):
     """Remove the station's hooks and nothing else. Whatever it cannot read (an event that is not a list, an entry
     or a hook that is not an object) it leaves as it is; an event it empties goes."""
+    return _remove_matching(settings_path, HOOK_EVENTS, is_station_hook)
+
+
+def _remove_matching(settings_path, names, ours):
+    """Remove the hooks whose command `ours` claims, from the events named (every event, for None)."""
     settings_path = Path(settings_path)
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     events = settings.get('hooks') if isinstance(settings, dict) else None
     if not isinstance(events, dict):
         return False
     changed = False
-    for event in HOOK_EVENTS:
+    for event in list(events) if names is None else names:
         entries = events.get(event)
         if not isinstance(entries, list):
             continue
@@ -179,7 +258,7 @@ def remove_hooks(settings_path):
             if not isinstance(hooks, list):
                 kept.append(entry)
                 continue
-            mine = [h for h in hooks if not (isinstance(h, dict) and is_station_hook(h.get('command')))]
+            mine = [h for h in hooks if not (isinstance(h, dict) and ours(h.get('command')))]
             if len(mine) == len(hooks):
                 kept.append(entry)
                 continue
@@ -356,6 +435,56 @@ def hook_command(config_path):
     return shlex.join([sys.executable, str(RUN_AGENT), 'hook', '--config', str(config_path)])
 
 
+def hold_command(config_path):
+    return shlex.join([sys.executable, str(RUN_AGENT), 'hold', '--config', str(config_path)])
+
+
+class TrustFileRefused(OSError):
+    """A trusted.json that is there but isn't a valid, safe list: add_trusted leaves it as it is (the final review's M7)."""
+
+
+def add_trusted(own_dir, path):
+    """Add the realpath of `path` to <own_dir>/trusted.json, written whole. False when it was already there. A
+    trusted.json that can't be read as a valid, safe list is never replaced: TrustFileRefused names it and why."""
+    from . import checklists
+    own_dir, real = Path(own_dir), os.path.realpath(path)
+    paths, problem = checklists.read_trusted(own_dir)
+    if problem:
+        raise TrustFileRefused(errno.EINVAL, f'{own_dir / "trusted.json"} {problem}, so it was left as it is')
+    current = sorted(paths)
+    if real in current:
+        return False
+    write_private(own_dir / 'trusted.json', {'trusted': current + [real]})
+    return True
+
+
+def trust_checkout(home, out, checkout=None):
+    """Dock's trust of <checkout>/.superyak/checklists for the ship whose home this is. Never raises: a failing
+    trust never undoes a dock."""
+    from . import checklists
+    directory = Path(checkout if checkout is not None else AGENT_DIR.parent) / '.superyak' / 'checklists'
+    try:
+        if not directory.is_dir():
+            out(f'This checkout has no checklists to trust: {directory} is missing. Dock again once it has them.')
+            return False
+        reason = checklists.trust_refusal(directory)
+        if reason:
+            out(f"Not trusting this checkout's checklists ({directory}): {reason}. "
+                f'If the checkout was made under umask 002, run `chmod -R go-w {directory}` and dock again.')
+            return False
+        added = add_trusted(Path(home) / 'checklists', directory)
+    except TrustFileRefused as error:
+        out(f"Not trusting this checkout's checklists ({directory}): {error.strerror}. Fix it, then dock again.")
+        return False
+    except (OSError, ValueError) as error:
+        out(f"Couldn't trust this checkout's checklists ({directory}): {error}.")
+        return False
+    if added:
+        out(f"Trusted this checkout's checklists ({directory}); under umask 002, a list git rewrites is skipped until "
+            'you run `chmod -R go-w` on it.')
+    return added
+
+
 def start_at_newest_mention(config_path, state_path, client, out):
     """R22: a ship whose watcher state has no mention cursor would answer every mention since docking (the cursor
     starts at 0), so the first service install reads the mentions to the end and stores the newest. A ship that has a
@@ -383,11 +512,48 @@ def start_at_newest_mention(config_path, state_path, client, out):
     return True
 
 
-def install_all(config_path, *, hook=False, adna=True, service=True, out=print, client=None):
+def install_lessons(lessons_settings, out=print):
+    """The lessons hook, when its settings are ones it can use; says what it did. Never raises. The settings are
+    copied to lessons_hook.default_settings(), the one file both the hook and the hold before each command read, and
+    the hook is installed naming that file (Rio Grande's S2). The copy has dock's own name, so a `--lessons` naming
+    it is refused, and undock never deletes the person's file. The hook goes in first: if the copy then fails, both
+    find no settings and stay silent, rather than the hold holding for a hook that isn't there."""
+    from .lessons_hook import default_settings, read_settings
+    given, copy = Path(lessons_settings).expanduser().resolve(), default_settings()
+    if given == copy.resolve() or (copy.exists() and given.exists() and os.path.samefile(given, copy)):
+        out(f'The lessons hook was not installed: {given} is the copy dock makes and undock removes. Keep your '
+            'settings in a file of your own and give that to --lessons.')
+        return
+    if read_settings(given) is None:
+        out(f'The lessons hook was not installed: {given} needs `ship` (a ship name) and `data_dir` (the '
+            "peer's data directory), and `query`, if it has one, as a list of words. Fix it and run make dock again.")
+        return
+    try:
+        value = json.loads(given.read_text())
+        changes = install_lessons_hooks(Path.home() / '.claude' / 'settings.json', copy)
+    except (OSError, ValueError, AttributeError, TypeError) as error:
+        out(f'Could not install the lessons hook in ~/.claude/settings.json ({_reason(error)}). Fix the file and run '
+            'make dock again.')
+        return
+    try:
+        if read_json(copy) != value:
+            write_private(copy, value)
+    except (OSError, ValueError, TypeError) as error:
+        out(f'Could not write {copy} ({_reason(error)}), so the lessons hook stays silent. Run make dock again.')
+        return
+    if changes:
+        out("Added the lessons hook: lessons from Andy's ships can appear at a prompt, at session start, after a "
+            'failed command and before a command.')
+    out(f'The lessons hook and the hold read {copy}, a copy of {given}. Run make dock again after changing it; '
+        'undock removes the copy and leaves yours.')
+
+
+def install_all(config_path, *, hook=False, adna=True, service=True, out=print, client=None, lessons=None):
     """The required steps come first so that nothing optional can hold them up: the watcher's tool config
     (without aDNA), the station tools for Claude Code and Codex, the hook, the watcher service. Then the
     optional aDNA tools; if they install, the watcher's tool config is rewritten to include them (each run
-    reads the file afresh) and they are registered with Claude Code."""
+    reads the file afresh) and they are registered with Claude Code. `lessons`, the lessons hook's settings file,
+    is its own switch: without it nothing of the lessons hook is installed or changed."""
     config_path = Path(config_path)
     home, mcp_argv = config_path.parent, [sys.executable, str(RUN_AGENT), 'mcp', '--config', str(config_path)]
     write_private(home / 'run-mcp.json', run_mcp_config(config_path))
@@ -409,6 +575,9 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print, 
             out('Room messages will no longer appear in Claude Code sessions (instructions still load).')
         elif changes:
             out('Added the station hooks: instructions load at the start of each Claude Code session.')
+    trust_checkout(home, out)
+    if lessons is not None:
+        install_lessons(Path(lessons), out)
     if service and start_at_newest_mention(config_path, home / 'ship-state.json', client, out):
         install_service([sys.executable, str(RUN_AGENT), 'watch', '--config', str(config_path),
                          '--state', str(home / 'ship-state.json'), '--mcp-config', str(home / 'run-mcp.json')], out,
@@ -452,12 +621,14 @@ def uninstall_all(config_path, out=print):
     local = 'watcher stopped, station tools and hook removed'
     try:
         remove_hooks(Path.home() / '.claude' / 'settings.json')
+        remove_lessons_hooks(Path.home() / '.claude' / 'settings.json')
     except (OSError, ValueError, AttributeError, TypeError) as error:
-        # Undock goes on: station.json goes below, and a hook without it prints nothing.
+        # Undock goes on: station.json and the lessons settings go below, and a hook without them prints nothing.
         out(f'Could not remove the Claude Code hooks from ~/.claude/settings.json ({_reason(error)}). Fix the file and remove '
-            'the entries that run run_agent.py hook.')
+            'the entries that run run_agent.py hook or lessons-hook.')
         local = 'watcher stopped and station tools removed; the hooks stay in ~/.claude/settings.json'
-    for path in (config_path, config_path.parent / 'run-mcp.json'):
+    from .lessons_hook import default_settings
+    for path in (config_path, config_path.parent / 'run-mcp.json', default_settings()):
         path.unlink(missing_ok=True)
     if revoked is False:
         out(f'Undocked on this machine ({local}), but the key was NOT revoked on the station: ask an admin to revoke it.')

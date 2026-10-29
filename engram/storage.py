@@ -94,12 +94,23 @@ class Storage:
         migrations_dir: str | None = None,
         *,
         check_same_thread: bool = True,
+        imprint_working_copy: bool = False,
     ):
         self.db_path = db_path
         self._check_same_thread = check_same_thread
         self.conn = sqlite3.connect(
             db_path, check_same_thread=self._check_same_thread
         )
+        # An imprint is read-only evidence: refuse before any pragma or migration touches the file.
+        if not imprint_working_copy:
+            try:
+                refused = store_identity.is_imprint(self.conn)
+            except BaseException:
+                self.conn.close()
+                raise
+            if refused:
+                self.conn.close()
+                raise store_identity.ImprintRefused(f"{db_path} is an imprint; it is never opened for writing")
         self._conn_closed = False
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0

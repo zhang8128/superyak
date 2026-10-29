@@ -137,7 +137,11 @@ the username-and-source counter and gives back its other reservations; a tailnet
 also clears the username's public hold. A success sets `superyak_device` (random, HttpOnly,
 Secure, SameSite=Strict, 180 days, stored hashed, one row per browser, at most 20 per user,
 kept at logout): presented on a sign-in to its own username, it exempts that browser from
-the three holds, and its failures hold only its own token (eight in five minutes). Sign-ins
+the three holds, and its failures hold only its own token (eight in five minutes), as do
+its public sign-ins of any outcome (eight in five minutes; a held token gets 429 before
+entering a lane). A username's known browsers together are held after 24 public sign-ins
+of any outcome in five minutes, with the same 429 before a lane, since a cookieless sign-in
+mints a token for free; only a valid token's sign-in counts, and tailnet sign-ins never do. Sign-ins
 run in worker lanes of their own: public 2 at a time with 8 waiting, tailnet 1 with 4,
 known browsers 1 with 4; a full lane answers 429. One-use invitation redemption is atomic.
 
@@ -326,6 +330,40 @@ lighthouse stopped, is the one way to a new key: it refuses while the file exist
 `peer-key.pem` aside with a dated suffix, creates the identity (naming the endpoint's host) and changes nothing in the
 database. Every signature made with the lost key then stops verifying, the station's peer id changes so every paired
 peer pairs again, and replies it already sent into remote rooms show as unverified.
+
+## Imprints
+
+A store copy (an imprint, spec `engram/docs/superpowers/specs/2026-10-25-store-imprint-design.md`, I 9) goes from a
+ship to the station only with its owner's yes. These routes exist only when the station runs with an imprints directory.
+
+- `POST /api/imprints` (ship key): the request, at most 64 KiB, which carries only what the confirm view shows. Returns
+  201 `{id, code, expires, confirm_url}`. The code is for the owner, not for the ship.
+- `GET /api/imprints` (person): the person's own imprints. With a ship key it returns that ship's context.
+- `GET /api/imprints/code/{code}` (person): the confirm view's content, to the ship's owner only. Anyone else gets 404.
+- `POST /api/imprints/{id}/confirm` (person, CSRF): `{code, password, attest}`. The owner enters the password again and
+  acknowledges what leaves. That includes memories that name other people, which are copied with those people carried
+  as co-subjects, and at n = 0 that no one but the owner is recorded on them. A ship key gets 403. The password is
+  counted as `/api/login` counts it, with the request's own public or tailnet source and known browser, in a sign-in
+  lane; a wrong one is 401 and a held one 429.
+- `POST /api/imprints/{id}/decline` (person): the owner says no.
+- `PUT /api/imprints/{id}/manifest`, `PUT /api/imprints/{id}/parts/{n}` and `POST /api/imprints/{id}/complete` (ship
+  key): the upload, after the owner's yes.
+- An imprint goes over the tailnet only (I 9): the request, manifest, parts and complete routes answer a public (Funnel)
+  request 403 `Imprints go to the station over the tailnet only`, even with a valid ship key.
+- `POST /api/imprints/{id}/withdraw` (the owner or the ship; anyone else gets 404) and
+  `POST /api/imprints/{id}/shorten` (person, `{valid_until}`): the owner or the ship narrows the station's ceiling. Neither
+  changes the owner's own records.
+- `GET /api/imprints/{id}` (person): one imprint's status and receipts.
+
+Two signed record kinds (see Signed records) are new. `imprint-permission` is the permissions-spec records the owner's
+yes created, signed by the station; `imprint-receipt` is one hash-chained event, holding no content. Receipts from
+station commands that hold no key (`station-approve`, `station-imprint-admit`, `station-imprint-use`) are written
+unsigned and signed by the lighthouse, the running station, within 60 seconds, and at its start.
+
+The `admitted` receipt's detail is `{checks, report_sha256, skipped, roads_and_trails, sessions_too_large}`.
+`roads_and_trails` is R(I), as the permissions spec's `Need` names it, at `as_of` = t1 (the time of the yes) over the
+scope's lanes. A use's own evaluation runs one lane with no `--as-of`, so N, the count admission made, can exceed what
+one evaluation derives (YN1). `sessions_too_large` is the number of sessions left out of that count for their size.
 
 ## Grants
 
@@ -586,7 +624,7 @@ create_user(username, name, password, *, is_admin=False) -> user [trusted CLI on
 rename_user(actor, name) -> user
 account_corrections(actor) -> ordered actual self-correction records
 login(username, password, source, *, public=True, device=None) -> {user,csrf_token,token,device}
-session_is_valid(token); ship_key_is_valid(key); device_is_valid(device, username) -> bool, writing nothing
+session_is_valid(token); ship_key_is_valid(key); device_is_valid(device, username) -> bool, writing nothing; 429 for a held token
 session(token) -> user+csrf_token; logout(token) -> None
 accounts(actor); invite(actor, expires_in=86400); redeem(token,username,name,password)
 contacts(actor) -> [{id,name}]

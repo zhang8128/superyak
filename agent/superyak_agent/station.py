@@ -1,6 +1,5 @@
 """Ship-side station client and the machine's private ship configuration."""
 import functools
-import hashlib
 import http.client
 import json
 import os
@@ -12,6 +11,7 @@ from urllib.parse import quote, urlencode
 import urllib.error
 import urllib.request
 from superyak_team.teamlib import fence_external
+from .acting import session_key  # noqa: F401 - re-exported, moved to acting.py
 
 HOME = Path.home() / '.superyak'
 MESSAGE_LIMIT = 20000  # the station's longest message
@@ -35,12 +35,6 @@ def presence_headers(name, client, mode=None):
     if mode in ('write', 'plan'):
         headers['x-superyak-mode'] = mode
     return headers
-
-
-def session_key(session_id):
-    """The 16 hex digits naming a Claude Code session's files in the ship's sessions folder: the hook's state and
-    `.prompted`, and the MCP tool's `.watch` (watch by default, W3). One function, so both sides name the same file."""
-    return hashlib.sha256(session_id.encode('utf-8', 'surrogatepass')).hexdigest()[:16]
 
 
 @functools.lru_cache(maxsize=1)
@@ -107,8 +101,12 @@ class StationClient:
         self.key, self.transport = key, transport or urllib_transport()
         self.presence = dict(presence or {})  # spec S1: names the session on every call; {} sends nothing new
 
-    def request(self, method, path, body=None, headers=None):
-        """`headers` adds to this call only, such as a docking poll's X-Superyak-Secret."""
+    def request(self, method, path, body=None, raw=None, headers=None):
+        """`raw` sends those bytes as the body (content-type application/octet-stream), for the imprint request, its
+        manifest and its parts; `body` is JSON. Not both. `headers` adds to this call only, such as a docking poll's
+        X-Superyak-Secret."""
+        if raw is not None and body is not None:
+            raise ValueError('send a JSON body or raw bytes, not both')
         extra, headers = headers or {}, {'origin': self.origin, 'accept': 'application/json'}
         if self.origin != self.base:
             scheme, _, host = self.origin.partition('://')
@@ -118,7 +116,10 @@ class StationClient:
         headers.update(self.presence)
         headers.update(extra)
         data = None
-        if body is not None:
+        if raw is not None:
+            headers['content-type'] = 'application/octet-stream'
+            data = bytes(raw)
+        elif body is not None:
             headers['content-type'] = 'application/json'
             data = json.dumps(body).encode()
         status, raw = self.transport(method, self.base + path, headers, data)
@@ -420,6 +421,16 @@ def breakout_count_lines(got):
             # The title is a ship's words (review M3): quoted, and said to be one.
             lines.append(f'{n} new in breakout "{quoted_title(titles.get(room_id))}" (title set by a ship){call}')
     return lines
+
+
+def lesson_count_line(got):
+    """First rail section 3: one line for the lessons room's posts a breakouts=mentions read left out, after the
+    breakouts' lines and never folded into them; [] when there are none."""
+    lessons = got.get('lesson_count') if isinstance(got, dict) else None
+    if type(lessons) is not int or lessons < 1:
+        return []
+    return ['1 new lesson; it reaches you through the lessons hook' if lessons == 1
+            else f'{lessons} new lessons; they reach you through the lessons hook']
 
 
 def brief_date(updated):

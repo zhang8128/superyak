@@ -155,6 +155,19 @@ def signed_out_browser(playwright, *, viewport=None):
         browser.close()
 
 
+def test_the_sign_in_page_says_it_is_a_prototype_and_links_what_superyak_is(browser_peer):
+    """Tardis's cold walk (goal 4, T4): before any account, a stranger reads that this is a prototype not for real
+    patient information, in the README's own words, and finds what Superyak is in one click. It stays true on any peer:
+    whose home it is is left to a station's own welcome."""
+    with sync_playwright() as playwright, signed_out_browser(playwright) as page:
+        page.goto(browser_peer["base_url"] + "/")
+        expect(page.get_by_text("A prototype, being built and tested")).to_be_visible()
+        expect(page.get_by_text("please don't put real patient information in it yet", exact=False)).to_be_visible()
+        link = page.get_by_role("link", name="What is Superyak?")
+        expect(link).to_be_visible()
+        expect(link).to_have_attribute("href", "https://github.com/zhang8128/superyak#readme")
+
+
 def test_source_library_import_pause_and_private_review(browser_peer):
     store = browser_peer['app'].state.store
     actor = browser_peer['users']['patient']['id']
