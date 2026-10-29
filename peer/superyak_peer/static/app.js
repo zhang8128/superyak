@@ -1130,7 +1130,7 @@ function shipBanner(room) {
   // Wormhole runs no model: it copies @persona posts to the lattice, so it gets its own line, not the Claude one.
   const ships = (room.members || []).filter(member => member.kind === "ship" && member.id !== room.bridge_id);
   const claude = ships.length ? `<strong>Ships in this room send its text to Claude.</strong><p>Aboard: ${ships.map(ship => escapeHtml(ship.name)).join(", ")}. Keep patient and participant details out of this room.</p>` : "";
-  const bridge = room.bridge_id ? `<strong>Wormhole bridges this room to Stanley's aDNA lattice.</strong><p>A post that mentions a lattice persona with @ is copied there, outside this station. Keep patient and participant details out of those posts.</p>` : "";
+  const bridge = room.bridge_id ? `<strong>Wormhole bridges this room to Stanley's aDNA lattice.</strong><p>A post that mentions a lattice persona with @ is copied there with its author's name and this room's title, outside this station. Keep patient and participant details out of those posts and out of the title.</p>` : "";
   return claude || bridge ? `<div class="notice ship-banner">${claude}${bridge}</div>` : "";
 }
 

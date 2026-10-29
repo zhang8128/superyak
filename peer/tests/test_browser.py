@@ -1728,6 +1728,7 @@ def test_the_ship_banner_says_what_crosses_the_bridge_and_never_counts_wormhole_
         page.reload()
         banner = page.locator(".ship-banner")
         expect(banner).to_contain_text("Wormhole bridges this room to Stanley's aDNA lattice.")
+        expect(banner).to_contain_text("copied there with its author's name and this room's title, outside this station")
         expect(banner).not_to_contain_text("Claude")
         page.goto(f"{base}/#chats/{both['id']}")
         page.reload()
