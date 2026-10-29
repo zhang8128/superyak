@@ -28,6 +28,7 @@ from .members import Members
 from .lessons import Lessons, LESSON_SCHEMA
 from .imprints import Imprints, IMPRINT_SCHEMA
 from .room_cloud import RoomCloud, ROOM_CLOUD_SCHEMA
+from .connector import Connector, OAUTH_SCHEMA
 from .common import encode, Problem
 from .peer_store import PeerStore, PEER_SCHEMA
 from .dispatch import DispatchGate
@@ -54,7 +55,7 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL R
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
 '''
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud, Connector):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
 
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True, busy_until=None,
@@ -75,7 +76,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         os.close(fd)
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
-            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA + ROOM_CLOUD_SCHEMA)
+            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA + ROOM_CLOUD_SCHEMA + OAUTH_SCHEMA)
         # Additive migration preserves every existing identity and credential.
         with self.transaction() as db:
             columns = {row['name'] for row in db.execute('PRAGMA table_info(users)')}

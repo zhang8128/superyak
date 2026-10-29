@@ -2,7 +2,7 @@
 "Where it lives", "The home is its own authorization server")."""
 import pytest
 from fastapi.testclient import TestClient
-from connector_support import CALLBACK, PUBLIC_ORIGIN, home, public_client  # noqa: F401
+from connector_support import CALLBACK, PUBLIC_CLIENT, PUBLIC_ORIGIN, home, public_client  # noqa: F401
 
 RESOURCE = {'resource': 'https://home.example/mcp', 'authorization_servers': ['https://home.example'],
             'bearer_methods_supported': ['header'], 'scopes_supported': ['rooms.read']}
@@ -53,15 +53,15 @@ def test_every_connector_route_answers_a_public_request(home):
     client = public_client(home.app, origin=PUBLIC_ORIGIN)
     for method, path in CONNECTOR_PATHS:
         response = client.request(method, path, json={} if method == 'POST' else None)
-        expected = 200 if path.startswith('/.well-known/') else 501
+        expected = 200 if path.startswith('/.well-known/') else 400 if path == '/register' else 501  # {} is no registration
         assert response.status_code == expected, (method, path, response.status_code, response.text)
 
 
 def test_register_token_and_mcp_pass_the_boundary_without_an_origin(home):
     client = public_client(home.app)
-    for path in ('/register', '/token', '/mcp'):
+    for path, ran in (('/register', 400), ('/token', 501), ('/mcp', 501)):
         response = client.post(path)
-        assert response.status_code == 501, (path, response.text)  # the handler ran: never 'Same-origin request required'
+        assert response.status_code == ran, (path, response.text)  # the handler ran: never 'Same-origin request required'
 
 
 def test_the_body_bound_still_holds_where_the_origin_check_is_skipped(home):
@@ -135,3 +135,102 @@ def test_serve_keeps_access_logs_off_with_a_public_origin(tmp_path, monkeypatch)
     main(['serve', '--data-dir', str(tmp_path / 'peer'), '--origin', PUBLIC_ORIGIN, '--proxy-headers',
           '--public-origin', PUBLIC_ORIGIN, '--connector-callback', CALLBACK])
     assert ran['access_log'] is False and ran['app'].state.public_origin == PUBLIC_ORIGIN
+
+
+# ---- Task 4: registration (spec "Registration (/register)") ----
+
+REGISTRATION = {'redirect_uris': [CALLBACK], 'client_name': 'Claude', 'grant_types': ['authorization_code', 'refresh_token'],
+                'response_types': ['code'], 'token_endpoint_auth_method': 'none'}
+
+
+def register(app, body=None, source='203.0.113.5'):
+    client = TestClient(app, base_url=PUBLIC_ORIGIN, client=(source, 50000))
+    return client.post('/register', json=REGISTRATION if body is None else body)
+
+
+def client_ids(store):
+    with store.transaction() as db:
+        return [r[0] for r in db.execute('SELECT client_id FROM oauth_clients ORDER BY created, rowid')]
+
+
+def test_a_registration_gets_a_public_client(home):
+    made = register(home.app)
+    assert made.status_code == 201, made.text
+    body = made.json()
+    assert set(body) == {'client_id', 'client_id_issued_at', 'redirect_uris', 'grant_types', 'response_types',
+                         'token_endpoint_auth_method', 'client_name'}
+    assert (body['redirect_uris'], body['grant_types'], body['response_types'], body['token_endpoint_auth_method'],
+            body['client_name'], body['client_id_issued_at']) == (
+        [CALLBACK], ['authorization_code', 'refresh_token'], ['code'], 'none', 'Claude', int(home.clock[0]))
+    assert client_ids(home.store) == [body['client_id']]
+
+
+def test_only_the_configured_callback_registers(home):
+    for uris in ([], [CALLBACK, CALLBACK], ['https://evil.example/callback'], [CALLBACK + '/'], CALLBACK):
+        refused = register(home.app, {**REGISTRATION, 'redirect_uris': uris})
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_redirect_uri'}), uris
+    missing = {key: value for key, value in REGISTRATION.items() if key != 'redirect_uris'}
+    assert register(home.app, missing).json() == {'error': 'invalid_redirect_uri'}
+    assert client_ids(home.store) == []
+
+
+def test_registration_bounds(home):
+    """8 KB at most, a client_name of at most 100 characters, grant types within authorization_code and refresh_token,
+    code responses and no client secret only. A refusal says only its error."""
+    client = TestClient(home.app, base_url=PUBLIC_ORIGIN, client=PUBLIC_CLIENT)
+    exact = b'{"redirect_uris": ["' + CALLBACK.encode() + b'"]'
+    exact += b' ' * (8192 - len(exact) - 1) + b'}'
+    assert client.post('/register', content=exact, headers={'content-type': 'application/json'}).status_code == 201
+    over = client.post('/register', content=exact[:-1] + b' }', headers={'content-type': 'application/json'})
+    assert (over.status_code, over.json()) == (413, {'error': 'invalid_client_metadata'})
+    for bad in ({'client_name': 'x' * 101}, {'client_name': 5}, {'grant_types': ['implicit']},
+                {'grant_types': 'authorization_code'}, {'grant_types': []}, {'response_types': ['token']},
+                {'token_endpoint_auth_method': 'client_secret_basic'}):
+        refused = register(home.app, {**REGISTRATION, **bad})
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_client_metadata'}), bad
+    for raw in (b'not json', b'[]'):
+        refused = client.post('/register', content=raw, headers={'content-type': 'application/json'})
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_client_metadata'}), raw
+    assert register(home.app, {'redirect_uris': [CALLBACK]}).json()['grant_types'] == ['authorization_code']
+
+
+def test_the_101st_unused_registration_evicts_the_oldest(home):
+    """A flood costs the sender only their own registrations: at 100 unused, the oldest goes, never the new one."""
+    first = register(home.app, source='198.51.100.0').json()['client_id']
+    for n in range(1, 100):
+        home.clock[0] += 1
+        assert register(home.app, source=f'198.51.100.{n}').status_code == 201
+    assert len(client_ids(home.store)) == 100
+    home.clock[0] += 1
+    assert register(home.app, source='198.51.101.1').status_code == 201
+    ids = client_ids(home.store)
+    assert first not in ids and len(ids) == 100
+
+
+def test_the_per_source_limit(home):
+    for _ in range(10):
+        assert register(home.app).status_code == 201
+    limited = register(home.app)
+    assert (limited.status_code, limited.json()) == (429, {'error': 'slow_down'})
+    assert register(home.app, source='198.51.100.9').status_code == 201  # another source isn't held
+    home.clock[0] += 3601
+    assert register(home.app).status_code == 201
+
+
+def test_an_unused_registration_is_gone_after_24_hours(home):
+    old = register(home.app).json()['client_id']
+    home.clock[0] += 86400
+    register(home.app, source='198.51.100.7')
+    assert old in client_ids(home.store)  # not yet: a day and no more
+    home.clock[0] += 1
+    register(home.app, source='198.51.100.8')
+    assert old not in client_ids(home.store)
+
+
+@pytest.mark.parametrize('callback', ['http://claude.ai/api/mcp/auth_callback', CALLBACK + '#x', CALLBACK + '?x=1',
+                                      'https://user@claude.ai/api/mcp/auth_callback', 'claude.ai/api/mcp/auth_callback'])
+def test_create_app_refuses_a_callback_it_cant_match(tmp_path, callback):
+    """Task 3's review, N5: the one redirect is an https URL with no query, fragment or userinfo."""
+    from superyak_peer.app import create_app
+    with pytest.raises(ValueError):
+        create_app(tmp_path / 'peer', allowed_origins=[PUBLIC_ORIGIN], public_origin=PUBLIC_ORIGIN, connector_callback=callback)

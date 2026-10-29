@@ -382,8 +382,15 @@ Origin; the consent page's posts keep it.
 - `GET /.well-known/oauth-authorization-server` (RFC 8414): the issuer, its authorization, token and registration
   endpoints, `code` responses, the `authorization_code` and `refresh_token` grants, `none` client authentication,
   `S256` only, the scopes `rooms.read` and `offline_access`, and `authorization_response_iss_parameter_supported`.
-- `POST /register`, `GET /authorize`, `POST /authorize/request`, `/authorize/signin`, `/authorize/decision`,
-  `POST /token`, and `GET`, `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
+- `POST /register` (RFC 7591, bounded): a JSON body of at most 8 KB (413 above), `redirect_uris` exactly the one
+  callback (else 400 `invalid_redirect_uri`), `grant_types` within `authorization_code` and `refresh_token` (default
+  the first), `response_types` `["code"]`, `token_endpoint_auth_method` `none`, and a `client_name` of at most 100
+  characters, kept only as quoted data (else 400 `invalid_client_metadata`). Returns 201 `{client_id,
+  client_id_issued_at, redirect_uris, grant_types, response_types, token_endpoint_auth_method[, client_name]}`, never
+  a secret. At most 10 a source an hour (429 `slow_down`). At 100 unused registrations the oldest unused one is
+  evicted, never the new one refused, and an unused registration is gone after a day.
+- `GET /authorize`, `POST /authorize/request`, `/authorize/signin`, `/authorize/decision`, `POST /token`, and `GET`,
+  `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
 
 ## Grants
 
