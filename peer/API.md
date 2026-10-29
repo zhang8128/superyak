@@ -370,8 +370,9 @@ one evaluation derives (YN1). `sessions_too_large` is the number of sessions lef
 A person's home, read from Claude (spec `docs/superpowers/specs/2026-10-27-remote-connector-design.md`, plan
 `docs/superpowers/plans/2026-10-28-remote-connector.md`). These routes exist only when the station runs with
 `serve --public-origin URL`, which must be one of the `--origin` values: one lowercase https origin with no path.
-`--connector-callback URL` names the one redirect accepted, claude.ai's by default. On any other origin each route
-answers 404. Each is reachable by a public request with no session and checks what it needs itself; none sends CORS
+`--connector-callback URL` names the one redirect accepted, claude.ai's by default. On any other origin (another
+name, scheme or port) each route answers 404; a tailnet client using the public name is served, since the connector
+authenticates by OAuth, not by where a request comes from. A public origin that isn't canonical stops `serve`. Each is reachable by a public request with no session and checks what it needs itself; none sends CORS
 headers. `POST /register`, `/token` and `/mcp` skip the same-origin write check, since Claude's servers send no home
 Origin; the consent page's posts keep it.
 

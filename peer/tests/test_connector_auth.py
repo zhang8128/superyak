@@ -40,6 +40,8 @@ def test_connector_routes_are_404_on_any_other_origin(home):
 def test_no_connector_route_exists_without_a_public_origin(env):
     app = env[0]
     client = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'})
+    templates = {getattr(route, 'path', None) for route in app.router.routes}
+    assert not templates & {path for _, path in CONNECTOR_PATHS}
     for method, path in CONNECTOR_PATHS:
         assert client.request(method, path).status_code in (404, 405), (method, path)
     assert getattr(app.state, 'public_origin', None) is None
@@ -59,7 +61,28 @@ def test_register_token_and_mcp_pass_the_boundary_without_an_origin(home):
     client = public_client(home.app)
     for path in ('/register', '/token', '/mcp'):
         response = client.post(path)
-        assert response.status_code != 403, (path, response.text)  # never 'Same-origin request required'
+        assert response.status_code == 501, (path, response.text)  # the handler ran: never 'Same-origin request required'
+
+
+def test_the_body_bound_still_holds_where_the_origin_check_is_skipped(home):
+    """Rio Grande's section 2, S2: /register, /token and /mcp are the only anonymous public POSTs without the
+    same-origin check, so the 6 MB bound must still apply to them."""
+    from superyak_peer.app import MAX_REQUEST
+    client = public_client(home.app)
+    for path in ('/register', '/token', '/mcp'):
+        response = client.post(path, content=b'x' * (MAX_REQUEST + 1))
+        assert (response.status_code, response.json()) == (413, {'error': 'Request too large'}), path
+
+
+def test_another_scheme_or_port_on_the_public_name_is_another_origin(tmp_path):
+    """S3: the origin rule compares scheme, host and port, not the host alone."""
+    from superyak_peer.app import create_app
+    app = create_app(tmp_path / 'peer', allowed_origins=[PUBLIC_ORIGIN, 'https://home.example:8443', 'http://home.example'],
+                     public_origin=PUBLIC_ORIGIN)
+    for base in ('https://home.example:8443', 'http://home.example'):
+        client = TestClient(app, base_url=base, headers={'origin': base})
+        for method, path in CONNECTOR_PATHS:
+            assert client.request(method, path).status_code == 404, (base, method, path)
 
 
 def test_the_consent_posts_still_need_the_homes_origin(home):
@@ -75,13 +98,30 @@ def test_no_connector_route_sends_cors_headers(home):
         assert not [name for name in response.headers if name.lower().startswith('access-control-')], (method, path)
 
 
+def test_a_canonical_public_origin_with_a_port_is_accepted(tmp_path):
+    from superyak_peer.app import create_app
+    app = create_app(tmp_path / 'peer', allowed_origins=['https://home.example:8443'], public_origin='https://home.example:8443')
+    assert app.state.public_origin == 'https://home.example:8443'
+
+
 @pytest.mark.parametrize('origins, public', [
     (['http://testserver'], 'https://home.example'),          # not one of the origins
     (['http://home.example'], 'http://home.example'),          # not https
     (['https://home.example/x'], 'https://home.example/x'),    # a path
     (['https://Home.example'], 'https://Home.example'),         # not lowercase
+    (['https://home.example?'], 'https://home.example?'),       # an empty query
+    (['https://home.example#'], 'https://home.example#'),       # an empty fragment
+    (['https://home.example:'], 'https://home.example:'),       # an empty port
+    (['https://home.example:443'], 'https://home.example:443'),  # the default port, spelled out
+    (['https://home.example:0443'], 'https://home.example:0443'),  # a leading zero
+    (['https://home.example.'], 'https://home.example.'),       # a trailing dot
+    (['https://user@home.example'], 'https://user@home.example'),  # userinfo
+    (['https://hôme.example'], 'https://hôme.example'),         # not ASCII
+    (['https://home.example\n'], 'https://home.example\n'),     # a newline
+    (['https://home\\example'], 'https://home\\example'),      # a backslash
 ])
 def test_create_app_refuses_a_public_origin_it_cant_be(tmp_path, origins, public):
+    """D13 and S1: one canonical https origin, or serve stops; a typo never quietly turns the connector off."""
     from superyak_peer.app import create_app
     with pytest.raises(ValueError):
         create_app(tmp_path / 'peer', allowed_origins=origins, public_origin=public)

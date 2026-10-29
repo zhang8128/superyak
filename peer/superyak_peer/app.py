@@ -55,6 +55,11 @@ PUBLIC_ROUTES = {
     '/authorize/request': {'POST'}, '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
     '/mcp': {'GET', 'POST', 'DELETE'},
 }
+# The connector's issuer, as D13 needs it to equal what a person types: https, lowercase ASCII labels, no trailing
+# dot, and a port only when it isn't the default, without a leading zero. Anything else stops serve, rather than
+# leaving a typo to turn the connector off quietly (Rio Grande's section 2 of connector-config, S1).
+PUBLIC_ORIGIN = re.compile(r'https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+                           r'(?::(?P<port>[1-9][0-9]{0,4}))?')
 # The connector's writes come from Claude's servers, which send no home Origin; they authenticate by OAuth, never by a
 # cookie, so they skip the same-origin write check as /federation/ does (connector spec D12). The consent page's posts don't.
 OAUTH_WRITES = ('/register', '/token', '/mcp')
@@ -271,10 +276,10 @@ def download(row):
 def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None, imprints_dir: Path | None = None,
                public_origin: str | None = None, connector_callback: str | None = None):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
-    if public_origin is not None:  # the connector's issuer: one exact https origin among the allowed ones (connector spec)
-        parts = urlsplit(public_origin)
-        if (parts.scheme != 'https' or not parts.hostname or parts.path or parts.query or parts.fragment or parts.username
-                or parts.password or public_origin != public_origin.lower() or public_origin not in allowed_origins):
+    if public_origin is not None:  # the connector's issuer: one canonical https origin among the allowed ones (D13)
+        canonical = PUBLIC_ORIGIN.fullmatch(public_origin)
+        if not canonical or canonical['port'] == '443' or int(canonical['port'] or 443) > 65535 \
+                or public_origin not in allowed_origins:
             raise ValueError('The public origin is one lowercase https origin with no path, and one of the origins')
     demo_credentials = []
     if local_demo:
