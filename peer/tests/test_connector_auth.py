@@ -13,7 +13,7 @@ ISSUER = {'issuer': 'https://home.example', 'authorization_endpoint': 'https://h
           'scopes_supported': ['rooms.read', 'offline_access'], 'authorization_response_iss_parameter_supported': True}
 CONNECTOR_PATHS = [('GET', '/.well-known/oauth-protected-resource'), ('GET', '/.well-known/oauth-protected-resource/mcp'),
                    ('GET', '/.well-known/oauth-authorization-server'), ('POST', '/register'), ('GET', '/authorize'),
-                   ('POST', '/authorize/request'), ('POST', '/authorize/signin'), ('POST', '/authorize/decision'),
+                   ('POST', '/authorize/signin'), ('POST', '/authorize/decision'),
                    ('POST', '/token'), ('GET', '/mcp'), ('POST', '/mcp'), ('DELETE', '/mcp')]
 
 
@@ -53,7 +53,8 @@ def test_every_connector_route_answers_a_public_request(home):
     client = public_client(home.app, origin=PUBLIC_ORIGIN)
     for method, path in CONNECTOR_PATHS:
         response = client.request(method, path, json={} if method == 'POST' else None)
-        expected = 200 if path.startswith('/.well-known/') else 400 if path == '/register' else 501  # {} is no registration
+        # {} is no registration, and /authorize with no client shows its page
+        expected = 200 if path.startswith('/.well-known/') else 400 if path in ('/register', '/authorize') else 501
         assert response.status_code == expected, (method, path, response.status_code, response.text)
 
 
@@ -86,7 +87,7 @@ def test_another_scheme_or_port_on_the_public_name_is_another_origin(tmp_path):
 
 
 def test_the_consent_posts_still_need_the_homes_origin(home):
-    for path in ('/authorize/request', '/authorize/signin', '/authorize/decision'):
+    for path in ('/authorize/signin', '/authorize/decision'):
         response = public_client(home.app).post(path, json={})
         assert (response.status_code, response.json()) == (403, {'error': 'Same-origin request required'}), path
 
@@ -309,3 +310,141 @@ def test_serve_refuses_a_public_origin_without_proxy_headers(tmp_path, monkeypat
     with pytest.raises(SystemExit) as stopped:
         main(['serve', '--data-dir', str(tmp_path / 'peer'), '--origin', PUBLIC_ORIGIN, '--public-origin', PUBLIC_ORIGIN])
     assert stopped.value.code == 1 and '--proxy-headers' in capsys.readouterr().err
+
+
+# ---- Task 5: /authorize, the sign-in and the consent page (plan revision 2; spec "The authorization request") ----
+
+CHALLENGE = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'  # RFC 7636's S256 example challenge
+RESOURCE_URL = PUBLIC_ORIGIN + '/mcp'
+
+
+def authorize(home, client=None, raw=None, **override):
+    """GET /authorize as Claude sends it for `client` (an id; a new registration when None), with `override` replacing
+    (or, as None, dropping) a parameter; or `raw`, a query string as it is. Never follows the redirect."""
+    browser = public_client(home.app)
+    if raw is not None:
+        return browser.get('/authorize?' + raw, follow_redirects=False)
+    params = {'response_type': 'code', 'client_id': client or register(home.app).json()['client_id'],
+              'redirect_uri': CALLBACK, 'state': 'st-1', 'code_challenge': CHALLENGE, 'code_challenge_method': 'S256',
+              'resource': RESOURCE_URL, 'scope': 'rooms.read offline_access'} | override
+    return browser.get('/authorize', params={k: v for k, v in params.items() if v is not None}, follow_redirects=False)
+
+
+def redirected(response):
+    """(the redirect's URL without its query, its query as one value per name) for a 303."""
+    from urllib.parse import parse_qs, urlsplit
+    assert response.status_code == 303, (response.status_code, response.text)
+    where = urlsplit(response.headers['location'])
+    return where._replace(query='', fragment='').geturl(), {k: v[0] for k, v in parse_qs(where.query).items()}, where.fragment
+
+
+def a_page(response):
+    """An error page: 400, HTML, no redirect, and nothing the request sent shown back."""
+    assert response.status_code == 400 and 'location' not in response.headers, (response.status_code, response.headers)
+    assert response.headers['content-type'].startswith('text/html')
+    return response.text
+
+
+def pending_payload(fragment):
+    import base64
+    import json
+    encoded = fragment.split('.')[0]
+    return json.loads(base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4)))
+
+
+def test_a_good_request_goes_to_the_consent_page_with_a_signed_request(home):
+    """Spec r4: the validated request travels in the consent page's fragment, signed with the home's key under its own
+    label, and nothing is stored."""
+    import base64
+    import hashlib
+    import hmac
+    client_id = register(home.app).json()['client_id']
+    page, query, fragment = redirected(authorize(home, client_id))
+    assert (page, query) == (PUBLIC_ORIGIN + '/assets/consent.html', {})
+    assert pending_payload(fragment) == {'v': 1, 'client_id': client_id, 'redirect_uri': CALLBACK, 'state': 'st-1',
+                                         'challenge': CHALLENGE, 'resource': RESOURCE_URL,
+                                         'scope': 'rooms.read offline_access', 'at': int(home.clock[0])}
+    encoded, tag = fragment.split('.')
+    raw = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
+    expected = hmac.new(home.store._connector_key, b'pending\n' + raw, hashlib.sha256).digest()
+    assert base64.urlsafe_b64decode(tag + '=' * (-len(tag) % 4)) == expected
+
+
+def test_authorize_writes_nothing(home):
+    """D18: no public write before a sign-in. A thousand good requests leave every table as it was."""
+    client_id = register(home.app).json()['client_id']
+    before = everything(home.store)
+    for n in range(1000):
+        assert authorize(home, client_id, state=f's{n}').status_code == 303
+    assert everything(home.store) == before
+
+
+def test_a_bad_client_or_redirect_shows_a_page_and_never_redirects(home):
+    client_id = register(home.app).json()['client_id']
+    for override in ({'client_id': 'not-a-client'}, {'client_id': client_id + 'x'}, {'redirect_uri': None},
+                     {'redirect_uri': 'https://evil.example/callback'}):
+        a_page(authorize(home, client_id, **override))
+    a_page(authorize(home, raw=''))  # no client at all
+    shown = a_page(authorize(home, client_id, redirect_uri='https://evil.example/<script>'))
+    assert 'evil.example' not in shown and '<script>' not in shown  # the page repeats nothing it was sent
+
+
+def test_redirect_tricks_are_refused(home):
+    client_id = register(home.app).json()['client_id']
+    for uri in ('http://localhost.evil.example/callback', 'http://127.0.0.1@evil.example/', CALLBACK + '#x', CALLBACK + '/',
+                CALLBACK.replace('auth_callback', 'other'), CALLBACK.replace('claude.ai', 'CLAUDE.AI'), CALLBACK + '?x=1'):
+        a_page(authorize(home, client_id, redirect_uri=uri))
+
+
+def test_a_repeated_parameter_is_refused(home):
+    """RFC 6749 3.1: a parameter sent twice. A repeated client or redirect is a page; anything else redirects."""
+    from urllib.parse import urlencode
+    client_id = register(home.app).json()['client_id']
+    good = {'response_type': 'code', 'client_id': client_id, 'redirect_uri': CALLBACK, 'state': 'st-1',
+            'code_challenge': CHALLENGE, 'code_challenge_method': 'S256'}
+    for name in ('client_id', 'redirect_uri'):
+        a_page(authorize(home, raw=urlencode(good) + '&' + urlencode({name: good[name]})))
+    _, query, _ = redirected(authorize(home, raw=urlencode(good) + '&scope=rooms.read&scope=offline_access'))
+    assert query == {'error': 'invalid_request', 'state': 'st-1', 'iss': PUBLIC_ORIGIN}
+
+
+def test_pkce_s256_is_required(home):
+    client_id = register(home.app).json()['client_id']
+    for override in ({'code_challenge': None}, {'code_challenge_method': 'plain'}, {'code_challenge_method': None},
+                     {'code_challenge': 'too-short'}, {'code_challenge': CHALLENGE + '!'}, {'code_challenge': 'a' * 129}):
+        target, query, _ = redirected(authorize(home, client_id, **override))
+        assert (target, query) == (CALLBACK, {'error': 'invalid_request', 'state': 'st-1', 'iss': PUBLIC_ORIGIN}), override
+
+
+def test_response_type_must_be_code(home):
+    target, query, _ = redirected(authorize(home, response_type='token'))
+    assert (target, query) == (CALLBACK, {'error': 'unsupported_response_type', 'state': 'st-1', 'iss': PUBLIC_ORIGIN})
+
+
+def test_resource_and_scope(home):
+    client_id = register(home.app).json()['client_id']
+    for resource in ('https://other.example/mcp', PUBLIC_ORIGIN, PUBLIC_ORIGIN + '/mcp/', PUBLIC_ORIGIN + '/MCP'):
+        assert redirected(authorize(home, client_id, resource=resource))[1]['error'] == 'invalid_target', resource
+    for resource, kept in (('HTTPS://HOME.EXAMPLE/mcp', RESOURCE_URL), (None, RESOURCE_URL)):  # MCP: case-insensitive
+        page, _, fragment = redirected(authorize(home, client_id, resource=resource))
+        assert page.endswith('/assets/consent.html') and pending_payload(fragment)['resource'] == kept
+    for scope in ('rooms.write', 'rooms.read admin', ''):
+        assert redirected(authorize(home, client_id, scope=scope))[1]['error'] == 'invalid_scope', scope
+    assert pending_payload(redirected(authorize(home, client_id, scope=None))[2])['scope'] == 'rooms.read'
+    assert pending_payload(redirected(authorize(home, client_id, scope='offline_access rooms.read'))[2])['scope'] == (
+        'rooms.read offline_access')  # one spelling, SCOPES' order
+
+
+def test_every_authorization_error_carries_iss_and_the_state_as_sent(home):
+    """RFC 9207: iss on every authorization response. The state goes back as it came, and an error without one
+    sends none."""
+    _, query, _ = redirected(authorize(home, state='a b&c', response_type='token'))
+    assert query == {'error': 'unsupported_response_type', 'state': 'a b&c', 'iss': PUBLIC_ORIGIN}
+    _, query, _ = redirected(authorize(home, state=None, response_type='token'))
+    assert query == {'error': 'unsupported_response_type', 'iss': PUBLIC_ORIGIN}
+    assert redirected(authorize(home, state='x' * 513))[1]['error'] == 'invalid_request'  # bounded, so the fragment is
+
+
+def test_authorize_request_is_gone(home):
+    """Spec r4: the consent page's first post is the sign-in, so there is no /authorize/request."""
+    assert public_client(home.app, origin=PUBLIC_ORIGIN).post('/authorize/request', json={}).status_code in (404, 405)

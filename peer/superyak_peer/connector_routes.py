@@ -3,14 +3,22 @@ on any other origin, needs no session, and checks what it needs itself; none sen
 later tasks build answer 501 until then. An async route here runs every identity check and store call in the
 threadpool, never on the event loop (fix:actor-off-the-event-loop); a sync one runs there anyway."""
 import json
+from urllib.parse import urlencode
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
-from .connector import REGISTER_BODY_MAX, OAuthError, check_callback, issuer_metadata, resource_metadata
+from .connector import (REGISTER_BODY_MAX, OAuthError, RedirectError, check_callback, issuer_metadata,
+                        resource_metadata)
 
 NOT_YET = 'Not built yet'
+# /authorize's page for a request whose client or redirect can't be trusted, so it can't be sent back (spec "Validate
+# first"). It repeats nothing the request carried.
+REFUSED_PAGE = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" '
+                'content="width=device-width, initial-scale=1"><title>This connection can\'t be used</title></head>'
+                '<body><main><h1>This connection can\'t be used</h1><p>The request to connect to this home isn\'t one it '
+                'can check, so nothing was shared. Go back to Claude and connect again.</p></main></body></html>')
 
 
 def install(app, public_origin, callback):
@@ -60,10 +68,36 @@ def install(app, public_origin, callback):
             return JSONResponse({'error': refused.error}, refused.status)
         return JSONResponse(made, 201)
 
+    @app.get('/authorize')
+    def authorize(request: Request):
+        """Spec revision 4, "The authorization request": the client and the redirect first, a refusal shown as a page;
+        then the rest, a refusal sent back to the redirect with `error`, `state` and `iss`; then the consent page, the
+        request signed into its fragment. It writes nothing (D18). A parameter sent twice is refused (RFC 6749 3.1)."""
+        if not on_public_origin(request):
+            return JSONResponse({'error': 'Not found'}, 404)
+        items = request.query_params.multi_items()
+        names, params = [name for name, _ in items], dict(items)
+        if names.count('client_id') > 1 or names.count('redirect_uri') > 1:
+            return HTMLResponse(REFUSED_PAGE, 400)
+        try:
+            store.check_client(params.get('client_id'), params.get('redirect_uri'), callback)
+        except OAuthError:
+            return HTMLResponse(REFUSED_PAGE, 400)
+
+        def back(error):
+            answer = {'error': error} | ({'state': params['state']} if params.get('state') is not None else {})
+            return RedirectResponse(callback + '?' + urlencode(answer | {'iss': public_origin}), 303)
+        if len(names) != len(set(names)):
+            return back('invalid_request')
+        try:
+            fragment = store.sign_pending(params, public_origin, public_origin + '/mcp')
+        except RedirectError as refused:
+            return back(refused.error)
+        return RedirectResponse(public_origin + '/assets/consent.html#' + fragment, 303)
+
     def not_yet(request: Request):
         return answer(request, {'error': NOT_YET}, 501)
 
-    for path, methods in (('/authorize', ['GET']), ('/authorize/request', ['POST']),
-                          ('/authorize/signin', ['POST']), ('/authorize/decision', ['POST']), ('/token', ['POST']),
+    for path, methods in (('/authorize/signin', ['POST']), ('/authorize/decision', ['POST']), ('/token', ['POST']),
                           ('/mcp', ['GET', 'POST', 'DELETE'])):
         app.add_api_route(path, not_yet, methods=methods)

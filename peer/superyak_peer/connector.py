@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import unicodedata
 from urllib.parse import urlsplit
@@ -46,6 +47,30 @@ class OAuthError(Exception):
     def __init__(self, status, error):
         super().__init__(error)
         self.status, self.error = status, error
+
+
+class RedirectError(OAuthError):
+    """An authorization request refused after its client and redirect were checked: the route sends the browser back
+    to that redirect with `error`, the request's `state` and `iss` (spec, "Then the rest")."""
+
+    def __init__(self, error):
+        super().__init__(303, error)
+
+
+# The authorization request (spec revision 4, "The authorization request"): validated, then signed into the consent
+# page's fragment with the home's key under its own label, and stored only at a good sign-in (D18).
+PENDING_SECONDS = 600
+STATE_MAX = 512  # characters; the state travels in the fragment, so it is bounded
+CHALLENGE = re.compile(r'[A-Za-z0-9_-]{43}')  # an S256 challenge: base64url of SHA-256, unpadded (RFC 7636)
+
+
+def canonical_resource(value):
+    """The resource with its scheme and host lowercased, as MCP asks a server to accept, or None if it isn't a plain
+    https URL: no userinfo, query or fragment."""
+    parts = urlsplit(value) if isinstance(value, str) else None
+    if not parts or parts.username or parts.password or parts.query or parts.fragment or not parts.hostname:
+        return None
+    return f'{parts.scheme.lower()}://{parts.netloc.lower()}{parts.path}'
 
 
 def check_callback(callback):
@@ -124,6 +149,41 @@ class Connector:
         made = {'client_id': client_id, 'client_id_issued_at': now, 'redirect_uris': [callback], 'grant_types': grants,
                 'response_types': ['code'], 'token_endpoint_auth_method': 'none'}
         return made | ({'client_name': name} if name is not None else {})
+
+    def check_client(self, client_id, redirect_uri, callback):
+        """/authorize's first check: a known client, and its redirect equal to the one callback, character for
+        character. One read transaction (it takes the store's gate, as every read does) and no write. A refusal is a
+        page, never a redirect, so it raises OAuthError."""
+        if not isinstance(redirect_uri, str) or redirect_uri != callback:
+            raise OAuthError(400, 'invalid_request')
+        with self.transaction() as db:
+            known = self.known_client(db, client_id, callback)
+        if known is None:
+            raise OAuthError(400, 'invalid_client')
+        return known
+
+    def sign_pending(self, params, issuer, resource):
+        """The rest of /authorize, once check_client passed: a code response, an S256 challenge, a bounded state, the
+        canonical resource (or none) and scopes within SCOPES. Returns the consent page's fragment, the request signed
+        with the key under the label `pending`; it writes nothing. A refusal raises RedirectError."""
+        if params.get('response_type') != 'code':
+            raise RedirectError('unsupported_response_type')
+        if params.get('code_challenge_method') != 'S256' or not CHALLENGE.fullmatch(params.get('code_challenge') or ''):
+            raise RedirectError('invalid_request')
+        state = params.get('state')
+        if state is not None and len(state) > STATE_MAX:
+            raise RedirectError('invalid_request')
+        if params.get('resource') is not None and canonical_resource(params['resource']) != resource:
+            raise RedirectError('invalid_target')
+        asked = params.get('scope')
+        scopes = ['rooms.read'] if asked is None else asked.split(' ')
+        if not scopes or not set(scopes) <= set(SCOPES):
+            raise RedirectError('invalid_scope')
+        body = {'v': CLIENT_VERSION, 'client_id': params['client_id'], 'redirect_uri': params['redirect_uri'],
+                'state': state, 'challenge': params['code_challenge'], 'resource': resource,
+                'scope': ' '.join(scope for scope in SCOPES if scope in scopes), 'at': int(self.clock())}
+        request = json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+        return _b64(request) + '.' + _b64(_tag(self._connector_key, b'pending', request))
 
     def known_client(self, db, client_id, callback):
         """Spec revision 4's one check, in order: a row with exactly this id is that client (so a key rotation or a

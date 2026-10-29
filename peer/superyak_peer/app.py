@@ -52,7 +52,7 @@ PUBLIC_ROUTES = {
     # itself, and they exist only with serve --public-origin, so without it the router has no such route to allow.
     '/.well-known/oauth-protected-resource': {'GET'}, '/.well-known/oauth-protected-resource/mcp': {'GET'},
     '/.well-known/oauth-authorization-server': {'GET'}, '/register': {'POST'}, '/authorize': {'GET'},
-    '/authorize/request': {'POST'}, '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
+    '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
     '/mcp': {'GET', 'POST', 'DELETE'},
 }
 # The connector's issuer, as D13 needs it to equal what a person types: https, lowercase ASCII labels, no trailing
