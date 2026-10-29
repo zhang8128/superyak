@@ -279,7 +279,8 @@ it too, since the words are a literal piece of the command. Its long form:
   `systemctl --user show --timestamp=us <unit> -p ActiveExitTimestamp -p InactiveEnterTimestamp`.
   A stop over about 6 s means the 5 s grace (SHUTDOWN_GRACE) isn't holding. Health checked once `restart` returns
   can't see the 502s while the unit was stopping (Serenity, 2026-10-29: stops of up to 25 s on the unit, 41 s by
-  her read of health over the tailnet, and none of it seen).
+  her read of health over the tailnet, and none of it seen). ActiveEnterTimestamp is when the run before began, not
+  the stop: read on a unit still stopping, it made her 41 s.
 - If it breaks at 3 a.m., what tells us, and who? Name the check: a dying unit alerts Odo in Ops; a running
   route is watched by route-watch once its timer is installed (Tardis says so in the room; `systemctl --user
   list-timers` on Tardis shows it); anything else, say that nothing watches it yet
@@ -591,7 +592,8 @@ it, not only as its diff reads.
 - [ ] When a bound depends on several limits, solve for the input that maximizes it (the corners of the limits) and
       test that input; trying each kind of input alone doesn't find it (Tardis, 2026-10-29: a client name of 67 `"` and
       33 emoji fitted the first rule's 100 characters and 200 raw bytes, yet made a 523-character id, while each
-      kind alone made 435).
+      kind alone made 435). One field at or over the cap is a corner too (connector Task 8's review: one message
+      bigger than the 100,000-character cut stalled `read_room` with an empty page and an unmoved cursor).
 - [ ] A rule that replaces another is judged against the one it replaces in both directions, from sources independent
       of the rule: what it newly misses, and what it newly flags. A table measured against the data it was built
       from proves nothing (Serenity, 2026-10-28: the old tag rule marked 35 of 48 ordinary lines and nobody counted;
@@ -604,6 +606,10 @@ it, not only as its diff reads.
 - [ ] A test that takes its cases from the code it tests (a table, a list of names) also pins literal cases, so a
       dropped entry fails a test instead of taking its own test with it (Rio Grande's reader, 2026-10-28: a
       look-alike table's per-entry test passed with an entry removed).
+- [ ] A test fixture writes rows in the shape production's own writer does: find the writer and copy its shape, or
+      build the row through it. A row written by hand can make a test pass on fiction (connector Task 8's review,
+      2026-10-29: a fixture stored a remote author by contact id, but federation.py:889 stores `<peer>:<user>`, so
+      remote authors were never named and the naming test passed).
 
 ## Answering a mention or a request in a room
 
