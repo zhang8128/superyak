@@ -1406,7 +1406,8 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     # federation pull (plan SF9): copied as they are. Restored nonces are pruned by `at` on the next pull, and a restore
     # takes longer than the 300 s replay window; the backfill covers a copy older than peer_delivery.
     'peer_meta', 'pull_nonces', 'peer_delivery',
-    'oauth_clients'}  # the connector's registrations: public and interchangeable, they grant nothing
+    'oauth_clients',  # the connector's registrations: public and interchangeable, they grant nothing
+    'oauth_pending'}  # connector sign-ins: every row ends within 10 minutes, and a restore takes longer
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):

@@ -9,6 +9,7 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
+from .common import Problem
 from .connector import (REGISTER_BODY_MAX, OAuthError, RedirectError, check_callback, issuer_metadata,
                         resource_metadata)
 
@@ -17,8 +18,8 @@ NOT_YET = 'Not built yet'
 # first"). It repeats nothing the request carried.
 REFUSED_PAGE = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" '
                 'content="width=device-width, initial-scale=1"><title>This connection can\'t be used</title></head>'
-                '<body><main><h1>This connection can\'t be used</h1><p>The request to connect to this home isn\'t one it '
-                'can check, so nothing was shared. Go back to Claude and connect again.</p></main></body></html>')
+                '<body><main><h1>This connection can\'t be used</h1><p>The request to connect to this home isn\'t '
+                'one it can check, so nothing was shared. Go back to Claude and connect again.</p></main></body></html>')
 
 
 def install(app, public_origin, callback):
@@ -95,9 +96,39 @@ def install(app, public_origin, callback):
             return back(refused.error)
         return RedirectResponse(public_origin + '/assets/consent.html#' + fragment, 303)
 
+    @app.post('/authorize/signin')
+    async def signin(request: Request):
+        """The consent page's first post: {request, username, password}. Its identity is in its body (the signed
+        request and the password), so it can't refuse before reading it; the event-loop guard lists it as ANONYMOUS
+        for that reason. The request is checked off the lane, so a forged one takes no sign-in slot and counts no
+        attempt; the password is checked in the lane /api/login uses, counted as it counts."""
+        if not on_public_origin(request):
+            return JSONResponse({'error': 'Not found'}, 404)
+        raw = await request.body()
+        if len(raw) > REGISTER_BODY_MAX:
+            return JSONResponse({'error': 'invalid_request'}, 413)
+        try:
+            data = json.loads(raw)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            data = None
+        if not isinstance(data, dict):
+            return JSONResponse({'error': 'invalid_request'}, 400)
+        try:
+            pending = await run_in_threadpool(store.pending_request, data.get('request'), callback, public_origin + '/mcp')
+            username = data.get('username')
+            lane, public, device = await request.app.state.sign_in_lane(request, username)
+            view = await lane.run(store.pending_sign_in, pending, username, data.get('password'),
+                                  request.client.host if request.client else 'unknown', public=public, device=device)
+        except OAuthError as refused:
+            return JSONResponse({'error': refused.error}, refused.status)
+        except Problem as refused:  # the lane full, or a username that isn't text
+            return JSONResponse({'error': 'too_many_attempts' if refused.status == 429 else 'invalid_request'},
+                                429 if refused.status == 429 else 400)
+        return JSONResponse(view)
+
     def not_yet(request: Request):
         return answer(request, {'error': NOT_YET}, 501)
 
-    for path, methods in (('/authorize/signin', ['POST']), ('/authorize/decision', ['POST']), ('/token', ['POST']),
+    for path, methods in (('/authorize/decision', ['POST']), ('/token', ['POST']),
                           ('/mcp', ['GET', 'POST', 'DELETE'])):
         app.add_api_route(path, not_yet, methods=methods)

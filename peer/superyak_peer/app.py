@@ -364,6 +364,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         if public and device is not None and await run_in_threadpool(store.device_is_valid, device, username):
             lane = lanes.known  # the read writes nothing, runs before queueing and refuses a held token; Store.login checks again
         return lane, public, device
+    app.state.sign_in_lane = sign_in_lane  # the connector's sign-in (Task 5) is laned and counted the same way
 
     async def login_response(request, username, password):
         lane, public, device = await sign_in_lane(request, username)

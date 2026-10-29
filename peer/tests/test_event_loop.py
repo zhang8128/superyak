@@ -272,7 +272,8 @@ def test_a_loop_object_on_app_state_is_not_the_store():
 # federation delivery, which is checked by its signature.
 ANONYMOUS = {('POST', '/api/login'), ('POST', '/api/invitations/redeem'), ('POST', '/api/access-requests'),
              ('POST', '/api/dockings'), ('POST', '/federation/events'),
-             ('POST', '/register')}  # the connector's registration is public by design (spec r4, D18)
+             ('POST', '/register'),  # the connector's registration is public by design (spec r4, D18)
+             ('POST', '/authorize/signin')}  # its identity is in its body: the signed request and the password
 
 
 def routes_of(app):

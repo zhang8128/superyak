@@ -53,8 +53,8 @@ def test_every_connector_route_answers_a_public_request(home):
     client = public_client(home.app, origin=PUBLIC_ORIGIN)
     for method, path in CONNECTOR_PATHS:
         response = client.request(method, path, json={} if method == 'POST' else None)
-        # {} is no registration, and /authorize with no client shows its page
-        expected = 200 if path.startswith('/.well-known/') else 400 if path in ('/register', '/authorize') else 501
+        # {} is no registration or sign-in, and /authorize with no client shows its page
+        expected = 200 if path.startswith('/.well-known/') else 400 if path in ('/register', '/authorize', '/authorize/signin') else 501
         assert response.status_code == expected, (method, path, response.status_code, response.text)
 
 
@@ -448,3 +448,187 @@ def test_every_authorization_error_carries_iss_and_the_state_as_sent(home):
 def test_authorize_request_is_gone(home):
     """Spec r4: the consent page's first post is the sign-in, so there is no /authorize/request."""
     assert public_client(home.app, origin=PUBLIC_ORIGIN).post('/authorize/request', json={}).status_code in (404, 405)
+
+
+# ---- Task 5, the sign-in: the first row anyone on the internet can cause belongs to a person who has just typed their
+# password (spec r4, D18). The request is checked, then checked again as /authorize did, before the password counts. ----
+
+def person(home, username='sam@example.org', name='Sam Example'):
+    return home.store.create_user(username, name, 'long-password-' + username.split('@')[0])
+
+
+def consent(home, **headers):
+    """The consent page's own requests: at the public origin, from a public address, with the home's Origin."""
+    return public_client(home.app, origin=PUBLIC_ORIGIN, **headers)
+
+
+def sign_in(home, fragment, username='sam@example.org', password=None):
+    return consent(home).post('/authorize/signin', json={
+        'request': fragment, 'username': username,
+        'password': 'long-password-' + username.split('@')[0] if password is None else password})
+
+
+def a_fragment(home, client=None, **override):
+    return redirected(authorize(home, client, **override))[2]
+
+
+def table(home, name):
+    with home.store.transaction() as db:
+        return [dict(row) for row in db.execute(f'SELECT * FROM {name}')]
+
+
+def mint_pending(home, body, raw=None):
+    """A pending request signed with the home's own key, as anyone holding a backup could make one (Task 4's S2)."""
+    import base64
+    import hashlib
+    import hmac
+    import json
+    raw = raw or json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+    tag = hmac.new(home.store._connector_key, b'pending\n' + raw, hashlib.sha256).digest()
+    enc = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()  # noqa: E731
+    return enc(raw) + '.' + enc(tag)
+
+
+def test_the_first_row_is_made_at_a_good_sign_in(home):
+    sam = person(home)
+    fragment = a_fragment(home)
+    wrong = sign_in(home, fragment, password='not-the-password')
+    assert (wrong.status_code, wrong.json()) == (401, {'error': 'invalid_login'}) and table(home, 'oauth_pending') == []
+    good = sign_in(home, fragment)
+    assert good.status_code == 200, good.text
+    view = good.json()
+    assert set(view) == {'pending', 'csrf', 'name', 'app', 'client_name', 'scope', 'rooms'}
+    assert (view['name'], view['app'], view['client_name'], view['scope']) == (
+        'Sam Example', 'Claude (claude.ai)', 'Claude', 'rooms.read offline_access')
+    [row] = table(home, 'oauth_pending')
+    request = pending_payload(fragment)
+    assert {k: row[k] for k in ('client_id', 'redirect_uri', 'state', 'challenge', 'resource', 'scope', 'at')} == {
+        'client_id': request['client_id'], 'redirect_uri': CALLBACK, 'state': 'st-1', 'challenge': CHALLENGE,
+        'resource': RESOURCE_URL, 'scope': 'rooms.read offline_access', 'at': request['at']}
+    assert (row['id'], row['person_id'], row['decided'], row['code_hash']) == (view['pending'], sam['id'], None, None)
+    assert row['csrf'] != view['csrf'] and len(view['csrf']) >= 40  # kept only as a hash
+
+
+def attempts(home):
+    return table(home, 'login_attempts')
+
+
+def test_a_forged_or_stale_request_is_refused_before_the_password(home):
+    """A changed byte, a client id's tag in place of the request's (the labels differ), a request 600 s or more after
+    /authorize: 400, before any password attempt counts, and no row. Mutation: the password checked first."""
+    person(home)
+    client_id = register(home.app).json()['client_id']
+    fragment = a_fragment(home, client_id)
+    encoded, tag = fragment.split('.')
+    changed = encoded[:-2] + ('A' if encoded[-2] != 'A' else 'B') + encoded[-1] + '.' + tag
+    for forged in (changed, client_id, fragment + 'x', 'no-dot', '', '.'.join([encoded, tag, tag])):
+        refused = sign_in(home, forged, password='wrong')
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), forged[:20]
+    assert attempts(home) == [] and table(home, 'oauth_pending') == []
+    home.clock[0] += 600
+    stale = sign_in(home, fragment, password='wrong')
+    assert (stale.status_code, stale.json()) == (400, {'error': 'request_expired'})
+    assert attempts(home) == [] and table(home, 'oauth_pending') == []
+    home.clock[0] -= 1
+    assert sign_in(home, fragment).status_code == 200  # 599 s in, still good
+
+
+def test_a_request_signed_with_the_key_is_checked_again(home):
+    """Task 4's re-check, S2: the key is backed up, so a request it signs is checked again from its own values as
+    /authorize did. Another redirect, an unknown client, another resource, a scope outside SCOPES, a missing field, a
+    payload /authorize wouldn't make (spaces, an unknown version): 400 before the password, and no row."""
+    import json
+    person(home)
+    good = pending_payload(a_fragment(home))
+    for change in ({'redirect_uri': 'https://evil.example/callback'}, {'client_id': 'made-up'},
+                   {'resource': 'https://other.example/mcp'}, {'scope': 'rooms.read rooms.write'}, {'scope': ''},
+                   {'v': 2}, {'challenge': 'short'}, {'at': str(good['at'])}, {'state': 5}):
+        refused = sign_in(home, mint_pending(home, good | change), password='wrong')
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), change
+    for raw in (json.dumps(good).encode(), json.dumps({k: v for k, v in good.items() if k != 'state'},
+                                                      sort_keys=True, separators=(',', ':')).encode()):
+        assert sign_in(home, mint_pending(home, None, raw), password='wrong').status_code == 400
+    assert attempts(home) == [] and table(home, 'oauth_pending') == []
+    assert sign_in(home, mint_pending(home, good)).status_code == 200  # the same values, signed the same way: good
+
+
+def test_signing_in_again_switches_the_person(home):
+    """One fragment, sam then jenn: one row, jenn's, with a new CSRF token, and the same pending id."""
+    from superyak_peer.auth import token_hash
+    person(home)
+    jenn = person(home, 'jenn@example.org', 'Jenn Example')
+    fragment = a_fragment(home)
+    first = sign_in(home, fragment).json()
+    second = sign_in(home, fragment, 'jenn@example.org').json()
+    [row] = table(home, 'oauth_pending')
+    assert (row['person_id'], row['csrf'], second['pending'], second['name']) == (
+        jenn['id'], token_hash(second['csrf']), first['pending'], 'Jenn Example')
+    assert second['csrf'] != first['csrf']
+
+
+def test_signing_in_after_a_decision_is_refused(home):
+    person(home)
+    fragment = a_fragment(home)
+    sign_in(home, fragment)
+    with home.store.transaction() as db:
+        db.execute('UPDATE oauth_pending SET decided=?', (home.clock[0],))
+    refused = sign_in(home, fragment)
+    assert (refused.status_code, refused.json()) == (400, {'error': 'already_decided'})
+
+
+def test_the_sign_in_shares_login_holds_and_leaves_no_session(home):
+    """The same holds as /api/login: eight wrong passwords from one source, then even the right one gets 429. A good
+    sign-in makes no session and sets no cookie."""
+    person(home)
+    fragment = a_fragment(home)
+    good = sign_in(home, fragment)
+    assert good.status_code == 200 and 'set-cookie' not in good.headers and table(home, 'sessions') == []
+    for _ in range(8):
+        assert sign_in(home, fragment, password='wrong').status_code == 401
+    held = sign_in(home, fragment)
+    assert (held.status_code, held.json()) == (429, {'error': 'too_many_attempts'})
+
+
+def test_the_page_asks_for_the_password_even_with_a_session(home):
+    """A session cookie changes nothing: the sign-in always needs the password, and nothing before it returns rooms."""
+    person(home)
+    login = consent(home).post('/api/login', json={'username': 'sam@example.org', 'password': 'long-password-sam'})
+    assert login.status_code == 200
+    cookie = {'cookie': f'superyak_session={login.cookies.get("superyak_session")}'}
+    fragment = a_fragment(home)
+    for password in ('', None):
+        body = {'request': fragment, 'username': 'sam@example.org'} | ({'password': password} if password is not None else {})
+        refused = consent(home, **cookie).post('/authorize/signin', json=body)
+        assert refused.status_code in (400, 401) and 'rooms' not in refused.text
+    assert table(home, 'oauth_pending') == []
+
+
+def test_the_consent_rooms_group_earlier_parts_and_flag_marked_rooms(home):
+    """Each of the person's current rooms, with its earlier parts grouped under it, and marked rooms flagged: the
+    page offers none of them chosen and can't offer a marked one."""
+    sam, jenn = person(home), person(home, 'jenn@example.org', 'Jenn Example')
+    store = home.store
+    plain = store.create_room(sam['id'], 'Plain', [])['id']
+    earlier = store.create_room(sam['id'], 'Growing', [])['id']
+    later = store.add_participants(sam['id'], earlier, [jenn['id']])['id']
+    marked = store.create_room(sam['id'], 'Marked', [])['id']
+    with store.transaction() as db:
+        db.execute('INSERT INTO room_cloud VALUES(?,?,?)', (marked, sam['id'], home.clock[0]))
+    rooms = sign_in(home, a_fragment(home)).json()['rooms']
+    assert sorted(rooms, key=lambda room: room['room']) == sorted([
+        {'room': plain, 'title': 'Plain', 'earlier_of': None, 'cloud': False},
+        {'room': later, 'title': 'Growing', 'earlier_of': None, 'cloud': False},
+        {'room': earlier, 'title': 'Growing', 'earlier_of': later, 'cloud': False},
+        {'room': marked, 'title': 'Marked', 'earlier_of': None, 'cloud': True}], key=lambda room: room['room'])
+    assert [room['room'] for room in rooms].index(earlier) == [room['room'] for room in rooms].index(later) + 1
+
+
+def test_a_good_sign_in_sweeps_requests_past_their_ten_minutes(home):
+    person(home)
+    old = a_fragment(home)
+    sign_in(home, old)
+    home.clock[0] += 601
+    sign_in(home, a_fragment(home), password='wrong')
+    assert len(table(home, 'oauth_pending')) == 1  # a wrong password sweeps nothing
+    sign_in(home, a_fragment(home))
+    assert [row['at'] for row in table(home, 'oauth_pending')] == [int(home.clock[0])]

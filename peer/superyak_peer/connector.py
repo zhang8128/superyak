@@ -9,6 +9,8 @@ import secrets
 import unicodedata
 from urllib.parse import urlsplit
 
+from .common import Problem
+
 DEFAULT_CALLBACK = 'https://claude.ai/api/mcp/auth_callback'  # claude.ai's; older help text said it may move to claude.com
 SCOPES = ('rooms.read', 'offline_access')
 
@@ -33,7 +35,10 @@ def issuer_metadata(issuer):
 # restore copies it as it is, since a client grants nothing by itself.
 OAUTH_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY, name TEXT, grant_types TEXT NOT NULL, created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth_pending(id TEXT PRIMARY KEY, request TEXT NOT NULL UNIQUE, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, state TEXT, challenge TEXT NOT NULL, resource TEXT NOT NULL, scope TEXT NOT NULL, at INTEGER NOT NULL, person_id TEXT NOT NULL, csrf TEXT NOT NULL, decided REAL, code_hash TEXT, code_expires REAL, grant_id TEXT);
 '''
+# oauth_pending (Task 5): a request from its sign-in on, keyed by `request`, the SHA-256 of its fragment's tag, so one
+# fragment is one row. `decided` is when Allow or Deny was chosen; the plan's columns had no mark for a Deny.
 REGISTER_BODY_MAX = 8 * 1024  # bytes
 CLIENT_NAME_MAX, CLIENT_NAME_BYTES = 100, 200
 GRANT_TYPES = ('authorization_code', 'refresh_token')
@@ -62,6 +67,20 @@ class RedirectError(OAuthError):
 PENDING_SECONDS = 600
 STATE_MAX = 512  # characters; the state travels in the fragment, so it is bounded
 CHALLENGE = re.compile(r'[A-Za-z0-9_-]{43}')  # an S256 challenge: base64url of SHA-256, unpadded (RFC 7636)
+
+
+APP_NAMES = {'claude.ai': 'Claude', 'claude.com': 'Claude'}  # the consent page names an app by its redirect host
+PENDING_FIELDS = ('v', 'client_id', 'redirect_uri', 'state', 'challenge', 'resource', 'scope', 'at')
+
+
+def app_name(redirect_uri):
+    """The app as the consent page names it: by its redirect host, never by its self-asserted client_name."""
+    host = urlsplit(redirect_uri).hostname or ''
+    return f'{APP_NAMES[host]} ({host})' if host in APP_NAMES else host
+
+
+def _encoded(body):
+    return json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
 
 
 def canonical_resource(value):
@@ -182,8 +201,110 @@ class Connector:
         body = {'v': CLIENT_VERSION, 'client_id': params['client_id'], 'redirect_uri': params['redirect_uri'],
                 'state': state, 'challenge': params['code_challenge'], 'resource': resource,
                 'scope': ' '.join(scope for scope in SCOPES if scope in scopes), 'at': int(self.clock())}
-        request = json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+        request = _encoded(body)
         return _b64(request) + '.' + _b64(_tag(self._connector_key, b'pending', request))
+
+    def pending_request(self, fragment, callback, resource):
+        """The sign-in's first checks, before any password counts: the fragment's tag (compare_digest, under the label
+        `pending`), its payload exactly as sign_pending encodes one, its age (PENDING_SECONDS from `at`), and then the
+        request checked again from its own values as /authorize did: a known client, the configured callback, the
+        canonical resource, scopes within SCOPES. So the key vouches only for what the home re-derives (Task 4's
+        re-check, S2). Returns the request with `key`, the SHA-256 of its tag, and the client's `client_name`. A
+        refusal raises OAuthError: 400 invalid_request, or 400 request_expired."""
+        invalid = OAuthError(400, 'invalid_request')
+        if not isinstance(fragment, str) or len(fragment) > 4096:
+            raise invalid
+        encoded, dot, mac = fragment.partition('.')
+        raw, tag = _unb64(encoded), _unb64(mac)
+        if not dot or raw is None or tag is None:
+            raise invalid
+        if not hmac.compare_digest(tag, _tag(self._connector_key, b'pending', raw)):
+            raise invalid
+        try:
+            body = json.loads(raw)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            raise invalid from None
+        if not isinstance(body, dict) or set(body) != set(PENDING_FIELDS) or raw != _encoded(body):
+            raise invalid
+        state, scope = body['state'], body['scope']
+        if (type(body['v']) is not int or body['v'] != CLIENT_VERSION or type(body['at']) is not int
+                or not isinstance(body['client_id'], str) or not isinstance(body['challenge'], str)
+                or not CHALLENGE.fullmatch(body['challenge']) or not (state is None or isinstance(state, str))
+                or (state is not None and len(state) > STATE_MAX) or body['resource'] != resource
+                or not isinstance(scope, str) or not scope
+                # SCOPES' own spelling, which also refuses a name outside SCOPES
+                or scope != ' '.join(name for name in SCOPES if name in scope.split(' '))):
+            raise invalid
+        age = self.clock() - body['at']
+        if age < 0:
+            raise invalid
+        if age >= PENDING_SECONDS:
+            raise OAuthError(400, 'request_expired')
+        try:
+            known = self.check_client(body['client_id'], body['redirect_uri'], callback)
+        except OAuthError:
+            raise invalid from None
+        return body | {'key': hashlib.sha256(tag).hexdigest(), 'client_name': known['name']}
+
+    def pending_sign_in(self, request, username, password, source, *, public=True, device=None):
+        """The sign-in, after pending_request passed: the password checked and counted as /api/login counts it
+        (check_password_attempt, which makes no session), and only then the row, keyed by the request so a second
+        sign-in on one fragment rebinds that row's person and CSRF token. A row already decided refuses it. Returns the
+        consent page's view, then sweeps. Refusals: 401 invalid_login, 429 too_many_attempts, 400 already_decided."""
+        from .auth import token_hash
+        try:
+            right = self.check_password_attempt(username, password, source, public=public, device=device)
+        except Problem as refused:
+            raise OAuthError(429, 'too_many_attempts') if refused.status == 429 else OAuthError(400, 'invalid_request')
+        if not right:
+            raise OAuthError(401, 'invalid_login')
+        csrf = secrets.token_urlsafe(32)
+        with self.transaction() as db:
+            user = db.execute("SELECT id, name FROM users WHERE username=? AND kind='person' AND activation_pending=0",
+                              (username,)).fetchone()
+            if user is None:  # changed since the password was checked
+                raise OAuthError(401, 'invalid_login')
+            row = db.execute('SELECT id, decided FROM oauth_pending WHERE request=?', (request['key'],)).fetchone()
+            if row is not None and row['decided'] is not None:
+                raise OAuthError(400, 'already_decided')
+            if row is not None:
+                pending = row['id']
+                db.execute('UPDATE oauth_pending SET person_id=?, csrf=? WHERE id=?',
+                           (user['id'], token_hash(csrf), pending))
+            else:
+                pending = secrets.token_urlsafe(16)
+                db.execute('INSERT INTO oauth_pending(id, request, client_id, redirect_uri, state, challenge, '
+                           'resource, scope, at, person_id, csrf) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                           (pending, request['key'], request['client_id'], request['redirect_uri'], request['state'],
+                            request['challenge'], request['resource'], request['scope'], request['at'], user['id'],
+                            token_hash(csrf)))
+            rooms = self._consent_rooms(db, user['id'])
+            self._connector_sweep(db)
+        return {'pending': pending, 'csrf': csrf, 'name': user['name'], 'app': app_name(request['redirect_uri']),
+                'client_name': request['client_name'], 'scope': request['scope'], 'rooms': rooms}
+
+    def _consent_rooms(self, db, person_id):
+        """The person's rooms on this home as the consent page offers them: each current room, its earlier parts
+        grouped under it as `earlier_of` (spec D9), and `cloud` where a member keeps it away from cloud models."""
+        rows = db.execute('SELECT rooms.id, rooms.title FROM room_members JOIN rooms ON rooms.id=room_members.room_id '
+                          'WHERE room_members.user_id=? ORDER BY rooms.title, rooms.id', (person_id,)).fetchall()
+        current, earlier = [], {}
+        for row in rows:
+            later = self._current_room(db, row['id'])  # None for a current room
+            entry = {'room': row['id'], 'title': row['title'], 'earlier_of': later,
+                     'cloud': self._marked(db, row['id'])}
+            (current.append(entry) if later is None else earlier.setdefault(later, []).append(entry))
+        shown = []
+        for entry in current:
+            shown += [entry] + earlier.pop(entry['room'], [])
+        return shown + [entry for rest in earlier.values() for entry in rest]
+
+    def _connector_sweep(self, db):
+        """Pending requests past their 10 minutes, unless a code issued from one is still live. Called only after a good
+        sign-in, never by a request nobody signed in for (D18). Task 6 and Task 8 extend it."""
+        now = self.clock()
+        db.execute('DELETE FROM oauth_pending WHERE at<=? AND (code_expires IS NULL OR code_expires<=?)',
+                   (now - PENDING_SECONDS, now))
 
     def known_client(self, db, client_id, callback):
         """Spec revision 4's one check, in order: a row with exactly this id is that client (so a key rotation or a
