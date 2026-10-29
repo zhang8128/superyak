@@ -978,14 +978,15 @@ def _keep_tokens_like_replaced(db, old, now, report):
     """Task 6, with a usable replaced file (Rio Grande, on the restore design): a refresh token rotated since the copy
     must not come back unrotated, nor one revoked since come back live. Each token the copy has takes the replaced
     file's earlier expiry and any use it records; one the replaced file lacks (an access token swept after it ended, or
-    any token of a connection that ended) is revoked. A revoke writes REVOKED, never now (the section 2's S1). It only
-    takes power away."""
+    any token of a connection that ended) is revoked. A revoke writes REVOKED, never now (the section 2's S1), and it
+    reaches the tokens that ran out on their own just before too, as step 4 does (Rio Grande's restore reader's S1): a
+    clock that steps back would make one live again. The count is of the live ones. It only takes power away."""
     from .connector import REVOKED
     if not _usable(db, old, report, *TOKEN_COMPARED):
         return
     there = {row[0]: row[1:] for row in old.execute('SELECT hash, expires, used FROM connector_tokens')}
     taken = 0
-    for row in db.execute('SELECT hash, expires, used FROM connector_tokens WHERE expires>?', (now,)).fetchall():
+    for row in db.execute('SELECT hash, expires, used FROM connector_tokens WHERE expires>?', (REVOKED,)).fetchall():
         theirs = there.get(row['hash'])
         expires, used = (REVOKED, row['used']) if theirs is None else (theirs[0], theirs[1] if row['used'] is None else row['used'])
         if not _finite(expires) or used is not None and not _finite(used):
@@ -993,16 +994,18 @@ def _keep_tokens_like_replaced(db, old, now, report):
         if expires < row['expires'] or used != row['used']:
             db.execute('UPDATE connector_tokens SET expires=?, used=? WHERE hash=?',
                        (min(expires, row['expires']), used, row['hash']))
-            taken += 1
+            taken += row['expires'] > now
     report['counts']['connector tokens taken back'] = taken
 
 
 def _revoke_every_token(db, old, now, report):
-    """Task 6, without a usable replaced file: every token is revoked, as every connection is."""
+    """Task 6, without a usable replaced file: every token is revoked, as every connection is, the ones that ran out on
+    their own just before included. The count is of the live ones."""
     from .connector import REVOKED
     if _usable(db, None, report, *TOKEN_COMPARED):
         report['counts']['connector tokens taken back'] = db.execute(
-            'UPDATE connector_tokens SET expires=? WHERE expires>?', (REVOKED, now)).rowcount
+            'SELECT count(*) FROM connector_tokens WHERE expires>?', (now,)).fetchone()[0]
+        db.execute('UPDATE connector_tokens SET expires=? WHERE expires>?', (REVOKED, REVOKED))
 
 
 def _revoke_every_connection(db, old, now, report):

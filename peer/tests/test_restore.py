@@ -1999,11 +1999,31 @@ def test_without_a_replaced_file_every_token_is_revoked(tmp_path, capsys):
     grant = connection(store, sam['id'])
     for kind in ('refresh', 'access'):
         a_token(store, grant, kind)
+    a_token(store, grant, 'access', expires=time.time() - 2)  # ran out on its own just before: ended too, not counted
     copy = staged(tmp_path, store)
     code, out, err = reconcile(capsys, '--db', copy)
     assert code == 0, err
     assert {row['expires'] for row in tokens_in(copy).values()} == {REVOKED}
     assert 'connector tokens taken back (2)' in out
+
+
+def test_a_restore_also_ends_tokens_that_ran_out_on_their_own_just_before_it(tmp_path, capsys):
+    """Rio Grande's restore reader's S1 (on step 4), in Task 6's tokens: only tokens still live by the clock were taken
+    back, so an access token the replaced file had revoked, whose own hour ran out seconds before the reconcile, kept
+    that time, and with its grant live a clock stepped back past it made it a bearer again. Every token in the copy now
+    takes the replaced file's facts; the count is still of the live ones."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    walked = a_token(store, grant, 'access', expires=time.time() - 2)
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:  # the live file's walk revoked it after the copy
+        db.execute('UPDATE connector_tokens SET expires=? WHERE hash=?', (REVOKED, walked))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert tokens_in(copy)[walked]['expires'] == REVOKED
+    assert 'connector tokens taken back (0)' in out
 
 
 def test_a_replaced_file_damaged_in_a_token_column_revokes_every_token(tmp_path, capsys):
