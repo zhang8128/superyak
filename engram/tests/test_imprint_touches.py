@@ -6,7 +6,7 @@ from tests.imprint_support import (HOME, exactly_one_target_answers, iso_of, kep
 
 
 @pytest.mark.parametrize("fixture", ["nothing_at_or_after_t1", "as_of_t1_nothing_at_t1"])
-def test_every_package_touch_is_a_source_touch(tmp_path, fixture):
+def test_every_package_touch_is_a_source_touch(tmp_path, fixture, route_open):
     store, t1 = mixed_lane_recall_store(tmp_path, fixture)   # route; a mixed-lane recall; a used recall of one target
     built = build(make_plan(*plan_args(tmp_path, store=lambda _: store, route=True, until=iso_of(t1))).id,
                   home=HOME(tmp_path), now=t1)

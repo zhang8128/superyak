@@ -27,6 +27,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+import imprint_filter
 import store_identity
 import store_reader
 from imprint_checks import l1_values, l2_fts, l3_vec0, l4_raw, terms_of, verify
@@ -797,6 +798,8 @@ def _saved_plan(path: Path) -> dict:
         scope["lanes"], scope["layers"], scope["until"]
     except (OSError, ValueError, KeyError, TypeError):
         raise PlanRefused("The saved plan can't be read. Run the plan again.") from None
+    if "route" in terms["actions"] and not imprint_filter.ROUTE_OPEN:     # a plan saved before the gate (review S-1)
+        raise PlanRefused(imprint_filter.ROUTE_WAITS + " Run the plan again without route.")
     return saved
 
 
@@ -1693,8 +1696,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--exclude", type=Path, metavar="FILE", help="a file of memory ids, one a line, to leave out")
     p.add_argument("--include-unsourced-semantics", action="store_true")
     p.add_argument("--audience", help="place:home/<the operator the station named>")
-    p.add_argument("--actions", default="imprint", help="imprint, or imprint,route")
-    p.add_argument("--purposes", help="calibration, or calibration,trail-evaluation with route")
+    p.add_argument("--actions", default="imprint",
+                   help="imprint for now; imprint,route waits until trails ships")
+    p.add_argument("--purposes", help="calibration for now; calibration,trail-evaluation comes with route, "
+                                      "which waits until trails ships")
     p.add_argument("--days", type=int, default=DEFAULT_DAYS)
     p.add_argument("--list", type=Path, metavar="FILE", help="write one JSON line per row that would leave")
     p.add_argument("--json", action="store_true", help="print the dry run as JSON")

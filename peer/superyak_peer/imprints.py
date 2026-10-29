@@ -111,6 +111,10 @@ LARGEST_PACKAGE = 2 * 2**30
 LIVE_BYTES = 16 * 2**30
 FREE_FLOOR = 4 * 2**30
 OPEN_PER_SHIP = 4
+# Route waits until trails ships (Serenity's condition S1): without it, admission fails at the count after the
+# session ids and the recall and operation logs are already here. Opening it is this line and engram's
+# `imprint_filter.ROUTE_OPEN`, with trails.
+ROUTE_OPEN = False
 CODE_LIFE = 600
 MAX_REQUEST_BODY = 64 * 1024
 MAX_MANIFEST = 256 * 1024
@@ -219,7 +223,7 @@ def check_request(doc, *, super_admin, owner_username):
     if (not _PERSON.fullmatch(owner_username) or not _PERSON.fullmatch(super_admin)
             or terms['audience'] != [f'place:home/{super_admin}']):
         raise _bad('terms.audience')
-    actions = _choice(terms['actions'], ('imprint', 'route'), 'terms.actions')
+    actions = _choice(terms['actions'], ('imprint', 'route') if ROUTE_OPEN else ('imprint',), 'terms.actions')
     if 'imprint' not in actions:
         raise _bad('terms.actions')
     route = 'route' in actions

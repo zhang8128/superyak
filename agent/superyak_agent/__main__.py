@@ -28,6 +28,9 @@ def build_parser():
     route.add_argument('--dry-run', action='store_true', help='Print each check; post nothing and write no state')
     hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
+    lessons = commands.add_parser('lessons-hook', help="Claude Code hook: lessons from Andy's ships (first rail)")
+    lessons.add_argument('--settings', type=Path, help='The hook\'s own settings (default '
+                         '~/.superyak/lessons-hook.installed.json, the copy dock makes of --lessons)')
     held = commands.add_parser('hold', help='Claude Code PreToolUse hook on Bash: checklists and lessons hold a '
                                'command once (dispatched before this parser, which only describes it)')
     held.add_argument('--config', type=Path, default=CONFIG)
@@ -56,6 +59,8 @@ def build_parser():
     dock.add_argument('--note', default='')
     dock.add_argument('--wait', type=int, default=540)
     dock.add_argument('--hook', action='store_true', help='Show new room messages at each Claude Code turn')
+    dock.add_argument('--lessons', type=Path, help="The machine ship only: also install the lessons hook, with its own "
+                      'settings in this file (ship, data_dir)')
     dock.add_argument('--no-adna', action='store_true')
     dock.add_argument('--no-service', action='store_true')
     run_mcp = commands.add_parser('run-mcp', help='Write the MCP config used by watcher runs')
@@ -160,7 +165,8 @@ def _dock_project(args, fields):
 
 
 def _imprint(args):
-    """`imprint context|send|status|withdraw|shorten`: prints `STATUS: <value>` last; a send still waiting for the owner exits 3, as dock does."""
+    """`imprint context|send|status|withdraw|shorten`: prints `STATUS: <value>` last; a send still waiting for the owner exits 3, as dock does,
+    and one whose code has expired exits 1 (`code-expired`: nobody can allow it; the owner plans again after the sweep)."""
     from .imprint import Imprint, ImprintRefused
     from .station import StationError, client_for, label, load_config
     imprint = Imprint(args.home, client_for(load_config(args.home / 'station.json'), timeout=120))
@@ -178,13 +184,13 @@ def _imprint(args):
             return 0
         status = imprint.send(args.plan, wait=args.wait)
     except ImprintRefused as error:
-        print(error)
+        print(error, flush=True)
         return error.code
     except (StationError, OSError) as error:
-        print(f'imprint: {label(str(error), 300)}')     # a station's message is data: one printable line (review I2)
+        print(f'imprint: {label(str(error), 300)}', flush=True)     # a station's message is data: one printable line (review I2)
         return 1
-    print(f'STATUS: {label(status)}')
-    return 3 if status == 'waiting-for-you' else 0
+    print(f'STATUS: {label(status)}', flush=True)
+    return {'waiting-for-you': 3, 'code-expired': 1}.get(status, 0)
 
 
 def main(argv=None):
@@ -196,6 +202,9 @@ def main(argv=None):
     parser = build_parser()
     if argv[:1] == ['hook']:
         return _hook(parser, argv)
+    if argv[:1] == ['lessons-hook']:  # run_agent.py takes this path before importing this module
+        from .lessons_hook import main as lessons_hook
+        return lessons_hook(argv[1:])
     args = parser.parse_args(argv)
     if args.command == 'checklists':
         from .checklist_cli import main as checklists
@@ -256,6 +265,10 @@ def main(argv=None):
             if not (args.name and args.contact):
                 parser.error('--request needs --name and --contact')
             fields = {'name': args.name, 'contact': args.contact, 'note': args.note}
+        if args.lessons is not None and args.project is not None:
+            print('dock: --lessons is for the machine ship; the lessons hook goes in ~/.claude/settings.json',
+                  file=sys.stderr)
+            return 2
         try:
             home, kind = check_mode(args.ship, args.home, args.project)   # S2: before any network call or write
         except Refused as error:
@@ -266,7 +279,8 @@ def main(argv=None):
         workspace = args.workspace or str(Path(__file__).resolve().parents[2])
         code = Dock(args.station, door=args.door, ship=args.ship, workspace=workspace, home=home).run(fields, wait=args.wait)
         if code == 0:
-            install_all(home / 'station.json', hook=args.hook, adna=not args.no_adna, service=not args.no_service)
+            lessons = {} if args.lessons is None else {'lessons': args.lessons}  # without the flag, today's call exactly
+            install_all(home / 'station.json', hook=args.hook, adna=not args.no_adna, service=not args.no_service, **lessons)
         return code
     if args.command == 'run-mcp':
         from .install import run_mcp_config

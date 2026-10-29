@@ -214,7 +214,7 @@ function showLogin(message = "") {
       <section class="login-story">
         ${brand()}
         <div><h1>A home for the parts of your life you choose to share.</h1><p>Write privately, talk with people you trust, and turn on only the version you mean to share.</p></div>
-        <p class="login-note">Self-hosted on your Superyak peer.</p>
+        <p class="login-note">Self-hosted on your Superyak peer. A prototype, being built and tested: please don't put real patient information in it yet. <a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a></p>
       </section>
       <section class="login-panel" aria-labelledby="login-title">
         <p class="eyebrow">Personal home</p>
@@ -1102,7 +1102,7 @@ function imprintDialog() {
     <label class="choice"><input type="checkbox" id="imprint-attest"><span class="choice-copy"><strong>${e(p.check)}</strong></span></label>
     ${p.check_advice ? `<p class="meta">${e(p.check_advice)}</p>` : ""}
     <p>${e(p.closing)}</p>
-    <div class="field"><label for="imprint-password">Password</label><input class="input" id="imprint-password" type="password" autocomplete="current-password"></div>
+    <div class="field"><label for="imprint-password">Password</label><input class="input" id="imprint-password" type="password" autocomplete="new-password" aria-describedby="imprint-password-hint"><p class="meta" id="imprint-password-hint">Type your own station password. Don't accept a password your browser suggests.</p></div>
     <p class="meta" id="imprint-error" role="alert"></p>
     <div class="button-row"><button class="button" data-action="allow-imprint">Allow</button><button class="button secondary" data-action="decline-imprint">Decline</button></div></div></dialog>`;
 }

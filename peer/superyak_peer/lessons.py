@@ -22,7 +22,10 @@ LIMITS = {'ship': 32, 'claim': 160, 'why': 300, 'error': 120, 'command': 120, 'f
 BODY_BYTES = 4096
 VALUES_PER_KIND = 8
 LIVE_CAP = 32
-HOLD_BYTES = 6  # a command value this long may hold a command (section 8); a value this long matches at a prompt
+# Only a `command` value this long holds a command (section 8), so before a command only one this long matches (the
+# hold contract, review M2). It must equal the hook's own HOLD_BYTES (agent/superyak_agent/lessons_hold.py). At a
+# prompt, any value this long matches.
+HOLD_BYTES = 6
 RETRACT = re.compile(r'retract ([0-9a-f]{64}:[0-9a-f]{64})')
 FULL_ID = re.compile(r'[0-9a-f]{64}:[0-9a-f]{64}')
 SHORT = re.compile(r'[0-9a-f]{8}-[0-9a-f]{8}')
@@ -54,6 +57,7 @@ EMBED_BATCH = 8
 EMBED_SECONDS = 120.0
 INFO_SECONDS = 2.0
 BUSY_MS = 30_000  # SQLite's own wait for another connection's lock (db.py's timeout), which a budget only shortens
+BUDGET_CAP_MS = 3_600_000  # read_request's clamp on budget_ms: no hook waits an hour, and JSON's integers have no end
 RUNTIME_CONFIG = Path.home() / '.config' / 'superyak' / 'runtime.json'
 # Section 7.1: the only values a repeat record takes beside its ids and its time.
 REPEAT_HOW = ('receipt', 'read')
@@ -468,13 +472,20 @@ def write_index(path, value, vectors, read_at):
         raise
 
 
+def seen_ok(seen):
+    """Section 5's `seen`: at most SEEN_MAX lesson short ids, in a list (in process, also a tuple or a set). read_request
+    and could_hold share it, as they share `holding`, so could_hold refuses exactly the `seen` the query refuses."""
+    return (isinstance(seen, (list, tuple, set, frozenset)) and len(seen) <= SEEN_MAX
+            and all(isinstance(s, str) and SHORT.fullmatch(s) for s in seen))
+
+
 def read_request(raw):
     """Section 5's input, checked against its caps (the hook cuts before sending); ValueError for anything else."""
     value = json.loads(raw)
     if not isinstance(value, dict) or not isinstance(value.get('ship'), str) or len(value['ship']) > 32:
         raise ValueError('ship')
     seen = value.get('seen', [])
-    if not isinstance(seen, list) or len(seen) > SEEN_MAX or not all(isinstance(s, str) and SHORT.fullmatch(s) for s in seen):
+    if not seen_ok(seen):
         raise ValueError('seen')
     limit = value.get('limit', SHOWN)  # how many lesson slots the caller will render: 0 to 3
     if type(limit) is not int or not 0 <= limit <= SHOWN:
@@ -482,6 +493,8 @@ def read_request(raw):
     budget = value.get('budget_ms')  # the hook's time left: a ceiling on Near's own deadline, and step 4's (review S1)
     if budget is not None and (type(budget) is not int or budget < 0):
         raise ValueError('budget_ms')
+    if budget is not None:
+        budget = min(budget, BUDGET_CAP_MS)  # 10**309 is past a float, and the deadlines below are floats
     request = {'ship': value['ship'], 'seen': set(seen), 'limit': limit, 'budget_ms': budget}
     if 'prompt' in value:
         if not isinstance(value['prompt'], str) or len(value['prompt']) > PROMPT_CHARS:
@@ -586,15 +599,23 @@ def answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=tim
     return prompt_answer(request, index, age, socket_path, near, monotonic)
 
 
-def could_hold(command, ship, data_dir):
-    """Before a Bash command, in process (the signature agreed with Tardis, City of AI 2af70b05): whether the full query
-    could find a lesson that holds this command, so the hook runs it only then. True only when a lesson the asking ship
-    could be shown (the ship is a member at the index's last run, the lesson isn't its own, and its `learned from`
-    doesn't name it) has a `command` value of at least 6 bytes inside `command`, cut to 300 characters as the hook
-    cuts it. It reads this peer's index file and nothing else: no store, no database, no socket, no write. It ignores
-    the file's age, since the query's step 4 re-checks retractions and membership, so a stale index can only make it
-    say True too often, never miss a hold. No index, or one that can't be read, is False."""
-    if not isinstance(command, str) or not isinstance(ship, str):
+def holding(values, command):
+    """The `command` values found literally in `command` that can hold it: at least HOLD_BYTES each (section 8)."""
+    return [v for v in values if len(v.encode('utf-8')) >= HOLD_BYTES and v in command]
+
+
+def could_hold(command, ship, data_dir, seen=()):
+    """Before a Bash command, in process (the signature agreed with Tardis, City of AI 2af70b05, and `seen` since the
+    hold contract, review M2 and S1): whether the full query could find a lesson that holds this command, so the hook
+    runs it only then. True only when a lesson the asking ship could be shown (the ship is a member at the index's
+    last run, the lesson isn't its own, its `learned from` doesn't name it, and its short id isn't in `seen`) has a
+    `command` value of at least 6 bytes inside `command`, cut to 300 characters as the hook cuts it: exactly the
+    lessons the words-only query answers. `seen` is the ids the hook will send in the request, so a head whose only
+    such lesson was shown already asks no query. A `seen` the query would refuse (read_request) is False, since that
+    query answers nothing. It reads this peer's index file and nothing else: no store, no database, no socket, no
+    write. It ignores the file's age, since the query's step 4 re-checks retractions and membership, so a stale index
+    can only make it say True too often, never miss a hold. No index, or one that can't be read, is False."""
+    if not isinstance(command, str) or not isinstance(ship, str) or not seen_ok(seen):
         return False
     try:
         index = read_index(Path(data_dir) / INDEX_FILE)
@@ -603,22 +624,25 @@ def could_hold(command, ship, data_dir):
     asking = index and index['ships'].get(ship)
     if asking is None or not isinstance(asking, str):
         return False
-    command = command[:CAPS['command']]
-    return any(item['author'] != asking and item['learned_from'] != ship and len(value.encode('utf-8')) >= HOLD_BYTES
-               and value in command for item in index['lessons'] for value in item['command'])
+    command, seen = command[:CAPS['command']], set(seen)
+    return any(item['author'] != asking and item['learned_from'] != ship and holding(item['command'], command)
+               and short_lesson_id(item['id']) not in seen for item in index['lessons'])
 
 
 def words(item, request):
     """Section 5 step 1: (how many values match, the matched `command` value to show, or None). Before a command
-    (`words_only`) only `command` values are matched; the hook holds on the one returned when it has 6 bytes or more,
-    so the first matched value of at least 6 bytes is returned when there is one, else the first matched."""
+    (`words_only`) only `command` values of at least HOLD_BYTES match, the only ones the hook holds on (the hold
+    contract, review M2): the seam shows a lesson before a command only in a hold, so a lesson whose matched values
+    are all shorter is no match there. It is never answered or receipted, and takes no slot of `limit`. Otherwise
+    every value of every kind matches, and the first matched `command` value of at least 6 bytes is returned when
+    there is one, else the first matched."""
+    held = holding(item['command'], request['command'])
+    if request['words_only']:
+        return len(held), (held or [None])[0]
     commands = [v for v in item['command'] if v in request['command']]
-    count = len(commands)
-    if not request['words_only']:
-        count += sum(1 for v in item['error'] if v in request['error'])
-        count += sum(1 for v in item['file'] if v in request['command'] or v in request['error'] or v in request['cwd'])
-    holding = [v for v in commands if len(v.encode('utf-8')) >= HOLD_BYTES]  # C43: one that can hold, when one matched
-    return count, (holding or commands or [None])[0]
+    count = len(commands) + sum(1 for v in item['error'] if v in request['error'])
+    count += sum(1 for v in item['file'] if v in request['command'] or v in request['error'] or v in request['cwd'])
+    return count, (held or commands or [None])[0]  # C43: one that can hold, when one matched
 
 
 def context_text(request):
@@ -674,18 +698,25 @@ def query(request, data_dir, socket_path, clock=time.time, monotonic=time.monoto
             nearest = angles[0][0] if angles else None  # C22: over the lessons this ship could be shown
             candidates += [(item, round(theta, 4), None) for theta, _, item in angles if theta <= R_MAX and item['id'] not in taken]
     from contextlib import nullcontext
+    import sqlite3
     from .db import Store
     from .dispatch import DispatchGate, GateTimeout
     end = None if request['budget_ms'] is None else started + request['budget_ms'] / 1000
-    answer = {'lessons': []}
+    answer, busy = {'lessons': []}, False
     if end is None or monotonic() < end:
         bound = nullcontext() if end is None else DispatchGate(Path(data_dir).absolute() / 'dispatch.lock').bounded(end, monotonic)
         try:
             with bound:
-                answer = Store(data_dir, signing=False, clock=clock)._lessons_answer(request, candidates, nearest, end, monotonic)
+                # Opening the store waits for another connection's lock only until `end` too (a backup's reader, say)
+                store = Store(data_dir, signing=False, clock=clock, busy_until=end, monotonic=monotonic)
+                answer = store._lessons_answer(request, candidates, nearest, end, monotonic)
         except GateTimeout:
             pass
-    late = end is not None and monotonic() >= end  # out of time, so never "unavailable" (C24)
+        except sqlite3.OperationalError as error:  # busy while opening, at most until `end` (or SQLite's 30 s): nothing written
+            if end is None or ((getattr(error, 'sqlite_errorcode', None) or 0) & 0xFF) != sqlite3.SQLITE_BUSY:
+                raise
+            busy = True  # a lock, not the embedder, kept the answer: never "unavailable" (C24)
+    late = end is not None and (busy or monotonic() >= end)  # out of time, so never "unavailable" (C24)
     return answer, ('embedder unavailable' if unavailable and not answer['lessons'] and not late else None)
 
 

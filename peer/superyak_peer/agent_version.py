@@ -86,7 +86,9 @@ def load(module_file=__file__, run=subprocess.run, err=None):
             history, reason = read_history(checkout, run=run)
     except Exception as error:  # noqa: BLE001
         history, reason = None, f'unexpected error ({type(error).__name__})'
-    line = (f'superyak: version check on: {history.station}, {len(history.behind)} behind' if history is not None
+    # the count is of older agent versions this station can recognize, not of commits this station lacks
+    line = (f'superyak: version check on: {history.station} (ships on any of {len(history.behind)} older agent versions '
+            'are told to update)' if history is not None
             else f'superyak: version check off: {reason}')
     try:
         print(line, file=err, flush=True)

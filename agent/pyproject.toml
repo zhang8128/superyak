@@ -36,6 +36,7 @@ only-include = [
     "superyak_agent/install.py",
     "superyak_agent/kick.py",
     "superyak_agent/lessons_hold.py",
+    "superyak_agent/lessons_hook.py",
     "superyak_agent/mcp.py",
     "superyak_agent/memos.py",
     "superyak_agent/project_dock.py",

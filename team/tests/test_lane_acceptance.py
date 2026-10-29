@@ -660,6 +660,9 @@ def test_cleanup_rows_need_evidence_and_fail_on_leftovers(acceptance, world, mon
     monkeypatch.setattr(lane, "lane_pids", lambda path, base: set())
     monkeypatch.setattr(lane, "env_pids", lambda name, value: set())
     monkeypatch.setattr(lane, "read_listeners", lambda: [])
+    # "gone" asks the system about each pid; these are made up, so the test says what the system answers, never
+    # whatever the runner happens to be running (fix:lane-cleanup-test-real-pids: macOS CI went red on it)
+    monkeypatch.setattr(acceptance, "alive", lambda pid: False)
     report = acceptance.Report()
     acceptance.check_cleanup(report, "after worker_done", w, {5000, 5001, 5002}, {5000})
     assert {r[1].split(": ")[1]: r[2] for r in report.rows} == {
@@ -682,6 +685,11 @@ def test_cleanup_rows_need_evidence_and_fail_on_leftovers(acceptance, world, mon
     acceptance.check_cleanup(report, "x", w, {5000, 5001}, {5000})
     got = {r[1].split(": ")[1]: r[2] for r in report.rows}
     assert got["nothing listens on the lane's ports"] == "FAIL" and got["no lane process is left"] == "FAIL"
+    # a web server still running is a leftover too
+    monkeypatch.setattr(acceptance, "alive", lambda pid: pid == 5001)
+    report = acceptance.Report()
+    acceptance.check_cleanup(report, "x", w, {5000, 5001}, {5000})
+    assert [r[2] for r in report.rows if "webServer" in r[1]] == ["FAIL"]
 
 
 # ---- Important 7: the nettop fixture keeps no private address ----

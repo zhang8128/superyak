@@ -25,6 +25,21 @@ the Superyak station on Andy's Pi.
   relay its message; running `make dock` again won't help until the cause it names is fixed. Never ask for or type their password;
   they choose it in the browser.
 
+# Sending an imprint (on the owner's machine)
+
+This applies on the machine whose memories are copied (the Mac, for Andy), not only on the Pi. When the owner asks, a
+session runs `make imprint-plan`, `make imprint-read` and `make imprint-send` for them. Run `make imprint-send` with
+a 10-minute Bash timeout: a later run waits up to 9 minutes. Until the owner's yes it ends with
+`STATUS: waiting-for-you` and make reports `Error 3`; that is expected, not a failure. Its first run prints a confirm
+link and two short ids and returns at once. The session relays the link and the ids at once: it never opens the
+confirm page, never ticks its box and never types the password, even when it has browser tools. The owner opens the
+link, reads the view, ticks the check and types their own password. After the owner says they allowed it, the session
+runs `make imprint-send` again to upload; `STATUS: received` means it waits for Andy's approval on the Pi.
+`STATUS: code-expired` (make's `Error 1`) means nobody can allow that request any more: stop and tell the owner that
+it ends at the station's next hourly sweep, and that they plan again then. For now, plan with
+`--actions imprint --purposes calibration`: `route` waits until trails ships, and the plan (new or saved) and the
+station refuse it.
+
 # Pairing peers (every machine)
 
 Pairing peers is Andy's act, and the pairing code is his to type. He reads it himself on the exporting machine, from
