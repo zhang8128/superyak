@@ -1874,24 +1874,44 @@ def test_damaged_or_mismatched_connections_are_revoked_never_a_crash(tmp_path, c
     sam = store.create_user('sam', 'Sam', 'long-password-sam')
     jenn = store.create_user('jenn', 'Jenn', 'long-password-jenn')
     r1 = store.create_room(sam['id'], 'One', [])['id']
-    g = {name: connection(store, sam['id'], [r1]) for name in ('bad_rooms', 'empty_rooms', 'bad_ends', 'other_person',
-                                                                'other_client')}
+    g = {name: connection(store, sam['id'], [r1]) for name in ('bad_rooms', 'empty_rooms', 'bad_ends', 'endless',
+                                                                'other_person', 'other_client', 'other_host')}
     copy = staged(tmp_path, store)
     with closing(sqlite3.connect(copy)) as db:
         db.execute('UPDATE connector_grants SET rooms=? WHERE id=?', (json.dumps([[r1]]), g['bad_rooms']))  # unhashable
         db.execute("UPDATE connector_grants SET rooms='[]' WHERE id=?", (g['empty_rooms'],))  # an Allow never makes one
+        db.execute('UPDATE connector_grants SET ends=? WHERE id=?', (float('inf'), g['endless']))  # Tardis: no end at all
         db.commit()
     with store.transaction() as db:
         db.execute("UPDATE connector_grants SET ends='soon' WHERE id=?", (g['bad_ends'],))
         db.execute('UPDATE connector_grants SET person_id=? WHERE id=?', (jenn['id'], g['other_person']))
         db.execute("UPDATE connector_grants SET client_id='another-client' WHERE id=?", (g['other_client'],))
+        db.execute("UPDATE connector_grants SET redirect_host='other.example' WHERE id=?", (g['other_host'],))  # N1
+        db.execute('UPDATE connector_grants SET ends=? WHERE id=?', (float('inf'), g['endless']))
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
     assert code == 0, err
     after = grants_in(copy)
     assert all(after[grant]['revoked'] is not None for grant in g.values())
-    assert out.count('a value one of the two files can\'t read') == 3
-    assert out.count('another connection in the replaced file') == 2
+    assert out.count('a value one of the two files can\'t read') == 4
+    assert out.count('another connection in the replaced file') == 3
     assert 'may continue in a newer room' not in out
+
+
+@pytest.mark.parametrize('kept', ['zz', 'ab' * 31, 'AB' * 32 + 'x', ''], ids=['not-hex', 'short', 'long', 'empty'])
+def test_a_replaced_key_that_isnt_one_makes_a_new_key(tmp_path, capsys, kept):
+    """The re-check's nit 2: a replaced file's key that isn't 64 hex characters passed the reconcile and then stopped
+    go-live at step 6 in fromhex. It is checked here, and anything else makes a new key, as a missing one does."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy = staged(tmp_path, store)
+    key = connector_key(copy)
+    with store.transaction() as db:
+        db.execute("UPDATE system_meta SET value=? WHERE key='connector_client_key'", (kept,))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert connector_key(copy) not in (key, kept) and len(bytes.fromhex(connector_key(copy))) == 32
+    assert 'connector key made new (1)' in out
+    assert go_live(copy, tmp_path / 'live')._connector_key == bytes.fromhex(connector_key(copy))
 
 
 def test_a_narrowed_room_set_keeps_the_copys_order(tmp_path, capsys):

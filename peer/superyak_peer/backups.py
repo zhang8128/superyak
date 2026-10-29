@@ -9,6 +9,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -872,7 +873,9 @@ def _room_list(value):
 
 
 def _end(value):
-    if type(value) not in (int, float):
+    """A connection's end as the reconcile reads it: a finite number, else ValueError (Tardis: two infinite ends would keep
+    a connection with no end, and a NaN never compares)."""
+    if type(value) not in (int, float) or not math.isfinite(value):
         raise ValueError('ends')
     return value
 
@@ -887,6 +890,8 @@ def _keep_connector_key_like_replaced(db, old, report):
         return
     theirs = old.execute('SELECT value FROM system_meta WHERE key=?', (KEY_NAME,)).fetchone() \
         if _has(old, 'system_meta') else None
+    if theirs is not None and not (isinstance(theirs[0], str) and re.fullmatch(r'[0-9a-fA-F]{64}', theirs[0])):
+        theirs = None  # the re-check's nit 2: not a key, so as if missing, rather than stop go-live in fromhex
     here = db.execute('SELECT value FROM system_meta WHERE key=?', (KEY_NAME,)).fetchone()
     if theirs is None:
         if here is not None:  # the section 2's M1, the key's half: nothing to keep from, so the copy's isn't trusted
