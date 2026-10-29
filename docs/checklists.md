@@ -556,6 +556,9 @@ it, not only as its diff reads.
 - [ ] Before a mutant result is trusted, it is shown that the mutant changed the file (`cmp` against the kept copy)
       and that the test written for it ran; a mutant counts as caught only when its own test fails (Serenity and
       Tardis, 2026-10-28: a `sed` that didn't apply and a `-k` that selected nothing each made a false survivor).
+- [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
+      one from before the last migration (Tardis, 2026-10-29: G4b's removal looked harmless on a current store, and on a
+      pre-pull store Store() migrated it before refusing).
 - [ ] A rule that replaces another is judged against the one it replaces in both directions, from sources independent
       of the rule: what it newly misses, and what it newly flags. A table measured against the data it was built
       from proves nothing (Serenity, 2026-10-28: the old tag rule marked 35 of 48 ordinary lines and nobody counted;
