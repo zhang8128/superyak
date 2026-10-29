@@ -1089,6 +1089,84 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
                 expect(family.get_by_role("heading", name="First audience")).to_have_count(0)
 
 
+def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
+    """Never to a cloud model (connector plan, Task 2): a member marks a continuing room and, by default, the earlier
+    room they're in; every member sees the badge with its count, and only the marker sees "(yours)"."""
+    store = browser_peer["app"].state.store
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Chats", exact=True).click()
+            page.get_by_role("button", name="New private chat").click()
+            page.get_by_label("Chat title").fill("Kept close")
+            page.get_by_role("checkbox", name="Sam Family").check()
+            page.get_by_role("button", name="Create chat").click()
+            expect(page.get_by_role("heading", name="Kept close")).to_be_visible()
+            first = decode_fragment_id(page.url)
+            page.get_by_role("button", name="Change participants").click()
+            page.get_by_role("checkbox", name="Dr. Morgan").check()
+            page.get_by_role("button", name="Start a new linked chat").click()
+            expect(page.get_by_text("New room · earlier messages stay in the original chat")).to_be_visible()
+            second = decode_fragment_id(page.url)
+            assert second != first
+
+            with signed_in_browser(playwright, browser_peer, "family") as (family, _):
+                family.goto(browser_peer["base_url"] + f"/#chats/{second}")
+                expect(family.get_by_role("heading", name="Kept close")).to_be_visible()
+                expect(family.get_by_role("checkbox", name="Mark the 1 earlier room you're in too")).to_be_checked()
+                family.get_by_role("button", name="Keep this room away from cloud models").click()
+                expect(family.locator(".split-detail").get_by_text("Never to a cloud model · 1 (yours)")).to_be_visible()
+                expect(family.locator(".split-list").get_by_text("Never to a cloud model · 1 (yours)")).to_have_count(2)
+                expect(family.get_by_role("button", name="Clear my mark")).to_be_visible()
+                expect(family.get_by_text("Clearing takes your mark off this room only; your marks on earlier rooms stay.")).to_be_visible()
+
+            page.reload()
+            expect(page.locator(".split-detail").get_by_text("Never to a cloud model · 1", exact=True)).to_be_visible()
+        with store.transaction() as db:
+            marked = {r[0] for r in db.execute("SELECT room_id FROM room_cloud")}
+        assert marked == {first, second}
+
+
+def test_the_mark_controls_say_what_they_do(browser_peer):
+    """Rio Grande's section 2 of room-cloud-ui (M1, S2, N1, N2): unticking the earlier rooms marks this room alone;
+    "Clear my mark" clears it; the owner's add dialog says the new room keeps the mark; a room with a member on another
+    home says the mark holds on this home; a received or replaced room offers no mark; the badge shows a number only."""
+    store = browser_peer["app"].state.store
+    patient, family, doctor = (browser_peer["users"][name]["id"] for name in ("patient", "family", "doctor"))
+    first = store.create_room(patient, "Kept close", [family])["id"]
+    second = store.add_participants(patient, first, [doctor])["id"]
+    with store.transaction() as db:  # a member on another home, as federation stores one (no pairing in a test)
+        db.execute("INSERT OR IGNORE INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", ("b" * 64,))
+        db.execute("INSERT INTO remote_contacts VALUES(?,?,?,?)", ("remote_willa", "b" * 64, "willa", "Willa Away"))
+    across = store.create_room(patient, "Across homes", [family, "remote_willa"])["id"]
+
+    def marked():
+        with store.transaction() as db:
+            return {r[0] for r in db.execute("SELECT room_id FROM room_cloud")}
+    base = browser_peer["base_url"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.goto(base + f"/#chats/{second}")
+            page.get_by_role("checkbox", name="Mark the 1 earlier room you're in too").uncheck()
+            page.get_by_role("button", name="Keep this room away from cloud models").click()
+            expect(page.get_by_role("button", name="Clear my mark")).to_be_visible()
+            assert marked() == {second}  # unticked: this room alone
+
+            with signed_in_browser(playwright, browser_peer, "patient") as (owner, _):
+                owner.goto(base + f"/#chats/{second}")
+                owner.get_by_role("button", name="Change participants").click()
+                expect(owner.get_by_text("The new room keeps the mark: no ship, and no one on another home, can join it.")).to_be_visible()
+                owner.goto(base + f"/#chats/{across}")
+                expect(owner.get_by_role("heading", name="Across homes")).to_be_visible()
+                expect(owner.get_by_text("This mark holds on this home. Members' homes get it once federation carries it.")).to_be_visible()
+                assert owner.evaluate("cloudControl({id: 'x', origin: 'a-peer', member_ids: []}, false)") == ""
+                assert "Keep this room away" not in owner.evaluate("cloudControl({id: 'x', member_ids: []}, true)")
+                assert "<b>" not in owner.evaluate("cloudBadge({cloud: {count: '<b>1</b>', mine: false}})")
+
+            page.get_by_role("button", name="Clear my mark").click()
+            expect(page.get_by_role("button", name="Keep this room away from cloud models")).to_be_visible()
+            assert marked() == set()
+
+
 def test_durable_name_corrections_shared_attribution_and_complete_revision(browser_peer):
     """I7: durable actual names and stable source attribution remain navigable."""
     store = browser_peer["app"].state.store

@@ -2,6 +2,7 @@
 A ship's own add (POST /api/ships/me/rooms/{key}/members) needs the ship in the room, which a marked room never has,
 so the paths below are every way a ship can reach a marked room."""
 import pytest
+from fastapi.testclient import TestClient
 from superyak_peer.common import Problem
 from superyak_peer.room_cloud import (ASK_OWNER, EARLIER_ASK, EARLIER_FIRST, OWNER_TOLD, REMOTE_REFUSED, REPLACED_MARK,
                                       SHIP_REFUSED, SHIPS_FIRST)
@@ -216,3 +217,43 @@ def test_the_quiet_day_is_per_room(city):
     refused(c.store.mark_room, c.jenn['id'], c.room)
     refused(c.store.mark_room, c.jenn['id'], other)
     assert len(notices(c.store, c.room, 'cloud-ask-')) == 1 and len(notices(c.store, other, 'cloud-ask-')) == 1
+
+
+def test_the_cloud_routes_mark_and_clear(city):
+    c = city
+    room = people_room(c, 'jenn', 'doctor')
+    jenn = login(c.app, 'jenn')
+    marked = jenn.post(f'/api/chats/{room}/cloud', json={})
+    assert marked.status_code == 200, marked.text
+    assert marked.json() == {'marked': [room], 'cloud': {'count': 1, 'mine': True}}
+    assert jenn.get(f'/api/chats/{room}').json()['cloud'] == {'count': 1, 'mine': True}
+    assert jenn.delete(f'/api/chats/{room}/cloud').json() == {'cloud': {'count': 0, 'mine': False}}
+    assert 'cloud' not in jenn.get(f'/api/chats/{room}').json()
+
+
+def test_the_route_takes_earlier_and_says_why_it_refuses(city):
+    c = city
+    first = people_room(c, 'jenn')
+    second = c.store.add_participants(c.andy['id'], first, [c.doctor['id']])['id']
+    jenn = login(c.app, 'jenn')
+    assert jenn.post(f'/api/chats/{second}/cloud', json={'earlier': False}).json()['marked'] == [second]
+    refused = jenn.post(f'/api/chats/{c.room}/cloud', json={})  # Rio Grande and Odo are aboard
+    assert (refused.status_code, refused.json()['error']) == (409, ASK_OWNER.format(owner='Andy'))
+    assert jenn.post('/api/chats/peer:room/cloud', json={}).status_code == 404
+
+
+def test_a_ship_key_cant_mark_or_clear(city):
+    c = city
+    ship = TestClient(c.app, base_url='http://testserver')
+    ship.headers.update({'origin': 'http://testserver', 'authorization': f'Bearer {c.rio_key}'})
+    for response in (ship.post(f'/api/chats/{c.room}/cloud', json={}), ship.delete(f'/api/chats/{c.room}/cloud')):
+        assert (response.status_code, response.json()) == (403, {'error': 'Ship keys cannot use this route'})
+
+
+def test_the_route_marks_the_earlier_rooms_by_default(city):
+    """Rio Grande's section 2 of room-cloud-ui, S1: an empty body marks the room and the earlier rooms the person is in."""
+    c = city
+    first = people_room(c, 'jenn')
+    second = c.store.add_participants(c.andy['id'], first, [c.doctor['id']])['id']
+    marked = login(c.app, 'jenn').post(f'/api/chats/{second}/cloud', json={})
+    assert marked.status_code == 200 and set(marked.json()['marked']) == {first, second}
