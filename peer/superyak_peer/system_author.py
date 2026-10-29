@@ -36,7 +36,9 @@ class SystemAuthor:
         """One station notice, in the caller's transaction: the message under the caller's client id, its message_kinds
         row and its chat.message event. Its callers pass notice-<ship id>-<mention id> (the deferral),
         brief-<room id>-<revision> (the brief), moderator-<grant id> and moderator-<grant id>-revoked (the appointment and
-        the end) and member-<row id> (a member add or removal). No reply_to, no ticket, no mentions, no post budget; local rooms only.
+        the end), member-<row id> (a member add or removal) and cloud-ask-<time> (a member asked to keep the room away
+        from cloud models while ships are in it, from RoomCloud._tell_owner). No reply_to, no ticket, no mentions, no
+        post budget; local rooms only.
         Returns the message id, or None when the text holds a live ship key or the room is a closed breakout; the
         caller's own write still stands. A retry under the same client id returns the message already posted."""
         if ':' in room_id:
