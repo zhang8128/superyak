@@ -1131,7 +1131,13 @@ function shipBanner(room) {
   const ships = (room.members || []).filter(member => member.kind === "ship" && member.id !== room.bridge_id);
   const claude = ships.length ? `<strong>Ships in this room send its text to Claude.</strong><p>Aboard: ${ships.map(ship => escapeHtml(ship.name)).join(", ")}. Keep patient and participant details out of this room.</p>` : "";
   const bridge = room.bridge_id ? `<strong>Wormhole bridges this room to Stanley's aDNA lattice.</strong><p>A post that mentions a lattice persona with @ is copied there with its author's name and this room's title, outside this station. Keep patient and participant details out of those posts and out of the title.</p>` : "";
-  return claude || bridge ? `<div class="notice ship-banner">${claude}${bridge}</div>` : "";
+  // A received room's home is the other one; here, members on another home get a copy this home can't recall.
+  const away = room.origin ? [] : (room.member_ids || []).filter((id) => String(id).startsWith("remote_"));
+  const names = away.map((id) => escapeHtml(participantName(id))).join(", ");
+  const homes = away.length === 1
+    ? `<strong>Someone in this room is on another home.</strong><p>${names} is on another home: this room's text is copied there, and that home keeps its own copy under its own rules.</p>`
+    : away.length ? `<strong>Some people in this room are on other homes.</strong><p>${names} are on other homes: this room's text is copied to each, and each keeps its own copy under its own rules.</p>` : "";
+  return claude || bridge || homes ? `<div class="notice ship-banner">${claude}${bridge}${homes}</div>` : "";
 }
 
 async function loadDocking() {

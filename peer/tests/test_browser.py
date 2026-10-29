@@ -1737,6 +1737,34 @@ def test_the_ship_banner_says_what_crosses_the_bridge_and_never_counts_wormhole_
         expect(banner).to_contain_text("Wormhole bridges this room to Stanley's aDNA lattice.")
 
 
+def test_the_banner_says_a_room_with_members_on_another_home_is_copied_there(browser_peer):
+    """fix:banner-room-with-remote-members (the banner review's outside note): a room with members on another home
+    copies its text to their homes, and no banner said so. It names them, escaped; a received room's home is the
+    other one, so it says nothing there."""
+    base, store = browser_peer["base_url"], browser_peer["app"].state.store
+    patient, family = (browser_peer["users"][name]["id"] for name in ("patient", "family"))
+    with store.transaction() as db:  # a member on another home, as federation stores one (no pairing in a test)
+        db.execute("INSERT OR IGNORE INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", ("b" * 64,))
+        db.execute("INSERT INTO remote_contacts VALUES(?,?,?,?)", ("remote_willa", "b" * 64, "willa", "Willa <b>Away</b>"))
+    across = store.create_room(patient, "Across homes", [family, "remote_willa"])["id"]
+    local = store.create_room(patient, "At home", [family])["id"]
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        page.goto(f"{base}/#chats/{across}")
+        page.reload()
+        banner = page.locator(".ship-banner")
+        expect(banner).to_contain_text("Someone in this room is on another home.")
+        expect(banner).to_contain_text("Willa <b>Away</b> is on another home: this room's text is copied there")
+        expect(banner).not_to_contain_text("Claude")
+        page.goto(f"{base}/#chats/{local}")
+        page.reload()
+        expect(page.get_by_role("heading", name="At home")).to_be_visible()
+        expect(page.locator(".ship-banner")).to_have_count(0)
+        received = page.evaluate("shipBanner({origin: 'a-peer', member_ids: ['remote_willa'], members: []})")
+        assert received == ""
+        two = page.evaluate("shipBanner({member_ids: ['remote_willa', 'remote_other'], members: []})")
+        assert 'Some people in this room are on other homes.' in two and 'Willa &lt;b&gt;Away&lt;/b&gt;, ' in two
+
+
 def test_a_room_shows_which_ship_messages_came_from_runs(browser_peer):
     """Break caught: a run's reply and a ship's own post look the same to people."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
