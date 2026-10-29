@@ -43,7 +43,8 @@ def install(app, public_origin, callback):
 
     @app.post('/register')
     async def register(request: Request):
-        """RFC 7591, bounded (spec "Registration"): an 8 KB body, then the store's checks and limits."""
+        """RFC 7591, bounded and stateless (spec revision 4, D18): an 8 KB body in bytes, then the store's checks.
+        Nothing is written."""
         if not on_public_origin(request):
             return JSONResponse({'error': 'Not found'}, 404)
         raw = await request.body()
@@ -53,9 +54,8 @@ def install(app, public_origin, callback):
             metadata = json.loads(raw)
         except (ValueError, UnicodeDecodeError, RecursionError):
             return JSONResponse({'error': 'invalid_client_metadata'}, 400)
-        source = request.client.host if request.client else 'unknown'  # as the sign-in's holds count it
         try:
-            made = await run_in_threadpool(store.register_client, metadata, source, callback)
+            made = await run_in_threadpool(store.register_client, metadata, callback)
         except OAuthError as refused:
             return JSONResponse({'error': refused.error}, refused.status)
         return JSONResponse(made, 201)

@@ -104,6 +104,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             db.execute("INSERT OR IGNORE INTO inbox_received SELECT origin, resource_id, recipient, ? FROM inbox "
                        "WHERE kind='room' AND payload IS NOT NULL", (self.clock(),))
         self._ensure_system_author()  # after the migration, where users.kind surely exists (spec S11)
+        self._ensure_connector_key()  # the remote connector's client-id key (spec revision 4, D18)
         self._backfill_brief_history()  # ship briefs S5: after the schema, at every start
         if signing:  # G4a: the door and the station commands that never sign hold no key, check none and backfill nothing
             self._load_station_identity()  # spec A step 3, G4: a station that can't load its identity doesn't start

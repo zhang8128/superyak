@@ -1,7 +1,11 @@
 """The remote connector (spec docs/superpowers/specs/2026-10-27-remote-connector-design.md): a person's home, read
 from Claude through its own OAuth server and /mcp. Without `serve --public-origin`, none of it exists."""
-import ipaddress
+import base64
+import hashlib
+import hmac
+import json
 import secrets
+import unicodedata
 from urllib.parse import urlsplit
 
 DEFAULT_CALLBACK = 'https://claude.ai/api/mcp/auth_callback'  # claude.ai's; older help text said it may move to claude.com
@@ -23,43 +27,17 @@ def issuer_metadata(issuer):
             'scopes_supported': list(SCOPES), 'authorization_response_iss_parameter_supported': True}
 
 
-# Registration (spec "Registration (/register)", plan Task 4). Each table comes with the task that uses it, and so does
-# its place in the restore reconcile: clients are interchangeable public registrations that grant nothing.
+# Registration (spec revision 4, "Registration (/register)", D18): stateless. A client id is its own record, signed with
+# the home's key, and /register writes nothing. oauth_clients holds only clients a code has been issued to (Task 5);
+# restore copies it as it is, since a client grants nothing by itself.
 OAUTH_SCHEMA = '''
-CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY, name TEXT, redirect_uri TEXT NOT NULL, grant_types TEXT NOT NULL, created REAL NOT NULL, source TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS oauth_clients_by_source ON oauth_clients(source, created);
+CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY, name TEXT, grant_types TEXT NOT NULL, created REAL NOT NULL);
 '''
-REGISTER_BODY_MAX = 8 * 1024
-CLIENT_NAME_MAX = 100
-UNUSED_CLIENTS_MAX = 100  # at the cap the oldest unused one goes, never the new one: unused ones are interchangeable
-UNUSED_CLIENT_SECONDS = 86400
-REGISTRATIONS_PER_HOUR = 10  # per sender; a number the spec leaves open (plan Task 4)
-REGISTRATIONS_PER_HOUR_48 = 30  # per IPv6 /48 across its /64s (the second security review of 8420194d)
+REGISTER_BODY_MAX = 8 * 1024  # bytes
+CLIENT_NAME_MAX, CLIENT_NAME_BYTES = 100, 200
 GRANT_TYPES = ('authorization_code', 'refresh_token')
-
-
-def sender(source):
-    """Whom the per-source limit counts: an IPv6 sender by its /64, since one /64 holds countless addresses (a security
-    review of 5dd19d4c); an IPv4-mapped, 6to4 or Teredo address as the IPv4 sender inside it (the second review);
-    anything else as given."""
-    try:
-        address = ipaddress.ip_address(source)
-    except ValueError:
-        return source
-    if address.version == 6:
-        inside = address.ipv4_mapped or address.sixtofour or (address.teredo[1] if address.teredo else None)
-        if inside:
-            return str(inside)
-        return str(ipaddress.ip_network(f'{address}/64', strict=False))
-    return str(address)
-
-
-def allocation(sender_key):
-    """The coarser key a sender's /64 belongs to: its /48, since an allocation is often one (the second review); an IPv4
-    sender is its own."""
-    if '/' not in sender_key:
-        return sender_key
-    return str(ipaddress.ip_network(sender_key).supernet(new_prefix=48))
+CLIENT_VERSION = 1
+KEY_NAME = 'connector_client_key'  # in system_meta: it protects what an id says, not a secret, so it is backed up
 
 
 class OAuthError(Exception):
@@ -80,45 +58,90 @@ def check_callback(callback):
     return callback
 
 
-class Connector:
-    def _connector_sweep(self, db):
-        """What the connector keeps only for a while, swept before each registration (later tasks add theirs): an
-        unused registration after a day."""
-        db.execute('DELETE FROM oauth_clients WHERE used=0 AND created<?', (self.clock() - UNUSED_CLIENT_SECONDS,))
+def client_fields_ok(name, grants):
+    """/register's rules for what an id carries, checked again whenever an id is verified (a stolen key can't mint a
+    payload /register would refuse): a name of at most 100 characters and 200 bytes with no Cc, Cf or lone surrogate,
+    and grant types within GRANT_TYPES, each once."""
+    if name is not None:
+        if not isinstance(name, str) or len(name) > CLIENT_NAME_MAX:
+            return False
+        try:
+            if len(name.encode()) > CLIENT_NAME_BYTES:
+                return False
+        except UnicodeEncodeError:  # a lone surrogate
+            return False
+        if any(unicodedata.category(c) in ('Cc', 'Cf', 'Cs') for c in name):
+            return False
+    return (isinstance(grants, list) and bool(grants) and all(isinstance(g, str) for g in grants)
+            and set(grants) <= set(GRANT_TYPES) and len(set(grants)) == len(grants))
 
-    def register_client(self, metadata, source, callback):
-        """Dynamic client registration (RFC 7591), bounded: exactly the one callback, a public client with no secret,
-        grant types within authorization_code and refresh_token, a client_name of at most 100 characters kept only as
-        quoted data. At most REGISTRATIONS_PER_HOUR from one source, and at UNUSED_CLIENTS_MAX unused the oldest unused
-        one is evicted. Returns RFC 7591's response."""
+
+def _b64(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b'=').decode()
+
+
+def _unb64(text):
+    """Strict unpadded base64url: anything that doesn't encode back to itself is None."""
+    try:
+        raw = base64.urlsafe_b64decode(text + '=' * (-len(text) % 4))
+    except (ValueError, TypeError):
+        return None
+    return raw if _b64(raw) == text else None
+
+
+def _tag(key, label, body, callback=b''):
+    return hmac.new(key, label + b'\n' + body + (b'\n' + callback if callback else b''), hashlib.sha256).digest()
+
+
+class Connector:
+    def _ensure_connector_key(self):
+        """The key, 32 random bytes in system_meta, made at first start and kept in memory, so /register touches no
+        table and takes no lock."""
+        with self.transaction() as db:
+            db.execute('INSERT OR IGNORE INTO system_meta VALUES(?, ?)', (KEY_NAME, secrets.token_hex(32)))
+            self._connector_key = bytes.fromhex(db.execute('SELECT value FROM system_meta WHERE key=?',
+                                                           (KEY_NAME,)).fetchone()[0])
+
+    def register_client(self, metadata, callback):
+        """Dynamic client registration (RFC 7591), stateless: exactly the one callback, a public client with no secret,
+        and /register's field rules. Returns RFC 7591's response, whose client_id carries the registration."""
         if not isinstance(metadata, dict):
             raise OAuthError(400, 'invalid_client_metadata')
         if metadata.get('redirect_uris') != [callback]:
             raise OAuthError(400, 'invalid_redirect_uri')
         name = metadata.get('client_name')
         grants = metadata.get('grant_types', ['authorization_code'])
-        if ((name is not None and (not isinstance(name, str) or len(name) > CLIENT_NAME_MAX))
-                or not isinstance(grants, list) or not grants or not all(isinstance(g, str) for g in grants)
-                or not set(grants) <= set(GRANT_TYPES) or len(set(grants)) != len(grants)
-                or metadata.get('response_types', ['code']) != ['code']
+        if (not client_fields_ok(name, grants) or metadata.get('response_types', ['code']) != ['code']
                 or metadata.get('token_endpoint_auth_method', 'none') != 'none'):
             raise OAuthError(400, 'invalid_client_metadata')
-        source = sender(source)
-        with self.transaction() as db:
-            self._connector_sweep(db)
-            now = self.clock()
-            recent = [row[0] for row in db.execute('SELECT source FROM oauth_clients WHERE created>?', (now - 3600,))]
-            coarse = allocation(source)
-            if (recent.count(source) >= REGISTRATIONS_PER_HOUR
-                    or (coarse != source and sum(allocation(s) == coarse for s in recent) >= REGISTRATIONS_PER_HOUR_48)):
-                raise OAuthError(429, 'slow_down')
-            unused = db.execute('SELECT count(*) FROM oauth_clients WHERE used=0').fetchone()[0]
-            if unused >= UNUSED_CLIENTS_MAX:
-                db.execute('DELETE FROM oauth_clients WHERE client_id IN (SELECT client_id FROM oauth_clients WHERE used=0 '
-                           'ORDER BY created, rowid LIMIT ?)', (unused - UNUSED_CLIENTS_MAX + 1,))
-            client_id = secrets.token_urlsafe(24)
-            db.execute('INSERT INTO oauth_clients VALUES(?,?,?,?,?,?,0)',
-                       (client_id, name, callback, ' '.join(grants), now, source))
-        made = {'client_id': client_id, 'client_id_issued_at': int(now), 'redirect_uris': [callback], 'grant_types': grants,
+        now = int(self.clock())
+        body = {'v': CLIENT_VERSION, 'grant_types': grants, 'issued_at': now} | ({'name': name} if name is not None else {})
+        payload = json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+        client_id = _b64(payload) + '.' + _b64(_tag(self._connector_key, b'client', payload, callback.encode()))
+        made = {'client_id': client_id, 'client_id_issued_at': now, 'redirect_uris': [callback], 'grant_types': grants,
                 'response_types': ['code'], 'token_endpoint_auth_method': 'none'}
         return made | ({'client_name': name} if name is not None else {})
+
+    def known_client(self, db, client_id, callback):
+        """Spec revision 4's one check, in order: a row with exactly this id is that client (so a key rotation or a
+        callback change disconnects no one); otherwise the tag, compared with compare_digest, then the version and the
+        payload by /register's own rules. Returns {client_id, name, grant_types}, or None for an unknown id."""
+        if not isinstance(client_id, str) or len(client_id) > 512:  # longer than any id /register makes
+            return None
+        row = db.execute('SELECT name, grant_types FROM oauth_clients WHERE client_id=?', (client_id,)).fetchone()
+        if row:
+            return {'client_id': client_id, 'name': row['name'], 'grant_types': row['grant_types'].split()}
+        encoded, dot, mac = client_id.partition('.')
+        payload, tag = _unb64(encoded), _unb64(mac)
+        if not dot or payload is None or tag is None:
+            return None
+        if not hmac.compare_digest(tag, _tag(self._connector_key, b'client', payload, callback.encode())):
+            return None
+        try:
+            body = json.loads(payload)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            return None
+        if (not isinstance(body, dict) or body.get('v') != CLIENT_VERSION or type(body.get('issued_at')) is not int
+                or not client_fields_ok(body.get('name'), body.get('grant_types'))):
+            return None
+        return {'client_id': client_id, 'name': body.get('name'), 'grant_types': body['grant_types']}

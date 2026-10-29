@@ -788,6 +788,8 @@ def main(argv=None):
                 raise ValueError('Local demo requires a loopback bind')
             # public route spec 1: uvicorn trusts forwarded headers from TRUSTED_PROXY (127.0.0.1) only, so a proxy on ::1
             # (or localhost resolving to it) would make every request look like loopback, and so tailnet
+            if args.public_origin and not args.proxy_headers:  # connector Task 4's section 2, S4
+                raise ValueError('--public-origin needs --proxy-headers: behind Funnel every sender would be 127.0.0.1, one shared bucket for the sign-in holds')
             if args.proxy_headers and (not ipv4_loopback or args.local_demo or not args.origin or any(not o.startswith('https://') for o in args.origin)):
                 raise ValueError('Proxy headers require an IPv4 loopback bind, explicit HTTPS origins, and no local demo')
             if args.peer_tls:
