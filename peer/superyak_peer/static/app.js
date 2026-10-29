@@ -976,7 +976,10 @@ function connectionDelivery(connection) {
   return `${endpoint}${pulled}<p class="meta">${connection.last_success ? `Last delivered ${escapeHtml(formatDate(connection.last_success))}` : "Nothing delivered yet"}</p>`;
 }
 
-// Rio Grande's SF3: a status code alone, since the words after it come from the peer; otherwise this side's own phrase
+// Rio Grande's SF3: a status code alone, since the words after it come from the peer; otherwise this side's own phrase.
+// A slice is enough there, unlike the CLI's safe_line, because classify() never keeps a peer's words without its status:
+// a network fault keeps only its type's name (BadStatusLine, not the status line the peer sent), a ValueError is
+// send_pinned's own, and the caller escapes what's shown (Serenity's read of federation pull).
 function problemShown(problem) {
   const code = /^\d{3}\b/.exec(problem);
   return code ? code[0] : problem.slice(0, 80);
