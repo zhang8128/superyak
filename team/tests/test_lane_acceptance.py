@@ -642,10 +642,18 @@ def test_a_root_listener_is_reachable_named_by_nettop_and_invisible_to_lsof(acce
 
 
 def test_sudo_is_refreshed_while_the_run_lasts(acceptance):
-    calls = []
-    keeper = acceptance.SudoKeeper(run=lambda cmd, **k: calls.append(cmd) or Ran(0), every=0.05)
+    """The keeper refreshes again and again until stopped, and never after. It waits for the third call rather than
+    counting calls in a fixed 0.3 s: a loaded runner can start the thread late (macOS CI at 6ee026a5 counted 2)."""
+    calls, refreshed = [], threading.Event()
+
+    def run(cmd, **k):
+        calls.append(cmd)
+        if len(calls) >= 3:
+            refreshed.set()
+        return Ran(0)
+    keeper = acceptance.SudoKeeper(run=run, every=0.05)
     assert keeper.start() is True
-    time.sleep(0.3)
+    assert refreshed.wait(10), calls
     keeper.stop()
     n = len(calls)
     time.sleep(0.2)
