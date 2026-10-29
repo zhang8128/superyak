@@ -606,6 +606,8 @@ def test_chat_keeps_unsent_text_and_membership_change_starts_empty_room(browser_
             page.get_by_role("button", name="Create chat").click()
             page.get_by_role("textbox", name="Message", exact=True).fill("This belongs to the original room.")
             page.get_by_role("button", name="Send message").click()
+            # wait on what the send produces, its last render's status (app.js sendMessage), never on text already shown
+            expect(page.locator("#chat-status")).to_have_text("Message saved")
             expect(page.get_by_text("This belongs to the original room.")).to_be_visible()
 
             page.get_by_role("textbox", name="Message", exact=True).fill("Keep this through a connection problem.")
@@ -621,6 +623,10 @@ def test_chat_keeps_unsent_text_and_membership_change_starts_empty_room(browser_
                 "Keep this through a connection problem."
             )
             page.get_by_role("button", name="Send message").click()
+            # the restored draft is the textarea's own text, so the message's text matched before the send answered,
+            # and the send's render could land after Taylor was checked, unchecking it (run 40860178482)
+            expect(page.locator("#chat-status")).to_have_text("Message saved")
+            expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_value("")
             expect(page.get_by_text("Keep this through a connection problem.")).to_be_visible()
 
             page.get_by_role("button", name="Change participants").click()
