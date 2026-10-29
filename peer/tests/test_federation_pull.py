@@ -254,6 +254,23 @@ def test_300_obsolete_rows_examine_200_hold_the_gate_per_row_and_leave_more(pull
     assert sum(r['status'] == 'withdrawn' for r in outbox(a)) == 200
 
 
+
+@pytest.mark.parametrize('first, second', [('x' * 70_000, 'y' * 70_000), ('\U0001F600' * 20_000, '\U0001F601' * 20_000)],
+                         ids=['ascii', 'astral'])
+def test_a_pull_stops_at_its_budget_and_an_envelope_over_it_goes_alone(pulling, first, second):
+    """Spec §4, step 5 (found untested on the spec walk after Rio Grande's section 2): the walk stops at the request's
+    budget in encoded bytes, but an envelope over the budget still goes when nothing else is ready, so a large row can't
+    block the queue. The next one waits, `more` says so, and the next pull brings it."""
+    clock, a, peers, contacts = pulling
+    mac = peers['mac']
+    share(a, contacts['mac'], first)  # each over the 65,536-byte budget in bytes; the astral ones only in bytes (MF2)
+    share(a, contacts['mac'], second)
+    got = pull(mac, a, clock, budget=65_536)
+    assert [json.loads(e)['payload']['body'] for e in got['envelopes']] == [first] and got['more'] is True
+    acked = [json.loads(e)['event_id'] for e in got['envelopes']]
+    again = pull(mac, a, clock, budget=65_536, ack=acked)
+    assert [json.loads(e)['payload']['body'] for e in again['envelopes']] == [second] and again['more'] is False
+
 def test_the_walk_stops_at_its_time_and_says_more(pulling):
     clock, a, peers, contacts = pulling
     mac = peers['mac']

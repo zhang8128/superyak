@@ -368,3 +368,18 @@ def test_the_largest_release_arrives_by_pull_end_to_end(tmp_path, char):
         largest_release(a, contact, char)
         Federate(mo[2]).run_pass()
         assert [(layer['title'], layer['body']) for layer in mo[0].shared_layers(mo[1])] == [(char * 200, char * 100_000)]
+
+
+def test_federate_and_the_listener_refuse_a_lost_identity_and_make_none(tmp_path):
+    """Plan Task 8, G4b for both commands (found missing on the spec walk after Rio Grande's section 2): a store that holds
+    signed records and lost identity.json is refused before any Store opens, and neither command makes a new identity,
+    which would void those records."""
+    from test_signatures import signed_station
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    store.claim_federation_mode('push')
+    (store.data_dir / 'identity.json').unlink()
+    for command, extra in (('federate', []), ('federation-listen', ['--port', '0'])):
+        done = subprocess.run([sys.executable, '-m', 'superyak_peer', command, '--data-dir', str(store.data_dir), *extra],
+                              capture_output=True, text=True, timeout=60)
+        assert done.returncode == 1 and 'holds signed records' in done.stderr, (command, done.stderr)
+        assert not (store.data_dir / 'identity.json').exists(), command
