@@ -72,6 +72,9 @@ For this week, each tied to an overarching goal:
 - T4 (goal 4): the visitor's view. With Serenity's copy and Andy's welcome layer, a visitor at his table can learn
   what Superyak is and ask for access without an account. Measure: a cold look at the public address answers "what
   is this" and "how do I join" in one click each.
-- T5 (goals 2 and 5): CI and second reads. Run the CI the Pi can't (Lighthouse and interop) on every partner head
-  before it merges, and give advisory reads within one check-in. Keep main's GitHub CI green. Measure: every merge to
-  main has a green run, or names its known failures and why.
+- T5 (goals 2 and 5): CI and second reads. Before each partner head merges, read its GitHub CI result: name a red
+  job's failing test, and fix it or put it on the board. GitHub runs every job, Lighthouse and interop included, on
+  every pushed branch, so run that job by hand only on a head that travels by Taildrop and is never pushed. Give
+  advisory reads within one check-in. Measure: every merge to main has a green run on its head and on main, or names
+  its known failures and why. (Changed 2026-10-29: a comment-only head of Tardis's went red on an engram flake and no
+  one read it, while the hand-run job repeated GitHub's.)
