@@ -79,6 +79,7 @@ APP_NAMES = {'claude.ai': 'Claude', 'claude.com': 'Claude'}  # the consent page 
 CODE_SECONDS = 60
 ACCESS_SECONDS = 3600  # an access token's hour, never past its grant's end (spec, "Tokens")
 REUSE_SECONDS = 60  # a rotated refresh token presented again within this gets a new pair; later revokes the grant
+REVOKED = 0  # a revoked token's end: a fixed past time, never "now", which a clock that steps back would reopen (S1)
 VERIFIER_FORM = re.compile(r'[A-Za-z0-9._~-]{43,128}')  # RFC 7636 4.1
 DAYS_MAX = 30  # a connection lasts 1 to 30 days, 30 by default, never more (spec, "Tokens")
 PENDING_FIELDS = ('v', 'client_id', 'redirect_uri', 'state', 'challenge', 'resource', 'scope', 'at')
@@ -366,7 +367,7 @@ class Connector:
         return row['redirect_uri'] + '?' + urlencode({'code': code} | back | {'iss': issuer})
 
     # ---- Task 6: /token (spec "Tokens"; RFC 6749 4.1.3, 5.1, 6 and 10.4). A token is stored only as its hash. A
-    # revoked one has its `expires` set to now, so the restore keeps one rule: the earlier end and any `used` mark win.
+    # revoked one has its `expires` set to REVOKED, so the restore keeps one rule: the earlier end and any `used` mark win.
     # An access token's `rotated_from` names the refresh token minted with it, a refresh token's the one it replaced. ----
 
     @staticmethod
@@ -429,7 +430,8 @@ class Connector:
                 raise OAuthError(400, 'invalid_grant')  # before any write: a code alone proves nothing
             if db.execute('SELECT 1 FROM connector_tokens WHERE code_hash=? LIMIT 1', (row['code_hash'],)).fetchone():
                 db.execute('UPDATE connector_grants SET revoked=? WHERE id=? AND revoked IS NULL', (now, row['grant_id']))
-                db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?', (now, row['grant_id'], now))
+                db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?',
+                           (REVOKED, row['grant_id'], REVOKED))
                 refused = OAuthError(400, 'invalid_grant')  # raised after the commit, so the revoke stays
             else:
                 if not now < row['code_expires']:
@@ -470,7 +472,7 @@ class Connector:
             # (the security review); the person reconnects either way.
             if not now < row['expires'] or row['used'] is not None and now - row['used'] >= REUSE_SECONDS:
                 db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (now, grant['id']))
-                db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?', (now, grant['id'], now))
+                db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?', (REVOKED, grant['id'], REVOKED))
                 refused = OAuthError(400, 'invalid_grant')
             else:
                 if row['used'] is not None:  # within the window: the successor it had, and all from it, are revoked
@@ -480,7 +482,7 @@ class Connector:
                         for child in db.execute('SELECT hash, kind FROM connector_tokens WHERE rotated_from=?',
                                                 (parent,)).fetchall():
                             db.execute('UPDATE connector_tokens SET expires=? WHERE hash=? AND expires>?',
-                                       (now, child['hash'], now))
+                                       (REVOKED, child['hash'], REVOKED))
                             if child['kind'] == 'refresh':
                                 walk.append(child['hash'])
                 else:
@@ -525,16 +527,22 @@ class Connector:
 
     def _connector_sweep(self, db):
         """Called only after a good sign-in or a good /token, never by a request nobody signed in for (D18). Pending
-        requests past their 10 minutes, unless a code issued from one is still live; access tokens past their end; and
-        (Task 5's line of the plan, which its build left out until here) the client rows of clients whose grants have
-        all ended 30 days ago, whose ids then work again as unused ones. Task 8 adds the receipts."""
+        requests past their 10 minutes, unless a code issued from one is still live; access tokens past their end; every
+        token of a grant that has ended or was revoked (the section 2's S6: a live grant keeps its used and rotated-out
+        refresh tokens, which the reuse checks read); and (Task 5's line of the plan, which its build left out until
+        here) the client rows of clients whose grants have all ended 30 days ago and that have no undecided sign-in, whose
+        ids then work again as unused ones. Task 8 adds the receipts."""
         now = self.clock()
         db.execute('DELETE FROM oauth_pending WHERE at<=? AND (code_expires IS NULL OR code_expires<=?)',
                    (now - PENDING_SECONDS, now))
         db.execute("DELETE FROM connector_tokens WHERE kind='access' AND expires<=?", (now,))
+        db.execute('DELETE FROM connector_tokens WHERE grant_id IN '
+                   '(SELECT id FROM connector_grants WHERE revoked IS NOT NULL OR ends<=?)', (now,))
         db.execute('DELETE FROM oauth_clients WHERE NOT EXISTS (SELECT 1 FROM connector_grants WHERE '
                    'connector_grants.client_id=oauth_clients.client_id AND '
-                   'coalesce(min(connector_grants.revoked, connector_grants.ends), connector_grants.ends) > ?)',
+                   'coalesce(min(connector_grants.revoked, connector_grants.ends), connector_grants.ends) > ?) '
+                   'AND NOT EXISTS (SELECT 1 FROM oauth_pending WHERE oauth_pending.client_id=oauth_clients.client_id '
+                   'AND oauth_pending.decided IS NULL)',
                    (now - 30 * 86400,))
 
     def known_client(self, db, client_id, callback):

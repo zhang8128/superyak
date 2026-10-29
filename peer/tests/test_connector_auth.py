@@ -1124,6 +1124,29 @@ def test_two_workers_that_refresh_one_token_at_once_lose_the_connection_together
     assert refresh(home, client, later.json()['refresh_token']).json() == {'error': 'invalid_grant'}
 
 
+def test_a_revoked_token_stays_revoked_when_the_clock_steps_back(home):
+    """The section 2's S1: a revoke written as "ends now" came undone when the wall clock stepped back, so the successor
+    a reuse had revoked refreshed again and two branches were live. A revoke writes a fixed past end instead."""
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    successor = refresh(home, client, first['refresh_token']).json()
+    refresh(home, client, first['refresh_token'])  # within the window: the successor is revoked
+    home.clock[0] -= 3
+    assert bearer(home, successor['access_token']) is None
+    assert refresh(home, client, successor['refresh_token']).json() == {'error': 'invalid_grant'}
+    assert [grant['revoked'] for grant in table(home, 'connector_grants')] == [home.clock[0]]
+
+
+def test_a_reuse_at_exactly_60_seconds_revokes_the_grant(home):
+    """The window is under 60 s: at the 60th second a rotated token is a late reuse (the section 2's mutant 35)."""
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    refresh(home, client, first['refresh_token'])
+    home.clock[0] += 60
+    assert refresh(home, client, first['refresh_token']).json() == {'error': 'invalid_grant'}
+    assert [grant['revoked'] for grant in table(home, 'connector_grants')] == [home.clock[0]]
+
+
 def test_reuse_after_60_seconds_revokes_the_grant(home):
     client, code = allowed(home)
     first = exchange(home, client, code).json()
@@ -1151,6 +1174,8 @@ def test_no_refresh_past_the_grant_end(home):
     home.clock[0] += 86400
     assert bearer(home, first['access_token']) is None
     assert refresh(home, client, first['refresh_token']).json() == {'error': 'invalid_grant'}
+    # at its end second the grant has ended, not been split: an honest refresh then revokes nothing (the section 2's S4)
+    assert [grant['revoked'] for grant in table(home, 'connector_grants')] == [None]
 
 
 def test_an_access_token_at_its_expiry_second(home):
@@ -1273,6 +1298,50 @@ def test_a_refresh_after_the_grant_is_revoked_mints_nothing(home):
     before = len(table(home, 'connector_tokens'))
     assert refresh(home, client, first['refresh_token']).json() == {'error': 'invalid_grant'}
     assert len(table(home, 'connector_tokens')) == before
+
+
+def test_a_good_refresh_sweeps_the_tokens_of_ended_and_revoked_connections(home):
+    """The section 2's S6, the plan's Task 6 line: the sweep drops the tokens of a connection that has ended or was
+    revoked, so refresh rows don't grow without end. A live connection keeps every row, its used and rotated-out refresh
+    tokens included, since the reuse and split-chain checks read them."""
+    from superyak_peer.auth import token_hash
+
+    def grant_of(answer):
+        return next(row['grant_id'] for row in table(home, 'connector_tokens') if row['hash'] == token_hash(answer['access_token']))
+    person(home)
+    client, code = allowed(home, state='st-revoked')  # one client id for all three: /register is stateless
+    revoked = exchange(home, client, code).json()
+    refresh(home, client, revoked['refresh_token'])
+    gone = grant_of(revoked)
+    with home.store.transaction() as db:
+        db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (home.clock[0], gone))
+    _, view = signed_in(home, client, state='st-ending')
+    _, query = sent_back(decide(home, view, rooms='*', days=1))
+    exchange(home, client, query['code'])
+    _, code = allowed(home, client, state='st-live')
+    live = exchange(home, client, code).json()
+    live_grant = grant_of(live)
+    home.clock[0] += 86400
+    kept = refresh(home, client, live['refresh_token']).json()
+    refresh(home, client, live['refresh_token'])  # within the window: kept's pair is rotated out, not deleted
+    assert {row['grant_id'] for row in table(home, 'connector_tokens')} == {live_grant}
+    assert len([row for row in table(home, 'connector_tokens') if row['kind'] == 'refresh']) == 3
+    assert refresh(home, client, kept['refresh_token']).json() == {'error': 'invalid_grant'}  # still seen as split
+
+
+def test_the_sweep_keeps_a_client_mid_sign_in(home):
+    """The section 2's nit: a client whose grants all ended 30 days ago, signing in again, kept its row only by being
+    known; swept mid-consent after a key rotation, its Allow failed after the password. A pending sign-in keeps it."""
+    old_client, code = allowed(home, state='st-old')
+    exchange(home, old_client, code)
+    with home.store.transaction() as db:
+        db.execute('UPDATE connector_grants SET ends=? WHERE client_id=?', (home.clock[0] - 30 * 86400 - 1, old_client))
+    _, view = signed_in(home, old_client, state='st-again')
+    client, code = allowed(home, register(home.app, {**REGISTRATION, 'client_name': 'New'}).json()['client_id'], state='st-new')
+    exchange(home, client, code)
+    assert sorted(row['client_id'] for row in table(home, 'oauth_clients')) == sorted([old_client, client])
+    home.store._connector_key = bytes(32)  # the key rotated since the old client registered
+    assert decide(home, view, rooms='*').status_code == 200
 
 
 def test_a_good_exchange_sweeps_clients_whose_grants_ended_30_days_ago(home):

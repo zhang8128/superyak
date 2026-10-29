@@ -873,10 +873,15 @@ def _room_list(value):
     return rooms
 
 
+def _finite(value):
+    """A number that compares: an int or a float, neither infinite nor NaN."""
+    return type(value) in (int, float) and math.isfinite(value)
+
+
 def _end(value):
     """A connection's end as the reconcile reads it: a finite number, else ValueError (Tardis: two infinite ends would keep
     a connection with no end, and a NaN never compares)."""
-    if type(value) not in (int, float) or not math.isfinite(value):
+    if not _finite(value):
         raise ValueError('ends')
     return value
 
@@ -972,17 +977,19 @@ TOKEN_COMPARED = ('connector_tokens.hash', 'connector_tokens.expires', 'connecto
 def _keep_tokens_like_replaced(db, old, now, report):
     """Task 6, with a usable replaced file (Rio Grande, on the restore design): a refresh token rotated since the copy
     must not come back unrotated, nor one revoked since come back live. Each token the copy has takes the replaced
-    file's earlier expiry and any use it records; one the replaced file lacks (an access token swept after it ended) is
-    revoked. It only takes power away."""
+    file's earlier expiry and any use it records; one the replaced file lacks (an access token swept after it ended, or
+    any token of a connection that ended) is revoked. A revoke writes REVOKED, never now (the section 2's S1). It only
+    takes power away."""
+    from .connector import REVOKED
     if not _usable(db, old, report, *TOKEN_COMPARED):
         return
     there = {row[0]: row[1:] for row in old.execute('SELECT hash, expires, used FROM connector_tokens')}
     taken = 0
     for row in db.execute('SELECT hash, expires, used FROM connector_tokens WHERE expires>?', (now,)).fetchall():
         theirs = there.get(row['hash'])
-        expires, used = (now, row['used']) if theirs is None else (theirs[0], theirs[1] if row['used'] is None else row['used'])
-        if type(expires) not in (int, float) or not math.isfinite(expires):
-            expires = now  # a value the replaced file can't give: fail closed
+        expires, used = (REVOKED, row['used']) if theirs is None else (theirs[0], theirs[1] if row['used'] is None else row['used'])
+        if not _finite(expires) or used is not None and not _finite(used):
+            expires, used = REVOKED, row['used']  # a value the replaced file can't give: fail closed, never a 500 later
         if expires < row['expires'] or used != row['used']:
             db.execute('UPDATE connector_tokens SET expires=?, used=? WHERE hash=?',
                        (min(expires, row['expires']), used, row['hash']))
@@ -992,9 +999,10 @@ def _keep_tokens_like_replaced(db, old, now, report):
 
 def _revoke_every_token(db, old, now, report):
     """Task 6, without a usable replaced file: every token is revoked, as every connection is."""
+    from .connector import REVOKED
     if _usable(db, None, report, *TOKEN_COMPARED):
         report['counts']['connector tokens taken back'] = db.execute(
-            'UPDATE connector_tokens SET expires=? WHERE expires>?', (now, now)).rowcount
+            'UPDATE connector_tokens SET expires=? WHERE expires>?', (REVOKED, now)).rowcount
 
 
 def _revoke_every_connection(db, old, now, report):

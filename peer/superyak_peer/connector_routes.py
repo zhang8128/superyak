@@ -188,11 +188,13 @@ def install(app, public_origin, callback):
         form = parse_form(raw)
         if form is None or 'grant_type' not in form:
             return answer({'error': 'invalid_request'}, 400)
-        how = {'authorization_code': store.exchange_code, 'refresh_token': store.refresh_tokens}.get(form['grant_type'])
-        if how is None:
-            return answer({'error': 'unsupported_grant_type'}, 400)
-        try:
-            made = await run_in_threadpool(how, form, public_origin + '/mcp', callback)
+        try:  # each store call named in its own run_in_threadpool, which the event-loop guard can see (S3)
+            if form['grant_type'] == 'authorization_code':
+                made = await run_in_threadpool(store.exchange_code, form, public_origin + '/mcp', callback)
+            elif form['grant_type'] == 'refresh_token':
+                made = await run_in_threadpool(store.refresh_tokens, form, public_origin + '/mcp', callback)
+            else:
+                return answer({'error': 'unsupported_grant_type'}, 400)
         except OAuthError as refused:
             return answer({'error': refused.error}, refused.status)
         return answer(made)

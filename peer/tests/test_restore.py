@@ -22,6 +22,7 @@ from superyak_peer.__main__ import main as cli
 from superyak_peer.app import create_app
 from superyak_peer.auth import token_hash
 from superyak_peer.common import Problem
+from superyak_peer.connector import REVOKED
 from superyak_peer.db import Store
 from superyak_peer.door import create_door
 
@@ -1986,7 +1987,7 @@ def test_a_restore_keeps_every_token_use_and_revoke_the_replaced_file_had(tmp_pa
     after = tokens_in(copy)
     assert after[t['used_since']]['used'] == later
     assert after[t['revoked_since']]['expires'] == later
-    assert after[t['gone_since']]['expires'] < before[t['gone_since']]['expires']
+    assert after[t['gone_since']]['expires'] == REVOKED  # a fixed past end, which a clock stepped back can't reopen (S1)
     assert after[t['untouched']] == before[t['untouched']]
     assert 'connector tokens taken back (3)' in out
 
@@ -2001,6 +2002,44 @@ def test_without_a_replaced_file_every_token_is_revoked(tmp_path, capsys):
     copy = staged(tmp_path, store)
     code, out, err = reconcile(capsys, '--db', copy)
     assert code == 0, err
-    with closing(sqlite3.connect(copy)) as db:
-        assert db.execute('SELECT count(*) FROM connector_tokens WHERE expires > ?', (time.time(),)).fetchone()[0] == 0
+    assert {row['expires'] for row in tokens_in(copy).values()} == {REVOKED}
     assert 'connector tokens taken back (2)' in out
+
+
+def test_a_replaced_file_damaged_in_a_token_column_revokes_every_token(tmp_path, capsys):
+    """The section 2's S2: the tokens' COMPARED line. A replaced file without `connector_tokens.used` is treated as
+    absent, so every connection and token is revoked; "not compared" would bring a token used since the copy back live
+    and unused."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    used = a_token(store, grant)
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute('UPDATE connector_tokens SET used=? WHERE hash=?', (store.clock(), used))
+        db.execute('ALTER TABLE connector_tokens DROP COLUMN used')
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert 'treated as absent' in out
+    assert tokens_in(copy)[used]['expires'] == REVOKED and grants_in(copy)[grant]['revoked'] is not None
+
+
+@pytest.mark.parametrize('column, value', [('expires', 'soon'), ('expires', float('inf')), ('used', 'yesterday')])
+def test_a_token_value_the_replaced_file_cant_give_revokes_it(tmp_path, capsys, column, value):
+    """The section 2's mutant 33 and its nit: an end that isn't a finite number, or a use that isn't one, revokes the
+    token. A `used` copied as text made the next refresh answer 500, not {error}."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    damaged, fine = a_token(store, grant), a_token(store, grant)
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute(f'UPDATE connector_tokens SET {column}=? WHERE hash=?', (value, damaged))
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    after = tokens_in(copy)
+    assert after[damaged]['expires'] == REVOKED and after[fine]['expires'] > time.time()

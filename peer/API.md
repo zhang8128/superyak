@@ -421,8 +421,8 @@ Origin; the consent page's posts keep it.
     guessed code, or a used one without its client and verifier, writes nothing; a code used again with both is
     refused and revokes the connection it made.
   - `grant_type=refresh_token` with `refresh_token` and `client_id`: it rotates on every use. One presented again
-    within 60 s of its use gets a new pair, and the one it had is revoked; later, the connection is revoked, and so
-    does presenting a token that a reuse rotated out, since its chain was split.
+    within 60 s of its use gets a new pair, and the one it had is revoked; later, the connection is revoked.
+    Presenting a token that a reuse rotated out also revokes the connection, since its chain was split.
   - It answers `{access_token, token_type: "Bearer", expires_in, scope[, refresh_token]}`. An access token (`syc_at_`)
     lasts an hour, never past its connection's end; a refresh token (`syc_rt_`) is given when the scope has
     `offline_access` and the client registered the `refresh_token` grant. Tokens are stored only as hashes.
