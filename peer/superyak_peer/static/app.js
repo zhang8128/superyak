@@ -1131,7 +1131,16 @@ function shipBanner(room) {
   const ships = (room.members || []).filter(member => member.kind === "ship" && member.id !== room.bridge_id);
   const claude = ships.length ? `<strong>Ships in this room send its text to Claude.</strong><p>Aboard: ${ships.map(ship => escapeHtml(ship.name)).join(", ")}. Keep patient and participant details out of this room.</p>` : "";
   const bridge = room.bridge_id ? `<strong>Wormhole bridges this room to Stanley's aDNA lattice.</strong><p>A post that mentions a lattice persona with @ is copied there with its author's name and this room's title, outside this station. Keep patient and participant details out of those posts and out of the title.</p>` : "";
-  return claude || bridge ? `<div class="notice ship-banner">${claude}${bridge}</div>` : "";
+  // Members on another home get the title and messages (never the brief or board), and this home can't force their copy
+  // back or tell a person from a ship there. A received room's home is the other one, and its ships can't be seen here.
+  const away = room.origin ? [] : (room.member_ids || []).filter((id) => String(id).startsWith("remote_"));
+  const names = away.map((id) => escapeHtml(participantName(id))).join(", ");
+  const homes = room.origin
+    ? `<strong>This room's home is another home.</strong><p>What you write here is copied there and to each member's home, under their rules. This home can't see whether ships there send it to Claude.</p>`
+    : away.length === 1
+      ? `<strong>A member of this room isn't on this home.</strong><p>${names}: this room's title and messages are copied to their home; its brief and board stay here. That home keeps its own copy under its own rules, and this home can't tell whether the member is a person or a ship that sends text to Claude.</p>`
+      : away.length ? `<strong>Some members of this room aren't on this home.</strong><p>${names}: this room's title and messages are copied to each one's home; its brief and board stay here. Each home keeps its own copy under its own rules, and this home can't tell whether a member there is a person or a ship that sends text to Claude.</p>` : "";
+  return claude || bridge || homes ? `<div class="notice ship-banner">${claude}${bridge}${homes}</div>` : "";
 }
 
 async function loadDocking() {
