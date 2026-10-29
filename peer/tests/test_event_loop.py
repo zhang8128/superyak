@@ -10,6 +10,7 @@ import asyncio
 import functools
 import inspect
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -46,14 +47,23 @@ def reaches_the_store(name, services):
     return name.split('.')[0] in services or any(name == root or name.startswith(root + '.') for root in HELD_AT)
 
 
+def pairs(target, value):
+    """(name, value) pairs, pairing tuples and lists of the same length one to one, nested ones too."""
+    sequences = (ast.Tuple, ast.List)
+    if isinstance(target, sequences) and isinstance(value, sequences) and len(target.elts) == len(value.elts):
+        for inner_target, inner_value in zip(target.elts, value.elts):
+            # with equal lengths a starred name takes exactly one value, so only it is skipped (`s, *_ = store, who`)
+            if not isinstance(inner_target, ast.Starred) and not isinstance(inner_value, ast.Starred):
+                yield from pairs(inner_target, inner_value)
+    else:
+        yield target, value
+
+
 def bindings(node):
-    """(target, value) pairs an assignment makes, pairing a tuple of names with a tuple of values one to one."""
+    """(target, value) pairs an assignment makes: `s, k = store, key` and `(s, n), k = (store, 1), 2` pair name by name."""
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
     for target in targets:
-        if isinstance(target, ast.Tuple) and isinstance(node.value, ast.Tuple) and len(target.elts) == len(node.value.elts):
-            yield from zip(target.elts, node.value.elts)
-        else:
-            yield target, node.value
+        yield from pairs(target, node.value)
 
 
 def services_in(tree):
@@ -84,7 +94,7 @@ def calls_in(node, skip_nested=False):
         name = dotted(node.func) if isinstance(node, ast.Call) else None
         if name is not None:
             yield node.lineno, name
-        handed_over = skip_nested and name in HANDOFFS
+        handed_over = name in HANDOFFS
         stack.extend(child for child in ast.iter_child_nodes(node) if not (handed_over and isinstance(child, ast.Lambda)))
 
 
@@ -106,12 +116,16 @@ def _facts(source, *_globals):
                if isinstance(node, ast.ImportFrom) and node.level == 1 for alias in node.names]
     loops = [(node.name, tuple(calls_in(node, skip_nested=True))) for node in ast.walk(tree)
              if isinstance(node, ast.AsyncFunctionDef)]
-    return frozenset(services_in(tree)), tuple(sync), tuple(imports), tuple(loops)
+    renames = tuple((target.id, dotted(value)) for node in ast.walk(tree) if isinstance(node, (ast.Assign, ast.AnnAssign))
+                    and node.value is not None for target, value in bindings(node)
+                    if isinstance(target, ast.Name) and dotted(value) is not None)
+    return frozenset(services_in(tree)), tuple(sync), tuple(imports), tuple(loops), renames
 
 
-def blocking_helpers(services, sync, imported=frozenset()):
+def blocking_helpers(services, sync, imported=frozenset(), renames=()):
     """The identity checks and `imported` (blocking helpers this module imports), plus every sync function or method
-    in the module that calls one of them, the store or another such helper."""
+    in the module that calls one of them, the store or another such helper, and every name bound to one of those
+    (`check = current_user`)."""
     blocking = set(IDENTITY) | set(imported)
     direct = {called_as for called_as, calls in sync
               if any(name not in ON_THE_LOOP and reaches_the_store(name, services) for name in calls)}
@@ -123,22 +137,26 @@ def blocking_helpers(services, sync, imported=frozenset()):
             if called_as not in blocking and (calls - ON_THE_LOOP) & blocking:
                 blocking.add(called_as)
                 grew = True
+        for name, source in renames:
+            if name not in blocking and source in blocking:
+                blocking.add(name)
+                grew = True
     return blocking
 
 
 def calls_on_the_loop(read=Path.read_text):
     """(module, async function, line, call) for each call that reads the store on the event loop."""
     modules = {path: facts(read(path)) for path in sorted(PACKAGE.rglob('*.py'))}
-    blocking = {path: blocking_helpers(known[0], known[1]) for path, known in modules.items()}
+    blocking = {path: blocking_helpers(known[0], known[1], renames=known[4]) for path, known in modules.items()}
     for _ in range(3):  # a helper imported from a sibling module, under any local name, counts as blocking there too
-        for path, (services, sync, imports, _) in modules.items():
+        for path, (services, sync, imports, _, renames) in modules.items():
             imported = {local for module, name, local in imports if module
                         and name in blocking.get(path.parent / f'{module.replace(".", "/")}.py', set())}
             imported |= {f'{local}.{helper}' for module, name, local in imports if module is None  # `from . import m`
                          for helper in blocking.get(path.parent / f'{name}.py', set()) if '.' not in helper}
-            blocking[path] = blocking_helpers(services, sync, imported)
+            blocking[path] = blocking_helpers(services, sync, imported, renames)
     found = []
-    for path, (services, _, _, loops) in modules.items():
+    for path, (services, _, _, loops, _) in modules.items():
         for function, calls in loops:
             for line, name in calls:
                 if name not in ON_THE_LOOP and (name in blocking[path] or reaches_the_store(name, services)):
@@ -256,6 +274,46 @@ def test_a_helper_reached_through_an_imported_sibling_module_is_seen():
     assert ('app.py', 'imprint_shorten', 'pr.sign_first') in {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
 
 
+def test_a_helper_whose_lambda_goes_to_the_threadpool_is_off_the_loop():
+    """`def later(): return run_in_threadpool(lambda: store.x())`, awaited on the loop, runs the store on a worker."""
+    read = reading('app.py',
+                   ('def actor(request):\n',
+                    'def later(store, key):\n    return run_in_threadpool(lambda: store.drop_item(None, key, None))\n\n\n'
+                    'def actor(request):\n'),
+                   ("return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
+                    "return await later(store, key)"))
+    assert not [found for found in calls_on_the_loop(read) if found[1] == 'chat_board_drop']
+
+
+def test_a_name_bound_to_an_identity_check_is_one():
+    read = reading('app.py', ("        who, data = await caller(member, request), await body(request)\n"
+                              "        return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
+                              "        check = current_user\n        who = check(request)['id']\n"
+                              "        return await run_in_threadpool(store.drop_item, who, key, None)"))
+    assert ('app.py', 'chat_board_drop', 'check') in {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
+
+
+def test_a_nested_tuple_alias_is_a_service():
+    read = reading('app.py', ("return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
+                              "(s, n), k = (store, 1), key\n        return s.drop_item(who, k, data.get('key'))"))
+    assert ('app.py', 'chat_board_drop', 's.drop_item') in {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
+
+
+def test_a_starred_unpacking_still_pairs_the_other_names():
+    read = reading('app.py', ("return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
+                              "s, *_ = store, who\n        return s.drop_item(who, key, data.get('key'))"))
+    assert ('app.py', 'chat_board_drop', 's.drop_item') in {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
+
+
+def test_the_cache_is_keyed_by_the_globals_the_walk_reads(monkeypatch):
+    read = reading('app.py', ("return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
+                              "return db.drop_item(who, key, data.get('key'))"))
+    before = {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
+    monkeypatch.setattr(sys.modules[__name__], 'SERVICES', SERVICES | {'db'})
+    after = {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
+    assert ('app.py', 'chat_board_drop', 'db.drop_item') in after - before
+
+
 def test_a_loop_object_on_app_state_is_not_the_store():
     """federation-pull's wake is an asyncio.Event on app.state: setting it on the loop is right, and isn't flagged."""
     def read(path):
@@ -288,12 +346,21 @@ def anonymous_answers(app, origin, monkeypatch):
     the body before answering, and the endpoints seen. Every route-level read (body(), json(), form(), a hand parse)
     goes through Request.stream; the size bound below the routes reads at the ASGI level, so it isn't counted."""
     from starlette.requests import Request
-    reads, real = [], Request.stream
+    reads, real_stream, real_receive = [], Request.stream, Request.receive
 
     def watched(self):
         reads.append(self.url.path)
-        return real(self)
+        return real_stream(self)
+
+    def watched_receive(self):
+        receive = real_receive.fget(self)
+
+        async def recording():
+            reads.append(self.url.path)
+            return await receive()
+        return recording
     monkeypatch.setattr(Request, 'stream', watched)
+    monkeypatch.setattr(Request, 'receive', property(watched_receive))  # a raw `await request.receive()`
     anonymous = TestClient(app, base_url=origin, headers={'origin': origin},
                            client=('127.0.0.1', 50000))  # tailnet, so PublicRoute lets it reach the route
     answers, seen = {}, set()
@@ -305,9 +372,12 @@ def anonymous_answers(app, origin, monkeypatch):
                 seen.add(route.endpoint.__name__)
                 continue
             url = re.sub(r'\{[^}]+\}', '1', route.path)
-            reads.clear()
-            response = anonymous.request(method, url, content=b'not json', headers={'content-type': 'application/json'})
-            answers[(method, route.path)] = (response.status_code, bool(reads))
+            for body, kind in ((b'not json', 'application/json'), (b'a=1', 'application/x-www-form-urlencoded')):
+                reads.clear()  # a form body too: form() reads nothing under a JSON content type
+                response = anonymous.request(method, url, content=body, headers={'content-type': kind})
+                previous = answers.get((method, route.path), (401, False))
+                worst = previous if previous[0] not in (401, 403) or previous[1] else (response.status_code, bool(reads))
+                answers[(method, route.path)] = worst
             seen.add(route.endpoint.__name__)
     return answers, seen
 
