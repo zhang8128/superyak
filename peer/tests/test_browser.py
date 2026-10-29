@@ -877,8 +877,9 @@ def test_the_right_code_typed_with_enter_pairs_and_survives_a_re_render(browser_
             box = page.get_by_label("Type the code shown on the other machine")
             box.fill(code[:10])
             page.get_by_role("button", name="Check delivery now").click()  # refresh() renders the page again
-            # wait on what the click produces, the render with its flash, never on the value already there before it
-            # (fix:pairing-code-test-refresh-race): a re-render landing during the typing below would undo it
+            # wait on what the click produces, its render with its flash, never on the value already there before it
+            # (fix:pairing-code-test-refresh-race): a late render could land during the typing below, or replace the
+            # pairing's flash before it's checked, and the value check alone passed before any re-render happened
             expect(page.locator(".notice[role=status]")).to_have_text("Delivery status refreshed")
             expect(page.get_by_label("Type the code shown on the other machine")).to_have_value(code[:10])
             page.get_by_label("Type the code shown on the other machine").fill(code)
