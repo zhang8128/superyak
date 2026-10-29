@@ -36,8 +36,14 @@ def dotted(node):
     return '.'.join([node.id, *reversed(parts)])
 
 
+# What app.state holds that blocks: the store, what reaches it, and the local model. Its other entries (an Event, flags,
+# the sign-in lanes) are loop objects, so `app.state.` alone isn't one.
+HELD = ('store', 'federation', 'interchange', 'data_sources', 'assistant')
+HELD_AT = tuple(f'{owner}.{held}' for owner in ('app.state', 'request.app.state') for held in HELD) + ('self.store',)
+
+
 def reaches_the_store(name, services):
-    return name.split('.')[0] in services or name.startswith(('app.state.', 'request.app.state.', 'self.store.'))
+    return name.split('.')[0] in services or any(name == root or name.startswith(root + '.') for root in HELD_AT)
 
 
 def services_in(tree):
@@ -158,6 +164,12 @@ def test_each_waiting_exception_is_still_needed():
     ('app.py', 'return await run_in_threadpool(store.shorten_imprint, ',
      'sign_first(store)\n            return await run_in_threadpool(store.shorten_imprint, ',
      ('app.py', 'imprint_shorten', 'sign_first')),
+    # the last pass's: an alias of self.store, and a held object reached through app.state
+    ('app.py', '        if (key is not None or token is not None) and await run_in_threadpool(self.valid, key, token):',
+     '        s = self.store\n        if s.session_is_valid(token):', ('app.py', 'refusal', 's.session_is_valid')),
+    ('app.py', "return await run_in_threadpool(store.rename_user, who, data.get('name'))",
+     "app.state.federation.status(who)\n        return await run_in_threadpool(store.rename_user, who, data.get('name'))",
+     ('app.py', 'rename_me', 'app.state.federation.status')),
 ])
 def test_the_walk_sees_a_call_put_back_on_the_loop(module, fixed, broken, expected):
     def read(path):
@@ -179,6 +191,18 @@ def test_a_lambda_handed_to_the_threadpool_is_off_the_loop():
         assert source.count(fixed) == 1
         return source.replace(fixed, "return await run_in_threadpool(lambda: store.drop_item(who, key, data.get('key')))")
     assert not [found for found in calls_on_the_loop(read) if found[1] == 'chat_board_drop']
+
+
+def test_a_loop_object_on_app_state_is_not_the_store():
+    """federation-pull's wake is an asyncio.Event on app.state: setting it on the loop is right, and isn't flagged."""
+    def read(path):
+        source = path.read_text()
+        if path.name != 'app.py':
+            return source
+        fixed = "return await run_in_threadpool(store.rename_user, who, data.get('name'))"
+        assert source.count(fixed) == 1
+        return source.replace(fixed, 'app.state.sync_wake.set()\n        ' + fixed)
+    assert not [found for found in calls_on_the_loop(read) if found[1] == 'rename_me']
 
 
 # Routes that take no identity: signing in, redeeming an invitation, asking for access, starting a docking, and a
