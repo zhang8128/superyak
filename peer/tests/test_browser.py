@@ -3577,8 +3577,9 @@ def test_delivery_labels_retrying_not_delivered_and_too_large_to_pull(browser_pe
                    (layers['Refused update'],))
         db.execute("UPDATE outbox SET status='refused', last_error='413 Too large to pull' WHERE resource_id=?",
                    (layers['Oversized update'],))
-        db.execute("UPDATE peer_delivery SET failures=1, next_attempt=?, failing_since=?, last_problem='connection refused' "
-                   "WHERE peer_id=?", (now + 120, now - 60, remote_card['peer_id']))
+        db.execute("UPDATE peer_delivery SET failures=1, next_attempt=?, failing_since=?, last_pull=?, "
+                   "last_problem='403 Peer authentication failed, and words the other peer chose' WHERE peer_id=?",
+                   (now + 120, now - 60, now - 30, remote_card['peer_id']))
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, 'organizer') as (page, _):
             page.get_by_role('link', name='Connections', exact=True).click()
@@ -3595,7 +3596,9 @@ def test_delivery_labels_retrying_not_delivered_and_too_large_to_pull(browser_pe
             peer = page.locator('.card', has_text='Casey Remote').filter(has_text='Fingerprint')
             expect(peer.get_by_text('Failing since', exact=False)).to_be_visible()
             expect(peer.get_by_text('1 failure · next attempt', exact=False)).to_be_visible()
-            expect(peer.get_by_text('connection refused', exact=False)).to_be_visible()
+            expect(peer.get_by_text('1 failure · next attempt', exact=False)).to_contain_text('· 403')  # SF3: the code only
+            expect(peer.get_by_text('words the other peer chose', exact=False)).to_have_count(0)
+            expect(peer.get_by_text('Last pulled', exact=False)).to_be_visible()  # SF2: a pull apart from a delivery
             assert page.evaluate("deliveryText('mystery')") == 'Delivery status unknown'  # never "Saved here"
             assert page.evaluate("deliveryText('refused')") == 'Not delivered'  # a refused reply's own label (spec §8)
             refused.get_by_role('button', name='Retry').click()

@@ -27,6 +27,7 @@ PULL_ROWS, PULL_SECONDS = 200, 5.0  # spec §4: a pull examines at most 200 rows
 PULL_LIMIT, PULL_ASK, PULL_ROUNDS, PULL_AGAIN, PULL_NO_ROUTE = 20, 1024 * 1024, 10, 60, 300
 CLOCKS_DIFFER = 'Clocks differ by more than 5 minutes'
 log = logging.getLogger(__name__)
+PROBLEM_CAP = 200  # characters of last_problem kept; a peer's words can be 64 KiB (Rio Grande's SF3)
 PEER_SCOPED_STATUS = frozenset({401, 404, 408, 421, 425, 429})
 PEER_SCOPED_403 = frozenset({'Unknown or unpaired peer', 'Peer authentication failed', 'Unrecognized host',
                              'Same-origin request required', 'Federation requires HTTPS'})
@@ -316,7 +317,7 @@ class Federation:
             if row:
                 db.execute('UPDATE peer_delivery SET next_attempt=? WHERE peer_id=?', (now + min(cap, 2 ** min(row[0], 12)), peer_id))
             db.execute('UPDATE peer_delivery SET failing_since=COALESCE(failing_since, ?) WHERE peer_id=?', (now, peer_id))
-            db.execute('UPDATE peer_delivery SET last_problem=? WHERE peer_id=?', (words, peer_id))
+            db.execute('UPDATE peer_delivery SET last_problem=? WHERE peer_id=?', (words and words[:PROBLEM_CAP], peer_id))
 
     def sync_once(self, *, send=None, limit=20):
         """One pass over the push peers' due rows (spec §7): mode and due-ness are chosen before LIMIT, so a pull peer's
@@ -489,7 +490,8 @@ class Federation:
             now = self.store.clock()
             with self.store.transaction() as db:
                 self._peer_outcome(db, peer_id, 'reset', None, now)  # a successful pull resets the row; pushes go again
-                db.execute('UPDATE peer_delivery SET last_success=? WHERE peer_id=?', (now, peer_id))
+                # "last pulled from it" on a pull peer (spec §7); last_success stays a push's (Rio Grande's SF2)
+                db.execute('UPDATE peer_delivery SET last_pull=? WHERE peer_id=?', (now, peer_id))
             if limit == 0:
                 return got
             got['rounds'] += 1
@@ -520,7 +522,7 @@ class Federation:
             got.update(answer=words, next=PULL_NO_ROUTE)
         elif status == 403:
             with self.store.transaction() as db:
-                db.execute('UPDATE peer_delivery SET last_problem=? WHERE peer_id=?', (words, peer_id))
+                db.execute('UPDATE peer_delivery SET last_problem=? WHERE peer_id=?', (words and words[:PROBLEM_CAP], peer_id))
             got.update(answer=words, next=PULL_AGAIN, clock=error.message == CLOCKS_DIFFER)
         elif status is not None and 400 <= status < 500 and status not in PEER_SCOPED_STATUS:
             log.warning('A pull to %s was answered %s: a bug on one side; its acks are kept', peer_id[:8], words)

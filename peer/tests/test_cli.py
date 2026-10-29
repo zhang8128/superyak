@@ -479,11 +479,15 @@ def test_connections_says_how_delivery_to_each_peer_is_going():
          'next_attempt': 1000 + 240, 'last_problem': 'certificate differs'},
         {**base, 'name': 'Sam', 'card': push, 'mode': 'push', 'last_success': 1000 - 60},
         {**base, 'name': 'Ann', 'card': push, 'mode': 'push'},
+        {**base, 'name': 'Lia', 'card': push, 'mode': 'push', 'last_pull': 1000 - 120},  # a pull peer's listener (SF2)
+        {**base, 'name': 'Rex', 'card': push, 'mode': 'push', 'failures': 1, 'failing_since': 1000 - 60,
+         'last_problem': '403 Peer authentication failed, and words the other peer chose'},  # SF3: its code only
     ], now=1000).splitlines()
     assert [line.split('; ', 1)[1] for line in lines] == [
         'last pull 5 min ago', 'no pull yet',
         'failing for 2 h, 3 failures, next attempt in 4 min, certificate differs',
-        'last delivered 1 min ago', 'nothing delivered yet']
+        'last delivered 1 min ago', 'nothing delivered yet',
+        'last pulled 2 min ago, nothing delivered yet', 'failing for 1 min, 1 failure, 403']
 
 
 def test_card_pull_is_refused_on_a_store_with_an_identity_and_no_mode(tmp_path):

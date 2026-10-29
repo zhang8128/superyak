@@ -513,4 +513,5 @@ def test_a_push_backoff_doesnt_hold_back_a_pull_and_a_pull_resets_it(pulling):
     row = delivery(mac, a)
     assert got['received'] == 1
     assert (row['failures'], row['next_attempt'], row['failing_since'], row['last_problem']) == (0, None, None, None)
-    assert row['last_success'] == clock()
+    # Rio Grande's SF2: a pull is "last pulled from it", never "last delivered", which only a push to it records
+    assert (row['last_pull'], row['last_success']) == (clock(), None)

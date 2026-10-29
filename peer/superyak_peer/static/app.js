@@ -966,12 +966,20 @@ function connectionDelivery(connection) {
     return `<p class="meta">Fetches from us · ${connection.last_pull ? `last pull ${escapeHtml(formatDate(connection.last_pull))}` : "no pull yet"}</p>`;
   }
   const endpoint = `<p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p>`;
+  // a pull peer's view of a listener: its last pull from it, apart from its last delivery to it (Rio Grande's SF2)
+  const pulled = connection.last_pull ? `<p class="meta">Last pulled ${escapeHtml(formatDate(connection.last_pull))}</p>` : "";
   if (connection.failures) {
-    const problem = connection.last_problem ? ` · ${escapeHtml(connection.last_problem)}` : "";
+    const problem = connection.last_problem ? ` · ${escapeHtml(problemShown(connection.last_problem))}` : "";
     const next = connection.next_attempt ? ` · next attempt ${escapeHtml(formatDate(connection.next_attempt))}` : "";
-    return `${endpoint}<p class="meta">Failing since ${escapeHtml(formatDate(connection.failing_since))} · ${escapeHtml(connection.failures)} ${connection.failures === 1 ? "failure" : "failures"}${next}${problem}</p>`;
+    return `${endpoint}${pulled}<p class="meta">Failing since ${escapeHtml(formatDate(connection.failing_since))} · ${escapeHtml(connection.failures)} ${connection.failures === 1 ? "failure" : "failures"}${next}${problem}</p>`;
   }
-  return `${endpoint}<p class="meta">${connection.last_success ? `Last delivered ${escapeHtml(formatDate(connection.last_success))}` : "Nothing delivered yet"}</p>`;
+  return `${endpoint}${pulled}<p class="meta">${connection.last_success ? `Last delivered ${escapeHtml(formatDate(connection.last_success))}` : "Nothing delivered yet"}</p>`;
+}
+
+// Rio Grande's SF3: a status code alone, since the words after it come from the peer; otherwise this side's own phrase
+function problemShown(problem) {
+  const code = /^\d{3}\b/.exec(problem);
+  return code ? code[0] : problem.slice(0, 80);
 }
 
 function connectionGroup(connection) {

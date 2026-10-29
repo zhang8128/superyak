@@ -401,18 +401,29 @@ def contact_state(contact):
     return 'confirmed by typing' if contact['confirmed'] else 'no typed code on record'
 
 
+def problem_shown(problem):
+    """A peer's problem as the CLI and the page show it (Rio Grande's SF3): a status code alone, since the words after it
+    come from the peer; otherwise this side's own phrase, such as "certificate differs"."""
+    import re
+    code = re.match(r'\d{3}\b', problem)
+    return code.group(0) if code else safe_line(problem, 80)
+
+
 def delivery_health(contact, now):
-    """Federation pull P10 (spec §8): how delivery to this contact's peer is going, in the CLI's words."""
+    """Federation pull P10 (spec §8): how delivery to this contact's peer is going, in the CLI's words. On a pull peer, a
+    listener's last pull from it is said apart from its last delivery to it (Rio Grande's SF2)."""
     if contact.get('mode') == 'pull' or contact['card'].get('delivery') == 'pull':
         return f"last pull {ago(now - contact['last_pull'])} ago" if contact.get('last_pull') else 'no pull yet'
+    pulled = f"last pulled {ago(now - contact['last_pull'])} ago, " if contact.get('last_pull') else ''
     if contact.get('failures'):
         due = contact.get('next_attempt')
         parts = [f"failing for {ago(now - contact['failing_since'])}" if contact.get('failing_since') else 'failing',
                  f"{contact['failures']} {'failure' if contact['failures'] == 1 else 'failures'}",
                  (f'next attempt in {ago(due - now)}' if due > now else 'next attempt due') if due else None,
-                 safe_line(contact['last_problem'], 80) if contact.get('last_problem') else None]
-        return ', '.join(part for part in parts if part)
-    return f"last delivered {ago(now - contact['last_success'])} ago" if contact.get('last_success') else 'nothing delivered yet'
+                 problem_shown(contact['last_problem']) if contact.get('last_problem') else None]
+        return pulled + ', '.join(part for part in parts if part)
+    return pulled + (f"last delivered {ago(now - contact['last_success'])} ago" if contact.get('last_success')
+                     else 'nothing delivered yet')
 
 
 def describe_connections(listed, now=None):

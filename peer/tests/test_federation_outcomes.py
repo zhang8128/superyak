@@ -345,3 +345,14 @@ def test_ops_notices_a_pull_peer_quiet_for_a_day_from_its_last_pull_or_else_its_
     [second] = notices(a, 'pull-quiet-')                # a day since its last pull: a new episode, a new id
     assert second['id'] != first['id']
     assert notices(a, 'push-failing-') == []
+
+
+def test_a_peers_long_answer_is_capped_in_last_problem(world):
+    """Rio Grande's SF3: a peer-scoped answer's words come from the peer, up to 64 KiB. last_problem keeps at most 200
+    characters of them; the page and the CLI show only the status code."""
+    from superyak_peer.transport import PeerAnswer
+    clock, a, peers, contacts = world
+    share(a, contacts['live'])
+    a[2].sync_once(send=answering(peers, PeerAnswer(503, 'w' * 70_000)))
+    problem = delivery(a, peer_of(peers, 'live'))['last_problem']
+    assert problem.startswith('503 ') and len(problem) == 200
