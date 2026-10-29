@@ -214,6 +214,10 @@ The list itself is [`.superyak/checklists/before-push.md`](../.superyak/checklis
 - killer: Nothing in the diff describes a security hole that isn't fixed and live yet, in code, docs, lessons or
   commit messages. Keep it in a members-only room until the fix ships. (Rio Grande pushed one in a lesson on
   2026-10-27; Tardis caught it.)
+- A branch that fixes a hole not yet live travels between machines by Taildrop bundle, never a push, until the fix
+  is live; a push for review publishes its commit messages, and those name what still gets past the live code
+  (2026-10-28: a pushed fix branch's messages listed the disguises main's tag check still let through, until the fix
+  went live at d2351b7e).
 - The push is needed now: build branches go up once, when ready for review or merge (every push runs CI).
 - Each commit's message says which ship made it. Every ship commits as zhang8128, so the author field can't tell
   them apart (Serenity, 2026-10-27).
