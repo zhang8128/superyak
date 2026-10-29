@@ -15,6 +15,10 @@ limit counted over rows that eviction deletes stopped nothing once the table was
 one egress range, so any per-source limit could lock the owner out. The same rule, no public write before a sign-in,
 reaches `/authorize`'s pending request. Registration, the pending request, their tests and the stores change.
 
+Revision 4 is amended by Task 4's re-check (Rio Grande's fresh Pi reader): a name's 200 bytes are counted as the id
+escapes them, line breaks are refused with control and format characters, and the sign-in checks the pending request
+again, since the key is backed up. Two lines change, under "Registration" and "The authorization request".
+
 ## Why
 
 Andy, 2026-10-27: "is superyak something that can be run from claude or chatgpt…", "or scientists or doctors". He is
@@ -116,8 +120,9 @@ nothing.
 - The body is at most 8 KB, counted in bytes.
 - A client lists exactly 1 `redirect_uri`, equal character for character to the allow-list's. In phase 1 the
   allow-list is the one configured callback. Allowing up to 4 waits for Later, when there is more than one callback.
-- `client_name` is at most 100 characters and 200 bytes in UTF-8, with no Unicode control or format character (Cc,
-  Cf) and no lone surrogate. It is shown only as quoted data, the client's own unverified words.
+- `client_name` is at most 100 characters and 200 bytes of UTF-8 as the client id's JSON escapes it, with no Unicode
+  control, format or line-break character (Cc, Cf, Zl, Zp) and no lone surrogate, so every id stays under 512
+  characters (Task 4's re-check, MF1). It is shown only as quoted data, the client's own unverified words.
 - `grant_types` is a subset of `authorization_code` and `refresh_token`.
 - Every client is public (`none`) and gets no secret. There is no RFC 7592 management endpoint.
 - **The client id carries its registration.** It is `base64url(payload) "." base64url(tag)`, unpadded. The payload is
@@ -162,7 +167,9 @@ nothing.
   the request encoded as the client id's payload is, its own label keeping its tags apart from client ids', and valid
   for 10 minutes: client,
   `redirect_uri`, `state`, `code_challenge`, `resource`, scope and the time. The page's first post, the sign-in, checks
-  the signature and the age, and only then, with a person signed in, is the request stored in `oauth_pending`. Every
+  the signature and the age, then the request again as `/authorize` did (a known client, the configured callback, the
+  canonical resource, the scopes), so the key vouches only for what the home re-derives and a copy of it from a backup
+  can't name another redirect. Only then, with a person signed in, is the request stored in `oauth_pending`. Every
   later step uses only the stored values. So the first row anyone on the internet can cause belongs to a person who
   has just typed their password.
 - **The sign-in.** The page always asks for the password, even when the browser has a session. The session cookie is
@@ -495,8 +502,9 @@ these against it, and update this spec where it differs:
   - every connector route answers 404 on any origin but the public one, and none exists without `--public-origin`.
 - **Registration:**
   - only the configured callback is accepted, character for character (an upper-case host is refused);
-  - the 8 KB body in bytes (a body under 8,192 characters but over 8,192 bytes is refused), the 100-character
-    `client_name` with no Cc, Cf or lone surrogate, exactly 1 `redirect_uri`, and `grant_types` bounds;
+  - the 8 KB body in bytes (a body under 8,192 characters but over 8,192 bytes is refused), a `client_name` of 100
+    characters and 200 bytes as the id escapes it (67 quotes and 33 emoji is refused) with no Cc, Cf, Zl, Zp or lone
+    surrogate, exactly 1 `redirect_uri`, and `grant_types` bounds;
   - no client gets a secret, and `/register` writes nothing (the store is unchanged after a thousand registrations);
   - an id with a changed byte, another home's key, another callback or an unknown `v` is unknown at `/authorize` and
     `/token`; an id whose payload `/register` would refuse is unknown even with a valid tag;
