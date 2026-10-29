@@ -405,8 +405,10 @@ class Connector:
 
     def exchange_code(self, form, resource, callback):
         """grant_type=authorization_code (RFC 6749 4.1.3, RFC 7636 4.6). A guessed or wrong code writes nothing (Rio
-        Grande's 4). A real code presented again is refused and revokes the grant it made, so everything issued from it
-        goes (4.1.2): the only write /token can cause without a pair is one that needs a code an Allow minted."""
+        Grande's 4), and a used code presented without its client, redirect and verifier is a wrong one: a code can sit
+        in browser history, so that holder can't cut the connection (the security review). The code presented again
+        with all three is the theft RFC 6749 4.1.2 means: refused, and the grant it made is revoked, so everything
+        issued from it goes. So the only writes /token can cause need a code an Allow minted and its verifier."""
         from .auth import token_hash
         if not all(isinstance(form.get(name), str) and form[name] for name in ('code', 'client_id', 'redirect_uri',
                                                                                   'code_verifier')):
@@ -420,15 +422,17 @@ class Connector:
             row = db.execute('SELECT * FROM oauth_pending WHERE code_hash=?', (token_hash(form['code']),)).fetchone()
             if row is None:
                 raise OAuthError(400, 'invalid_grant')
+            challenge = _b64(hashlib.sha256(form['code_verifier'].encode()).digest())
+            if (row['client_id'] != form['client_id'] or row['redirect_uri'] != form['redirect_uri']
+                    or not VERIFIER_FORM.fullmatch(form['code_verifier'])
+                    or not hmac.compare_digest(challenge, row['challenge'])):
+                raise OAuthError(400, 'invalid_grant')  # before any write: a code alone proves nothing
             if db.execute('SELECT 1 FROM connector_tokens WHERE code_hash=? LIMIT 1', (row['code_hash'],)).fetchone():
                 db.execute('UPDATE connector_grants SET revoked=? WHERE id=? AND revoked IS NULL', (now, row['grant_id']))
                 db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?', (now, row['grant_id'], now))
                 refused = OAuthError(400, 'invalid_grant')  # raised after the commit, so the revoke stays
             else:
-                challenge = _b64(hashlib.sha256(form['code_verifier'].encode()).digest())
-                if (not now < row['code_expires'] or row['client_id'] != form['client_id']
-                        or row['redirect_uri'] != form['redirect_uri'] or not VERIFIER_FORM.fullmatch(form['code_verifier'])
-                        or not hmac.compare_digest(challenge, row['challenge'])):
+                if not now < row['code_expires']:
                     raise OAuthError(400, 'invalid_grant')
                 grant = self._live_grant(db, row['grant_id'], now)
                 if grant is None:
@@ -456,12 +460,15 @@ class Connector:
             row = db.execute("SELECT * FROM connector_tokens WHERE hash=? AND kind='refresh'", (presented,)).fetchone()
             owner = db.execute('SELECT client_id FROM connector_grants WHERE id=?', (row['grant_id'],)).fetchone() \
                 if row is not None else None
-            if row is None or owner is None or owner['client_id'] != form['client_id'] or not now < row['expires']:
+            if row is None or owner is None or owner['client_id'] != form['client_id']:
                 raise OAuthError(400, 'invalid_grant')
             grant = self._live_grant(db, row['grant_id'], now)
             if grant is None:
                 raise OAuthError(400, 'invalid_grant')
-            if row['used'] is not None and now - row['used'] >= REUSE_SECONDS:
+            # A refresh token's end is its grant's, so one expired while its grant is live was rotated out by a reuse:
+            # its chain was split, and one branch isn't the client's. So it revokes the grant, both branches with it
+            # (the security review); the person reconnects either way.
+            if not now < row['expires'] or row['used'] is not None and now - row['used'] >= REUSE_SECONDS:
                 db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (now, grant['id']))
                 db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?', (now, grant['id'], now))
                 refused = OAuthError(400, 'invalid_grant')

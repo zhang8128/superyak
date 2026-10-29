@@ -418,9 +418,11 @@ Origin; the consent page's posts keep it.
   `unsupported_grant_type` or `invalid_target`, 401 `invalid_client`. A session cookie is never read.
   - `grant_type=authorization_code` with `code`, `client_id`, `redirect_uri` and `code_verifier` (and `resource`,
     which must be this home's): the code's client and redirect exactly, its S256 verifier, within its 60 s. A wrong or
-    guessed code writes nothing; a code used again is refused and revokes the connection it made.
+    guessed code, or a used one without its client and verifier, writes nothing; a code used again with both is
+    refused and revokes the connection it made.
   - `grant_type=refresh_token` with `refresh_token` and `client_id`: it rotates on every use. One presented again
-    within 60 s of its use gets a new pair, and the one it had is revoked; later, the connection is revoked.
+    within 60 s of its use gets a new pair, and the one it had is revoked; later, the connection is revoked, and so
+    does presenting a token that a reuse rotated out, since its chain was split.
   - It answers `{access_token, token_type: "Bearer", expires_in, scope[, refresh_token]}`. An access token (`syc_at_`)
     lasts an hour, never past its connection's end; a refresh token (`syc_rt_`) is given when the scope has
     `offline_access` and the client registered the `refresh_token` grant. Tokens are stored only as hashes.

@@ -993,6 +993,19 @@ def test_a_code_lasts_60_seconds_by_the_wall_clock(home):
     assert exchange(home, client, code).json() == {'error': 'invalid_grant'}
 
 
+def test_a_used_code_without_its_verifier_or_client_revokes_nothing(home):
+    """The security review: a used code can sit in browser history, so presenting it without its verifier, or for
+    another client, must not cut the person's connection. It is invalid_grant and writes nothing; only the code with
+    its client and verifier, the theft RFC 6749 4.1.2 means, revokes."""
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    other = register(home.app, {**REGISTRATION, 'client_name': 'Other'}).json()['client_id']
+    before = everything(home.store)
+    for override in ({'code_verifier': 'A' * 43}, {'client_id': other}, {'redirect_uri': CALLBACK + '/'}):
+        assert exchange(home, client, code, **override).json() == {'error': 'invalid_grant'}, override
+    assert everything(home.store) == before and bearer(home, first['access_token'])
+
+
 def test_a_second_use_of_a_code_revokes_what_it_issued(home):
     """RFC 6749 4.1.2: the code's second use is refused and revokes everything issued from it."""
     client, code = allowed(home)
@@ -1074,8 +1087,22 @@ def test_a_rotated_token_reused_within_60_seconds_gets_a_new_pair_and_kills_the_
     assert again.status_code == 200
     again = again.json()
     assert bearer(home, successor['access_token']) is None
-    assert refresh(home, client, successor['refresh_token']).json() == {'error': 'invalid_grant'}
     assert bearer(home, again['access_token']) and refresh(home, client, again['refresh_token']).status_code == 200
+
+
+def test_a_superseded_refresh_token_presented_again_revokes_the_grant(home):
+    """The security review: someone who took a used refresh token and presented it within the 60 s got a new pair and
+    killed the client's successor, and the client's next refresh only got invalid_grant, so the takeover went unseen.
+    A refresh token rotated out while its grant is still live can only come back from a chain that was split, so
+    presenting it revokes the grant, the other branch included. The person reconnects either way."""
+    client, code = allowed(home)
+    first = exchange(home, client, code).json()
+    successor = refresh(home, client, first['refresh_token']).json()
+    taken = refresh(home, client, first['refresh_token']).json()  # someone else, within the window
+    assert refresh(home, client, successor['refresh_token']).json() == {'error': 'invalid_grant'}
+    assert [grant['revoked'] for grant in table(home, 'connector_grants')] == [home.clock[0]]
+    assert bearer(home, taken['access_token']) is None
+    assert refresh(home, client, taken['refresh_token']).json() == {'error': 'invalid_grant'}
 
 
 def test_reuse_after_60_seconds_revokes_the_grant(home):
