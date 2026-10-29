@@ -48,6 +48,9 @@ and Playwright (`peer/tests/test_browser.py`). No new dependencies.
 
 ## Review Focus
 
+- **A marked room's text leaking by a side path**, the failure this whole connector exists to prevent: through
+  `search`'s one statement over both `messages` and `peer_messages`, through `fetch`'s two-before-and-two-after
+  expansion, or through a brief carried into a new linked room. One test exercises all three together. Test in Task 8.
 - **Consent submitted twice** (the back button after Allow, a double click): the second decision gets a plain error
   page and mints no second code. Test in Task 5.
 - **A person in hundreds of rooms:** `rooms()` over 100,000 characters is cut at a room boundary with
@@ -55,8 +58,6 @@ and Playwright (`peer/tests/test_browser.py`). No new dependencies.
 - **Non-ASCII search** (Cyrillic, emoji, accents): matches the exact substring; only ASCII folds case. Test in Task 8.
 - **A granted room that continues after consent:** adding a member makes a new linked room. The new room is refused
   as "isn't shared" until the person adds it, and the old room stays readable while they're in it. Test in Task 8.
-- **An access token at exactly its expiry second** gets 401 with `error="invalid_token"`, and its refresh token still
-  works until the grant ends. Test in Task 6.
 
 ---
 
@@ -71,7 +72,7 @@ and Playwright (`peer/tests/test_browser.py`). No new dependencies.
   including `/mcp`'s JSON-RPC.
 - Create `peer/superyak_peer/static/consent.html` and `consent.js`: the sign-in and consent page.
 - Modify `peer/superyak_peer/db.py:56,77` (mixins and schemas), `members.py:73` (`_add_members` carry and refusal),
-  `ships.py:283` (`_station_add` refusal), `chats.py:147` (`_room_fields` adds `cloud`), `app.py:47` (`PUBLIC_ROUTES`),
+  `ships.py:283` (`_station_add` refusal), `chats.py:14` (`_room` adds `cloud`), `app.py:47` (`PUBLIC_ROUTES`),
   `app.py:69-108` (`BrowserBoundary` exemptions), `app.py:261` (`create_app` parameters), `__main__.py:547-561`
   (`serve` flags), `static/app.js` (badge, mark control, Connected apps, admins' view, notice), `peer/API.md`,
   `peer/README.md`, `peer/pyproject.toml`.
@@ -89,7 +90,9 @@ and Playwright (`peer/tests/test_browser.py`). No new dependencies.
 - Produces: `RoomCloud._marked(db, room_id) -> bool`; `RoomCloud._cloud(db, room_id, actor_id) -> {'count': int,
   'mine': bool}`; `Store.mark_room(actor_id, key, earlier=True) -> {'marked': [room_id, ...], 'cloud': {...}}`;
   `Store.unmark_room(actor_id, key) -> {'cloud': {...}}`; `RoomCloud._refuse_ship_in_marked(db, room_id, member_ids)`
-  (raises `Problem(409, SHIP_REFUSED)`); `_room_fields` adds `cloud: {count, mine}` for every member.
+  (raises `Problem(409, SHIP_REFUSED)`); `_room(db, actor, key)` (chats.py:14), which has the viewer, adds `cloud:
+  {count, mine}` for every member, since `_room_fields` has no actor; `_add_members` sets `new['cloud']` again after
+  copying the marks, so the room it returns isn't shown unmarked.
 - Schema: `room_cloud(room_id TEXT, member_id TEXT, set_at REAL, PRIMARY KEY(room_id, member_id))`.
 - Copy: `SHIPS_FIRST = "This room has ships in it, and ships run on cloud models. Remove them first."`,
   `ASK_OWNER = "Ask {owner} to remove them first."` (`{owner}` is the owner's display name through `_account_name`),
@@ -135,11 +138,17 @@ Expected: FAIL (no `mark_room`).
 - [ ] **Step 3: Implement `RoomCloud` in `room_cloud.py`, and wire it**
 
 Add `RoomCloud` to the Store MRO (db.py:56) and `ROOM_CLOUD_SCHEMA` to the schemas (db.py:77). In `_add_members`
-(members.py:73), call `_refuse_ship_in_marked(db, room['id'], member_ids)` first, then after `_create_room` copy every
-`room_cloud` row from the old room to the new id. `_station_add` (ships.py:283) needs nothing extra, since it goes
-through `_add_members`. The owner's notice goes through `_post_as_system` (system_author.py:35), skipped when the same
-text was posted in that room within 86,400 s. Earlier rooms come from `_rooms_back` (grants.py:155), filtered to rooms
-the member is in.
+(members.py:73), call `_refuse_ship_in_marked(db, key, new_ids)` once `new_ids` is known (members.py:81) and before
+`_create_room`; after `_create_room`, copy every `room_cloud` row from the old room to the new id. `_station_add`
+(ships.py:283) needs nothing extra, since it goes through `_add_members`. Earlier rooms are
+`_earlier_with(db, room['owner_id'], room, actor_id)` (members.py:181), which already walks the chain for the rooms that
+still hold the member.
+
+The owner's notice goes through `_post_as_system(db, room_id, f'cloud-ask-{int(now)}', OWNER_TOLD)`
+(system_author.py:35), but only when no message in that room by the system author with text `OWNER_TOLD` was created
+in the last 86,400 s (a `SELECT` on `messages` first). The spec only says the owner is told; the 24-hour quiet is this
+plan's addition, so a member who retries doesn't flood the room. `_post_as_system`'s own key is permanent, which is why
+the key carries the time.
 
 - [ ] **Step 4: Run them to verify they pass**, then the whole peer suite.
 
@@ -153,7 +162,8 @@ the member is in.
 - Consumes: Task 1's `mark_room`, `unmark_room`, `cloud` on rooms.
 - Produces: `POST /api/chats/{key}/cloud` with body `{"earlier": bool}` (default true) and `DELETE
   /api/chats/{key}/cloud`, persons only (`actor(request)`), local keys only (a `:` key is 404). In app.js:
-  `cloudBadge(room)`, the control in `roomDetail` beside the room-management area (app.js:877) for every member, and
+  `cloudBadge(room)`, the control in `roomDetail` (app.js:931) beside its `room-management` block, which shows only to
+  the owner, for every member, and
   the add dialog's line "The new room keeps the mark."
 
 - [ ] **Step 1: Write the failing tests**
@@ -187,8 +197,9 @@ def test_a_member_marks_a_room_and_every_member_sees_the_badge(page, ...):
 **Interfaces:**
 - Produces: `create_app(..., public_origin: str | None = None, connector_callback: str = DEFAULT_CALLBACK)`. It raises
   `ValueError` unless `public_origin` is https, has no path, query or fragment, and is in `allowed_origins`. It stores
-  `app.state.public_origin`. `serve --public-origin URL` and `--connector-callback URL`; with `--public-origin`, uvicorn
-  runs with `access_log=False`.
+  `app.state.public_origin`. `serve --public-origin URL` and `--connector-callback URL`. Access logs are already off for
+  every `serve` (`access_log=False`, __main__.py:816): change nothing there, and add a test that they stay off with
+  `--public-origin` set.
 - Produces: `connector_routes.install(app, public_origin, callback)`, called by `create_app` only with a public origin;
   `on_public_origin(request) -> bool`; every route raises 404 when it's false.
 - Produces: in `connector.py`, `DEFAULT_CALLBACK`, `ISSUER_METADATA(issuer) -> dict`, `RESOURCE_METADATA(issuer) ->
@@ -218,6 +229,7 @@ def test_register_token_and_mcp_pass_the_boundary_without_an_origin(home): ...  
 def test_the_consent_posts_still_need_the_homes_origin(home): ...  # /authorize/signin without Origin: 403
 def test_no_connector_route_sends_cors_headers(home): ...  # no access-control-* header on any response
 def test_create_app_refuses_a_public_origin_outside_the_origins(tmp_path): ...  # ValueError; http:// too
+def test_serve_keeps_access_logs_off_with_a_public_origin(monkeypatch): ...  # uvicorn.run captured: access_log False
 ```
 
 In `test_public_route.py`, extend `ALLOWED` and add
@@ -273,7 +285,7 @@ def test_an_unused_registration_is_gone_after_24_hours(home):  # clock + 86,401,
 
 **Interfaces:**
 - Consumes: Task 4's tables; `check_password_attempt(username, password, source, *, public=True, device=None)`
-  (auth.py:229); `REPLACED_ROOMS` (common.py:9), `_rooms_back` (grants.py:155); Task 1's `_marked`.
+  (auth.py:229); `REPLACED_ROOMS` (common.py:9), `_rooms_back` (grants.py:199); Task 1's `_marked`.
 - Produces: `Store.check_client(client_id, redirect_uri)` (raises `OAuthError`, shown as a page, never a redirect);
   `Store.open_pending(params, issuer, resource) -> str` (raises `RedirectError(error)`, a subclass of `OAuthError` in
   `connector.py`, which the route redirects with `error`, `state` and `iss`); `Store.pending_view(pending_id) -> {'app', 'client_name', 'scope'}`;
@@ -354,14 +366,16 @@ def test_a_rotated_token_reused_within_60_seconds_gets_a_new_pair_and_kills_the_
 def test_reuse_after_60_seconds_revokes_the_grant(home): ...
 def test_no_refresh_past_the_grant_end(home): ...  # days=1, clock + 86,401: invalid_grant
 def test_a_token_for_another_home_is_refused(home): ...  # resource 'https://other.example/mcp': invalid_target
-def test_an_access_token_at_its_expiry_second(home):  # Review Focus: clock + 3,600 -> bearer None; refresh works
+def test_an_access_token_at_its_expiry_second(home):  # clock + 3,600 -> bearer None, 401 invalid_token; refresh works
 def test_a_person_made_activation_pending_loses_access(home): ...  # bearer None on the next call
 ```
 
 - [ ] **Step 2: Run them to verify they fail.**
 - [ ] **Step 3: Implement.** An access token's `expires` is `min(now + 3600, grant.ends)`; a refresh token's is the
-  grant's end. A refresh presented after use: within 60 s of `used`, mint a new pair and revoke every token with
-  `rotated_from` at or after the earlier successor; later, revoke the grant.
+  grant's end. A refresh presented after use: within 60 s of `used`, mint a new pair, then walk forward from the earlier
+  successor (the token whose `rotated_from` is the presented token's hash) through each token whose `rotated_from` is
+  the one before it, revoking every one of them and every access token issued with them; later than 60 s, revoke the
+  grant.
 - [ ] **Step 4: Run them to verify they pass.**
 - [ ] **Step 5: Commit.**
 
@@ -436,6 +450,10 @@ def test_fetch_returns_two_before_and_two_after(connected): ...
 def test_a_continuation_after_consent_is_refused_until_added(connected): ...  # Review Focus
 def test_a_room_marked_after_consent_is_refused_on_the_next_call(connected): ...
 def test_marked_rooms_vanish_from_every_tool_including_carried_briefs(connected): ...
+def test_a_marked_rooms_text_takes_no_side_path(connected):  # Review Focus, all three together:
+    # a marked room with a local message and a peer_messages message both holding 'zebra-417', next to a granted room;
+    # search('zebra-417') -> no result; fetch(<granted message next to the marked room's time>) -> no marked text;
+    # a member added (new linked room, carried brief 'brief-zebra') -> neither 'zebra-417' nor 'brief-zebra' anywhere
 def test_a_query_past_5_seconds_is_ended(connected): ...  # a progress handler forced slow: isError, answers < 30 s
 def test_one_receipt_per_call_with_ids_and_never_arguments(connected): ...  # the query string appears in no row
 def test_a_refused_or_failed_call_leaves_a_receipt(connected): ...
