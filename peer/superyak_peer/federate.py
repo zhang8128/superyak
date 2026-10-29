@@ -65,6 +65,9 @@ class Federate:
             self.stopping = True
         signal.signal(signal.SIGTERM, stop)
         while not self.stopping:
-            self.run_pass()
+            try:
+                self.run_pass()
+            except Exception:  # noqa: BLE001 - a pass's own reads (a locked store) never end federate (Rio Grande's SF4)
+                log.exception('federate: a pass failed; the next one goes on')
             if not self.stopping:
                 self.sleep(self.pass_seconds)

@@ -73,6 +73,27 @@ def test_federate_pulls_at_start_after_a_recovery_and_after_a_sleep_overrun(tmp_
     assert pulls == [1_000_000.0, 1_000_002.0, 1_000_043.0]
 
 
+def test_federate_survives_a_locked_store_in_its_own_reads(tmp_path, monkeypatch):
+    """Rio Grande's SF4: run_pass's own reads (the sync requests, the mode, the cards) sat outside every try, and run()
+    had none, so one locked database ended federate: a restart, an alert, and the acks held in memory dropped. A pass that
+    raises is logged now, and the next one goes on."""
+    import sqlite3
+    from superyak_peer.federate import Federate
+    clock, a, mac = puller(tmp_path)
+    wake = Wake()
+    loop = Federate(mac[2], clock=wake, sleep=wake.sleep)
+    real, calls = loop._requests, []
+
+    def requests():
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError('database is locked')
+        loop.stopping = len(calls) >= 3
+        return real()
+    monkeypatch.setattr(loop, '_requests', requests)
+    loop.run()
+    assert len(calls) == 3
+
 def test_federate_survives_a_pull_that_raises_and_still_pushes(tmp_path, monkeypatch):
     from superyak_peer.federate import Federate
     clock, a, mac = puller(tmp_path)
