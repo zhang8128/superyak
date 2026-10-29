@@ -579,6 +579,8 @@ it, not only as its diff reads.
 - [ ] Before a mutant result is trusted, it is shown that the mutant changed the file (`cmp` against the kept copy)
       and that the test written for it ran; a mutant counts as caught only when its own test fails (Serenity and
       Tardis, 2026-10-28: a `sed` that didn't apply and a `-k` that selected nothing each made a false survivor).
+      The unmutated copy is run first, and a test that fails there never counts as a kill (Serenity, 2026-10-29: a
+      scratch copy's own failure counted as 8 of 41 "kills", and two search filters were in fact unpinned).
 - [ ] No file in a worktree is edited, by hand or as a mutant, while a suite runs there: the run then tests a mix of
       two heads, and a subprocess test imports the mutated file. Check first with `pgrep -fa '[p]ytest'` run as a
       command of its own, and look for the worktree's path; see "Shell commands" for why (Rio Grande, 2026-10-29:
