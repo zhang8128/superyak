@@ -67,6 +67,7 @@ class RedirectError(OAuthError):
 # page's fragment with the home's key under its own label, and stored only at a good sign-in (D18).
 PENDING_SECONDS = 600
 STATE_MAX = 512  # characters; the state travels in the fragment, so it is bounded
+STATE = re.compile(r'[\x20-\x7e]{1,%d}' % STATE_MAX)  # RFC 6749 A.5: one or more VSCHAR, so the fragment stays bounded
 CHALLENGE = re.compile(r'[A-Za-z0-9_-]{43}')  # an S256 challenge: base64url of SHA-256, unpadded (RFC 7636)
 
 
@@ -89,8 +90,11 @@ def _encoded(body):
 def canonical_resource(value):
     """The resource with its scheme and host lowercased, as MCP asks a server to accept, or None if it isn't a plain
     https URL: no userinfo, query or fragment."""
-    parts = urlsplit(value) if isinstance(value, str) else None
-    if not parts or parts.username or parts.password or parts.query or parts.fragment or not parts.hostname:
+    try:
+        parts = urlsplit(value) if isinstance(value, str) else None
+        if not parts or parts.username or parts.password or parts.query or parts.fragment or not parts.hostname:
+            return None
+    except ValueError:  # one urlsplit can't parse, such as https://[ (Task 5's section 2, S3)
         return None
     return f'{parts.scheme.lower()}://{parts.netloc.lower()}{parts.path}'
 
@@ -193,7 +197,7 @@ class Connector:
         if params.get('code_challenge_method') != 'S256' or not CHALLENGE.fullmatch(params.get('code_challenge') or ''):
             raise RedirectError('invalid_request')
         state = params.get('state')
-        if state is not None and len(state) > STATE_MAX:
+        if state is not None and not STATE.fullmatch(state):
             raise RedirectError('invalid_request')
         if params.get('resource') is not None and canonical_resource(params['resource']) != resource:
             raise RedirectError('invalid_target')
@@ -232,8 +236,8 @@ class Connector:
         state, scope = body['state'], body['scope']
         if (type(body['v']) is not int or body['v'] != CLIENT_VERSION or type(body['at']) is not int
                 or not isinstance(body['client_id'], str) or not isinstance(body['challenge'], str)
-                or not CHALLENGE.fullmatch(body['challenge']) or not (state is None or isinstance(state, str))
-                or (state is not None and len(state) > STATE_MAX) or body['resource'] != resource
+                or not CHALLENGE.fullmatch(body['challenge'])
+                or not (state is None or isinstance(state, str) and STATE.fullmatch(state)) or body['resource'] != resource
                 or not isinstance(scope, str) or not scope
                 # SCOPES' own spelling, which also refuses a name outside SCOPES
                 or scope != ' '.join(name for name in SCOPES if name in scope.split(' '))):
@@ -249,12 +253,30 @@ class Connector:
             raise invalid from None
         return body | {'key': hashlib.sha256(tag).hexdigest(), 'client_name': known['name']}
 
-    def pending_sign_in(self, request, username, password, source, *, public=True, device=None):
-        """The sign-in, after pending_request passed: the password checked and counted as /api/login counts it
-        (check_password_attempt, which makes no session), and only then the row, keyed by the request so a second
-        sign-in on one fragment rebinds that row's person and CSRF token. A row already decided refuses it. Returns the
-        consent page's view, then sweeps. Refusals: 401 invalid_login, 429 too_many_attempts, 400 already_decided."""
+    def _rebind_refused(self, db, request, csrf):
+        """A refusal for signing in on a request that is decided, or already signed in without the token the page holds
+        for it (Task 5's section 2, S1: a copy of the fragment must not take someone's consent over); None otherwise."""
         from .auth import token_hash
+        row = db.execute('SELECT decided, csrf FROM oauth_pending WHERE request=?', (request['key'],)).fetchone()
+        if row is None:
+            return None
+        if row['decided'] is not None:
+            return OAuthError(400, 'already_decided')
+        if not isinstance(csrf, str) or not hmac.compare_digest(row['csrf'], token_hash(csrf)):
+            return OAuthError(403, 'invalid_request')
+        return None
+
+    def pending_sign_in(self, request, username, password, source, *, public=True, device=None, csrf=None):
+        """The sign-in, after pending_request passed: the password checked and counted as /api/login counts it
+        (check_password_attempt, which makes no session), and only then the row, keyed by the request. A request
+        already signed in is taken over (Switch person) only with the CSRF token its page holds, checked before the
+        password and again with the row; a decided one refuses it. Returns the consent page's view, then sweeps.
+        Refusals: 401 invalid_login, 429 too_many_attempts, 403 invalid_request, 400 already_decided."""
+        from .auth import token_hash
+        with self.transaction() as db:
+            refused = self._rebind_refused(db, request, csrf)
+        if refused is not None:  # before the password, so an attempt that can't succeed counts nothing
+            raise refused
         try:
             right = self.check_password_attempt(username, password, source, public=public, device=device)
         except Problem as refused:
@@ -262,32 +284,33 @@ class Connector:
             raise OAuthError(429, 'too_many_attempts') if refused.status == 429 else OAuthError(401, 'invalid_login')
         if not right:
             raise OAuthError(401, 'invalid_login')
-        csrf = secrets.token_urlsafe(32)
+        fresh = secrets.token_urlsafe(32)  # the request's new token; `csrf` is the one the page sent
         with self.transaction() as db:
             user = db.execute("SELECT id, name FROM users WHERE username=? AND kind='person' AND activation_pending=0",
                               (username,)).fetchone()
             if user is None:  # changed since the password was checked
                 raise OAuthError(401, 'invalid_login')
-            row = db.execute('SELECT id, decided FROM oauth_pending WHERE request=?', (request['key'],)).fetchone()
-            if row is not None and row['decided'] is not None:
-                raise OAuthError(400, 'already_decided')
+            refused = self._rebind_refused(db, request, csrf)  # again: another sign-in may have landed meanwhile
+            if refused is not None:
+                raise refused
+            row = db.execute('SELECT id FROM oauth_pending WHERE request=?', (request['key'],)).fetchone()
             if row is not None:
                 pending = row['id']
                 db.execute('UPDATE oauth_pending SET person_id=?, csrf=? WHERE id=?',
-                           (user['id'], token_hash(csrf), pending))
+                           (user['id'], token_hash(fresh), pending))
             else:
                 pending = secrets.token_urlsafe(16)
                 db.execute('INSERT INTO oauth_pending(id, request, client_id, redirect_uri, state, challenge, '
                            'resource, scope, at, person_id, csrf) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                            (pending, request['key'], request['client_id'], request['redirect_uri'], request['state'],
                             request['challenge'], request['resource'], request['scope'], request['at'], user['id'],
-                            token_hash(csrf)))
+                            token_hash(fresh)))
             rooms = self._consent_rooms(db, user['id'])
             self._connector_sweep(db)
-        return {'pending': pending, 'csrf': csrf, 'name': user['name'], 'app': app_name(request['redirect_uri']),
+        return {'pending': pending, 'csrf': fresh, 'name': user['name'], 'app': app_name(request['redirect_uri']),
                 'client_name': request['client_name'], 'scope': request['scope'], 'rooms': rooms}
 
-    def pending_decide(self, pending, csrf, allow, rooms, days=DAYS_MAX, *, issuer):
+    def pending_decide(self, pending, csrf, allow, rooms, days=DAYS_MAX, *, issuer, callback):
         """Allow or Deny, from the stored request only: its pending id and CSRF token (403 for a wrong token), within
         its ten minutes from /authorize, and once (400 already_decided after either). Deny sends access_denied. Allow
         takes the rooms chosen ("*" sent as itself, or current rooms of the person's that no member keeps away from
@@ -320,7 +343,8 @@ class Connector:
                 raise OAuthError(400, 'invalid_request')
             if type(days) is not int or not 1 <= days <= DAYS_MAX:
                 raise OAuthError(400, 'invalid_request')
-            known = self.known_client(db, row['client_id'], row['redirect_uri'])
+            # the configured callback, never only the stored one (Task 5's section 2, S2)
+            known = self.known_client(db, row['client_id'], callback) if row['redirect_uri'] == callback else None
             if known is None:  # the key rotated or the callback changed since the sign-in
                 raise OAuthError(400, 'invalid_request')
             grant, code = secrets.token_urlsafe(16), secrets.token_urlsafe(32)

@@ -56,7 +56,7 @@ function field(label, input) {
   return el("div", { class: "field" }, el("label", { for: input.id }, label), input);
 }
 
-function signIn(message = "") {
+function signIn(message = "", csrf = null) {
   const username = el("input", { class: "input", id: "username", autocomplete: "username", required: true });
   const password = el("input", {
     class: "input", id: "password", type: "password", autocomplete: "current-password", required: true,
@@ -67,7 +67,8 @@ function signIn(message = "") {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     status.textContent = "Signing in...";
-    const answer = await post("/authorize/signin", { request, username: username.value, password: password.value });
+    // Switch person sends the token this page holds: without it a request already signed in can't be taken over
+    const answer = await post("/authorize/signin", { request, username: username.value, password: password.value, ...(csrf ? { csrf } : {}) });
     if (answer.ok) return consent(answer.data);
     const code = answer.data.error;
     if (ENDED[code]) return ended(code);
@@ -131,7 +132,7 @@ function consent(view) {
   allow.addEventListener("click", () => decide(true));
   deny.addEventListener("click", () => decide(false));
   const switchPerson = el("button", { class: "button ghost", type: "button" }, "Switch person");
-  switchPerson.addEventListener("click", () => signIn());
+  switchPerson.addEventListener("click", () => signIn("", view.csrf));
   const lines = [
     `What ${app} reads can't be taken back.`,
     `${app}'s HIPAA agreement doesn't cover connectors.`,

@@ -180,6 +180,7 @@ nothing.
   token, and both end at Allow, at Deny, or after the 10 minutes.
 - **Allow and Deny** post the pending id with that CSRF token. Allow sends the browser to the stored `redirect_uri`
   with `code`, `state` and `iss`. Deny sends it with `error=access_denied`, `state` and `iss`.
+- **Known limit: a replayed request.** Anyone who has a `/authorize` URL (a client id, a redirect equal to the callback, a challenge of their own) can bring a person to this page, and an Allow then mints the same kind of code, bound to that request's state and PKCE. Nothing on the home tells a replay from the person's own request; the page's "Allow only if you just started connecting from your own Claude account" is the guard, and its line stays. A request already signed in is taken over only with the CSRF token its page holds (Task 5's section 2, S1), so a copy of the fragment can't swap who decides.
 - **Codes.** 256-bit random, single use, valid for 60 seconds, stored hashed. Each is bound to its client,
   `redirect_uri`, `resource`, scope, person and challenge, and `/token` checks every one. A second use of a code
   revokes everything issued from it (RFC 6749 section 4.1.2).

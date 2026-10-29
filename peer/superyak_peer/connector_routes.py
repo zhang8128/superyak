@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from .common import Problem
-from .connector import (DAYS_MAX, REGISTER_BODY_MAX, STATE_MAX, OAuthError, RedirectError, check_callback, issuer_metadata,
+from .connector import (DAYS_MAX, REGISTER_BODY_MAX, STATE, OAuthError, RedirectError, check_callback, issuer_metadata,
                         resource_metadata)
 
 NOT_YET = 'Not built yet'
@@ -87,8 +87,8 @@ def install(app, public_origin, callback):
 
         def back(error):
             state = params.get('state')
-            # a state refused as too long isn't sent back either (Tardis): only a bounded one goes in the Location
-            answer = {'error': error} | ({'state': state} if state is not None and len(state) <= STATE_MAX else {})
+            # a state refused for its length or its characters isn't sent back either (Tardis): only a good one is
+            answer = {'error': error} | ({'state': state} if state is not None and STATE.fullmatch(state) else {})
             return RedirectResponse(callback + '?' + urlencode(answer | {'iss': public_origin}), 303)
         if len(names) != len(set(names)):
             return back('invalid_request')
@@ -120,7 +120,8 @@ def install(app, public_origin, callback):
             username = data.get('username')
             lane, public, device = await request.app.state.sign_in_lane(request, username)
             view = await lane.run(store.pending_sign_in, pending, username, data.get('password'),
-                                  request.client.host if request.client else 'unknown', public=public, device=device)
+                                  request.client.host if request.client else 'unknown', public=public, device=device,
+                                  csrf=data.get('csrf'))
         except OAuthError as refused:
             return JSONResponse({'error': refused.error}, refused.status)
         except Problem as refused:  # the lane full, or a username that isn't text
@@ -145,7 +146,8 @@ def install(app, public_origin, callback):
             return JSONResponse({'error': 'invalid_request'}, 400)
         try:
             url = await run_in_threadpool(store.pending_decide, data.get('pending'), data.get('csrf'), data.get('allow'),
-                                          data.get('rooms'), data.get('days', DAYS_MAX), issuer=public_origin)
+                                          data.get('rooms'), data.get('days', DAYS_MAX), issuer=public_origin,
+                                          callback=callback)
         except OAuthError as refused:
             return JSONResponse({'error': refused.error}, refused.status)
         return JSONResponse({'redirect': url})

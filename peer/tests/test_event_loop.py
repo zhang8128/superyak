@@ -327,11 +327,12 @@ def test_every_async_write_checks_identity_before_it_reads_the_body(tmp_path, mo
 def test_the_connector_routes_are_walked_too(tmp_path, monkeypatch):
     """Tardis's forward point: with the connector on, its async write routes join the walk. Each one either takes no
     identity by design and is listed in ANONYMOUS (`/register`, spec r4 D18), or refuses an anonymous caller without
-    reading its body. Today only /register is async; a route Task 5 makes async meets this the day it does."""
+    reading its body. /register, /authorize/signin and /authorize/decision are async, and each is ANONYMOUS by design:
+    the first stores nothing, and the other two carry their identity in their body."""
     origin = 'https://home.example'
     app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver', origin], public_origin=origin)
     answers, seen = anonymous_answers(app, origin, monkeypatch)
-    assert 'register' in seen
+    assert {'register', 'signin', 'decision'} <= set(seen)
     assert {route: answer for route, answer in answers.items() if answer[0] not in (401, 403) or answer[1]} == {}
 
 
