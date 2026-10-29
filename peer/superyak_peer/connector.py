@@ -500,7 +500,7 @@ class Connector:
 
     def bearer(self, token, resource):
         """An access token's grant, checked on every call: its hash known and unexpired, its resource this one, its grant
-        live and its person active. {grant_id, person_id, rooms, scope}, or None. A refresh token is no bearer."""
+        live and its person active. {grant_id, person_id, rooms, scope, resource}, or None. A refresh token is no bearer."""
         from .auth import token_hash
         if not isinstance(token, str) or not token.startswith('syc_at_'):
             return None
@@ -512,7 +512,8 @@ class Connector:
             grant = self._live_grant(db, row['grant_id'], now)
             if grant is None:
                 return None
-            return {'grant_id': grant['id'], 'person_id': grant['person_id'], 'rooms': grant['rooms'], 'scope': row['scope']}
+            return {'grant_id': grant['id'], 'person_id': grant['person_id'], 'rooms': grant['rooms'], 'scope': row['scope'],
+                    'resource': row['resource']}
 
     def _consent_rooms(self, db, person_id):
         """The person's rooms on this home as the consent page offers them: each current room, its earlier parts

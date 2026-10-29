@@ -141,3 +141,143 @@ def test_shapes_and_iso_times(connected):
     assert read['messages'] == [{'id': message['id'], 'author': 'Sam Example', 'author_kind': 'person', 'time': EPOCH,
                                  'text': 'hello', 'reply_to': None}]
     assert read['brief'] is None and read['total'] == 1 and read['first_position'] == 0 and read['more'] is False
+
+
+# ---- search and fetch ----
+
+DOT = ' \u00b7 '  # the separator in a result's title: room title, author, date
+
+
+def remote_member(connected, room, name='Remy Remote', contact='remote_remy'):
+    """A member on a paired home, as federation leaves one: a peer, its contact, and the contact in the room."""
+    with connected.store.transaction() as db:
+        db.execute("INSERT OR IGNORE INTO peers(peer_id, card, paired) VALUES('peer-remy', '{}', 1)")
+        db.execute("INSERT OR IGNORE INTO remote_contacts VALUES(?, 'peer-remy', 'u-remy', ?)", (contact, name))
+        db.execute('INSERT OR IGNORE INTO remote_room_members VALUES(?, ?)', (room, contact))
+    return contact
+
+
+def remote_says(connected, room, text, contact='remote_remy'):
+    with connected.store.transaction() as db:
+        db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,1,?)',
+                   (f'pm-{text[:12]}-{room[:4]}', room, contact, f'c-{text[:12]}', text, connected.clock[0]))
+    return f'pm-{text[:12]}-{room[:4]}'
+
+
+def test_search_bounds_and_escapes(connected):
+    for query in ('', 'x' * 201, 7, None):
+        assert refused(call(connected, 'search', **({'query': query} if query is not None else {})))
+    plain = say(connected, connected.rooms[0], 'plain text')
+    connected.clock[0] += 1
+    percent = say(connected, connected.rooms[0], '100% done')
+    connected.clock[0] += 1
+    under = say(connected, connected.rooms[1], 'snake_case here')
+    assert [r['id'] for r in ok(call(connected, 'search', query='%'))['results']] == [percent['id']]
+    assert [r['id'] for r in ok(call(connected, 'search', query='_'))['results']] == [under['id']]
+    assert [r['id'] for r in ok(call(connected, 'search', query='E'))['results']] == [under['id'], percent['id'], plain['id']]
+    for n in range(25):
+        connected.clock[0] += 1
+        say(connected, connected.rooms[0], f'many {n:02d}')
+    found = ok(call(connected, 'search', query='many'))['results']
+    assert len(found) == 20 and found[0]['title'].endswith(DOT.join(['', 'Sam Example', '1970-01-12']))
+    assert set(found[0]) == {'id', 'title', 'url'}
+    assert all('many' not in r['url'] for r in found)  # the url never carries the query
+
+
+def test_search_matches_non_ascii_exactly(connected):
+    """SQLite's LIKE folds ASCII case only, which is enough for phase 1: non-ASCII matches exactly as written."""
+    for text in ('\u0412\u0441\u0442\u0440\u0435\u0447\u0430 at noon', 'smile \U0001f642', 'Zo\u00eb wrote'):
+        say(connected, connected.rooms[0], text)
+        connected.clock[0] += 1
+    for query, count in (('\u0412\u0441\u0442\u0440\u0435\u0447\u0430', 1), ('\U0001f642', 1), ('Zo\u00eb', 1),
+                         ('ZOE', 0), ('ZO\u00cb', 0), ('zo\u00eb', 1)):
+        assert len(ok(call(connected, 'search', query=query))['results']) == count, query
+
+
+def test_search_is_one_statement(connected, monkeypatch):
+    """Store calls hold the process lock, so search is one bounded SQL statement, never a loop over rooms."""
+    import sqlite3
+    say(connected, connected.rooms[0], 'needle one')
+    say(connected, connected.rooms[1], 'needle two')
+    statements, connect = [], sqlite3.connect
+
+    def traced(*args, **kwargs):
+        db = connect(*args, **kwargs)
+        db.set_trace_callback(statements.append)
+        return db
+    monkeypatch.setattr(sqlite3, 'connect', traced)
+    assert len(ok(call(connected, 'search', query='needle'))['results']) == 2
+    searching = [s for s in statements if 'LIKE' in s.upper() and 'ESCAPE' in s.upper()]
+    assert len(searching) == 1 and 'LIMIT 20' in searching[0]
+    assert not [s for s in statements if 'FROM messages WHERE room_id' in s]  # no read of a whole room
+
+
+def test_search_reads_only_the_grants_rooms(connected):
+    andy = person(connected, 'andy@example.org', 'Andy Example')
+    other = connected.store.create_room(andy['id'], 'Andy alone', [])['id']
+    diary = connected.store.create_room(connected.person['id'], 'Diary', [])['id']
+    say(connected, other, 'secret needle', andy)
+    say(connected, diary, 'diary needle')
+    shared = say(connected, connected.rooms[0], 'shared needle')
+    assert [r['id'] for r in ok(call(connected, 'search', query='needle'))['results']] == [shared['id']]
+
+
+def test_fetch_returns_two_before_and_two_after(connected):
+    ids = []
+    for n in range(7):
+        connected.clock[0] += 1
+        ids.append(say(connected, connected.rooms[0], f'line {n}')['id'])
+    got = ok(call(connected, 'fetch', id=ids[3]))
+    assert set(got) == {'id', 'title', 'text', 'url'} and got['id'] == ids[3]
+    lines = [json.loads(line) for line in got['text'].split('\n')]
+    assert [line['id'] for line in lines] == ids[1:6]
+    assert set(lines[0]) == {'id', 'author', 'author_kind', 'time', 'text', 'reply_to'}
+    assert got['title'] == DOT.join(['Care plan', 'Sam Example', '1970-01-12'])
+    edge = [json.loads(line)['id'] for line in ok(call(connected, 'fetch', id=ids[0]))['text'].split('\n')]
+    assert edge == ids[:3]
+    assert refused(call(connected, 'fetch', id='nope')) == NO_SUCH
+
+
+def test_fetch_refuses_a_message_in_a_room_it_cant_read(connected):
+    andy = person(connected, 'andy@example.org', 'Andy Example')
+    other = connected.store.create_room(andy['id'], 'Andy alone', [])['id']
+    diary = connected.store.create_room(connected.person['id'], 'Diary', [])['id']
+    assert refused(call(connected, 'fetch', id=say(connected, other, 'not yours', andy)['id'])) == NO_SUCH
+    assert refused(call(connected, 'fetch', id=say(connected, diary, 'not shared')['id'])) == NOT_SHARED
+
+
+def test_search_and_fetch_urls(connected):
+    message = say(connected, connected.rooms[0], 'find me')
+    found = ok(call(connected, 'search', query='find me'))['results'][0]
+    assert found['url'] == 'https://home.example/#chats/' + connected.rooms[0]
+    assert ok(call(connected, 'fetch', id=message['id']))['url'] == found['url']
+
+
+def test_a_marked_rooms_text_takes_no_side_path(connected):
+    """Review Focus, all three together: a marked room's local and peer text, and a carried brief, appear in no tool."""
+    marked = connected.store.create_room(connected.person['id'], 'Marked', [])['id']
+    remote_member(connected, marked)
+    say(connected, marked, 'zebra-417 local')
+    remote_says(connected, marked, 'zebra-417 from afar')
+    connected.store.save_brief(connected.person['id'], marked, 'brief-zebra', 0)
+    connected.store.mark_room(connected.person['id'], marked)
+    connected.clock[0] += 1
+    beside = say(connected, connected.rooms[0], 'right beside it')
+    from connector_support import allowed, exchange
+    client, code = allowed(connected, rooms='*', state='st-all')
+    connected.tokens = exchange(connected, client, code).json()
+    andy = person(connected, 'andy@example.org', 'Andy Example')
+    later = connected.store.add_participants(connected.person['id'], marked, [andy['id']], carry_brief=1)['id']  # the brief's revision, carried
+    seen = json.dumps([ok(call(connected, 'search', query='zebra')), ok(call(connected, 'fetch', id=beside['id'])),
+                       ok(call(connected, 'rooms'))])
+    assert 'zebra-417' not in seen and 'brief-zebra' not in seen and later not in seen
+    assert refused(call(connected, 'read_room', room=later)) == MARKED
+
+
+def test_remote_authors_are_named_and_kinded(connected):
+    remote_member(connected, connected.rooms[0])
+    connected.clock[0] += 1
+    remote_says(connected, connected.rooms[0], 'hello from afar')
+    messages = ok(call(connected, 'read_room', room=connected.rooms[0]))['messages']
+    assert [(m['author'], m['author_kind']) for m in messages] == [('Remy Remote', 'remote')]
+    assert ok(call(connected, 'rooms'))['rooms'][0]['members'] == ['Remy Remote', 'Sam Example']

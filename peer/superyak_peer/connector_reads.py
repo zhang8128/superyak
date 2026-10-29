@@ -29,6 +29,25 @@ REFUSALS = {
 TOO_LONG = 'This read took too long. Ask for less, such as a smaller limit.'
 BAD_LIMIT = '`limit` must be a whole number from 1 to 100.'
 BAD_CURSOR = 'Give at most one of `before` and `since`, each a whole number from an earlier result.'
+SEARCH_RESULTS = 20
+DOT = ' \u00b7 '  # a search result's title: room title, author, date
+# search (spec "search is one bounded query"): one statement over local and paired homes' messages, with the membership,
+# room-set and mark filters inside it, never a post-filter and never a loop over rooms. LIKE folds ASCII case only.
+SEARCH_SQL = '''
+SELECT * FROM (
+  SELECT m.id, m.room_id, m.created, r.title, coalesce(u.name, 'Someone') AS author FROM messages m
+    JOIN room_members rm ON rm.room_id=m.room_id AND rm.user_id=:person JOIN rooms r ON r.id=m.room_id
+    LEFT JOIN users u ON u.id=m.author_id
+    WHERE m.body LIKE :pattern ESCAPE '\\' AND NOT EXISTS (SELECT 1 FROM room_cloud WHERE room_cloud.room_id=m.room_id)
+      AND (:every OR m.room_id IN (SELECT value FROM json_each(:rooms)))
+  UNION ALL
+  SELECT p.id, p.room_id, p.created, r.title, coalesce(c.name, 'Someone on another home') FROM peer_messages p
+    JOIN room_members rm ON rm.room_id=p.room_id AND rm.user_id=:person JOIN rooms r ON r.id=p.room_id
+    LEFT JOIN remote_contacts c ON c.id=p.author_id
+    WHERE p.body LIKE :pattern ESCAPE '\\' AND NOT EXISTS (SELECT 1 FROM room_cloud WHERE room_cloud.room_id=p.room_id)
+      AND (:every OR p.room_id IN (SELECT value FROM json_each(:rooms)))
+) ORDER BY created DESC, id LIMIT 20'''
+BAD_QUERY = '`query` must be text of 1 to 200 characters.'
 TEXT_CAP = 100_000  # characters of a result's JSON (Claude takes about 150,000); cut at a message or room boundary
 QUERY_SECONDS = 5  # SQLite's progress handler ends a connector query past this: it holds the store's lock while it runs
 DEFAULT_LIMIT, MAX_LIMIT = 30, 100
@@ -42,6 +61,16 @@ def iso(when):
 def size(value):
     """The characters a value takes as the result's JSON: what /mcp sends."""
     return len(json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')))
+
+
+def day(when):
+    return datetime.fromtimestamp(when, timezone.utc).strftime('%Y-%m-%d')
+
+
+def room_url(grant, room_id):
+    """The web app's route to a room (app.js's #chats/<id>) on this home's public origin, from the token's audience. It
+    never carries text or the query."""
+    return grant['resource'].removesuffix('/mcp') + '/#chats/' + room_id
 
 
 def whole(value, low, high=None):
@@ -231,6 +260,50 @@ class ConnectorReads:
         seen.reading(room_id)
         return result
 
+    def _tool_search(self, db, grant, args, seen):
+        """Messages whose text contains `query`, newest first, at most SEARCH_RESULTS, in ChatGPT's deep-research shape.
+        Its receipt lists the rooms in its results. It never says how many matches were hidden."""
+        query = args.get('query')
+        if not isinstance(query, str) or not 1 <= len(query) <= 200:
+            raise ToolRefused(BAD_QUERY)
+        pattern = '%' + query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+        every = grant['rooms'] == '*'
+        rows = db.execute(SEARCH_SQL, {'person': grant['person_id'], 'pattern': pattern, 'every': int(every),
+                                       'rooms': '[]' if every else grant['rooms']}).fetchall()
+        for row in rows:
+            seen.reading(row['room_id'])
+        return {'results': [{'id': row['id'], 'title': DOT.join([row['title'], row['author'], day(row['created'])]),
+                             'url': room_url(grant, row['room_id'])} for row in rows]}
+
+    def _tool_fetch(self, db, grant, args, seen):
+        """One message from `search`, with the 2 before and the 2 after it in its room, as JSON lines shaped as in
+        read_room; cut at a message boundary at TEXT_CAP, the message itself always kept."""
+        message_id = args.get('id')
+        if not isinstance(message_id, str) or not message_id or len(message_id) > 200:
+            raise ToolRefused(REFUSALS['no_such'])
+        row = db.execute('SELECT room_id FROM messages WHERE id=? UNION ALL SELECT room_id FROM peer_messages WHERE id=?',
+                         (message_id, message_id)).fetchone()
+        if row is None:
+            raise ToolRefused(REFUSALS['no_such'])
+        room_id = self._readable(db, grant, row['room_id'], seen)
+        order = self._message_order(db, room_id)
+        at = next(i for i, (mid, _) in enumerate(order) if mid == message_id)
+        begin = max(0, at - 2)
+        shaped = self._shaped(db, room_id, order[begin:at + 3])
+        target = shaped[at - begin]
+        title = db.execute('SELECT title FROM rooms WHERE id=?', (room_id,)).fetchone()[0]
+        result = {'id': message_id, 'title': DOT.join([title, target['author'], target['time'][:10]]), 'text': '',
+                  'url': room_url(grant, room_id)}
+        lines = [json.dumps(message, ensure_ascii=False, separators=(',', ':')) for message in shaped]
+        kept, budget = list(range(len(lines))), TEXT_CAP - size(result | {'truncated': True})
+        while len(kept) > 1 and sum(len(lines[i]) + 1 for i in kept) > budget:
+            kept.remove(max(kept, key=lambda i: (abs(i - (at - begin)), i)))  # the farthest goes first, later before earlier
+        result['text'] = '\n'.join(lines[i] for i in kept)
+        if len(kept) < len(lines):
+            result['truncated'] = True
+        seen.reading(room_id)
+        return result
+
     def _shaped(self, db, room_id, picked):
         """Messages as the tools give them: {id, author, author_kind, time, text, reply_to}, a display name for the
         author, `system` for the station's system author and `remote` for a member on a paired home."""
@@ -253,4 +326,5 @@ class ConnectorReads:
         return shaped
 
 
-TOOLS = {'rooms': ConnectorReads._tool_rooms, 'read_room': ConnectorReads._tool_read_room}
+TOOLS = {'rooms': ConnectorReads._tool_rooms, 'read_room': ConnectorReads._tool_read_room,
+         'search': ConnectorReads._tool_search, 'fetch': ConnectorReads._tool_fetch}
