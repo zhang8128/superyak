@@ -540,6 +540,9 @@ it, not only as its diff reads.
       old breadth (grep its callers, its fixtures and the specs that use it), not on the targeted files alone
       (Rio Grande, 2026-10-29: a card refused ships, and the first rail's lessons room pairs another home's ship
       through its card; three approvals missed it, and the whole suite caught it).
+- [ ] Before acting on an agent's notice or report, the work it names is checked as still open (`git merge-base
+      --is-ancestor <head> main` for a branch): a notice can fire again long after its work merged (Rio Grande,
+      2026-10-29: a day-old fixer's notice re-fired, and a post called a merged branch open and moved its pointer).
 - [ ] A mark, hold or refusal on a chain of linked rooms is checked, and probed, in both directions: the earlier
       rooms and the room that continues it (Tardis, 2026-10-28: a review walked a chain backwards only, and marking
       a replaced room left its live continuation able to take a ship).
