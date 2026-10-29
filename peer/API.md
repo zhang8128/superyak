@@ -382,8 +382,18 @@ Origin; the consent page's posts keep it.
 - `GET /.well-known/oauth-authorization-server` (RFC 8414): the issuer, its authorization, token and registration
   endpoints, `code` responses, the `authorization_code` and `refresh_token` grants, `none` client authentication,
   `S256` only, the scopes `rooms.read` and `offline_access`, and `authorization_response_iss_parameter_supported`.
-- `POST /register`, `GET /authorize`, `POST /authorize/request`, `/authorize/signin`, `/authorize/decision`,
-  `POST /token`, and `GET`, `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
+- `POST /register` (RFC 7591, stateless, spec D18): a JSON body of at most 8 KB (413 above), `redirect_uris` exactly
+  the one callback (else 400 `invalid_redirect_uri`), `grant_types` within `authorization_code` and `refresh_token`,
+  each once (default the first), `response_types` `["code"]`, `token_endpoint_auth_method` `none`, and a `client_name`
+  of at most 100 characters and 200 UTF-8 bytes as JSON escapes it, with no control, format or line-break character
+  and no lone surrogate, kept only as quoted data (else 400 `invalid_client_metadata`). Returns 201 `{client_id, client_id_issued_at, redirect_uris,
+  grant_types, response_types, token_endpoint_auth_method[, client_name]}`, never a secret. It writes nothing and takes
+  no lock, so it keeps no limit: the client id, at most 512 characters, carries the registration, signed with this
+  home's key (`connector_client_key` in `system_meta`, backed up) and bound to the callback. An id has no age limit; it
+  stops working only when the key or `--connector-callback` changes, except for a client a code has been issued to,
+  which `oauth_clients` then knows by its id. `serve --public-origin` needs `--proxy-headers`.
+- `GET /authorize`, `POST /authorize/request`, `/authorize/signin`, `/authorize/decision`, `POST /token`, and `GET`,
+  `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
 
 ## Grants
 

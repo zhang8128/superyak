@@ -2,7 +2,7 @@
 "Where it lives", "The home is its own authorization server")."""
 import pytest
 from fastapi.testclient import TestClient
-from connector_support import CALLBACK, PUBLIC_ORIGIN, home, public_client  # noqa: F401
+from connector_support import CALLBACK, PUBLIC_CLIENT, PUBLIC_ORIGIN, home, public_client  # noqa: F401
 
 RESOURCE = {'resource': 'https://home.example/mcp', 'authorization_servers': ['https://home.example'],
             'bearer_methods_supported': ['header'], 'scopes_supported': ['rooms.read']}
@@ -53,15 +53,15 @@ def test_every_connector_route_answers_a_public_request(home):
     client = public_client(home.app, origin=PUBLIC_ORIGIN)
     for method, path in CONNECTOR_PATHS:
         response = client.request(method, path, json={} if method == 'POST' else None)
-        expected = 200 if path.startswith('/.well-known/') else 501
+        expected = 200 if path.startswith('/.well-known/') else 400 if path == '/register' else 501  # {} is no registration
         assert response.status_code == expected, (method, path, response.status_code, response.text)
 
 
 def test_register_token_and_mcp_pass_the_boundary_without_an_origin(home):
     client = public_client(home.app)
-    for path in ('/register', '/token', '/mcp'):
+    for path, ran in (('/register', 400), ('/token', 501), ('/mcp', 501)):
         response = client.post(path)
-        assert response.status_code == 501, (path, response.text)  # the handler ran: never 'Same-origin request required'
+        assert response.status_code == ran, (path, response.text)  # the handler ran: never 'Same-origin request required'
 
 
 def test_the_body_bound_still_holds_where_the_origin_check_is_skipped(home):
@@ -135,3 +135,177 @@ def test_serve_keeps_access_logs_off_with_a_public_origin(tmp_path, monkeypatch)
     main(['serve', '--data-dir', str(tmp_path / 'peer'), '--origin', PUBLIC_ORIGIN, '--proxy-headers',
           '--public-origin', PUBLIC_ORIGIN, '--connector-callback', CALLBACK])
     assert ran['access_log'] is False and ran['app'].state.public_origin == PUBLIC_ORIGIN
+
+
+# ---- Task 4: registration (spec revision 4, "Registration (/register)", D18) ----
+
+REGISTRATION = {'redirect_uris': [CALLBACK], 'client_name': 'Claude', 'grant_types': ['authorization_code', 'refresh_token'],
+                'response_types': ['code'], 'token_endpoint_auth_method': 'none'}
+
+
+def register(app, body=None, source='203.0.113.5'):
+    client = TestClient(app, base_url=PUBLIC_ORIGIN, client=(source, 50000))
+    return client.post('/register', json=REGISTRATION if body is None else body)
+
+
+def raw_register(app, raw):
+    client = TestClient(app, base_url=PUBLIC_ORIGIN, client=PUBLIC_CLIENT)
+    return client.post('/register', content=raw, headers={'content-type': 'application/json'})
+
+
+def everything(store):
+    """Every table's rows: registration writes none of them."""
+    with store.transaction() as db:
+        tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        return {t: db.execute(f'SELECT * FROM "{t}" ORDER BY 1').fetchall() for t in tables}
+
+
+def test_a_registration_gets_a_public_client(home):
+    made = register(home.app)
+    assert made.status_code == 201, made.text
+    body = made.json()
+    assert set(body) == {'client_id', 'client_id_issued_at', 'redirect_uris', 'grant_types', 'response_types',
+                         'token_endpoint_auth_method', 'client_name'}
+    assert (body['redirect_uris'], body['grant_types'], body['response_types'], body['token_endpoint_auth_method'],
+            body['client_name'], body['client_id_issued_at']) == (
+        [CALLBACK], ['authorization_code', 'refresh_token'], ['code'], 'none', 'Claude', int(home.clock[0]))
+    assert register(home.app, {'redirect_uris': [CALLBACK]}).json()['grant_types'] == ['authorization_code']
+
+
+def test_registration_writes_nothing(home):
+    """D18: /register checks and writes nothing, so there is nothing to fill, evict or sweep: the store is unchanged
+    after a thousand registrations."""
+    before = everything(home.store)
+    for n in range(1000):
+        assert register(home.app, source=f'198.51.100.{n % 250}').status_code == 201
+    assert everything(home.store) == before
+
+
+def test_only_the_configured_callback_registers(home):
+    for uris in ([], [CALLBACK, CALLBACK], ['https://evil.example/callback'], [CALLBACK + '/'], CALLBACK,
+                 [CALLBACK.replace('claude.ai', 'CLAUDE.AI')]):
+        refused = register(home.app, {**REGISTRATION, 'redirect_uris': uris})
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_redirect_uri'}), uris
+    missing = {key: value for key, value in REGISTRATION.items() if key != 'redirect_uris'}
+    assert register(home.app, missing).json() == {'error': 'invalid_redirect_uri'}
+
+
+def test_registration_bounds(home):
+    """8 KB counted in bytes; a client_name of at most 100 characters and 200 bytes, with no Cc, Cf or lone surrogate;
+    grant types within authorization_code and refresh_token; code responses; no client secret. A refusal says only
+    its error."""
+    exact = b'{"redirect_uris": ["' + CALLBACK.encode() + b'"]'
+    exact += b' ' * (8192 - len(exact) - 1) + b'}'
+    assert raw_register(home.app, exact).status_code == 201
+    over = raw_register(home.app, exact[:-1] + b' }')
+    assert (over.status_code, over.json()) == (413, {'error': 'invalid_client_metadata'})
+    wide = ('{"redirect_uris": ["' + CALLBACK + '"], "x": "' + '\u00e9' * 4096 + '"}').encode()
+    assert len(wide.decode()) < 8192 < len(wide)  # under 8,192 characters, over 8,192 bytes
+    assert raw_register(home.app, wide).status_code == 413
+    for bad in ({'client_name': 'x' * 101}, {'client_name': '\u20ac' * 67}, {'client_name': 5},
+                {'client_name': 'a\x00b'}, {'client_name': 'a\x1bb'}, {'client_name': 'a\nb'},
+                {'client_name': 'Claude\u202e'}, {'client_name': 'a\u200bb'},
+                {'client_name': 'a\u2028b'}, {'client_name': 'a\u2029b'},  # line breaks, so a name is one line
+                {'client_name': '"' * 67 + '\U0001F600' * 33},  # 199 bytes, but 266 as the id carries it (MF1)
+                {'grant_types': ['implicit']}, {'grant_types': 'authorization_code'}, {'grant_types': []},
+                {'grant_types': ['refresh_token', 'refresh_token']}, {'response_types': ['token']},
+                {'token_endpoint_auth_method': 'client_secret_basic'}):
+        refused = register(home.app, {**REGISTRATION, **bad})
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_client_metadata'}), bad
+    surrogate = ('{"redirect_uris": ["' + CALLBACK + '"], "client_name": "a\\ud800b"}').encode()
+    assert raw_register(home.app, surrogate).json() == {'error': 'invalid_client_metadata'}
+    for raw in (b'not json', b'[]'):
+        assert raw_register(home.app, raw).json() == {'error': 'invalid_client_metadata'}, raw
+    assert register(home.app, {**REGISTRATION, 'client_name': '\u20ac' * 66}).status_code == 201  # 198 bytes
+    assert register(home.app, {**REGISTRATION, 'client_name': '"' * 34 + '\U0001F600' * 33}).status_code == 201  # 200
+
+
+def test_an_id_is_at_most_512_characters(home):
+    """The name's 200 bytes are counted as the id carries them, after JSON escaping (Task 4's re-check, MF1), so the
+    worst mixes of escapes and astral characters still make ids the 512 pre-check lets through."""
+    for name in ('"' * 100, '\\' * 100, '\u20ac' * 66, 'x' * 100, '"' * 34 + '\U0001F600' * 33,
+                 '\\' * 50 + '\u20ac' * 33 + 'x'):
+        made = register(home.app, {**REGISTRATION, 'client_name': name})
+        assert made.status_code == 201 and len(made.json()['client_id']) <= 512, (name[:3], len(made.json()['client_id']))
+        assert known(home, made.json()['client_id'])['name'] == name
+
+
+def known(home, client_id):
+    with home.store.transaction() as db:
+        return home.store.known_client(db, client_id, CALLBACK)
+
+
+def test_one_ordered_check_knows_a_client(home):
+    """Spec revision 4: a row with exactly this id first, else the tag (compare_digest), the version and the payload
+    checked again by /register's rules. Anything else is unknown."""
+    import base64
+    import hashlib
+    import hmac
+    import json
+    made = register(home.app).json()
+    assert known(home, made['client_id'])['name'] == 'Claude'
+    payload, tag = made['client_id'].split('.')
+    flipped = payload[:-1] + ('A' if payload[-1] != 'A' else 'B')
+    assert known(home, flipped + '.' + tag) is None  # a changed byte
+    with home.store.transaction() as db:
+        assert home.store.known_client(db, made['client_id'], CALLBACK + 'x') is None  # another callback
+
+    def mint(body, raw=None):
+        raw = raw or json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+        mac = hmac.new(home.store._connector_key, b'client\n' + raw + b'\n' + CALLBACK.encode(), hashlib.sha256).digest()
+        enc = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()  # noqa: E731
+        return enc(raw) + '.' + enc(mac)
+    good = {'v': 1, 'name': 'Claude', 'grant_types': ['authorization_code'], 'issued_at': 1}
+    assert known(home, mint(good)) is not None  # an unused id from long ago still works
+    assert known(home, mint({**good, 'v': 2})) is None  # an unknown version
+    assert known(home, mint({**good, 'name': 'x' * 101})) is None  # a payload /register would refuse
+    assert known(home, mint({**good, 'grant_types': ['implicit']})) is None
+    # Task 4's re-check, S1 and S3: with the key, only the payload /register itself makes is a client
+    for loose in ({**good, 'v': True}, {**good, 'v': 1.0}, {**good, 'extra': 1}, {**good, 'name': None},
+                  {**good, 'issued_at': -1}, {**good, 'issued_at': '1'}, {**good, 'issued_at': 1.5}):
+        assert known(home, mint(loose)) is None, loose
+    assert known(home, mint(None, b'{"grant_types":["authorization_code"],"issued_at":1,"name":"x","name":"Claude","v":1}')) is None
+    assert known(home, mint(None, json.dumps(good, sort_keys=True).encode())) is None  # spaces: not canonical
+    alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    spare = tag[:-1] + alphabet[alphabet.index(tag[-1]) ^ 1]  # the tag's last character has 2 bits to spare
+    assert base64.urlsafe_b64decode(spare + '=') == base64.urlsafe_b64decode(tag + '=')
+    assert known(home, payload + '.' + spare) is None  # the same bytes, encoded another way (S3, R6)
+    assert known(home, 'no-dot') is None and known(home, '.') is None and known(home, '!!.!!') is None
+
+
+def test_a_connected_client_survives_a_key_rotation(home):
+    """Known by its row, never by its tag: rotating the key voids only unused ids (the reviewer's must-fix 1)."""
+    used = register(home.app).json()['client_id']
+    home.clock[0] += 1  # the same registration in the same second is the same id, which grants nothing either way
+    unused = register(home.app).json()['client_id']
+    assert used != unused
+    with home.store.transaction() as db:
+        db.execute('INSERT INTO oauth_clients VALUES(?,?,?,?)', (used, 'Claude', 'authorization_code', home.clock[0]))
+    home.store._connector_key = b'\x01' * 32  # a rotation
+    assert known(home, used) is not None and known(home, unused) is None
+
+
+def test_the_key_is_made_once_and_kept(tmp_path):
+    from superyak_peer.db import Store
+    first = Store(tmp_path / 'peer')._connector_key
+    assert len(first) == 32 and Store(tmp_path / 'peer')._connector_key == first
+
+
+@pytest.mark.parametrize('callback', ['http://claude.ai/api/mcp/auth_callback', CALLBACK + '#x', CALLBACK + '?x=1',
+                                      'https://user@claude.ai/api/mcp/auth_callback', 'claude.ai/api/mcp/auth_callback'])
+def test_create_app_refuses_a_callback_it_cant_match(tmp_path, callback):
+    """Task 3's review, N5: the one redirect is an https URL with no query, fragment or userinfo."""
+    from superyak_peer.app import create_app
+    with pytest.raises(ValueError):
+        create_app(tmp_path / 'peer', allowed_origins=[PUBLIC_ORIGIN], public_origin=PUBLIC_ORIGIN, connector_callback=callback)
+
+
+def test_serve_refuses_a_public_origin_without_proxy_headers(tmp_path, monkeypatch, capsys):
+    """Task 4's section 2, S4: behind Funnel without --proxy-headers every sender is 127.0.0.1, so the sign-in's holds
+    would be one shared bucket. serve refuses the pair at start."""
+    import uvicorn
+    from superyak_peer.__main__ import main
+    monkeypatch.setattr(uvicorn, 'run', lambda app, **options: None)
+    with pytest.raises(SystemExit) as stopped:
+        main(['serve', '--data-dir', str(tmp_path / 'peer'), '--origin', PUBLIC_ORIGIN, '--public-origin', PUBLIC_ORIGIN])
+    assert stopped.value.code == 1 and '--proxy-headers' in capsys.readouterr().err
