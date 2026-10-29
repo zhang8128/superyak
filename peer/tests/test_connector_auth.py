@@ -816,16 +816,21 @@ def test_the_first_allow_writes_the_clients_row(home):
 # exactly as /api/login is ----
 
 def test_the_decision_sends_a_code_only_to_the_configured_callback(home):
-    """S2: a request signed in under one --connector-callback isn't allowed under another; nothing is minted."""
+    """S2: a request signed in under one --connector-callback isn't allowed under another; nothing is minted. The
+    client is a connected one, known by its row, so the redirect's own comparison is what refuses it (the re-check's
+    R6)."""
     import pytest as _pytest
     from superyak_peer.connector import OAuthError
     person(home)
-    _, view = signed_in(home)
+    client, first = signed_in(home, state='st-first')
+    sent_back(decide(home, first, rooms='*'))  # now the client has its oauth_clients row
+    _, view = signed_in(home, client)
     with _pytest.raises(OAuthError) as refused:
         home.store.pending_decide(view['pending'], view['csrf'], True, '*', issuer=PUBLIC_ORIGIN,
                                   callback='https://other.example/callback')
     assert (refused.value.status, refused.value.error) == (400, 'invalid_request')
-    assert table(home, 'connector_grants') == [] and [row['decided'] for row in table(home, 'oauth_pending')] == [None]
+    assert len(table(home, 'connector_grants')) == 1  # the first connection's only
+    assert [row['decided'] for row in table(home, 'oauth_pending') if row['id'] == view['pending']] == [None]
 
 
 def counters(home):
@@ -881,3 +886,25 @@ def test_the_sign_in_waits_in_the_lane_api_login_uses(home, monkeypatch):
                                    'password': 'wrong'})
     sign_in(home, 'forged.request', password='wrong')
     assert used == [('public', 'pending_sign_in'), ('tailnet', 'pending_sign_in')]
+
+
+def test_a_sign_in_that_lands_during_anothers_password_check_keeps_the_request(home, monkeypatch):
+    """The re-check's R2: the second rebind check, with the row. Jenn passes the first check on a request nobody has
+    signed in on; while her password is being checked, sam signs in on it. Her sign-in is then refused, and the
+    request stays sam's."""
+    from superyak_peer.connector import OAuthError
+    sam = person(home)
+    person(home, 'jenn@example.org', 'Jenn Example')
+    store = home.store
+    request = store.pending_request(a_fragment(home), CALLBACK, RESOURCE_URL)
+    real = store.check_password_attempt
+
+    def meanwhile(username, password, source, **kwargs):
+        if username == 'jenn@example.org':
+            store.pending_sign_in(request, 'sam@example.org', 'long-password-sam', '203.0.113.9')
+        return real(username, password, source, **kwargs)
+    monkeypatch.setattr(store, 'check_password_attempt', meanwhile)
+    with pytest.raises(OAuthError) as refused:
+        store.pending_sign_in(request, 'jenn@example.org', 'long-password-jenn', '203.0.113.5')
+    assert (refused.value.status, refused.value.error) == (403, 'invalid_request')
+    assert [row['person_id'] for row in table(home, 'oauth_pending')] == [sam['id']]

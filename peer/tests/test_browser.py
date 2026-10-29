@@ -3865,3 +3865,24 @@ def test_deny_on_the_consent_page_sends_access_denied(connector_home):
     [url] = landed
     assert {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()} == {
         'error': 'access_denied', 'state': 'st-1', 'iss': CONSENT_ORIGIN}
+
+
+def test_switch_person_on_the_consent_page_hands_the_request_to_the_second_person(connector_home):
+    """The re-check's R10: Switch person sends the token the page holds, so the second person's sign-in takes the
+    request over, and their Allow makes their grant."""
+    home, landed = connector_home, []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            start_connecting(page, home)
+            sign_in_to_consent(page)
+            page.get_by_role('button', name='Switch person').click()
+            page.get_by_label('Username', exact=True).fill('jenn@example.org')
+            page.get_by_label('Password', exact=True).fill('long-password-jenn')
+            page.get_by_role('button', name='Sign in').click()
+            expect(page.get_by_text('Signed in as Jenn Example')).to_be_visible()
+            page.get_by_label('All my rooms, including new ones').check()
+            page.get_by_role('button', name='Allow').click()
+            expect(page.get_by_text('Back at Claude')).to_be_visible()
+    with home['store'].transaction() as db:
+        [(person,)] = db.execute('SELECT users.username FROM connector_grants JOIN users ON users.id=connector_grants.person_id')
+    assert person == 'jenn@example.org' and len(landed) == 1
