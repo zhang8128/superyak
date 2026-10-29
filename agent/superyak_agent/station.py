@@ -1,13 +1,17 @@
 """Ship-side station client and the machine's private ship configuration."""
 import functools
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import secrets
+import socket
+import struct
 import tempfile
 import time
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 import urllib.error
 import urllib.request
 from superyak_team.teamlib import fence_external
@@ -67,10 +71,90 @@ class StationError(Exception):
         super().__init__(f'{status}: {message}')
 
 
-def urllib_transport(timeout=30, limit=None):
+# fix:docked-ships-over-tailnet. A Mac's resolver can answer Funnel's public pair for the station's *.ts.net name while
+# MagicDNS answers its tailnet address, and every call then went out to the internet and back in through Funnel's relay
+# (health 299 ms against 36 ms on the tailnet, 2026-10-29). So a ship asks MagicDNS itself.
+MAGICDNS = ('100.100.100.100', 53)
+TAILNET = ipaddress.ip_network('100.64.0.0/10')
+PIN_SECONDS = 60
+_PINS = {}  # host -> (tailnet address or None, monotonic time it's kept until)
+
+
+def magicdns_address(host, server=MAGICDNS, timeout=0.05):
+    """The tailnet address MagicDNS gives `host`: an A record in 100.64.0.0/10 in the answer to this query (RFC 1035,
+    one question, one UDP datagram). None for no answer within `timeout`, an error, another query's answer, anything
+    malformed, or only addresses outside the tailnet."""
+    try:
+        labels = [part.encode('ascii') for part in host.rstrip('.').split('.')]
+    except UnicodeEncodeError:
+        return None
+    if not all(0 < len(part) < 64 for part in labels):
+        return None
+    ident = secrets.randbelow(1 << 16)
+    question = b''.join(bytes([len(part)]) + part for part in labels) + b'\x00' + struct.pack('>HH', 1, 1)
+    query = struct.pack('>HHHHHH', ident, 0x0100, 1, 0, 0, 0) + question
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect(server)  # a connected socket takes datagrams from the server only
+            sock.send(query)
+            answer = sock.recv(512)
+        got, flags, questions, records = struct.unpack('>HHHH', answer[:8])
+        if got != ident or not flags & 0x8000 or flags & 0x000F or questions != 1 or answer[12:12 + len(question)] != question:
+            return None
+        at = 12 + len(question)
+        for _ in range(records):
+            while answer[at] and answer[at] < 0xC0:  # the record's name: labels, then a zero or a pointer
+                at += 1 + answer[at]
+            at += 2 if answer[at] >= 0xC0 else 1
+            kind, klass, _ttl, size = struct.unpack('>HHIH', answer[at:at + 10])
+            data = answer[at + 10:at + 10 + size]
+            if len(data) < size:
+                return None
+            at += 10 + size
+            if kind == 1 and klass == 1 and size == 4 and ipaddress.IPv4Address(data) in TAILNET:
+                return str(ipaddress.IPv4Address(data))
+    except (OSError, struct.error, IndexError):
+        return None
+    return None
+
+
+def tailnet_pin(host, *, ask=magicdns_address, now=time.monotonic, pins=_PINS):
+    """Where to connect for `host`: its tailnet address when it's a *.ts.net name MagicDNS answers, else None (resolve as
+    usual). Each answer, a miss included, is kept PIN_SECONDS, so a short-lived hook asks once and a long-lived server
+    asks again a minute later."""
+    if not host or not host.endswith('.ts.net'):
+        return None
+    kept = pins.get(host)
+    if kept and kept[1] > now():
+        return kept[0]
+    address = ask(host)
+    pins[host] = (address, now() + PIN_SECONDS)
+    return address
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connects to `address`, while TLS (SNI and the certificate check) and the Host header stay on the URL's name."""
+
+    def __init__(self, host, *args, address, **kwargs):
+        super().__init__(host, *args, **kwargs)
+        self._create_connection = lambda where, *rest: socket.create_connection((address, where[1]), *rest)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, address):
+        super().__init__()
+        self.address = address
+
+    def https_open(self, req):
+        return self.do_open(functools.partial(_PinnedHTTPSConnection, address=self.address), req, context=self._context)
+
+
+def urllib_transport(timeout=30, limit=None, *, pin=tailnet_pin):
     """`timeout` bounds each socket operation (connect, each read), not the call. With `limit`, an answer longer than
     that many bytes raises ValueError once limit + 1 are in, so a huge or endless one costs no more than that (the
-    hook's board call, work board step 3 review I1)."""
+    hook's board call, work board step 3 review I1). An https station that `pin` names an address for is reached at
+    that address, directly, with no proxy (fix:docked-ships-over-tailnet)."""
     def read(response):
         if limit is None:
             return response.read()
@@ -81,8 +165,12 @@ def urllib_transport(timeout=30, limit=None):
 
     def send(method, url, headers, data):
         request = urllib.request.Request(url, data=data, method=method, headers=headers)
+        parts = urlsplit(url)
+        address = pin(parts.hostname) if parts.scheme == 'https' else None
+        opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}), _PinnedHTTPSHandler(address)) if address
+                  else None)
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with (opener.open(request, timeout=timeout) if opener else urllib.request.urlopen(request, timeout=timeout)) as response:
                 return response.status, read(response)
         except urllib.error.HTTPError as error:
             return error.code, read(error)
