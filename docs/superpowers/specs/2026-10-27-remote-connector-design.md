@@ -502,8 +502,9 @@ these against it, and update this spec where it differs:
   - every connector route answers 404 on any origin but the public one, and none exists without `--public-origin`.
 - **Registration:**
   - only the configured callback is accepted, character for character (an upper-case host is refused);
-  - the 8 KB body in bytes (a body under 8,192 characters but over 8,192 bytes is refused), the 100-character
-    `client_name` with no Cc, Cf or lone surrogate, exactly 1 `redirect_uri`, and `grant_types` bounds;
+  - the 8 KB body in bytes (a body under 8,192 characters but over 8,192 bytes is refused), a `client_name` of 100
+    characters and 200 bytes as the id escapes it (67 quotes and 33 emoji is refused) with no Cc, Cf, Zl, Zp or lone
+    surrogate, exactly 1 `redirect_uri`, and `grant_types` bounds;
   - no client gets a secret, and `/register` writes nothing (the store is unchanged after a thousand registrations);
   - an id with a changed byte, another home's key, another callback or an unknown `v` is unknown at `/authorize` and
     `/token`; an id whose payload `/register` would refuse is unknown even with a valid tag;
