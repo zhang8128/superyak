@@ -507,7 +507,11 @@ half, 3, 11, 12 and 13:
 - The whole peer suite on Tardis, browser tests included, against Task 0's baseline.
 - The wheel builds and imports `superyak_peer.listener` in a clean venv (`make peer-bundle`, and the packaging test,
   SF12). An editable checkout hides a missing module (lessons, tardis).
-- **Mutants**, each of which should fail a test:
+- **Mutants**, each of which should fail a test. Done at d1629417 (main 12a1943d merged in): all 22 below fail the test
+  written for each, run alone with `-k`, not merely some test in the file. Two needed a second definition. Pruning by
+  `at` with 300 s kept is safe, since the clock check refuses anything older; the real mutant stores arrival time,
+  which a future-skewed `at` replays past. The two pin mutants each change only their own path, so each is caught by
+  its own case (Tardis):
   - check 2 after the nonce insert;
   - busy taken before the signature;
   - nonces pruned by arrival with 300 s kept;
