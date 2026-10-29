@@ -412,7 +412,21 @@ Origin; the consent page's posts keep it.
   as `"*"` or a list of the person's current rooms no member keeps away from cloud models, each once, and `days` 1 to
   30 (30 by default), and answers `{redirect}` with a `code` (single use, 60 s), the `state` and `iss`. Deny answers
   `{redirect}` with `error=access_denied`, the `state` and `iss`.
-- `POST /token`, and `GET`, `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
+- `POST /token` (RFC 6749 4.1.3, 6): `application/x-www-form-urlencoded` only (anything else is 400 `invalid_request`
+  before parsing), a strict form with no name twice, at most 8 KB. Every answer carries `Cache-Control: no-store` and
+  `Pragma: no-cache`, and a refusal is `{error}` only: 400 `invalid_request`, `invalid_grant`,
+  `unsupported_grant_type` or `invalid_target`, 401 `invalid_client`. A session cookie is never read.
+  - `grant_type=authorization_code` with `code`, `client_id`, `redirect_uri` and `code_verifier` (and `resource`,
+    which must be this home's): the code's client and redirect exactly, its S256 verifier, within its 60 s. A wrong or
+    guessed code, or a used one without its client and verifier, writes nothing; a code used again with both is
+    refused and revokes the connection it made.
+  - `grant_type=refresh_token` with `refresh_token` and `client_id`: it rotates on every use. One presented again
+    within 60 s of its use gets a new pair, and the one it had is revoked; later, the connection is revoked.
+    Presenting a token that a reuse rotated out also revokes the connection, since its chain was split.
+  - It answers `{access_token, token_type: "Bearer", expires_in, scope[, refresh_token]}`. An access token (`syc_at_`)
+    lasts an hour, never past its connection's end; a refresh token (`syc_rt_`) is given when the scope has
+    `offline_access` and the client registered the `refresh_token` grant. Tokens are stored only as hashes.
+- `GET`, `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
 
 ## Grants
 

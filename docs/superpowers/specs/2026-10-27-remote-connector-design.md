@@ -19,6 +19,10 @@ Revision 4 is amended by Task 4's re-check (Rio Grande's fresh Pi reader): a nam
 escapes them, line breaks are refused with control and format characters, and the sign-in checks the pending request
 again, since the key is backed up. Two lines change, under "Registration" and "The authorization request".
 
+Revision 4 is amended again by Task 6's section 2 (the same reader): a used code alone writes nothing, presenting a
+refresh token that a reuse rotated out revokes its grant, at a stated cost to a client that refreshes from two workers
+at once, and the first week's revokes are read by their reason. Lines change under "Codes", "Tokens" and "Measure".
+
 ## Why
 
 Andy, 2026-10-27: "is superyak something that can be run from claude or chatgpt…", "or scientists or doctors". He is
@@ -199,7 +203,8 @@ nothing.
   section 2, S1), so a copy of the fragment can't swap who decides after that.
 - **Codes.** 256-bit random, single use, valid for 60 seconds, stored hashed. Each is bound to its client,
   `redirect_uri`, `resource`, scope, person and challenge, and `/token` checks every one. A second use of a code
-  revokes everything issued from it (RFC 6749 section 4.1.2).
+  revokes everything issued from it (RFC 6749 section 4.1.2), but only when it comes with its client, redirect and
+  verifier: a code alone can sit in browser history, and its holder writes nothing.
 - **`iss`** comes back in every authorization response (RFC 9207). MCP 2026-07-28 makes it a SHOULD, and ChatGPT's
   preferred redirect needs it (research 2).
 
@@ -235,7 +240,11 @@ It says, in plain words:
 - Refresh tokens rotate on every use. Claude refreshes on a 401 and up to 5 minutes before expiry, so a lost response
   or two overlapping refreshes can present a rotated token. A rotated token reused within 60 seconds gets a new pair
   and invalidates the earlier successor and anything issued from it, since the successor may already have been used
-  once. Reuse after the 60 seconds revokes the whole grant.
+  once. Reuse after the 60 seconds revokes the whole grant. So does presenting a token that such a reuse rotated
+  out while its grant is live: its chain was split, and one branch isn't the client's (RFC 9700 section 4.14.2). The
+  cost: a client whose two workers refresh one token at once, each keeping its own answer, loses the connection, not
+  one worker; a client that refreshes one at a time loses nothing. A revoke writes a fixed past end, never "now", so a
+  clock that steps back can't reopen it.
 - A grant ends at a fixed time, set at consent: 30 days by default, never more (the station's own grant ceiling,
   `max_expiry_hours: 720`, grants.py:57). No refresh token outlives its grant.
 - Errors answer 400 with `{"error": ...}`, one of:
@@ -613,6 +622,8 @@ A person Andy invited to his home, not one of the three ships, connects their Cl
 rooms, and asks Claude about them. A room someone marked stays hidden. The receipts show the reads and the refusals,
 and the person revokes the connection when they're done. Once, after the home's key is rotated on purpose, an unused
 registration is refused with `invalid_client`, and Claude registering again on its own is checked and written down.
+In the first week every revoke is read by its reason (board `build:connector-revoke-reason`): one nobody asked for is a
+finding, the split-chain rule's two-worker cost first among them.
 
 ## Decisions
 

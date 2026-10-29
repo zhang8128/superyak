@@ -22,6 +22,7 @@ from superyak_peer.__main__ import main as cli
 from superyak_peer.app import create_app
 from superyak_peer.auth import token_hash
 from superyak_peer.common import Problem
+from superyak_peer.connector import REVOKED
 from superyak_peer.db import Store
 from superyak_peer.door import create_door
 
@@ -1460,6 +1461,7 @@ RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'room_cloud',  # never to a cloud model: every mark either file holds is kept (fix:restore-keeps-every-cloud-mark)
     'connector_grants',  # connections: every revocation, end and narrowing either file holds (fix:restore-keeps-connector-revocations)
     'oauth_pending',  # connector sign-ins: every one cleared, so none decided or redeemed since the copy comes back (Tardis)
+    'connector_tokens',  # Task 6: the earlier expiry and any use either file holds, so no rotated token comes back unused
     'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
@@ -1995,3 +1997,120 @@ def test_a_narrowed_room_set_keeps_the_copys_order(tmp_path, capsys):
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
     assert code == 0, err
     assert json.loads(grants_in(copy)[grant]['rooms']) == [r1, r2]
+
+
+
+def a_token(store, grant, kind='refresh', *, used=None, expires=None):
+    import secrets as _secrets
+    from superyak_peer.auth import token_hash
+    value = token_hash(_secrets.token_urlsafe(16))
+    with store.transaction() as db:
+        db.execute('INSERT INTO connector_tokens VALUES(?,?,?,?,?,?,?,?,?)', (value, kind, grant, 'rooms.read', 'https://home.example/mcp',
+                   expires or store.clock() + 86400, None, used, None))
+    return value
+
+
+def tokens_in(path):
+    with closing(sqlite3.connect(path)) as db:
+        db.row_factory = sqlite3.Row
+        return {row['hash']: dict(row) for row in db.execute('SELECT * FROM connector_tokens')}
+
+
+def test_a_restore_keeps_every_token_use_and_revoke_the_replaced_file_had(tmp_path, capsys):
+    """Rio Grande, on the restore design: a refresh token rotated after the copy must not come back unrotated, and one
+    revoked since must not come back live. Each token the copy has takes the replaced file's earlier expiry and any use
+    it records; one the replaced file lacks is revoked. Without a replaced file every token is revoked, as its grant is."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    t = {name: a_token(store, grant) for name in ('used_since', 'revoked_since', 'gone_since', 'untouched')}
+    copy = staged(tmp_path, store)
+    before = tokens_in(copy)
+    later = store.clock() + 5
+    with store.transaction() as db:
+        db.execute('UPDATE connector_tokens SET used=? WHERE hash=?', (later, t['used_since']))
+        db.execute('UPDATE connector_tokens SET expires=? WHERE hash=?', (later, t['revoked_since']))
+        db.execute('DELETE FROM connector_tokens WHERE hash=?', (t['gone_since'],))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    after = tokens_in(copy)
+    assert after[t['used_since']]['used'] == later
+    assert after[t['revoked_since']]['expires'] == later
+    assert after[t['gone_since']]['expires'] == REVOKED  # a fixed past end, which a clock stepped back can't reopen (S1)
+    assert after[t['untouched']] == before[t['untouched']]
+    assert 'connector tokens taken back (3)' in out
+
+
+def test_without_a_replaced_file_every_token_is_revoked(tmp_path, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    for kind in ('refresh', 'access'):
+        a_token(store, grant, kind)
+    for ago in (2, 86400):  # ran out on their own, just before and a day before: ended too, not counted
+        a_token(store, grant, 'access', expires=time.time() - ago)
+    copy = staged(tmp_path, store)
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    assert {row['expires'] for row in tokens_in(copy).values()} == {REVOKED}
+    assert 'connector tokens taken back (2)' in out
+
+
+def test_a_restore_also_ends_tokens_that_ran_out_on_their_own_just_before_it(tmp_path, capsys):
+    """Rio Grande's restore reader's S1 (on step 4), in Task 6's tokens: only tokens still live by the clock were taken
+    back, so an access token the replaced file had revoked, whose own hour ran out seconds before the reconcile, kept
+    that time, and with its grant live a clock stepped back past it made it a bearer again. Every token in the copy now
+    takes the replaced file's facts; the count is still of the live ones."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    walked = [a_token(store, grant, 'access', expires=time.time() - ago) for ago in (2, 86400)]  # a day: R6's shape
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:  # the live file's walk revoked them after the copy
+        db.executemany('UPDATE connector_tokens SET expires=? WHERE hash=?', [(REVOKED, value) for value in walked])
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert [tokens_in(copy)[value]['expires'] for value in walked] == [REVOKED, REVOKED]
+    assert 'connector tokens taken back (0)' in out
+
+
+def test_a_replaced_file_damaged_in_a_token_column_revokes_every_token(tmp_path, capsys):
+    """The section 2's S2: the tokens' COMPARED line. A replaced file without `connector_tokens.used` is treated as
+    absent, so every connection and token is revoked; "not compared" would bring a token used since the copy back live
+    and unused."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    used = a_token(store, grant)
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute('UPDATE connector_tokens SET used=? WHERE hash=?', (store.clock(), used))
+        db.execute('ALTER TABLE connector_tokens DROP COLUMN used')
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert 'treated as absent' in out
+    assert tokens_in(copy)[used]['expires'] == REVOKED and grants_in(copy)[grant]['revoked'] is not None
+
+
+@pytest.mark.parametrize('column, value', [('expires', 'soon'), ('expires', float('inf')), ('used', 'yesterday')])
+def test_a_token_value_the_replaced_file_cant_give_revokes_it(tmp_path, capsys, column, value):
+    """The section 2's mutant 33 and its nit: an end that isn't a finite number, or a use that isn't one, revokes the
+    token. A `used` copied as text made the next refresh answer 500, not {error}."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    grant = connection(store, sam['id'])
+    damaged, fine = a_token(store, grant), a_token(store, grant)
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute(f'UPDATE connector_tokens SET {column}=? WHERE hash=?', (value, damaged))
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    after = tokens_in(copy)
+    assert after[damaged]['expires'] == REVOKED and after[fine]['expires'] > time.time()
