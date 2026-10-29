@@ -572,9 +572,9 @@ it, not only as its diff reads.
 - [ ] No file in a worktree is edited, by hand or as a mutant, while a suite runs there: the run then tests a mix of
       two heads, and a subprocess test imports the mutated file. Check first with `pgrep -fa '[p]ytest'` run as a
       command of its own, and look for the worktree's path; see "Shell commands" for why (Rio Grande, 2026-10-29:
-      two suite runs and one mutant run were thrown away).
+      three suite runs thrown away, two after a hand edit and one after a mutant).
 - [ ] Each reviewer agent gets a scratch folder of its own for its scripts, worktree and verdict, named in its brief:
-      two reviewers shared one `run.sh`, one overwrote the other's, and that one reran every mutant (Rio Grande's
+      two reviewers shared one `run.sh`, one overwrote the other's, and the other reran every mutant (Rio Grande's
       readers, 2026-10-29).
 - [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
       one from before the last migration (Tardis, 2026-10-29: removing the lost-identity check (G4b) looked harmless
