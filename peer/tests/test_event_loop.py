@@ -50,10 +50,11 @@ def reaches_the_store(name, services):
 def pairs(target, value):
     """(name, value) pairs, pairing tuples and lists of the same length one to one, nested ones too."""
     sequences = (ast.Tuple, ast.List)
-    if (isinstance(target, sequences) and isinstance(value, sequences) and len(target.elts) == len(value.elts)
-            and not any(isinstance(element, ast.Starred) for element in target.elts + value.elts)):
+    if isinstance(target, sequences) and isinstance(value, sequences) and len(target.elts) == len(value.elts):
         for inner_target, inner_value in zip(target.elts, value.elts):
-            yield from pairs(inner_target, inner_value)
+            # with equal lengths a starred name takes exactly one value, so only it is skipped (`s, *_ = store, who`)
+            if not isinstance(inner_target, ast.Starred) and not isinstance(inner_value, ast.Starred):
+                yield from pairs(inner_target, inner_value)
     else:
         yield target, value
 
@@ -295,6 +296,12 @@ def test_a_name_bound_to_an_identity_check_is_one():
 def test_a_nested_tuple_alias_is_a_service():
     read = reading('app.py', ("return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
                               "(s, n), k = (store, 1), key\n        return s.drop_item(who, k, data.get('key'))"))
+    assert ('app.py', 'chat_board_drop', 's.drop_item') in {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
+
+
+def test_a_starred_unpacking_still_pairs_the_other_names():
+    read = reading('app.py', ("return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
+                              "s, *_ = store, who\n        return s.drop_item(who, key, data.get('key'))"))
     assert ('app.py', 'chat_board_drop', 's.drop_item') in {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
 
 
