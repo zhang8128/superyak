@@ -322,6 +322,7 @@ def test_a_restore_ends_waiting_items_as_a_fact_that_a_clock_stepping_back_keeps
     copy = staged(tmp_path, store)
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
     assert code == 0, err
+    assert 'pending access requests expired (1)' in out and 'waiting dockings expired (1)' in out
     stepped_back = time.time() - 5  # the Pi's clock, set back a few seconds after the reconcile
     go_live(copy, tmp_path / 'live')
     live = Store(tmp_path / 'live', clock=lambda: stepped_back)
@@ -331,6 +332,33 @@ def test_a_restore_ends_waiting_items_as_a_fact_that_a_clock_stepping_back_keeps
         live.decide_access_request(andy['id'], request['id'], True)
     with pytest.raises(Problem):
         live.confirm_docking(andy['id'], waiting['id'], waiting['code'])
+    with live.transaction() as db:  # the value, not only its effect: a time an hour back would pass the 5 s step
+        assert db.execute('SELECT expires FROM access_requests WHERE id=?', (request['id'],)).fetchone()[0] == backups.ENDED
+        assert db.execute('SELECT expires FROM dockings WHERE id=?', (waiting['id'],)).fetchone()[0] == backups.ENDED
+
+
+def test_a_restore_also_ends_items_that_ran_out_on_their_own_just_before_it(tmp_path, capsys):
+    """The section 2 review's S1: step 4 ended only items still live by the clock, so one whose own lifetime ran out
+    seconds before the reconcile kept that time, and a clock stepped back past it made it approvable again. Every
+    pending request and waiting docking in the copy now ends as a fact; the report still counts only the live ones."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    request = store.request_access('Eve', 'eve@example.org', '')
+    waiting = store.start_docking('defiant', 'bazzite')
+    just_now = time.time() - 2
+    with store.transaction() as db:  # both ran out on their own two seconds ago
+        db.execute('UPDATE access_requests SET expires=? WHERE id=?', (just_now, request['id']))
+        db.execute('UPDATE dockings SET expires=? WHERE id=?', (just_now, waiting['id']))
+    copy = staged(tmp_path, store)
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    go_live(copy, tmp_path / 'live')
+    live = Store(tmp_path / 'live', clock=lambda: just_now - 5)
+    assert live.access_request_status(request['id'], request['secret'])['status'] == 'expired'
+    assert waiting['id'] not in [item['id'] for item in live.station_pending()]
+    with pytest.raises(Problem):
+        live.confirm_docking(andy['id'], waiting['id'], waiting['code'])
+    assert 'pending access requests expired (0)' in out and 'waiting dockings expired (0)' in out
 
 
 def peer_station(tmp_path):

@@ -462,12 +462,14 @@ ENDED = 0.0  # an end written as a fixed past time: one written as now comes und
 
 
 def _expire_waiting(db, old, now, report):
-    """Step 4: every pending access request and waiting docking ends, so requesters ask again. They end at ENDED, not
-    now, so a clock that steps back after the restore can't make one approvable again for those seconds."""
+    """Step 4: every pending access request and waiting docking ends, so requesters ask again. All of them end at
+    ENDED, not now, and so do the ones whose own lifetime ran out just before (the section 2 review's S1): a clock
+    that steps back after the restore can make none approvable again. The report counts the ones still live."""
     for table, status, label in (('access_requests', 'pending', 'pending access requests expired'),
                                  ('dockings', 'waiting', 'waiting dockings expired')):
         if _usable(db, None, report, f'{table}.expires', f'{table}.status'):
-            report['counts'][label] = db.execute(f'UPDATE {table} SET expires=? WHERE status=? AND expires>?', (ENDED, status, now)).rowcount
+            report['counts'][label] = db.execute(f'SELECT count(*) FROM {table} WHERE status=? AND expires>?', (status, now)).fetchone()[0]
+            db.execute(f'UPDATE {table} SET expires=? WHERE status=? AND expires>?', (ENDED, status, ENDED))
 
 
 IMPRINT_NEEDS = ('imprint_requests.id', 'imprint_requests.imprint_id', 'imprint_requests.status',

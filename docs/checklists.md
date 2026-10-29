@@ -563,9 +563,10 @@ it, not only as its diff reads.
 - [ ] A mark, hold or refusal on a chain of linked rooms is checked, and probed, in both directions: the earlier
       rooms and the room that continues it (Tardis, 2026-10-28: a review walked a chain backwards only, and marking
       a replaced room left its live continuation able to take a ship).
-- [ ] A revoke, expiry or end is recorded as a fact (a flag, or a fixed past time), never as `now` compared with a
-      clock later: a clock that steps back undoes it (Tardis's line, 2026-10-29, after the connector Task 6 review's
-      S1 found a walk revoke written as `now`; Serenity then found restore step 4 ending requests the same way).
+- [ ] A revoke or a forced end (an expiry set to end something now) is recorded as a fact (a flag, or a fixed past
+      time), never as `now` compared with a clock later: a clock that steps back undoes it (Tardis's line, 2026-10-29,
+      after the connector Task 6 review's S1 found a walk revoke written as `now`; Serenity then found restore step 4
+      ending requests the same way).
 - [ ] A file:line cited in a plan or review, including one copied from a spec, is checked against the current code
       before it is relied on: a copied citation is a claim, not a fact (Serenity, 2026-10-28: the connector plan
       carried a spec's stale pointers, and one instruction read against the real code would have turned access logs on).
