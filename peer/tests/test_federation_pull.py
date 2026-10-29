@@ -182,7 +182,8 @@ def test_only_a_verified_request_can_be_busy(pulling):
 
 def test_a_nonce_is_kept_for_as_long_as_a_replay_could_pass_the_clock(pulling):
     """Plan P6: pruned by the request's `at`, not by arrival. A request 299 s ahead of the listener's clock is valid
-    until `at` + 300; replayed 598 s later it still passes the clock, so its nonce must still be there."""
+    until `at` + 300; replayed 598 s later it still passes the clock, so its nonce must still be there. With a day's
+    keep this no longer tells `at` from arrival (storing `int(now)` would pass); the boundary test below pins the keep."""
     clock, a, peers, contacts = pulling
     early = request(peers['mac'], a, clock, at=int(clock()) + 299)
     a[2].serve_pull(canonical(early))
@@ -198,10 +199,38 @@ def test_a_clock_that_runs_ahead_and_is_set_back_prunes_no_nonce_a_replay_needs(
     start = clock.at
     first = request(peers['mac'], a, clock)
     a[2].serve_pull(canonical(first))
-    clock.at = start + 1200  # the clock jumps ahead, and a pull in that time prunes by it
+    clock.at = start + 1200  # both clocks jump ahead (one fake clock here), and a pull in that time prunes by it
     pull(peers['mac'], a, clock)
-    clock.at = start + 10  # and is set right
+    clock.at = start + 10  # and are set right
     refused(lambda: a[2].serve_pull(canonical(first)), 409, 'Replay')
+
+
+def test_a_nonce_is_kept_exactly_a_day_by_its_at_then_pruned(pulling):
+    """The keep's boundary (Rio Grande's reader, S2): a nonce is still there a day after its `at`, and gone a second
+    later, so the table stays bounded. Mutations: a shorter keep, `<=` in the prune, no prune at all."""
+    clock, a, peers, contacts = pulling
+    start = clock.at
+    first = request(peers['mac'], a, clock)
+    a[2].serve_pull(canonical(first))
+
+    def kept():
+        with a[0].transaction() as db:
+            return db.execute('SELECT 1 FROM pull_nonces WHERE nonce=?', (first['nonce'],)).fetchone() is not None
+    clock.at = start + 86400
+    pull(peers['mac'], a, clock)
+    assert kept()
+    clock.at = start + 86401
+    pull(peers['mac'], a, clock)
+    assert not kept()
+
+
+def test_the_nonce_prune_uses_an_index_on_at(pulling):
+    """The prune runs under the write lock on every verified pull, and a day's keep is about 144 times the rows, so it
+    must not scan (Rio Grande's reader, S1: 175 ms at 1.44 M rows without the index, 0.03 ms with it)."""
+    clock, a, peers, contacts = pulling
+    with a[0].transaction() as db:
+        plan = ' '.join(row[-1] for row in db.execute('EXPLAIN QUERY PLAN DELETE FROM pull_nonces WHERE at<?', (0,)))
+    assert 'pull_nonces_at' in plan, plan
 
 
 def mark_restored(a, value):

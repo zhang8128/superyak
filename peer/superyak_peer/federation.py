@@ -29,7 +29,9 @@ PULL_LIMIT, PULL_ASK, PULL_ROUNDS, PULL_AGAIN, PULL_NO_ROUTE = 20, 1024 * 1024, 
 CLOCKS_DIFFER = 'Clocks differ by more than 5 minutes'
 # A listener keeps a pull nonce a day by the request's own `at`, not the 600 s a replay needs: pruned by the local
 # clock, a clock that ran ahead and was set back would otherwise drop a nonce whose request still passes the 300 s
-# check (fix:pull-nonces-prune-margin). About 1,440 rows a day per pull peer pulling each minute.
+# check (fix:pull-nonces-prune-margin). The likely case is an unclean reboot of the Pi, whose clock comes back from
+# fake-hwclock's hourly save before time sync. At least 1,440 rows a day per pull peer pulling each minute (every
+# round and retry signs its own nonce), pruned through the index on `at`.
 NONCE_KEEP = 86400
 log = logging.getLogger(__name__)
 PROBLEM_CAP = 200  # characters of last_problem kept; a peer's words can be 64 KiB (Rio Grande's SF3)
@@ -399,8 +401,9 @@ class Federation:
         floor is the mark plus 300 s, whatever the copy's age or a peer's clock, and pulls wait out those 5 minutes
         once after a restore. A damaged mark falls back to this listener's own start, which follows every restore
         (runbook step 8): closed for 300 s, and no longer. Not covered: a rollback, which puts back a file with no newer
-        mark (runbook 10.4 waits more than 10 minutes instead, until fix:pull-floor-after-rollback writes one), and the
-        Pi's clock stepping backward between the stop and the reconcile."""
+        mark (runbook 10.4 waits more than 10 minutes instead, until fix:pull-floor-after-rollback writes one); the
+        Pi's clock stepping backward between the stop and the reconcile; and a clock stepping back more than
+        NONCE_KEEP - 300 s between a prune and a replay, which a per-origin floor would close."""
         restored = self._restored_at(db)
         return (self._started if restored is None else restored) + 300
 
