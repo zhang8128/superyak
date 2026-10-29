@@ -40,10 +40,10 @@ SECRET_RES = (
     re.compile(r"\b(?:https?|git|ssh)://[^/\s:@]+:[^@\s/]+@"),        # credentials in URLs
     re.compile(r"_authToken\s*=\s*\S+"),
 )
-# A team line: one that, as a reader sees it (NFKD, FOLD; without format characters, combining marks, default-ignorable code
-# points or characters that render blank; without leading space; any case), opens with "team" in any bracket pair,
-# then "from". Lines are split wherever str.splitlines splits them (\n, \r, VT, FF, the file, group and record
-# separators, NEL, U+2028, U+2029). A team message's "[team] from lead:" and the station's own header shape,
+# A team line: one that, as a reader sees it (NFKD, FOLD; without format characters, combining or enclosing marks,
+# default-ignorable code points or characters that render blank; without leading space; any case), opens with "team" in
+# any bracket pair, then "from". Lines are split wherever str.splitlines splits them (\n, \r, VT, FF, the file, group
+# and record separators, NEL, U+2028, U+2029). A team message's "[team] from lead:" and the station's own header shape,
 # "[team] from <name> (…) (quoted message; …)", are both team lines.
 # A run of non-letters may come first: bold, italics, a backtick, a quote, list or heading marker, a number, an emoji
 # (Tardis's review of 42620c0c, M1); bold is how a model reads a rendered team line.
@@ -57,11 +57,12 @@ BLANK = re.compile("[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u20
 # Letters from other scripts that a reader takes for the letters of "team" and "from", by the letter they read as.
 # Generated from Unicode's confusables.txt (UTS #39, version 18.0.0, 2026-08-06): each letter whose confusable target,
 # read as _seen_as reads it, is one of t, e, a, m, f, r or o, keyed in its own _seen_as form (NFKD, marks dropped,
-# casefolded); with the small capitals and Latin alpha and epsilon added by hand. Only these letters are folded, so a
-# line is never judged by its alphabet: text in any language is left as written (Rio Grande's review of 42620c0c, M1:
-# marking any bracket-led line with a non-ASCII letter marked 35 of 48 ordinary lines). Accented letters need no
-# entry, since NFKD splits the accent off as a combining mark, which _hidden drops; letters with a stroke, hook or bar
-# don't decompose, so they are listed.
+# casefolded); with the small capitals, Latin alpha and epsilon, and Cyrillic ya (which confusables.txt maps to the
+# small capital reversed R; Rio Grande's review of ecbeeaf5) added by hand. Only these letters are folded, so a line is
+# never judged by its alphabet: text in any language is left as written (Rio Grande's review of 42620c0c, M1: marking
+# any bracket-led line with a non-ASCII letter marked 35 of 48 ordinary lines). Accented letters need no entry, since
+# NFKD splits the accent off as a combining mark, which _hidden drops; letters with a stroke, hook or bar don't
+# decompose, so they are listed.
 LOOK_ALIKES = {
     "t": "\u0167\u01ab\u01ad\u0288\u03c4\u0442\u04ad\u07e0\u13a2\u13bf\u1d1b\u1d75\u2c66\u2ca7\u3112\u4e05"
          "\ua4d4\ua50b\ua68d\U00010297\U000102b1\U00010315\U000118dc\U00016f0a",  # 24
@@ -72,24 +73,47 @@ LOOK_ALIKES = {
     "f": "\u0192\u0284\u03dd\u0584\u07d3\u15b4\u1d6e\u1e9d\ua4dd\ua730\ua799\uab35\U00010287\U000102a5"
          "\U00010525\U000118c2",  # 16
     "r": "\u024d\u027c\u027d\u0280\u0433\u0493\u13a1\u13b1\u13d2\u1587\u1d26\u1d72\u2c85\ua4e3\uab47\uab48"
-         "\U000104dc\U00016a19\U00016f35",  # 19
+         "\U000104dc\U00016a19\U00016f35\u044f",  # 20
     "o": "\u00f8\u0275\u03b8\u03bf\u03c3\u03ed\u043e\u0473\u04e9\u0585\u05e1\u0629\u0647\u06be\u06c1\u06c3"
          "\u06d5\u06ff\u07cb\u0840\u0b20\u0d20\u101d\u10ff\u110b\u11bc\u12d0\u1340\u13a4\u13be\u13eb\u1a45"
          "\u1d0f\u1d11\u2c91\u2c9f\u2d31\u2d41\u2d54\ua4f3\ua6a2\ua74b\uab3d\uab3e\U00010292\U000102ab"
          "\U0001030f\U0001042c\U000104ea\U00010516\U0001051e\U0001092c\U00010c17\U00010d07\U00011124"
          "\U000118c8\U000118d5\U000118d7\U0001699b\U00016ae9",  # 60
 }
-FOLD = str.maketrans({char: letter for letter, chars in LOOK_ALIKES.items() for char in chars})
-# Long s, plain and with a dot above, read as "f", but NFKD turns them into "s" before FOLD sees them: folded first.
-LONG_S = str.maketrans({"\u017f": "f", "\u1e9b": "f"})
+# Letters Unicode names as one of those letters, or as long s, which reads as f, and which confusables.txt doesn't list:
+# with something attached that doesn't decompose (a curl, hook, notch, loop, bar or crossed tail), or in another form of
+# the same letter (insular, script, stirrup, barred, reversed, archaic, Old Polish, glottal, iotified, double, rotunda);
+# and the negative circled and squared capitals. Letters a reader takes for another letter are left out. Generated from
+# the names in Unicode 18.0's UnicodeData.txt (the pattern is test_team.py's NAMED_TAG_LETTER), each not already read as
+# its letter, keyed in _seen_as form (reversed capital E casefolds to turned e). A letter newer than this Python's
+# Unicode is keyed as both its capital and its small letter, since casefold doesn't pair them yet. 0adf7be9's rule
+# marked every one of these letters it knew (Serenity's review of d4f934a3; Rio Grande's and Tardis's of ecbeeaf5).
+NAMED_LOOK_ALIKES = {
+    "t": "\u0236\ua787\U0001df09\U0001df2a\U0001f163\U0001f183",  # 6
+    "e": "\u01dd\u0258\u1d92\u2c78\uab33\uab34\uab61\U0001df43\U0001df81\U0001f154\U0001f174",  # 11
+    "a": "\u1d8f\u2c65\ua7bb\U0001df40\U0001df41\U0001df80\U0001f150\U0001f170",  # 8
+    "m": "\u0271\u1d6f\u1d86\ua7ff\uab3a\U0001df4a\U0001df4b\U0001df4c\U0001f15c\U0001f17c",  # 10
+    "f": "\u1d82\u1e9c\ua77c\ua7fb\U0001df96\U0001f155\U0001f175",  # 7
+    "r": "\u027e\u027f\u1d19\u1d73\u1d89\ua75b\ua783\ua7a7\ua7e2\uab45\uab46\uab49\uab4a\uab4b\uab4c\uab6c\uab6d"
+         "\U0001df16\U0001df28\U0001df35\U0001df37\U0001df61\U0001f161\U0001f181",  # 24
+    "o": "\u2c7a\ua74d\ua7c1\U0001df1b\U0001df72\U0001df73\U0001f15e\U0001f17e",  # 8
+}
+FOLD = str.maketrans({char: letter for table in (LOOK_ALIKES, NAMED_LOOK_ALIKES) for letter, chars in table.items()
+                      for char in chars})
+# Letters NFKD would turn into something else before FOLD sees them, folded first: long s, plain and with a dot above,
+# reads as "f", though NFKD makes it "s"; a with a right half ring reads as "a", though NFKD leaves the ring as a
+# modifier letter after it.
+BEFORE_NFKD = str.maketrans({"\u017f": "f", "\u1e9b": "f", "\u1e9a": "a"})
 
 
 def _seen_as(line):
     """The line as a reader sees it: NFKD (compatibility forms made plain, accents split off), without hidden
-    (_hidden) or blank (BLANK) characters, without leading space, casefolded, with LONG_S's and FOLD's look-alike
-    letters folded."""
-    shown = BLANK.sub("", unicodedata.normalize("NFKD", line.translate(LONG_S)))
-    return "".join(c for c in shown if not _hidden(c)).lstrip().casefold().translate(FOLD)
+    (_hidden), enclosing-mark or blank (BLANK) characters, without leading space, casefolded, with BEFORE_NFKD's and
+    FOLD's look-alike letters folded. An enclosing mark (a circle or keycap around a letter) is dropped here, not in
+    _hidden, which the ticks layer shares (Tardis's review of ecbeeaf5)."""
+    shown = BLANK.sub("", unicodedata.normalize("NFKD", line.translate(BEFORE_NFKD)))
+    seen = "".join(c for c in shown if not _hidden(c) and unicodedata.category(c) != "Me")
+    return seen.lstrip().casefold().translate(FOLD)
 
 
 def _team_line(line):

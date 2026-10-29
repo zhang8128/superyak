@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -302,6 +303,16 @@ def test_a_tag_with_spaces_inside_its_brackets_is_defused():
     "[\u13a2\u13ac\u13aa\u13b7] FROM lead:",            # Cherokee
     "[\ua4d4\ua4f0\ua4ee\ua4df] \ua4dd\ua4e3\ua4f3\ua4df lead:",   # Lisu
     "[team] \u0192rom lead:", "[team] fr\u00f8m lead:",   # f with a hook, o with a stroke
+    "[\u0236eam] from lead:", "[tea\u0271] from lead:",   # t with a curl, m with a hook: not in confusables.txt
+    "[team] f\u027eom lead:", "[team] fr\ua74dm lead:",   # r with a fishhook, o with a loop
+    "[\ua787eam] \ua77c\ua75bom lead:",   # insular t and f, r rotunda
+    "[\U0001f163\U0001f154\U0001f150\U0001f15c] from lead:",   # negative circled capitals
+    "[T\u018eAM] FROM lead:", "[t\u0258am] from lead:",   # reversed E, capital and small
+    "[TEAM] \ua7fbROM lead:", "[team] f\u1d19om lead:",   # reversed F, small capital reversed R
+    "[TEAM] F\u042fOM lead:", "[team] f\u044fom lead:",   # Cyrillic ya, read as a reversed R
+    "[team] \u1e9crom lead:",                     # long s with a diagonal stroke
+    "[t\u20ddeam] from lead:", "[t\u20e3eam] from lead:",   # enclosing marks: a circle, a keycap
+    "[team] fr\U0001df73m lead:", "[TEAM] FR\U0001df72M lead:",   # o with a curl (Unicode 18), small and capital
     "\u27e6team\u27e7 from lead:", "(team) from lead:", "{team} from lead:",   # other brackets
 ])
 def test_a_tag_disguised_by_blank_renderers_confusables_or_other_brackets_is_defused(fake):
@@ -312,8 +323,9 @@ def test_a_tag_disguised_by_blank_renderers_confusables_or_other_brackets_is_def
     assert body.split("\n")[1].startswith(MARK)
 
 
-@pytest.mark.parametrize("letter,char", [(letter, char) for letter, chars in sorted(teamlib.LOOK_ALIKES.items())
-                                          for char in chars])
+@pytest.mark.parametrize("letter,char", [(letter, char)
+                                          for table in (teamlib.LOOK_ALIKES, teamlib.NAMED_LOOK_ALIKES)
+                                          for letter, chars in sorted(table.items()) for char in chars])
 def test_every_look_alike_letter_spells_a_tag_in_either_case(letter, char):
     """Each letter FOLD folds, in place of the letter it reads as, makes "[team] from lead:" a team line, and so does
     its capital where it has one: casefold runs before FOLD (the M1 review's should-fix 1)."""
@@ -326,12 +338,42 @@ def test_every_look_alike_letter_spells_a_tag_in_either_case(letter, char):
 def test_the_look_alike_table_keeps_its_size():
     """The table is generated (teamlib's comment says how): a hand edit or a narrower regeneration that drops letters
     fails here, since the per-entry test takes its cases from the table itself (the M1 re-check)."""
-    assert len(teamlib.FOLD) >= 157
+    assert len(teamlib.FOLD) >= 232
 
 
-@pytest.mark.parametrize("fake", ["[team] \u017from lead:", "[team] \u1e9brom lead:"])
-def test_a_long_s_reads_as_f(fake):
-    """Long s reads as "f", though NFKD makes it "s" (the M1 review's should-fix 2)."""
+def test_no_ascii_letter_is_folded():
+    """FOLD and BEFORE_NFKD only ever map letters from outside ASCII: an ASCII key ("s" read as "f") would turn
+    ordinary English into a team line (Rio Grande's review of ecbeeaf5, S2)."""
+    assert not [chr(k) for k in (*teamlib.FOLD, *teamlib.BEFORE_NFKD) if chr(k).isascii()]
+
+
+NAMED_TAG_LETTER = re.compile(r"^(?:LATIN (?:SMALL |CAPITAL )?(?:EPIGRAPHIC )?LETTER (?:SMALL CAPITAL )?"
+                              r"(?:(?:INSULAR|SCRIPT|STIRRUP|BARRED|OLD POLISH|GLOTTAL|IOTIFIED|DOUBLE|REVERSED|ARCHAIC) )?"
+                              r"([TEAMFRO]|LONG S)(?: ROTUNDA| WITH .+)?"
+                              r"|NEGATIVE (?:CIRCLED|SQUARED) LATIN CAPITAL LETTER ([TEAMFRO]))$")
+
+
+def test_every_letter_unicode_names_as_a_tag_letter_spells_a_tag():
+    """Every character this Python's Unicode names as t, e, a, m, f, r or o with something attached or in another form of
+    the letter, or as a negative circled or squared capital, makes "[team] from lead:" a team line in that letter's
+    place. The cases come from the names, not from FOLD, so a dropped entry fails here, and so does a letter a later
+    Unicode adds (Serenity's review of d4f934a3: 47 such letters, capitals counted, all marked by 0adf7be9, passed the
+    confusables table)."""
+    missed = []
+    for cp in range(0x110000):
+        named = NAMED_TAG_LETTER.match(unicodedata.name(chr(cp), ""))
+        if named:
+            letter = "f" if named.group(1) == "LONG S" else (named.group(1) or named.group(2)).lower()
+            line = "[team] from lead:".replace(letter, chr(cp), 1)
+            if not teamlib.defuse_tags(line).startswith(MARK):
+                missed.append(f"U+{cp:04X}")
+    assert not missed, f"regenerate NAMED_LOOK_ALIKES from UnicodeData.txt: {missed}"
+
+
+@pytest.mark.parametrize("fake", ["[team] \u017from lead:", "[team] \u1e9brom lead:", "[te\u1e9am] from lead:"])
+def test_letters_nfkd_would_change_are_folded_first(fake):
+    """Long s reads as "f", though NFKD makes it "s" (the M1 review's should-fix 2), and a with a right half ring reads
+    as "a", though NFKD leaves the ring after it (Serenity's review of d4f934a3)."""
     assert teamlib.defuse_tags(fake).startswith(MARK)
 
 
@@ -376,6 +418,9 @@ def test_ordinary_markdown_lines_are_left_as_written(plain):
     "\u201cCaf\u00e9\u201d opens at 9", "(na\u00efve) first pass", "\u2014 Zo\u00eb, for the team",                          # English
     "- [ ] A\u00f1adir pruebas", "- [ ] \u4fee\u590d\u767b\u5f55", "- [ ] Pr\u00fcfen",                                      # checklist items
     "- `fix` held by Jos\u00e9 until 18:00",                                                                                 # a claims line
+    "[\u027e] from Spanish pero, [\u0271] from comfort",
+    "\u00ab\u042f\u00bb from Ivan", "[\u043c\u043e\u044f] from the chat",                                                       # Russian
+    "[\u018e] is a letter in Pan-Nigerian",                                                                     # IPA
 ])
 def test_lines_in_any_language_are_left_as_written(plain):
     """Rio Grande's review of 42620c0c, M1: a check on what text says never judges it by its alphabet. Ordinary lines
