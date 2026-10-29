@@ -188,9 +188,13 @@ nothing.
     own Claude account" is the guard there, and it stays;
   - someone holding another person's URL can sign in as themselves and Allow, which mints a code for their own rooms
     bound to that person's state and PKCE; if that person's browser then follows the callback link, their Claude reads
-    the replayer's rooms. The copy line can't guard this, since that person never sees the page. What limits it is
-    that the replayer needs the URL, the callback link must reach that person's browser within the code's 60 s, and
-    it can only show the replayer's own rooms.
+    the replayer's rooms. The copy line can't guard this, since that person never sees the page. The harm is that the
+    replayer plants text they chose in that person's Claude context. What limits it is that the replayer needs the
+    URL, the callback link must reach that person's browser within the code's 60 s, and it can only show the
+    replayer's own rooms. Binding the request to the browser that opened it wouldn't help, since the replayer finishes
+    in their own browser (Tardis).
+  The one real guard is the URL itself: an `/authorize` URL is as private as that person's browser and Claude
+  session, and this home keeps it out of its own logs (`serve` runs with access logs off).
   Once someone has signed in on a request, it is taken over only with the CSRF token their page holds (Task 5's
   section 2, S1), so a copy of the fragment can't swap who decides after that.
 - **Codes.** 256-bit random, single use, valid for 60 seconds, stored hashed. Each is bound to its client,
