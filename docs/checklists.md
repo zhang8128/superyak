@@ -275,6 +275,9 @@ it too, since the words are a literal piece of the command. Its long form:
   from outside when the diff touches it; if a check fails, revert and restart. A security fix to a live route
   merges on the Pi, restarts and is probed before main is pushed, so its code is never public before the fix is
   live (the public route, 2026-10-27).
+- Each restart's stop is read, not only health after it: `systemctl --user show <unit> -p ActiveExitTimestamp -p
+  InactiveEnterTimestamp`. Health checked once `restart` returns can't see the 502s while the unit was stopping
+  (Serenity, 2026-10-29: every deploy's 25 to 41 s gap went unseen until she read health over the tailnet).
 - If it breaks at 3 a.m., what tells us, and who? Name the check: a dying unit alerts Odo in Ops; a running
   route is watched by route-watch once its timer is installed (Tardis says so in the room; `systemctl --user
   list-timers` on Tardis shows it); anything else, say that nothing watches it yet
