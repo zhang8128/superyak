@@ -3,8 +3,8 @@ A ship's own add (POST /api/ships/me/rooms/{key}/members) needs the ship in the 
 so the paths below are every way a ship can reach a marked room."""
 import pytest
 from superyak_peer.common import Problem
-from superyak_peer.room_cloud import ASK_OWNER, OWNER_TOLD, SHIP_REFUSED, SHIPS_FIRST
-from test_moderate_grants import city, login, moderate, notices  # noqa: F401
+from superyak_peer.room_cloud import ASK_OWNER, OWNER_TOLD, REMOTE_REFUSED, SHIP_REFUSED, SHIPS_FIRST
+from test_moderate_grants import city, login, moderate, notices, remote_contact  # noqa: F401
 
 
 def people_room(c, *names):
@@ -130,3 +130,18 @@ def test_only_a_member_marks_a_local_room(city):
     assert refused(c.store.mark_room, c.jenn['id'], 'peer:room')[0] == 404
     assert refused(c.store.mark_room, c.jenn['id'], room, earlier='yes')[0] == 400
     assert refused(c.store.unmark_room, c.doctor['id'], room)[0] == 404
+
+
+def test_a_member_on_another_home_isnt_added_to_a_marked_room(city):
+    """This home can't tell whether a member on a paired home is a ship (`card --as` exports any account's card), and
+    that home doesn't know the mark until federation carries it. So a marked room takes no new remote member; a room
+    that had one before it was marked keeps them (spec, "Rooms with members on other homes")."""
+    c = city
+    willa = remote_contact(c.store)
+    room = people_room(c, 'jenn')
+    c.store.mark_room(c.jenn['id'], room)
+    before = room_count(c.store)
+    assert refused(c.store.add_participants, c.andy['id'], room, [willa]) == (409, REMOTE_REFUSED)
+    assert room_count(c.store) == before
+    earlier = c.store.create_room(c.andy['id'], 'Clinic notes', [c.jenn['id'], willa])['id']
+    assert c.store.mark_room(c.jenn['id'], earlier)['cloud'] == {'count': 1, 'mine': True}

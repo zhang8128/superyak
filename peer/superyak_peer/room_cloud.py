@@ -14,6 +14,8 @@ SHIPS_FIRST = SHIPS_IN + ' Remove them first.'
 ASK_OWNER = SHIPS_IN + ' Ask {owner} to remove them first.'
 OWNER_TOLD = 'A member asked to keep this room away from cloud models. Remove the ships to let them.'
 SHIP_REFUSED = 'A member keeps this room away from cloud models, and ships run on cloud models.'
+REMOTE_REFUSED = ("A member keeps this room away from cloud models, and this home can't tell whether someone on another "
+                  "home is a ship, nor tell their home about the mark yet.")
 QUIET = 86400  # the owner is told once a day at most, so a member who tries again doesn't flood the room (the plan's)
 
 
@@ -37,9 +39,14 @@ class RoomCloud:
                           "WHERE room_members.room_id=? AND users.kind='ship'", (room_id,)).fetchone() is not None
 
     def _refuse_ship_in_marked(self, db, room_id, member_ids):
-        """D6: no ship joins a marked room, by any add path. Members on other homes are contacts, not users, and pass."""
+        """D6: no ship joins a marked room, by any add path. Nor does anyone on another home: this home can't tell a
+        remote contact's kind (`card --as` exports any account's card), and their home doesn't know the mark until
+        federation carries it, so a new one is refused, failing closed. A room that had one before it was marked keeps
+        them, as the spec says for "Rooms with members on other homes"."""
         if not member_ids or not self._marked(db, room_id):
             return
+        if any(m.startswith('remote_') for m in member_ids):
+            raise Problem(409, REMOTE_REFUSED)
         marks = ','.join('?' * len(member_ids))
         if db.execute(f"SELECT 1 FROM users WHERE kind='ship' AND id IN ({marks})", member_ids).fetchone():
             raise Problem(409, SHIP_REFUSED)
