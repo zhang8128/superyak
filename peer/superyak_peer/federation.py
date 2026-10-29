@@ -440,7 +440,7 @@ class Federation:
                         body = self._walk_row(db, key, PULL_CAP)
                         if body is None:
                             continue
-                        encoded = len(json.dumps(body, ensure_ascii=False)) + 1
+                        encoded = len(json.dumps(body, ensure_ascii=False).encode()) + 1  # bytes, as the listener sends
                         if envelopes and size + encoded > value['budget']:
                             break  # it waits for the next pull; one over the budget goes only alone
                         db.execute('UPDATE outbox SET attempts=attempts+1, next_attempt=0 WHERE id=?', (key,))
@@ -588,7 +588,7 @@ class Federation:
             db.execute("UPDATE outbox SET status='refused', last_error=? WHERE id=? AND status IN ('pending','failed')",
                        (classify(Local(error))[2], key))
             return None
-        if len(json.dumps(body, ensure_ascii=False)) + 1 > cap - 1024:
+        if len(json.dumps(body, ensure_ascii=False).encode()) + 1 > cap - 1024:  # bytes, as the listener sends (MF2)
             db.execute("UPDATE outbox SET status='refused', last_error=? WHERE id=? AND status IN ('pending','failed')",
                        ('413 Too large to pull', key))
             return None

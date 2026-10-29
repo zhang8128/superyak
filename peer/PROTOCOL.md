@@ -334,15 +334,18 @@ the declared `Content-Length` at no less than 64 KiB/s (a 5.8 MB response gets a
 100 s on a slow link, and a stalled one still ends). A 2xx needs a `Content-Length`
 within 6 MiB + 64 KiB, or it is refused unread. The puller asks for a 1 MiB budget.
 
-**Too large to pull.** Envelopes travel as JSON strings, so escaping grows them. A
-row whose encoded envelope alone can't fit within the cap less 1 KiB of frame is
-`refused` where it waits, `last_error` "413 Too large to pull": its owner sees "Too
-large to deliver by pull", with no Retry, and a smaller release is a new revision. The
-worst release the limits allow (100 files totalling 4 MiB with 120-character names, a
-body of 100,000 U+0001 characters and a 200-character title of the same) makes a
-6,228,581 B envelope and a 6,331,282 B response against the 6,356,992 B cap: a margin
-of 25,710 B. Any later change to the body, title or attachment limits has to revisit
-this cap.
+**Too large to pull.** The listener answers in compact UTF-8, and every size here is
+counted in those bytes. Envelopes travel as JSON strings, so escaping grows them: a
+control character costs 7 bytes in the answer (escaped twice), a quote or backslash 4,
+and any other character its UTF-8 bytes. A row whose encoded envelope alone can't fit
+within the cap less 1 KiB of frame is `refused` where it waits, `last_error` "413 Too
+large to pull": its owner sees "Too large to deliver by pull", with no Retry, and a
+smaller release is a new revision. The worst release the limits allow (100 files
+totalling 4 MiB with 120-character names, a body of 100,000 U+0001 characters and a
+200-character title of the same) makes a 6,229,026 B envelope and a 6,331,727 B answer
+against the 6,356,992 B cap: a margin of 25,265 B, measured through the listener's own
+encoding (test_listener). The same release in emoji answers 6,031,127 B. Any later
+change to the body, title or attachment limits has to revisit this cap.
 
 **The puller.** It keeps acks and refusals per listener until a request carrying them
 gets a 2xx. An envelope from any origin but the listener is dropped; the rest go to

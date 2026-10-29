@@ -15,7 +15,9 @@ ROUTES = {'/federation/events': ('receive', MAX_ENVELOPE), '/federation/pull': (
 
 
 async def _reply(send, status, value):
-    body = json.dumps(value).encode()
+    # UTF-8, compact: the bytes federation.py counts for P5 and the budget (Rio Grande's MF2). ASCII escapes made an
+    # astral character 12 bytes, which took a release P5 had passed over the transport's cap.
+    body = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()
     await send({'type': 'http.response.start', 'status': status,
                 'headers': [(b'content-type', b'application/json'), (b'content-length', str(len(body)).encode()),
                             (b'cache-control', b'no-store'), (b'x-content-type-options', b'nosniff')]})

@@ -83,6 +83,33 @@ def test_https_is_required_and_any_host_is_served(listening):
     assert answer.status_code == 400
 
 
+
+def largest_release(a, contact, char):
+    """The largest release the limits allow (plan P5, SF4): 100 files totalling 4 MiB with 120-character names, a body of
+    100,000 and a title of 200 of `char`."""
+    import base64
+    from superyak_peer.files import MAX_FILE
+    size = MAX_FILE // 100
+    ids = [a[0].upload_file(a[1], f'{n:03d}' + 'a' * 113 + '.pdf', 'application/pdf',
+                            base64.b64encode(b'%PDF-' + b'0' * (size - 5)).decode())['id'] for n in range(100)]
+    layer = a[0].create_layer(a[1], {'title': char * 200, 'body': char * 100_000, 'audience_users': [contact],
+                                     'attachment_ids': ids})
+    a[0].activate_layer(a[1], layer['id'], 1)
+
+
+@pytest.mark.parametrize('char', ['\x01', '\U0001F600'], ids=['control', 'astral'])
+def test_the_largest_release_pulls_through_the_real_listener_encoding(listening, char):
+    """Rio Grande's section 2, MF2: P5 and the budget count the bytes the listener sends. A control character costs 7
+    bytes in the answer, escaped twice, and is the worst case P5 computed; an astral one cost 12 while the listener sent
+    ASCII escapes, which took this release over PULL_CAP, refused unread at every pull for good. Both now arrive."""
+    from superyak_peer.transport import PULL_CAP
+    client, clock, a, pat, mo, contacts = listening
+    largest_release(a, contacts['mo'], char)
+    answer = client.post('/federation/pull', content=canonical(pull_request(mo, a, clock)))
+    assert answer.status_code == 200 and len(answer.content) <= PULL_CAP, len(answer.content)
+    [envelope] = answer.json()['envelopes']
+    assert mo[2].receive(envelope.encode())['ok']
+
 def listen(*args):
     return subprocess.run([sys.executable, '-m', 'superyak_peer', 'federation-listen', *map(str, args)],
                           capture_output=True, text=True, timeout=60)
