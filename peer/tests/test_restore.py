@@ -311,6 +311,28 @@ def test_reconcile_takes_back_every_other_step(tmp_path, capsys):
         assert secret not in out
 
 
+def test_a_restore_ends_waiting_items_as_a_fact_that_a_clock_stepping_back_keeps(tmp_path, capsys):
+    """fix:restore-expire-waiting-as-a-fact (Serenity, after the Task 6 review's S1): step 4 ended a pending access
+    request and a waiting docking with expires=now, so a clock that stepped back after the restore made both
+    approvable again for those seconds. A fixed past time holds whatever the clock does."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    request = store.request_access('Eve', 'eve@example.org', '')
+    waiting = store.start_docking('defiant', 'bazzite')
+    copy = staged(tmp_path, store)
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    stepped_back = time.time() - 5  # the Pi's clock, set back a few seconds after the reconcile
+    go_live(copy, tmp_path / 'live')
+    live = Store(tmp_path / 'live', clock=lambda: stepped_back)
+    assert live.access_request_status(request['id'], request['secret'])['status'] == 'expired'
+    assert waiting['id'] not in [item['id'] for item in live.station_pending()]
+    with pytest.raises(Problem):
+        live.decide_access_request(andy['id'], request['id'], True)
+    with pytest.raises(Problem):
+        live.confirm_docking(andy['id'], waiting['id'], waiting['code'])
+
+
 def peer_station(tmp_path):
     """A station with four peers and their contacts, outbox rows (pending, failed, delivered, sent) and inbox payloads."""
     store = Store(tmp_path / 'lighthouse')
