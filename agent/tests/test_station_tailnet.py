@@ -10,7 +10,8 @@ import subprocess
 import threading
 import pytest
 from superyak_agent import station
-from superyak_agent.station import magicdns_address, tailnet_pin, urllib_transport
+import time
+from superyak_agent.station import StationClient, client_for, magicdns_address, tailnet_pin, tailnet_unpin, urllib_transport
 
 NAME = 'station.tail0000.ts.net'
 
@@ -68,12 +69,18 @@ def trusted(tmp_path, monkeypatch):
     served.close()
 
 
-def test_a_ts_net_station_is_reached_at_its_pinned_address_with_tls_on_the_name(trusted):
+def test_a_ts_net_station_is_reached_at_its_pinned_address_with_tls_on_the_name(trusted, monkeypatch):
     """The connection goes to the pinned address; the certificate is checked against the name, and SNI and Host are the
-    name's, so the station can't tell the path apart."""
+    name's, so the station can't tell the path apart. The pinned opener is built once, since its TLS context costs
+    about 7 ms to make."""
+    import urllib.request
+    built, real = [], urllib.request.build_opener
+    monkeypatch.setattr(urllib.request, 'build_opener', lambda *handlers: built.append(1) or real(*handlers))
     send = urllib_transport(timeout=5, pin=lambda host: '127.0.0.1' if host == NAME else None)
     assert send('GET', f'https://{NAME}:{trusted.port}/api/health', {}, None) == (200, b'{"ok": true}')
-    assert trusted.seen == [(NAME, f'{NAME}:{trusted.port}', '/api/health')]
+    assert send('GET', f'https://{NAME}:{trusted.port}/api/me', {}, None)[0] == 200
+    assert trusted.seen == [(NAME, f'{NAME}:{trusted.port}', '/api/health'), (NAME, f'{NAME}:{trusted.port}', '/api/me')]
+    assert len(built) == 1
 
 
 def test_a_pinned_address_still_needs_the_names_certificate(tmp_path, monkeypatch):
@@ -98,6 +105,43 @@ def test_a_pinned_request_goes_direct_whatever_proxy_the_environment_names(trust
     monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:9')
     send = urllib_transport(timeout=5, pin=lambda host: '127.0.0.1')
     assert send('GET', f'https://{NAME}:{trusted.port}/api/me', {}, None)[0] == 200
+
+
+def test_an_address_that_wont_connect_falls_back_to_the_name_once_per_minute(tmp_path, monkeypatch):
+    """Tardis: MagicDNS can answer 100.x while the connect still fails (an ACL, a node shared in, serve down). The pinned
+    connect gives up after PIN_CONNECT; the call goes by the name as before, and the miss is kept, so the next call
+    doesn't wait again. 192.0.2.1 is TEST-NET-1 (RFC 5737), never routed. Mutation: no fallback, or no miss kept."""
+    import urllib.request
+    cert, key = certificate(tmp_path, 'localhost')
+    monkeypatch.setenv('SSL_CERT_FILE', str(cert))
+    # urlopen's global opener makes its TLS context once (Python 3.12 on), so one an earlier test made wouldn't trust this
+    # certificate: start a fresh one, as a new process would
+    monkeypatch.setattr(urllib.request, '_opener', None)
+    served = Station(cert, key)
+    asked, pins = [], {}
+    try:
+        send = urllib_transport(timeout=5, pin=lambda host: tailnet_pin(host, ask=lambda h: asked.append(h) or '192.0.2.1',
+                                                                          pins=pins, suffix=''),
+                                unpin=lambda host: tailnet_unpin(host, pins=pins))
+        began = time.monotonic()
+        assert send('GET', f'https://localhost:{served.port}/api/health', {}, None)[0] == 200
+        assert time.monotonic() - began < station.PIN_CONNECT + 2
+        began = time.monotonic()
+        assert send('GET', f'https://localhost:{served.port}/api/me', {}, None)[0] == 200
+        assert time.monotonic() - began < 0.5 and asked == ['localhost'] and pins['localhost'][0] is None
+        assert [path for _, _, path in served.seen] == ['/api/health', '/api/me']
+    finally:
+        served.close()
+
+
+def test_every_client_the_agent_makes_takes_the_pin(trusted, monkeypatch):
+    """Rio Grande: one transport for every path. client_for (the MCP server, the watcher, kick, imprint-send, Wormhole)
+    and a StationClient with no transport (dock) both reach a pinned station at its pinned address."""
+    monkeypatch.setitem(station._PINS, NAME, ('127.0.0.1', time.monotonic() + 60))
+    base = f'https://{NAME}:{trusted.port}'
+    assert client_for({'station': base, 'key': 'k'}).request('GET', '/api/health') == {'ok': True}
+    assert StationClient(base).request('GET', '/api/health') == {'ok': True}
+    assert [host for _, host, _ in trusted.seen] == [f'{NAME}:{trusted.port}'] * 2
 
 
 def test_without_a_pin_the_transport_resolves_as_before(trusted):

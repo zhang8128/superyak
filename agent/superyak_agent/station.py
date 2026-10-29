@@ -77,6 +77,7 @@ class StationError(Exception):
 MAGICDNS = ('100.100.100.100', 53)
 TAILNET = ipaddress.ip_network('100.64.0.0/10')
 PIN_SECONDS = 60
+PIN_CONNECT = 1.0  # seconds for a pinned connect; the tailnet's takes about 20 ms
 _PINS = {}  # host -> (tailnet address or None, monotonic time it's kept until)
 
 
@@ -119,11 +120,11 @@ def magicdns_address(host, server=MAGICDNS, timeout=0.05):
     return None
 
 
-def tailnet_pin(host, *, ask=magicdns_address, now=time.monotonic, pins=_PINS):
+def tailnet_pin(host, *, ask=magicdns_address, now=time.monotonic, pins=_PINS, suffix='.ts.net'):
     """Where to connect for `host`: its tailnet address when it's a *.ts.net name MagicDNS answers, else None (resolve as
     usual). Each answer, a miss included, is kept PIN_SECONDS, so a short-lived hook asks once and a long-lived server
     asks again a minute later."""
-    if not host or not host.endswith('.ts.net'):
+    if not host or not host.endswith(suffix):
         return None
     kept = pins.get(host)
     if kept and kept[1] > now():
@@ -133,12 +134,32 @@ def tailnet_pin(host, *, ask=magicdns_address, now=time.monotonic, pins=_PINS):
     return address
 
 
+def tailnet_unpin(host, *, now=time.monotonic, pins=_PINS):
+    """A pinned address that wouldn't connect: `host` goes by its name for the next PIN_SECONDS (Tardis's point on
+    fix:docked-ships-over-tailnet: MagicDNS can answer while an ACL or a stopped serve keeps the connect from working)."""
+    pins[host] = (None, now() + PIN_SECONDS)
+
+
+class _PinUnreachable(OSError):
+    """The pinned address didn't connect. Nothing was sent, so the call can go by the name instead."""
+
+
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """Connects to `address`, while TLS (SNI and the certificate check) and the Host header stay on the URL's name."""
+    """Connects to `address`, while TLS (SNI and the certificate check) and the Host header stay on the URL's name. The
+    connect itself gets at most PIN_CONNECT; the socket then takes the call's own timeout."""
 
     def __init__(self, host, *args, address, **kwargs):
         super().__init__(host, *args, **kwargs)
-        self._create_connection = lambda where, *rest: socket.create_connection((address, where[1]), *rest)
+
+        def connect(where, timeout=None, source=None):
+            limit = timeout if isinstance(timeout, (int, float)) else None
+            try:
+                sock = socket.create_connection((address, where[1]), min(PIN_CONNECT, limit or PIN_CONNECT), source)
+            except OSError as error:
+                raise _PinUnreachable(f'{address} did not connect: {error}') from error
+            sock.settimeout(limit)
+            return sock
+        self._create_connection = connect
 
 
 class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
@@ -150,11 +171,12 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(functools.partial(_PinnedHTTPSConnection, address=self.address), req, context=self._context)
 
 
-def urllib_transport(timeout=30, limit=None, *, pin=tailnet_pin):
+def urllib_transport(timeout=30, limit=None, *, pin=tailnet_pin, unpin=tailnet_unpin):
     """`timeout` bounds each socket operation (connect, each read), not the call. With `limit`, an answer longer than
     that many bytes raises ValueError once limit + 1 are in, so a huge or endless one costs no more than that (the
     hook's board call, work board step 3 review I1). An https station that `pin` names an address for is reached at
-    that address, directly, with no proxy (fix:docked-ships-over-tailnet)."""
+    that address, directly, with no proxy (fix:docked-ships-over-tailnet). If that address won't connect, the call goes
+    by the name as before and `unpin` keeps the miss."""
     def read(response):
         if limit is None:
             return response.read()
@@ -163,14 +185,28 @@ def urllib_transport(timeout=30, limit=None, *, pin=tailnet_pin):
             raise ValueError(f'the station answered more than {limit} bytes')
         return raw
 
+    openers = {}  # address -> its opener, built once: a handler's TLS context costs about 7 ms to make
+
     def send(method, url, headers, data):
+        host = urlsplit(url).hostname if url.startswith('https:') else None
+        address = pin(host) if host else None
+        if address:
+            opener = openers.get(address)
+            if opener is None:
+                opener = openers[address] = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                                                                       _PinnedHTTPSHandler(address))
+            try:
+                return exchange(opener.open, method, url, headers, data)
+            except urllib.error.URLError as error:
+                if not isinstance(error.reason, _PinUnreachable):
+                    raise
+                unpin(host)
+        return exchange(urllib.request.urlopen, method, url, headers, data)
+
+    def exchange(open_url, method, url, headers, data):
         request = urllib.request.Request(url, data=data, method=method, headers=headers)
-        parts = urlsplit(url)
-        address = pin(parts.hostname) if parts.scheme == 'https' else None
-        opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}), _PinnedHTTPSHandler(address)) if address
-                  else None)
         try:
-            with (opener.open(request, timeout=timeout) if opener else urllib.request.urlopen(request, timeout=timeout)) as response:
+            with open_url(request, timeout=timeout) as response:
                 return response.status, read(response)
         except urllib.error.HTTPError as error:
             return error.code, read(error)
