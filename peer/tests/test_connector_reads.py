@@ -380,3 +380,90 @@ def test_receipts_are_kept_while_the_grant_lives_plus_a_year(connected):
     connected.clock[0] += 20
     sweep('st-after')
     assert receipts(connected) == []
+
+
+# ---- cut at a boundary at 100,000 characters (spec: Claude takes about 150,000) ----
+
+def test_results_are_cut_at_a_message_boundary(connected):
+    """A backward read keeps the newest messages that fit, with `truncated` and `before` to continue; a since read
+    keeps the oldest to arrive, with `truncated` and `seq` to continue. Each result stays valid JSON under the cap."""
+    from superyak_peer.connector_reads import TEXT_CAP
+    ids = []
+    for n in range(30):
+        connected.clock[0] += 1
+        ids.append(say(connected, connected.rooms[0], f'{n:02d} ' + 'x' * 4996)['id'])
+    back = call(connected, 'read_room', room=connected.rooms[0])
+    assert len(back['content'][0]['text']) <= TEXT_CAP
+    back = ok(back)
+    kept = [m['id'] for m in back['messages']]
+    assert back['truncated'] is True and kept == ids[-len(kept):] and 0 < len(kept) < 30
+    assert back['before'] == back['first_position'] == 30 - len(kept) and back['more'] is True
+    rest = ok(call(connected, 'read_room', room=connected.rooms[0], before=back['before']))
+    assert [m['id'] for m in rest['messages']] == ids[:30 - len(kept)][-len(rest['messages']):]
+    forward = call(connected, 'read_room', room=connected.rooms[0], since=0)
+    assert len(forward['content'][0]['text']) <= TEXT_CAP
+    forward = ok(forward)
+    first = [m['id'] for m in forward['messages']]
+    assert forward['truncated'] is True and forward['more'] is True and first == ids[:len(first)]
+    after = ok(call(connected, 'read_room', room=connected.rooms[0], since=forward['seq']))
+    assert [m['id'] for m in after['messages']] == ids[len(first):len(first) + len(after['messages'])]
+
+
+def test_rooms_is_cut_at_a_room_boundary(connected):
+    """Review Focus: 600 rooms with 200-character titles is more than the cap; the list stays valid JSON, cut whole."""
+    from connector_support import allowed, exchange
+    from superyak_peer.connector_reads import TEXT_CAP
+    for n in range(600):
+        connected.store.create_room(connected.person['id'], f'{n:03d} ' + 't' * 196, [])
+    client, code = allowed(connected, rooms='*', state='st-all')
+    connected.tokens = exchange(connected, client, code).json()
+    result = call(connected, 'rooms')
+    assert len(result['content'][0]['text']) <= TEXT_CAP
+    listed = ok(result)
+    assert listed['truncated'] is True and 300 < len(listed['rooms']) < 602
+    assert all(len(room['title']) == 200 or room['title'] in ('Care plan', 'Lab notes') for room in listed['rooms'])
+
+
+def test_fetch_is_cut_with_its_message_kept(connected):
+    from superyak_peer.connector_reads import TEXT_CAP
+    ids = []
+    for n in range(5):
+        connected.clock[0] += 1
+        ids.append(say(connected, connected.rooms[0], f'{n} ' + 'y' * 19990)['id'])
+    result = call(connected, 'fetch', id=ids[2])
+    assert len(result['content'][0]['text']) <= TEXT_CAP
+    got = ok(result)
+    kept = [json.loads(line)['id'] for line in got['text'].split('\n')]
+    assert got['truncated'] is True and ids[2] in kept and len(kept) == 4 and ids[4] not in kept  # the later edge goes first
+
+
+def test_read_room_refuses_bad_arguments(connected):
+    say(connected, connected.rooms[0], 'one')
+    for args in ({'limit': 0}, {'limit': 101}, {'limit': '5'}, {'limit': True}, {'limit': 2.0}, {'before': -1},
+                 {'since': 'x'}, {'before': 0, 'since': 0}, {'before': 2}, {'since': True}):
+        assert refused(call(connected, 'read_room', room=connected.rooms[0], **args)), args
+    assert ok(call(connected, 'read_room', room=connected.rooms[0], before=0))['messages'] == []
+    assert [m['text'] for m in ok(call(connected, 'read_room', room=connected.rooms[0], before=1))['messages']] == ['one']
+
+
+def test_the_system_author_and_a_ship_are_kinded(connected):
+    andy = connected.store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    started = connected.store.start_docking('serenity', 'test-host')
+    ship = connected.store.confirm_docking(andy['id'], started['id'], started['code'])
+    room = connected.store.create_room(connected.person['id'], 'With a ship', [ship['id']])['id']
+    connected.store.send_message(ship['id'], room, 'c-ship', 'from the ship')
+    with connected.store.transaction() as db:
+        connected.store._post_as_system(db, room, 'c-notice', 'a station notice')
+    from connector_support import allowed, exchange
+    client, code = allowed(connected, rooms=[room], state='st-ship')
+    connected.tokens = exchange(connected, client, code).json()
+    kinds = [m['author_kind'] for m in ok(call(connected, 'read_room', room=room))['messages']]
+    assert sorted(kinds) == ['ship', 'system']
+
+
+def test_a_paired_homes_message_is_activity(connected):
+    remote_member(connected, connected.rooms[1])
+    connected.clock[0] += 500
+    remote_says(connected, connected.rooms[1], 'latest, from afar')
+    rooms = ok(call(connected, 'rooms'))['rooms']
+    assert rooms[0]['room'] == connected.rooms[1] and rooms[0]['last_activity'] == '1970-01-12T13:55:00Z'
