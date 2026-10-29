@@ -282,18 +282,21 @@ def test_the_walk_stops_at_its_time_and_says_more(pulling):
     assert 1 <= len(got['envelopes']) < 10 and got['more'] is True
 
 
-def test_an_envelope_too_large_to_pull_is_refused_where_it_waits_and_its_owner_sees_why(pulling, monkeypatch):
+@pytest.mark.parametrize('pad', ['ascii', 'astral'])
+def test_an_envelope_too_large_to_pull_is_refused_where_it_waits_and_its_owner_sees_why(pulling, monkeypatch, pad):
     """Plan P5 and RG: an envelope whose JSON-string form alone can't fit the transport's cap is refused, "413 Too large to
-    pull", the row behind it arrives in the same pull, and the release's owner sees why in status()."""
+    pull", the row behind it arrives in the same pull, and the release's owner sees why in status(). The astral pad is
+    a quarter of the cap in characters and the whole cap in bytes, so P5 must count bytes (the re-check's N9)."""
     from superyak_peer.transport import PULL_CAP
     clock, a, peers, contacts = pulling
     mac = peers['mac']
     first, second, row1, row2 = two_layers(a, contacts['mac'])
     real = a[2]._prepare_in
+    extra = (' ' * PULL_CAP if pad == 'ascii' else '\U0001F600' * (PULL_CAP // 4)).encode()
 
     def huge(db, key):
         body = real(db, key)
-        return body + b' ' * PULL_CAP if key == row1 else body  # test-only: a body the cap can't carry
+        return body + extra if key == row1 else body  # test-only: a body the cap can't carry
     monkeypatch.setattr(a[2], '_prepare_in', huge)
     got = pull(mac, a, clock)
     assert [json.loads(e)['event_id'] for e in got['envelopes']] == [row2]

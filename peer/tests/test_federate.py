@@ -398,13 +398,22 @@ def test_the_largest_release_arrives_by_pull_end_to_end(tmp_path, char):
 def test_federate_and_the_listener_refuse_a_lost_identity_and_make_none(tmp_path):
     """Plan Task 8, G4b for both commands (found missing on the spec walk after Rio Grande's section 2): a store that holds
     signed records and lost identity.json is refused before any Store opens, and neither command makes a new identity,
-    which would void those records."""
+    which would void those records. The store is made as a pre-pull one, so a Store opened before the refusal would
+    migrate it: every file is byte for byte as it was (the re-check's N8; Store() migrates before it refuses)."""
+    import hashlib
     from test_signatures import signed_station
     store, owner, ship, room, docking = signed_station(tmp_path)
     store.claim_federation_mode('push')
+    with store.transaction() as db:
+        db.execute('DROP TABLE peer_delivery')  # as a store from before federation pull has it
     (store.data_dir / 'identity.json').unlink()
+
+    def files():
+        return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in store.data_dir.iterdir() if path.is_file()}
+    before = files()
     for command, extra in (('federate', []), ('federation-listen', ['--port', '0'])):
         done = subprocess.run([sys.executable, '-m', 'superyak_peer', command, '--data-dir', str(store.data_dir), *extra],
                               capture_output=True, text=True, timeout=60)
         assert done.returncode == 1 and 'holds signed records' in done.stderr, (command, done.stderr)
         assert not (store.data_dir / 'identity.json').exists(), command
+        assert files() == before, command
