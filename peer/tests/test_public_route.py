@@ -414,7 +414,7 @@ def test_a_routes_own_error_still_reaches_the_500_handler(env, monkeypatch, wher
 
 CONNECTOR_ALLOWED = {('/.well-known/oauth-protected-resource', 'GET'), ('/.well-known/oauth-protected-resource/mcp', 'GET'),
                      ('/.well-known/oauth-authorization-server', 'GET'), ('/register', 'POST'), ('/authorize', 'GET'),
-                     ('/authorize/request', 'POST'), ('/authorize/signin', 'POST'), ('/authorize/decision', 'POST'),
+                     ('/authorize/signin', 'POST'), ('/authorize/decision', 'POST'),
                      ('/token', 'POST'), ('/mcp', 'GET'), ('/mcp', 'POST'), ('/mcp', 'DELETE')}
 
 

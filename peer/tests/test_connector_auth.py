@@ -13,7 +13,7 @@ ISSUER = {'issuer': 'https://home.example', 'authorization_endpoint': 'https://h
           'scopes_supported': ['rooms.read', 'offline_access'], 'authorization_response_iss_parameter_supported': True}
 CONNECTOR_PATHS = [('GET', '/.well-known/oauth-protected-resource'), ('GET', '/.well-known/oauth-protected-resource/mcp'),
                    ('GET', '/.well-known/oauth-authorization-server'), ('POST', '/register'), ('GET', '/authorize'),
-                   ('POST', '/authorize/request'), ('POST', '/authorize/signin'), ('POST', '/authorize/decision'),
+                   ('POST', '/authorize/signin'), ('POST', '/authorize/decision'),
                    ('POST', '/token'), ('GET', '/mcp'), ('POST', '/mcp'), ('DELETE', '/mcp')]
 
 
@@ -53,7 +53,9 @@ def test_every_connector_route_answers_a_public_request(home):
     client = public_client(home.app, origin=PUBLIC_ORIGIN)
     for method, path in CONNECTOR_PATHS:
         response = client.request(method, path, json={} if method == 'POST' else None)
-        expected = 200 if path.startswith('/.well-known/') else 400 if path == '/register' else 501  # {} is no registration
+        # {} is no registration or sign-in, and /authorize with no client shows its page
+        expected = (200 if path.startswith('/.well-known/') else
+                    400 if path in ('/register', '/authorize', '/authorize/signin', '/authorize/decision') else 501)
         assert response.status_code == expected, (method, path, response.status_code, response.text)
 
 
@@ -86,7 +88,7 @@ def test_another_scheme_or_port_on_the_public_name_is_another_origin(tmp_path):
 
 
 def test_the_consent_posts_still_need_the_homes_origin(home):
-    for path in ('/authorize/request', '/authorize/signin', '/authorize/decision'):
+    for path in ('/authorize/signin', '/authorize/decision'):
         response = public_client(home.app).post(path, json={})
         assert (response.status_code, response.json()) == (403, {'error': 'Same-origin request required'}), path
 
@@ -309,3 +311,600 @@ def test_serve_refuses_a_public_origin_without_proxy_headers(tmp_path, monkeypat
     with pytest.raises(SystemExit) as stopped:
         main(['serve', '--data-dir', str(tmp_path / 'peer'), '--origin', PUBLIC_ORIGIN, '--public-origin', PUBLIC_ORIGIN])
     assert stopped.value.code == 1 and '--proxy-headers' in capsys.readouterr().err
+
+
+# ---- Task 5: /authorize, the sign-in and the consent page (plan revision 2; spec "The authorization request") ----
+
+CHALLENGE = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'  # RFC 7636's S256 example challenge
+RESOURCE_URL = PUBLIC_ORIGIN + '/mcp'
+
+
+def authorize(home, client=None, raw=None, **override):
+    """GET /authorize as Claude sends it for `client` (an id; a new registration when None), with `override` replacing
+    (or, as None, dropping) a parameter; or `raw`, a query string as it is. Never follows the redirect."""
+    browser = public_client(home.app)
+    if raw is not None:
+        return browser.get('/authorize?' + raw, follow_redirects=False)
+    params = {'response_type': 'code', 'client_id': client or register(home.app).json()['client_id'],
+              'redirect_uri': CALLBACK, 'state': 'st-1', 'code_challenge': CHALLENGE, 'code_challenge_method': 'S256',
+              'resource': RESOURCE_URL, 'scope': 'rooms.read offline_access'} | override
+    return browser.get('/authorize', params={k: v for k, v in params.items() if v is not None}, follow_redirects=False)
+
+
+def redirected(response):
+    """(the redirect's URL without its query, its query as one value per name) for a 303."""
+    from urllib.parse import parse_qs, urlsplit
+    assert response.status_code == 303, (response.status_code, response.text)
+    where = urlsplit(response.headers['location'])
+    return where._replace(query='', fragment='').geturl(), {k: v[0] for k, v in parse_qs(where.query).items()}, where.fragment
+
+
+def a_page(response):
+    """An error page: 400, HTML, no redirect, and nothing the request sent shown back."""
+    assert response.status_code == 400 and 'location' not in response.headers, (response.status_code, response.headers)
+    assert response.headers['content-type'].startswith('text/html')
+    return response.text
+
+
+def pending_payload(fragment):
+    import base64
+    import json
+    encoded = fragment.split('.')[0]
+    return json.loads(base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4)))
+
+
+def test_a_good_request_goes_to_the_consent_page_with_a_signed_request(home):
+    """Spec r4: the validated request travels in the consent page's fragment, signed with the home's key under its own
+    label, and nothing is stored."""
+    import base64
+    import hashlib
+    import hmac
+    client_id = register(home.app).json()['client_id']
+    page, query, fragment = redirected(authorize(home, client_id))
+    assert (page, query) == (PUBLIC_ORIGIN + '/assets/consent.html', {})
+    assert pending_payload(fragment) == {'v': 1, 'client_id': client_id, 'redirect_uri': CALLBACK, 'state': 'st-1',
+                                         'challenge': CHALLENGE, 'resource': RESOURCE_URL,
+                                         'scope': 'rooms.read offline_access', 'at': int(home.clock[0])}
+    encoded, tag = fragment.split('.')
+    raw = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
+    expected = hmac.new(home.store._connector_key, b'pending\n' + raw, hashlib.sha256).digest()
+    assert base64.urlsafe_b64decode(tag + '=' * (-len(tag) % 4)) == expected
+
+
+def test_authorize_writes_nothing(home):
+    """D18: no public write before a sign-in. A thousand good requests leave every table as it was."""
+    client_id = register(home.app).json()['client_id']
+    before = everything(home.store)
+    for n in range(1000):
+        assert authorize(home, client_id, state=f's{n}').status_code == 303
+    assert everything(home.store) == before
+
+
+def test_a_bad_client_or_redirect_shows_a_page_and_never_redirects(home):
+    client_id = register(home.app).json()['client_id']
+    for override in ({'client_id': 'not-a-client'}, {'client_id': client_id + 'x'}, {'redirect_uri': None},
+                     {'redirect_uri': 'https://evil.example/callback'}):
+        a_page(authorize(home, client_id, **override))
+    a_page(authorize(home, raw=''))  # no client at all
+    shown = a_page(authorize(home, client_id, redirect_uri='https://evil.example/<script>'))
+    assert 'evil.example' not in shown and '<script>' not in shown  # the page repeats nothing it was sent
+
+
+def test_redirect_tricks_are_refused(home):
+    client_id = register(home.app).json()['client_id']
+    for uri in ('http://localhost.evil.example/callback', 'http://127.0.0.1@evil.example/', CALLBACK + '#x', CALLBACK + '/',
+                CALLBACK.replace('auth_callback', 'other'), CALLBACK.replace('claude.ai', 'CLAUDE.AI'), CALLBACK + '?x=1'):
+        a_page(authorize(home, client_id, redirect_uri=uri))
+
+
+def test_a_repeated_parameter_is_refused(home):
+    """RFC 6749 3.1: a parameter sent twice. A repeated client or redirect is a page; anything else redirects."""
+    from urllib.parse import urlencode
+    client_id = register(home.app).json()['client_id']
+    good = {'response_type': 'code', 'client_id': client_id, 'redirect_uri': CALLBACK, 'state': 'st-1',
+            'code_challenge': CHALLENGE, 'code_challenge_method': 'S256'}
+    for name in ('client_id', 'redirect_uri'):
+        a_page(authorize(home, raw=urlencode(good) + '&' + urlencode({name: good[name]})))
+    _, query, _ = redirected(authorize(home, raw=urlencode(good) + '&scope=rooms.read&scope=offline_access'))
+    assert query == {'error': 'invalid_request', 'state': 'st-1', 'iss': PUBLIC_ORIGIN}
+
+
+def test_pkce_s256_is_required(home):
+    client_id = register(home.app).json()['client_id']
+    for override in ({'code_challenge': None}, {'code_challenge_method': 'plain'}, {'code_challenge_method': None},
+                     {'code_challenge': 'too-short'}, {'code_challenge': CHALLENGE + '!'}, {'code_challenge': 'a' * 129}):
+        target, query, _ = redirected(authorize(home, client_id, **override))
+        assert (target, query) == (CALLBACK, {'error': 'invalid_request', 'state': 'st-1', 'iss': PUBLIC_ORIGIN}), override
+
+
+def test_response_type_must_be_code(home):
+    target, query, _ = redirected(authorize(home, response_type='token'))
+    assert (target, query) == (CALLBACK, {'error': 'unsupported_response_type', 'state': 'st-1', 'iss': PUBLIC_ORIGIN})
+
+
+def test_resource_and_scope(home):
+    client_id = register(home.app).json()['client_id']
+    for resource in ('https://other.example/mcp', PUBLIC_ORIGIN, PUBLIC_ORIGIN + '/mcp/', PUBLIC_ORIGIN + '/MCP',
+                     'https://[', 'https://[::1'):  # one urlsplit can't parse is a target too (Task 5's S3), never a 500
+        assert redirected(authorize(home, client_id, resource=resource))[1]['error'] == 'invalid_target', resource
+    for resource, kept in (('HTTPS://HOME.EXAMPLE/mcp', RESOURCE_URL), (None, RESOURCE_URL)):  # MCP: case-insensitive
+        page, _, fragment = redirected(authorize(home, client_id, resource=resource))
+        assert page.endswith('/assets/consent.html') and pending_payload(fragment)['resource'] == kept
+    for scope in ('rooms.write', 'rooms.read admin', ''):
+        assert redirected(authorize(home, client_id, scope=scope))[1]['error'] == 'invalid_scope', scope
+    assert pending_payload(redirected(authorize(home, client_id, scope=None))[2])['scope'] == 'rooms.read'
+    assert pending_payload(redirected(authorize(home, client_id, scope='offline_access rooms.read'))[2])['scope'] == (
+        'rooms.read offline_access')  # one spelling, SCOPES' order
+
+
+def test_every_authorization_error_carries_iss_and_the_state_as_sent(home):
+    """RFC 9207: iss on every authorization response. The state goes back as it came, and an error without one
+    sends none."""
+    _, query, _ = redirected(authorize(home, state='a b&c', response_type='token'))
+    assert query == {'error': 'unsupported_response_type', 'state': 'a b&c', 'iss': PUBLIC_ORIGIN}
+    _, query, _ = redirected(authorize(home, state=None, response_type='token'))
+    assert query == {'error': 'unsupported_response_type', 'iss': PUBLIC_ORIGIN}
+    _, query, _ = redirected(authorize(home, state='x' * 513))  # bounded, so the fragment is
+    assert query == {'error': 'invalid_request', 'iss': PUBLIC_ORIGIN}  # and a state refused as too long isn't sent back (Tardis)
+    for state in ('\x01' * 512, 'a\nb', '\u00e9', ''):  # RFC 6749 A.5: one or more VSCHAR (0x20 to 0x7E), the nit's 512 x \x01
+        _, query, _ = redirected(authorize(home, state=state))
+        assert query == {'error': 'invalid_request', 'iss': PUBLIC_ORIGIN}, repr(state)
+    longest = '"\\' * 256  # every character JSON escapes: the largest request a good state can make
+    page, _, fragment = redirected(authorize(home, state=longest))
+    assert page.endswith('/assets/consent.html') and len(fragment) < 4096 and pending_payload(fragment)['state'] == longest
+
+
+def test_authorize_request_is_gone(home):
+    """Spec r4: the consent page's first post is the sign-in, so there is no /authorize/request."""
+    assert public_client(home.app, origin=PUBLIC_ORIGIN).post('/authorize/request', json={}).status_code in (404, 405)
+
+
+# ---- Task 5, the sign-in: the first row anyone on the internet can cause belongs to a person who has just typed their
+# password (spec r4, D18). The request is checked, then checked again as /authorize did, before the password counts. ----
+
+def person(home, username='sam@example.org', name='Sam Example'):
+    return home.store.create_user(username, name, 'long-password-' + username.split('@')[0])
+
+
+def consent(home, **headers):
+    """The consent page's own requests: at the public origin, from a public address, with the home's Origin."""
+    return public_client(home.app, origin=PUBLIC_ORIGIN, **headers)
+
+
+def sign_in(home, fragment, username='sam@example.org', password=None, csrf=None):
+    """The consent page's sign-in; `csrf` is what Switch person sends, the token the page holds for that request."""
+    return consent(home).post('/authorize/signin', json={
+        'request': fragment, 'username': username,
+        'password': 'long-password-' + username.split('@')[0] if password is None else password}
+        | ({'csrf': csrf} if csrf is not None else {}))
+
+
+def a_fragment(home, client=None, **override):
+    return redirected(authorize(home, client, **override))[2]
+
+
+def table(home, name):
+    with home.store.transaction() as db:
+        return [dict(row) for row in db.execute(f'SELECT * FROM {name}')]
+
+
+def mint_pending(home, body, raw=None):
+    """A pending request signed with the home's own key, as anyone holding a backup could make one (Task 4's S2)."""
+    import base64
+    import hashlib
+    import hmac
+    import json
+    raw = raw or json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+    tag = hmac.new(home.store._connector_key, b'pending\n' + raw, hashlib.sha256).digest()
+    enc = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()  # noqa: E731
+    return enc(raw) + '.' + enc(tag)
+
+
+def test_the_first_row_is_made_at_a_good_sign_in(home):
+    sam = person(home)
+    fragment = a_fragment(home)
+    wrong = sign_in(home, fragment, password='not-the-password')
+    assert (wrong.status_code, wrong.json()) == (401, {'error': 'invalid_login'}) and table(home, 'oauth_pending') == []
+    good = sign_in(home, fragment)
+    assert good.status_code == 200, good.text
+    view = good.json()
+    assert set(view) == {'pending', 'csrf', 'name', 'app', 'client_name', 'scope', 'rooms'}
+    assert (view['name'], view['app'], view['client_name'], view['scope']) == (
+        'Sam Example', 'Claude (claude.ai)', 'Claude', 'rooms.read offline_access')
+    [row] = table(home, 'oauth_pending')
+    request = pending_payload(fragment)
+    assert {k: row[k] for k in ('client_id', 'redirect_uri', 'state', 'challenge', 'resource', 'scope', 'at')} == {
+        'client_id': request['client_id'], 'redirect_uri': CALLBACK, 'state': 'st-1', 'challenge': CHALLENGE,
+        'resource': RESOURCE_URL, 'scope': 'rooms.read offline_access', 'at': request['at']}
+    assert (row['id'], row['person_id'], row['decided'], row['code_hash']) == (view['pending'], sam['id'], None, None)
+    assert row['csrf'] != view['csrf'] and len(view['csrf']) >= 40  # kept only as a hash
+
+
+def attempts(home):
+    return table(home, 'login_attempts')
+
+
+def test_a_forged_or_stale_request_is_refused_before_the_password(home):
+    """A changed byte, a client id's tag in place of the request's (the labels differ), a request 600 s or more after
+    /authorize: 400, before any password attempt counts, and no row. Mutation: the password checked first."""
+    person(home)
+    client_id = register(home.app).json()['client_id']
+    fragment = a_fragment(home, client_id)
+    encoded, tag = fragment.split('.')
+    changed = encoded[:-2] + ('A' if encoded[-2] != 'A' else 'B') + encoded[-1] + '.' + tag
+    for forged in (changed, client_id, fragment + 'x', 'no-dot', '', '.'.join([encoded, tag, tag])):
+        refused = sign_in(home, forged, password='wrong')
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), forged[:20]
+    assert attempts(home) == [] and table(home, 'oauth_pending') == []
+    home.clock[0] += 600
+    stale = sign_in(home, fragment, password='wrong')
+    assert (stale.status_code, stale.json()) == (400, {'error': 'request_expired'})
+    assert attempts(home) == [] and table(home, 'oauth_pending') == []
+    home.clock[0] -= 1
+    assert sign_in(home, fragment).status_code == 200  # 599 s in, still good
+
+
+def test_a_request_signed_with_the_key_is_checked_again(home):
+    """Task 4's re-check, S2: the key is backed up, so a request it signs is checked again from its own values as
+    /authorize did. Another redirect, an unknown client, another resource, a scope outside SCOPES, a missing field, a
+    payload /authorize wouldn't make (spaces, an unknown version): 400 before the password, and no row."""
+    import json
+    person(home)
+    good = pending_payload(a_fragment(home))
+    for change in ({'redirect_uri': 'https://evil.example/callback'}, {'client_id': 'made-up'},
+                   {'resource': 'https://other.example/mcp'}, {'scope': 'rooms.read rooms.write'}, {'scope': ''},
+                   {'v': 2}, {'challenge': 'short'}, {'at': str(good['at'])}, {'state': 5}, {'at': good['at'] + 1},
+                   {'state': 'a\x01'}):  # a request from the future, and a state /authorize wouldn't take
+        refused = sign_in(home, mint_pending(home, good | change), password='wrong')
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), change
+    for raw in (json.dumps(good).encode(), json.dumps({k: v for k, v in good.items() if k != 'state'},
+                                                      sort_keys=True, separators=(',', ':')).encode()):
+        assert sign_in(home, mint_pending(home, None, raw), password='wrong').status_code == 400
+    assert attempts(home) == [] and table(home, 'oauth_pending') == []
+    assert sign_in(home, mint_pending(home, good)).status_code == 200  # the same values, signed the same way: good
+
+
+def test_signing_in_again_switches_the_person(home):
+    """One fragment, sam then jenn through Switch person, which sends the CSRF token the page holds: one row, jenn's,
+    with a new token, and the same pending id."""
+    from superyak_peer.auth import token_hash
+    person(home)
+    jenn = person(home, 'jenn@example.org', 'Jenn Example')
+    fragment = a_fragment(home)
+    first = sign_in(home, fragment).json()
+    second = sign_in(home, fragment, 'jenn@example.org', csrf=first['csrf']).json()
+    [row] = table(home, 'oauth_pending')
+    assert (row['person_id'], row['csrf'], second['pending'], second['name']) == (
+        jenn['id'], token_hash(second['csrf']), first['pending'], 'Jenn Example')
+    assert second['csrf'] != first['csrf']
+
+
+def test_a_signed_in_request_is_taken_over_only_with_its_csrf_token(home):
+    """Task 5's section 2, S1: someone else holding the fragment (a copy made before the page cleared it) can't take a
+    signed-in request over by signing in: a rebind needs the token the page holds, so it comes only from that page's
+    Switch person. Without it, 403, and the request stays the first person's, their token still good."""
+    sam = person(home)
+    person(home, 'jenn@example.org', 'Jenn Example')
+    fragment = a_fragment(home)
+    sams = sign_in(home, fragment).json()
+    counted = counters(home)
+    for csrf in (None, 'x' * 43):
+        for username, password in (('jenn@example.org', None), ('sam@example.org', None), ('jenn@example.org', 'wrong')):
+            refused = sign_in(home, fragment, username, password, csrf=csrf)
+            assert (refused.status_code, refused.json()) == (403, {'error': 'invalid_request'}), (username, csrf)
+    assert counters(home) == counted  # refused before the password, so no attempt was counted
+    [row] = table(home, 'oauth_pending')
+    assert row['person_id'] == sam['id']
+    assert sent_back(decide(home, sams, rooms='*'))[1]['state'] == 'st-1'  # sam's token still decides
+
+
+def test_signing_in_after_a_decision_is_refused(home):
+    """After a real Allow, and after a real Deny: 400, and the row keeps its person, code and grant."""
+    person(home)
+    for allow in (True, False):
+        fragment = a_fragment(home, state=f'st-{allow}')
+        view = sign_in(home, fragment).json()
+        sent_back(decide(home, view, allow=allow, rooms='*'))
+        before = [row for row in table(home, 'oauth_pending') if row['id'] == view['pending']]
+        refused = sign_in(home, fragment, csrf=view['csrf'])
+        assert (refused.status_code, refused.json()) == (400, {'error': 'already_decided'}), allow
+        assert [row for row in table(home, 'oauth_pending') if row['id'] == view['pending']] == before
+
+
+def test_the_sign_in_shares_login_holds_and_leaves_no_session(home):
+    """The same holds as /api/login: eight wrong passwords from one source, then even the right one gets 429. A good
+    sign-in makes no session and sets no cookie."""
+    person(home)
+    good = sign_in(home, a_fragment(home))
+    assert good.status_code == 200 and 'set-cookie' not in good.headers and table(home, 'sessions') == []
+    fragment = a_fragment(home, state='st-2')  # one nobody has signed in on, so each wrong password reaches the check
+    for _ in range(8):
+        assert sign_in(home, fragment, password='wrong').status_code == 401
+    held = sign_in(home, fragment)
+    assert (held.status_code, held.json()) == (429, {'error': 'too_many_attempts'})
+
+
+def test_the_page_asks_for_the_password_even_with_a_session(home):
+    """A session cookie changes nothing: the sign-in always needs the password, and nothing before it returns rooms."""
+    person(home)
+    login = consent(home).post('/api/login', json={'username': 'sam@example.org', 'password': 'long-password-sam'})
+    assert login.status_code == 200
+    cookie = {'cookie': f'superyak_session={login.cookies.get("superyak_session")}'}
+    fragment = a_fragment(home)
+    for password in ('', None):
+        body = {'request': fragment, 'username': 'sam@example.org'} | ({'password': password} if password is not None else {})
+        refused = consent(home, **cookie).post('/authorize/signin', json=body)
+        assert refused.status_code in (400, 401) and 'rooms' not in refused.text
+    assert table(home, 'oauth_pending') == []
+
+
+def test_the_consent_rooms_group_earlier_parts_and_flag_marked_rooms(home):
+    """Each of the person's current rooms, with its earlier parts grouped under it, and marked rooms flagged: the
+    page offers none of them chosen and can't offer a marked one."""
+    sam, jenn = person(home), person(home, 'jenn@example.org', 'Jenn Example')
+    store = home.store
+    plain = store.create_room(sam['id'], 'Plain', [])['id']
+    earlier = store.create_room(sam['id'], 'Growing', [])['id']
+    later = store.add_participants(sam['id'], earlier, [jenn['id']])['id']
+    marked = store.create_room(sam['id'], 'Marked', [])['id']
+    with store.transaction() as db:
+        db.execute('INSERT INTO room_cloud VALUES(?,?,?)', (marked, sam['id'], home.clock[0]))
+    rooms = sign_in(home, a_fragment(home)).json()['rooms']
+    assert sorted(rooms, key=lambda room: room['room']) == sorted([
+        {'room': plain, 'title': 'Plain', 'earlier_of': None, 'cloud': False},
+        {'room': later, 'title': 'Growing', 'earlier_of': None, 'cloud': False},
+        {'room': earlier, 'title': 'Growing', 'earlier_of': later, 'cloud': False},
+        {'room': marked, 'title': 'Marked', 'earlier_of': None, 'cloud': True}], key=lambda room: room['room'])
+    assert [room['room'] for room in rooms].index(earlier) == [room['room'] for room in rooms].index(later) + 1
+
+
+def test_a_good_sign_in_sweeps_requests_past_their_ten_minutes(home):
+    person(home)
+    old = a_fragment(home)
+    sign_in(home, old)
+    home.clock[0] += 601
+    sign_in(home, a_fragment(home), password='wrong')
+    assert len(table(home, 'oauth_pending')) == 1  # a wrong password sweeps nothing
+    sign_in(home, a_fragment(home))
+    assert [row['at'] for row in table(home, 'oauth_pending')] == [int(home.clock[0])]
+
+
+def test_the_sweep_keeps_a_request_whose_code_is_still_live(home):
+    """Allowed 590 s after /authorize, its code lives to 650 s: a sweep at 601 s keeps it, one at 651 s doesn't."""
+    person(home)
+    view = sign_in(home, a_fragment(home)).json()
+    home.clock[0] += 590
+    sent_back(decide(home, view, rooms='*'))
+    home.clock[0] += 11
+    sign_in(home, a_fragment(home, state='st-2'))
+    assert view['pending'] in [row['id'] for row in table(home, 'oauth_pending')]
+    home.clock[0] += 50
+    sign_in(home, a_fragment(home, state='st-3'))
+    assert view['pending'] not in [row['id'] for row in table(home, 'oauth_pending')]
+
+
+# ---- Task 5, the decision: Allow and Deny post the pending id with its CSRF token. Allow sends the browser to the
+# stored redirect with a code, the state and iss; Deny with access_denied. Every later step uses only stored values. ----
+
+def signed_in(home, client=None, username='sam@example.org', **override):
+    """A sign-in on a fresh request: (its client id, the view)."""
+    client = client or register(home.app).json()['client_id']
+    view = sign_in(home, a_fragment(home, client, **override), username)
+    assert view.status_code == 200, view.text
+    return client, view.json()
+
+
+def decide(home, view, allow=True, rooms=None, **extra):
+    body = {'pending': view['pending'], 'csrf': view['csrf'], 'allow': allow,
+            'rooms': [room['room'] for room in view['rooms'] if not room['cloud'] and not room['earlier_of']][:1]
+            if rooms is None else rooms} | extra
+    return consent(home).post('/authorize/decision', json=body)
+
+
+def sent_back(decision):
+    from urllib.parse import parse_qs, urlsplit
+    assert decision.status_code == 200, decision.text
+    where = urlsplit(decision.json()['redirect'])
+    return where._replace(query='').geturl(), {k: v[0] for k, v in parse_qs(where.query).items()}
+
+
+def test_allow_sends_a_code_and_makes_the_grant(home):
+    import json
+    from superyak_peer.auth import token_hash
+    sam = person(home)
+    room = home.store.create_room(sam['id'], 'Care plan', [])['id']
+    client, view = signed_in(home)
+    target, query = sent_back(decide(home, view, rooms=[room]))
+    assert (target, set(query), query['state'], query['iss']) == (CALLBACK, {'code', 'state', 'iss'}, 'st-1', PUBLIC_ORIGIN)
+    [grant] = table(home, 'connector_grants')
+    assert {k: grant[k] for k in ('person_id', 'client_id', 'redirect_host', 'scope', 'created', 'ends', 'revoked')} == {
+        'person_id': sam['id'], 'client_id': client, 'redirect_host': 'claude.ai', 'scope': 'rooms.read offline_access',
+        'created': home.clock[0], 'ends': home.clock[0] + 30 * 86400, 'revoked': None}
+    assert json.loads(grant['rooms']) == [room]
+    [row] = table(home, 'oauth_pending')
+    assert (row['decided'], row['code_hash'], row['code_expires'], row['grant_id']) == (
+        home.clock[0], token_hash(query['code']), home.clock[0] + 60, grant['id'])
+    assert len(query['code']) >= 43  # 256 bits
+
+
+def test_deny_redirects_with_access_denied_state_and_iss(home):
+    person(home)
+    _, view = signed_in(home)
+    target, query = sent_back(decide(home, view, allow=False))
+    assert (target, query) == (CALLBACK, {'error': 'access_denied', 'state': 'st-1', 'iss': PUBLIC_ORIGIN})
+    [row] = table(home, 'oauth_pending')
+    assert row['decided'] == home.clock[0] and row['code_hash'] is None
+    assert table(home, 'connector_grants') == [] and table(home, 'oauth_clients') == []
+
+
+def test_decisions_need_the_pending_id_and_its_csrf(home):
+    """A wrong CSRF token is 403, an unknown pending id 400, and the ten minutes run from /authorize, not the sign-in."""
+    person(home)
+    jenn = person(home, 'jenn@example.org', 'Jenn Example')
+    client = register(home.app).json()['client_id']
+    fragment = a_fragment(home, client)
+    sams = sign_in(home, fragment).json()
+    jenns = sign_in(home, fragment, 'jenn@example.org', csrf=sams['csrf']).json()  # Switch person
+    for wrong in ({'csrf': 'x' * 43}, {'csrf': sams['csrf']}):  # sam's token died when jenn signed in on that request
+        refused = decide(home, jenns | wrong, rooms='*')
+        assert (refused.status_code, refused.json()) == (403, {'error': 'invalid_request'}), wrong
+    refused = decide(home, jenns | {'pending': 'made-up'}, rooms='*')
+    assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'})
+    home.clock[0] += 600
+    stale = decide(home, jenns, rooms='*')
+    assert (stale.status_code, stale.json()) == (400, {'error': 'request_expired'})
+    assert table(home, 'connector_grants') == [] and jenn  # nothing was issued
+
+
+def test_a_second_decision_mints_no_second_code(home):
+    """Review Focus: the back button after Allow, or a double click. The second decision gets 400 and mints nothing."""
+    person(home)
+    _, view = signed_in(home)
+    sent_back(decide(home, view, rooms='*'))
+    for allow in (True, False):
+        again = decide(home, view, allow=allow, rooms='*')
+        assert (again.status_code, again.json()) == (400, {'error': 'already_decided'}), allow
+    assert len(table(home, 'connector_grants')) == 1 and len({row['code_hash'] for row in table(home, 'oauth_pending')}) == 1
+
+
+def test_nothing_is_chosen_by_default_and_marked_rooms_cant_be_chosen(home):
+    sam, jenn = person(home), person(home, 'jenn@example.org', 'Jenn Example')
+    store = home.store
+    mine = store.create_room(sam['id'], 'Mine', [])['id']
+    earlier = store.create_room(sam['id'], 'Growing', [])['id']
+    store.add_participants(sam['id'], earlier, [jenn['id']])
+    marked = store.create_room(sam['id'], 'Marked', [])['id']
+    theirs = store.create_room(jenn['id'], 'Theirs', [])['id']
+    with store.transaction() as db:
+        db.execute('INSERT INTO room_cloud VALUES(?,?,?)', (marked, sam['id'], home.clock[0]))
+    for n, rooms in enumerate(([], None, [marked], [earlier], [theirs], [mine, mine], ['*'], 'all', [5], {'room': mine})):
+        _, view = signed_in(home, state=f'st-{n}')  # a request of its own each time
+        body = {'pending': view['pending'], 'csrf': view['csrf'], 'allow': True} | ({} if rooms is None else {'rooms': rooms})
+        refused = consent(home).post('/authorize/decision', json=body)
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), rooms
+    assert table(home, 'connector_grants') == []
+    _, view = signed_in(home, state='st-all')
+    sent_back(decide(home, view, rooms='*'))  # "All my rooms, including new ones" only when sent as itself
+    assert [grant['rooms'] for grant in table(home, 'connector_grants')] == ['*']
+
+
+def test_days_are_1_to_30(home):
+    person(home)
+    for n, days in enumerate((0, 31, -1, '30', True, 1.5, None)):
+        _, view = signed_in(home, state=f'st-{n}')
+        refused = decide(home, view, rooms='*', days=days)
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), days
+    _, view = signed_in(home, state='st-one-day')
+    sent_back(decide(home, view, rooms='*', days=1))
+    assert [grant['ends'] for grant in table(home, 'connector_grants')] == [home.clock[0] + 86400]
+
+
+def test_the_first_allow_writes_the_clients_row(home):
+    """D18: a client is known by its row once a code has been issued to it, so a key rotation disconnects no one."""
+    person(home)
+    client, view = signed_in(home)
+    assert table(home, 'oauth_clients') == []
+    sent_back(decide(home, view, rooms='*'))
+    assert [(row['client_id'], row['name'], row['grant_types']) for row in table(home, 'oauth_clients')] == [
+        (client, 'Claude', 'authorization_code refresh_token')]
+    _, view = signed_in(home, client, state='st-2')  # the same request again would be the same fragment, decided
+    sent_back(decide(home, view, rooms='*'))  # a second connection from the same client
+    assert len(table(home, 'oauth_clients')) == 1
+
+
+# ---- Task 5's section 2, S2 and S4: the code goes only to the configured callback, and the sign-in is counted and laned
+# exactly as /api/login is ----
+
+def test_the_decision_sends_a_code_only_to_the_configured_callback(home):
+    """S2: a request signed in under one --connector-callback isn't allowed under another; nothing is minted. The
+    client is a connected one, known by its row, so the redirect's own comparison is what refuses it (the re-check's
+    R6)."""
+    import pytest as _pytest
+    from superyak_peer.connector import OAuthError
+    person(home)
+    client, first = signed_in(home, state='st-first')
+    sent_back(decide(home, first, rooms='*'))  # now the client has its oauth_clients row
+    _, view = signed_in(home, client)
+    with _pytest.raises(OAuthError) as refused:
+        home.store.pending_decide(view['pending'], view['csrf'], True, '*', issuer=PUBLIC_ORIGIN,
+                                  callback='https://other.example/callback')
+    assert (refused.value.status, refused.value.error) == (400, 'invalid_request')
+    assert len(table(home, 'connector_grants')) == 1  # the first connection's only
+    assert [row['decided'] for row in table(home, 'oauth_pending') if row['id'] == view['pending']] == [None]
+
+
+def counters(home):
+    return sorted((row['key'], row['count']) for row in table(home, 'login_attempts'))
+
+
+@pytest.mark.parametrize('where', ['public', 'tailnet'])
+def test_a_wrong_password_is_counted_as_api_login_counts_it(home, where):
+    """S4: the same login_attempts rows as one wrong /api/login from the same place, public or tailnet."""
+    person(home)
+    client = consent(home) if where == 'public' else TestClient(home.app, base_url=PUBLIC_ORIGIN,
+                                                                 headers={'origin': PUBLIC_ORIGIN})
+    fragment = a_fragment(home)
+    assert client.post('/api/login', json={'username': 'sam@example.org', 'password': 'wrong'}).status_code == 401
+    by_login = counters(home)
+    with home.store.transaction() as db:
+        db.execute('DELETE FROM login_attempts')
+    assert client.post('/authorize/signin', json={'request': fragment, 'username': 'sam@example.org',
+                                                  'password': 'wrong'}).status_code == 401
+    assert counters(home) == by_login and any(f'"{where}"' in key for key, _ in by_login)  # keys name their kind
+
+
+def test_a_known_browser_counts_on_its_own_token_as_api_login_does(home):
+    """S4: a browser with a valid superyak_device cookie: a wrong sign-in changes its token's failures and every
+    counter exactly as one wrong /api/login from that browser does."""
+    from collections import Counter
+    person(home)
+    browser = consent(home)
+    assert browser.post('/api/login', json={'username': 'sam@example.org', 'password': 'long-password-sam'}).status_code == 200
+    failures = lambda: [row['failures'] for row in table(home, 'login_devices')]  # noqa: E731
+    fragment = a_fragment(home)
+    start = Counter(dict(counters(home)))
+    browser.post('/api/login', json={'username': 'sam@example.org', 'password': 'wrong'})
+    after_login = Counter(dict(counters(home)))
+    assert failures() == [1]
+    browser.post('/authorize/signin', json={'request': fragment, 'username': 'sam@example.org', 'password': 'wrong'})
+    after_sign_in = Counter(dict(counters(home)))
+    assert failures() == [2]
+    assert after_sign_in - after_login == after_login - start and after_login - start  # the same counters moved
+
+
+def test_the_sign_in_waits_in_the_lane_api_login_uses(home, monkeypatch):
+    """S4: a public sign-in runs in the public lane, a tailnet one in the tailnet lane; a forged request takes none."""
+    person(home)
+    lanes, used = home.app.state.sign_in_lanes, []
+    for name in ('public', 'tailnet', 'known'):
+        lane = getattr(lanes, name)
+        monkeypatch.setattr(lane, 'run', lambda call, *args, real=lane.run, name=name, **kwargs: (
+            used.append((name, call.__name__)), real(call, *args, **kwargs))[1])
+    sign_in(home, a_fragment(home), password='wrong')
+    TestClient(home.app, base_url=PUBLIC_ORIGIN, headers={'origin': PUBLIC_ORIGIN}).post(
+        '/authorize/signin', json={'request': a_fragment(home, state='st-2'), 'username': 'sam@example.org',
+                                   'password': 'wrong'})
+    sign_in(home, 'forged.request', password='wrong')
+    assert used == [('public', 'pending_sign_in'), ('tailnet', 'pending_sign_in')]
+
+
+def test_a_sign_in_that_lands_during_anothers_password_check_keeps_the_request(home, monkeypatch):
+    """The re-check's R2: the second rebind check, with the row. Jenn passes the first check on a request nobody has
+    signed in on; while her password is being checked, sam signs in on it. Her sign-in is then refused, and the
+    request stays sam's."""
+    from superyak_peer.connector import OAuthError
+    sam = person(home)
+    person(home, 'jenn@example.org', 'Jenn Example')
+    store = home.store
+    request = store.pending_request(a_fragment(home), CALLBACK, RESOURCE_URL)
+    real = store.check_password_attempt
+
+    def meanwhile(username, password, source, **kwargs):
+        if username == 'jenn@example.org':
+            store.pending_sign_in(request, 'sam@example.org', 'long-password-sam', '203.0.113.9')
+        return real(username, password, source, **kwargs)
+    monkeypatch.setattr(store, 'check_password_attempt', meanwhile)
+    with pytest.raises(OAuthError) as refused:
+        store.pending_sign_in(request, 'jenn@example.org', 'long-password-jenn', '203.0.113.5')
+    assert (refused.value.status, refused.value.error) == (403, 'invalid_request')
+    assert [row['person_id'] for row in table(home, 'oauth_pending')] == [sam['id']]

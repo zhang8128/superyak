@@ -392,8 +392,27 @@ Origin; the consent page's posts keep it.
   home's key (`connector_client_key` in `system_meta`, backed up) and bound to the callback. An id has no age limit; it
   stops working only when the key or `--connector-callback` changes, except for a client a code has been issued to,
   which `oauth_clients` then knows by its id. `serve --public-origin` needs `--proxy-headers`.
-- `GET /authorize`, `POST /authorize/request`, `/authorize/signin`, `/authorize/decision`, `POST /token`, and `GET`,
-  `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
+- `GET /authorize` (spec r4, "The authorization request"): first the client and `redirect_uri`, which must equal the
+  callback character for character; a failure, or either sent twice, is a 400 page that repeats nothing it was sent.
+  Then the rest, a failure going back to the redirect as `error`, the `state` as sent and `iss`: `response_type`
+  `code` (else `unsupported_response_type`), an S256 `code_challenge` of 43 base64url characters (else
+  `invalid_request`), a `state` of at most 512 characters, `resource` absent or the public origin + `/mcp` with any
+  case in its scheme and host (else `invalid_target`), `scope` within `rooms.read offline_access`, `rooms.read` when
+  absent (else `invalid_scope`), and no parameter twice. A good request is a 303 to `/assets/consent.html#<request>`,
+  the request signed with the home's key; it writes nothing.
+- `POST /authorize/signin` `{request, username, password}`, from the consent page (same origin): the signed request
+  checked first (400 `invalid_request`, or `request_expired` 10 minutes after `/authorize`), and checked again as
+  `/authorize` did, before any password attempt counts; then the password, counted as `/api/login` counts it, with no
+  session made (401 `invalid_login`, 429 `too_many_attempts`). Only then is the request stored. It answers `{pending,
+  csrf, name, app, client_name, scope, rooms}`, where `app` is named by the redirect host ("Claude (claude.ai)"),
+  `client_name` is the client's own unverified words, and `rooms` is `[{room, title, earlier_of, cloud}]`. Signing in
+  again on one request switches the person; a decided one answers 400 `already_decided`.
+- `POST /authorize/decision` `{pending, csrf, allow, rooms, days}`: 403 for a wrong CSRF token, 400
+  `request_expired` 10 minutes after `/authorize`, 400 `already_decided` after a first decision. Allow takes `rooms`
+  as `"*"` or a list of the person's current rooms no member keeps away from cloud models, each once, and `days` 1 to
+  30 (30 by default), and answers `{redirect}` with a `code` (single use, 60 s), the `state` and `iss`. Deny answers
+  `{redirect}` with `error=access_denied`, the `state` and `iss`.
+- `POST /token`, and `GET`, `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
 
 ## Grants
 

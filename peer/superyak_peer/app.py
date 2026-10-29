@@ -52,7 +52,7 @@ PUBLIC_ROUTES = {
     # itself, and they exist only with serve --public-origin, so without it the router has no such route to allow.
     '/.well-known/oauth-protected-resource': {'GET'}, '/.well-known/oauth-protected-resource/mcp': {'GET'},
     '/.well-known/oauth-authorization-server': {'GET'}, '/register': {'POST'}, '/authorize': {'GET'},
-    '/authorize/request': {'POST'}, '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
+    '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
     '/mcp': {'GET', 'POST', 'DELETE'},
 }
 # The connector's issuer, as D13 needs it to equal what a person types: https, lowercase ASCII labels, no trailing
@@ -364,6 +364,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         if public and device is not None and await run_in_threadpool(store.device_is_valid, device, username):
             lane = lanes.known  # the read writes nothing, runs before queueing and refuses a held token; Store.login checks again
         return lane, public, device
+    app.state.sign_in_lane = sign_in_lane  # the connector's sign-in (Task 5) is laned and counted the same way
 
     async def login_response(request, username, password):
         lane, public, device = await sign_in_lane(request, username)
