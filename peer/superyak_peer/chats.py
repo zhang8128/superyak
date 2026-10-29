@@ -158,6 +158,16 @@ class Chats:
         room['moderators'] = list({m['id']: {'id': m['id'], 'name': m['name']} for m in self._moderators(db, key)}.values())  # a holder once, however many grants
         return room
 
+    def _said_before_replacement(self, db, room_id, message_id):
+        """Whether a message in a replaced room was posted before the room that continues it was made, by event order
+        (event ids only grow, whatever the clock does). A message with no event, or a room with no recorded
+        replacement, counts as not before: fail closed."""
+        replaced_at = db.execute('SELECT min(id) FROM events WHERE resource_id IN '
+                                 '(SELECT id FROM rooms WHERE linked_room_id=?)', (room_id,)).fetchone()[0]
+        posted_at = db.execute("SELECT id FROM events WHERE kind='chat.message' AND resource_id=? "
+                               "AND json_extract(payload, '$.message_id')=?", (room_id, message_id)).fetchone()
+        return replaced_at is not None and posted_at is not None and posted_at[0] < replaced_at
+
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):
         self._refuse_live_ship_keys(body)
         if ':' in key:
@@ -176,9 +186,12 @@ class Chats:
                     raise Problem(409, 'Message ID already used with different text')
                 return dict(existing, replayed=True)  # a retry: nothing new was posted
             # A new conversation goes to the room that continues a replaced one, as adds say. An answer (a reply to a
-            # message here, or a run's labelled reply) still lands beside its question: a mention made before an add is
-            # answered where it was asked, and a ship's finished run never loses its reply.
-            if reply_to is None and ticket_id is None and db.execute(f'SELECT 1 WHERE ? IN ({REPLACED_ROOMS})', (key,)).fetchone():
+            # message from before the add, or a run's labelled reply) still lands beside its question: a mention made
+            # before an add is answered where it was asked, and a ship's finished run never loses its reply. A reply to
+            # something said after the add would carry the conversation on where the new member never sees it.
+            replaced = db.execute(f'SELECT 1 WHERE ? IN ({REPLACED_ROOMS})', (key,)).fetchone() is not None
+            if replaced and (reply_to is None and ticket_id is None
+                             or reply_to is not None and not self._said_before_replacement(db, key, reply_to)):
                 raise Problem(409, REPLACED_SEND)
             self._lessons_gate(db, key, actor, body, labelled=ticket_id is not None or reply_to is not None,
                                client_id=client_message_id)  # first rail section 3
@@ -194,7 +207,8 @@ class Chats:
                 db.execute('INSERT INTO message_sources VALUES(?,?)', (message_id, ticket_id))
             if reply_to is not None:
                 db.execute('INSERT INTO message_replies VALUES(?,?)', (message_id, reply_to))
-            self._record_mentions(db, key, message_id, body)
+            if not replaced:  # an answer in a replaced room starts no run and calls no one there
+                self._record_mentions(db, key, message_id, body)
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
             sent = dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
             if reply_to is None:  # R27: this ship's deferred mentions here that still wait (stale deferrals spec)

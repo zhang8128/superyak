@@ -307,3 +307,30 @@ def test_a_replaced_room_with_a_fork_keeps_its_lines_for_the_next_run(tmp_path):
     station = ReplacedStation([{'id': ROOM}, {'id': 'a', 'linked_room_id': ROOM}, {'id': 'b', 'linked_room_id': ROOM}])
     assert run(tmp_path, Route(), station=station) == [] and station.posts == []
     assert json.loads((tmp_path / 'route-watch.json').read_text())['pending']
+
+
+def test_a_followed_room_is_kept_so_the_next_run_posts_there_at_once(tmp_path):
+    """The re-check's N5: a later run starts in the room an earlier run followed to, with no extra 409 and no rooms()
+    call."""
+    station = ReplacedStation([{'id': ROOM}, {'id': 'room-city-2', 'linked_room_id': ROOM}])
+    run(tmp_path, Route(), station=station)
+    assert json.loads((tmp_path / 'route-watch.json').read_text())['followed'] == [ROOM, 'room-city-2']
+    station.rooms = lambda: pytest.fail('a followed room needs no rooms() call')
+    later = Clock()
+    later.now += rw.DAY + 1  # the daily line, so this run has something to post
+    sent = run(tmp_path, Route(), station=station, clock=later)
+    assert sent and station.posts[-1][0] == 'room-city-2'
+
+
+def test_a_continuation_this_ship_is_not_in_gets_one_attempt(tmp_path):
+    """Serenity's point: the station says replaced, but the listed rooms lead nowhere new (the ship isn't in the room
+    that continues it), so continued() hands back the same room. One attempt, the line kept, no second post."""
+    station = ReplacedStation([{'id': ROOM}])
+    attempts = []
+
+    def refusing(room_id, body, client_message_id, ticket_id=None, reply_to=None):
+        attempts.append(room_id)
+        raise rw.StationError(409, rw.REPLACED_SEND)
+    station.post = refusing
+    assert run(tmp_path, Route(), station=station) == [] and attempts == [ROOM]
+    assert json.loads((tmp_path / 'route-watch.json').read_text())['pending']

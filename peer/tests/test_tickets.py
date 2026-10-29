@@ -143,6 +143,28 @@ def test_an_answer_still_lands_in_a_room_replaced_after_its_question(env):
         409, 'This room was replaced by a newer linked room; post in the room that continues it')
 
 
+def test_a_replaced_room_takes_answers_only_to_what_was_said_before_the_add(env):
+    """fix:replaced-room-replies-only-to-earlier: once the room is replaced, a reply is accepted only to a message
+    from before the add, so no conversation goes on there where the new member and the bridge never see it; and an
+    answer there records no mention, so it can start no run (the re-check's S7: five chained replies all landed, and
+    a reply naming @serenity ran an owner build in the replaced room)."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    before = say(clients[0], room, 'a', 'What do we do about the notes?')
+    added = clients[0].post(f'/api/chats/{room}/participants', json={'member_ids': [users[2]['id']]})
+    assert added.status_code == 201, added.text
+
+    def reply(client, cid, body, to):
+        return client.post(f'/api/chats/{room}/messages', json={'client_message_id': cid, 'body': body, 'reply_to': to})
+    answer = reply(clients[1], 'b', 'Keep them in the vault. @serenity please check', before['id'])
+    assert answer.status_code == 201, answer.text
+    chained = reply(clients[0], 'c', 'Agreed, and what about the rest?', answer.json()['id'])
+    assert (chained.status_code, chained.json()['error']) == (
+        409, 'This room was replaced by a newer linked room; post in the room that continues it')
+    assert [m for m in app.state.store.mentions(ship['id']) if m['message_id'] == answer.json()['id']] == []
+    run = ticket(serenity, answer.json()['id'])
+    assert run.status_code != 200 or run.json()['mode'] != 'build'  # no recorded mention, so no build from it
+
+
 def test_a_ticket_labels_one_message_only_and_never_a_finished_or_foreign_one(env):
     app, clients, users, clock, ship, serenity, room = setup(env)
     owner = say(clients[0], room, 'a', '@serenity add notes')
