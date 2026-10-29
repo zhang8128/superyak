@@ -44,7 +44,7 @@ def test_the_installed_session_end_command_reaches_the_station(station, ship_con
     fake, andy, jenn, serenity = station
     config_path = write_config(ship_config, tmp_path)
     declare(fake, 's1')
-    monkeypatch.setattr(hook, 'urllib_transport', lambda timeout=5: fake)
+    monkeypatch.setattr(hook, 'urllib_transport', lambda timeout=5, **_: fake)  # **_: the run's pin and unpin
     monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({'session_id': 's1', 'hook_event_name': 'SessionEnd', 'reason': 'other'})))
     monkeypatch.setenv('SUPERYAK_HOOK_EVENT', 'session-end')
     assert cli.main(['hook', '--config', str(config_path)]) == 0
