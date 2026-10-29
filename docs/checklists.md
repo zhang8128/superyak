@@ -584,10 +584,11 @@ well means answering what is true now.
       ("A live station act").
 - [ ] Its date and the repo's state are checked before it is answered as live, and so is an agent's notice or report
       before it is acted on: a request settled since is answered as settled, not as a live question; to reopen it,
-      ask it as a new one. For a branch: `git fetch origin && git merge-base --is-ancestor <head> origin/main && echo
-      merged || echo open` (Tardis, 2026-10-28: a day-old force-push request, pushed and lifted the day before, was
-      answered as a live question; Rio Grande, 2026-10-29: a day-old fixer's notice fired again, and a post called a
-      merged branch open and moved its pointer).
+      ask it as a new one. For a branch, on one line:
+      `git fetch origin && git merge-base --is-ancestor <head> origin/main && echo merged || echo open`
+      (Tardis, 2026-10-28: a day-old force-push request, pushed and lifted the day before, was answered as a live
+      question; Rio Grande, 2026-10-29: a day-old fixer's notice fired again, and a post called a merged branch open
+      and moved its pointer).
 
 ## Shell commands (zsh)
 
