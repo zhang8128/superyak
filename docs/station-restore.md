@@ -202,7 +202,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    wormhole: if a room shows bridged that should not be, run `make station-unbridge ID=<short id>`. Put the units
    step 3 saved, the watchers and the federation units, back as they were, after the lighthouse: enable again those that
    were enabled, and start again those that were running (a crashed one restarting counts as running). Check each
-   started unit with `is-active`, then enable both timers again.
+   started unit with `is-active`, then enable both timers again. A pull peer's deliveries resume about 5 minutes after
+   step 5's reconcile: until then the listener answers its pulls "Replay", counts no failure and keeps its acks, so a
+   copy's lost pull nonces can't be replayed (fix:restore-keeps-pull-nonces).
    ```bash
    systemctl --user start superyak-lighthouse superyak-door
    # now the law layers, in the browser
@@ -249,4 +251,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
     4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and
        wormhole, put the watchers step 3 saved back as they were, and enable the timers again. Step 8's checks that act
        on step 5's report (the law layers, the members and admins, the `bridged` column) are for a restored copy and
-       don't apply to a rollback.
+       don't apply to a rollback. If a federation unit was running, note the time 10.1 stopped it, and start it again
+       more than 10 minutes after that: the file put back lacks the pull nonces the restored station recorded and
+       carries no newer restore mark, and a pull it served just before the stop, from a peer whose clock ran 300 s
+       ahead, could pass the clock check for 10 minutes after the stop (fix:restore-keeps-pull-nonces). The lighthouse,
+       the door, the ships and the timers needn't wait. Until `fix:pull-floor-after-rollback` writes a mark at 10.3,
+       this wait is the guard.
