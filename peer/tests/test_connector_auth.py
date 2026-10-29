@@ -217,6 +217,21 @@ def test_the_per_source_limit(home):
     assert register(home.app).status_code == 201
 
 
+def test_an_ipv6_sender_is_counted_by_its_64(home):
+    """A security review of 5dd19d4c: one IPv6 /64 holds countless addresses, so the per-source limit counts the /64,
+    or one sender could pose as hundreds of sources and evict others' fresh registrations. An IPv4-mapped address is
+    its IPv4 address."""
+    for n in range(10):
+        assert register(home.app, source=f'2001:db8::{n + 1:x}').status_code == 201
+    limited = register(home.app, source='2001:db8::ffff:1')
+    assert (limited.status_code, limited.json()) == (429, {'error': 'slow_down'})
+    assert register(home.app, source='2001:db8:0:1::1').status_code == 201  # another /64
+    for _ in range(9):
+        register(home.app, source='192.0.2.7')
+    assert register(home.app, source='::ffff:192.0.2.7').status_code == 201  # the 10th from 192.0.2.7
+    assert register(home.app, source='192.0.2.7').status_code == 429
+
+
 def test_an_unused_registration_is_gone_after_24_hours(home):
     old = register(home.app).json()['client_id']
     home.clock[0] += 86400

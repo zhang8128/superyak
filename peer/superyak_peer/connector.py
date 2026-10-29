@@ -1,5 +1,6 @@
 """The remote connector (spec docs/superpowers/specs/2026-10-27-remote-connector-design.md): a person's home, read
 from Claude through its own OAuth server and /mcp. Without `serve --public-origin`, none of it exists."""
+import ipaddress
 import secrets
 from urllib.parse import urlsplit
 
@@ -34,6 +35,18 @@ UNUSED_CLIENTS_MAX = 100  # at the cap the oldest unused one goes, never the new
 UNUSED_CLIENT_SECONDS = 86400
 REGISTRATIONS_PER_HOUR = 10  # per source; a number the spec leaves open (plan Task 4)
 GRANT_TYPES = ('authorization_code', 'refresh_token')
+
+
+def sender(source):
+    """Whom the per-source limit counts: an IPv6 sender by its /64, since one /64 holds countless addresses (a security
+    review of 5dd19d4c); an IPv4-mapped address as its IPv4 address; anything else as given."""
+    try:
+        address = ipaddress.ip_address(source)
+    except ValueError:
+        return source
+    if address.version == 6 and address.ipv4_mapped:
+        return str(address.ipv4_mapped)
+    return str(ipaddress.ip_network(f'{address}/64', strict=False)) if address.version == 6 else str(address)
 
 
 class OAuthError(Exception):
@@ -77,6 +90,7 @@ class Connector:
                 or metadata.get('response_types', ['code']) != ['code']
                 or metadata.get('token_endpoint_auth_method', 'none') != 'none'):
             raise OAuthError(400, 'invalid_client_metadata')
+        source = sender(source)
         with self.transaction() as db:
             self._connector_sweep(db)
             now = self.clock()
