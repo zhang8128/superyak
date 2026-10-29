@@ -59,6 +59,11 @@ class OAuthError(Exception):
         self.status, self.error = status, error
 
 
+class ToolRefused(Exception):
+    """A tool call the home won't answer (spec "The tools"): /mcp gives it as a tool result with isError and this one
+    plain sentence, never a JSON-RPC error."""
+
+
 class RedirectError(OAuthError):
     """An authorization request refused after its client and redirect were checked: the route sends the browser back
     to that redirect with `error`, the request's `state` and `iss` (spec, "Then the rest")."""
@@ -508,6 +513,11 @@ class Connector:
             if grant is None:
                 return None
             return {'grant_id': grant['id'], 'person_id': grant['person_id'], 'rooms': grant['rooms'], 'scope': row['scope']}
+
+    def connector_call(self, grant, name, arguments):
+        """One tools/call for a grant as `bearer` gave it: the tool's result, or ToolRefused. Task 8 builds the four
+        tools here; until then every call answers {'ok': True}."""
+        return {'ok': True}
 
     def _consent_rooms(self, db, person_id):
         """The person's rooms on this home as the consent page offers them: each current room, its earlier parts

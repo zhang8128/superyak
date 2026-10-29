@@ -23,6 +23,9 @@ Revision 4 is amended again by Task 6's section 2 (the same reader): a used code
 refresh token that a reuse rotated out revokes its grant, at a stated cost to a client that refreshes from two workers
 at once, and the first week's revokes are read by their reason. Lines change under "Codes", "Tokens" and "Measure".
 
+Revision 4 is amended a third time by Task 7's section 2: a connector token on another route gets 401, and "Limits"
+says why `/mcp` counts only `tools/call`, from the reader's measurement on the Pi.
+
 ## Why
 
 Andy, 2026-10-27: "is superyak something that can be run from claude or chatgpt…", "or scientists or doctors". He is
@@ -284,8 +287,8 @@ Built by hand (D17), with no new dependencies: the peer keeps fastapi, uvicorn, 
 - **The challenge.** A plain 401 with `WWW-Authenticate: Bearer
   resource_metadata="<public origin>/.well-known/oauth-protected-resource/mcp", scope="rooms.read"`, plus
   `error="invalid_token"` when a token was presented. Never a redirect to a login page.
-- A ship key or a session cookie at `/mcp` gets 401. A connector token on any other route fails as today (403 on
-  person routes, 401 on room routes, app.py:88-102), because connector tokens live in their own table.
+- A ship key or a session cookie at `/mcp` gets 401. A connector token on any other route gets 401, as any unknown
+  bearer does today, because connector tokens live in their own table.
 
 ### The tools
 
@@ -442,6 +445,9 @@ private chats" (app.js:979).
 
 - `/mcp` allows 60 `tools/call` a minute and 2,000 a day per grant. `initialize`, `tools/list` and `ping` don't count.
   Over the limit, it answers 429 with `Retry-After`.
+- Each `/mcp` request makes one store read (about 1 ms on the Pi) before its grant is known, as PublicRoute's key check
+  does, so no per-grant count can bound it. A bound before any lookup belongs to the public route (board
+  `fix:public-route-bound-before-lookup`).
 - A tool call takes at most 30 seconds ("The time cap", above).
 - `/register` stores nothing and needs no limit; its 8 KB body bounds the work (D18).
 
