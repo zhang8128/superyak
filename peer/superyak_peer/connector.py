@@ -60,20 +60,24 @@ def check_callback(callback):
 
 def client_fields_ok(name, grants):
     """/register's rules for what an id carries, checked again whenever an id is verified (a stolen key can't mint a
-    payload /register would refuse): a name of at most 100 characters and 200 bytes with no Cc, Cf or lone surrogate,
-    and grant types within GRANT_TYPES, each once."""
+    payload /register would refuse): a name of at most 100 characters with no Cc, Cf, line break (Zl, Zp) or lone
+    surrogate, and 200 bytes as the id carries it, after JSON escaping, so every id stays under 512 characters (Task
+    4's re-check, MF1); and grant types within GRANT_TYPES, each once."""
     if name is not None:
         if not isinstance(name, str) or len(name) > CLIENT_NAME_MAX:
             return False
-        try:
-            if len(name.encode()) > CLIENT_NAME_BYTES:
-                return False
-        except UnicodeEncodeError:  # a lone surrogate
+        if any(unicodedata.category(c) in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp') for c in name):
             return False
-        if any(unicodedata.category(c) in ('Cc', 'Cf', 'Cs') for c in name):
+        if len(json.dumps(name, ensure_ascii=False).encode()) - 2 > CLIENT_NAME_BYTES:  # less its two quotes
             return False
     return (isinstance(grants, list) and bool(grants) and all(isinstance(g, str) for g in grants)
             and set(grants) <= set(GRANT_TYPES) and len(set(grants)) == len(grants))
+
+
+def _client_payload(name, grants, issued_at):
+    """The one encoding of a registration, which /register makes and an id's payload must equal byte for byte."""
+    body = {'v': CLIENT_VERSION, 'grant_types': grants, 'issued_at': issued_at} | ({'name': name} if name is not None else {})
+    return json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
 
 
 def _b64(raw):
@@ -115,8 +119,7 @@ class Connector:
                 or metadata.get('token_endpoint_auth_method', 'none') != 'none'):
             raise OAuthError(400, 'invalid_client_metadata')
         now = int(self.clock())
-        body = {'v': CLIENT_VERSION, 'grant_types': grants, 'issued_at': now} | ({'name': name} if name is not None else {})
-        payload = json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+        payload = _client_payload(name, grants, now)
         client_id = _b64(payload) + '.' + _b64(_tag(self._connector_key, b'client', payload, callback.encode()))
         made = {'client_id': client_id, 'client_id_issued_at': now, 'redirect_uris': [callback], 'grant_types': grants,
                 'response_types': ['code'], 'token_endpoint_auth_method': 'none'}
@@ -124,8 +127,10 @@ class Connector:
 
     def known_client(self, db, client_id, callback):
         """Spec revision 4's one check, in order: a row with exactly this id is that client (so a key rotation or a
-        callback change disconnects no one); otherwise the tag, compared with compare_digest, then the version and the
-        payload by /register's own rules. Returns {client_id, name, grant_types}, or None for an unknown id."""
+        callback change disconnects no one); otherwise the tag, compared with compare_digest, then the payload by
+        /register's own rules, and equal to the payload /register itself makes from it, so an unknown version, a key it
+        doesn't make, a repeated key or another spelling is unknown (Task 4's re-check, S1). Returns {client_id, name,
+        grant_types}, or None for an unknown id."""
         if not isinstance(client_id, str) or len(client_id) > 512:  # longer than any id /register makes
             return None
         row = db.execute('SELECT name, grant_types FROM oauth_clients WHERE client_id=?', (client_id,)).fetchone()
@@ -141,7 +146,8 @@ class Connector:
             body = json.loads(payload)
         except (ValueError, UnicodeDecodeError, RecursionError):
             return None
-        if (not isinstance(body, dict) or body.get('v') != CLIENT_VERSION or type(body.get('issued_at')) is not int
-                or not client_fields_ok(body.get('name'), body.get('grant_types'))):
+        if (not isinstance(body, dict) or type(body.get('issued_at')) is not int or body['issued_at'] < 0
+                or not client_fields_ok(body.get('name'), body.get('grant_types'))
+                or payload != _client_payload(body.get('name'), body['grant_types'], body['issued_at'])):
             return None
         return {'client_id': client_id, 'name': body.get('name'), 'grant_types': body['grant_types']}

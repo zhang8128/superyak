@@ -385,8 +385,8 @@ Origin; the consent page's posts keep it.
 - `POST /register` (RFC 7591, stateless, spec D18): a JSON body of at most 8 KB (413 above), `redirect_uris` exactly
   the one callback (else 400 `invalid_redirect_uri`), `grant_types` within `authorization_code` and `refresh_token`,
   each once (default the first), `response_types` `["code"]`, `token_endpoint_auth_method` `none`, and a `client_name`
-  of at most 100 characters and 200 UTF-8 bytes with no control or format character and no lone surrogate, kept only
-  as quoted data (else 400 `invalid_client_metadata`). Returns 201 `{client_id, client_id_issued_at, redirect_uris,
+  of at most 100 characters and 200 UTF-8 bytes as JSON escapes it, with no control, format or line-break character
+  and no lone surrogate, kept only as quoted data (else 400 `invalid_client_metadata`). Returns 201 `{client_id, client_id_issued_at, redirect_uris,
   grant_types, response_types, token_endpoint_auth_method[, client_name]}`, never a secret. It writes nothing and takes
   no lock, so it keeps no limit: the client id, at most 512 characters, carries the registration, signed with this
   home's key (`connector_client_key` in `system_meta`, backed up) and bound to the callback. An id has no age limit; it

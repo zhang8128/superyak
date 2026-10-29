@@ -205,6 +205,8 @@ def test_registration_bounds(home):
     for bad in ({'client_name': 'x' * 101}, {'client_name': '\u20ac' * 67}, {'client_name': 5},
                 {'client_name': 'a\x00b'}, {'client_name': 'a\x1bb'}, {'client_name': 'a\nb'},
                 {'client_name': 'Claude\u202e'}, {'client_name': 'a\u200bb'},
+                {'client_name': 'a\u2028b'}, {'client_name': 'a\u2029b'},  # line breaks, so a name is one line
+                {'client_name': '"' * 67 + '\U0001F600' * 33},  # 199 bytes, but 266 as the id carries it (MF1)
                 {'grant_types': ['implicit']}, {'grant_types': 'authorization_code'}, {'grant_types': []},
                 {'grant_types': ['refresh_token', 'refresh_token']}, {'response_types': ['token']},
                 {'token_endpoint_auth_method': 'client_secret_basic'}):
@@ -215,12 +217,17 @@ def test_registration_bounds(home):
     for raw in (b'not json', b'[]'):
         assert raw_register(home.app, raw).json() == {'error': 'invalid_client_metadata'}, raw
     assert register(home.app, {**REGISTRATION, 'client_name': '\u20ac' * 66}).status_code == 201  # 198 bytes
+    assert register(home.app, {**REGISTRATION, 'client_name': '"' * 34 + '\U0001F600' * 33}).status_code == 201  # 200
 
 
 def test_an_id_is_at_most_512_characters(home):
-    for name in ('"' * 100, '\\' * 100, '\u20ac' * 66, 'x' * 100):
+    """The name's 200 bytes are counted as the id carries them, after JSON escaping (Task 4's re-check, MF1), so the
+    worst mixes of escapes and astral characters still make ids the 512 pre-check lets through."""
+    for name in ('"' * 100, '\\' * 100, '\u20ac' * 66, 'x' * 100, '"' * 34 + '\U0001F600' * 33,
+                 '\\' * 50 + '\u20ac' * 33 + 'x'):
         made = register(home.app, {**REGISTRATION, 'client_name': name})
         assert made.status_code == 201 and len(made.json()['client_id']) <= 512, (name[:3], len(made.json()['client_id']))
+        assert known(home, made.json()['client_id'])['name'] == name
 
 
 def known(home, client_id):
@@ -243,8 +250,8 @@ def test_one_ordered_check_knows_a_client(home):
     with home.store.transaction() as db:
         assert home.store.known_client(db, made['client_id'], CALLBACK + 'x') is None  # another callback
 
-    def mint(body):
-        raw = json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+    def mint(body, raw=None):
+        raw = raw or json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
         mac = hmac.new(home.store._connector_key, b'client\n' + raw + b'\n' + CALLBACK.encode(), hashlib.sha256).digest()
         enc = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()  # noqa: E731
         return enc(raw) + '.' + enc(mac)
@@ -253,6 +260,16 @@ def test_one_ordered_check_knows_a_client(home):
     assert known(home, mint({**good, 'v': 2})) is None  # an unknown version
     assert known(home, mint({**good, 'name': 'x' * 101})) is None  # a payload /register would refuse
     assert known(home, mint({**good, 'grant_types': ['implicit']})) is None
+    # Task 4's re-check, S1 and S3: with the key, only the payload /register itself makes is a client
+    for loose in ({**good, 'v': True}, {**good, 'v': 1.0}, {**good, 'extra': 1}, {**good, 'name': None},
+                  {**good, 'issued_at': -1}, {**good, 'issued_at': '1'}, {**good, 'issued_at': 1.5}):
+        assert known(home, mint(loose)) is None, loose
+    assert known(home, mint(None, b'{"grant_types":["authorization_code"],"issued_at":1,"name":"x","name":"Claude","v":1}')) is None
+    assert known(home, mint(None, json.dumps(good, sort_keys=True).encode())) is None  # spaces: not canonical
+    alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    spare = tag[:-1] + alphabet[alphabet.index(tag[-1]) ^ 1]  # the tag's last character has 2 bits to spare
+    assert base64.urlsafe_b64decode(spare + '=') == base64.urlsafe_b64decode(tag + '=')
+    assert known(home, payload + '.' + spare) is None  # the same bytes, encoded another way (S3, R6)
     assert known(home, 'no-dot') is None and known(home, '.') is None and known(home, '!!.!!') is None
 
 
