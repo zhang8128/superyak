@@ -35,6 +35,7 @@ def issuer_metadata(issuer):
 # restore copies it as it is, since a client grants nothing by itself.
 OAUTH_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY, name TEXT, grant_types TEXT NOT NULL, created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS connector_grants(id TEXT PRIMARY KEY, person_id TEXT NOT NULL REFERENCES users(id), client_id TEXT NOT NULL, redirect_host TEXT NOT NULL, rooms TEXT NOT NULL, scope TEXT NOT NULL, created REAL NOT NULL, ends REAL NOT NULL, last_used REAL, revoked REAL);
 CREATE TABLE IF NOT EXISTS oauth_pending(id TEXT PRIMARY KEY, request TEXT NOT NULL UNIQUE, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, state TEXT, challenge TEXT NOT NULL, resource TEXT NOT NULL, scope TEXT NOT NULL, at INTEGER NOT NULL, person_id TEXT NOT NULL, csrf TEXT NOT NULL, decided REAL, code_hash TEXT, code_expires REAL, grant_id TEXT);
 '''
 # oauth_pending (Task 5): a request from its sign-in on, keyed by `request`, the SHA-256 of its fragment's tag, so one
@@ -70,6 +71,8 @@ CHALLENGE = re.compile(r'[A-Za-z0-9_-]{43}')  # an S256 challenge: base64url of 
 
 
 APP_NAMES = {'claude.ai': 'Claude', 'claude.com': 'Claude'}  # the consent page names an app by its redirect host
+CODE_SECONDS = 60
+DAYS_MAX = 30  # a connection lasts 1 to 30 days, 30 by default, never more (spec, "Tokens")
 PENDING_FIELDS = ('v', 'client_id', 'redirect_uri', 'state', 'challenge', 'resource', 'scope', 'at')
 
 
@@ -282,6 +285,53 @@ class Connector:
             self._connector_sweep(db)
         return {'pending': pending, 'csrf': csrf, 'name': user['name'], 'app': app_name(request['redirect_uri']),
                 'client_name': request['client_name'], 'scope': request['scope'], 'rooms': rooms}
+
+    def pending_decide(self, pending, csrf, allow, rooms, days=DAYS_MAX, *, issuer):
+        """Allow or Deny, from the stored request only: its pending id and CSRF token (403 for a wrong token), within
+        its ten minutes from /authorize, and once (400 already_decided after either). Deny sends access_denied. Allow
+        takes the rooms chosen ("*" sent as itself, or current rooms of the person's that no member keeps away from
+        cloud models, each once, at least one) and 1 to 30 days, makes the grant and a code (256 bits, 60 s, stored as
+        a hash), and writes the client's oauth_clients row when it has none. Returns the URL to send the browser to,
+        with the state and iss."""
+        from urllib.parse import urlencode
+        from .auth import token_hash
+        if not isinstance(pending, str) or not isinstance(csrf, str) or type(allow) is not bool:
+            raise OAuthError(400, 'invalid_request')
+        with self.transaction() as db:
+            now = self.clock()
+            row = db.execute('SELECT * FROM oauth_pending WHERE id=?', (pending,)).fetchone()
+            if row is None:
+                raise OAuthError(400, 'invalid_request')
+            if not hmac.compare_digest(row['csrf'], token_hash(csrf)):
+                raise OAuthError(403, 'invalid_request')
+            if row['decided'] is not None:
+                raise OAuthError(400, 'already_decided')
+            if now - row['at'] >= PENDING_SECONDS:
+                raise OAuthError(400, 'request_expired')
+            back = {'state': row['state']} if row['state'] is not None else {}
+            if not allow:
+                db.execute('UPDATE oauth_pending SET decided=? WHERE id=?', (now, pending))
+                return row['redirect_uri'] + '?' + urlencode({'error': 'access_denied'} | back | {'iss': issuer})
+            choosable = {room['room'] for room in self._consent_rooms(db, row['person_id'])
+                         if room['earlier_of'] is None and not room['cloud']}
+            if not (rooms == '*' or isinstance(rooms, list) and rooms and all(isinstance(room, str) for room in rooms)
+                    and len(set(rooms)) == len(rooms) and set(rooms) <= choosable):
+                raise OAuthError(400, 'invalid_request')
+            if type(days) is not int or not 1 <= days <= DAYS_MAX:
+                raise OAuthError(400, 'invalid_request')
+            known = self.known_client(db, row['client_id'], row['redirect_uri'])
+            if known is None:  # the key rotated or the callback changed since the sign-in
+                raise OAuthError(400, 'invalid_request')
+            grant, code = secrets.token_urlsafe(16), secrets.token_urlsafe(32)
+            db.execute('INSERT INTO connector_grants(id, person_id, client_id, redirect_host, rooms, scope, created, ends) '
+                       'VALUES(?,?,?,?,?,?,?,?)',
+                       (grant, row['person_id'], row['client_id'], urlsplit(row['redirect_uri']).hostname,
+                        '*' if rooms == '*' else json.dumps(rooms), row['scope'], now, now + days * 86400))
+            db.execute('INSERT OR IGNORE INTO oauth_clients(client_id, name, grant_types, created) VALUES(?,?,?,?)',
+                       (row['client_id'], known['name'], ' '.join(known['grant_types']), now))
+            db.execute('UPDATE oauth_pending SET decided=?, code_hash=?, code_expires=?, grant_id=? WHERE id=?',
+                       (now, token_hash(code), now + CODE_SECONDS, grant, pending))
+        return row['redirect_uri'] + '?' + urlencode({'code': code} | back | {'iss': issuer})
 
     def _consent_rooms(self, db, person_id):
         """The person's rooms on this home as the consent page offers them: each current room, its earlier parts

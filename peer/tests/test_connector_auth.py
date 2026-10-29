@@ -54,7 +54,8 @@ def test_every_connector_route_answers_a_public_request(home):
     for method, path in CONNECTOR_PATHS:
         response = client.request(method, path, json={} if method == 'POST' else None)
         # {} is no registration or sign-in, and /authorize with no client shows its page
-        expected = 200 if path.startswith('/.well-known/') else 400 if path in ('/register', '/authorize', '/authorize/signin') else 501
+        expected = (200 if path.startswith('/.well-known/') else
+                    400 if path in ('/register', '/authorize', '/authorize/signin', '/authorize/decision') else 501)
         assert response.status_code == expected, (method, path, response.status_code, response.text)
 
 
@@ -632,3 +633,132 @@ def test_a_good_sign_in_sweeps_requests_past_their_ten_minutes(home):
     assert len(table(home, 'oauth_pending')) == 1  # a wrong password sweeps nothing
     sign_in(home, a_fragment(home))
     assert [row['at'] for row in table(home, 'oauth_pending')] == [int(home.clock[0])]
+
+
+# ---- Task 5, the decision: Allow and Deny post the pending id with its CSRF token. Allow sends the browser to the
+# stored redirect with a code, the state and iss; Deny with access_denied. Every later step uses only stored values. ----
+
+def signed_in(home, client=None, username='sam@example.org', **override):
+    """A sign-in on a fresh request: (its client id, the view)."""
+    client = client or register(home.app).json()['client_id']
+    view = sign_in(home, a_fragment(home, client, **override), username)
+    assert view.status_code == 200, view.text
+    return client, view.json()
+
+
+def decide(home, view, allow=True, rooms=None, **extra):
+    body = {'pending': view['pending'], 'csrf': view['csrf'], 'allow': allow,
+            'rooms': [room['room'] for room in view['rooms'] if not room['cloud'] and not room['earlier_of']][:1]
+            if rooms is None else rooms} | extra
+    return consent(home).post('/authorize/decision', json=body)
+
+
+def sent_back(decision):
+    from urllib.parse import parse_qs, urlsplit
+    assert decision.status_code == 200, decision.text
+    where = urlsplit(decision.json()['redirect'])
+    return where._replace(query='').geturl(), {k: v[0] for k, v in parse_qs(where.query).items()}
+
+
+def test_allow_sends_a_code_and_makes_the_grant(home):
+    import json
+    from superyak_peer.auth import token_hash
+    sam = person(home)
+    room = home.store.create_room(sam['id'], 'Care plan', [])['id']
+    client, view = signed_in(home)
+    target, query = sent_back(decide(home, view, rooms=[room]))
+    assert (target, set(query), query['state'], query['iss']) == (CALLBACK, {'code', 'state', 'iss'}, 'st-1', PUBLIC_ORIGIN)
+    [grant] = table(home, 'connector_grants')
+    assert {k: grant[k] for k in ('person_id', 'client_id', 'redirect_host', 'scope', 'created', 'ends', 'revoked')} == {
+        'person_id': sam['id'], 'client_id': client, 'redirect_host': 'claude.ai', 'scope': 'rooms.read offline_access',
+        'created': home.clock[0], 'ends': home.clock[0] + 30 * 86400, 'revoked': None}
+    assert json.loads(grant['rooms']) == [room]
+    [row] = table(home, 'oauth_pending')
+    assert (row['decided'], row['code_hash'], row['code_expires'], row['grant_id']) == (
+        home.clock[0], token_hash(query['code']), home.clock[0] + 60, grant['id'])
+    assert len(query['code']) >= 43  # 256 bits
+
+
+def test_deny_redirects_with_access_denied_state_and_iss(home):
+    person(home)
+    _, view = signed_in(home)
+    target, query = sent_back(decide(home, view, allow=False))
+    assert (target, query) == (CALLBACK, {'error': 'access_denied', 'state': 'st-1', 'iss': PUBLIC_ORIGIN})
+    [row] = table(home, 'oauth_pending')
+    assert row['decided'] == home.clock[0] and row['code_hash'] is None
+    assert table(home, 'connector_grants') == [] and table(home, 'oauth_clients') == []
+
+
+def test_decisions_need_the_pending_id_and_its_csrf(home):
+    """A wrong CSRF token is 403, an unknown pending id 400, and the ten minutes run from /authorize, not the sign-in."""
+    person(home)
+    jenn = person(home, 'jenn@example.org', 'Jenn Example')
+    client = register(home.app).json()['client_id']
+    fragment = a_fragment(home, client)
+    sams = sign_in(home, fragment).json()
+    jenns = sign_in(home, fragment, 'jenn@example.org').json()
+    for wrong in ({'csrf': 'x' * 43}, {'csrf': sams['csrf']}):  # sam's token died when jenn signed in on that request
+        refused = decide(home, jenns | wrong, rooms='*')
+        assert (refused.status_code, refused.json()) == (403, {'error': 'invalid_request'}), wrong
+    refused = decide(home, jenns | {'pending': 'made-up'}, rooms='*')
+    assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'})
+    home.clock[0] += 600
+    stale = decide(home, jenns, rooms='*')
+    assert (stale.status_code, stale.json()) == (400, {'error': 'request_expired'})
+    assert table(home, 'connector_grants') == [] and jenn  # nothing was issued
+
+
+def test_a_second_decision_mints_no_second_code(home):
+    """Review Focus: the back button after Allow, or a double click. The second decision gets 400 and mints nothing."""
+    person(home)
+    _, view = signed_in(home)
+    sent_back(decide(home, view, rooms='*'))
+    for allow in (True, False):
+        again = decide(home, view, allow=allow, rooms='*')
+        assert (again.status_code, again.json()) == (400, {'error': 'already_decided'}), allow
+    assert len(table(home, 'connector_grants')) == 1 and len({row['code_hash'] for row in table(home, 'oauth_pending')}) == 1
+
+
+def test_nothing_is_chosen_by_default_and_marked_rooms_cant_be_chosen(home):
+    sam, jenn = person(home), person(home, 'jenn@example.org', 'Jenn Example')
+    store = home.store
+    mine = store.create_room(sam['id'], 'Mine', [])['id']
+    earlier = store.create_room(sam['id'], 'Growing', [])['id']
+    store.add_participants(sam['id'], earlier, [jenn['id']])
+    marked = store.create_room(sam['id'], 'Marked', [])['id']
+    theirs = store.create_room(jenn['id'], 'Theirs', [])['id']
+    with store.transaction() as db:
+        db.execute('INSERT INTO room_cloud VALUES(?,?,?)', (marked, sam['id'], home.clock[0]))
+    for rooms in ([], None, [marked], [earlier], [theirs], [mine, mine], ['*'], 'all', [5], {'room': mine}):
+        _, view = signed_in(home)
+        body = {'pending': view['pending'], 'csrf': view['csrf'], 'allow': True} | ({} if rooms is None else {'rooms': rooms})
+        refused = consent(home).post('/authorize/decision', json=body)
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), rooms
+    assert table(home, 'connector_grants') == []
+    _, view = signed_in(home)
+    sent_back(decide(home, view, rooms='*'))  # "All my rooms, including new ones" only when sent as itself
+    assert [grant['rooms'] for grant in table(home, 'connector_grants')] == ['*']
+
+
+def test_days_are_1_to_30(home):
+    person(home)
+    for days in (0, 31, -1, '30', True, 1.5, None):
+        _, view = signed_in(home)
+        refused = decide(home, view, rooms='*', days=days)
+        assert (refused.status_code, refused.json()) == (400, {'error': 'invalid_request'}), days
+    _, view = signed_in(home)
+    sent_back(decide(home, view, rooms='*', days=1))
+    assert [grant['ends'] for grant in table(home, 'connector_grants')] == [home.clock[0] + 86400]
+
+
+def test_the_first_allow_writes_the_clients_row(home):
+    """D18: a client is known by its row once a code has been issued to it, so a key rotation disconnects no one."""
+    person(home)
+    client, view = signed_in(home)
+    assert table(home, 'oauth_clients') == []
+    sent_back(decide(home, view, rooms='*'))
+    assert [(row['client_id'], row['name'], row['grant_types']) for row in table(home, 'oauth_clients')] == [
+        (client, 'Claude', 'authorization_code refresh_token')]
+    _, view = signed_in(home, client, state='st-2')  # the same request again would be the same fragment, decided
+    sent_back(decide(home, view, rooms='*'))  # a second connection from the same client
+    assert len(table(home, 'oauth_clients')) == 1

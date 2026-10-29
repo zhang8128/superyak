@@ -1407,7 +1407,10 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     # takes longer than the 300 s replay window; the backfill covers a copy older than peer_delivery.
     'peer_meta', 'pull_nonces', 'peer_delivery',
     'oauth_clients',  # the connector's registrations: public and interchangeable, they grant nothing
-    'oauth_pending'}  # connector sign-ins: every row ends within 10 minutes, and a restore takes longer
+    'oauth_pending',  # connector sign-ins: every row ends within 10 minutes, and a restore takes longer
+    # connector grants are access, so a restore must keep every revocation (fix:restore-keeps-connector-revocations,
+    # before the deploy): copied as they are only until then, while no grant is live
+    'connector_grants'}
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):

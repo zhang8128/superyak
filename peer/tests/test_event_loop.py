@@ -273,7 +273,8 @@ def test_a_loop_object_on_app_state_is_not_the_store():
 ANONYMOUS = {('POST', '/api/login'), ('POST', '/api/invitations/redeem'), ('POST', '/api/access-requests'),
              ('POST', '/api/dockings'), ('POST', '/federation/events'),
              ('POST', '/register'),  # the connector's registration is public by design (spec r4, D18)
-             ('POST', '/authorize/signin')}  # its identity is in its body: the signed request and the password
+             ('POST', '/authorize/signin'),  # its identity is in its body: the signed request and the password
+             ('POST', '/authorize/decision')}  # and so is this one's: the pending id and its CSRF token
 
 
 def routes_of(app):

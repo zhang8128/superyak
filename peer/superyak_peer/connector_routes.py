@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from .common import Problem
-from .connector import (REGISTER_BODY_MAX, OAuthError, RedirectError, check_callback, issuer_metadata,
+from .connector import (DAYS_MAX, REGISTER_BODY_MAX, OAuthError, RedirectError, check_callback, issuer_metadata,
                         resource_metadata)
 
 NOT_YET = 'Not built yet'
@@ -126,9 +126,31 @@ def install(app, public_origin, callback):
                                 429 if refused.status == 429 else 400)
         return JSONResponse(view)
 
+    @app.post('/authorize/decision')
+    async def decision(request: Request):
+        """Allow or Deny: {pending, csrf, allow, rooms, days}. Its identity is the pending id and its CSRF token, in its
+        body, so it can't refuse before reading it; the event-loop guard lists it as ANONYMOUS for that reason."""
+        if not on_public_origin(request):
+            return JSONResponse({'error': 'Not found'}, 404)
+        raw = await request.body()
+        if len(raw) > REGISTER_BODY_MAX:
+            return JSONResponse({'error': 'invalid_request'}, 413)
+        try:
+            data = json.loads(raw)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            data = None
+        if not isinstance(data, dict) or 'rooms' not in data and data.get('allow') is True:
+            return JSONResponse({'error': 'invalid_request'}, 400)
+        try:
+            url = await run_in_threadpool(store.pending_decide, data.get('pending'), data.get('csrf'), data.get('allow'),
+                                          data.get('rooms'), data.get('days', DAYS_MAX), issuer=public_origin)
+        except OAuthError as refused:
+            return JSONResponse({'error': refused.error}, refused.status)
+        return JSONResponse({'redirect': url})
+
     def not_yet(request: Request):
         return answer(request, {'error': NOT_YET}, 501)
 
-    for path, methods in (('/authorize/decision', ['POST']), ('/token', ['POST']),
+    for path, methods in (('/token', ['POST']),
                           ('/mcp', ['GET', 'POST', 'DELETE'])):
         app.add_api_route(path, not_yet, methods=methods)
