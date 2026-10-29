@@ -33,20 +33,33 @@ REGISTER_BODY_MAX = 8 * 1024
 CLIENT_NAME_MAX = 100
 UNUSED_CLIENTS_MAX = 100  # at the cap the oldest unused one goes, never the new one: unused ones are interchangeable
 UNUSED_CLIENT_SECONDS = 86400
-REGISTRATIONS_PER_HOUR = 10  # per source; a number the spec leaves open (plan Task 4)
+REGISTRATIONS_PER_HOUR = 10  # per sender; a number the spec leaves open (plan Task 4)
+REGISTRATIONS_PER_HOUR_48 = 30  # per IPv6 /48 across its /64s (the second security review of 8420194d)
 GRANT_TYPES = ('authorization_code', 'refresh_token')
 
 
 def sender(source):
     """Whom the per-source limit counts: an IPv6 sender by its /64, since one /64 holds countless addresses (a security
-    review of 5dd19d4c); an IPv4-mapped address as its IPv4 address; anything else as given."""
+    review of 5dd19d4c); an IPv4-mapped, 6to4 or Teredo address as the IPv4 sender inside it (the second review);
+    anything else as given."""
     try:
         address = ipaddress.ip_address(source)
     except ValueError:
         return source
-    if address.version == 6 and address.ipv4_mapped:
-        return str(address.ipv4_mapped)
-    return str(ipaddress.ip_network(f'{address}/64', strict=False)) if address.version == 6 else str(address)
+    if address.version == 6:
+        inside = address.ipv4_mapped or address.sixtofour or (address.teredo[1] if address.teredo else None)
+        if inside:
+            return str(inside)
+        return str(ipaddress.ip_network(f'{address}/64', strict=False))
+    return str(address)
+
+
+def allocation(sender_key):
+    """The coarser key a sender's /64 belongs to: its /48, since an allocation is often one (the second review); an IPv4
+    sender is its own."""
+    if '/' not in sender_key:
+        return sender_key
+    return str(ipaddress.ip_network(sender_key).supernet(new_prefix=48))
 
 
 class OAuthError(Exception):
@@ -94,8 +107,10 @@ class Connector:
         with self.transaction() as db:
             self._connector_sweep(db)
             now = self.clock()
-            if db.execute('SELECT count(*) FROM oauth_clients WHERE source=? AND created>?',
-                          (source, now - 3600)).fetchone()[0] >= REGISTRATIONS_PER_HOUR:
+            recent = [row[0] for row in db.execute('SELECT source FROM oauth_clients WHERE created>?', (now - 3600,))]
+            coarse = allocation(source)
+            if (recent.count(source) >= REGISTRATIONS_PER_HOUR
+                    or (coarse != source and sum(allocation(s) == coarse for s in recent) >= REGISTRATIONS_PER_HOUR_48)):
                 raise OAuthError(429, 'slow_down')
             unused = db.execute('SELECT count(*) FROM oauth_clients WHERE used=0').fetchone()[0]
             if unused >= UNUSED_CLIENTS_MAX:

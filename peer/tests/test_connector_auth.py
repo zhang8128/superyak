@@ -232,6 +232,24 @@ def test_an_ipv6_sender_is_counted_by_its_64(home):
     assert register(home.app, source='192.0.2.7').status_code == 429
 
 
+def test_an_ipv6_allocation_is_held_at_its_48_and_tunnels_count_as_ipv4(home):
+    """The second security review of 8420194d: an allocation is often a /48, so it is held at 30 an hour across its
+    /64s; a 6to4 or Teredo address is counted as the IPv4 sender inside it."""
+    import ipaddress
+    for n in range(30):
+        assert register(home.app, source=f'2001:db8:0:{n:x}::1').status_code == 201, n
+    assert register(home.app, source='2001:db8:0:ff::1').status_code == 429  # another /64, the same /48
+    assert register(home.app, source='2001:db8:1::1').status_code == 201  # another /48
+    for _ in range(10):
+        register(home.app, source='2002:c000:207::1')  # 6to4 for 192.0.2.7
+    assert register(home.app, source='192.0.2.7').status_code == 429
+    teredo = '2001:0:4136:e378:8000:63bf:3fff:fdd2'
+    client = str(ipaddress.ip_address(teredo).teredo[1])
+    for _ in range(10):
+        register(home.app, source=client)
+    assert register(home.app, source=teredo).status_code == 429
+
+
 def test_an_unused_registration_is_gone_after_24_hours(home):
     old = register(home.app).json()['client_id']
     home.clock[0] += 86400

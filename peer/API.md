@@ -387,7 +387,8 @@ Origin; the consent page's posts keep it.
   the first), `response_types` `["code"]`, `token_endpoint_auth_method` `none`, and a `client_name` of at most 100
   characters, kept only as quoted data (else 400 `invalid_client_metadata`). Returns 201 `{client_id,
   client_id_issued_at, redirect_uris, grant_types, response_types, token_endpoint_auth_method[, client_name]}`, never
-  a secret. At most 10 a source an hour (429 `slow_down`). At 100 unused registrations the oldest unused one is
+  a secret. At most 10 a sender an hour (429 `slow_down`): an IPv6 sender counts by its /64, at most 30 an hour
+  across one /48, and an IPv4-mapped, 6to4 or Teredo address as the IPv4 sender inside it. At 100 unused registrations the oldest unused one is
   evicted, never the new one refused, and an unused registration is gone after a day.
 - `GET /authorize`, `POST /authorize/request`, `/authorize/signin`, `/authorize/decision`, `POST /token`, and `GET`,
   `POST`, `DELETE /mcp`: built by the plan's later tasks; until then they answer 501.
