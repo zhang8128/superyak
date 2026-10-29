@@ -1391,6 +1391,7 @@ def test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line(tmp_p
 # until it is put in one list on purpose (the work board's tables came after the backups work was written).
 RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'room_cloud',  # never to a cloud model: every mark either file holds is kept (fix:restore-keeps-every-cloud-mark)
+    'connector_grants',  # connections: every revocation, end and narrowing either file holds (fix:restore-keeps-connector-revocations)
     'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
@@ -1408,9 +1409,7 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'peer_meta', 'pull_nonces', 'peer_delivery',
     'oauth_clients',  # the connector's registrations: public and interchangeable, they grant nothing
     'oauth_pending',  # connector sign-ins: every row ends within 10 minutes, and a restore takes longer
-    # connector grants are access, so a restore must keep every revocation (fix:restore-keeps-connector-revocations,
-    # before the deploy): copied as they are only until then, while no grant is live
-    'connector_grants'}
+    }
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):
@@ -1672,3 +1671,149 @@ def test_a_copy_from_before_the_marks_gains_them_and_a_chain_keeps_both(tmp_path
     assert 'cloud marks kept (2)' in out
     with closing(sqlite3.connect(copy)) as db:
         assert {r[0] for r in db.execute('SELECT room_id FROM room_cloud')} == {first, second}
+
+
+
+# ---- fix:restore-keeps-connector-revocations: a connection to Claude is access, so a restored copy from before a
+# revoke never brings it back (designed in the room with Rio Grande and Tardis: only taking power away, by grant id) ----
+
+def connection(store, person_id, rooms='*', *, ends=None, revoked=None, grant_id=None):
+    """A connector grant as Task 5's Allow makes one, written directly: the restore reads only the row."""
+    import uuid
+    grant = grant_id or uuid.uuid4().hex
+    now = store.clock()
+    with store.transaction() as db:
+        db.execute('INSERT INTO connector_grants(id, person_id, client_id, redirect_host, rooms, scope, created, ends, revoked) '
+                   'VALUES(?,?,?,?,?,?,?,?,?)', (grant, person_id, 'a-client', 'claude.ai',
+                                                 rooms if rooms == '*' else json.dumps(rooms), 'rooms.read', now,
+                                                 ends or now + 30 * 86400, revoked))
+    return grant
+
+
+def grants_in(path):
+    with closing(sqlite3.connect(path)) as db:
+        db.row_factory = sqlite3.Row
+        return {row['id']: dict(row) for row in db.execute('SELECT * FROM connector_grants')}
+
+
+def connector_key(path):
+    with closing(sqlite3.connect(path)) as db:
+        row = db.execute("SELECT value FROM system_meta WHERE key='connector_client_key'").fetchone()
+        return row[0] if row else None
+
+
+def test_a_restore_keeps_every_connection_restriction_the_replaced_file_had(tmp_path, capsys):
+    """With a usable replaced file, each connection the copy has takes the replaced file's restrictions: its revoke, an
+    earlier end, a narrower room set (a list against "*", or two lists' intersection), and a revoke when the replaced
+    file no longer has it (swept after it ended, or deleted) or the two room sets share nothing. A connection made after
+    the copy isn't in it. Nothing is widened: one widened after the copy keeps the copy's narrower rooms."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    r1, r2 = (store.create_room(sam['id'], title, [])['id'] for title in ('One', 'Two'))
+    g = {name: connection(store, sam['id'], rooms) for name, rooms in (
+        ('revoked', '*'), ('swept', '*'), ('narrowed', [r1, r2]), ('shortened', '*'), ('widened', [r1]),
+        ('star', '*'), ('continued', [r1]), ('untouched', [r2]))}
+    copy = staged(tmp_path, store)
+    before = grants_in(copy)
+    with store.transaction() as db:
+        db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (store.clock() + 5, g['revoked']))
+        db.execute('DELETE FROM connector_grants WHERE id=?', (g['swept'],))
+        db.execute('UPDATE connector_grants SET rooms=? WHERE id=?', (json.dumps([r1]), g['narrowed']))
+        db.execute('UPDATE connector_grants SET ends=? WHERE id=?', (store.clock() + 86400, g['shortened']))
+        db.execute("UPDATE connector_grants SET rooms='*' WHERE id=?", (g['widened'],))
+        db.execute('UPDATE connector_grants SET rooms=? WHERE id=?', (json.dumps([r2]), g['star']))
+        db.execute('UPDATE connector_grants SET rooms=? WHERE id=?', (json.dumps(['a-newer-room']), g['continued']))
+    later = connection(store, sam['id'])  # after the copy
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    after, live = grants_in(copy), grants_in(store.db_path)
+    assert later not in after
+    assert after[g['revoked']]['revoked'] == live[g['revoked']]['revoked']
+    assert after[g['swept']]['revoked'] is not None
+    assert json.loads(after[g['narrowed']]['rooms']) == [r1] and after[g['narrowed']]['revoked'] is None
+    assert after[g['shortened']]['ends'] == live[g['shortened']]['ends']
+    assert json.loads(after[g['widened']]['rooms']) == [r1]
+    assert json.loads(after[g['star']]['rooms']) == [r2]
+    assert after[g['continued']]['revoked'] is not None
+    assert after[g['untouched']] == before[g['untouched']]
+    assert 'connections revoked (3)' in out and 'connections narrowed (2)' in out and 'connections shortened (1)' in out
+    assert 'no room in both files, so a room it named may continue in a newer room' in out
+
+
+def test_without_a_replaced_file_every_connection_is_revoked_and_the_connector_key_made_new(tmp_path, capsys):
+    """With no replaced file to compare with, the restore fails closed: every connection is revoked, and the connector
+    key is made new, since the copy's key may be the one that leaked. The report says each person connects again."""
+    from superyak_peer.backups import CONNECTIONS_NOT_KEPT
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    open_one = connection(store, sam['id'])
+    earlier = store.clock() - 10  # the store's clock is the real one, so read once
+    already = connection(store, sam['id'], revoked=earlier)
+    copy = staged(tmp_path, store)
+    key = connector_key(copy)
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    after = grants_in(copy)
+    assert after[open_one]['revoked'] is not None and after[already]['revoked'] == earlier
+    assert connector_key(copy) not in (None, key) and len(bytes.fromhex(connector_key(copy))) == 32
+    assert 'connections revoked (1)' in out and CONNECTIONS_NOT_KEPT in out
+
+
+def test_a_connector_key_rotated_after_the_copy_stays_rotated(tmp_path, capsys):
+    """Rio Grande: a key rotated after the copy revoked every unused client id and pending request. With a usable
+    replaced file the reconcile keeps its key, so an id minted before the rotation is unknown once the copy is live,
+    and a connected client, known by its row, still is."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    callback = 'https://claude.ai/api/mcp/auth_callback'
+    unused = store.register_client({'redirect_uris': [callback]}, callback)['client_id']
+    connected = store.register_client({'redirect_uris': [callback], 'client_name': 'Claude'}, callback)['client_id']
+    with store.transaction() as db:
+        db.execute('INSERT INTO oauth_clients VALUES(?,?,?,?)', (connected, 'Claude', 'authorization_code', store.clock()))
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:
+        db.execute("UPDATE system_meta SET value=? WHERE key='connector_client_key'", ('ab' * 32,))  # a rotation
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert connector_key(copy) == 'ab' * 32 and 'connector key kept from the replaced file (1)' in out
+    live = go_live(copy, tmp_path / 'live')
+    with live.transaction() as db:
+        assert live.known_client(db, unused, callback) is None
+        assert live.known_client(db, connected, callback) is not None
+
+
+def test_an_unrotated_key_is_left_alone_and_not_reported(tmp_path, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy = staged(tmp_path, store)
+    key = connector_key(copy)
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert connector_key(copy) == key and 'connector key' not in out
+
+
+def test_older_files_on_either_side_of_the_connector(tmp_path, capsys):
+    """A replaced file from before the connector is named as not compared; a copy from before it is skipped and named,
+    and with a replaced file that has a key, the copy takes it."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute('DROP TABLE connector_grants')
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert 'connector_grants.revoked' in out.split('Not compared, because the replaced file lacks them:')[1]
+    older = Store(tmp_path / 'second')
+    older.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy = staged(tmp_path, older, 'replaced-20261017-130000')
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('DROP TABLE connector_grants')
+        db.execute("DELETE FROM system_meta WHERE key='connector_client_key'")
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', older.db_path)
+    assert code == 0, err
+    assert 'connector_grants' in out.split('Skipped, because this copy lacks them:')[1]
+    assert connector_key(copy) == connector_key(older.db_path)
