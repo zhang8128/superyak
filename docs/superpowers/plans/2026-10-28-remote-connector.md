@@ -41,8 +41,9 @@ sign-in. Tasks 1 to 3 are built and merged as written.
   you."
 - Limits: 60 `tools/call` a minute and 2,000 a day per grant (429 with `Retry-After`); a query stops at 5 s; a call
   answers within 30 s. `/register`: 8 KB body in bytes, and no limit, eviction or sweep (it stores nothing).
-- No public write before a sign-in (spec D18): `/register` and `/authorize` write nothing and take no store lock.
-  The first row an anonymous request can cause is made at a good sign-in, and `connector_sweep()` runs only after a
+- No public write before a sign-in (spec D18): `/register` writes nothing and takes no store lock. `/authorize`
+  writes nothing, though its client-row check is a read, and every read takes the store's gate (`Store.transaction()`)
+  like any other. The first row an anonymous request can cause is made at a good sign-in, and `connector_sweep()` runs only after a
   good sign-in or a good `/token`, never before the request is checked.
 - Connector routes keep identity and store calls off the event loop: a sync `def`, or `run_in_threadpool` as
   `/register` does.
@@ -215,7 +216,8 @@ def test_a_member_marks_a_room_and_every_member_sees_the_badge(page, ...):
 - Produces: `PUBLIC_ROUTES` gains `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/mcp`,
   `/.well-known/oauth-authorization-server` (GET), `/register`, `/token` (POST), `/authorize` (GET),
   `/authorize/request`, `/authorize/signin`, `/authorize/decision` (POST, the consent page's own posts), and `/mcp`
-  (GET, POST, DELETE).
+  (GET, POST, DELETE). (Task 5 takes `/authorize/request` out again: in spec revision 4 the page's first post is the
+  sign-in.)
 - Produces: `BrowserBoundary` exempts exactly the paths `/register`, `/token` and `/mcp` from the same-origin write
   check, as it does `/federation/`, and keeps the 6 MB body cap.
 - Produces in `connector_support.py`: `PUBLIC_ORIGIN = 'https://home.example'`; fixture `home(tmp_path)` → `(app,
@@ -266,7 +268,8 @@ any per-source limit could lock the owner out (D18).
   `oauth_pending(id, request, client_id, redirect_uri, state, challenge, resource, scope, at, person_id, csrf,
   code_hash, code_expires, grant_id)` with `request` unique (Task 5); `connector_grants(id, person_id, client_id,
   redirect_host, rooms, scope, created, ends, last_used, revoked)` (Task 5); `connector_tokens(hash, kind, grant_id,
-  scope, resource, expires, rotated_from, used, code_hash)` (Task 6). `rooms` holds `"*"` or a JSON list of room ids,
+  scope, resource, expires, rotated_from, used, code_hash)` (Task 6), `code_hash` naming the code a token came from, so
+  a second use of that code revokes everything issued from it (spec, Codes). `rooms` holds `"*"` or a JSON list of room ids,
   each once.
 - Produces: `class OAuthError(Exception)` with `status` and `error`; the route answers `{"error": error}` only.
 - Produces: `check_callback(callback) -> str` (`create_app` refuses a callback with a query, fragment or userinfo);
@@ -314,16 +317,21 @@ def test_serve_refuses_a_public_origin_without_proxy_headers(tmp_path, monkeypat
   password, source, *, public=True, device=None)` (auth.py:229); `REPLACED_ROOMS` (common.py:9), `_rooms_back`
   (grants.py:199); Task 1's `_marked`.
 - Produces: tables `oauth_pending` and `connector_grants` (Task 4's columns).
-- Produces: `Store.check_client(client_id, redirect_uri)` (`known_client` and an exact redirect match; raises
-  `OAuthError`, shown as a page, never a redirect; reads only).
+- Produces: `Store.check_client(client_id, redirect_uri, callback)`: one read transaction, which takes the store's
+  gate as every read does, calling `known_client(db, client_id, callback)`, then an exact redirect match. It raises
+  `OAuthError`, shown as a page, never a redirect, and writes nothing.
 - Produces: `Store.sign_pending(params, issuer, resource) -> str`, the fragment
   `_b64(request) + "." + _b64(_tag(key, b'pending', request))`, where `request` is encoded as a client id's payload is
   (`{v, client_id, redirect_uri, state, challenge, resource, scope, at}`, `at` integer seconds). It writes nothing. It
   raises `RedirectError(error)`, a subclass of `OAuthError` in `connector.py`, which the route redirects with `error`,
   `state` and `iss`.
 - Produces: `Store.pending_sign_in(fragment, username, password, source, device) -> {'pending', 'csrf', 'name', 'app',
-  'client_name', 'scope', 'rooms'}`. It checks the tag and the age (600 s from `at`) before the password, so a forged
-  or stale request costs no login attempt, then the password, and only then stores the row. `request` is the SHA-256
+  'client_name', 'scope', 'rooms'}`. It checks the tag with `hmac.compare_digest` and the age (600 s from `at`) before
+  the password, so a forged or stale request costs no login attempt. Then it checks the request again as `/authorize`
+  did, from the request's own values: a known client (`check_client`), `redirect_uri` equal to the configured
+  callback, the canonical resource and scopes within `SCOPES`. So the key vouches only for what the home re-derives,
+  and a request forged with a backup's copy of the key still can't name another redirect (Task 4's re-check, S2).
+  Then the password, and only then it stores the row. `request` is the SHA-256
   of the tag, so a second sign-in on the same fragment rebinds that row's person and CSRF token and never makes a
   second row. A row already decided refuses it. `rooms` is `[{room, title, earlier_of, cloud}]`, an earlier room
   grouped under its continuation and marked rooms flagged. Then it runs `connector_sweep()`.
@@ -368,6 +376,10 @@ def test_a_second_decision_mints_no_second_code(home):  # Review Focus: the seco
 def test_days_are_1_to_30(home): ...  # 0 and 31: 400; default 30
 def test_signing_in_again_switches_the_person(home): ...  # sam then jenn on one fragment: one row, jenn's, and sam's
                                                           # csrf is refused
+def test_signing_in_after_a_decision_is_refused(home): ...  # the same fragment after Allow, and after Deny: 400, and
+                                                            # the row keeps its person, code and grant
+def test_a_request_signed_with_the_key_is_checked_again(home):  # minted with the key: another redirect_uri, an unknown
+    # client, another resource, a scope outside SCOPES: 400 at sign-in, login_attempts unchanged, no row
 def test_the_first_allow_writes_the_clients_row(home): ...  # oauth_clients empty until Allow, then that id's row
 def test_the_consent_assets_answer_a_public_request(home): ...  # anonymous GET /assets/consent.html and .js: 200
 ```
@@ -384,7 +396,8 @@ def test_the_consent_assets_answer_a_public_request(home): ...  # anonymous GET 
   device cookie as `/api/login` does, then `check_password_attempt`. Codes are issued at Allow:
   `secrets.token_urlsafe(32)`, hashed into `oauth_pending`, valid 60 s. Allow also creates the `connector_grants` row
   (`ends = now + days * 86400`). The page is static, with no inline script (CSP, app.py:38-43). It reads the fragment
-  from `location.hash`, posts it as it is and never parses it.
+  from `location.hash`, posts it as it is and never parses it. A request past its 10 minutes gets the page's own copy,
+  "This request has expired. Go back to Claude and connect again.", with no form, and the browser test asserts it.
 - [ ] **Step 4: Run them to verify they pass**, and the browser test.
 - [ ] **Step 5: Commit.**
 
