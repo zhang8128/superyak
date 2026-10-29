@@ -563,14 +563,23 @@ it, not only as its diff reads.
 - [ ] A mark, hold or refusal on a chain of linked rooms is checked, and probed, in both directions: the earlier
       rooms and the room that continues it (Tardis, 2026-10-28: a review walked a chain backwards only, and marking
       a replaced room left its live continuation able to take a ship).
+- [ ] A revoke or a forced end (an expiry set to end something now) is recorded as a fact (a flag, or a fixed past
+      time), never as `now` compared with a clock later: a clock that steps back undoes it (Tardis's line, 2026-10-29,
+      after the connector Task 6 review's S1 found a walk revoke written as `now`; Serenity then found restore step 4
+      ending requests the same way).
 - [ ] A file:line cited in a plan or review, including one copied from a spec, is checked against the current code
       before it is relied on: a copied citation is a claim, not a fact (Serenity, 2026-10-28: the connector plan
       carried a spec's stale pointers, and one instruction read against the real code would have turned access logs on).
 - [ ] Before a mutant result is trusted, it is shown that the mutant changed the file (`cmp` against the kept copy)
       and that the test written for it ran; a mutant counts as caught only when its own test fails (Serenity and
       Tardis, 2026-10-28: a `sed` that didn't apply and a `-k` that selected nothing each made a false survivor).
-      Mutants are applied in a scratch worktree, never in one whose suite is running: a subprocess test there
-      imports the mutated file (Rio Grande, 2026-10-29, threw away a whole run for it).
+- [ ] No file in a worktree is edited, by hand or as a mutant, while a suite runs there: the run then tests a mix of
+      two heads, and a subprocess test imports the mutated file. Check first with `pgrep -fa '[p]ytest'` run as a
+      command of its own, and look for the worktree's path; see "Shell commands" for why (Rio Grande, 2026-10-29:
+      three suite runs thrown away, two after a hand edit and one after a mutant).
+- [ ] Each reviewer agent gets a scratch folder of its own for its scripts, worktree and verdict, named in its brief:
+      two reviewers shared one `run.sh`, one overwrote the other's, and the other reran every mutant (Rio Grande's
+      readers, 2026-10-29).
 - [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
       one from before the last migration (Tardis, 2026-10-29: removing the lost-identity check (G4b) looked harmless
       on a current store, but a store from before federation pull was migrated when it opened, before the refusal).

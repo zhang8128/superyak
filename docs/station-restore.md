@@ -186,7 +186,8 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
 7. **Act on the report.** Change again any password it lists that was changed for a reason. Read each room brief it lists
    ("room briefs that differ"; the report never shows brief text) in the browser, and save again the one you want. Issue again any invitation
    still wanted. Tell the owners of ships whose keys were revoked to dock again. Ask the issuers of the grants the report lists as missing from the replaced file, or revoked with no usable replaced file, to make again any still wanted; a grant made after the copy is gone too. Requests and dockings since the copy
-   were expired; their senders ask again, and nothing is approved from memory. If the report says marks set since the
+   were expired, at a fixed past time so a clock set back can't revive one; their senders ask again, and nothing is
+   approved from memory. If the report says marks set since the
    copy were not kept, ask the members of the rooms that matter to check their "never to a cloud model" marks in the
    browser before any ship is added to those rooms. Tell the people whose connections the report lists as revoked to
    connect again from their app if they still want it; a connection made after the copy is gone too. The peers the report says it
