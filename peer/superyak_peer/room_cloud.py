@@ -4,7 +4,7 @@ member leaves, since their words stay. Ships run on cloud models, so a marked ro
 until there is none, and every add path refuses one (`_add_members`, which the participants route, a moderator,
 make station-add-ship and make station-bridge all take). Adding members makes a new linked room, and the marks go with
 it in the same transaction. Only a marked room's view carries `cloud`, as only a breakout's carries `breakout`."""
-from .common import Problem
+from .common import REPLACED_ROOMS, Problem
 
 ROOM_CLOUD_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS room_cloud(room_id TEXT NOT NULL REFERENCES rooms(id), member_id TEXT NOT NULL REFERENCES users(id), set_at REAL NOT NULL, PRIMARY KEY(room_id, member_id));
@@ -14,8 +14,10 @@ SHIPS_FIRST = SHIPS_IN + ' Remove them first.'
 ASK_OWNER = SHIPS_IN + ' Ask {owner} to remove them first.'
 OWNER_TOLD = 'A member asked to keep this room away from cloud models. Remove the ships to let them.'
 SHIP_REFUSED = 'A member keeps this room away from cloud models, and ships run on cloud models.'
-EARLIER_SHIPS = ("An earlier room you're in has ships in it, and ships run on cloud models. Mark this room alone, or "
-                 "ask its owner to remove them first.")
+EARLIER_IN = "An earlier room you're in has ships in it, and ships run on cloud models. Mark this room alone, or"
+EARLIER_FIRST = EARLIER_IN + ' remove them first.'
+EARLIER_ASK = EARLIER_IN + ' ask {owner} to remove them first.'
+REPLACED_MARK = 'This room continues in a newer room. Mark that one.'
 REMOTE_REFUSED = ("A member keeps this room away from cloud models, and this home can't tell whether someone on another "
                   "home is a ship, nor tell their home about the mark yet.")
 QUIET = 86400  # the owner is told once a day at most, so a member who tries again doesn't flood the room (the plan's)
@@ -67,23 +69,29 @@ class RoomCloud:
             self._post_as_system(db, room_id, f'cloud-ask-{int(now)}', OWNER_TOLD)
 
     def mark_room(self, actor, key, earlier=True):
-        """The actor's own mark on a local room they're in, and, with `earlier`, on the earlier rooms of its chain that
-        still hold them. Refused while a ship is a member; a member who isn't the owner is told to ask the owner, and the
-        owner is told a member asked. Returns the rooms marked and the room's `cloud`."""
+        """A person's own mark on a current local room they're in, and, with `earlier`, on the earlier rooms of its
+        chain that still hold them. A replaced room is refused, since the room continuing it would stay unmarked. Refused
+        while a ship is a member of any room to be marked; a member who isn't the owner is told to ask the owner, and,
+        for the room itself, the owner is told a member asked. Returns the rooms marked and the room's `cloud`."""
         if not isinstance(key, str) or ':' in key:
             raise Problem(404, 'Not found')
         if type(earlier) is not bool:
             raise Problem(400, 'earlier is true or false')
         with self.transaction() as db:
+            self._person(db, actor)  # only a person marks; a ship at the store is refused before anything is said
             room = self._room(db, actor, key)
+            if db.execute(f'SELECT 1 WHERE ? IN ({REPLACED_ROOMS})', (key,)).fetchone():
+                raise Problem(409, REPLACED_MARK)  # its continuation would stay unmarked (Rio Grande's section 2, M1)
+            owner = room['owner_id'] == actor
             if not self._has_ship(db, key):
                 marked = [key] + (self._earlier_with(db, room['owner_id'], room, actor) if earlier else [])
-                if any(self._has_ship(db, earlier_room) for earlier_room in marked[1:]):
-                    raise Problem(409, EARLIER_SHIPS)  # older data or a restore can leave one there (Tardis's review)
+                if any(self._has_ship(db, earlier_room) for earlier_room in marked[1:]):  # older data or a restore (Tardis)
+                    raise Problem(409, EARLIER_FIRST if owner else
+                                  EARLIER_ASK.format(owner=self._account_name(db, room['owner_id'])))
                 db.executemany('INSERT OR IGNORE INTO room_cloud VALUES(?,?,?)',
                                [(room_id, actor, self.clock()) for room_id in marked])
                 return {'marked': marked, 'cloud': self._cloud(db, key, actor)}
-            if room['owner_id'] == actor:
+            if owner:
                 refusal = SHIPS_FIRST
             else:
                 refusal = ASK_OWNER.format(owner=self._account_name(db, room['owner_id']))
@@ -91,10 +99,12 @@ class RoomCloud:
         raise Problem(409, refusal)
 
     def unmark_room(self, actor, key):
-        """The actor clears their own mark on a room they're in. Nobody clears another's, and a former member's stands."""
+        """A person clears their own mark on a room they're in, a replaced one included. Nobody clears another's, a former
+        member's stands, and the earlier rooms' marks stay, which fails closed."""
         if not isinstance(key, str) or ':' in key:
             raise Problem(404, 'Not found')
         with self.transaction() as db:
+            self._person(db, actor)
             self._room(db, actor, key)
             db.execute('DELETE FROM room_cloud WHERE room_id=? AND member_id=?', (key, actor))
             return {'cloud': self._cloud(db, key, actor)}

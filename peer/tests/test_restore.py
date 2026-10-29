@@ -1397,7 +1397,8 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
     'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries',  # first rail: coordination; the add gate also needs a paired peer
     'lesson_repeats',  # first rail 7.1: a local record beside the receipts, never federated
-    'room_cloud'}  # never to a cloud model: members' marks, copied as the backup has them
+    'room_cloud'}  # never to a cloud model: copied as the backup has them for now, so a later mark is lost;
+                  # fix:restore-keeps-every-cloud-mark reconciles it before the mark's routes go live
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):

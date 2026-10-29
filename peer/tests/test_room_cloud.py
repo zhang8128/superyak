@@ -3,7 +3,8 @@ A ship's own add (POST /api/ships/me/rooms/{key}/members) needs the ship in the 
 so the paths below are every way a ship can reach a marked room."""
 import pytest
 from superyak_peer.common import Problem
-from superyak_peer.room_cloud import ASK_OWNER, EARLIER_SHIPS, OWNER_TOLD, REMOTE_REFUSED, SHIP_REFUSED, SHIPS_FIRST
+from superyak_peer.room_cloud import (ASK_OWNER, EARLIER_ASK, EARLIER_FIRST, OWNER_TOLD, REMOTE_REFUSED, REPLACED_MARK,
+                                      SHIP_REFUSED, SHIPS_FIRST)
 from test_moderate_grants import city, login, moderate, notices, remote_contact  # noqa: F401
 
 
@@ -156,6 +157,62 @@ def test_an_earlier_room_with_a_ship_left_in_it_isnt_marked(city):
     second = c.store.add_participants(c.andy['id'], first, [c.doctor['id']])['id']
     with c.store.transaction() as db:
         db.execute('INSERT INTO room_members VALUES(?,?)', (first, c.rio['id']))  # as legacy data could leave it
-    assert refused(c.store.mark_room, c.jenn['id'], second) == (409, EARLIER_SHIPS)
+    assert refused(c.store.mark_room, c.jenn['id'], second) == (409, EARLIER_ASK.format(owner='Andy'))
+    assert refused(c.store.mark_room, c.andy['id'], second) == (409, EARLIER_FIRST)  # the owner removes them himself
     assert marks(c.store, first) == set() and marks(c.store, second) == set()
     assert c.store.mark_room(c.jenn['id'], second, earlier=False)['marked'] == [second]
+
+
+def test_a_replaced_room_isnt_marked_alone(city):
+    """Rio Grande's section 2, M1: a mark on a replaced room alone would leave the room that continues it unmarked, and
+    open to a ship that would get the carried brief. Clearing stays open everywhere."""
+    c = city
+    first = people_room(c, 'jenn')
+    second = c.store.add_participants(c.andy['id'], first, [c.doctor['id']])['id']
+    assert refused(c.store.mark_room, c.jenn['id'], first) == (409, REPLACED_MARK)
+    assert marks(c.store, first) == set()
+    c.store.mark_room(c.jenn['id'], second)  # and, by default, the room it continues
+    assert c.store.unmark_room(c.jenn['id'], first)['cloud'] == {'count': 0, 'mine': False}
+    assert marks(c.store, second) == {c.jenn['id']}
+
+
+def test_only_a_person_marks_or_clears(city):
+    """Rio Grande's section 2, S1: a ship calling the store is refused as not a person, and the room hears nothing."""
+    c = city
+    assert refused(c.store.mark_room, c.rio['id'], c.room) == (403, 'Only people can do this')
+    assert refused(c.store.unmark_room, c.rio['id'], c.room) == (403, 'Only people can do this')
+    assert notices(c.store, c.room, 'cloud-ask-') == []
+
+
+def test_a_former_members_mark_moves_with_the_room(city):
+    c = city
+    sam = c.store.create_user('sam', 'Sam', 'long-password-sam')
+    room = people_room(c, 'jenn', 'doctor')
+    c.store.mark_room(c.jenn['id'], room)
+    c.store.remove_participant(c.andy['id'], room, c.jenn['id'])
+    new = c.store.add_participants(c.andy['id'], room, [sam['id']])
+    assert marks(c.store, new['id']) == {c.jenn['id']}
+
+
+def test_a_station_ship_counts_as_a_ship(city):
+    c = city
+    room = c.store.create_room(c.andy['id'], 'Ops', [c.jenn['id'], c.odo['id']])['id']  # Odo has no owner
+    assert refused(c.store.mark_room, c.andy['id'], room) == (409, SHIPS_FIRST)
+
+
+def test_every_member_named_in_an_add_is_checked(city):
+    c = city
+    sam = c.store.create_user('sam', 'Sam', 'long-password-sam')
+    willa = remote_contact(c.store)
+    room = people_room(c, 'jenn')
+    c.store.mark_room(c.jenn['id'], room)
+    assert refused(c.store.add_participants, c.andy['id'], room, [sam['id'], c.tardis['id']]) == (409, SHIP_REFUSED)
+    assert refused(c.store.add_participants, c.andy['id'], room, [sam['id'], willa]) == (409, REMOTE_REFUSED)
+
+
+def test_the_quiet_day_is_per_room(city):
+    c = city
+    other = c.store.create_room(c.andy['id'], 'Ops', [c.jenn['id'], c.rio['id']])['id']
+    refused(c.store.mark_room, c.jenn['id'], c.room)
+    refused(c.store.mark_room, c.jenn['id'], other)
+    assert len(notices(c.store, c.room, 'cloud-ask-')) == 1 and len(notices(c.store, other, 'cloud-ask-')) == 1
