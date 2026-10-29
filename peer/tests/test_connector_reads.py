@@ -285,6 +285,8 @@ def test_remote_authors_are_named_and_kinded(connected):
     remote_says(connected, connected.rooms[0], 'hello from afar')
     messages = ok(call(connected, 'read_room', room=connected.rooms[0]))['messages']
     assert [(m['author'], m['author_kind']) for m in messages] == [('Remy Remote', 'remote')]
+    found = ok(call(connected, 'search', query='from afar'))['results']
+    assert [r['title'].split(DOT)[1] for r in found] == ['Remy Remote']  # search names a paired home's author too
     assert ok(call(connected, 'rooms'))['rooms'][0]['members'] == ['Remy Remote', 'Sam Example']
 
 
@@ -599,4 +601,27 @@ def test_a_narrowed_room_set_mid_call_is_refused(connected, monkeypatch):
         return real(grant, tool, args)
     monkeypatch.setattr(connected.store, 'connector_call', narrowing)
     assert refused(call(connected, 'read_room', room=connected.rooms[0])) == NOT_SHARED
+
+
+def test_a_page_that_is_only_one_cut_message_says_truncated(connected):
+    """A room whose one message is past the cap: the page holds all of it there is, and still says it was cut."""
+    say(connected, connected.rooms[1], chr(1) * 20000)
+    back = ok(call(connected, 'read_room', room=connected.rooms[1]))
+    assert back['truncated'] is True and back['messages'][0]['text_cut'] > 0
+
+
+def test_an_access_token_revoked_mid_call_is_seen_inside_the_read(connected, monkeypatch):
+    """A reuse's walk revokes an access token while its connection stays live: the call re-reads the token too."""
+    from superyak_peer.connector import REVOKED
+    say(connected, connected.rooms[0], 'after the token went')
+    real = connected.store.connector_call
+
+    def walking(grant, tool, args):
+        with connected.store.transaction() as db:
+            db.execute("UPDATE connector_tokens SET expires=? WHERE kind='access'", (REVOKED,))
+        return real(grant, tool, args)
+    monkeypatch.setattr(connected.store, 'connector_call', walking)
+    answer = mcp(connected, rpc('tools/call', {'name': 'read_room', 'arguments': {'room': connected.rooms[0]}}),
+                 connected.tokens['access_token'])
+    assert answer.status_code == 401 and 'after the token went' not in answer.text
 
