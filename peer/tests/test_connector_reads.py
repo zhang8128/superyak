@@ -157,11 +157,16 @@ def remote_member(connected, room, name='Remy Remote', contact='remote_remy'):
     return contact
 
 
-def remote_says(connected, room, text, contact='remote_remy'):
+def remote_says(connected, room, text, author='peer-remy:u-remy'):
+    """A paired home's message as federation stores one: its author is `<peer>:<user>` (federation.py:881), never the
+    contact's own id (the reader's must-fix 2: a fixture in another shape passed on fiction)."""
+    message = f'pm-{len(text)}-{text[:12]}-{room[:6]}'
     with connected.store.transaction() as db:
         db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,1,?)',
-                   (f'pm-{text[:12]}-{room[:4]}', room, contact, f'c-{text[:12]}', text, connected.clock[0]))
-    return f'pm-{text[:12]}-{room[:4]}'
+                   (message, room, author, f'c-{message}', text, connected.clock[0]))
+        db.execute("INSERT INTO events(kind, resource_id, resource_version, payload, created) VALUES('chat.message', ?, 1, "
+                   "json_object('message_id', ?, 'author_id', ?), ?)", (room, message, author, connected.clock[0]))
+    return message
 
 
 def test_search_bounds_and_escapes(connected):
@@ -374,11 +379,14 @@ def test_receipts_are_kept_while_the_grant_lives_plus_a_year(connected):
     def sweep(state):  # another connection's good /token runs the sweep
         client, code = allowed(connected, state=state)
         assert exchange(connected, client, code).status_code == 200
-    connected.clock[0] += 365 * 86400 - 10
-    sweep('st-before')
-    assert {r['id'] for r in receipts(connected)} >= {'orphan'} and len(receipts(connected)) == 2
-    connected.clock[0] += 20
-    sweep('st-after')
+    with connected.store.transaction() as db:  # revoked 100 days after the read, so its end is later than the read
+        db.execute('UPDATE connector_grants SET revoked=NULL, ends=? WHERE id=?', (connected.clock[0] + 100 * 86400, grant))
+    start = connected.clock[0]
+    connected.clock[0] = start + 365 * 86400 + 10  # a year past the read, not past the grant's end
+    sweep('st-a-year-on')
+    assert [r['id'] != 'orphan' for r in receipts(connected)] == [True]  # the orphan goes a year past when it was made
+    connected.clock[0] = start + 465 * 86400 + 10
+    sweep('st-a-year-past-the-end')
     assert receipts(connected) == []
 
 
@@ -406,7 +414,7 @@ def test_results_are_cut_at_a_message_boundary(connected):
     first = [m['id'] for m in forward['messages']]
     assert forward['truncated'] is True and forward['more'] is True and first == ids[:len(first)]
     after = ok(call(connected, 'read_room', room=connected.rooms[0], since=forward['seq']))
-    assert [m['id'] for m in after['messages']] == ids[len(first):len(first) + len(after['messages'])]
+    assert after['messages'] and [m['id'] for m in after['messages']] == ids[len(first):len(first) + len(after['messages'])]
 
 
 def test_rooms_is_cut_at_a_room_boundary(connected):
@@ -497,3 +505,96 @@ def test_a_cursor_past_15_digits_is_refused_as_the_station_does(connected):
     for field in ('before', 'since'):
         assert refused(call(connected, 'read_room', room=connected.rooms[0], **{field: 10 ** 15}))
     assert ok(call(connected, 'read_room', room=connected.rooms[0], since=10 ** 15 - 1))['messages'] == []
+
+
+def test_search_returns_exactly_the_grants_readable_messages(connected):
+    """The reader's must-fix 1: each of search's six filters, local and paired-home, pinned by the result ids exactly.
+    A result holds no text, so a test that looks for text can't see a leak."""
+    from connector_support import allowed, exchange
+    andy = person(connected, 'andy@example.org', 'Andy Example')
+    mine = connected.rooms[0]
+    marked = connected.store.create_room(connected.person['id'], 'Marked', [])['id']
+    unchosen = connected.store.create_room(connected.person['id'], 'Unchosen', [])['id']
+    elsewhere = connected.store.create_room(andy['id'], 'Andy alone', [])['id']
+    ids = {}
+    for room in (mine, marked, unchosen, elsewhere):
+        connected.clock[0] += 1
+        remote_member(connected, room)
+        ids[room] = {say(connected, room, f'needle local {room}', andy if room == elsewhere else None)['id'],
+                     remote_says(connected, room, f'needle far {room}')}
+    connected.store.mark_room(connected.person['id'], marked)
+    assert {r['id'] for r in ok(call(connected, 'search', query='needle'))['results']} == ids[mine]  # the list
+    client, code = allowed(connected, rooms='*', state='st-all')
+    connected.tokens = exchange(connected, client, code).json()
+    assert {r['id'] for r in ok(call(connected, 'search', query='needle'))['results']} == ids[mine] | ids[unchosen]
+
+
+def test_one_message_over_the_cap_is_kept_cut_and_the_cursor_moves(connected):
+    """The reader's must-fix 3: a message whose JSON alone passes the cap (20,000 control characters is about 120,000)
+    stalled read_room both ways. It's kept with its text cut and `text_cut`, and the cursor moves past it."""
+    from superyak_peer.connector_reads import TEXT_CAP
+    say(connected, connected.rooms[0], 'before it')
+    connected.clock[0] += 1
+    huge = say(connected, connected.rooms[0], chr(1) * 20000)
+    back = call(connected, 'read_room', room=connected.rooms[0])
+    assert len(back['content'][0]['text']) <= TEXT_CAP
+    back = ok(back)
+    assert [m['id'] for m in back['messages']] == [huge['id']] and back['messages'][0]['text_cut'] is True
+    assert back['truncated'] is True and back['before'] == 1 and back['more'] is True
+    earlier = ok(call(connected, 'read_room', room=connected.rooms[0], before=back['before']))
+    assert [m['text'] for m in earlier['messages']] == ['before it']
+    alone = connected.store.send_message(connected.person['id'], connected.rooms[1], 'c-huge-2', chr(1) * 20000)
+    connected.store.send_message(connected.person['id'], connected.rooms[1], 'c-after', 'after it')
+    forward = ok(call(connected, 'read_room', room=connected.rooms[1], since=0))
+    assert [m['id'] for m in forward['messages']] == [alone['id']] and forward['messages'][0]['text_cut'] is True
+    assert forward['more'] is True
+    following = ok(call(connected, 'read_room', room=connected.rooms[1], since=forward['seq']))
+    assert [m['text'] for m in following['messages']] == ['after it']
+
+
+def test_fetch_stays_under_the_cap_measured_on_its_whole_json(connected):
+    """The reader's should-fix: fetch's lines are JSON inside a JSON string, escaped twice, so measuring the lines
+    alone let a result reach about twice the cap. A target too big alone is cut and marked."""
+    from superyak_peer.connector_reads import TEXT_CAP
+    ids = []
+    for n in range(5):
+        connected.clock[0] += 1
+        ids.append(say(connected, connected.rooms[0], f'{n} ' + '"' * 19990)['id'])
+    result = call(connected, 'fetch', id=ids[2])
+    assert len(result['content'][0]['text']) <= TEXT_CAP and ok(result)['truncated'] is True
+    connected.clock[0] += 1
+    alone = say(connected, connected.rooms[1], chr(1) * 20000)['id']
+    result = call(connected, 'fetch', id=alone)
+    assert len(result['content'][0]['text']) <= TEXT_CAP
+    line = json.loads(ok(result)['text'])
+    assert line['id'] == alone and line['text_cut'] is True
+
+
+def test_a_revoke_or_a_narrowing_mid_call_is_seen_inside_the_read(connected, monkeypatch):
+    """The reader's should-fix: bearer's check and the read were two transactions, so a revoke landing between them
+    still let text out. The call re-reads the token and the connection inside its own transaction: a revoke gives the
+    challenge, and a narrowed room set the refusal."""
+    say(connected, connected.rooms[0], 'after the revoke')
+    real = connected.store.connector_call
+
+    def revoking(grant, tool, args):
+        with connected.store.transaction() as db:
+            db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (connected.clock[0], grant['grant_id']))
+        return real(grant, tool, args)
+    monkeypatch.setattr(connected.store, 'connector_call', revoking)
+    answer = mcp(connected, rpc('tools/call', {'name': 'read_room', 'arguments': {'room': connected.rooms[0]}}),
+                 connected.tokens['access_token'])
+    assert answer.status_code == 401 and 'after the revoke' not in answer.text
+    assert 'error="invalid_token"' in answer.headers['www-authenticate']
+
+
+def test_a_narrowed_room_set_mid_call_is_refused(connected, monkeypatch):
+    real = connected.store.connector_call
+
+    def narrowing(grant, tool, args):
+        with connected.store.transaction() as db:
+            db.execute('UPDATE connector_grants SET rooms=? WHERE id=?', (json.dumps([connected.rooms[1]]), grant['grant_id']))
+        return real(grant, tool, args)
+    monkeypatch.setattr(connected.store, 'connector_call', narrowing)
+    assert refused(call(connected, 'read_room', room=connected.rooms[0])) == NOT_SHARED
+

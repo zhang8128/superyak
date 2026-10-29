@@ -453,7 +453,8 @@ private chats" (app.js:979).
 
 - `/mcp` allows 60 `tools/call` a minute and 2,000 a day per grant. `initialize`, `tools/list` and `ping` don't count.
   Over the limit, it answers 429 with `Retry-After`. The calls are counted from the receipts, in the call's own
-  transaction, so a restart doesn't empty the count and a refused call spends nothing.
+  transaction, so a restart doesn't empty the count. A call the limit refuses writes no receipt, so a 429 spends
+  nothing; a tool's own refusal writes one and counts.
 - Each `/mcp` request makes one store read (about 1 ms on the Pi) before its grant is known, as PublicRoute's key check
   does, so no per-grant count can bound it. A bound before any lookup belongs to the public route (board
   `fix:public-route-bound-before-lookup`).

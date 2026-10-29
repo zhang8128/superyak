@@ -2165,11 +2165,15 @@ def test_the_day_limit_counts_the_restored_receipts(tmp_path, capsys):
     sam = store.create_user('sam', 'Sam', 'long-password-sam')
     grant = connection(store, sam['id'])
     copy = staged(tmp_path, store)
-    for _ in range(60):  # made since the copy
-        a_receipt(store, grant, sam['id'])
+    now = store.clock()
+    with store.transaction() as db:  # the day's 2,000, made since the copy, none in the last minute (the reader's nit)
+        db.executemany('INSERT INTO connector_reads VALUES(?,?,?,?,?,?,?,?,?,?)',
+                       [(f'r{i}', grant, sam['id'], 'claude.ai', now - 82800 + i * 41, 'rooms', '[]', '[]', 1, 'ok')
+                        for i in range(2000)])
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
     assert code == 0, err
-    assert go_live(copy, tmp_path / 'live').connector_limited(grant) is not None
+    live = go_live(copy, tmp_path / 'live')
+    assert abs(live.connector_limited(grant) - 3600) <= 2  # the day's oldest leaves its window in an hour
 
 
 def test_without_a_replaced_file_the_copys_receipts_stay_and_the_loss_is_said(tmp_path, capsys):

@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from .common import Problem, valid_utf8
 from .connector import (DAYS_MAX, REGISTER_BODY_MAX, STATE, OAuthError, RedirectError, ToolRefused, check_callback,
                         issuer_metadata, resource_metadata)
-from .connector_reads import CallLimited
+from .connector_reads import CallLimited, GrantGone
 
 # /authorize's page for a request whose client or redirect can't be trusted, so it can't be sent back (spec "Validate
 # first"). It repeats nothing the request carried.
@@ -331,6 +331,9 @@ def install(app, public_origin, callback):
             result = await run_in_threadpool(store.connector_call, grant, params['name'], params.get('arguments', {}))
         except CallLimited as limited:
             return JSONResponse({'error': 'Too many requests'}, 429, headers={'retry-after': str(limited.seconds)})
+        except GrantGone:  # revoked or ended after the token check above and before the read: as the next call would be
+            return JSONResponse({'error': 'invalid_token'}, 401,
+                                headers={'www-authenticate': challenge + ', error="invalid_token"'})
         except ToolRefused as refusal:
             return JSONResponse({'jsonrpc': '2.0', 'id': id, 'result': {
                 'content': [{'type': 'text', 'text': str(refusal)}], 'isError': True}})

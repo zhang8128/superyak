@@ -44,7 +44,7 @@ SELECT * FROM (
   UNION ALL
   SELECT p.id, p.room_id, p.created, r.title, coalesce(c.name, 'Someone on another home') FROM peer_messages p
     JOIN room_members rm ON rm.room_id=p.room_id AND rm.user_id=:person JOIN rooms r ON r.id=p.room_id
-    LEFT JOIN remote_contacts c ON c.id=p.author_id
+    LEFT JOIN remote_contacts c ON c.peer_id || ':' || c.user_id=p.author_id
     WHERE p.body LIKE :pattern ESCAPE '\\' AND NOT EXISTS (SELECT 1 FROM room_cloud WHERE room_cloud.room_id=p.room_id)
       AND (:every OR p.room_id IN (SELECT value FROM json_each(:rooms)))
 ) ORDER BY created DESC, id LIMIT 20'''
@@ -64,6 +64,22 @@ def iso(when):
 def size(value):
     """The characters a value takes as the result's JSON: what /mcp sends."""
     return len(json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')))
+
+
+def fitted(message, fits):
+    """The message whole when `fits` takes it; else with its text cut to the longest start that fits, and `text_cut`.
+    A message alone past the cap is kept this way, so a read's cursor always moves past it (the reader's must-fix 3:
+    one hostile message stalled read_room both ways)."""
+    if fits(message):
+        return message
+    text, low, high = message['text'], 0, len(message['text'])
+    while low < high:
+        middle = (low + high + 1) // 2
+        if fits(message | {'text': text[:middle], 'text_cut': True}):
+            low = middle
+        else:
+            high = middle - 1
+    return message | {'text': text[:low], 'text_cut': True}
 
 
 def day(when):
@@ -89,6 +105,11 @@ class CallLimited(Exception):
         self.seconds = seconds
 
 
+class GrantGone(Exception):
+    """The token or its connection ended after bearer checked it and before the read: /mcp answers the challenge (401),
+    as the next call would. Nothing is read or written."""
+
+
 class _Seen:
     """What one call read and refused, for its receipt."""
 
@@ -108,6 +129,7 @@ class ConnectorReads:
         seen, refusal = _Seen(), None
         try:
             with self.transaction() as db:
+                grant = self._still_live(db, grant, self.clock())  # bearer's check was another transaction
                 wait = self._limited(db, grant['grant_id'], self.clock())  # in the call's own transaction: no race
                 if wait is not None:
                     raise CallLimited(wait)
@@ -121,7 +143,7 @@ class ConnectorReads:
                     db.set_progress_handler(None, 0)
                 self._receipt(db, grant, tool, seen, 'refused' if refusal else 'ok',
                               len(str(refusal)) if refusal else size(result))
-        except CallLimited:
+        except (CallLimited, GrantGone):
             raise
         except sqlite3.OperationalError as error:
             self._failed(grant, tool, seen)
@@ -135,14 +157,25 @@ class ConnectorReads:
             raise refusal
         return result
 
+    def _still_live(self, db, grant, now):
+        """The grant as it stands in this transaction (the reader's should-fix: a revoke, or a room set narrowed, between
+        bearer and the read let text out): its access token still unexpired and its connection still live and active,
+        with the rooms and person read from the row now, else GrantGone."""
+        token = db.execute("SELECT expires FROM connector_tokens WHERE hash=? AND kind='access'",
+                           (grant.get('token'),)).fetchone()
+        live = self._live_grant(db, grant['grant_id'], now) if token is not None and now < token['expires'] else None
+        if live is None:
+            raise GrantGone()
+        return grant | {'person_id': live['person_id'], 'rooms': live['rooms']}
+
     def connector_limited(self, grant_id):
         """None, or the whole seconds until the grant may make one more tools/call."""
         with self.transaction() as db:
             return self._limited(db, grant_id, self.clock())
 
     def _limited(self, db, grant_id, now):
-        """Counted from the receipts, so a restart doesn't empty it, and a refused call (which writes none) spends
-        nothing. Each window is read by its oldest receipt, so a clock set back only makes it stricter, and every wait
+        """Counted from the receipts, so a restart doesn't empty it. A call the limit refuses writes no receipt, so a 429
+        spends nothing; a tool's own refusal writes one, and counts. Each window is read by its oldest receipt, so a clock set back only makes it stricter, and every wait
         is above 0, since every receipt counted is inside its window."""
         for window, most in ((86400, CALLS_PER_DAY), (60, CALLS_PER_MINUTE)):
             count, oldest = db.execute('SELECT count(*), min(at) FROM connector_reads WHERE grant_id=? AND at>?',
@@ -258,13 +291,15 @@ class ConnectorReads:
             shaped = self._shaped(db, room_id, [order[i] for i in positions])
             kept = []
             for position, message in zip(reversed(positions), reversed(shaped)):  # the newest are kept
-                budget -= size(message) + 1
-                if budget < 0:
+                if size(message) + 1 > budget:
+                    if not kept:  # one message alone past the cap: kept cut, so `before` moves past it
+                        kept.insert(0, (position, fitted(message, lambda m: size(m) + 1 <= budget)))
                     break
+                budget -= size(message) + 1
                 kept.insert(0, (position, message))
             result.update(messages=[m for _, m in kept], first_position=kept[0][0] if kept else end,
                           more=bool(kept) and kept[0][0] > 0)
-            if len(kept) < len(positions):
+            if len(kept) < len(positions) or any(m.get('text_cut') for _, m in kept):
                 result.update(truncated=True, before=kept[0][0] if kept else end)
         else:
             position = {message_id: i for i, (message_id, _) in enumerate(order)}
@@ -279,10 +314,13 @@ class ConnectorReads:
             shaped = dict(zip((p for _, p in arrived), self._shaped(db, room_id, [order[p] for _, p in arrived])))
             kept, cut = [], False
             for event_id, at in arrived:  # the oldest to arrive are kept
-                budget -= size(shaped[at]) + 1
-                if budget < 0:
+                if size(shaped[at]) + 1 > budget:
+                    if not kept:  # one message alone past the cap: kept cut, so `seq` moves past it
+                        shaped[at] = fitted(shaped[at], lambda m: size(m) + 1 <= budget)
+                        kept.append((event_id, at))
                     cut = True
                     break
+                budget -= size(shaped[at]) + 1
                 kept.append((event_id, at))
             positions = sorted(at for _, at in kept)
             result.update(messages=[shaped[at] for at in positions], first_position=positions[0] if positions else total,
@@ -326,12 +364,18 @@ class ConnectorReads:
         title = db.execute('SELECT title FROM rooms WHERE id=?', (room_id,)).fetchone()[0]
         result = {'id': message_id, 'title': DOT.join([title, target['author'], target['time'][:10]]), 'text': '',
                   'url': room_url(grant, room_id)}
-        lines = [json.dumps(message, ensure_ascii=False, separators=(',', ':')) for message in shaped]
-        kept, budget = list(range(len(lines))), TEXT_CAP - size(result | {'truncated': True})
-        while len(kept) > 1 and sum(len(lines[i]) + 1 for i in kept) > budget:
-            kept.remove(max(kept, key=lambda i: (abs(i - (at - begin)), i)))  # the farthest goes first, later before earlier
+        def line(message):
+            return json.dumps(message, ensure_ascii=False, separators=(',', ':'))
+
+        def whole(text):  # measured on the result's whole JSON: the lines are escaped again inside it (the reader's 2x)
+            return size(result | {'text': text, 'truncated': True})
+        lines, kept, here = [line(message) for message in shaped], list(range(len(shaped))), at - begin
+        while len(kept) > 1 and whole('\n'.join(lines[i] for i in kept)) > TEXT_CAP:
+            kept.remove(max(kept, key=lambda i: (abs(i - here), i)))  # the farthest goes first, later before earlier
+        if whole('\n'.join(lines[i] for i in kept)) > TEXT_CAP:  # the message alone past the cap: its text is cut
+            lines[here] = line(fitted(shaped[here], lambda m: whole(line(m)) <= TEXT_CAP))
         result['text'] = '\n'.join(lines[i] for i in kept)
-        if len(kept) < len(lines):
+        if len(kept) < len(lines) or '"text_cut":true' in lines[here]:
             result['truncated'] = True
         seen.reading(room_id)
         return result
@@ -344,8 +388,9 @@ class ConnectorReads:
         remote = {row['author_id'] for row, (_, source) in zip(rows, picked) if source == 1}
         people = {r['id']: (r['name'], r['kind']) for r in db.execute(
             f'SELECT id, name, kind FROM users WHERE id IN ({",".join("?" * len(local))})', tuple(local))} if local else {}
-        contacts = {r['id']: r['name'] for r in db.execute(
-            f'SELECT id, name FROM remote_contacts WHERE id IN ({",".join("?" * len(remote))})', tuple(remote))} if remote else {}
+        contacts = {r['author']: r['name'] for r in db.execute(  # a paired home's author is <peer>:<user> (federation.py)
+            "SELECT peer_id || ':' || user_id AS author, name FROM remote_contacts WHERE peer_id || ':' || user_id IN "
+            f'({",".join("?" * len(remote))})', tuple(remote))} if remote else {}
         shaped = []
         for row, (_, source) in zip(rows, picked):
             if source == 1:

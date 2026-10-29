@@ -1009,9 +1009,9 @@ def _keep_tokens_like_replaced(db, old, now, report):
 
 
 RECEIPT_COLUMNS = ('id', 'grant_id', 'person_id', 'app', 'at', 'tool', 'rooms_read', 'rooms_refused', 'size', 'outcome')
-RECEIPTS_NOT_KEPT = ("Read receipts made since the copy could not be kept, since there was no replaced file to take them from: "
-                     "tell the people with connections that Connected apps no longer shows what was read between the copy "
-                     "and this restore.")
+RECEIPTS_NOT_KEPT = ("Read receipts made since the copy could not be kept, since there was no usable replaced file to "
+                     "take them from: tell the people with connections that Connected apps no longer shows what was "
+                     "read between the copy and this restore.")
 
 
 def _keep_receipts_like_replaced(db, old, now, report):
