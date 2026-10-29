@@ -122,6 +122,7 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    takes the replaced file's revoke, its earlier end and its narrower rooms, and one it no longer has, or whose rooms the
    two files don't share, is revoked; the connector key is the replaced file's when the two differ. Without one, every
    connection is revoked and the connector key is made new. The report counts them and lists each revoked connection.
+   Every pending connector sign-in is cleared either way, so someone mid-consent starts over.
    Without a usable replaced file nothing is unpaired and nothing is held. That includes a peer you cut off and partly
    paired again since the copy: name it in `UNPAIR=` too, then pair again the participants you meant to keep, each with
    its own code. List the peers paired in the staged copy (read-only; the

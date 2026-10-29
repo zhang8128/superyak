@@ -918,6 +918,15 @@ def _keep_connections_like_replaced(db, old, now, report):
                              'connections shortened': shortened})
 
 
+def _clear_connector_sign_ins(db, old, now, report):
+    """Tardis, on the review of fix:restore-keeps-connector-revocations: every pending connector sign-in is cleared, with
+    a replaced file or without. A restore soon after a backup would otherwise bring back, within its ten minutes, a
+    request decided since the copy, undecided, and a code redeemed since, unredeemed. Someone mid-consent starts over,
+    which a restore causes anyway. Nothing here rests on how long a restore takes."""
+    if _usable(db, None, report, 'oauth_pending'):
+        report['counts']['connector sign-ins cleared'] = db.execute('DELETE FROM oauth_pending').rowcount
+
+
 def _revoke_every_connection(db, old, now, report):
     """fix:restore-keeps-connector-revocations, without a usable replaced file: fail closed, as _revoke_every_grant
     does. Every connection is revoked, and the connector key is made new, since the copy's key may be the one that leaked
@@ -1156,7 +1165,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
         try:
             now = clock()
             for step in (_end_sessions, _use_invitations, _revoke_held_keys, _clear_uncollected, _expire_waiting, _raise_sequences,
-                         _hold_imprints):
+                         _hold_imprints, _clear_connector_sign_ins):
                 step(db, old, now, report)
             if old is None:
                 _revoke_owned_ship_keys(db, old, now, report)

@@ -1392,6 +1392,7 @@ def test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line(tmp_p
 RECONCILED_TABLES = {  # read or changed by a step, or the mark
     'room_cloud',  # never to a cloud model: every mark either file holds is kept (fix:restore-keeps-every-cloud-mark)
     'connector_grants',  # connections: every revocation, end and narrowing either file holds (fix:restore-keeps-connector-revocations)
+    'oauth_pending',  # connector sign-ins: every one cleared, so none decided or redeemed since the copy comes back (Tardis)
     'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
@@ -1408,7 +1409,6 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     # takes longer than the 300 s replay window; the backfill covers a copy older than peer_delivery.
     'peer_meta', 'pull_nonces', 'peer_delivery',
     'oauth_clients',  # the connector's registrations: public and interchangeable, they grant nothing
-    'oauth_pending',  # connector sign-ins: every row ends within 10 minutes, and a restore takes longer
     }
 
 
@@ -1817,3 +1817,26 @@ def test_older_files_on_either_side_of_the_connector(tmp_path, capsys):
     assert code == 0, err
     assert 'connector_grants' in out.split('Skipped, because this copy lacks them:')[1]
     assert connector_key(copy) == connector_key(older.db_path)
+
+
+@pytest.mark.parametrize('replaced', [True, False], ids=['with-replaced', 'without'])
+def test_a_restore_clears_every_pending_connector_sign_in(tmp_path, capsys, replaced):
+    """Tardis, on the review: a restore soon after a backup (one is taken minutes before every merge) would bring back,
+    within its ten minutes, a request decided since the copy, undecided, and a code redeemed since, unredeemed. So the
+    reconcile clears every pending sign-in, with a replaced file or without: someone mid-consent starts over, which a
+    restore causes anyway. Nothing rests on how long a restore takes."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    with store.transaction() as db:
+        for n, decided in enumerate((None, store.clock())):
+            db.execute('INSERT INTO oauth_pending(id, request, client_id, redirect_uri, state, challenge, resource, scope, '
+                       'at, person_id, csrf, decided) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                       (f'p{n}', f'r{n}', 'a-client', 'https://claude.ai/api/mcp/auth_callback', 'st', 'c' * 43,
+                        'https://home.example/mcp', 'rooms.read', int(store.clock()), sam['id'], 'hash', decided))
+    copy = staged(tmp_path, store)
+    code, out, err = reconcile(capsys, '--db', copy, *(('--replaced', store.db_path) if replaced else ()))
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        assert db.execute('SELECT count(*) FROM oauth_pending').fetchone()[0] == 0
+    assert 'connector sign-ins cleared (2)' in out
