@@ -526,6 +526,10 @@ it, not only as its diff reads.
 - [ ] A test that hands made-up pids, ports or paths to code that asks the system about them also stands in for the
       asking function, in every case, so its answer is the test's, never the runner's (Tardis, 2026-10-28: a lane
       test's made-up pids met a real `os.kill` and turned macOS CI red whenever a runner process held one).
+- [ ] A rule that replaces another is judged against the one it replaces in both directions, from sources independent
+      of the rule: what it newly misses, and what it newly flags. A table measured against the data it was built
+      from proves nothing (Serenity, 2026-10-28: the old tag rule marked 35 of 48 ordinary lines and nobody counted;
+      the new one missed 47 named look-alikes, and its coverage was checked against its own source).
 - [ ] A guarantee the code or its comments claim ("X can't do Y") lists every source its input comes from (a person,
       a model, a tool's output, a file, a room message, another hook) and has a test per source (Tardis, 2026-10-28:
       an id line said quoted text "can't" mark a lesson seen; one source was tested, and four others could).
