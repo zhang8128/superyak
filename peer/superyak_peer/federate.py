@@ -31,12 +31,18 @@ class Federate:
             cards = [json.loads(row[0]) for row in db.execute('SELECT card FROM peers WHERE paired=1')]
         return [card for card in cards if card.get('delivery', 'push') == 'push']
 
+    def _pushed(self):
+        """Each listener's last successful push, to see which one a pass's push reached."""
+        with self.federation.store.transaction() as db:
+            return dict(db.execute("SELECT peer_id, last_success FROM peer_delivery WHERE mode='push'").fetchall())
+
     def run_pass(self):
         now = self.clock()
         woke = self.last_end is not None and now - self.last_end - self.pass_seconds > WAKE_OVERRUN
         requests = self._requests()
         woke, self.seen_requests = woke or requests != self.seen_requests, requests
-        if self.federation.store.federation_mode() == 'pull':
+        pulling = self.federation.store.federation_mode() == 'pull'
+        if pulling:
             for card in self.pull_cards():
                 if self.stopping:
                     return
@@ -49,6 +55,7 @@ class Federate:
                 except Exception:  # noqa: BLE001 - a pull's fault never ends federate
                     log.exception('A pull from %s failed', peer[:8])
                     self.due[peer] = self.clock() + 60
+        before = self._pushed() if pulling else {}
         for name, step in (('collect', self.federation.collect),
                            ('sync', lambda: self.federation.sync_once(send=self.send))):
             if self.stopping:
@@ -57,6 +64,10 @@ class Federate:
                 step()
             except Exception:  # noqa: BLE001 - nor does a push's
                 log.exception('federate: %s failed', name)
+        if pulling:  # a push that reached a listener shows it's back: its pull goes at the next pass (spec §1, RG's N2)
+            for peer, success in self._pushed().items():
+                if success is not None and success != before.get(peer):
+                    self.due[peer] = self.clock()
         self.last_end = self.clock()
 
     def run(self):

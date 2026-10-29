@@ -245,6 +245,29 @@ def test_the_sync_worker_survives_a_pass_that_raises(tmp_path, monkeypatch):
     assert len(calls) >= 2
 
 
+def test_federate_pulls_at_once_after_a_push_to_that_peer_succeeds(tmp_path, monkeypatch):
+    """Spec §1 (Rio Grande's N2): a push that succeeds shows the listener is back, so its pull goes at the next pass
+    rather than waiting out the 60 s."""
+    from superyak_peer.federate import Federate
+    clock, a, mac = puller(tmp_path)
+    wake, pulls = Wake(), []
+    monkeypatch.setattr(mac[2], 'pull_once', lambda card, send=None: pulls.append(wake()) or {'next': 60})
+    listener = a[2].identity.peer_id
+
+    def pushed(send=None):
+        with mac[0].transaction() as db:
+            db.execute('UPDATE peer_delivery SET last_success=? WHERE peer_id=?', (wake(), listener))
+        return {}
+    loop = Federate(mac[2], clock=wake, sleep=wake.sleep)
+    loop.run_pass()                                   # at start
+    wake.sleep(5), loop.run_pass()                    # not due: 60 s off
+    monkeypatch.setattr(mac[2], 'sync_once', pushed)
+    wake.sleep(5), loop.run_pass()                    # a push to it succeeds in this pass
+    monkeypatch.setattr(mac[2], 'sync_once', lambda send=None: {})
+    wake.sleep(5), loop.run_pass()                    # so its pull goes now
+    wake.sleep(5), loop.run_pass()                    # and once
+    assert pulls == [1_000_000.0, 1_000_015.0]
+
 def test_federate_pulls_at_once_after_check_delivery_now(tmp_path, monkeypatch):
     from superyak_peer.federate import Federate
     clock, a, mac = puller(tmp_path)
