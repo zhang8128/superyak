@@ -22,8 +22,6 @@ PACKAGE = Path(superyak_peer.app.__file__).parent
 IDENTITY = {'actor', 'member', 'ship_member', 'current_user'}
 SERVICES = {'store', 'fed', 'manager', 'sources'}  # the names route modules reach the store through
 ON_THE_LOOP = {'store.inbox_wait_slot'}  # an in-memory count of a ship's waits, with no store read
-# federation-pull rewrites `sync` in this shape (Tardis, 2026-10-29). These two calls, and no new one, wait for it.
-WAITING = {('peer_routes.py', 'sync', 'actor'), ('peer_routes.py', 'sync', 'fed.status')}
 
 
 def dotted(node):
@@ -134,12 +132,7 @@ def calls_on_the_loop(read=Path.read_text):
 
 
 def test_no_async_function_in_the_package_calls_the_store_or_an_identity_check_on_the_loop():
-    assert [found for found in calls_on_the_loop() if (found[0], found[1], found[3]) not in WAITING] == []
-
-
-def test_each_waiting_exception_is_still_needed():
-    """When federation-pull lands, `sync` runs these calls on the threadpool, this fails, and WAITING goes."""
-    assert WAITING <= {(module, function, name) for module, function, _, name in calls_on_the_loop()}
+    assert calls_on_the_loop() == []
 
 
 @pytest.mark.parametrize('module,fixed,broken,expected', [
@@ -156,8 +149,8 @@ def test_each_waiting_exception_is_still_needed():
      ('app.py', 'chat_board_link', 'request.app.state.store.link_item')),
     ('peer_routes.py', 'await run_in_threadpool(admin_check, await caller(current_user, request))',
      'admin_check(await caller(current_user, request))', ('peer_routes.py', 'preview', 'admin_check')),
-    ('peer_routes.py', 'await run_in_threadpool(fed.sync_once)\n',
-     'await run_in_threadpool(fed.sync_once)\n        fed.connections(who)\n', ('peer_routes.py', 'sync', 'fed.connections')),
+    ('peer_routes.py', 'await run_in_threadpool(fed.make_due)\n',
+     'await run_in_threadpool(fed.make_due)\n        fed.connections(who)\n', ('peer_routes.py', 'sync', 'fed.connections')),
     # the re-check's: a method reached through self, and a helper imported from a sibling module
     ('app.py', 'await run_in_threadpool(self.valid, key, token)', 'self.valid(key, token)',
      ('app.py', 'refusal', 'self.valid')),
@@ -178,7 +171,6 @@ def test_the_walk_sees_a_call_put_back_on_the_loop(module, fixed, broken, expect
             return source
         assert source.count(fixed) == 1
         return source.replace(fixed, broken)
-    assert expected not in WAITING
     assert expected in {(module, function, name) for module, function, _, name in calls_on_the_loop(read)}
 
 
