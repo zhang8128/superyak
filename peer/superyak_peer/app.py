@@ -797,6 +797,16 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def chat_remove(key: str, user_id: str, request: Request, grant_id: str | None = None):
         return store.remove_participant(actor(request), key, user_id, grant_id)
 
+    @app.post('/api/chats/{key}/cloud')
+    async def chat_cloud_mark(key: str, request: Request):
+        """Never to a cloud model: the person's own mark on a room they're in (persons only; a ship key gets 403)."""
+        who, data = actor(request), await body(request)
+        return await run_in_threadpool(store.mark_room, who, key, data.get('earlier', True))
+
+    @app.delete('/api/chats/{key}/cloud')
+    def chat_cloud_clear(key: str, request: Request):
+        return store.unmark_room(actor(request), key)
+
     if imprints_dir is not None:
         # Review S3: every store call, hash, write and fsync of these async routes runs in a worker, never on the event
         # loop; the confirm's in a sign-in lane. The sync routes below already run in FastAPI's threadpool.

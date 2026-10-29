@@ -1080,6 +1080,43 @@ def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent
                 expect(family.get_by_role("heading", name="First audience")).to_have_count(0)
 
 
+def test_a_member_marks_a_room_and_every_member_sees_the_badge(browser_peer):
+    """Never to a cloud model (connector plan, Task 2): a member marks a continuing room and, by default, the earlier
+    room they're in; every member sees the badge with its count, and only the marker sees "(yours)"."""
+    store = browser_peer["app"].state.store
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Chats", exact=True).click()
+            page.get_by_role("button", name="New private chat").click()
+            page.get_by_label("Chat title").fill("Kept close")
+            page.get_by_role("checkbox", name="Sam Family").check()
+            page.get_by_role("button", name="Create chat").click()
+            expect(page.get_by_role("heading", name="Kept close")).to_be_visible()
+            first = decode_fragment_id(page.url)
+            page.get_by_role("button", name="Change participants").click()
+            page.get_by_role("checkbox", name="Dr. Morgan").check()
+            page.get_by_role("button", name="Start a new linked chat").click()
+            expect(page.get_by_text("New room · earlier messages stay in the original chat")).to_be_visible()
+            second = decode_fragment_id(page.url)
+            assert second != first
+
+            with signed_in_browser(playwright, browser_peer, "family") as (family, _):
+                family.goto(browser_peer["base_url"] + f"/#chats/{second}")
+                expect(family.get_by_role("heading", name="Kept close")).to_be_visible()
+                expect(family.get_by_role("checkbox", name="Mark the 1 earlier room you're in too")).to_be_checked()
+                family.get_by_role("button", name="Keep this room away from cloud models").click()
+                expect(family.locator(".split-detail").get_by_text("Never to a cloud model · 1 (yours)")).to_be_visible()
+                expect(family.locator(".split-list").get_by_text("Never to a cloud model · 1 (yours)")).to_have_count(2)
+                expect(family.get_by_role("button", name="Clear my mark")).to_be_visible()
+                expect(family.get_by_text("Clearing takes your mark off this room only; your marks on earlier rooms stay.")).to_be_visible()
+
+            page.reload()
+            expect(page.locator(".split-detail").get_by_text("Never to a cloud model · 1", exact=True)).to_be_visible()
+        with store.transaction() as db:
+            marked = {r[0] for r in db.execute("SELECT room_id FROM room_cloud")}
+        assert marked == {first, second}
+
+
 def test_durable_name_corrections_shared_attribution_and_complete_revision(browser_peer):
     """I7: durable actual names and stable source attribution remain navigable."""
     store = browser_peer["app"].state.store
