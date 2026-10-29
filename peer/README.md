@@ -131,15 +131,41 @@ uv run --locked python -m superyak_peer card --username owner --endpoint https:/
 uv run --locked python -m superyak_peer serve --peer-tls --host 127.0.0.1 --origin https://peer.example:7435 --federation-endpoint https://peer.example:7435 --sync
 ```
 
-Use the actual hostname on the first card export so its certificate includes that
-name. The example requires an operator-provided route/tunnel to the loopback
-listener. Remote binds require TLS. Trust the generated certificate through your
-browser/OS explicitly; do not bypass certificate verification. Import and pair
-each other's card in Connections using the local setup owner. Pairing addresses
-the named remote participant; it grants no content until a room or release
-explicitly selects that contact. The UI shows failed or pending deliveries while
-local editing continues. The server needs `--sync` for background delivery;
-Connections also provides an explicit sync action.
+A peer dials another by its card's exact certificate pin, so the certificate's names
+and dates don't matter to peers. A browser still checks names: use the actual
+hostname on the first card export if people will open that address. The example
+requires an operator-provided route/tunnel to the loopback listener. Remote binds
+require TLS. Trust the generated certificate through your browser/OS explicitly; do
+not bypass certificate verification. Import and pair each other's card in Connections
+using the local setup owner. Pairing addresses the named remote participant; it grants
+no content until a room or release explicitly selects that contact. The UI shows each
+delivery's state (pending, retrying, not delivered, delivered) while local editing
+continues. One process delivers for a data directory: `serve --sync`, or `federate`
+beside a `serve` without it. Connections' "Check delivery now" makes every peer due,
+and dials only from that process.
+
+### A peer that never listens (federation pull)
+
+A Mac that may not open a port fetches what its peers hold for it, and pushes its own
+replies (PROTOCOL.md, Pull). Each step that types a password or a pairing code is a
+person's, at that machine's own terminal.
+
+- **On each peer it pairs with,** which listens: `card --username <you> --endpoint
+  https://<tailnet name>:7437` (the pairing code goes to that terminal's stderr), then
+  `make federation-units FEDERATION_DATA=<data dir>` and enable
+  `superyak-federation-listen` and, unless `serve` already runs with `--sync`,
+  `superyak-federate`. Publish it with `tailscale serve --tcp 7437
+  tcp://127.0.0.1:7437`, a passthrough, so the pinned certificate is the one served.
+- **On the Mac:** `init --username <you> --name "<name>"` (you type the password),
+  `card --username <you> --pull > mac-card.json` (the code on stderr), and `pair --card
+  <their card> --as <you>` for each peer, typing the code read off that peer's screen;
+  pair the Mac's card on each peer the same way. Then fill in
+  `launchd/superyak-federate.plist`'s two paths, copy it to `~/Library/LaunchAgents/`
+  and load it yourself.
+- **What you see:** on the listener, the Mac's peer "Fetches from us" with its last
+  pull, its rows "Waiting for pull", and an Ops notice when it hasn't fetched for a
+  day. On the Mac, `connections --as <you>`, `deliveries --as <you>` and `retry <id>
+  --as <you>`.
 
 ## Use the hackathon dashboard
 

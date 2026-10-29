@@ -715,16 +715,17 @@ All origins used by browser/peer traffic must be repeated with `--origin`.
 
 | Method/path | Request | Response/authority |
 |---|---|---|
-| GET `/api/connections` | — | Array of `{id,peer_id,user_id,name,card,paired,pairing_code,confirmed,held}`; `confirmed` while a typed code confirmed that very card, and `pairing_code` only then (null otherwise, so it can't be copied into a re-pair); `held` while the contact waits for its own code after a peer-wide disconnect; local owner only |
+| GET `/api/connections` | — | Array of `{id,peer_id,user_id,name,card,paired,pairing_code,confirmed,held,mode,failures,next_attempt,last_success,last_pull,failing_since,last_problem}`; `confirmed` while a typed code confirmed that very card, and `pairing_code` only then (null otherwise, so it can't be copied into a re-pair); `held` while the contact waits for its own code after a peer-wide disconnect. The rest is the contact's peer's delivery (federation pull, PROTOCOL.md): `mode` `push` or `pull`; `failures`, `next_attempt` and `failing_since` its backoff; `last_success`; `last_pull`, last pulled from us on a listener and last pulled from it on a pull peer; `last_problem`, a fixed local phrase such as "certificate differs". Local owner only |
 | GET `/api/connections/card` | — | Current signed-in participant's public card |
 | GET `/api/connections/code` | — | `{code}`: that card's pairing code, grouped; any signed-in participant; 409 without an endpoint |
 | POST `/api/connections/preview` | `{card}` | Validated public card, never its code; local owner only; no pairing or network |
 | POST `/api/connections/pair` | `{card,code}` | Remote contact `{id,peer_id,user_id,name,pairing_code,confirmed}`, 201; local owner (403 first); a missing or malformed code, or the old `fingerprint` alone, 400; a wrong code, 400 naming the card's code |
 | DELETE `/api/connections/{contact_id}` | — | `{ok:true}`; local owner; unpairs entire peer and hides its received content. Every contact of the peer is then held and loses its confirmation: pairing one participant again reconnects that one only, and each other one stays out of audiences, gets no delivery and has its events refused until its own code is typed |
-| GET `/api/sync` | — | `{enabled,deliveries:[...]}` for current author only |
-| POST `/api/sync` | none | Runs one bounded pass, returns same author-filtered status |
-| POST `/api/sync/{delivery_id}/retry` | none | `{ok:true}`; authorized local delivery controller; resets failed attempt budget, preserves event ID; nonfailed returns 409 |
-| POST `/federation/events` | Signed envelope | HTTPS, independent pairing/signature authentication; see PROTOCOL.md |
+| GET `/api/sync` | — | `{enabled,deliveries:[...]}` for current author only. Each delivery has its `status` (`pending`, `delivered`, `failed`, `refused` or `withdrawn`), its peer's `next_attempt` and `peer_mode`, and for a `refused` row its `last_error` (the status code first; the words after it can come from the other peer) |
+| POST `/api/sync` | none | "Check delivery now": makes every peer due. In a `serve --sync` process it wakes that process's worker and answers after the pass it woke, about 10 s at most; without `--sync` it never dials (`federate` syncs). Returns the same author-filtered status |
+| POST `/api/sync/{delivery_id}/retry` | none | `{ok:true}`; authorized local delivery controller; takes a `failed` or `refused` row, clears its `last_error`, makes its peer due and preserves its event ID and envelope; any other status returns 409 |
+| POST `/federation/events` | Signed envelope | HTTPS, independent pairing/signature authentication; see PROTOCOL.md. Served by `serve` and by `federation-listen` |
+| POST `/federation/pull` | Signed pull request | `federation-listen` only: a paired pull peer fetches what waits for it, and acks or refuses what it took; see PROTOCOL.md's Pull section |
 
 Delivery metadata is `{id,resource_id,revision,contact_id,action,status,attempts,
 next_attempt,resource_title,contact_name,peer_id}`. Message/reply deliveries additionally include `message_id` and
