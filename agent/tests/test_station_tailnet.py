@@ -30,7 +30,7 @@ def certificate(tmp_path, name):
 class Station:
     """An HTTPS server on 127.0.0.1 that records each request's SNI name and Host header."""
 
-    def __init__(self, cert, key):
+    def __init__(self, cert, key, redirect=None):
         self.seen = []
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cert, key)
@@ -41,11 +41,25 @@ class Station:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 seen.append((sni[-1] if sni else None, self.headers.get('Host'), self.path))
+                if redirect and self.path == '/redirect':
+                    self.send_response(302)
+                    self.send_header('Location', redirect)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
                 body = b'{"ok": true}'
                 self.send_response(200)
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get('Content-Length') or 0))
+                seen.append((sni[-1] if sni else None, self.headers.get('Host'), 'POST ' + self.path))
+                self.send_response(201)
+                self.send_header('Content-Length', '2')
+                self.end_headers()
+                self.wfile.write(b'{}')
 
             def log_message(self, *args):
                 pass
@@ -130,8 +144,35 @@ def test_an_address_that_wont_connect_falls_back_to_the_name_once_per_minute(tmp
         assert send('GET', f'https://localhost:{served.port}/api/me', {}, None)[0] == 200
         assert time.monotonic() - began < 0.5 and asked == ['localhost'] and pins['localhost'][0] is None
         assert [path for _, _, path in served.seen] == ['/api/health', '/api/me']
+        # Rio Grande's point 3: a POST whose pinned connect fails reaches the station once, by the name
+        pins.clear()
+        assert send('POST', f'https://localhost:{served.port}/api/chats/r/messages', {'content-type': 'application/json'},
+                    b'{"body": "once"}')[0] == 201
+        assert [path for _, _, path in served.seen].count('POST /api/chats/r/messages') == 1
     finally:
         served.close()
+
+
+def test_a_redirect_to_another_name_is_never_sent_to_the_pinned_address(tmp_path, monkeypatch):
+    """Rio Grande's point 1: the pin is for the name it was asked for. A redirect from the pinned station to another
+    name connects to that name, as urllib would without a pin, never to the station's tailnet address."""
+    first, first_key = certificate(tmp_path, NAME)
+    second, second_key = certificate(tmp_path, 'localhost')
+    roots = tmp_path / 'roots.pem'
+    roots.write_bytes(first.read_bytes() + second.read_bytes())
+    monkeypatch.setenv('SSL_CERT_FILE', str(roots))
+    target = Station(second, second_key)
+    station_a = Station(first, first_key, redirect=f'https://localhost:{target.port}/api/health')
+    dialled, real = [], socket.create_connection
+    monkeypatch.setattr(socket, 'create_connection', lambda where, *rest: dialled.append(where) or real(where, *rest))
+    try:
+        send = urllib_transport(timeout=5, pin=lambda host: '127.0.0.1' if host == NAME else None)
+        assert send('GET', f'https://{NAME}:{station_a.port}/redirect', {}, None) == (200, b'{"ok": true}')
+        assert dialled == [('127.0.0.1', station_a.port), ('localhost', target.port)]
+        assert [host for _, host, _ in target.seen] == [f'localhost:{target.port}']
+    finally:
+        target.close()
+        station_a.close()
 
 
 def test_every_client_the_agent_makes_takes_the_pin(trusted, monkeypatch):

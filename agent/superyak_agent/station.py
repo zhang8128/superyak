@@ -145,11 +145,14 @@ class _PinUnreachable(OSError):
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """Connects to `address`, while TLS (SNI and the certificate check) and the Host header stay on the URL's name. The
-    connect itself gets at most PIN_CONNECT; the socket then takes the call's own timeout."""
+    """Connects to `address` when `host` is the name it was pinned for, while TLS (SNI and the certificate check) and the
+    Host header stay on that name. Any other host, a redirect's, connects as usual. The pinned connect gets at most
+    PIN_CONNECT; the socket then takes the call's own timeout."""
 
-    def __init__(self, host, *args, address, **kwargs):
+    def __init__(self, host, *args, address, pinned, **kwargs):
         super().__init__(host, *args, **kwargs)
+        if self.host != pinned:
+            return
 
         def connect(where, timeout=None, source=None):
             limit = timeout if isinstance(timeout, (int, float)) else None
@@ -163,12 +166,13 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
 
 class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
-    def __init__(self, address):
+    def __init__(self, address, host):
         super().__init__()
-        self.address = address
+        self.address, self.host = address, host
 
     def https_open(self, req):
-        return self.do_open(functools.partial(_PinnedHTTPSConnection, address=self.address), req, context=self._context)
+        return self.do_open(functools.partial(_PinnedHTTPSConnection, address=self.address, pinned=self.host), req,
+                            context=self._context)
 
 
 def urllib_transport(timeout=30, limit=None, *, pin=tailnet_pin, unpin=tailnet_unpin):
@@ -185,16 +189,16 @@ def urllib_transport(timeout=30, limit=None, *, pin=tailnet_pin, unpin=tailnet_u
             raise ValueError(f'the station answered more than {limit} bytes')
         return raw
 
-    openers = {}  # address -> its opener, built once: a handler's TLS context costs about 7 ms to make
+    openers = {}  # (host, address) -> its opener, built once: a handler's TLS context costs about 7 ms to make
 
     def send(method, url, headers, data):
         host = urlsplit(url).hostname if url.startswith('https:') else None
         address = pin(host) if host else None
         if address:
-            opener = openers.get(address)
+            opener = openers.get((host, address))
             if opener is None:
-                opener = openers[address] = urllib.request.build_opener(urllib.request.ProxyHandler({}),
-                                                                       _PinnedHTTPSHandler(address))
+                opener = openers[(host, address)] = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                                                                               _PinnedHTTPSHandler(address, host))
             try:
                 return exchange(opener.open, method, url, headers, data)
             except urllib.error.URLError as error:
