@@ -64,7 +64,9 @@ address. Claude refuses tailnet addresses (100.64.0.0/10), so the connector need
   values. Without it, the connector's routes don't exist. Nothing is derived from the Host header.
 - **Issuer** = the public origin. **Resource** = the public origin + `/mcp`, with lowercase scheme and host and no
   trailing slash. That is the URL the person types into Claude.
-- On any other origin (loopback, tailnet), every connector route answers 404.
+- On any other origin (loopback, or any name but the public one), every connector route answers 404. A tailnet client
+  using the public name is served like any other: on the Pi, Funnel and the tailnet share one name, and the connector
+  authenticates by OAuth, never by where a request comes from.
 - `serve --connector-callback` holds the claude.ai callback, `https://claude.ai/api/mcp/auth_callback` by default.
   Older help text warned it may move to claude.com (research 1).
 

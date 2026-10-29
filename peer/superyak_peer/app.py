@@ -48,7 +48,21 @@ PUBLIC_ROUTES = {
     '/': {'GET', 'HEAD'}, '/public/': {'GET', 'HEAD'}, '/assets': {'GET', 'HEAD'}, '/api/health': {'GET'},
     '/api/login': {'POST'}, '/api/invitations/redeem': {'POST'},
     '/public/layers/{key}': {'GET'}, '/public/layers/{layer_id}/files/{key}': {'GET'},
+    # The remote connector's routes (its spec, "The home is its own authorization server"): each checks what it needs
+    # itself, and they exist only with serve --public-origin, so without it the router has no such route to allow.
+    '/.well-known/oauth-protected-resource': {'GET'}, '/.well-known/oauth-protected-resource/mcp': {'GET'},
+    '/.well-known/oauth-authorization-server': {'GET'}, '/register': {'POST'}, '/authorize': {'GET'},
+    '/authorize/request': {'POST'}, '/authorize/signin': {'POST'}, '/authorize/decision': {'POST'}, '/token': {'POST'},
+    '/mcp': {'GET', 'POST', 'DELETE'},
 }
+# The connector's issuer, as D13 needs it to equal what a person types: https, lowercase ASCII labels, no trailing
+# dot, and a port only when it isn't the default, without a leading zero. Anything else stops serve, rather than
+# leaving a typo to turn the connector off quietly (Rio Grande's section 2 of connector-config, S1).
+PUBLIC_ORIGIN = re.compile(r'https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+                           r'(?::(?P<port>[1-9][0-9]{0,4}))?')
+# The connector's writes come from Claude's servers, which send no home Origin; they authenticate by OAuth, never by a
+# cookie, so they skip the same-origin write check as /federation/ does (connector spec D12). The consent page's posts don't.
+OAUTH_WRITES = ('/register', '/token', '/mcp')
 
 
 def is_public(scope):
@@ -82,7 +96,8 @@ class BrowserBoundary:
         method = scope['method']
         # Federation endpoints use separate cryptographic auth; their router must
         # verify signed envelopes and never accept browser session authority.
-        browser_write = method not in ('GET', 'HEAD', 'OPTIONS') and not scope['path'].startswith('/federation/')
+        browser_write = (method not in ('GET', 'HEAD', 'OPTIONS') and not scope['path'].startswith('/federation/')
+                         and scope['path'] not in OAUTH_WRITES)
         if browser_write:
             if not origin or origin != request_origin:
                 return await JSONResponse({'error': 'Same-origin request required'}, 403)(scope, receive, send)
@@ -258,8 +273,14 @@ def paging(query):
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
-def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None, imprints_dir: Path | None = None):
+def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None, imprints_dir: Path | None = None,
+               public_origin: str | None = None, connector_callback: str | None = None):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
+    if public_origin is not None:  # the connector's issuer: one canonical https origin among the allowed ones (D13)
+        canonical = PUBLIC_ORIGIN.fullmatch(public_origin)
+        if not canonical or canonical['port'] == '443' or int(canonical['port'] or 443) > 65535 \
+                or public_origin not in allowed_origins:
+            raise ValueError('The public origin is one lowercase https origin with no path, and one of the origins')
     demo_credentials = []
     if local_demo:
         from .__main__ import validate_demo
@@ -291,6 +312,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     from .source_routes import install as install_sources
     app.state.assistant = LocalGemma(model_config)
     install_sources(app)
+    if public_origin is not None:  # the remote connector: its routes exist only here (connector plan, Task 3)
+        from .connector import DEFAULT_CALLBACK
+        from .connector_routes import install as install_connector
+        install_connector(app, public_origin, connector_callback or DEFAULT_CALLBACK)
     app.mount('/assets', StaticFiles(directory=STATIC_DIR), name='assets')
     app.add_middleware(BrowserBoundary, allowed_origins=allowed_origins)
     app.add_middleware(PublicRoute, store=store, router=app.router)  # added last, so outermost (spec 2)

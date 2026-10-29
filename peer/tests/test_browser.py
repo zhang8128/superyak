@@ -212,6 +212,9 @@ def test_source_library_conflict_keeps_correction_and_does_not_overwrite(browser
         expect(page.get_by_label('Source name', exact=True)).to_have_value('My correction')
         assert service.get(actor, source['id'])['name'] == 'Correction from another tab'
         page.get_by_role('button', name='Load latest source settings', exact=True).click()
+        # The heading already shows the other tab's name, so it can't tell that the reload finished; the button goes
+        # only when it has, and a save clicked while it runs is dropped (fix:browser-source-layer-flakes, CI b918196e)
+        expect(page.get_by_role('button', name='Load latest source settings', exact=True)).to_be_hidden()
         expect(page.get_by_role('heading', name='Correction from another tab', exact=True)).to_be_visible()
         expect(page.get_by_label('Source name', exact=True)).to_have_value('My correction')
         page.get_by_role('button', name='Save source details', exact=True).click()
@@ -1236,7 +1239,10 @@ def test_overlapping_upload_and_save_merges_attachment_into_latest_layer_values(
             expect(page.get_by_text("overlap.txt uploaded")).to_be_visible()
             expect(page.get_by_label("What do you want to share?")).to_have_value("Newer text saved while upload waits")
             expect(page.get_by_role("checkbox", name="overlap.txt")).to_be_checked()
-            page.get_by_role("button", name="Save private draft").click()
+            # "Private draft saved" still shows from the first save, so wait for this save's own answer before
+            # reading the store (fix:browser-source-layer-flakes: about 1 in 8 on the Mac read it in flight)
+            with page.expect_response(lambda r: r.request.method == "PUT" and r.url.endswith(f"/api/layers/{layer_id}")):
+                page.get_by_role("button", name="Save private draft").click()
             expect(page.locator("#main-content").get_by_text("Private draft saved")).to_be_visible()
             saved = store.get_layer(patient_id, layer_id)
             assert saved["body"] == "Newer text saved while upload waits"

@@ -113,6 +113,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    A peer you cut off and then paired again one participant at a time keeps its other participants held: with a usable
    replaced file the reconcile holds them in the copy too, and its report line "Held again" lists them, each until its
    own code is typed again. Nothing more is needed for them.
+   **Marks that keep a room away from cloud models.** With a usable replaced file, every mark it holds is kept in the copy,
+   one cleared since the copy included (failing closed), and the report counts them as "cloud marks kept". Without one,
+   marks set since the copy are gone, and the report says so: see step 7.
    Without a usable replaced file nothing is unpaired and nothing is held. That includes a peer you cut off and partly
    paired again since the copy: name it in `UNPAIR=` too, then pair again the participants you meant to keep, each with
    its own code. List the peers paired in the staged copy (read-only; the
@@ -174,7 +177,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
 7. **Act on the report.** Change again any password it lists that was changed for a reason. Read each room brief it lists
    ("room briefs that differ"; the report never shows brief text) in the browser, and save again the one you want. Issue again any invitation
    still wanted. Tell the owners of ships whose keys were revoked to dock again. Ask the issuers of the grants the report lists as missing from the replaced file, or revoked with no usable replaced file, to make again any still wanted; a grant made after the copy is gone too. Requests and dockings since the copy
-   were expired; their senders ask again, and nothing is approved from memory. The peers the report says it
+   were expired; their senders ask again, and nothing is approved from memory. If the report says marks set since the
+   copy were not kept, ask the members of the rooms that matter to check their "never to a cloud model" marks in the
+   browser before any ship is added to those rooms. The peers the report says it
    unpaired need nothing more; pair again, in the browser after the start, only a peer you want that the report lists as
    paired in the replaced file but not here. If your own account comes back waiting for
    activation, renew it (the file must not exist yet; the command writes it mode 0600, and the link is never put in a
