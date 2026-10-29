@@ -800,6 +800,9 @@ def main(argv=None):
             if current is not None and not has_identity:  # plan P8 (review SF5): only the first card makes an identity
                 raise ValueError('identity.json is missing, and a card command never makes a new one once this peer has a '
                                  'mode: restore identity.json, or make a new identity on purpose with station-new-identity')
+            if args.pull and current is None and has_identity:  # Rio Grande's section 2, MF1 (spec §1, check 3 SF5)
+                raise ValueError('This peer already has an identity, so a pull card here would make it a pull peer for good. '
+                                 'A pull peer is a new data directory: init, then card --pull, before anything else.')
             if args.pull and not has_identity and paired_before:  # review SF6
                 raise ValueError('This peer already has peers but no identity, so a pull card would be an identity they '
                                  'have never seen. Export a card here first, then pair again.')

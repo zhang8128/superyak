@@ -485,6 +485,25 @@ def test_connections_says_how_delivery_to_each_peer_is_going():
         'failing for 2 h, 3 failures, next attempt in 4 min, certificate differs',
         'last delivered 1 min ago', 'nothing delivered yet']
 
+
+def test_card_pull_is_refused_on_a_store_with_an_identity_and_no_mode(tmp_path):
+    """Rio Grande's section 2, MF1 (spec §1, check 3 SF5): unless the mode is already pull, card --pull refuses a store
+    that already has an identity. create_app makes one at first start, so a mistaken run on the Pi's lighthouse would
+    make it a pull peer for good. Refused with peers and without; the mode stays unset and identity.json unchanged."""
+    from superyak_peer.federation import Federation
+    from superyak_peer.identity import PeerIdentity, pairing_code
+    alone, _ = pull_owner(tmp_path / 'pi')
+    PeerIdentity.load_or_create(alone.data_dir)
+    far, far_owner = pull_owner(tmp_path / 'far')
+    far_card = Federation(far, endpoint='https://far.example:7437').card(far_owner)
+    paired, paired_owner = pull_owner(tmp_path / 'tardis')
+    Federation(paired, endpoint='https://tardis.example:7437').pair(paired_owner, far_card, code=pairing_code(far_card))
+    for store in (alone, paired):
+        before = (store.data_dir / 'identity.json').read_bytes()
+        done = run('card', '--data-dir', store.data_dir, '--username', 'owner', '--pull')
+        assert done.returncode == 1 and 'already has an identity' in done.stderr, done.stderr
+        assert store.federation_mode() is None and (store.data_dir / 'identity.json').read_bytes() == before
+
 def test_card_pull_is_refused_on_a_store_paired_before_any_card(tmp_path):
     """SF6: paired through `pair` before any card, it has a peers row, no identity.json and no mode."""
     from superyak_peer.__main__ import admin_account, federation_here
