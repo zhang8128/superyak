@@ -44,4 +44,4 @@ def test_door_command_turns_off_the_access_log_so_status_secrets_stay_out_of_it(
     calls = []
     monkeypatch.setattr(uvicorn, 'run', lambda app, **kwargs: calls.append(kwargs))
     main(['door', '--data-dir', str(tmp_path / 'peer'), '--port', '7999'])
-    assert calls == [{'host': '127.0.0.1', 'port': 7999, 'access_log': False}]
+    assert calls == [{'host': '127.0.0.1', 'port': 7999, 'access_log': False, 'timeout_graceful_shutdown': 5}]
