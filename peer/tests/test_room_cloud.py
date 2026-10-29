@@ -3,7 +3,7 @@ A ship's own add (POST /api/ships/me/rooms/{key}/members) needs the ship in the 
 so the paths below are every way a ship can reach a marked room."""
 import pytest
 from superyak_peer.common import Problem
-from superyak_peer.room_cloud import ASK_OWNER, OWNER_TOLD, REMOTE_REFUSED, SHIP_REFUSED, SHIPS_FIRST
+from superyak_peer.room_cloud import ASK_OWNER, EARLIER_SHIPS, OWNER_TOLD, REMOTE_REFUSED, SHIP_REFUSED, SHIPS_FIRST
 from test_moderate_grants import city, login, moderate, notices, remote_contact  # noqa: F401
 
 
@@ -145,3 +145,17 @@ def test_a_member_on_another_home_isnt_added_to_a_marked_room(city):
     assert room_count(c.store) == before
     earlier = c.store.create_room(c.andy['id'], 'Clinic notes', [c.jenn['id'], willa])['id']
     assert c.store.mark_room(c.jenn['id'], earlier)['cloud'] == {'count': 1, 'mine': True}
+
+
+def test_an_earlier_room_with_a_ship_left_in_it_isnt_marked(city):
+    """Removals from before they reached earlier rooms, or a restore of older state, can leave a ship in an earlier
+    room (Tardis's review of 541670b5). A mark there would promise what a ship could still read, so marking the chain
+    is refused with the reason, and marking this room alone still works."""
+    c = city
+    first = people_room(c, 'jenn')
+    second = c.store.add_participants(c.andy['id'], first, [c.doctor['id']])['id']
+    with c.store.transaction() as db:
+        db.execute('INSERT INTO room_members VALUES(?,?)', (first, c.rio['id']))  # as legacy data could leave it
+    assert refused(c.store.mark_room, c.jenn['id'], second) == (409, EARLIER_SHIPS)
+    assert marks(c.store, first) == set() and marks(c.store, second) == set()
+    assert c.store.mark_room(c.jenn['id'], second, earlier=False)['marked'] == [second]

@@ -14,6 +14,8 @@ SHIPS_FIRST = SHIPS_IN + ' Remove them first.'
 ASK_OWNER = SHIPS_IN + ' Ask {owner} to remove them first.'
 OWNER_TOLD = 'A member asked to keep this room away from cloud models. Remove the ships to let them.'
 SHIP_REFUSED = 'A member keeps this room away from cloud models, and ships run on cloud models.'
+EARLIER_SHIPS = ("An earlier room you're in has ships in it, and ships run on cloud models. Mark this room alone, or "
+                 "ask its owner to remove them first.")
 REMOTE_REFUSED = ("A member keeps this room away from cloud models, and this home can't tell whether someone on another "
                   "home is a ship, nor tell their home about the mark yet.")
 QUIET = 86400  # the owner is told once a day at most, so a member who tries again doesn't flood the room (the plan's)
@@ -76,6 +78,8 @@ class RoomCloud:
             room = self._room(db, actor, key)
             if not self._has_ship(db, key):
                 marked = [key] + (self._earlier_with(db, room['owner_id'], room, actor) if earlier else [])
+                if any(self._has_ship(db, earlier_room) for earlier_room in marked[1:]):
+                    raise Problem(409, EARLIER_SHIPS)  # older data or a restore can leave one there (Tardis's review)
                 db.executemany('INSERT OR IGNORE INTO room_cloud VALUES(?,?,?)',
                                [(room_id, actor, self.clock()) for room_id in marked])
                 return {'marked': marked, 'cloud': self._cloud(db, key, actor)}
