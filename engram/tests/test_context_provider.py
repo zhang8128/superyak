@@ -219,6 +219,27 @@ def test_timeout_view_preserves_injected_count_transport():
     assert original.with_timeout(1).count(request()) == 12
 
 
+def read_request(sock):
+    """The whole HTTP request a fake peer was sent: its headers, then Content-Length bytes of body. http.client sends
+    the headers and the body in two writes, so one recv can return the headers alone; a peer that answered then and
+    closed made the client's body write fail with BrokenPipeError (a CI flake, run 40861047803)."""
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(65536)
+        if not chunk:
+            return data
+        data += chunk
+    head, _, rest = data.partition(b"\r\n\r\n")
+    length = next((int(line.split(b":", 1)[1]) for line in head.split(b"\r\n")[1:]
+                   if line.lower().startswith(b"content-length:")), 0)
+    while len(rest) < length:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        rest += chunk
+    return head + b"\r\n\r\n" + rest
+
+
 @pytest.mark.parametrize("phase", ["headers", "body"])
 def test_trickling_http_response_cannot_extend_overall_call_deadline(monkeypatch, phase):
     """Use real HTTP parsing over a socket pair; only TLS/network setup is replaced."""
@@ -234,7 +255,7 @@ def test_trickling_http_response_cannot_extend_overall_call_deadline(monkeypatch
     def peer():
         try:
             server.settimeout(2)
-            server.recv(65536)
+            read_request(server)
             prefix = b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n"
             if phase == "body":
                 prefix += b"\r\n"
@@ -276,7 +297,7 @@ def test_deadline_reader_preserves_http_body_after_connection_close(monkeypatch)
     def peer():
         try:
             server.settimeout(2)
-            server.recv(65536)
+            read_request(server)  # all of it, so the close below can't land before the client's body write
             server.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: "
                            + str(len(body)).encode() + b"\r\n\r\n" + body)
         finally:
