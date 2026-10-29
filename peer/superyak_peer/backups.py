@@ -387,7 +387,11 @@ COMPARED = ('users.id', 'users.is_admin', 'users.is_super_admin', 'users.salt', 
             'budget_uses.ticket_id', 'budget_uses.created',
             # room moderators, M20: the act log the member-changes step reads
             'member_changes.id', 'member_changes.grant_id', 'member_changes.change', 'member_changes.actor_id',
-            'member_changes.room_id', 'member_changes.new_room_id', 'member_changes.created')
+            'member_changes.room_id', 'member_changes.new_room_id', 'member_changes.created',
+            # fix:restore-keeps-connector-revocations, the section 2's M1: a replaced file damaged in a connection column
+            # is treated as absent, so every connection is revoked, never one left open as only "not compared"
+            'connector_grants.id', 'connector_grants.person_id', 'connector_grants.client_id',
+            'connector_grants.redirect_host', 'connector_grants.rooms', 'connector_grants.ends', 'connector_grants.revoked')
 
 
 class ReconcileRefused(ValueError):
@@ -840,8 +844,11 @@ def _keep_marks_like_replaced(db, old, now, report):
 
 CONNECTIONS_NOT_KEPT = ('Every connection to Claude or another app was revoked and the connector key made new, since there '
                         'was no replaced file to compare with: each person connects again from their app.')
-CONNECTION_COMPARED = ('connector_grants.id', 'connector_grants.rooms', 'connector_grants.ends', 'connector_grants.revoked')
-CONNECTION_NAMED = ('connector_grants.person_id', 'connector_grants.created')  # read from the copy only
+CONNECTION_COMPARED = ('connector_grants.id', 'connector_grants.person_id', 'connector_grants.client_id',
+                       'connector_grants.redirect_host', 'connector_grants.rooms', 'connector_grants.ends',
+                       'connector_grants.revoked')  # in COMPARED too, so a replaced file lacking one is absent
+CONNECTION_NAMED = ('connector_grants.created',)  # read from the copy only
+DAMAGED = 'a value one of the two files can\'t read'
 
 
 def _connection_line(db, row, how):
@@ -849,28 +856,44 @@ def _connection_line(db, row, how):
     return '#' + row['id'][:4], found[0] if found else row['person_id'][:6], how
 
 
-def _room_set(value):
-    """A connection's rooms as the reconcile compares them: None for "*", else the ids in its JSON list. A damaged value
-    is an empty set, so it narrows to nothing and the connection is revoked."""
+def _room_list(value):
+    """A connection's rooms as the reconcile reads them: None for "*", else its JSON list of room ids. Anything else (not
+    JSON, not a list, empty, or holding anything but a string) raises ValueError: the connection is revoked, never the
+    restore stopped (the section 2's S3)."""
     if value == '*':
         return None
     try:
         rooms = json.loads(value)
     except (TypeError, ValueError):
-        return set()
-    return {room for room in rooms if isinstance(room, str)} if isinstance(rooms, list) else set()
+        raise ValueError('rooms') from None
+    if not isinstance(rooms, list) or not rooms or not all(isinstance(room, str) for room in rooms):
+        raise ValueError('rooms')
+    return rooms
+
+
+def _end(value):
+    if type(value) not in (int, float):
+        raise ValueError('ends')
+    return value
 
 
 def _keep_connector_key_like_replaced(db, old, report):
     """Rio Grande, on the design: a connector key rotated after the copy revoked every unused client id and pending
     request (perhaps because a backup leaked it), so the replaced file's key, when it differs, is kept. Connected clients
     are known by their oauth_clients rows (spec D18), so they keep working."""
+    import secrets
     from .connector import KEY_NAME
-    if not (_has(old, 'system_meta') and _has(db, 'system_meta')):
+    if not _has(db, 'system_meta'):
         return
-    theirs = old.execute('SELECT value FROM system_meta WHERE key=?', (KEY_NAME,)).fetchone()
+    theirs = old.execute('SELECT value FROM system_meta WHERE key=?', (KEY_NAME,)).fetchone() \
+        if _has(old, 'system_meta') else None
     here = db.execute('SELECT value FROM system_meta WHERE key=?', (KEY_NAME,)).fetchone()
-    if theirs is None or here is not None and here[0] == theirs[0]:
+    if theirs is None:
+        if here is not None:  # the section 2's M1, the key's half: nothing to keep from, so the copy's isn't trusted
+            db.execute('INSERT OR REPLACE INTO system_meta VALUES(?, ?)', (KEY_NAME, secrets.token_hex(32)))
+            report['counts']['connector key made new'] = 1
+        return
+    if here is not None and here[0] == theirs[0]:
         return
     db.execute('INSERT OR REPLACE INTO system_meta VALUES(?, ?)', (KEY_NAME, theirs[0]))
     report['counts']['connector key kept from the replaced file'] = 1
@@ -887,30 +910,40 @@ def _keep_connections_like_replaced(db, old, now, report):
     _keep_connector_key_like_replaced(db, old, report)
     if not (_usable(db, old, report, *CONNECTION_COMPARED) and _usable(db, None, report, *CONNECTION_NAMED)):
         return
-    there = {row[0]: row[1:] for row in old.execute('SELECT id, rooms, ends, revoked FROM connector_grants')}
+    there = {row[0]: row[1:] for row in old.execute(
+        'SELECT id, person_id, client_id, redirect_host, rooms, ends, revoked FROM connector_grants')}
     revoked = narrowed = shortened = 0
-    for row in db.execute('SELECT id, person_id, rooms, ends FROM connector_grants WHERE revoked IS NULL '
-                          'ORDER BY created, id').fetchall():
+    for row in db.execute('SELECT id, person_id, client_id, redirect_host, rooms, ends FROM connector_grants '
+                          'WHERE revoked IS NULL ORDER BY created, id').fetchall():
         theirs = there.get(row['id'])
-        here_rooms = _room_set(row['rooms'])
         if theirs is None:
             when, how = now, 'missing from the replaced file'
-        elif theirs[2] is not None:
-            when, how = theirs[2], 'as in the replaced file'
+        elif theirs[5] is not None:
+            when, how = theirs[5], 'as in the replaced file'
+        elif tuple(theirs[:3]) != (row['person_id'], row['client_id'], row['redirect_host']):
+            when, how = now, 'another connection in the replaced file'  # fails closed, as _not_this_station does
         else:
-            there_rooms = _room_set(theirs[0])
-            rooms = there_rooms if here_rooms is None else here_rooms if there_rooms is None else here_rooms & there_rooms
-            if rooms is None or rooms:
-                if rooms != here_rooms:  # in the copy's own order where it has one, else the replaced file's
-                    order = json.loads(row['rooms']) if here_rooms is not None else json.loads(theirs[0])
-                    db.execute('UPDATE connector_grants SET rooms=? WHERE id=?',
-                               (json.dumps([room for room in order if room in rooms]), row['id']))
-                    narrowed += 1
-                if theirs[1] < row['ends']:
-                    db.execute('UPDATE connector_grants SET ends=? WHERE id=?', (theirs[1], row['id']))
-                    shortened += 1
-                continue
-            when, how = now, 'no room in both files, so a room it named may continue in a newer room'
+            try:
+                here_rooms, there_rooms = _room_list(row['rooms']), _room_list(theirs[3])
+                here_ends, there_ends = _end(row['ends']), _end(theirs[4])
+            except ValueError:
+                when, how = now, DAMAGED
+            else:
+                if here_rooms is None:  # "*" here: the replaced file's set, in its order
+                    rooms = there_rooms
+                elif there_rooms is None:
+                    rooms = here_rooms
+                else:  # the intersection, in the order the person chose them in the copy
+                    rooms = [room for room in here_rooms if room in set(there_rooms)]
+                if rooms is None or rooms:
+                    if rooms != here_rooms:
+                        db.execute('UPDATE connector_grants SET rooms=? WHERE id=?', (json.dumps(rooms), row['id']))
+                        narrowed += 1
+                    if there_ends < here_ends:
+                        db.execute('UPDATE connector_grants SET ends=? WHERE id=?', (there_ends, row['id']))
+                        shortened += 1
+                    continue
+                when, how = now, 'no room in both files, so a room it named may continue in a newer room'
         db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (when, row['id']))
         report['connections'].append(_connection_line(db, row, how))
         revoked += 1
@@ -930,7 +963,8 @@ def _clear_connector_sign_ins(db, old, now, report):
 def _revoke_every_connection(db, old, now, report):
     """fix:restore-keeps-connector-revocations, without a usable replaced file: fail closed, as _revoke_every_grant
     does. Every connection is revoked, and the connector key is made new, since the copy's key may be the one that leaked
-    (Rio Grande took this over keeping it). A new key voids only unused client ids and pending requests."""
+    (Rio Grande took this over keeping it). A new key voids unused client ids and consent links nobody has signed into;
+    pending sign-ins are cleared by _clear_connector_sign_ins, since a client known by its row would outlive the key."""
     import secrets
     from .connector import KEY_NAME
     if _has(db, 'system_meta'):

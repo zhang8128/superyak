@@ -1795,17 +1795,23 @@ def test_an_unrotated_key_is_left_alone_and_not_reported(tmp_path, capsys):
 
 
 def test_older_files_on_either_side_of_the_connector(tmp_path, capsys):
-    """A replaced file from before the connector is named as not compared; a copy from before it is skipped and named,
-    and with a replaced file that has a key, the copy takes it."""
+    """A replaced file without the connection columns is treated as absent, so every connection is revoked and the key
+    made new (Task's section 2, M1: "not compared" would have left a connection revoked since the copy open, the damaged
+    file review I1 closed for grants). A copy from before the connector is skipped and named, and takes the replaced
+    file's key."""
     store = Store(tmp_path / 'lighthouse')
     store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    open_one = connection(store, sam['id'])
     copy = staged(tmp_path, store)
+    key = connector_key(copy)
     with closing(sqlite3.connect(store.db_path)) as db:
-        db.execute('DROP TABLE connector_grants')
+        db.execute('ALTER TABLE connector_grants DROP COLUMN revoked')  # damaged in exactly the column that matters
         db.commit()
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
     assert code == 0, err
-    assert 'connector_grants.revoked' in out.split('Not compared, because the replaced file lacks them:')[1]
+    assert 'treated as absent' in out and grants_in(copy)[open_one]['revoked'] is not None
+    assert connector_key(copy) not in (None, key)
     older = Store(tmp_path / 'second')
     older.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     copy = staged(tmp_path, older, 'replaced-20261017-130000')
@@ -1840,3 +1846,64 @@ def test_a_restore_clears_every_pending_connector_sign_in(tmp_path, capsys, repl
     with closing(sqlite3.connect(copy)) as db:
         assert db.execute('SELECT count(*) FROM oauth_pending').fetchone()[0] == 0
     assert 'connector sign-ins cleared (2)' in out
+
+
+
+def test_a_replaced_file_without_the_connector_key_makes_a_new_one(tmp_path, capsys):
+    """The section 2's M1, the key's half: a replaced file that has the connection tables but no key row (a hand edit,
+    or damage) keeps no key, so the copy's isn't trusted either: a new one is made, as with no replaced file."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy = staged(tmp_path, store)
+    key = connector_key(copy)
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute("DELETE FROM system_meta WHERE key='connector_client_key'")
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert connector_key(copy) not in (None, key) and 'connector key made new (1)' in out
+
+
+def test_damaged_or_mismatched_connections_are_revoked_never_a_crash(tmp_path, capsys):
+    """The section 2's S3 and nits 4 and 5: a value either file can't be read by (a room that isn't a string, an end
+    that isn't a number) revokes that connection rather than stopping the restore at step 5 with a traceback, and says
+    why; so does a row the replaced file holds for another person, client or host. The "newer room" reason is kept for
+    two good room sets that share nothing."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    jenn = store.create_user('jenn', 'Jenn', 'long-password-jenn')
+    r1 = store.create_room(sam['id'], 'One', [])['id']
+    g = {name: connection(store, sam['id'], [r1]) for name in ('bad_rooms', 'empty_rooms', 'bad_ends', 'other_person',
+                                                                'other_client')}
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('UPDATE connector_grants SET rooms=? WHERE id=?', (json.dumps([[r1]]), g['bad_rooms']))  # unhashable
+        db.execute("UPDATE connector_grants SET rooms='[]' WHERE id=?", (g['empty_rooms'],))  # an Allow never makes one
+        db.commit()
+    with store.transaction() as db:
+        db.execute("UPDATE connector_grants SET ends='soon' WHERE id=?", (g['bad_ends'],))
+        db.execute('UPDATE connector_grants SET person_id=? WHERE id=?', (jenn['id'], g['other_person']))
+        db.execute("UPDATE connector_grants SET client_id='another-client' WHERE id=?", (g['other_client'],))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    after = grants_in(copy)
+    assert all(after[grant]['revoked'] is not None for grant in g.values())
+    assert out.count('a value one of the two files can\'t read') == 3
+    assert out.count('another connection in the replaced file') == 2
+    assert 'may continue in a newer room' not in out
+
+
+def test_a_narrowed_room_set_keeps_the_copys_order(tmp_path, capsys):
+    """The section 2's nit 6 (M11): narrowing keeps the rooms in the order the person chose them in the copy."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    r1, r2, r3 = (store.create_room(sam['id'], title, [])['id'] for title in ('One', 'Two', 'Three'))
+    grant = connection(store, sam['id'], [r3, r1, r2])
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:
+        db.execute('UPDATE connector_grants SET rooms=? WHERE id=?', (json.dumps([r2, r1]), grant))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert json.loads(grants_in(copy)[grant]['rooms']) == [r1, r2]
