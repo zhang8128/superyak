@@ -811,15 +811,24 @@ def _hold_like_replaced(db, old, now, report):
         report['held_counts'] = [sum(pair) for pair in zip(report['held_counts'], (withdrawn, nulled))]
 
 
+MARKS_NOT_KEPT = ('Marks set since the copy to keep rooms away from cloud models were not kept: ask the members of the '
+                  'rooms that matter to check their marks before any ship is added.')
+
+
 def _keep_marks_like_replaced(db, old, now, report):
     """Never to a cloud model (Rio Grande's section 2 of room-cloud, M2): a mark is a restriction, like a hold, so every
     mark the replaced file holds is kept here, for a room and member this copy has, with its set_at. Otherwise a mark
     made after the copy would be lost, and its room could take a ship; one cleared after the copy stays, failing closed.
-    A replaced file from before the marks has none to keep, and a copy from before them gains the table. Only takes away."""
+    A replaced file from before the marks has none to keep and is named as not compared; a copy from before them gains
+    the table. It only adds marks, so it only takes power away. Without a usable replaced file it doesn't run, and the
+    report says later marks are gone (MARKS_NOT_KEPT)."""
     if not _has(old, 'room_cloud.member_id'):
+        if _has(db, 'room_cloud.member_id') and 'room_cloud.member_id' not in report['not_compared']:
+            report['not_compared'].append('room_cloud.member_id')
         return
-    from .room_cloud import ROOM_CLOUD_SCHEMA
-    db.execute(ROOM_CLOUD_SCHEMA.strip().rstrip(';'))  # not executescript: that would commit the reconcile's transaction
+    if not _has(db, 'room_cloud.member_id'):
+        from .room_cloud import ROOM_CLOUD_TABLE
+        db.execute(ROOM_CLOUD_TABLE)  # one statement, not executescript: that would commit the reconcile's transaction
     kept = 0
     marks = old.execute('SELECT room_id, member_id, set_at FROM room_cloud ORDER BY set_at').fetchall()
     for room_id, member_id, set_at in marks:
@@ -1090,7 +1099,7 @@ def describe_reconcile(report):
         lines.append(f"The replaced file was {report['replaced']}. Room and space members, admins and law layers were not "
                      "compared: check them by hand in runbook step 8. Peer pairings were not compared either, and nothing was "
                      'unpaired: before the copy goes live (runbook step 5), peer pairings: list them and name any you had cut '
-                     "off in UNPAIR=. Every owned ship's keys were revoked, so those machines dock again.")
+                     "off in UNPAIR=. Every owned ship's keys were revoked, so those machines dock again. " + MARKS_NOT_KEPT)
     lines.append('Taken back: ' + ', '.join(f'{label} ({count})' for label, count in report['counts'].items()) + '.')
     for table, (before, after) in report['sequences'].items():
         if after != before:

@@ -1610,3 +1610,52 @@ def test_a_restore_keeps_every_cloud_mark_the_replaced_file_had(tmp_path, capsys
     with pytest.raises(Problem) as refused:
         live.add_participants(andy['id'], room, [odo['id']])
     assert (refused.value.status, refused.value.message) == (409, SHIP_REFUSED)
+
+
+def test_without_a_replaced_file_the_report_says_later_marks_are_gone(tmp_path, capsys):
+    """Rio Grande's section 2 of fa85825a, M1: with no replaced file a mark made after the copy is lost, so the report says
+    so, and step 7 asks the members of the rooms that matter to check their marks before any ship is added."""
+    from superyak_peer.backups import MARKS_NOT_KEPT
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    jenn = store.create_user('jenn', 'Jenn', 'long-password-jenn')
+    room = store.create_room(andy['id'], 'Clinic notes', [jenn['id']])['id']
+    copy = staged(tmp_path, store)
+    store.mark_room(jenn['id'], room)  # after the copy, and no replaced file to keep it from
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    assert MARKS_NOT_KEPT in out
+
+
+def test_a_replaced_file_without_marks_is_named_not_compared(tmp_path, capsys):
+    """S1: when the copy has room_cloud and the replaced file doesn't, the report names it as not compared."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute('DROP TABLE room_cloud')
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert 'Not compared, because the replaced file lacks them: room_cloud.member_id' in out
+
+
+def test_a_copy_from_before_the_marks_gains_them_and_a_chain_keeps_both(tmp_path, capsys):
+    """S2: a copy taken before room_cloud existed gains the table in the reconcile's own transaction, and a mark set on a
+    continuation and its earlier room after the copy is kept on both."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    jenn = store.create_user('jenn', 'Jenn', 'long-password-jenn')
+    doctor = store.create_user('doctor', 'Doctor', 'long-password-doctor')
+    first = store.create_room(andy['id'], 'Clinic notes', [jenn['id']])['id']
+    second = store.add_participants(andy['id'], first, [doctor['id']])['id']
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('DROP TABLE room_cloud')
+        db.commit()
+    store.mark_room(jenn['id'], second)  # the continuation and, by default, the room it continues
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert 'cloud marks kept (2)' in out
+    with closing(sqlite3.connect(copy)) as db:
+        assert {r[0] for r in db.execute('SELECT room_id FROM room_cloud')} == {first, second}

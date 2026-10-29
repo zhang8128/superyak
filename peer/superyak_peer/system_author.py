@@ -2,8 +2,9 @@
 '_station', found only by the id in system_meta; never a room member, never keyed, never signed in. Its only writer
 is _post_as_system, which exactly these notices call (ship briefs R18, room moderators M19): the ticket decision's
 (tickets.py _post_notice), the room brief's (briefs.py _write_brief), a moderator's appointment (moderators.py
-_make_moderate), its end (grants.py _revoke) and a member add (members.py _add_members) and a member removal
-(members.py _remove_member). message_kinds marks claim and notice messages, which are never answered
+_make_moderate), its end (grants.py _revoke), a member add (members.py _add_members), a member removal
+(members.py _remove_member) and a member's ask to keep a room with ships away from cloud models (room_cloud.py
+_tell_owner). message_kinds marks claim and notice messages, which are never answered
 (422) and never federate."""
 import secrets
 from .common import uid
