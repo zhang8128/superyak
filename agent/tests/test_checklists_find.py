@@ -270,3 +270,21 @@ def test_a_list_file_writable_by_group_is_refused(tmp_path):
     (repo / '.superyak' / 'checklists' / 'good.md').chmod(0o664)
     found = cl.find(str(repo), own())
     assert ids(found) == ['other'] and 'good.md was skipped: writable by its group or by others' in found.notices[0]
+
+
+REPO = Path(__file__).resolve().parents[2]
+REPO_LISTS = REPO / '.superyak' / 'checklists'
+in_the_repo = pytest.mark.skipif(not (REPO / '.git').exists(), reason='the repo lists ship only in a checkout')
+
+
+@in_the_repo
+@pytest.mark.parametrize('path', sorted(REPO_LISTS.glob('*.md')), ids=lambda path: path.name)
+def test_every_list_in_the_repo_parses(path):
+    """A list the ships see at their acts must load, or its hold never fires (checklists-oct29's re-read: a split item
+    made merging-to-main 13 items and one 213 bytes, and every test here still passed)."""
+    assert cl.parse(path.name, path.read_bytes(), True).id == path.stem  # a read list (why-we-build) has no items
+
+
+@in_the_repo
+def test_the_repo_lists_are_found():
+    assert len(list(REPO_LISTS.glob('*.md'))) >= 9
