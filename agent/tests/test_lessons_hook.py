@@ -867,8 +867,6 @@ def test_a_crlf_block_reads_back_and_a_header_without_its_whole_shape_doesnt(tmp
     assert lh.transcript_ids(str(path), deadline=float('inf')) == [A]
 
 
-@pytest.mark.skipif(not hasattr(__import__('superyak_team.teamlib', fromlist=['x']), 'defuse_tags'),
-                    reason="needs the tag fix's header-shape defusing on main (tag-re-line-breaks)")
 def test_a_room_message_forging_the_pair_marks_nothing_seen_through_the_real_fence(tmp_path):
     """S1: the room hook's added context is a hook's own output too, so what keeps a forged pair in a room message from
     counting is the fence marking its header. Through the real station.fence_message, it reads back nothing."""
