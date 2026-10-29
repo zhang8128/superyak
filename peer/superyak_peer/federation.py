@@ -33,6 +33,7 @@ CLOCKS_DIFFER = 'Clocks differ by more than 5 minutes'
 # fake-hwclock's hourly save before time sync. At least 1,440 rows a day per pull peer pulling each minute (every
 # round and retry signs its own nonce), pruned through the index on `at`.
 NONCE_KEEP = 86400
+PRUNE_NONCES = 'DELETE FROM pull_nonces WHERE at<?'  # one text, so a test can read the prune's own query plan
 log = logging.getLogger(__name__)
 PROBLEM_CAP = 200  # characters of last_problem kept; a peer's words can be 64 KiB (Rio Grande's SF3)
 PEER_SCOPED_STATUS = frozenset({401, 404, 408, 421, 425, 429})
@@ -433,7 +434,7 @@ class Federation:
         with self.store.transaction() as db:
             # pruned by the request's own `at` (plan P6): a nonce stays while a replay of it could still pass the clock, by
             # a margin no clock excursion shorter than NONCE_KEEP undoes (fix:pull-nonces-prune-margin)
-            db.execute('DELETE FROM pull_nonces WHERE at<?', (now - NONCE_KEEP,))
+            db.execute(PRUNE_NONCES, (now - NONCE_KEEP,))
             replay = (value['at'] <= self._replay_floor(db)
                       or db.execute('SELECT 1 FROM pull_nonces WHERE origin=? AND nonce=?',
                                     (origin, value['nonce'])).fetchone())

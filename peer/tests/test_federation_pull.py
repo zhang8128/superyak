@@ -226,11 +226,13 @@ def test_a_nonce_is_kept_exactly_a_day_by_its_at_then_pruned(pulling):
 
 def test_the_nonce_prune_uses_an_index_on_at(pulling):
     """The prune runs under the write lock on every verified pull, and a day's keep is about 144 times the rows, so it
-    must not scan (Rio Grande's reader, S1: 175 ms at 1.44 M rows without the index, 0.03 ms with it)."""
+    must not scan (Rio Grande's reader, S1: 175 ms at 1.44 M rows without the index, 0.03 ms with it). It reads the plan
+    of the prune's own text (the re-check's R1: a copy here passed while `at+0<?` in the prune scanned)."""
+    from superyak_peer.federation import PRUNE_NONCES
     clock, a, peers, contacts = pulling
     with a[0].transaction() as db:
-        plan = ' '.join(row[-1] for row in db.execute('EXPLAIN QUERY PLAN DELETE FROM pull_nonces WHERE at<?', (0,)))
-    assert 'pull_nonces_at' in plan, plan
+        plan = ' '.join(row[-1] for row in db.execute('EXPLAIN QUERY PLAN ' + PRUNE_NONCES, (0,)))
+    assert 'SEARCH' in plan and 'pull_nonces_at' in plan, plan
 
 
 def mark_restored(a, value):
