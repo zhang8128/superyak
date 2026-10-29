@@ -123,7 +123,8 @@ nothing.
 - **The client id carries its registration.** It is `base64url(payload) "." base64url(tag)`, unpadded. The payload is
   the UTF-8 bytes of `json.dumps({"v": 1, "name": …, "grant_types": […], "issued_at": <integer epoch seconds>},
   sort_keys=True, separators=(",", ":"), ensure_ascii=False)`, with `name` left out when none was given. The tag is
-  `HMAC-SHA256(key, payload + b"\n" + callback)`: the configured callback is bound into the tag, not carried, so
+  `HMAC-SHA256(key, b"client\n" + payload + b"\n" + callback)`: the label keeps it apart from the pending request's
+  tag (below), and the configured callback is bound into the tag, not carried, so
   changing `--connector-callback` voids every unused id, and an id is at most 512 characters. RFC 7591 lets the server
   choose its ids, so nothing changes for a client.
 - **One check, in this order, wherever a client id arrives** (`/authorize`, `/token`):
@@ -157,7 +158,9 @@ nothing.
   validated `redirect_uri` with the error, `state` and `iss`.
 - **The pending request, and no public write before sign-in** (D18). `/authorize` writes nothing. It sends the
   browser to the consent page, a static page under `/assets` (the CSP forbids inline script, app.py:66), with the
-  validated request in the URL fragment, signed with the same key as client ids and valid for 10 minutes: client,
+  validated request in the URL fragment as `base64url(request) "." base64url(HMAC-SHA256(key, b"pending\n" + request))`,
+  the request encoded as the client id's payload is, its own label keeping its tags apart from client ids', and valid
+  for 10 minutes: client,
   `redirect_uri`, `state`, `code_challenge`, `resource`, scope and the time. The page's first post, the sign-in, checks
   the signature and the age, and only then, with a person signed in, is the request stored in `oauth_pending`. Every
   later step uses only the stored values. So the first row anyone on the internet can cause belongs to a person who
@@ -583,7 +586,8 @@ these against it, and update this spec where it differs:
 
 A person Andy invited to his home, not one of the three ships, connects their Claude account to it, chooses their
 rooms, and asks Claude about them. A room someone marked stays hidden. The receipts show the reads and the refusals,
-and the person revokes the connection when they're done.
+and the person revokes the connection when they're done. Once, after the home's key is rotated on purpose, an unused
+registration is refused with `invalid_client`, and Claude registering again on its own is checked and written down.
 
 ## Decisions
 
