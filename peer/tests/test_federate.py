@@ -207,6 +207,31 @@ def test_check_delivery_now_without_sync_never_dials_and_makes_every_peer_due(tm
         assert db.execute("SELECT value FROM peer_meta WHERE key='sync_requests'").fetchone()[0] == '2'
 
 
+def test_check_delivery_now_runs_its_session_and_store_calls_in_workers(tmp_path, monkeypatch):
+    """fix:actor-off-the-event-loop's shape (Rio Grande's): a store waiting on its lock never stalls the lighthouse.
+    The session check comes first, then making peers due, then the status, each in a worker. Mutation: any of the three
+    called on the loop."""
+    import asyncio
+    app, client = sync_app(tmp_path, sync_enabled=False)
+    sign_in(client)
+    store, fed, seen = app.state.store, app.state.federation, []
+
+    def recording(name, real):
+        def call(*args):
+            try:
+                asyncio.get_running_loop()
+                seen.append((name, 'loop'))
+            except RuntimeError:
+                seen.append((name, 'worker'))
+            return real(*args)
+        return call
+    monkeypatch.setattr(store, 'session', recording('session', store.session))
+    monkeypatch.setattr(fed, 'make_due', recording('make_due', fed.make_due))
+    monkeypatch.setattr(fed, 'status', recording('status', fed.status))
+    assert client.post('/api/sync').status_code == 200
+    assert seen == [('session', 'worker'), ('make_due', 'worker'), ('status', 'worker')]
+
+
 def test_check_delivery_now_with_sync_answers_after_the_pass_it_woke(tmp_path, monkeypatch):
     import time
     from superyak_peer.federate import Federate

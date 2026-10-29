@@ -116,8 +116,9 @@ def install(app):
     async def sync(request: Request):
         """Check delivery now (plan P11). Every peer becomes due. With --sync, this process's worker is woken and the
         answer waits, about 10 s at most, for the pass it woke, so the person sees fresh status. Without it, another
-        process (federate) syncs, so this one never dials and answers at once."""
-        who = actor(request)
+        process (federate) syncs, so this one never dials and answers at once. The session and the store run in workers,
+        identity first; the wake and the counters stay on the loop, since an asyncio.Event isn't thread-safe."""
+        who = await run_in_threadpool(actor, request)
         await run_in_threadpool(fed.make_due)
         if app.state.sync_enabled and hasattr(app.state, 'sync_wake'):
             want = app.state.sync_started + 1
@@ -126,7 +127,7 @@ def install(app):
                 if app.state.sync_finished >= want:
                     break
                 await asyncio.sleep(0.05)
-        return {'enabled':app.state.sync_enabled, 'deliveries':fed.status(who)}
+        return {'enabled':app.state.sync_enabled, 'deliveries':await run_in_threadpool(fed.status, who)}
 
     @router.post('/api/sync/{key}/retry')
     def retry(key: str, request: Request):
