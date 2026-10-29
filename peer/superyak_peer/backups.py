@@ -811,6 +811,24 @@ def _hold_like_replaced(db, old, now, report):
         report['held_counts'] = [sum(pair) for pair in zip(report['held_counts'], (withdrawn, nulled))]
 
 
+def _keep_marks_like_replaced(db, old, now, report):
+    """Never to a cloud model (Rio Grande's section 2 of room-cloud, M2): a mark is a restriction, like a hold, so every
+    mark the replaced file holds is kept here, for a room and member this copy has, with its set_at. Otherwise a mark
+    made after the copy would be lost, and its room could take a ship; one cleared after the copy stays, failing closed.
+    A replaced file from before the marks has none to keep, and a copy from before them gains the table. Only takes away."""
+    if not _has(old, 'room_cloud.member_id'):
+        return
+    from .room_cloud import ROOM_CLOUD_SCHEMA
+    db.execute(ROOM_CLOUD_SCHEMA.strip().rstrip(';'))  # not executescript: that would commit the reconcile's transaction
+    kept = 0
+    marks = old.execute('SELECT room_id, member_id, set_at FROM room_cloud ORDER BY set_at').fetchall()
+    for room_id, member_id, set_at in marks:
+        if db.execute('SELECT 1 FROM rooms WHERE id=?', (room_id,)).fetchone() \
+                and db.execute('SELECT 1 FROM users WHERE id=?', (member_id,)).fetchone():
+            kept += db.execute('INSERT OR IGNORE INTO room_cloud VALUES(?,?,?)', (room_id, member_id, set_at)).rowcount
+    report['counts']['cloud marks kept'] = kept
+
+
 def _unpair_named(db, old, named, report):
     """--unpair PEER (revision 4): the same, for the peers a person names (the only way without a usable replaced file)."""
     if not named:
@@ -1040,7 +1058,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
                              _add_member_changes_like_replaced,
-                             _unpair_like_replaced, _hold_like_replaced, _report_differences):
+                             _unpair_like_replaced, _hold_like_replaced, _keep_marks_like_replaced, _report_differences):
                     step(db, old, now, report)
             _unpair_named(db, old, named, report)
             _write_mark(db, old, now, db_path)

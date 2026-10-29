@@ -1385,6 +1385,7 @@ def test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line(tmp_p
 # Every table today's schema creates, sorted by what the reconcile does with it. A new table fails the first test below
 # until it is put in one list on purpose (the work board's tables came after the backups work was written).
 RECONCILED_TABLES = {  # read or changed by a step, or the mark
+    'room_cloud',  # never to a cloud model: every mark either file holds is kept (fix:restore-keeps-every-cloud-mark)
     'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
     'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
     'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
@@ -1396,9 +1397,7 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'inbox_received', 'receipts', 'peer_messages', 'federation_cursor', 'layer_revisions',
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
     'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries',  # first rail: coordination; the add gate also needs a paired peer
-    'lesson_repeats',  # first rail 7.1: a local record beside the receipts, never federated
-    'room_cloud'}  # never to a cloud model: copied as the backup has them for now, so a later mark is lost;
-                  # fix:restore-keeps-every-cloud-mark reconciles it before the mark's routes go live
+    'lesson_repeats'}  # first rail 7.1: a local record beside the receipts, never federated
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):
@@ -1578,3 +1577,36 @@ def test_a_restore_keeps_every_hold_the_replaced_file_had(tmp_path, capsys, old_
     line = next(line for line in out.splitlines() if line.startswith('Held again'))
     assert f'{peer[:12]} (Drew)' in line and 'Casey' not in line
     assert 'Withdrew 1 pending and failed deliveries and cleared 1 received payloads' in line
+
+
+def test_a_restore_keeps_every_cloud_mark_the_replaced_file_had(tmp_path, capsys):
+    """Rio Grande's section 2 of room-cloud, M2: a mark is a restriction, like a hold, so the reconcile only adds. Take
+    the copy, then mark a room on the live station. Copying the older room_cloud as it is would lose that mark, and the
+    room could take a ship. So the reconcile keeps every mark the replaced file has, for a room and member the copy has,
+    with its set_at, and says how many. A mark cleared after the copy stays in it, failing closed."""
+    from superyak_peer.room_cloud import SHIP_REFUSED
+    from superyak_peer.common import Problem
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    jenn = store.create_user('jenn', 'Jenn', 'long-password-jenn')
+    odo = store.create_station_ship('odo', 'Odo')
+    room = store.create_room(andy['id'], 'Clinic notes', [jenn['id']])['id']
+    cleared = store.create_room(andy['id'], 'Ops', [jenn['id']])['id']
+    store.mark_room(jenn['id'], cleared)
+    copy = staged(tmp_path, store)
+    store.mark_room(jenn['id'], room)  # after the copy
+    store.unmark_room(jenn['id'], cleared)  # cleared after the copy
+    later = store.create_room(andy['id'], 'Later', [jenn['id']])['id']
+    store.mark_room(jenn['id'], later)  # a room the copy doesn't have: nothing to keep
+    with store.transaction() as db:
+        set_at = db.execute('SELECT set_at FROM room_cloud WHERE room_id=?', (room,)).fetchone()[0]
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert 'cloud marks kept (1)' in out
+    with closing(sqlite3.connect(copy)) as db:
+        assert set(db.execute('SELECT room_id, member_id, set_at FROM room_cloud')) >= {(room, jenn['id'], set_at)}
+        assert {r[0] for r in db.execute('SELECT room_id FROM room_cloud')} == {room, cleared}
+    live = go_live(copy, tmp_path / 'live')
+    with pytest.raises(Problem) as refused:
+        live.add_participants(andy['id'], room, [odo['id']])
+    assert (refused.value.status, refused.value.message) == (409, SHIP_REFUSED)
