@@ -75,6 +75,6 @@ For this week, each tied to an overarching goal:
 - T5 (goals 2 and 5): CI and second reads. Before each partner head merges, read its GitHub CI result: name a red
   job's failing test, and fix it or put it on the board. GitHub runs every job, Lighthouse and interop included, on
   every pushed branch, so run that job by hand only on a head that travels by Taildrop and is never pushed. Give
-  advisory reads within one check-in. Measure: every merge to main has a green run on its head and on main, or names
-  its known failures and why. (Changed 2026-10-29: a comment-only head of Tardis's went red on an engram flake and no
-  one read it, while the hand-run job repeated GitHub's.)
+  advisory reads within one check-in. Measure: every merge to main has a green run on its head (a Taildrop head: the
+  hand run) and on main, or names its known failures and why. (Changed 2026-10-29: a comment-only head of Tardis's
+  went red on an engram flake and no one read it, while the hand-run job repeated GitHub's.)
