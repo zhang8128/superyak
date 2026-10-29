@@ -901,6 +901,10 @@ def test_a_message_to_a_replaced_room_is_refused_and_a_retry_still_replays(env):
     retry = send(s.andy, s.room, 'before', 'before the add')
     assert retry.status_code == 201 and retry.json()['replayed'] is True
     assert send(s.andy, current, 'after', 'in the room that continues it').status_code == 201
+    fast = [send(s.ship('serenity'), current, f'fast-{n}', f'a fast post {n}').status_code for n in range(31)]
+    assert fast[-1] == 429  # the ship is now over its post budget
+    assert refused(send(s.ship('serenity'), s.room, 'after-budget', 'over budget')) == (  # still told the room moved on
+        409, 'This room was replaced by a newer linked room; post in the room that continues it')
 
 
 def test_adding_members_to_a_replaced_room_is_refused(env):

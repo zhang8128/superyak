@@ -2540,13 +2540,16 @@ def test_a_replaced_room_takes_no_message_and_keeps_the_unsent_text(browser_peer
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.goto(f"{base}/#chats/{room['id']}")
             page.reload()
-            page.get_by_role("textbox", name="Message", exact=True).fill("Typed before the add.")
+            draft = "Typed before the add. <b>kept as text</b> " + "x" * 400  # one long word: it must wrap, not widen
+            page.get_by_role("textbox", name="Message", exact=True).fill(draft)
             replacement = store.add_participants(patient, room["id"], [users["organizer"]["id"]])  # another tab
             page.reload()
             expect(page.get_by_text("This room was replaced by a newer linked room; post in the room that continues it.")).to_be_visible()
             expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_count(0)
             expect(page.get_by_role("button", name="Send message")).to_have_count(0)
-            expect(page.locator("pre.draft-kept")).to_have_text("Typed before the add.")
+            expect(page.locator("pre.draft-kept")).to_have_text(draft)
+            assert page.locator("pre.draft-kept b").count() == 0  # the kept text is escaped, never markup
+            assert page.locator("pre.draft-kept").evaluate("e => e.scrollWidth <= e.parentElement.clientWidth")
             assert [m["body"] for m in store.get_room(patient, room["id"])["messages"]] == []
             page.goto(f"{base}/#chats/{replacement['id']}")
             page.reload()

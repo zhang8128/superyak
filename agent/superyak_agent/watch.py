@@ -5,7 +5,7 @@ import subprocess
 import time
 from superyak_team.teamlib import redact
 from .runs import RunTimeout
-from .station import BREAKOUT_MARK, MESSAGE_LIMIT, StationError, authors, brief_block, describe, fence_message, label, quoted_title, read_json, source_label, write_private
+from .station import BREAKOUT_MARK, MESSAGE_LIMIT, REPLACED_SEND, StationError, authors, brief_block, describe, fence_message, label, quoted_title, read_json, source_label, write_private
 
 log = logging.getLogger('superyak.agent')
 POLL_SECONDS = 30
@@ -309,7 +309,8 @@ class Watcher:
                 self.client.post(ops['id'], notice['text'], f'notice-{notice["id"]}')
                 posted += 1
             except StationError as error:
-                if error.status not in (403, 404, 409):
+                if error.status not in (403, 404, 409) or error.message == REPLACED_SEND:
+                    # Ops was replaced since the list: the next cycle finds the room that continues it.
                     log.warning('could not announce notice %s, will retry: %s', notice['id'], error)
                     continue
                 # Rejected for good (a changed text under a used id, a room that is gone): do not retry it every cycle.

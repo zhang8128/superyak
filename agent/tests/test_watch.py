@@ -268,6 +268,23 @@ def test_notices_skip_an_ops_room_that_a_newer_one_replaced(station, tmp_path):
     assert bodies(fake, old) == ['the last word before the add']
 
 
+def test_a_notice_refused_because_ops_was_replaced_meanwhile_is_retried_next_cycle(station, tmp_path):
+    """The review's S1: Ops is replaced between the watcher's room list and its post. The station's replaced 409 isn't
+    final: the notice stays unannounced and the next cycle posts it in the room that continues Ops."""
+    fake, andy, jenn, serenity = station
+    odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')
+    old = fake.room('Ops', andy, odo)
+    config = {'station': 'http://station.test', 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': 'odo-key', 'workspace': str(tmp_path)}
+    w = watcher(fake, config, tmp_path, FakeRunner(), key='odo-key', notices_command=notices_command({'id': 'access-1', 'text': 'Jenn is asking to come aboard.'}))
+    listed = w.client.rooms()  # the list the watcher saw, taken before the add
+    current = fake.room('Ops', andy, odo, linked_room_id=old)
+    real_rooms = w.client.rooms
+    w.client.rooms = lambda: listed
+    assert w.cycle() == 0 and 'access-1' not in w.state['announced']
+    w.client.rooms = real_rooms
+    assert w.cycle() == 1 and bodies(fake, current) == ['Jenn is asking to come aboard.'] and bodies(fake, old) == []
+
+
 def test_notices_wait_when_the_only_ops_room_is_remote(station, tmp_path):
     fake, andy, jenn, serenity = station
     odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')

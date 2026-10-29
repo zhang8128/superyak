@@ -386,7 +386,9 @@ def test_the_wormhole_relays_both_ways_through_the_real_station(env, tmp_path):
     assert late.status_code == 409
     clients[0].post(f'/api/chats/{newer}/messages', json={'client_message_id': 'd', 'body': '@venus in the new room'})
     clock[0] += 1
+    relayed = len(vault.files(OUTBOUND))
     assert bridge.cycle() == 1
+    assert len(vault.files(OUTBOUND)) == relayed + 1  # only the new room's mention crossed, never the replaced room's
     assert clients[0].get(f'/api/chats/{gamma}').json()['messages'][-1]['body'] == '@venus just before the add'
     assert clients[0].get(f'/api/chats/{newer}').json()['messages'][-1]['body'].startswith('Sent to Venus')
 
