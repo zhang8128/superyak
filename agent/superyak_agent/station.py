@@ -71,6 +71,25 @@ class StationError(Exception):
         super().__init__(f'{status}: {message}')
 
 
+REPLACED_SEND = 'This room was replaced by a newer linked room; post in the room that continues it'
+
+
+def continued(rooms, room_id):
+    """The current room a replaced room now goes on in, following linked_room_id forward through the listed rooms; the
+    room itself when nothing replaced it, None at a fork or a cycle (fix:send-message-refuses-replaced-room)."""
+    later = {}
+    for room in rooms:
+        if room.get('linked_room_id'):
+            later.setdefault(room['linked_room_id'], []).append(room['id'])
+    key, seen = room_id, {room_id}
+    while key in later:
+        if len(later[key]) != 1 or later[key][0] in seen:
+            return None
+        key = later[key][0]
+        seen.add(key)
+    return key
+
+
 # fix:docked-ships-over-tailnet. A Mac's resolver can answer Funnel's public pair for the station's *.ts.net name while
 # MagicDNS answers its tailnet address, and every call then went out to the internet and back in through Funnel's relay
 # (health 299 ms against 36 ms on the tailnet, 2026-10-29). So a ship asks MagicDNS itself.

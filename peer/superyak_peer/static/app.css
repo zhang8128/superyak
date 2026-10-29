@@ -184,6 +184,9 @@ dialog::backdrop { background: rgba(14,31,28,.48); backdrop-filter: blur(2px); }
 .composer { position: sticky; bottom: 12px; margin-top: 22px; padding: 14px; display: grid; grid-template-columns: 1fr auto; gap: 10px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,248,.96); box-shadow: 0 8px 24px rgba(36,45,42,.08); }
 .composer .textarea { min-height: 54px; max-height: 150px; }
 .composer .inline-message { grid-column: 1 / -1; margin: 0; }
+.composer-replaced { grid-template-columns: 1fr; }
+.composer-replaced p { margin: 0; }
+.draft-kept { margin: 0; max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 
 .public-wrap { width: min(100%, 820px); margin: 0 auto; }
 .public-header { margin-bottom: 70px; display: flex; justify-content: space-between; align-items: center; }

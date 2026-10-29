@@ -5,7 +5,7 @@ import subprocess
 import time
 from superyak_team.teamlib import redact
 from .runs import RunTimeout
-from .station import BREAKOUT_MARK, MESSAGE_LIMIT, StationError, authors, brief_block, describe, fence_message, label, quoted_title, read_json, source_label, write_private
+from .station import BREAKOUT_MARK, MESSAGE_LIMIT, REPLACED_SEND, StationError, authors, brief_block, describe, fence_message, label, quoted_title, read_json, source_label, write_private
 
 log = logging.getLogger('superyak.agent')
 POLL_SECONDS = 30
@@ -295,8 +295,11 @@ class Watcher:
             return 0
         listed = json.loads(subprocess.run(self.notices_command, capture_output=True, text=True, check=True, timeout=60).stdout)
         notices = [n for n in listed if n['id'] not in self.state['announced']]
-        # Local rooms only: a federated room's id carries the other peer's name, and its members are not ours.
-        ops = max((r for r in self.client.rooms() if r.get('title') == NOTICE_ROOM and ':' not in r['id']),
+        # Local rooms only: a federated room's id carries the other peer's name, and its members are not ours. Current
+        # rooms only: the station refuses a message to a room a newer linked room replaced.
+        rooms = self.client.rooms() if notices else []
+        replaced = {r.get('linked_room_id') for r in rooms}
+        ops = max((r for r in rooms if r.get('title') == NOTICE_ROOM and ':' not in r['id'] and r['id'] not in replaced),
                   key=lambda r: r.get('last_activity') or 0, default=None) if notices else None
         if ops is None:
             return 0
@@ -306,7 +309,8 @@ class Watcher:
                 self.client.post(ops['id'], notice['text'], f'notice-{notice["id"]}')
                 posted += 1
             except StationError as error:
-                if error.status not in (403, 404, 409):
+                if error.status not in (403, 404, 409) or error.message == REPLACED_SEND:
+                    # Ops was replaced since the list: the next cycle finds the room that continues it.
                     log.warning('could not announce notice %s, will retry: %s', notice['id'], error)
                     continue
                 # Rejected for good (a changed text under a used id, a room that is gone): do not retry it every cycle.

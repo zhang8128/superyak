@@ -376,14 +376,20 @@ def test_the_wormhole_relays_both_ways_through_the_real_station(env, tmp_path):
     assert not any('@' in b for b in posts)
     assert [m['body'] for m in clients[1].get(f'/api/chats/{hers}').json()['messages']] == ['@venus from her room @wormhole']
     assert store.mentions(users[0]['id']) == []
-    # Adding a member makes a new linked room; the replaced one keeps Wormhole but is no longer bridged.
+    # Adding a member makes a new linked room; the replaced one keeps Wormhole but is no longer bridged. A mention posted
+    # just before the add, not yet relayed, stays where it is; a new message to the replaced room is refused
+    # (fix:send-message-refuses-replaced-room).
+    clients[0].post(f'/api/chats/{gamma}/messages', json={'client_message_id': 'c', 'body': '@venus just before the add'})
     newer = clients[0].post(f'/api/chats/{gamma}/participants', json={'member_ids': [users[3]['id']]}).json()['id']
     clock[0] += 1
-    clients[0].post(f'/api/chats/{gamma}/messages', json={'client_message_id': 'c', 'body': '@venus in the replaced room'})
+    late = clients[0].post(f'/api/chats/{gamma}/messages', json={'client_message_id': 'c2', 'body': '@venus in the replaced room'})
+    assert late.status_code == 409
     clients[0].post(f'/api/chats/{newer}/messages', json={'client_message_id': 'd', 'body': '@venus in the new room'})
     clock[0] += 1
+    relayed = len(vault.files(OUTBOUND))
     assert bridge.cycle() == 1
-    assert clients[0].get(f'/api/chats/{gamma}').json()['messages'][-1]['body'] == '@venus in the replaced room'
+    assert len(vault.files(OUTBOUND)) == relayed + 1  # only the new room's mention crossed, never the replaced room's
+    assert clients[0].get(f'/api/chats/{gamma}').json()['messages'][-1]['body'] == '@venus just before the add'
     assert clients[0].get(f'/api/chats/{newer}').json()['messages'][-1]['body'].startswith('Sent to Venus')
 
 

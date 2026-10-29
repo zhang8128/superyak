@@ -84,8 +84,8 @@ def epochs(store, keys):
 
 def test_a_removal_takes_the_member_out_of_every_room_of_the_chain(city):
     c = city
+    c.store.send_message(c.jenn['id'], c.room, 'old', 'Old words from Jenn')  # before the chain: a replaced room takes none
     rooms = chain(c)
-    c.store.send_message(c.jenn['id'], c.room, 'old', 'Old words from Jenn')
     for key in ('spec:a', 'spec:b'):
         c.store.claim(c.jenn['id'], rooms[2], key)
     with c.store.transaction() as db:

@@ -276,3 +276,34 @@ def test_the_command_needs_a_room_unless_it_is_a_dry_run(tmp_path, monkeypatch, 
                                                ('no public address (OSError)', True)])
 def test_what_counts_as_an_outage(result, is_outage):
     assert rw.outage(result) is is_outage
+
+
+class ReplacedStation(Station):
+    """ROOM was replaced by an add; the station refuses its lines with the replaced 409 and lists the room after it."""
+
+    def __init__(self, rooms):
+        super().__init__()
+        self.listed = rooms
+
+    def rooms(self):
+        return self.listed
+
+    def post(self, room_id, body, client_message_id, ticket_id=None, reply_to=None):
+        if any(room.get('linked_room_id') == room_id for room in self.listed):
+            raise rw.StationError(409, rw.REPLACED_SEND)
+        return super().post(room_id, body, client_message_id, ticket_id, reply_to)
+
+
+def test_lines_go_on_in_the_room_that_continues_a_replaced_one(tmp_path):
+    """fix:send-message-refuses-replaced-room: the configured room was replaced (someone was added to it), so its lines
+    follow the linked rooms forward instead of waiting in the queue until they're dropped."""
+    station = ReplacedStation([{'id': ROOM}, {'id': 'room-city-2', 'linked_room_id': ROOM},
+                               {'id': 'room-city-3', 'linked_room_id': 'room-city-2'}])
+    sent = run(tmp_path, Route(), station=station)
+    assert sent and [room for room, _ in station.posts] == ['room-city-3'] * len(sent)
+
+
+def test_a_replaced_room_with_a_fork_keeps_its_lines_for_the_next_run(tmp_path):
+    station = ReplacedStation([{'id': ROOM}, {'id': 'a', 'linked_room_id': ROOM}, {'id': 'b', 'linked_room_id': ROOM}])
+    assert run(tmp_path, Route(), station=station) == [] and station.posts == []
+    assert json.loads((tmp_path / 'route-watch.json').read_text())['pending']
