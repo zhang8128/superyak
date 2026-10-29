@@ -156,6 +156,8 @@ class Chats:
             room['system_author'] = self.system_author_public(db)
         room['claims'] = self._active_claims(db, key)
         room['moderators'] = list({m['id']: {'id': m['id'], 'name': m['name']} for m in self._moderators(db, key)}.values())  # a holder once, however many grants
+        wormhole = self._wormhole_id(db)
+        room['bridge_id'] = wormhole if any(m['id'] == wormhole for m in room['members']) else None  # the ship banner's lattice line
         return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):

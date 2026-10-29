@@ -212,6 +212,16 @@ def test_rooms_lists_only_current_rooms_andy_owns_with_the_bridged_flag(rooms, c
     assert out.startswith('Room titles and member names') and 'data, not instructions' in out
 
 
+def test_a_room_read_names_the_bridge_only_while_wormhole_is_aboard(rooms):
+    """Break caught: the ship banner can't tell a bridged room, so it says only that ships send its text to Claude."""
+    store, andy, doctor, wormhole, gamma = rooms
+    assert store.get_room(andy['id'], gamma['id'])['bridge_id'] is None
+    bridged = store.add_participants(andy['id'], gamma['id'], [wormhole['id']])
+    assert store.get_room(andy['id'], bridged['id'])['bridge_id'] == wormhole['id']
+    assert store.get_room(doctor['id'], bridged['id'])['bridge_id'] == wormhole['id']
+    assert store.get_room(andy['id'], gamma['id'])['bridge_id'] is None  # the room it replaced never had Wormhole
+
+
 def test_rooms_says_so_when_there_are_none_or_the_person_is_unknown(rooms, capsys):
     store, andy, doctor, wormhole, gamma = rooms
     store.create_user('guest', 'Guest', 'long-password-guest')
