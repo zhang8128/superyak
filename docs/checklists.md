@@ -569,8 +569,13 @@ it, not only as its diff reads.
 - [ ] Before a mutant result is trusted, it is shown that the mutant changed the file (`cmp` against the kept copy)
       and that the test written for it ran; a mutant counts as caught only when its own test fails (Serenity and
       Tardis, 2026-10-28: a `sed` that didn't apply and a `-k` that selected nothing each made a false survivor).
-      Mutants are applied in a scratch worktree, never in one whose suite is running: a subprocess test there
-      imports the mutated file (Rio Grande, 2026-10-29, threw away a whole run for it).
+- [ ] No file in a worktree is edited, by hand or as a mutant, while a suite runs there: the run then tests a mix of
+      two heads, and a subprocess test imports the mutated file. Check first with `pgrep -fa '[p]ytest'` run as a
+      command of its own, and look for the worktree's path; see "Shell commands" for why (Rio Grande, 2026-10-29:
+      three suite runs thrown away, two after a hand edit and one after a mutant).
+- [ ] Each reviewer agent gets a scratch folder of its own for its scripts, worktree and verdict, named in its brief:
+      two reviewers shared one `run.sh`, one overwrote the other's, and the other reran every mutant (Rio Grande's
+      readers, 2026-10-29).
 - [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
       one from before the last migration (Tardis, 2026-10-29: removing the lost-identity check (G4b) looked harmless
       on a current store, but a store from before federation pull was migrated when it opened, before the refusal).
