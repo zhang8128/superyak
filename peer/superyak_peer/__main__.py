@@ -401,14 +401,30 @@ def contact_state(contact):
     return 'confirmed by typing' if contact['confirmed'] else 'no typed code on record'
 
 
-def describe_connections(listed):
+def delivery_health(contact, now):
+    """Federation pull P10 (spec §8): how delivery to this contact's peer is going, in the CLI's words."""
+    if contact.get('mode') == 'pull' or contact['card'].get('delivery') == 'pull':
+        return f"last pull {ago(now - contact['last_pull'])} ago" if contact.get('last_pull') else 'no pull yet'
+    if contact.get('failures'):
+        due = contact.get('next_attempt')
+        parts = [f"failing for {ago(now - contact['failing_since'])}" if contact.get('failing_since') else 'failing',
+                 f"{contact['failures']} {'failure' if contact['failures'] == 1 else 'failures'}",
+                 (f'next attempt in {ago(due - now)}' if due > now else 'next attempt due') if due else None,
+                 safe_line(contact['last_problem'], 80) if contact.get('last_problem') else None]
+        return ', '.join(part for part in parts if part)
+    return f"last delivered {ago(now - contact['last_success'])} ago" if contact.get('last_success') else 'nothing delivered yet'
+
+
+def describe_connections(listed, now=None):
     """A code is listed only for a confirmed contact (connections() shows no other: it could be copied into a re-pair)."""
+    import time
     if not listed:
         return 'No paired peers.'
+    now = time.time() if now is None else now
     return '\n'.join(f"{safe_line(c['name'])} ({safe_line(c['user_id'])}) "
                      f"{('at ' + safe_line(c['card']['endpoint'], 200)) if c['card'].get('endpoint') else 'fetches from us'}: "
                      f"{('code ' + c['pairing_code']) if c['pairing_code'] else 'no code shown'}, {contact_state(c)}"
-                     f"{'' if c['paired'] else ', unpaired'}" for c in listed)
+                     f"{'' if c['paired'] else ', unpaired'}; {delivery_health(c, now)}" for c in listed)
 
 
 def describe_deliveries(rows):

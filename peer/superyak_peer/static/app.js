@@ -482,6 +482,7 @@ function messageDelivery(message, room) {
   if (room?.origin) return null;  // a received room: only the station's own state, never a guess from client ids
   const matches = state.sync.deliveries.filter((delivery) => delivery.message_id === message.id || (delivery.client_message_id && delivery.client_message_id === message.client_message_id));
   if (!matches.length) return "saved";
+  if (matches.some((item) => item.status === "refused")) return "refused";
   if (matches.some((item) => item.status === "failed")) return "failed";
   if (matches.some((item) => item.status === "pending")) return "pending";
   if (matches.every((item) => item.status === "withdrawn")) return "withdrawn";
@@ -489,7 +490,8 @@ function messageDelivery(message, room) {
 }
 
 function deliveryText(status) {
-  return { saved: "Saved here", pending: "Pending delivery", delivered: "Delivered", failed: "Failed to send", withdrawn: "Canceled" }[status] || "Saved here";
+  // federation pull spec §8: an unknown status is never shown as "Saved here", which would claim nothing was owed
+  return { saved: "Saved here", pending: "Pending delivery", delivered: "Delivered", failed: "Retrying", refused: "Not delivered", withdrawn: "Canceled" }[status] || "Delivery status unknown";
 }
 
 function isSelf(authorId) {
@@ -958,21 +960,60 @@ function contactState(contact) {
   return contact.confirmed ? "Confirmed by typing" : "No typed code on record";
 }
 
+// federation pull spec §8 (plan nit 20): how this peer receives, and how delivery to it is going
+function connectionDelivery(connection) {
+  if (connection.mode === "pull" || connection.card?.delivery === "pull") {
+    return `<p class="meta">Fetches from us · ${connection.last_pull ? `last pull ${escapeHtml(formatDate(connection.last_pull))}` : "no pull yet"}</p>`;
+  }
+  const endpoint = `<p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p>`;
+  if (connection.failures) {
+    const problem = connection.last_problem ? ` · ${escapeHtml(connection.last_problem)}` : "";
+    const next = connection.next_attempt ? ` · next attempt ${escapeHtml(formatDate(connection.next_attempt))}` : "";
+    return `${endpoint}<p class="meta">Failing since ${escapeHtml(formatDate(connection.failing_since))} · ${escapeHtml(connection.failures)} ${connection.failures === 1 ? "failure" : "failures"}${next}${problem}</p>`;
+  }
+  return `${endpoint}<p class="meta">${connection.last_success ? `Last delivered ${escapeHtml(formatDate(connection.last_success))}` : "Nothing delivered yet"}</p>`;
+}
+
 function connectionGroup(connection) {
   const peers = state.connections.filter((item) => item.peer_id === connection.peer_id);
   if (peers[0]?.id !== connection.id) return "";
-  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3><p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p><p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><ul class="meta">${peers.map((item) => `<li><span>${escapeHtml(item.name)}</span> <span>${item.pairing_code ? `Pairing code: ${escapeHtml(item.pairing_code)}` : "No code shown"}</span> <span>${contactState(item)}</span></li>`).join("")}</ul>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
+  return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3>${connectionDelivery(connection)}<p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p><ul class="meta">${peers.map((item) => `<li><span>${escapeHtml(item.name)}</span> <span>${item.pairing_code ? `Pairing code: ${escapeHtml(item.pairing_code)}` : "No code shown"}</span> <span>${contactState(item)}</span></li>`).join("")}</ul>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
+}
+
+// federation pull spec §8. A refusal shows its status code only: the words after it can come from the other peer.
+function refusedCode(delivery) {
+  const code = /^\d{3}\b/.exec(delivery.last_error || "");
+  return code ? ` (${code[0]})` : "";
+}
+
+function tooLargeToPull(delivery) {
+  return delivery.status === "refused" && delivery.last_error === "413 Too large to pull";
+}
+
+function nextAttempt(delivery) {
+  return delivery.next_attempt ? `, next attempt ${formatDate(delivery.next_attempt)}` : "";
+}
+
+function deliveryState(delivery) {
+  if (delivery.status === "pending" && delivery.peer_mode === "pull") return "Waiting for pull";
+  if (delivery.status === "failed") return `Retrying${nextAttempt(delivery)}`;
+  if (tooLargeToPull(delivery)) return "Too large to deliver by pull: make the release smaller";
+  if (delivery.status === "refused") return `Not delivered${refusedCode(delivery)}`;
+  return deliveryText(delivery.status);
 }
 
 function deliveryDescription(delivery) {
   const withdrawal = delivery.action.endsWith("withdraw");
   const person = delivery.contact_name || contactName(delivery.contact_id);
+  const unknown = delivery.status === "failed" ? "; remote acknowledgement unknown" : "";
   if (delivery.status === "withdrawn") return "Canceled obsolete queued content; this is not a remote acknowledgement";
   if (withdrawal) {
     if (delivery.status === "delivered") return `Remote withdrawal acknowledged by ${person}'s peer. Existing copies may remain.`;
-    return `Access stopped here; waiting for ${person}'s peer to acknowledge withdrawal${delivery.status === "failed" ? " — delivery failed; remote acknowledgement unknown" : ""}.`;
+    const shown = deliveryState(delivery);
+    const waiting = delivery.status === "pending" && delivery.peer_mode !== "pull" ? "" : ` — ${shown[0].toLowerCase()}${shown.slice(1)}${unknown}`;
+    return `Access stopped here; waiting for ${person}'s peer to acknowledge withdrawal${waiting}.`;
   }
-  return `${deliveryText(delivery.status)}${delivery.status === "failed" ? " — remote acknowledgement unknown" : ""}`;
+  return `${deliveryState(delivery)}${delivery.status === "failed" ? " — remote acknowledgement unknown" : ""}`;
 }
 
 function deliveryOperation(action) {
@@ -980,7 +1021,7 @@ function deliveryOperation(action) {
 }
 
 function deliveryCard(delivery) {
-  return `<div class="item"><div class="item-main"><strong>${escapeHtml(delivery.resource_title || "Shared item")} → ${escapeHtml(delivery.contact_name || contactName(delivery.contact_id))}</strong><span>${escapeHtml(deliveryOperation(delivery.action))} · ${escapeHtml(deliveryDescription(delivery))}</span><details><summary>Connection details</summary><p class="fingerprint meta">Item ${escapeHtml(delivery.resource_id)}<br>Peer ${escapeHtml(delivery.peer_id)}<br>Revision ${escapeHtml(delivery.revision)} · ${escapeHtml(delivery.attempts)} attempts</p></details></div>${delivery.status === "failed" ? `<button class="button secondary" data-action="retry-delivery" data-id="${escapeHtml(delivery.id)}">Retry</button>` : ""}</div>`;
+  return `<div class="item"><div class="item-main"><strong>${escapeHtml(delivery.resource_title || "Shared item")} → ${escapeHtml(delivery.contact_name || contactName(delivery.contact_id))}</strong><span>${escapeHtml(deliveryOperation(delivery.action))} · ${escapeHtml(deliveryDescription(delivery))}</span><details><summary>Connection details</summary><p class="fingerprint meta">Item ${escapeHtml(delivery.resource_id)}<br>Peer ${escapeHtml(delivery.peer_id)}<br>Revision ${escapeHtml(delivery.revision)} · ${escapeHtml(delivery.attempts)} attempts</p></details></div>${delivery.status === "failed" || (delivery.status === "refused" && !tooLargeToPull(delivery)) ? `<button class="button secondary" data-action="retry-delivery" data-id="${escapeHtml(delivery.id)}">Retry</button>` : ""}</div>`;
 }
 
 function resourceDelivery(id) {
@@ -1199,7 +1240,7 @@ function connectionsView() {
     ${state.myCode ? `<p class="notice" data-testid="my-pairing-code"><strong>Your pairing code:</strong> <code>${escapeHtml(state.myCode)}</code>. Type this on the other machine. Never send it with the card.</p>` : ""}
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and type the code the other machine shows.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
-    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${escapeHtml(state.pairPreview.endpoint)}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form"><div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
+    ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${state.pairPreview.endpoint ? escapeHtml(state.pairPreview.endpoint) : "Fetches from us: it has no address, and pulls what we hold for it"}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form"><div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
     ${shipsSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
 }
 

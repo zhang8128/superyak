@@ -464,6 +464,27 @@ def test_card_pull_prints_a_v2_card_whose_code_connections_lists_after_pairing(t
     assert f'code {show_code(pairing_code(card))}' in listed.stdout and 'fetches from us' in listed.stdout
 
 
+
+def test_connections_says_how_delivery_to_each_peer_is_going():
+    """Plan P10 (spec §8): each contact's line ends with its peer's delivery: a pull peer's last pull, or a push peer's
+    failing streak with its next attempt and problem, or its last delivery."""
+    from superyak_peer.__main__ import describe_connections
+    base = {'user_id': 'u1', 'pairing_code': None, 'paired': 1, 'held': 0, 'confirmed': 1, 'failures': 0,
+            'last_pull': None, 'last_success': None, 'failing_since': None, 'next_attempt': None, 'last_problem': None}
+    pull, push = {'endpoint': None, 'delivery': 'pull'}, {'endpoint': 'https://pat.example:7437'}
+    lines = describe_connections([
+        {**base, 'name': 'Mo', 'card': pull, 'mode': 'pull', 'last_pull': 1000 - 300},
+        {**base, 'name': 'Kai', 'card': pull, 'mode': 'pull'},
+        {**base, 'name': 'Pat', 'card': push, 'mode': 'push', 'failures': 3, 'failing_since': 1000 - 7200,
+         'next_attempt': 1000 + 240, 'last_problem': 'certificate differs'},
+        {**base, 'name': 'Sam', 'card': push, 'mode': 'push', 'last_success': 1000 - 60},
+        {**base, 'name': 'Ann', 'card': push, 'mode': 'push'},
+    ], now=1000).splitlines()
+    assert [line.split('; ', 1)[1] for line in lines] == [
+        'last pull 5 min ago', 'no pull yet',
+        'failing for 2 h, 3 failures, next attempt in 4 min, certificate differs',
+        'last delivered 1 min ago', 'nothing delivered yet']
+
 def test_card_pull_is_refused_on_a_store_paired_before_any_card(tmp_path):
     """SF6: paired through `pair` before any card, it has a peers row, no identity.json and no mode."""
     from superyak_peer.__main__ import admin_account, federation_here
