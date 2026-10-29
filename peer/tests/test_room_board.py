@@ -878,6 +878,31 @@ def test_the_carry_leaves_claims_that_are_not_on_open_items(env):
     assert claims(s.andy, new) == []
 
 
+def test_a_message_to_a_replaced_room_is_refused_and_a_retry_still_replays(env):
+    """fix:send-message-refuses-replaced-room: once an add has replaced a room, a new message to it gets 409 before
+    anything is written, as an add or a board write does, so nobody posts where the members have moved on. A retry
+    of a message sent before the replacement still answers as the replay it is, and the room that continues it
+    takes messages. A non-member still learns nothing (404 first)."""
+    s = Station(env)
+    sent = s.andy.post(f'/api/chats/{s.room}/messages', json={'client_message_id': 'before', 'body': 'before the add'})
+    assert sent.status_code == 201
+    current = add_member(s, s.room)
+    tables = ('messages', 'room_activity', 'events')
+    before = {t: s.rows(f'SELECT * FROM {t} ORDER BY rowid') for t in tables}
+
+    def send(client, room, client_id, body):
+        return client.post(f'/api/chats/{room}/messages', json={'client_message_id': client_id, 'body': body})
+    assert refused(send(s.andy, s.room, 'after', 'after the add')) == (
+        409, 'This room was replaced by a newer linked room; post in the room that continues it')
+    assert refused(send(s.ship('serenity'), s.room, 'after', 'a ship too')) == (
+        409, 'This room was replaced by a newer linked room; post in the room that continues it')
+    assert refused(send(s.outsider, s.room, 'after', 'not a member')) == (404, 'Not found')
+    assert {t: s.rows(f'SELECT * FROM {t} ORDER BY rowid') for t in tables} == before
+    retry = send(s.andy, s.room, 'before', 'before the add')
+    assert retry.status_code == 201 and retry.json()['replayed'] is True
+    assert send(s.andy, current, 'after', 'in the room that continues it').status_code == 201
+
+
 def test_adding_members_to_a_replaced_room_is_refused(env):
     """Final review (Serenity F2): once an add has replaced a room, adding members to it again gets 409 before anything
     is written, so the replacement chain never forks. Without it a second add would make a second current room beside

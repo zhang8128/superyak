@@ -227,7 +227,9 @@ def test_the_oldest_grant_is_charged_and_the_next_when_it_has_no_budget(env, mon
 
 def test_a_grant_naming_a_room_follows_it_forward_and_never_builds_in_a_replaced_room(env):
     """Test 16 and spec Review Focus 3: X becomes X' and then X'' as members are added; a grant naming X builds in each
-    current room, and a mention in X or X', once replaced, reads. A linked_room_id cycle made by hand ends the walk."""
+    current room, and a mention posted in X or X' while current, asked once it is replaced, reads. A new message to a
+    replaced room is refused (fix:send-message-refuses-replaced-room). A linked_room_id cycle made by hand ends the
+    walk."""
     app, clients, users, clock = env
     store = app.state.store
     patient, doctor, organizer, family = users
@@ -237,11 +239,15 @@ def test_a_grant_naming_a_room_follows_it_forward_and_never_builds_in_a_replaced
     early = mention(store, doctor, x, serenity)  # posted while X was current, asked once it is replaced
     x1 = store.add_participants(patient['id'], x, [family['id']])['id']
     assert decide(store, serenity, mention(store, doctor, x1, serenity)) == ('build', 'grant')
+    early1 = mention(store, doctor, x1, serenity)  # posted while X' was current, asked once it is replaced
     x2 = store.add_participants(patient['id'], x1, [organizer['id']])['id']
     assert decide(store, serenity, mention(store, doctor, x2, serenity)) == ('build', 'grant')
     assert decide(store, serenity, early) == ('read', 'none')
-    assert decide(store, serenity, mention(store, doctor, x, serenity)) == ('read', 'none')
-    assert decide(store, serenity, mention(store, doctor, x1, serenity)) == ('read', 'none')
+    assert decide(store, serenity, early1) == ('read', 'none')
+    for replaced in (x, x1):
+        with pytest.raises(Problem) as caught:
+            mention(store, doctor, replaced, serenity)
+        assert caught.value.status == 409
     loop_a, loop_b = room(store, patient, 'Loop A', doctor), room(store, patient, 'Loop B', doctor)
     looped = room(store, patient, 'Looped', doctor, serenity)
     with store.transaction() as db:  # Looped replaced Loop A, which replaced Loop B, which replaced Loop A

@@ -252,6 +252,22 @@ def test_notices_go_to_the_most_recently_active_local_ops_room_never_a_remote_on
     assert bodies(fake, remote) == ['the most recent message of all, but on someone else\'s station']
 
 
+def test_notices_skip_an_ops_room_that_a_newer_one_replaced(station, tmp_path):
+    """fix:send-message-refuses-replaced-room: the station refuses a message to a replaced room, so notices go to the
+    current Ops even when the replaced one was busier last. Otherwise every notice would wait until someone spoke in
+    the new room."""
+    fake, andy, jenn, serenity = station
+    odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')
+    old = fake.room('Ops', andy, odo)
+    current = fake.room('Ops', andy, odo, linked_room_id=old)
+    fake.say(old, andy, 'the last word before the add')
+    config = {'station': 'http://station.test', 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': 'odo-key', 'workspace': str(tmp_path)}
+    w = watcher(fake, config, tmp_path, FakeRunner(), key='odo-key', notices_command=notices_command({'id': 'access-1', 'text': 'Jenn is asking to come aboard.'}))
+    assert w.cycle() == 1
+    assert bodies(fake, current) == ['Jenn is asking to come aboard.']
+    assert bodies(fake, old) == ['the last word before the add']
+
+
 def test_notices_wait_when_the_only_ops_room_is_remote(station, tmp_path):
     fake, andy, jenn, serenity = station
     odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')

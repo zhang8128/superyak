@@ -2529,6 +2529,32 @@ def test_a_replaced_room_offers_no_add_and_a_stale_add_says_why(browser_peer):
             expect(page.get_by_role("button", name="Change participants")).to_be_visible()
 
 
+def test_a_replaced_room_takes_no_message_and_keeps_the_unsent_text(browser_peer):
+    """fix:send-message-refuses-replaced-room: once another tab's add replaces the room, the page shows no composer,
+    only where to post and the unsent text to copy; the station would answer 409 (test_room_board pins it). The room
+    that continues it takes the message."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "Care planning", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("textbox", name="Message", exact=True).fill("Typed before the add.")
+            replacement = store.add_participants(patient, room["id"], [users["organizer"]["id"]])  # another tab
+            page.reload()
+            expect(page.get_by_text("This room was replaced by a newer linked room; post in the room that continues it.")).to_be_visible()
+            expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_count(0)
+            expect(page.get_by_role("button", name="Send message")).to_have_count(0)
+            expect(page.locator("pre.draft-kept")).to_have_text("Typed before the add.")
+            assert [m["body"] for m in store.get_room(patient, room["id"])["messages"]] == []
+            page.goto(f"{base}/#chats/{replacement['id']}")
+            page.reload()
+            page.get_by_role("textbox", name="Message", exact=True).fill("In the room that continues it.")
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator("#chat-status")).to_have_text("Message saved")
+
+
 def test_the_brief_editor_saves_4000_emoji_and_shows_the_limit_past_it(browser_peer):
     """Review focus: a browser's maxlength counts UTF-16 units, so the editor has none and shows the station's limit."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]

@@ -11,6 +11,7 @@ REPLACED_ROOMS = 'SELECT linked_room_id FROM rooms WHERE linked_room_id IS NOT N
 BRIEF_CHANGED = 'The room brief changed since you looked at it; look again before carrying it'
 REPLACED_ADD = 'This room was replaced by a newer linked room; add members there'
 REPLACED_REMOVE = 'This room was replaced by a newer linked room; remove members there'
+REPLACED_SEND = 'This room was replaced by a newer linked room; post in the room that continues it'
 
 class Problem(Exception):
     def __init__(self, status, message, *, keep=False):
