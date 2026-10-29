@@ -1,7 +1,7 @@
-"""Remote connector, Task 8: the four read-only tools and their receipts (spec "The tools", D11; "Receipts and revoking",
-D4). Each tool builds its own result from the fields the spec lists and never passes a room object through. It reads
-only rooms on this home that are in the grant's set, that the person is still a member of and that aren't marked,
-checked at every read. Every call writes one receipt: room ids, never text and never an argument."""
+"""Remote connector, Task 8: the four read-only tools and their receipts (spec "The tools", D11; "Receipts and
+revoking", D4). Each tool builds its own result from the fields the spec lists and never passes a room object through.
+It reads only rooms on this home that are in the grant's set, that the person is still a member of and that aren't
+marked, checked at every read. Every call writes one receipt: room ids, never text and never an argument."""
 import json
 import math
 import secrets
@@ -17,9 +17,9 @@ CREATE TABLE IF NOT EXISTS connector_reads(id TEXT PRIMARY KEY, grant_id TEXT NO
 CREATE INDEX IF NOT EXISTS connector_reads_by_grant ON connector_reads(grant_id, at);
 '''
 # connector_reads: one row per tools/call. `rooms_read` is a JSON list of room ids and `rooms_refused` a JSON list of
-# {room, why}, a room recorded only when the person is in it; `outcome` is ok, refused or failed. It names its person and
-# app (the redirect host) itself and has no foreign key to connector_grants, so a receipt whose grant a restore removed
-# can still be shown on its own (Rio Grande and Tardis, on the restore design).
+# {room, why}, a room recorded only when the person is in it; `outcome` is ok, refused or failed. It names its person
+# and app (the redirect host) itself and has no foreign key to connector_grants, so a receipt whose grant a restore
+# removed can still be shown on its own (Rio Grande and Tardis, on the restore design).
 
 REFUSALS = {
     'marked': 'A member of this room keeps it away from cloud models.',
@@ -52,6 +52,7 @@ BAD_QUERY = '`query` must be text of 1 to 200 characters.'
 TEXT_CAP = 100_000  # characters of a result's JSON (Claude takes about 150,000); cut at a message or room boundary
 QUERY_SECONDS = 5  # SQLite's progress handler ends a connector query past this: it holds the store's lock while it runs
 DEFAULT_LIMIT, MAX_LIMIT = 30, 100
+CURSOR_MAX = 10 ** 15 - 1  # app.py's paging takes at most 15 digits; a larger one overflowed SQLite's integer (a 500)
 CALLS_PER_MINUTE, CALLS_PER_DAY = 60, 2000  # tools/call per grant (spec "Limits"); the other methods don't count
 
 
@@ -240,7 +241,7 @@ class ConnectorReads:
         limit, before, since = args.get('limit', DEFAULT_LIMIT), args.get('before'), args.get('since')
         if not whole(limit, 1, MAX_LIMIT):
             raise ToolRefused(BAD_LIMIT)
-        if (before is not None and since is not None) or not all(v is None or whole(v, 0) for v in (before, since)):
+        if (before is not None and since is not None) or not all(v is None or whole(v, 0, CURSOR_MAX) for v in (before, since)):
             raise ToolRefused(BAD_CURSOR)
         order = self._message_order(db, room_id)
         total, room_seq = len(order), self._room_seq(db, room_id)

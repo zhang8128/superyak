@@ -467,3 +467,33 @@ def test_a_paired_homes_message_is_activity(connected):
     remote_says(connected, connected.rooms[1], 'latest, from afar')
     rooms = ok(call(connected, 'rooms'))['rooms']
     assert rooms[0]['room'] == connected.rooms[1] and rooms[0]['last_activity'] == '1970-01-12T13:55:00Z'
+
+
+# ---- a hostile-input pass (Serenity's after-action review, 2026-10-29: mutants find untested lines, not inputs) ----
+
+HOSTILE = [[], {}, True, False, None, 1.5, -1, 0, 10 ** 30, 10 ** 15, '', ' ', 'x' * 10000, '%', '_', chr(92), ':',
+           'a:b', '../x', {'$gt': ''}, [1, 2], 'NaN', chr(0), chr(0x202e), '<script>']  # a backslash, NUL, RTL override
+FIELDS = {'rooms': ['extra'], 'read_room': ['room', 'limit', 'before', 'since'], 'search': ['query'], 'fetch': ['id']}
+
+
+def test_no_hostile_argument_is_a_500(connected):
+    """Every field an outside caller sets, sent each wrong type, empty, huge and odd: a result or a refusal, never a
+    500. The first pass found `since=10**30`, which overflowed SQLite's integer."""
+    bad = []
+    for tool, fields in FIELDS.items():
+        base = {'read_room': {'room': connected.rooms[0]}, 'search': {'query': 'x'}, 'fetch': {'id': 'x'}}.get(tool, {})
+        for field in fields:
+            for value in HOSTILE:
+                connected.clock[0] += 2  # under the minute's 60
+                answer = mcp(connected, rpc('tools/call', {'name': tool, 'arguments': base | {field: value}}),
+                             connected.tokens['access_token'], raise_server_exceptions=False)
+                if answer.status_code != 200 or 'result' not in answer.json():
+                    bad.append((tool, field, repr(value)[:30], answer.status_code))
+    assert bad == []
+
+
+def test_a_cursor_past_15_digits_is_refused_as_the_station_does(connected):
+    """app.py's paging takes at most 15 digits; read_room's cursors take the same bound, below SQLite's integer."""
+    for field in ('before', 'since'):
+        assert refused(call(connected, 'read_room', room=connected.rooms[0], **{field: 10 ** 15}))
+    assert ok(call(connected, 'read_room', room=connected.rooms[0], since=10 ** 15 - 1))['messages'] == []
