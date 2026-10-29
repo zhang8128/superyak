@@ -118,6 +118,11 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    **Marks that keep a room away from cloud models.** With a usable replaced file, every mark it holds is kept in the copy,
    one cleared since the copy included (failing closed), and the report counts them as "cloud marks kept". Without one,
    marks set since the copy are gone, and the report says so: see step 7.
+   **Connections to Claude and other apps.** A connection is access, so with a usable replaced file each one the copy has
+   takes the replaced file's revoke, its earlier end and its narrower rooms, and one it no longer has, or whose rooms the
+   two files don't share, is revoked; the connector key is the replaced file's when the two differ. Without one, every
+   connection is revoked and the connector key is made new. The report counts them and lists each revoked connection.
+   Every pending connector sign-in is cleared either way, so someone mid-consent starts over.
    Without a usable replaced file nothing is unpaired and nothing is held. That includes a peer you cut off and partly
    paired again since the copy: name it in `UNPAIR=` too, then pair again the participants you meant to keep, each with
    its own code. List the peers paired in the staged copy (read-only; the
@@ -181,7 +186,8 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    still wanted. Tell the owners of ships whose keys were revoked to dock again. Ask the issuers of the grants the report lists as missing from the replaced file, or revoked with no usable replaced file, to make again any still wanted; a grant made after the copy is gone too. Requests and dockings since the copy
    were expired; their senders ask again, and nothing is approved from memory. If the report says marks set since the
    copy were not kept, ask the members of the rooms that matter to check their "never to a cloud model" marks in the
-   browser before any ship is added to those rooms. The peers the report says it
+   browser before any ship is added to those rooms. Tell the people whose connections the report lists as revoked to
+   connect again from their app if they still want it; a connection made after the copy is gone too. The peers the report says it
    unpaired need nothing more; pair again, in the browser after the start, only a peer you want that the report lists as
    paired in the replaced file but not here. If your own account comes back waiting for
    activation, renew it (the file must not exist yet; the command writes it mode 0600, and the link is never put in a
