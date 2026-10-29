@@ -23,6 +23,7 @@ PACKAGE = Path(superyak_peer.app.__file__).parent
 IDENTITY = {'actor', 'member', 'ship_member', 'current_user'}
 SERVICES = {'store', 'fed', 'manager', 'sources'}  # the names route modules reach the store through
 ON_THE_LOOP = {'store.inbox_wait_slot'}  # an in-memory count of a ship's waits, with no store read
+HANDOFFS = {'run_in_threadpool', 'asyncio.to_thread'}  # by exact name: a function of the package's own is no handoff
 
 
 def dotted(node):
@@ -83,12 +84,16 @@ def calls_in(node, skip_nested=False):
         name = dotted(node.func) if isinstance(node, ast.Call) else None
         if name is not None:
             yield node.lineno, name
-        handed_over = name is not None and name.endswith(('run_in_threadpool', 'to_thread'))
+        handed_over = skip_nested and name in HANDOFFS
         stack.extend(child for child in ast.iter_child_nodes(node) if not (handed_over and isinstance(child, ast.Lambda)))
 
 
-@functools.lru_cache(maxsize=None)
 def facts(source):
+    return _facts(source, frozenset(SERVICES), HELD_AT, frozenset(ON_THE_LOOP), frozenset(HANDOFFS))
+
+
+@functools.lru_cache(maxsize=None)
+def _facts(source, *_globals):
     """What the walk needs from one module, read once per source: its service names, each sync function's calls (a
     method is called as `self.<name>`), its sibling imports (module, name, local name) and each async function's calls
     on the loop."""
@@ -98,7 +103,7 @@ def facts(source):
     sync = [('self.' + node.name if id(node) in methods else node.name, frozenset(name for _, name in calls_in(node)))
             for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
     imports = [(node.module, alias.name, alias.asname or alias.name) for node in ast.walk(tree)
-               if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module for alias in node.names]
+               if isinstance(node, ast.ImportFrom) and node.level == 1 for alias in node.names]
     loops = [(node.name, tuple(calls_in(node, skip_nested=True))) for node in ast.walk(tree)
              if isinstance(node, ast.AsyncFunctionDef)]
     return frozenset(services_in(tree)), tuple(sync), tuple(imports), tuple(loops)
@@ -127,8 +132,10 @@ def calls_on_the_loop(read=Path.read_text):
     blocking = {path: blocking_helpers(known[0], known[1]) for path, known in modules.items()}
     for _ in range(3):  # a helper imported from a sibling module, under any local name, counts as blocking there too
         for path, (services, sync, imports, _) in modules.items():
-            imported = {local for module, name, local in imports
-                        if name in blocking.get(path.parent / f'{module.replace(".", "/")}.py', set())}
+            imported = {local for module, name, local in imports if module
+                        and name in blocking.get(path.parent / f'{module.replace(".", "/")}.py', set())}
+            imported |= {f'{local}.{helper}' for module, name, local in imports if module is None  # `from . import m`
+                         for helper in blocking.get(path.parent / f'{name}.py', set()) if '.' not in helper}
             blocking[path] = blocking_helpers(services, sync, imported)
     found = []
     for path, (services, _, _, loops) in modules.items():
@@ -224,6 +231,31 @@ def test_a_lambda_handed_to_asyncio_to_thread_is_off_the_loop():
     assert not [found for found in calls_on_the_loop(read) if found[1] == 'chat_board_drop']
 
 
+def test_a_lambda_handed_to_a_function_of_our_own_is_on_the_loop():
+    """Only run_in_threadpool and asyncio.to_thread hand work over: a package function ending in `to_thread` runs
+    its argument where it's called (the guard-nits review's must-fix)."""
+    read = reading('app.py',
+                   ('def actor(request):\n', 'def hand_to_thread(work):\n    return work()\n\n\ndef actor(request):\n'),
+                   ("return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
+                    "return hand_to_thread(lambda: store.drop_item(who, key, data.get('key')))"))
+    assert ('app.py', 'chat_board_drop', 'store.drop_item') in {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
+
+
+def test_a_nested_function_handed_to_the_threadpool_is_off_the_loop():
+    read = reading('app.py', ("return await run_in_threadpool(store.drop_item, who, key, data.get('key'))",
+                              "def work():\n            return store.drop_item(who, key, data.get('key'))\n"
+                              "        return await run_in_threadpool(work)"))
+    assert not [found for found in calls_on_the_loop(read) if found[1] == 'chat_board_drop']
+
+
+def test_a_helper_reached_through_an_imported_sibling_module_is_seen():
+    read = reading('app.py', ('from .agent_version import agent_update\n',
+                              'from .agent_version import agent_update\nfrom . import peer_routes as pr\n'),
+                   ('            return await run_in_threadpool(store.shorten_imprint, ',
+                    '            pr.sign_first(store)\n            return await run_in_threadpool(store.shorten_imprint, '))
+    assert ('app.py', 'imprint_shorten', 'pr.sign_first') in {(m, f, n) for m, f, _, n in calls_on_the_loop(read)}
+
+
 def test_a_loop_object_on_app_state_is_not_the_store():
     """federation-pull's wake is an asyncio.Event on app.state: setting it on the loop is right, and isn't flagged."""
     def read(path):
@@ -251,8 +283,17 @@ def routes_of(app):
             yield from (inner for inner in route.original_router.routes if isinstance(inner, APIRoute))
 
 
-def anonymous_answers(app, origin):
-    """Each async write route's answer to an anonymous caller sending a body that isn't JSON, and the endpoints seen."""
+def anonymous_answers(app, origin, monkeypatch):
+    """Each async write route's answer to an anonymous caller sending a body that isn't JSON, whether the route read
+    the body before answering, and the endpoints seen. Every route-level read (body(), json(), form(), a hand parse)
+    goes through Request.stream; the size bound below the routes reads at the ASGI level, so it isn't counted."""
+    from starlette.requests import Request
+    reads, real = [], Request.stream
+
+    def watched(self):
+        reads.append(self.url.path)
+        return real(self)
+    monkeypatch.setattr(Request, 'stream', watched)
     anonymous = TestClient(app, base_url=origin, headers={'origin': origin},
                            client=('127.0.0.1', 50000))  # tailnet, so PublicRoute lets it reach the route
     answers, seen = {}, set()
@@ -264,29 +305,32 @@ def anonymous_answers(app, origin):
                 seen.add(route.endpoint.__name__)
                 continue
             url = re.sub(r'\{[^}]+\}', '1', route.path)
+            reads.clear()
             response = anonymous.request(method, url, content=b'not json', headers={'content-type': 'application/json'})
-            answers[(method, route.path)] = response.status_code
+            answers[(method, route.path)] = (response.status_code, bool(reads))
             seen.add(route.endpoint.__name__)
     return answers, seen
 
 
-def test_every_async_write_checks_identity_before_it_reads_the_body(tmp_path):
-    """Anonymous, with a body that isn't JSON: a route that reads the body first answers 400, not 401 or 403. The app
-    has the imprint routes on, and the peer router's routes are walked too."""
+def test_every_async_write_checks_identity_before_it_reads_the_body(tmp_path, monkeypatch):
+    """Anonymous, with a body that isn't JSON: each route refuses (401 or 403) without reading its body. A route that
+    reads first answers 400 to the JSON, or reads a form and then refuses; either fails here. The app has the imprint
+    routes on, and the peer router's routes are walked too."""
     app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver'], imprints_dir=tmp_path / 'imprints')
-    answers, seen = anonymous_answers(app, 'http://testserver')
+    answers, seen = anonymous_answers(app, 'http://testserver', monkeypatch)
     assert {'ship_brief', 'chat_send', 'grant_make', 'assist', 'preview', 'pair', 'sync', 'imprint_part'} <= seen
-    assert {route: status for route, status in answers.items() if status not in (401, 403)} == {}
+    assert {route: answer for route, answer in answers.items() if answer[0] not in (401, 403) or answer[1]} == {}
 
 
-def test_the_connector_routes_are_walked_too(tmp_path):
-    """Tardis's forward point: with the connector on, its routes join the walk, so a route Task 5 adds that takes a
-    session (/authorize/decision) is held to identity before the body the day it becomes async."""
+def test_the_connector_routes_are_walked_too(tmp_path, monkeypatch):
+    """Tardis's forward point: with the connector on, its async write routes join the walk. Each one either takes no
+    identity by design and is listed in ANONYMOUS (`/register`, spec r4 D18), or refuses an anonymous caller without
+    reading its body. Today only /register is async; a route Task 5 makes async meets this the day it does."""
     origin = 'https://home.example'
     app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver', origin], public_origin=origin)
-    answers, seen = anonymous_answers(app, origin)
+    answers, seen = anonymous_answers(app, origin, monkeypatch)
     assert 'register' in seen
-    assert {route: status for route, status in answers.items() if status not in (401, 403)} == {}
+    assert {route: answer for route, answer in answers.items() if answer[0] not in (401, 403) or answer[1]} == {}
 
 
 def ship_client(app, key):
