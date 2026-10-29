@@ -1,16 +1,16 @@
 """The remote connector's routes, installed only with `serve --public-origin` (connector plan, Task 3). Each answers 404
 on any other origin, needs no session, and checks what it needs itself; none sends CORS headers. An async route here
-runs every identity check and store call in the threadpool, never on the event loop (fix:actor-off-the-event-loop); a sync one runs there anyway."""
+runs every identity check and store call in the threadpool, never on the event loop (fix:actor-off-the-event-loop); a
+sync one runs there anyway."""
 import json
 import math
-from collections import deque
 from urllib.parse import parse_qsl, urlencode
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from .common import Problem
+from .common import Problem, valid_utf8
 from .connector import (DAYS_MAX, REGISTER_BODY_MAX, STATE, OAuthError, RedirectError, ToolRefused, check_callback,
                         issuer_metadata, resource_metadata)
 
@@ -27,8 +27,8 @@ REFUSED_PAGE = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><met
 NO_STORE = {'pragma': 'no-cache'}
 
 
-# ---- Task 7: /mcp (spec "`/mcp`: Streamable HTTP, by hand", D17). Stateless JSON-RPC: one message per POST, answered as
-# application/json, never SSE, with no MCP-Session-Id. ----
+# ---- Task 7: /mcp (spec "`/mcp`: Streamable HTTP, by hand", D17). Stateless JSON-RPC: one message per POST,
+# answered as application/json, never SSE, with no MCP-Session-Id. ----
 
 VERSIONS = ('2025-06-18', '2025-11-25')  # 2025-03-26 lacks structuredContent and requires batches
 LATEST, ASSUMED = '2025-11-25', '2025-06-18'  # MCP: a request without the header is taken as 2025-06-18
@@ -76,6 +76,11 @@ def rpc_error(id, code, message, status=200):
     return JSONResponse({'jsonrpc': '2.0', 'id': id, 'error': {'code': code, 'message': message}}, status)
 
 
+def as_text(value):
+    """The JSON a result's text holds: exactly what JSONResponse sends as structuredContent (the section 2's nit)."""
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, indent=None, separators=(',', ':'))
+
+
 def rpc_message(raw):
     """(the message, None) for one JSON-RPC 2.0 message as a JSON object, or (None, the 400 answer). A batch is
     refused: MCP 2025-06-18 removed them."""
@@ -83,6 +88,10 @@ def rpc_message(raw):
         message = json.loads(raw)
     except (ValueError, UnicodeDecodeError, RecursionError):
         return None, rpc_error(None, -32700, 'Parse error', 400)
+    try:  # an escaped lone surrogate parses, then no answer that echoes it can be encoded (the section 2's must-fix 2)
+        valid_utf8(message)
+    except (Problem, RecursionError):  # nesting json.loads takes, past what the check can walk
+        return None, rpc_error(None, -32600, 'Invalid request', 400)
     if not isinstance(message, dict) or message.get('jsonrpc') != '2.0':
         return None, rpc_error(None, -32600, 'Invalid request', 400)
     has_id = 'id' in message
@@ -98,21 +107,23 @@ def rpc_message(raw):
 
 class CallLimit:
     """tools/call a minute and a day per grant, kept on the event loop (one thread, so no lock) by the store's clock. A
-    refused call spends nothing. A restart forgets the counts: the limit bounds a runaway client, not a quota."""
+    refused call spends nothing. A restart forgets the counts: the limit bounds a runaway client, not a quota. A clock
+    set back leaves later times before earlier ones, so each window is read by its oldest time, never by position (the
+    section 2's S4: a wait read by position went negative); each wait is then above 0, since every time kept is inside
+    its window."""
 
     def __init__(self, clock):
         self.clock, self.calls = clock, {}
 
     def retry_after(self, grant_id):
         """None, and the call counted; or the whole seconds until one more fits."""
-        now, calls = self.clock(), self.calls.setdefault(grant_id, deque())
-        while calls and calls[0] <= now - 86400:
-            calls.popleft()
-        in_minute = sum(1 for when in calls if when > now - 60)
-        if len(calls) >= CALLS_PER_DAY:  # each wait is above 0: the oldest call kept is inside its window
-            return math.ceil(calls[0] + 86400 - now)
-        if in_minute >= CALLS_PER_MINUTE:
-            return math.ceil(calls[len(calls) - in_minute] + 60 - now)
+        now = self.clock()
+        calls = self.calls[grant_id] = [when for when in self.calls.get(grant_id, ()) if when > now - 86400]
+        minute = [when for when in calls if when > now - 60]
+        if len(calls) >= CALLS_PER_DAY:
+            return math.ceil(min(calls) + 86400 - now)
+        if len(minute) >= CALLS_PER_MINUTE:
+            return math.ceil(min(minute) + 60 - now)
         calls.append(now)
         return None
 
@@ -306,9 +317,9 @@ def install(app, public_origin, callback):
         sent = request.headers.get('authorization')
         scheme, _, presented = (sent or '').partition(' ')
         grant = await run_in_threadpool(store.bearer, presented, resource) if scheme.lower() == 'bearer' else None
-        if grant is None:
+        if grant is None:  # RFC 6750 3.1: no error code without a bearer token (no header, or another scheme)
             return JSONResponse({'error': 'invalid_token'}, 401, headers={
-                'www-authenticate': challenge + (', error="invalid_token"' if sent is not None else '')})
+                'www-authenticate': challenge + (', error="invalid_token"' if scheme.lower() == 'bearer' else '')})
         if 'rooms.read' not in grant['scope'].split(' '):
             return JSONResponse({'error': 'insufficient_scope'}, 403,
                                 headers={'www-authenticate': challenge + ', error="insufficient_scope"'})
@@ -337,7 +348,7 @@ def install(app, public_origin, callback):
             return JSONResponse({'jsonrpc': '2.0', 'id': id, 'result': {'tools': TOOLS}})
         if method != 'tools/call':
             return rpc_error(id, -32601, 'Method not found')
-        if (not isinstance(params, dict) or params.get('name') not in TOOL_NAMES
+        if (not isinstance(params, dict) or not isinstance(params.get('name'), str) or params['name'] not in TOOL_NAMES
                 or not isinstance(params.get('arguments', {}), dict)):
             return rpc_error(id, -32602, 'Invalid params')
         wait = limit.retry_after(grant['grant_id'])
@@ -349,7 +360,7 @@ def install(app, public_origin, callback):
             return JSONResponse({'jsonrpc': '2.0', 'id': id, 'result': {
                 'content': [{'type': 'text', 'text': str(refusal)}], 'isError': True}})
         return JSONResponse({'jsonrpc': '2.0', 'id': id, 'result': {
-            'content': [{'type': 'text', 'text': json.dumps(result)}], 'structuredContent': result, 'isError': False}})
+            'content': [{'type': 'text', 'text': as_text(result)}], 'structuredContent': result, 'isError': False}})
 
     def not_allowed(request: Request):
         """GET (an SSE stream) and DELETE (ending a session): a stateless home has neither (spec)."""

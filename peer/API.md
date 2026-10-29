@@ -430,15 +430,15 @@ Origin; the consent page's posts keep it.
   never SSE, with no `MCP-Session-Id`; `GET` and `DELETE` are 405. Checked in order: an `Origin` other than the public
   origin is 403; a missing, unknown, expired or revoked access token (or a ship key, or a session cookie) is 401 with
   `WWW-Authenticate: Bearer resource_metadata="<public origin>/.well-known/oauth-protected-resource/mcp",
-  scope="rooms.read"`, plus `error="invalid_token"` when an `Authorization` header was sent; a token without
+  scope="rooms.read"`, plus `error="invalid_token"` when a bearer token was sent (RFC 6750 3.1); a token without
   `rooms.read` is 403 with `error="insufficient_scope"`; an `MCP-Protocol-Version` other than `2025-06-18` or
   `2025-11-25` is 400 (none is taken as `2025-06-18`); a body over 64 KB is 413. Methods: `initialize` (answers the
   client's version when it is one of the two, else `2025-11-25`), `ping`, `tools/list`, `tools/call`; a notification
   or a response is 202 with no body; anything else is JSON-RPC `-32601`, a bad `tools/call` `-32602`, and a body that
-  isn't one JSON-RPC message 400 with `-32700` or `-32600`. `tools/call` is limited to 60 a minute and 2,000 a day per
-  connection: over either, 429 with `Retry-After`. A result carries `structuredContent` and the same JSON as text; a
-  refusal is a result with `isError: true` and one sentence. The four tools (`rooms`, `read_room`, `search`, `fetch`)
-  are read-only.
+  isn't one JSON-RPC message (an escaped lone surrogate included) 400 with `-32700` or `-32600`. `tools/call` is limited
+  to 60 a minute and 2,000 a day per connection: over either, 429 with `Retry-After`. A result carries
+  `structuredContent` and the same JSON as text; a refusal is a result with `isError: true` and one sentence. The four
+  tools (`rooms`, `read_room`, `search`, `fetch`) are read-only.
 
 ## Grants
 

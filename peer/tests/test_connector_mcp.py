@@ -33,7 +33,7 @@ def test_initialize_list_call_ping_and_initialized(connected):
     called = mcp(connected, rpc('tools/call', {'name': 'rooms', 'arguments': {}}, id='three'), access(connected)).json()
     assert called['id'] == 'three' and called['result']['isError'] is False
     assert called['result']['structuredContent'] == {'ok': True}  # Task 8's tools; a stub here
-    assert called['result']['content'] == [{'type': 'text', 'text': '{"ok": true}'}]
+    assert called['result']['content'] == [{'type': 'text', 'text': '{"ok":true}'}]  # as structuredContent is sent
     assert mcp(connected, rpc('ping', id=4), access(connected)).json() == {'jsonrpc': '2.0', 'id': 4, 'result': {}}
 
 
@@ -70,7 +70,7 @@ def test_no_token_and_a_bad_token_get_the_challenge(home):
         bad = mcp(home, INITIALIZE, token)
         assert bad.status_code == 401 and bad.headers['www-authenticate'] == CHALLENGE + ', error="invalid_token"', token
     basic = public_client(home.app, authorization='Basic c2FtOnB3').post('/mcp', json=INITIALIZE)
-    assert basic.headers['www-authenticate'] == CHALLENGE + ', error="invalid_token"'
+    assert basic.headers['www-authenticate'] == CHALLENGE  # RFC 6750 3.1: no error code for another scheme
 
 
 def test_a_ship_key_or_a_session_cookie_at_mcp_gets_401(home):
@@ -90,7 +90,7 @@ def test_a_connector_token_opens_no_other_route(connected):
     client = TestClient(connected.app, base_url='http://testserver',
                         headers={'origin': 'http://testserver', 'authorization': f'Bearer {access(connected)}'})
     assert client.get('/api/chats').status_code == 401
-    assert client.get('/api/me').status_code in (401, 403)
+    assert client.get('/api/me').status_code == 401
 
 
 def test_a_foreign_origin_gets_403(connected):
@@ -106,6 +106,11 @@ def test_the_bearer_scheme_is_any_case_and_one_space(connected):
                            (f'Bearer  {access(connected)}', 401), (f'Token {access(connected)}', 401)):
         response = public_client(connected.app, authorization=header).post('/mcp', json=INITIALIZE)
         assert response.status_code == status, header
+
+
+def test_the_token_is_checked_before_the_version_header(home):
+    refused = mcp(home, rpc('ping'), **{'mcp-protocol-version': 'banana'})
+    assert refused.status_code == 401 and refused.headers['www-authenticate'] == CHALLENGE
 
 
 def test_a_foreign_origin_is_refused_before_the_token_is_looked_at(connected):
@@ -162,10 +167,38 @@ def test_the_wait_counts_from_the_oldest_call_in_the_minute(connected):
     for _ in range(10):
         mcp(connected, call, access(connected))
     connected.clock[0] += 100  # those ten are outside the minute now, but still in the day
+    for _ in range(30):
+        mcp(connected, call, access(connected))
+    connected.clock[0] += 10
+    for _ in range(30):
+        mcp(connected, call, access(connected))
+    connected.clock[0] += 5
+    assert mcp(connected, call, access(connected)).headers['retry-after'] == '45'  # from the oldest; the newest is 55
+
+
+def test_retry_after_rounds_up(connected):
+    call = rpc('tools/call', {'name': 'rooms', 'arguments': {}})
+    connected.clock[0] += 0.5
     for _ in range(60):
         mcp(connected, call, access(connected))
-    connected.clock[0] += 15
-    assert mcp(connected, call, access(connected)).headers['retry-after'] == '45'
+    connected.clock[0] += 19.5
+    assert mcp(connected, call, access(connected)).headers['retry-after'] == '41'  # 40.5 s, up
+
+
+def test_retry_after_stays_positive_when_the_clock_steps_back(connected):
+    """The section 2's S4: a clock set back leaves later times before earlier ones, so a wait read by position went
+    negative (-41 in the reader's probe). Each window is read by its oldest time, so the wait is never below 1 s."""
+    call = rpc('tools/call', {'name': 'rooms', 'arguments': {}})
+    start = connected.clock[0]
+    connected.clock[0] = start + 200  # the clock runs ahead
+    for _ in range(59):
+        mcp(connected, call, access(connected))
+    connected.clock[0] = start  # and is set back
+    assert mcp(connected, call, access(connected)).status_code == 200
+    connected.clock[0] = start + 65
+    assert mcp(connected, call, access(connected)).status_code == 200
+    over = mcp(connected, call, access(connected))
+    assert over.status_code == 429 and over.headers['retry-after'] == '60'
 
 
 def test_the_2001st_call_in_a_day_gets_429(connected):
@@ -182,13 +215,15 @@ def test_the_2001st_call_in_a_day_gets_429(connected):
 
 
 def test_a_refused_call_is_not_counted(connected):
-    """A 429 spends nothing, so a client that retries too soon isn't kept out longer."""
+    """A 429 spends nothing, so a client that retries too soon isn't kept out longer. The refused calls come 30 s after
+    the counted ones, so a limit that counted them would still refuse at the minute (the section 2's must-fix 3)."""
     call = rpc('tools/call', {'name': 'rooms', 'arguments': {}})
     for _ in range(60):
         mcp(connected, call, access(connected))
-    for _ in range(5):
+    connected.clock[0] += 30
+    for _ in range(60):
         assert mcp(connected, call, access(connected)).status_code == 429
-    connected.clock[0] += 60
+    connected.clock[0] += 30
     assert mcp(connected, call, access(connected)).status_code == 200
 
 
@@ -209,17 +244,22 @@ def test_each_grant_has_its_own_limit(connected):
     (b'{"jsonrpc": "2.0", "id": [1], "method": "ping"}', -32600),
     (b'{"jsonrpc": "2.0", "id": true, "method": "ping"}', -32600), (b'{"jsonrpc": "2.0", "id": null, "method": "ping"}', -32600),
     (b'{"jsonrpc": "2.0", "id": 1.5, "method": "ping"}', -32600), (b'{"jsonrpc": "2.0", "result": {}}', -32600),
+    # must-fix 2: an escaped lone surrogate anywhere, which no answer can echo, and nesting too deep to check
+    (b'{"jsonrpc": "2.0", "id": "\\ud800", "method": "ping"}', -32600),
+    (b'{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "search", "arguments": {"query": "\\udc00"}}}', -32600),
+    (b'{"jsonrpc": "2.0", "id": 1, "method": "ping", "params": ' + b'[' * 30000 + b']' * 30000 + b'}', None),
 ])
 def test_a_message_that_isnt_one_json_rpc_request_is_400(connected, raw, code):
     refused = mcp(connected, raw, access(connected))
-    assert refused.status_code == 400 and refused.json() == {'jsonrpc': '2.0', 'id': None,
-                                                             'error': {'code': code, 'message': refused.json()['error']['message']}}
+    assert refused.status_code == 400 and refused.json()['id'] is None and set(refused.json()) == {'jsonrpc', 'id', 'error'}
+    assert refused.json()['error']['code'] == code if code is not None else refused.json()['error']['code'] in (-32700, -32600)
 
 
 def test_an_unknown_method_or_tool_is_a_json_rpc_error(connected):
     unknown = mcp(connected, rpc('resources/list', id=9), access(connected))
     assert unknown.status_code == 200 and unknown.json()['error']['code'] == -32601 and unknown.json()['id'] == 9
-    for params in ({'name': 'post', 'arguments': {}}, {'arguments': {}}, {'name': 'rooms', 'arguments': []}, None, []):
+    for params in ({'name': 'post', 'arguments': {}}, {'arguments': {}}, {'name': 'rooms', 'arguments': []}, None, [],
+                   {'name': ['rooms']}, {'name': {'rooms': 1}}, {'name': 7}):  # must-fix 1: a list was a 500
         bad = mcp(connected, rpc('tools/call', params, id=10), access(connected)).json()
         assert bad['error']['code'] == -32602, params
 
