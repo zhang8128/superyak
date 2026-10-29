@@ -13,7 +13,7 @@ see: docs/checklists.md#merging-to-main-law-section-2
 - [ ] Pi suites pass (engram, peer, agent, as touched); a known failure is named and fails alike on main here. GitHub CI: a pushed head's before merge, main's after; red holds it unless known and boarded.
 - [ ] The `only-include` lists name every new module and test file (peer's and agent's are held by test_packaging; check others by hand); the package builds and imports in a clean venv.
 - [ ] The station database is backed up (`make station-backup`).
-- [ ] killer: Main is pushed once. The affected Pi services are restarted and checked, and a touched public route is probed from outside; if a check fails, revert and restart.
+- [ ] killer: Main is pushed once. The affected Pi services are restarted and checked, each stop read from the unit; a touched public route is probed from outside; if a check fails, revert and restart.
 - [ ] killer: A security fix is merged on the Pi, restarted and probed live before main is pushed, so its code is never public before the fix is live.
 - [ ] If it breaks at 3 a.m., what tells us, and who? Name the check: a dying unit alerts Odo in Ops; route-watch watches a route once its timer is installed; else say that nothing watches it yet.
 - [ ] The merge is announced in the room, and its board item is marked done.
