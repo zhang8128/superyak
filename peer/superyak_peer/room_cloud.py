@@ -6,9 +6,10 @@ make station-add-ship and make station-bridge all take). Adding members makes a 
 it in the same transaction. Only a marked room's view carries `cloud`, as only a breakout's carries `breakout`."""
 from .common import REPLACED_ROOMS, Problem
 
-ROOM_CLOUD_SCHEMA = '''
-CREATE TABLE IF NOT EXISTS room_cloud(room_id TEXT NOT NULL REFERENCES rooms(id), member_id TEXT NOT NULL REFERENCES users(id), set_at REAL NOT NULL, PRIMARY KEY(room_id, member_id));
-'''
+# One statement, so the restore reconcile can create it inside its own transaction (backups._keep_marks_like_replaced).
+ROOM_CLOUD_TABLE = ('CREATE TABLE IF NOT EXISTS room_cloud(room_id TEXT NOT NULL REFERENCES rooms(id), member_id TEXT NOT NULL '
+                    'REFERENCES users(id), set_at REAL NOT NULL, PRIMARY KEY(room_id, member_id))')
+ROOM_CLOUD_SCHEMA = ROOM_CLOUD_TABLE + ';\n'
 SHIPS_IN = 'This room has ships in it, and ships run on cloud models.'
 SHIPS_FIRST = SHIPS_IN + ' Remove them first.'
 ASK_OWNER = SHIPS_IN + ' Ask {owner} to remove them first.'

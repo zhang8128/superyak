@@ -619,6 +619,8 @@ def main(argv=None):
     serve.add_argument('--proxy-headers', action='store_true', help='Trust X-Forwarded-Proto/For from a loopback reverse proxy such as tailscale serve')
     serve.add_argument('--model-config', type=Path, help='Operator-owned approved local Gemma JSON configuration')
     serve.add_argument('--share-link-file', type=Path, help='Reusable Tailscale share link released once to approved requesters')
+    serve.add_argument('--public-origin', help="The remote connector's issuer: one of --origin, its public https name. Without it the connector's routes don't exist")
+    serve.add_argument('--connector-callback', help="The one redirect the connector accepts (default claude.ai's)")
     args = parser.parse_args(argv)
     try:
         if args.command == 'bootstrap-super-admin':
@@ -940,7 +942,8 @@ def main(argv=None):
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
             from .models import load_config
             model_config = load_config(args.model_config)
-            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=agent_version.load(), imprints_dir=args.imprints_dir)
+            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=agent_version.load(), imprints_dir=args.imprints_dir,
+                             public_origin=args.public_origin, connector_callback=args.connector_callback)
             # access_log=False as for the door (public route spec 4): an older dock client's poll still carries ?secret=
             uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None,
                         proxy_headers=args.proxy_headers, forwarded_allow_ips=TRUSTED_PROXY if args.proxy_headers else None, access_log=False)
