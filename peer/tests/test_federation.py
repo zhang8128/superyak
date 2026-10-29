@@ -1299,6 +1299,146 @@ def test_the_confirmation_is_for_the_card_connections_rebuilds(two_peers, monkey
     assert listed['card']['endpoint'] == 'https://localhost:7435' and listed['confirmed'] is True
 
 
+# Federation pull, plan Task 2: the mode, the mode rules in pair(), peer_delivery and its backfill
+
+def pull_peer(path, name='mac'):
+    """A store whose mode is pull, with an admin, and the v2 card its Federation exports."""
+    from superyak_peer.db import Store
+    from superyak_peer.federation import Federation
+    store = Store(path)
+    user = store.create_user(name, name.title(), 'a-long-password', is_admin=True)
+    store.claim_federation_mode('pull')
+    fed = Federation(store, endpoint=None)
+    return store, user['id'], fed
+
+
+def delivery_row(store, peer_id):
+    with store.transaction() as db:
+        row = db.execute('SELECT * FROM peer_delivery WHERE peer_id=?', (peer_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def test_the_federation_mode_is_written_once_and_the_same_mode_again_is_a_no_op(tmp_path):
+    """Plan P2 (review MF3): a re-export and every restart write the mode again, and must work; only a change is refused."""
+    from superyak_peer.db import Store
+    push, pull = Store(tmp_path / 'push'), Store(tmp_path / 'pull')
+    assert push.federation_mode() is None
+    for _ in range(2):
+        push.claim_federation_mode('push')
+        pull.claim_federation_mode('pull')
+    assert (push.federation_mode(), pull.federation_mode()) == ('push', 'pull')
+    with pytest.raises(ValueError, match='push'):
+        push.claim_federation_mode('pull')
+    with pytest.raises(ValueError, match='pull'):
+        pull.claim_federation_mode('push')
+    assert (Store(tmp_path / 'push').federation_mode(), Store(tmp_path / 'pull').federation_mode()) == ('push', 'pull')
+
+
+def test_serve_with_a_federation_endpoint_claims_push_at_every_start(tmp_path):
+    from superyak_peer.app import create_app
+    from superyak_peer.db import Store
+    endpoint = 'https://localhost:7435'
+    for _ in range(2):
+        create_app(tmp_path / 'push', allowed_origins=[endpoint], federation_endpoint=endpoint)
+    assert Store(tmp_path / 'push').federation_mode() == 'push'
+    Store(tmp_path / 'pull').claim_federation_mode('pull')
+    with pytest.raises(ValueError, match='pull'):
+        create_app(tmp_path / 'pull', allowed_origins=[endpoint], federation_endpoint=endpoint)
+
+
+def test_a_pull_peers_federation_exports_a_v2_card(tmp_path):
+    store, user, fed = pull_peer(tmp_path / 'mac')
+    card = fed.card(user)
+    assert (card['version'], card['endpoint'], card['delivery']) == (2, None, 'pull')
+
+
+def test_a_known_peer_cannot_change_its_delivery_mode(two_peers, tmp_path):
+    """Spec §2: a v1 prior card meets a v2 card of the same peer with 409, not a KeyError, and the other way round."""
+    from superyak_peer.db import Store
+    from superyak_peer.federation import Federation
+    a, b, _, _ = two_peers
+    pull = b[2].identity.card(None, {'id': b[1], 'name': 'Bob'}, delivery='pull')
+    with pytest.raises(Problem) as refused:
+        a[2].pair(a[1], pull, code=pairing_code(pull))
+    assert refused.value.status == 409
+    store, user, fed = pull_peer(tmp_path / 'mac')
+    here = Store(tmp_path / 'here')
+    admin = here.create_user('here', 'Here', 'a-long-password', is_admin=True)['id']
+    listener = Federation(here, endpoint='https://localhost:7437')
+    listener.pair(admin, fed.card(user), code=pairing_code(fed.card(user)))
+    v1 = fed.identity.card('https://localhost:7438', {'id': user, 'name': 'Mac'})
+    with pytest.raises(Problem) as refused:
+        listener.pair(admin, v1, code=pairing_code(v1))
+    assert refused.value.status == 409
+
+
+def test_a_pull_peer_refuses_a_pull_card(tmp_path):
+    _, user, fed = pull_peer(tmp_path / 'mac')
+    _, other, other_fed = pull_peer(tmp_path / 'laptop', 'laptop')
+    card = other_fed.card(other)
+    with pytest.raises(Problem) as refused:
+        fed.pair(user, card, code=pairing_code(card))
+    assert refused.value.status == 400
+
+
+def test_a_v1_card_is_stored_byte_identical(two_peers):
+    from superyak_peer.common import encode
+    a, b, _, _ = two_peers
+    card = b[2].card(b[1])
+    with a[0].transaction() as db:
+        stored = db.execute('SELECT card FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()[0]
+    assert stored == encode(card) and 'delivery' not in json.loads(stored)
+
+
+def test_pairing_records_the_peers_mode_and_a_re_pair_makes_it_due(two_peers, tmp_path):
+    """Plan P14: pair() upserts peer_delivery on both paths; a person re-pairing makes the peer due again."""
+    a, b, _, _ = two_peers
+    peer = b[2].identity.peer_id
+    assert delivery_row(a[0], peer) == {'peer_id': peer, 'mode': 'push', 'failures': 0, 'next_attempt': None,
+                                        'last_success': None, 'last_pull': None, 'failing_since': None, 'last_problem': None}
+    with a[0].transaction() as db:
+        db.execute("UPDATE peer_delivery SET failures=5, next_attempt=9e9, failing_since=1, last_problem='x' WHERE peer_id=?", (peer,))
+    a[2].pair(a[1], b[2].card(b[1]), code=pairing_code(b[2].card(b[1])))
+    row = delivery_row(a[0], peer)
+    assert (row['mode'], row['failures'], row['next_attempt'], row['failing_since']) == ('push', 0, None, None)
+    store, user, fed = pull_peer(tmp_path / 'mac')
+    a[2].pair(a[1], fed.card(user), code=pairing_code(fed.card(user)))
+    assert delivery_row(a[0], fed.identity.peer_id)['mode'] == 'pull'
+
+
+def test_every_start_backfills_peer_delivery_and_a_card_that_isnt_json_stops_nothing(two_peers, tmp_path):
+    """Spec §7 (check 3 MF2): pairings made before the upgrade, or restored from older copies, get their row at the
+    next start, with the mode from their card (plan nit 4: a stored card that isn't JSON must not stop the store)."""
+    from superyak_peer.db import Store
+    a, b, _, _ = two_peers
+    store, user, fed = pull_peer(tmp_path / 'mac')
+    a[2].pair(a[1], fed.card(user), code=pairing_code(fed.card(user)))
+    with a[0].transaction() as db:
+        db.execute('DELETE FROM peer_delivery')
+        db.execute("INSERT INTO peers VALUES(?, 'not json', 1)", ('d' * 64,))
+    reopened = Store(a[0].data_dir)
+    assert delivery_row(reopened, b[2].identity.peer_id)['mode'] == 'push'
+    assert delivery_row(reopened, fed.identity.peer_id)['mode'] == 'pull'
+    assert delivery_row(reopened, 'd' * 64) is None
+
+
+def test_main_s_federation_sql_still_runs_on_a_store_this_branch_opened(two_peers):
+    """Rollback (spec §9): pairing-code's pair() inserts, collect's outbox insert and sync_once's update."""
+    a, b, ca, _ = two_peers
+    card = b[2].card(b[1])
+    with a[0].transaction() as db:
+        db.execute('INSERT INTO peers VALUES(?,?,1) ON CONFLICT(peer_id) DO UPDATE SET paired=1', (card['peer_id'], json.dumps(card)))
+        db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?) ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name',
+                   ('remote_x', card['peer_id'], 'someone', 'Someone'))
+        db.execute('INSERT INTO pairing_confirmations VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET code=excluded.code, '
+                   'confirmed=excluded.confirmed', ('remote_x', '0' * 32, 1.0))
+        db.execute('INSERT OR IGNORE INTO outbox(id,event_seq,contact_id,resource_id,revision,action,metadata,status) '
+                   'VALUES(?,?,?,?,?,?,?,?)', ('row_x', 1, ca['id'], 'layer_x', 1, 'layer.release', '{}', 'pending'))
+        db.execute("UPDATE outbox SET status=?,attempts=attempts+1,next_attempt=? WHERE id=? AND status IN ('pending','failed')",
+                   ('failed', 2.0, 'row_x'))
+        assert tuple(db.execute("SELECT status, last_error FROM outbox WHERE id='row_x'").fetchone()) == ('failed', None)
+
+
 def main_s_unpair(store, peer_id):
     """Main's Federation.unpair, which knows nothing of holds or confirmations: what an unpair made before this branch,
     or after a rollback, leaves behind."""

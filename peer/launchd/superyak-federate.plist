@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Federation pull (plan SF10): federate on the Mac, a pull peer that only dials out. A template: Andy replaces
+     USER_HOME and PEER_DATA with full paths, copies it to ~/Library/LaunchAgents/, and loads it himself (station law
+     section 7: a ship never loads a launchd job). Restarted after a crash, never after a clean exit, at most every 30 s. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.superyak.federate</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>USER_HOME/superyak/peer/.venv/bin/python</string>
+    <string>-I</string>
+    <string>-m</string>
+    <string>superyak_peer</string>
+    <string>federate</string>
+    <string>--data-dir</string>
+    <string>PEER_DATA</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>USER_HOME/superyak/peer</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OPENBLAS_NUM_THREADS</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardErrorPath</key>
+  <string>USER_HOME/Library/Logs/superyak-federate.log</string>
+</dict>
+</plist>

@@ -24,12 +24,13 @@ def canonical(value):
     except (ValueError, TypeError, RecursionError, UnicodeError):
         raise Problem(400, 'Invalid canonical JSON') from None
 
-def parse(raw):
+def parse(raw, limit=MAX_ENVELOPE):
+    """Strict JSON to a dict. The limit is an envelope's, except where a caller names its own (a pull response)."""
     if isinstance(raw, dict):
         raw = canonical(raw)
     if isinstance(raw, str):
         raw = raw.encode()
-    if not isinstance(raw, bytes) or len(raw) > MAX_ENVELOPE:
+    if not isinstance(raw, bytes) or len(raw) > limit:
         raise Problem(413, 'Envelope too large')
     def pairs(items):
         result = {}
@@ -47,14 +48,24 @@ def parse(raw):
     except (ValueError, RecursionError, UnicodeError):
         raise Problem(400, 'Invalid envelope JSON') from None
 
+CARD_KEYS = frozenset({'version', 'peer_id', 'signing_key', 'certificate', 'fingerprint', 'endpoint', 'participant'})
+
 def validate_card(card):
+    """v1 exactly as before; v2 is v1's keys plus `delivery`, with no endpoint: version 2 means pull, and there is no
+    v2 push (federation-pull spec §2)."""
     try:
-        if set(card) != {'version', 'peer_id', 'signing_key', 'certificate', 'fingerprint', 'endpoint', 'participant'} or type(card['version']) is not int or card['version'] != 1:
+        if type(card['version']) is not int or card['version'] not in (1, 2):
             raise ValueError()
-        endpoint = text(card['endpoint'], 'endpoint', 2048)
-        url = urlsplit(endpoint)
-        if url.scheme != 'https' or not url.hostname or url.username or url.password or url.fragment or url.query or url.path or url.port == 0 or any(c.isspace() for c in endpoint):
-            raise ValueError()
+        if card['version'] == 2:
+            if set(card) != CARD_KEYS | {'delivery'} or card['endpoint'] is not None or card['delivery'] != 'pull':
+                raise ValueError()
+        else:
+            if set(card) != CARD_KEYS:
+                raise ValueError()
+            endpoint = text(card['endpoint'], 'endpoint', 2048)
+            url = urlsplit(endpoint)
+            if url.scheme != 'https' or not url.hostname or url.username or url.password or url.fragment or url.query or url.path or url.port == 0 or any(c.isspace() for c in endpoint):
+                raise ValueError()
         key = base64.b64decode(card['signing_key'], validate=True)
         ed25519.Ed25519PublicKey.from_public_bytes(key)
         if hashlib.sha256(key).hexdigest() != card['peer_id']:
@@ -88,6 +99,7 @@ def typed_code(typed):
 
 # Spec A step 3 (G3, G12): a signed record has exactly its kind's keys and names its station, so no record passes
 # as another kind, as a federation envelope (which has no record kind), or as another station's.
+# `pull` is reserved: it is the kind of a federation pull request (PULL_KEYS), so no record kind may take it.
 RECORD_KEYS = {
     'instructions-revision': frozenset({'kind', 'station', 'layer_id', 'revision', 'owner_id', 'title', 'body',
                                         'audience_users', 'policy', 'created'}),
@@ -102,6 +114,10 @@ RECORD_KEYS = {
     'imprint-receipt': frozenset({'kind', 'station', 'id', 'permission', 'event', 'actor_id', 'at', 'detail',
                                   'previous'}),
 }
+# Federation pull (spec §4): a pull request's exact keys. It names its origin, never a station, and an envelope has no
+# kind, so a pull request can't pass as a record or an envelope, nor either of them as a pull request.
+PULL_KEYS = frozenset({'version', 'kind', 'origin', 'destination', 'nonce', 'at', 'limit', 'budget', 'ack', 'refused',
+                       'signature'})
 
 # Each entry of an imprint-permission's `records`: the permissions spec's 5.1 fields less the five ledger-only ones.
 INNER_RECORD_KEYS = frozenset({'id', 'layer', 'effect', 'selector', 'valid_from', 'valid_until', 'anchor', 'backing',
@@ -163,11 +179,25 @@ class PeerIdentity:
             cls._write(target, json.dumps(record))
         return cls(path, json.loads(target.read_text()))
 
-    def card(self, endpoint, participant):
+    def card(self, endpoint, participant, *, delivery='push'):
+        """A v1 card with an endpoint, or with delivery='pull' a v2 card with none (federation-pull spec §2)."""
+        if delivery not in ('push', 'pull'):
+            raise ValueError('delivery is push or pull')
         cert = x509.load_pem_x509_certificate(self.certificate.encode())
-        return validate_card({'version': 1, 'peer_id': self.peer_id, 'signing_key': base64.b64encode(self.public_key).decode(),
-                              'certificate': self.certificate, 'fingerprint': cert.fingerprint(hashes.SHA256()).hex(),
-                              'endpoint': endpoint, 'participant': {k: participant[k] for k in ('id', 'name')}})
+        card = {'version': 1, 'peer_id': self.peer_id, 'signing_key': base64.b64encode(self.public_key).decode(),
+                'certificate': self.certificate, 'fingerprint': cert.fingerprint(hashes.SHA256()).hex(),
+                'endpoint': endpoint, 'participant': {k: participant[k] for k in ('id', 'name')}}
+        if delivery == 'pull':
+            card.update(version=2, delivery='pull')
+        return validate_card(card)
+
+    def sign_pull(self, request):
+        """Federation pull (spec §4): this peer's own pull request, returned with its signature over the canonical
+        request without one."""
+        if not isinstance(request, dict) or set(request) != PULL_KEYS - {'signature'} or request['kind'] != 'pull' \
+                or request['origin'] != self.peer_id:
+            raise ValueError('Not a pull request this peer signs')
+        return {**request, 'signature': base64.b64encode(self.key.sign(canonical(request))).decode()}
 
     def sign_record(self, record):
         """G3: this station's signature over one of its own records (RECORD_KEYS), base64."""
@@ -209,6 +239,48 @@ def verify_envelope(raw, card, destination):
         ed25519.Ed25519PublicKey.from_public_bytes(base64.b64decode(card['signing_key'], validate=True)).verify(base64.b64decode(value['signature'], validate=True), canonical(unsigned))
         return value
     except (ValueError, TypeError, KeyError, InvalidSignature):
+        raise Problem(403, 'Peer authentication failed') from None
+
+HEX32, HEX64 = re.compile(r'[0-9a-f]{32}'), re.compile(r'[0-9a-f]{64}')
+PULL_BUDGET = (64 * 1024, MAX_ENVELOPE)  # encoded response bytes a puller may ask for (spec §4, nit 2)
+
+def pull_shape_ok(request):
+    """Federation pull (spec §4, check 1): exactly PULL_KEYS, each of its type and range, so no envelope or record body
+    passes. `ack` and `refused` name the listener's own rows, whose ids uid() makes: 32 lowercase hex (plan nit 17)."""
+    def ints(value, low, high):
+        return type(value) is int and low <= value <= high
+    try:
+        if not isinstance(request, dict) or set(request) != PULL_KEYS:
+            return False
+        if not (ints(request['version'], 1, 1) and request['kind'] == 'pull' and type(request['at']) is int
+                and ints(request['limit'], 0, 20) and ints(request['budget'], *PULL_BUDGET)
+                and isinstance(request['signature'], str) and len(request['signature']) <= 128):
+            return False
+        if not all(isinstance(request[k], str) and HEX64.fullmatch(request[k]) for k in ('origin', 'destination')):
+            return False
+        if not (isinstance(request['nonce'], str) and HEX32.fullmatch(request['nonce'])):
+            return False
+        acks, refused = request['ack'], request['refused']
+        if not (isinstance(acks, list) and len(acks) <= 100 and all(isinstance(a, str) and HEX32.fullmatch(a) for a in acks)):
+            return False
+        return isinstance(refused, list) and len(refused) <= 100 and all(
+            isinstance(r, dict) and set(r) == {'event_id', 'code'} and isinstance(r['event_id'], str)
+            and HEX32.fullmatch(r['event_id']) and ints(r['code'], 400, 499) for r in refused)
+    except (TypeError, KeyError):
+        return False
+
+def verify_pull(card, request):
+    """Federation pull (spec §4, check 4): a request with exactly PULL_KEYS, of kind `pull`, from the card's peer, signed
+    by its key. Its other fields are check 1's, which runs first; anything wrong here is 403."""
+    try:
+        if not isinstance(request, dict) or set(request) != PULL_KEYS or request['kind'] != 'pull' \
+                or request['origin'] != card['peer_id']:
+            raise ValueError()
+        unsigned = {k: v for k, v in request.items() if k != 'signature'}
+        key = ed25519.Ed25519PublicKey.from_public_bytes(base64.b64decode(card['signing_key'], validate=True))
+        key.verify(base64.b64decode(request['signature'], validate=True), canonical(unsigned))
+        return request
+    except (ValueError, TypeError, KeyError, InvalidSignature, Problem):
         raise Problem(403, 'Peer authentication failed') from None
 
 def verify_record(card, record, signature):

@@ -401,13 +401,55 @@ def contact_state(contact):
     return 'confirmed by typing' if contact['confirmed'] else 'no typed code on record'
 
 
-def describe_connections(listed):
+def problem_shown(problem):
+    """A peer's problem as the CLI and the page show it (Rio Grande's SF3): a status code alone, since the words after it
+    come from the peer; otherwise this side's own phrase, such as "certificate differs"."""
+    import re
+    code = re.match(r'\d{3}\b', problem)
+    return code.group(0) if code else safe_line(problem, 80)
+
+
+def delivery_health(contact, now):
+    """Federation pull P10 (spec §8): how delivery to this contact's peer is going, in the CLI's words. On a pull peer, a
+    listener's last pull from it is said apart from its last delivery to it (Rio Grande's SF2)."""
+    if contact.get('mode') == 'pull' or contact['card'].get('delivery') == 'pull':
+        return f"last pull {ago(now - contact['last_pull'])} ago" if contact.get('last_pull') else 'no pull yet'
+    pulled = f"last pulled {ago(now - contact['last_pull'])} ago, " if contact.get('last_pull') else ''
+    if contact.get('failures'):
+        due = contact.get('next_attempt')
+        parts = [f"failing for {ago(now - contact['failing_since'])}" if contact.get('failing_since') else 'failing',
+                 f"{contact['failures']} {'failure' if contact['failures'] == 1 else 'failures'}",
+                 (f'next attempt in {ago(due - now)}' if due > now else 'next attempt due') if due else None,
+                 problem_shown(contact['last_problem']) if contact.get('last_problem') else None]
+        return pulled + ', '.join(part for part in parts if part)
+    return pulled + (f"last delivered {ago(now - contact['last_success'])} ago" if contact.get('last_success')
+                     else 'nothing delivered yet')
+
+
+def describe_connections(listed, now=None):
     """A code is listed only for a confirmed contact (connections() shows no other: it could be copied into a re-pair)."""
+    import time
     if not listed:
         return 'No paired peers.'
-    return '\n'.join(f"{safe_line(c['name'])} ({safe_line(c['user_id'])}) at {safe_line(c['card']['endpoint'], 200)}: "
+    now = time.time() if now is None else now
+    return '\n'.join(f"{safe_line(c['name'])} ({safe_line(c['user_id'])}) "
+                     f"{('at ' + safe_line(c['card']['endpoint'], 200)) if c['card'].get('endpoint') else 'fetches from us'}: "
                      f"{('code ' + c['pairing_code']) if c['pairing_code'] else 'no code shown'}, {contact_state(c)}"
-                     f"{'' if c['paired'] else ', unpaired'}" for c in listed)
+                     f"{'' if c['paired'] else ', unpaired'}; {delivery_health(c, now)}" for c in listed)
+
+
+def describe_deliveries(rows):
+    """Federation pull P10: one safe line per delivery, with its id, status, why a refused one wasn't delivered, and
+    the peer's next attempt."""
+    if not rows:
+        return 'No deliveries.'
+    from datetime import datetime, timezone
+
+    def when(at):
+        return datetime.fromtimestamp(at, timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    return '\n'.join(f"{r['id']} {safe_line(r['status'])}{(': ' + safe_line(r['last_error'], 200)) if r['last_error'] else ''}"
+                     f"{(', next attempt ' + when(r['next_attempt'])) if r['next_attempt'] else ''}, to "
+                     f"{safe_line(r['contact_name'])}: {safe_line(r['resource_title'], 120)}" for r in rows)
 
 
 def main(argv=None):
@@ -429,7 +471,17 @@ def main(argv=None):
     card = commands.add_parser('card')
     card.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     card.add_argument('--username', required=True)
-    card.add_argument('--endpoint', required=True)
+    kind = card.add_mutually_exclusive_group(required=True)
+    kind.add_argument('--endpoint')
+    kind.add_argument('--pull', action='store_true', help='A pull card: no address; this peer fetches from its peers '
+                      '(federation pull)')
+    deliveries = commands.add_parser('deliveries', help="An admin's deliveries, one safe line each (federation pull P10)")
+    deliveries.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    deliveries.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
+    retry = commands.add_parser('retry', help='Retry a failed or refused delivery by its id (federation pull P10)')
+    retry.add_argument('key')
+    retry.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    retry.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
     pair = commands.add_parser('pair', help="Pair another peer's card; a person types its code, read off that machine's "
                                'screen, at this terminal')
     pair.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
@@ -536,6 +588,11 @@ def main(argv=None):
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
     door.add_argument('--port', type=int, default=7436)
+    listen = commands.add_parser('federation-listen', help="A push peer's federation listener: events and pulls, on "
+                                 'loopback, behind its own certificate (federation pull)')
+    listen.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    listen.add_argument('--host', default='127.0.0.1')
+    listen.add_argument('--port', type=int, default=7437)
     ship = commands.add_parser('create-ship', help='Trusted local: create the station ship (no owner) and write its private agent config')
     ship.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     ship.add_argument('--username', required=True)
@@ -544,6 +601,9 @@ def main(argv=None):
     ship.add_argument('--origin', help='Public origin when --station is a loopback proxy target')
     ship.add_argument('--workspace', type=Path, required=True)
     ship.add_argument('--config', type=Path, required=True)
+    federate = commands.add_parser('federate', help='Deliver for this data directory: pull in pull mode, then collect and '
+                                   'push, every 5 s (federation pull)')
+    federate.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve = commands.add_parser('serve')
     serve.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve.add_argument('--host', default='127.0.0.1')
@@ -737,17 +797,41 @@ def main(argv=None):
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
+            from .signatures import refuse_a_lost_identity_before_the_store
             from urllib.parse import urlsplit
+            refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b: before an identity is loaded or made
             store = Store(args.data_dir)
             with store.transaction() as db:
                 user = db.execute("SELECT id FROM users WHERE username=? AND kind!='system'", (args.username,)).fetchone()  # R34
                 if not user:
                     raise ValueError('Unknown local account')
-            host = urlsplit(args.endpoint).hostname
-            identity = PeerIdentity.load_or_create(store.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
-            exported = Federation(store, endpoint=args.endpoint, identity=identity).card(user[0])
+                paired_before = db.execute('SELECT 1 FROM peers LIMIT 1').fetchone()
+            mode, current = ('pull' if args.pull else 'push'), store.federation_mode()
+            has_identity = (store.data_dir / 'identity.json').is_file()
+            if current not in (None, mode):
+                store.claim_federation_mode(mode)  # refuses, in its own words: one identity never exports both kinds
+            if current is not None and not has_identity:  # plan P8 (review SF5): only the first card makes an identity
+                raise ValueError('identity.json is missing, and a card command never makes a new one once this peer has a '
+                                 'mode: restore identity.json, or make a new identity on purpose with station-new-identity')
+            if args.pull and current is None and has_identity:  # Rio Grande's section 2, MF1 (spec §1, check 3 SF5)
+                raise ValueError('This peer already has an identity, so a pull card here would make it a pull peer for good. '
+                                 'A pull peer is a new data directory: init, then card --pull, before anything else.')
+            if args.pull and not has_identity and paired_before:  # review SF6
+                raise ValueError('This peer already has peers but no identity, so a pull card would be an identity they '
+                                 'have never seen. Export a card here first, then pair again.')
+            hosts = ['localhost', '127.0.0.1'] + ([] if args.pull else [urlsplit(args.endpoint).hostname])
+            identity = PeerIdentity.load_or_create(store.data_dir, hosts=tuple(dict.fromkeys(hosts)))
+            store.claim_federation_mode(mode)  # plan P2: the first card sets the mode
+            exported = Federation(store, endpoint=None if args.pull else args.endpoint, identity=identity).card(user[0])
             print(json.dumps(exported, indent=2))  # stdout stays exactly a card
             show_card_code(exported)
+        elif args.command == 'deliveries':
+            store = Store(args.data_dir)
+            print(describe_deliveries(federation_here(store).status(admin_account(store, args.as_user))))
+        elif args.command == 'retry':
+            store = Store(args.data_dir)
+            federation_here(store).retry(admin_account(store, args.as_user), args.key)
+            print('Retrying: it goes with the next delivery pass.')
         elif args.command == 'pair':
             status = pair_command(args.data_dir, args.card, args.as_user)
             if status:
@@ -768,6 +852,49 @@ def main(argv=None):
                 password = args.password_file.read_text().rstrip('\r\n') if args.password_file else getpass.getpass('Owner password (12+ characters): ')
                 store._create_user(db, args.username, args.name, password, True)
             print(f'Superyak owner created in {args.data_dir}')
+        elif args.command == 'federate':
+            # plan P9 and nit 18: nothing is created where there's no peer database, and no identity is ever made
+            if not (args.data_dir / 'peer.sqlite3').is_file():
+                raise ValueError(f'No peer database at {args.data_dir / "peer.sqlite3"}: federate starts nothing there')
+            from .identity import PeerIdentity
+            from .signatures import refuse_a_lost_identity_before_the_store
+            refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b
+            if not (args.data_dir / 'identity.json').is_file():
+                raise ValueError('identity.json is missing, and federate never makes one')
+            from .dispatch import federation_lock
+            sync_lock = federation_lock(args.data_dir)  # noqa: F841 - one process syncs a directory, held for good
+            import logging
+            logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(message)s')
+            store = Store(args.data_dir)
+            from .federate import Federate
+            from .federation import Federation
+            Federate(Federation(store, endpoint=None, identity=PeerIdentity.load_or_create(store.data_dir))).run()
+        elif args.command == 'federation-listen':
+            # plan P9 and nit 18: nothing is created in a directory that isn't a peer's, and nothing serves a pull peer
+            if not (args.data_dir / 'peer.sqlite3').is_file():
+                raise ValueError(f'No peer database at {args.data_dir / "peer.sqlite3"}: federation-listen starts nothing there')
+            try:
+                loopback = ipaddress.ip_address(args.host).is_loopback
+            except ValueError:
+                loopback = False
+            if not loopback:
+                raise ValueError('federation-listen binds to loopback; tailscale serve publishes it')
+            from .identity import PeerIdentity
+            from .signatures import refuse_a_lost_identity_before_the_store
+            refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b
+            store = Store(args.data_dir)
+            if store.federation_mode() != 'push':
+                raise ValueError(f'federation-listen serves a push peer only, and this peer delivers by '
+                                 f'{store.federation_mode() or "neither yet"}')
+            if not (store.data_dir / 'identity.json').is_file():
+                raise ValueError('identity.json is missing, and federation-listen never makes one')
+            identity = PeerIdentity.load_or_create(store.data_dir)
+            from .federation import Federation
+            from .listener import create_listener
+            import uvicorn
+            app = create_listener(None, federation=Federation(store, endpoint=None, identity=identity))
+            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(identity.cert_path),
+                        ssl_keyfile=str(identity.key_path), access_log=False)
         elif args.command == 'door':
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback
@@ -807,6 +934,9 @@ def main(argv=None):
                 raise ValueError('Remote binds require TLS certificate and key')
             if bool(args.tls_cert) != bool(args.tls_key):
                 raise ValueError('TLS requires both certificate and key')
+            if args.sync:  # one process syncs a directory: this one, or federate (federation pull plan, dispatch.py)
+                from .dispatch import federation_lock
+                sync_lock = federation_lock(args.data_dir)  # noqa: F841 - held for the life of the server
             from .app import TRUSTED_PROXY, create_app
             import uvicorn
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']

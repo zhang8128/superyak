@@ -17,6 +17,7 @@ import pytest
 import uvicorn
 from playwright.sync_api import expect, sync_playwright
 
+from superyak_peer import peer_routes
 from superyak_peer.app import create_app
 from superyak_peer.common import Problem
 from superyak_peer.db import Store
@@ -41,7 +42,7 @@ ARTIFACTS = Path(tempfile.mkdtemp(prefix="superyak-browser-", dir=os.environ.get
 
 
 @pytest.fixture
-def browser_peer(tmp_path, request):
+def browser_peer(tmp_path, request, monkeypatch):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -50,7 +51,12 @@ def browser_peer(tmp_path, request):
     if local_demo:
         from superyak_peer.__main__ import seed_demo
         seed_demo(tmp_path / "browser-peer")
-    app = create_app(tmp_path / "browser-peer", allowed_origins=[base_url], local_demo=local_demo)
+    # "Check delivery now" dials only from serve --sync's worker (plan P11). Its timed passes would race a test's
+    # "Pending delivery" check, so under the marker the worker passes only when the button wakes it.
+    sync_worker = request.node.get_closest_marker("sync_worker") is not None
+    if sync_worker:
+        monkeypatch.setattr(peer_routes, "SYNC_SECONDS", 3600)
+    app = create_app(tmp_path / "browser-peer", allowed_origins=[base_url], local_demo=local_demo, sync_enabled=sync_worker)
     store = app.state.store
     password = "long-browser-password"
     users = {} if local_demo else {
@@ -1500,6 +1506,7 @@ def test_fresh_participant_creates_space_and_previews_exact_selection(browser_pe
             page.screenshot(path=str(ARTIFACTS / ('final-space-' + kind + '.png')), full_page=True)
 
 
+@pytest.mark.sync_worker
 def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer, tmp_path):
     app = browser_peer['app']
     fed, store = app.state.federation, app.state.store
@@ -1541,7 +1548,9 @@ def test_delivery_waiting_acknowledgement_refresh_and_unsaved_state(browser_peer
             expect(page.get_by_text("Access stopped here; waiting for Casey Delivery's peer to acknowledge withdrawal.", exact=False)).to_be_visible()
             assert remote.shared_layers(recipient)
             page.get_by_role('button', name='Check delivery now').click()
-            expect(page.get_by_text('delivery failed; remote acknowledgement unknown', exact=False)).to_be_visible()
+            # federation pull spec §8: a failed row reads "Retrying", with the peer's next attempt
+            expect(page.get_by_text("peer to acknowledge withdrawal — retrying, next attempt", exact=False)).to_be_visible()
+            expect(page.get_by_text('remote acknowledgement unknown', exact=False)).to_be_visible()
             page.get_by_label('What do you want to share?').fill('Unsaved retained during delivery refresh')
             incoming = remote.create_layer(recipient, {'title':'New incoming update', 'audience_users':[back['id']]})
             remote.activate_layer(recipient, incoming['id'], 1)
@@ -3589,3 +3598,99 @@ def test_load_earlier_skips_nothing_after_a_message_arrives_above_the_window(bro
             expect(messages).to_have_count(151)
             assert messages.all_inner_texts() == [f"message {i}" for i in range(150)] + ["A relayed word from long ago."]
             expect(page.get_by_role("button", name="Load earlier messages")).to_have_count(0)
+
+
+# Federation pull, plan Task 9 (spec §8, plan RG and nits 14 and 20): what the listener's page says about pull peers,
+# deliveries that wait, retry or were refused, and how delivery to each peer is going.
+
+def test_a_pull_peer_reads_fetches_from_us_and_its_rows_wait_for_pull(browser_peer, tmp_path):
+    import time
+    app = browser_peer['app']
+    store, fed = app.state.store, app.state.federation
+    mac = Store(tmp_path / 'mac')
+    mo = mac.create_user('mo', 'Mo Mac', 'long-mac-password', is_admin=True)['id']
+    mac.claim_federation_mode('pull')
+    card = Federation(mac, endpoint=None).card(mo)
+    assert card['endpoint'] is None and card['delivery'] == 'pull'
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, 'organizer') as (page, _):
+            page.get_by_role('link', name='Connections', exact=True).click()
+            page.get_by_label('Peer card').fill(json.dumps(card))
+            page.get_by_role('button', name='Preview peer card').click()
+            expect(page.get_by_text('Fetches from us: it has no address', exact=False)).to_be_visible()
+            page.get_by_label('Type the code shown on the other machine').fill(show_code(pairing_code(card)))
+            page.get_by_role('button', name='Pair this peer').click()
+            expect(page.get_by_text('Fetches from us · no pull yet')).to_be_visible()
+            expect(page.locator('.card', has_text='Mo Mac').get_by_text('Endpoint:', exact=False)).to_have_count(0)
+            page.get_by_role('link', name='My sharing layers').click()
+            open_new_layer(page)
+            page.get_by_label('Layer title').fill('For the Mac')
+            page.get_by_role('checkbox', name='Mo Mac').check()
+            page.get_by_role('button', name='Save private draft').click()
+            expect(page.get_by_text('Saved version 2', exact=True)).to_be_visible()
+            page.get_by_role('button', name='Preview audience').click()
+            page.get_by_role('button', name='Turn on version 2').click()
+            page.get_by_role('link', name='Connections', exact=True).click()
+            expect(page.locator('.item', has_text='For the Mac → Mo Mac').get_by_text('Share update · Waiting for pull')).to_be_visible()
+            # RG's N5: a pull peer's failed row (a walk's local fault) is still its next pull's: no "Retrying", no Retry.
+            # Rendered directly, since the page shows the same before and after a refresh, so a wait couldn't tell them apart.
+            failed = {'status': 'failed', 'peer_mode': 'pull', 'action': 'layer.release', 'id': 'k', 'resource_id': 'r',
+                      'peer_id': 'p', 'revision': 2, 'attempts': 1, 'resource_title': 'For the Mac', 'contact_name': 'Mo Mac',
+                      'next_attempt': None}
+            html = page.evaluate('row => deliveryCard(row)', failed)
+            assert 'Share update · Waiting for pull' in html and 'retry-delivery' not in html, html
+            with store.transaction() as db:  # what a served pull records (federation.py's _serve_pull)
+                db.execute('UPDATE peer_delivery SET last_pull=? WHERE mode=?', (time.time(), 'pull'))
+            page.get_by_role('button', name='Check delivery now').click()  # never dials here: no --sync, no pull peer to dial
+            page.get_by_role('link', name='My sharing layers').click()
+            page.get_by_role('link', name='Connections', exact=True).click()
+            expect(page.get_by_text('Fetches from us · last pull', exact=False)).to_be_visible()
+
+
+def test_delivery_labels_retrying_not_delivered_and_too_large_to_pull(browser_peer):
+    import time
+    app = browser_peer['app']
+    store, fed = app.state.store, app.state.federation
+    owner = browser_peer['users']['organizer']['id']
+    fed.endpoint = 'https://local.example:7443'
+    remote_card = browser_peer['remote_card']
+    contact = fed.pair(owner, remote_card, code=pairing_code(remote_card))['id']
+    layers = {}
+    for title in ('Retried update', 'Refused update', 'Oversized update'):
+        layer = store.create_layer(owner, {'title': title, 'audience_users': [contact]})
+        store.activate_layer(owner, layer['id'], 1)
+        layers[title] = layer['id']
+    fed.collect()
+    now = time.time()
+    with store.transaction() as db:  # the outcomes test_federation_outcomes drives for real, set directly here
+        db.execute("UPDATE outbox SET status='failed' WHERE resource_id=?", (layers['Retried update'],))
+        db.execute("UPDATE outbox SET status='refused', last_error='409 Revision already used' WHERE resource_id=?",
+                   (layers['Refused update'],))
+        db.execute("UPDATE outbox SET status='refused', last_error='413 Too large to pull' WHERE resource_id=?",
+                   (layers['Oversized update'],))
+        db.execute("UPDATE peer_delivery SET failures=1, next_attempt=?, failing_since=?, last_pull=?, "
+                   "last_problem='403 Peer authentication failed, and words the other peer chose' WHERE peer_id=?",
+                   (now + 120, now - 60, now - 30, remote_card['peer_id']))
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, 'organizer') as (page, _):
+            page.get_by_role('link', name='Connections', exact=True).click()
+            retried = page.locator('.item', has_text='Retried update → Casey Remote')
+            expect(retried.get_by_text('Share update · Retrying, next attempt', exact=False)).to_be_visible()
+            expect(retried.get_by_role('button', name='Retry')).to_be_visible()
+            refused = page.locator('.item', has_text='Refused update → Casey Remote')
+            expect(refused.get_by_text('Share update · Not delivered (409)')).to_be_visible()
+            expect(refused.get_by_role('button', name='Retry')).to_be_visible()
+            oversized = page.locator('.item', has_text='Oversized update → Casey Remote')
+            expect(oversized.get_by_text('Too large to deliver by pull: make the release smaller', exact=False)).to_be_visible()
+            expect(oversized.get_by_role('button', name='Retry')).to_have_count(0)
+            expect(page.get_by_text('Revision already used', exact=False)).to_have_count(0)  # the peer's own words never show
+            peer = page.locator('.card', has_text='Casey Remote').filter(has_text='Fingerprint')
+            expect(peer.get_by_text('Failing since', exact=False)).to_be_visible()
+            expect(peer.get_by_text('1 failure · next attempt', exact=False)).to_be_visible()
+            expect(peer.get_by_text('1 failure · next attempt', exact=False)).to_contain_text('· 403')  # SF3: the code only
+            expect(peer.get_by_text('words the other peer chose', exact=False)).to_have_count(0)
+            expect(peer.get_by_text('Last pulled', exact=False)).to_be_visible()  # SF2: a pull apart from a delivery
+            assert page.evaluate("deliveryText('mystery')") == 'Delivery status unknown'  # never "Saved here"
+            assert page.evaluate("deliveryText('refused')") == 'Not delivered'  # a refused reply's own label (spec §8)
+            refused.get_by_role('button', name='Retry').click()
+            expect(page.locator('.item', has_text='Refused update → Casey Remote').get_by_text('Not delivered', exact=False)).to_have_count(0)

@@ -102,6 +102,12 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             # remote room fields: a received room stored before inbox_received existed gets a time once: the first start that finds it without one, this start's
             db.execute("INSERT OR IGNORE INTO inbox_received SELECT origin, resource_id, recipient, ? FROM inbox "
                        "WHERE kind='room' AND payload IS NOT NULL", (self.clock(),))
+            if 'last_error' not in {row['name'] for row in db.execute('PRAGMA table_info(outbox)')}:  # federation pull (spec §7)
+                db.execute('ALTER TABLE outbox ADD COLUMN last_error TEXT')
+            # federation pull (spec §7, check 3 MF2): pairings made before the upgrade, and stores restored from older copies,
+            # get their delivery row at every start, so they keep sending. A card that isn't JSON gets none (plan nit 4).
+            db.execute("INSERT OR IGNORE INTO peer_delivery(peer_id, mode, failures) SELECT peer_id, "
+                       "COALESCE(json_extract(card, '$.delivery'), 'push'), 0 FROM peers WHERE json_valid(card)")
         self._ensure_system_author()  # after the migration, where users.kind surely exists (spec S11)
         self._backfill_brief_history()  # ship briefs S5: after the schema, at every start
         if signing:  # G4a: the door and the station commands that never sign hold no key, check none and backfill nothing

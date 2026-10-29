@@ -25,16 +25,30 @@ def sign_first(store):
         return 0
 
 
+SYNC_SECONDS = 5
+
 @asynccontextmanager
 async def federation_lifespan(app):
-    stop = asyncio.Event()
+    """serve --sync's worker (federation pull plan P11): federate's pass every SYNC_SECONDS, or at once when "Check
+    delivery now" wakes it. Passes are counted, so the button can answer after the pass it woke. A pass that raises
+    is logged and the worker goes on (nit 9): one OperationalError used to end it silently."""
+    from .federate import Federate
+    stop, app.state.sync_wake = asyncio.Event(), asyncio.Event()
+    app.state.sync_started = app.state.sync_finished = 0
     async def worker():
+        loop = Federate(app.state.federation)
         while not stop.is_set():
-            await asyncio.to_thread(app.state.federation.sync_once)
+            app.state.sync_wake.clear()
+            app.state.sync_started += 1
             try:
-                await asyncio.wait_for(stop.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                pass
+                await asyncio.to_thread(loop.run_pass)
+            except Exception:  # noqa: BLE001 - logged; the next pass goes on
+                log.exception('A delivery pass failed')
+            app.state.sync_finished += 1
+            waits = [asyncio.create_task(stop.wait()), asyncio.create_task(app.state.sync_wake.wait())]
+            await asyncio.wait(waits, timeout=SYNC_SECONDS, return_when=asyncio.FIRST_COMPLETED)
+            for waiting in waits:
+                waiting.cancel()
     async def signer():
         from . import imprints
         while not stop.is_set():
@@ -103,9 +117,20 @@ def install(app):
 
     @router.post('/api/sync')
     async def sync(request: Request):
-        who = actor(request)
-        await run_in_threadpool(fed.sync_once)
-        return {'enabled':app.state.sync_enabled, 'deliveries':fed.status(who)}
+        """Check delivery now (plan P11). Every peer becomes due. With --sync, this process's worker is woken and the
+        answer waits, about 10 s at most, for the pass it woke, so the person sees fresh status. Without it, another
+        process (federate) syncs, so this one never dials and answers at once. The session and the store run in workers,
+        identity first; the wake and the counters stay on the loop, since an asyncio.Event isn't thread-safe."""
+        who = await run_in_threadpool(actor, request)
+        await run_in_threadpool(fed.make_due)
+        if app.state.sync_enabled and hasattr(app.state, 'sync_wake'):
+            want = app.state.sync_started + 1
+            app.state.sync_wake.set()
+            for _ in range(200):
+                if app.state.sync_finished >= want:
+                    break
+                await asyncio.sleep(0.05)
+        return {'enabled':app.state.sync_enabled, 'deliveries':await run_in_threadpool(fed.status, who)}
 
     @router.post('/api/sync/{key}/retry')
     def retry(key: str, request: Request):

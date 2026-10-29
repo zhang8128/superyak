@@ -1106,7 +1106,7 @@ RUNBOOK = REPO / 'docs' / 'station-restore.md'
 SYSTEMCTL = '''#!/bin/sh
 echo "$*" >> "$LOG"
 case "$*" in
-  "--user list-units --all --plain --no-legend superyak-ship-*") cat "$UNITS" ;;
+  "--user list-units --all --plain --no-legend superyak-ship-* superyak-federat*") cat "$UNITS" ;;
   "--user is-enabled "*) awk -v unit="$3" '$1 == unit {print $2}' "$STATES" ;;
   "--user is-active "*) awk -v unit="$3" '$1 == unit {print $3}' "$STATES" ;;
 esac
@@ -1116,7 +1116,10 @@ WATCHERS = {'superyak-ship-running.service': ('enabled', 'active', 'running'),
             'superyak-ship-byhand.service': ('disabled', 'active', 'running'),          # started by hand, never enabled
             'superyak-ship-crashed.service': ('enabled', 'activating', 'auto-restart'),  # Restart=always brings it back
             'superyak-ship-failed.service': ('enabled', 'failed', 'failed'),
-            'superyak-ship-stopped.service': ('disabled', 'inactive', 'dead')}          # Andy stopped it
+            'superyak-ship-stopped.service': ('disabled', 'inactive', 'dead'),          # Andy stopped it
+            # the federation units are saved and put back the same way (Rio Grande's SF5 on federation pull)
+            'superyak-federate.service': ('disabled', 'inactive', 'dead'),               # Andy turned it off
+            'superyak-federation-listen.service': ('enabled', 'active', 'running')}
 
 
 def runbook_block(step):
@@ -1178,6 +1181,8 @@ def test_runbook_steps_3_and_8_put_each_watcher_back_as_it_was(tmp_path):
     assert watchers == ['--user enable superyak-ship-running.service', '--user enable superyak-ship-crashed.service',
                         '--user enable superyak-ship-failed.service', '--user start superyak-ship-running.service',
                         '--user start superyak-ship-byhand.service', '--user start superyak-ship-crashed.service']
+    federation = [call for call in calls if 'superyak-federat' in call and not call.startswith('--user is-active')]
+    assert federation == ['--user enable superyak-federation-listen.service', '--user start superyak-federation-listen.service']
     assert 'make station-rooms' in calls
 
 
@@ -1397,7 +1402,10 @@ COORDINATION_TABLES = {  # content and coordination, not access: copied as they 
     'inbox_received', 'receipts', 'peer_messages', 'federation_cursor', 'layer_revisions',
     'revision_signatures', 'room_brief_revisions', 'grant_origins',
     'lessons_room', 'lessons_peers', 'lesson_receipts', 'lesson_queries',  # first rail: coordination; the add gate also needs a paired peer
-    'lesson_repeats'}  # first rail 7.1: a local record beside the receipts, never federated
+    'lesson_repeats',  # first rail 7.1: a local record beside the receipts, never federated
+    # federation pull (plan SF9): copied as they are. Restored nonces are pruned by `at` on the next pull, and a restore
+    # takes longer than the 300 s replay window; the backfill covers a copy older than peer_delivery.
+    'peer_meta', 'pull_nonces', 'peer_delivery'}
 
 
 def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):
