@@ -932,7 +932,7 @@ function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
   const replaced = (state.home?.chats || []).some((item) => !item.origin && item.linked_room_id === room.id);  // takes no more members (409)
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2>${cloudBadge(room)}<div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${roomBoard(room)}${shipBanner(room)}${cloudControl(room, replaced)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${room.paged && room.first_position > 0 ? '<button class="button secondary" type="button" data-action="load-earlier">Load earlier messages</button>' : ""}${(room.messages || []).map((message) => messageMarkup(message, room)).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row">${replaced ? "" : '<button class="button ghost" data-action="change-participants">Change participants</button>'}${(room.member_ids || []).filter((id) => !replaced && !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
@@ -944,12 +944,12 @@ function chatDialog() {
   const existing = new Set(state.chatDialog === "linked" ? room?.member_ids || [] : []);
   const picked = new Set(state.chatPicked || []);
   const title = state.chatDialog === "new" ? "Start a private chat" : "Start a new linked chat";
-  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts with no messages."}</p>${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? `<div class="carry-help-slot">${carryHelp(room)}</div>` + carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts with no messages."}</p>${state.chatDialog === "linked" && room?.cloud ? '<p class="meta">The new room keeps the mark: no ship, and no one on another home, can join it.</p>' : ""}${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? `<div class="carry-help-slot">${carryHelp(room)}</div>` + carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
 }
 
 function chatsView() {
   return `<header class="page-head"><div><p class="eyebrow">Private conversation</p><h1>Chats</h1><p class="lede">Personal, direct, and group rooms work without an assistant or model.</p></div><button class="button" data-action="new-chat">New private chat</button></header>
-    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong><span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
+    <div class="split-view"><aside class="split-list"><div class="item-list">${state.home.chats.map((room) => `<button class="item" data-action="open-chat" data-id="${escapeHtml(room.id)}"><span class="item-main"><strong>${escapeHtml(room.title)}</strong>${cloudBadge(room)}<span>${escapeHtml(participantSummary(room))}</span></span><span class="item-side">${formatDate(room.last_activity)}</span></button>`).join("") || empty("No chats yet", "A personal room can be your first quiet place to write.")}</div></aside><div class="split-detail">${state.room ? roomDetail(state.room) : empty("Choose a chat", "Open a room or create a private conversation.")}</div></div>${chatDialog()}`;
 }
 
 function contactState(contact) {
@@ -1013,6 +1013,60 @@ function dockingDialog() {
   const docking = state.docking;
   if (!docking) return "";
   return `<dialog aria-labelledby="docking-title"><div class="dialog-content"><h2 id="docking-title">${docking.redock ? "Re-dock" : "Dock"} ${escapeHtml(docking.ship_name)}</h2><p>From <strong>${escapeHtml(docking.machine)}</strong>. Confirm only if you just ran <code>make dock</code> there.</p><p>${docking.redock ? "This replaces the ship’s old key." : "The ship will be yours. It reads and posts only in rooms a room owner adds it to."}</p><div class="button-row"><button class="button" data-action="confirm-docking">Confirm docking</button><button class="button secondary" data-action="cancel-docking">Cancel</button></div></div></dialog>`;
+}
+
+function cloudBadge(room) {
+  // Never to a cloud model: only a marked room carries `cloud`, its count and whether one of the marks is this person's
+  return room.cloud ? `<span class="badge cloud-badge">Never to a cloud model · ${Number(room.cloud.count) || 0}${room.cloud.mine ? " (yours)" : ""}</span>` : "";  // a number only, whoever sent it
+}
+
+function earlierRoomsWithMe(room) {
+  // The rooms this one continues that this person is still in, walking linked_room_id through their own rooms. The
+  // station marks the same ones (_earlier_with); a room they've left isn't listed here, so the walk ends there.
+  const mine = new Map((state.home?.chats || []).filter((item) => !item.origin).map((item) => [item.id, item]));
+  const found = [];
+  const seen = new Set();
+  let key = room.linked_room_id;
+  while (key && !seen.has(key) && mine.has(key)) {
+    seen.add(key);
+    found.push(mine.get(key));
+    key = mine.get(key).linked_room_id;
+  }
+  return found;
+}
+
+function cloudControl(room, replaced) {
+  if (room.origin) return "";  // a received room's mark is its home's to keep
+  // This home can't tell a member on another home's kind, nor tell their home about the mark yet (connector spec)
+  const elsewhere = (room.member_ids || []).some((id) => String(id).startsWith("remote_"))
+    ? `<p class="meta">This mark holds on this home. Members' homes get it once federation carries it.</p>` : "";
+  if (room.cloud?.mine) return `<div class="cloud-control"><p class="meta">You keep this room away from cloud models. Other members' marks are their own. Clearing takes your mark off this room only; your marks on earlier rooms stay.</p>${elsewhere}<button class="button secondary" data-action="cloud-clear">Clear my mark</button></div>`;
+  if (replaced) return `<div class="cloud-control"><p class="meta">This room continues in a newer room. Mark that one.</p></div>`;  // the station refuses it (409)
+  const earlier = earlierRoomsWithMe(room).length;
+  const ask = earlier ? `<label class="choice"><input type="checkbox" id="cloud-earlier" checked><span class="choice-copy">Mark the ${earlier} earlier room${earlier === 1 ? "" : "s"} you're in too</span></label>` : "";
+  return `<div class="cloud-control"><p class="meta">Keep this room's text away from Claude and other cloud models. Ships can't be in a marked room, and each member's mark is their own.</p>${elsewhere}${ask}<button class="button secondary" data-action="cloud-mark">Keep this room away from cloud models</button></div>`;
+}
+
+async function markRoom(room, earlier) {
+  try {
+    await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "POST", json: { earlier } });
+  } catch (error) {
+    setFlash(error.message, true);
+    render();
+    return;
+  }
+  await refresh("This room is kept away from cloud models.");
+}
+
+async function clearMark(room) {
+  try {
+    await api(`/api/chats/${pathPart(room.id)}/cloud`, { method: "DELETE", json: {} });
+  } catch (error) {
+    setFlash(error.message, true);
+    render();
+    return;
+  }
+  await refresh("Your mark is cleared. Other members' marks still stand.");
 }
 
 function shipBanner(room) {
@@ -2121,6 +2175,8 @@ document.addEventListener("click", async (event) => {
     else if (state.grantAsk?.id === target.dataset.id) document.querySelector('.grant-ask [data-action="grant-revoke-confirm"]')?.focus();
   }
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
+  if (action === "cloud-mark" && state.room) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
+  if (action === "cloud-clear" && state.room) await clearMark(state.room);
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
     // S4: the editor warns when the text it opens with is a ship's; saving would make all of it the owner's.
