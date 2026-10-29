@@ -258,7 +258,8 @@ class Connector:
         try:
             right = self.check_password_attempt(username, password, source, public=public, device=device)
         except Problem as refused:
-            raise OAuthError(429, 'too_many_attempts') if refused.status == 429 else OAuthError(400, 'invalid_request')
+            # a held attempt, or a username or password that isn't text: a wrong login to the page, not a bad request
+            raise OAuthError(429, 'too_many_attempts') if refused.status == 429 else OAuthError(401, 'invalid_login')
         if not right:
             raise OAuthError(401, 'invalid_login')
         csrf = secrets.token_urlsafe(32)

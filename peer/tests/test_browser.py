@@ -3704,3 +3704,161 @@ def test_delivery_labels_retrying_not_delivered_and_too_large_to_pull(browser_pe
             assert page.evaluate("deliveryText('refused')") == 'Not delivered'  # a refused reply's own label (spec §8)
             refused.get_by_role('button', name='Retry').click()
             expect(page.locator('.item', has_text='Refused update → Casey Remote').get_by_text('Not delivered', exact=False)).to_have_count(0)
+
+
+# ---- Remote connector, Task 5: the sign-in and consent page (spec "The consent page"), seen as a stranger would see
+# it on a phone (Tardis's cold look). The browser reaches https://home.example, which is routed to the app itself, so
+# the page runs at the connector's real public origin with no TLS server. ----
+
+CONSENT_ORIGIN = 'https://home.example'
+CONSENT_CALLBACK = 'https://claude.ai/api/mcp/auth_callback'
+CONSENT_CHALLENGE = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'
+CONSENT_LINES = (
+    "Claude wants to read the rooms you choose on this home. It can't post or change anything.",
+    "What Claude reads can't be taken back.",
+    "Claude's HIPAA agreement doesn't cover connectors.",
+    "Room text can contain instructions written by other people. Don't let a chat that uses this connector send email "
+    "or post elsewhere without checking.",
+    "This home's admins can see that this connection exists and can end it. They can't see which rooms it reads.",
+    "Allow only if you just started connecting from your own Claude account.",
+)
+
+
+@pytest.fixture
+def connector_home(tmp_path):
+    from fastapi.testclient import TestClient
+    clock = [1000000.0]
+    app = create_app(tmp_path / 'home', clock=lambda: clock[0], allowed_origins=[CONSENT_ORIGIN],
+                     public_origin=CONSENT_ORIGIN)
+    store = app.state.store
+    sam = store.create_user('sam@example.org', 'Sam Example', 'long-password-sam')
+    jenn = store.create_user('jenn@example.org', 'Jenn Example', 'long-password-jenn')
+    rooms = {'plain': store.create_room(sam['id'], 'Care plan', [])['id']}
+    growing = store.create_room(sam['id'], 'Growing', [])['id']
+    rooms['growing'] = store.add_participants(sam['id'], growing, [jenn['id']])['id']
+    rooms['marked'] = store.create_room(sam['id'], 'Night notes', [])['id']
+    rooms['markup'] = store.create_room(sam['id'], '<img src=x id=planted> notes', [])['id']  # a person's words, as text
+    with store.transaction() as db:
+        db.execute('INSERT INTO room_cloud VALUES(?,?,?)', (rooms['marked'], sam['id'], clock[0]))
+    client = TestClient(app, base_url=CONSENT_ORIGIN, client=('203.0.113.5', 50000), follow_redirects=False)
+    client_id = client.post('/register', json={'redirect_uris': [CONSENT_CALLBACK], 'client_name': 'Claude'}).json()['client_id']
+    return {'app': app, 'client': client, 'client_id': client_id, 'clock': clock, 'rooms': rooms, 'store': store}
+
+
+@contextmanager
+def consent_browser(playwright, home, landed):
+    """A phone-sized browser whose https://home.example is the app, and whose Claude callback records where it was
+    sent."""
+    def via_app(route):
+        request = route.request
+        headers = {k: v for k, v in request.all_headers().items() if k.lower() not in ('host', 'content-length')}
+        answer = home['client'].request(request.method, request.url, headers=headers, content=request.post_data_buffer)
+        route.fulfill(status=answer.status_code, body=answer.content,
+                      headers={k: v for k, v in answer.headers.items() if k.lower() != 'content-length'})
+
+    def at_claude(route):
+        landed.append(route.request.url)
+        route.fulfill(status=200, content_type='text/html', body='<p>Back at Claude</p>')
+    browser = playwright.chromium.launch(headless=True)
+    context = browser.new_context(viewport={'width': 390, 'height': 844})
+    context.route(lambda url: url.startswith(CONSENT_ORIGIN + '/'), via_app)  # a predicate: a glob's ? is a wildcard
+    context.route(lambda url: url.startswith('https://claude.ai/'), at_claude)
+    try:
+        yield context.new_page()
+    finally:
+        context.close()
+        browser.close()
+
+
+def start_connecting(page, home):
+    """/authorize as Claude sends it, then the consent page it sends the browser to. The 303 is followed here, not by
+    the browser: a fulfilled route's redirect isn't routed again, and the unit tests pin that redirect."""
+    sent = home['client'].get('/authorize', params={
+        'response_type': 'code', 'client_id': home['client_id'], 'redirect_uri': CONSENT_CALLBACK, 'state': 'st-1',
+        'code_challenge': CONSENT_CHALLENGE, 'code_challenge_method': 'S256', 'resource': CONSENT_ORIGIN + '/mcp',
+        'scope': 'rooms.read offline_access'})
+    assert sent.status_code == 303, sent.text
+    page.goto(sent.headers['location'])
+
+
+def fits_the_phone(page):
+    return page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+
+
+def sign_in_to_consent(page):
+    page.get_by_label('Username', exact=True).fill('sam@example.org')
+    page.get_by_label('Password', exact=True).fill('long-password-sam')
+    page.get_by_role('button', name='Sign in').click()
+    expect(page.get_by_text('Signed in as Sam Example')).to_be_visible()
+
+
+def test_the_consent_page_as_a_stranger_sees_it_on_a_phone(connector_home):
+    """The cold look: before signing in, only the sign-in form, and nothing about the person's rooms. After it, what
+    the app is (by its redirect host, its own name only in quotes), what it may do, each line the spec asks for, the
+    rooms with none chosen and the marked one unchoosable, and Allow only once something is chosen. Nothing overflows
+    the phone's width. Allow sends the browser to Claude with a code, the state and iss."""
+    from urllib.parse import parse_qs, urlsplit
+    home, landed = connector_home, []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            start_connecting(page, home)
+            expect(page.get_by_role('heading', name='Connect an app to your home')).to_be_visible()
+            expect(page.get_by_text('Care plan')).to_have_count(0)
+            assert page.url.startswith(CONSENT_ORIGIN + '/assets/consent.html#') and fits_the_phone(page)
+            sign_in_to_consent(page)
+            expect(page.get_by_role('heading', name='Claude (claude.ai)')).to_be_visible()
+            expect(page.get_by_text('It calls itself "Claude".')).to_be_visible()
+            for line in CONSENT_LINES:
+                expect(page.get_by_text(line, exact=True)).to_be_visible()
+            plain, marked = page.get_by_label('Care plan'), page.get_by_label('Night notes')
+            expect(plain).not_to_be_checked()
+            expect(marked).to_be_disabled()
+            expect(page.get_by_text('Kept away from cloud models')).to_be_visible()
+            expect(page.get_by_text('Growing: earlier part of Growing')).to_be_visible()
+            expect(page.get_by_text('<img src=x id=planted> notes')).to_be_visible()
+            assert page.locator('#planted').count() == 0  # shown as text, never made into an element
+            allow = page.get_by_role('button', name='Allow')
+            expect(allow).to_be_disabled()
+            plain.check()
+            expect(allow).to_be_enabled()
+            plain.uncheck()
+            expect(allow).to_be_disabled()
+            page.get_by_label('All my rooms, including new ones').check()
+            expect(allow).to_be_enabled()
+            assert fits_the_phone(page)
+            allow.click()
+            expect(page.get_by_text('Back at Claude')).to_be_visible()
+    [url] = landed
+    query = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
+    assert url.startswith(CONSENT_CALLBACK + '?') and set(query) == {'code', 'state', 'iss'}
+    assert (query['state'], query['iss']) == ('st-1', CONSENT_ORIGIN)
+    with home['store'].transaction() as db:
+        assert [row['rooms'] for row in db.execute('SELECT rooms FROM connector_grants')] == ['*']
+
+
+def test_the_consent_page_says_when_a_request_has_expired_and_offers_no_form(connector_home):
+    home, landed = connector_home, []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            start_connecting(page, home)
+            home['clock'][0] += 600
+            page.get_by_label('Username', exact=True).fill('sam@example.org')
+            page.get_by_label('Password', exact=True).fill('long-password-sam')
+            page.get_by_role('button', name='Sign in').click()
+            expect(page.get_by_text('This request has expired. Go back to Claude and connect again.')).to_be_visible()
+            expect(page.get_by_label('Password', exact=True)).to_have_count(0)
+    assert landed == []
+
+
+def test_deny_on_the_consent_page_sends_access_denied(connector_home):
+    from urllib.parse import parse_qs, urlsplit
+    home, landed = connector_home, []
+    with sync_playwright() as playwright:
+        with consent_browser(playwright, home, landed) as page:
+            start_connecting(page, home)
+            sign_in_to_consent(page)
+            page.get_by_role('button', name='Deny').click()
+            expect(page.get_by_text('Back at Claude')).to_be_visible()
+    [url] = landed
+    assert {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()} == {
+        'error': 'access_denied', 'state': 'st-1', 'iss': CONSENT_ORIGIN}

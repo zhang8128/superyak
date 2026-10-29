@@ -122,8 +122,8 @@ def install(app, public_origin, callback):
         except OAuthError as refused:
             return JSONResponse({'error': refused.error}, refused.status)
         except Problem as refused:  # the lane full, or a username that isn't text
-            return JSONResponse({'error': 'too_many_attempts' if refused.status == 429 else 'invalid_request'},
-                                429 if refused.status == 429 else 400)
+            return JSONResponse({'error': 'too_many_attempts' if refused.status == 429 else 'invalid_login'},
+                                429 if refused.status == 429 else 401)
         return JSONResponse(view)
 
     @app.post('/authorize/decision')
