@@ -124,6 +124,16 @@ def test_no_username_or_id_leaks(connected):
         assert secret not in seen, secret
 
 
+def test_the_text_is_structured_contents_json_byte_for_byte(connected):
+    """The section 2 re-check's nit 2: with real room text, not ASCII, the text holds the characters as sent, not
+    escaped, and equals structuredContent's JSON exactly."""
+    say(connected, connected.rooms[0], 'Zo\u00eb \U0001f642 "quoted" back\\slash')
+    result = call(connected, 'read_room', room=connected.rooms[0])
+    text = result['content'][0]['text']
+    assert 'Zo\u00eb \U0001f642' in text
+    assert text == json.dumps(result['structuredContent'], ensure_ascii=False, separators=(',', ':'))
+
+
 def test_shapes_and_iso_times(connected):
     message = say(connected, connected.rooms[0], 'hello')
     read = ok(call(connected, 'read_room', room=connected.rooms[0]))

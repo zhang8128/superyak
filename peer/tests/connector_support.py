@@ -19,9 +19,10 @@ def home(tmp_path):
     return SimpleNamespace(app=app, store=app.state.store, clock=clock)
 
 
-def public_client(app, **headers):
+def public_client(app, raise_server_exceptions=True, **headers):
     """A public request at the public origin, with no Origin header unless one is given (Claude's servers send none)."""
-    return TestClient(app, base_url=PUBLIC_ORIGIN, client=PUBLIC_CLIENT, headers=headers)
+    return TestClient(app, base_url=PUBLIC_ORIGIN, client=PUBLIC_CLIENT, headers=headers,
+                      raise_server_exceptions=raise_server_exceptions)
 
 
 # ---- The real flow, moved here from test_connector_auth.py for Tasks 7 to 9 (plan Task 6's `connected`): register,
@@ -153,10 +154,11 @@ def connected(home):
     return SimpleNamespace(**vars(home), tokens=tokens, rooms=rooms, client=client, person=sam)
 
 
-def mcp(home, message, token=None, **headers):
-    """POST /mcp as Claude sends it: JSON, from a public address, with no Origin; `message` as JSON, or bytes as they are."""
+def mcp(home, message, token=None, raise_server_exceptions=True, **headers):
+    """POST /mcp as Claude sends it: JSON, from a public address, with no Origin; `message` as JSON, or bytes as they are.
+    raise_server_exceptions=False answers a server error as the 500 Claude would get, so a test fails fast on it."""
     auth = {'authorization': f'Bearer {token}'} if token is not None else {}
-    client = public_client(home.app, **auth, **headers)
+    client = public_client(home.app, raise_server_exceptions, **auth, **headers)
     if isinstance(message, bytes):
         return client.post('/mcp', content=message, headers={'content-type': 'application/json'})
     return client.post('/mcp', json=message)
