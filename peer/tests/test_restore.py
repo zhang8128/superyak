@@ -1999,7 +1999,8 @@ def test_without_a_replaced_file_every_token_is_revoked(tmp_path, capsys):
     grant = connection(store, sam['id'])
     for kind in ('refresh', 'access'):
         a_token(store, grant, kind)
-    a_token(store, grant, 'access', expires=time.time() - 2)  # ran out on its own just before: ended too, not counted
+    for ago in (2, 86400):  # ran out on their own, just before and a day before: ended too, not counted
+        a_token(store, grant, 'access', expires=time.time() - ago)
     copy = staged(tmp_path, store)
     code, out, err = reconcile(capsys, '--db', copy)
     assert code == 0, err
@@ -2016,13 +2017,13 @@ def test_a_restore_also_ends_tokens_that_ran_out_on_their_own_just_before_it(tmp
     store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     sam = store.create_user('sam', 'Sam', 'long-password-sam')
     grant = connection(store, sam['id'])
-    walked = a_token(store, grant, 'access', expires=time.time() - 2)
+    walked = [a_token(store, grant, 'access', expires=time.time() - ago) for ago in (2, 86400)]  # a day: R6's shape
     copy = staged(tmp_path, store)
-    with store.transaction() as db:  # the live file's walk revoked it after the copy
-        db.execute('UPDATE connector_tokens SET expires=? WHERE hash=?', (REVOKED, walked))
+    with store.transaction() as db:  # the live file's walk revoked them after the copy
+        db.executemany('UPDATE connector_tokens SET expires=? WHERE hash=?', [(REVOKED, value) for value in walked])
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
     assert code == 0, err
-    assert tokens_in(copy)[walked]['expires'] == REVOKED
+    assert [tokens_in(copy)[value]['expires'] for value in walked] == [REVOKED, REVOKED]
     assert 'connector tokens taken back (0)' in out
 
 
