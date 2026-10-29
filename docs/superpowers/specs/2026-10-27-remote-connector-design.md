@@ -12,8 +12,8 @@ Revision 3 applies the re-check's should fixes and nits (approved under law sect
 
 Revision 4 replaces stored registrations with stateless client ids (D18), from the section 2 of Task 4's build: a
 limit counted over rows that eviction deletes stopped nothing once the table was full, and Claude's servers share
-one egress range, so any per-source limit could lock the owner out. The registration section, its tests and the
-clients' store change; nothing else does.
+one egress range, so any per-source limit could lock the owner out. The same rule, no public write before a sign-in,
+reaches `/authorize`'s pending request. Registration, the pending request, their tests and the stores change.
 
 ## Why
 
@@ -116,23 +116,35 @@ nothing.
 - The body is at most 8 KB, counted in bytes.
 - A client lists exactly 1 `redirect_uri`, equal character for character to the allow-list's. In phase 1 the
   allow-list is the one configured callback. Allowing up to 4 waits for Later, when there is more than one callback.
-- `client_name` is at most 100 characters, with no Unicode control or format character (Cc, Cf) and no lone
-  surrogate. It is shown only as quoted data, the client's own unverified words.
+- `client_name` is at most 100 characters and 200 bytes in UTF-8, with no Unicode control or format character (Cc,
+  Cf) and no lone surrogate. It is shown only as quoted data, the client's own unverified words.
 - `grant_types` is a subset of `authorization_code` and `refresh_token`.
 - Every client is public (`none`) and gets no secret. There is no RFC 7592 management endpoint.
-- **The client id carries its registration.** It is `base64url(payload) "." base64url(HMAC-SHA256(key, payload))`,
-  where the payload is the canonical JSON of `{"v": 1, "callback", "name", "grant_types", "issued_at"}`. RFC 7591 lets
-  the server choose its ids, so nothing changes for a client. `/authorize` and `/token` check the HMAC in constant
-  time, then the payload, and an id whose `callback` isn't the configured one is unknown.
-- **An unused id is valid for 30 days** from `issued_at`, so a client that cached it can still use it. A row is made
-  only when a code is first issued to it (`oauth_clients`), and from then on the row, not the age, says it exists. A
-  client whose grants have all ended is deleted after 30 days.
-- **No limit is needed, and none is kept.** Nothing is stored, so there is nothing to fill, evict or sweep, and a
-  flood costs only CPU bounded by the 8 KB body. Claude's servers share one egress range, so any per-source limit here
-  could lock the owner out (D18).
-- **The key** is 32 random bytes in `system_meta`, made at first start. It protects only what an id says (its name,
-  callback and age), not a secret: a public client's id isn't one, and anyone can register any `client_name`. So the
-  key goes into backups like the rest of the store, and rotating it voids only the unused ids.
+- **The client id carries its registration.** It is `base64url(payload) "." base64url(tag)`, unpadded. The payload is
+  the UTF-8 bytes of `json.dumps({"v": 1, "name": …, "grant_types": […], "issued_at": <integer epoch seconds>},
+  sort_keys=True, separators=(",", ":"), ensure_ascii=False)`, with `name` left out when none was given. The tag is
+  `HMAC-SHA256(key, payload + b"\n" + callback)`: the configured callback is bound into the tag, not carried, so
+  changing `--connector-callback` voids every unused id, and an id is at most 512 characters. RFC 7591 lets the server
+  choose its ids, so nothing changes for a client.
+- **One check, in this order, wherever a client id arrives** (`/authorize`, `/token`):
+  1. If `oauth_clients` has a row whose id equals it, character for character, it is that client. A client a code has
+     been issued to is known by its row, so rotating the key or changing the callback never disconnects anyone already
+     connected.
+  2. Otherwise split it, base64url-decode both parts, recompute the tag, and compare the raw bytes with
+     `hmac.compare_digest`. Refuse an unknown `v`, and check the payload again by `/register`'s own rules (name, grant
+     types), so a stolen key can't mint a payload `/register` would refuse. Anything else is unknown.
+- **No age limit.** An unused id grants nothing, so it stays valid while the key and the callback stand, and a
+  client that cached it can always use it again. `issued_at` is informational. A row is made only when a code is
+  first issued (`oauth_clients`). A client whose grants have all ended is deleted after 30 days, and its id then
+  works again as an unused one.
+- **No limit is needed, and none is kept.** Nothing is stored and no store lock is taken, so there is nothing to fill,
+  evict or sweep, and a flood costs only CPU bounded by the 8 KB body. Volume itself is the public route's to bear,
+  not this endpoint's. Claude's servers share one egress range, so any per-source limit here could lock the owner out
+  (D18).
+- **The key** is 32 random bytes in `system_meta`, made at first start. It protects what an id says, not a secret: a
+  public client's id isn't one, and anyone can register any `client_name`. So it goes into backups like the rest of the
+  store. Rotating it voids only unused ids; connected clients are known by their rows. A client given `invalid_client`
+  after a rotation registers again; the Measure test checks that Claude does.
 
 #### The authorization request (`/authorize`)
 
@@ -143,10 +155,13 @@ nothing.
   when present, is the canonical one (an uppercase scheme or host is accepted, as MCP asks), else `invalid_target`.
   `scope` is within `rooms.read offline_access`, and `rooms.read` when absent. These failures redirect to the
   validated `redirect_uri` with the error, `state` and `iss`.
-- **The pending request.** The home stores it server-side for 10 minutes, in `oauth_pending`: client, `redirect_uri`,
-  `state`, `code_challenge`, `resource` and scope. Then it sends the browser to the consent page, a static page under
-  `/assets` (the CSP forbids inline script, app.py:66), with an unguessable id for the request in the URL fragment.
-  Every later step uses only the stored values.
+- **The pending request, and no public write before sign-in** (D18). `/authorize` writes nothing. It sends the
+  browser to the consent page, a static page under `/assets` (the CSP forbids inline script, app.py:66), with the
+  validated request in the URL fragment, signed with the same key as client ids and valid for 10 minutes: client,
+  `redirect_uri`, `state`, `code_challenge`, `resource`, scope and the time. The page's first post, the sign-in, checks
+  the signature and the age, and only then, with a person signed in, is the request stored in `oauth_pending`. Every
+  later step uses only the stored values. So the first row anyone on the internet can cause belongs to a person who
+  has just typed their password.
 - **The sign-in.** The page always asks for the password, even when the browser has a session. The session cookie is
   `SameSite=Strict` (app.py:183), so the arrival from claude.ai doesn't carry it anyway, and a fresh sign-in makes the
   consent deliberate. The sign-in goes through the same checks and holds as the web app's (`login_attempts`), but
@@ -400,7 +415,7 @@ New tables, named apart from the existing `grants` (person-to-person ship grants
 and `receipts` (federation's, peer_store.py:35) (D15):
 
 - `oauth_clients`: clients a code has been issued to (D18), keyed by their stateless id.
-- `oauth_pending`: authorization requests, their sign-ins and their codes.
+- `oauth_pending`: authorization requests, from their sign-in on (none before one), and their codes.
 - `connector_grants`: person, client, redirect host, room set, scope, created, ends, last used, revoked. The room set
   takes the grants' shape: `"*"` or a list of room ids, each listed once (grants.py:20, 43-46).
 - `connector_tokens`: hash, kind (access or refresh), grant, scope, resource, expires, rotated from, used.
@@ -424,7 +439,7 @@ docs/superpowers/specs/2026-10-27-public-route-design.md), which the review coul
 these against it, and update this spec where it differs:
 
 - Whether it changes `BrowserBoundary`, and how the exemption for `/register`, `/token` and `/mcp` fits that change.
-- How the source address is found behind Funnel, for the sign-in holds and the registration limit.
+- How the source address is found behind Funnel, for the sign-in holds.
   `request.client.host` (app.py:180) is loopback without `--proxy-headers` (__main__.py:312, 488).
 - That access logs are off for `serve` on 443. Today only the access-request door turns them off (__main__.py:455);
   the `serve` call doesn't (__main__.py:488).
@@ -480,8 +495,12 @@ these against it, and update this spec where it differs:
   - the 8 KB body in bytes (a body under 8,192 characters but over 8,192 bytes is refused), the 100-character
     `client_name` with no Cc, Cf or lone surrogate, exactly 1 `redirect_uri`, and `grant_types` bounds;
   - no client gets a secret, and `/register` writes nothing (the store is unchanged after a thousand registrations);
-  - an id with a changed byte, another home's key, another callback, or an `issued_at` over 30 days old is unknown at
-    `/authorize`; a used client's id is accepted past 30 days.
+  - an id with a changed byte, another home's key, another callback or an unknown `v` is unknown at `/authorize` and
+    `/token`; an id whose payload `/register` would refuse is unknown even with a valid tag;
+  - a connected client keeps working after the key is rotated and after the callback changes (it is known by its row);
+  - an unused id from long ago still works; the id of a client whose row was deleted works again as an unused one;
+  - `/authorize` writes nothing: the store is unchanged until the sign-in, and a pending request older than 10 minutes
+    or with a changed byte is refused there.
 - **Authorization:**
   - a bad `client_id` or `redirect_uri` shows an error page and never redirects;
   - redirect tricks are refused: `http://localhost.evil.example/callback`, `http://127.0.0.1@evil.example/`, a
@@ -611,4 +630,7 @@ and the person revokes the connection when they're done.
   once a code is issued. A limit counted over stored registrations was refunded by its own eviction (11 senders made
   1,100 registrations against a limit of 110), and Claude's servers register from one shared egress range, so a
   per-source limit could lock the owner out. Stateless ids remove the table to fill, the eviction, the sweep and the
-  public write, at the cost of an unused id that can't be revoked, which grants nothing and lapses in 30 days.
+  public write, at the cost of an unused id that can't be revoked, which grants nothing. The same rule reaches
+  `/authorize`: its pending request is signed into the page's fragment and stored only at sign-in, so nothing a stranger
+  sends writes a row. A connected client is known by its row, never by its tag, so a key rotation disconnects no one.
+  (The section 2's readers and Tardis shaped the id: the callback bound, not carried; no age limit; a version.)
