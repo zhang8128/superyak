@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 
 import pytest
 
@@ -235,3 +236,71 @@ def test_federate_pulls_at_once_after_check_delivery_now(tmp_path, monkeypatch):
     wake.sleep(5), loop.run_pass()                    # asked: at once
     wake.sleep(5), loop.run_pass()                    # once per ask
     assert pulls == [1_000_000.0, 1_000_010.0]
+
+
+# Task 8f: end to end over real HTTPS. Two `federation-listen` processes on loopback, each behind its own certificate,
+# and a pull peer in process that only dials out: what a room message, its reply and a withdrawal take between them.
+
+@contextmanager
+def listening_peer(path, name):
+    """A push peer whose card names a real `federation-listen` process on a loopback port."""
+    import socket
+    import time
+    from test_federation_outcomes import station
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+    store, user, fed = station(path, name, time.time)
+    store.claim_federation_mode('push')
+    fed.endpoint = f'https://127.0.0.1:{port}'
+    log = path.parent / f'{name}-listen.log'
+    with log.open('wb') as out:
+        process = subprocess.Popen([sys.executable, '-m', 'superyak_peer', 'federation-listen', '--data-dir', str(path),
+                                    '--port', str(port)], stdout=out, stderr=out)
+    try:
+        deadline = time.monotonic() + 30  # a loaded Pi starts a process slowly
+        while True:
+            assert process.poll() is None, log.read_text()
+            try:
+                socket.create_connection(('127.0.0.1', port), timeout=1).close()
+                break
+            except OSError:
+                assert time.monotonic() < deadline, log.read_text()
+                time.sleep(0.05)
+        yield store, user, fed
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
+def test_end_to_end_over_real_https_pull_push_and_withdrawal(tmp_path):
+    import time
+    from superyak_peer.federate import Federate
+    from superyak_peer.identity import pairing_code
+    from test_federation_outcomes import share, station
+    mo = station(tmp_path / 'mo', 'mo', time.time, mode='pull')
+    with listening_peer(tmp_path / 'a', 'alice') as a, listening_peer(tmp_path / 'pat', 'pat') as pat:
+        contacts = {}
+        for key, peer in (('a', a), ('pat', pat)):
+            card, mine = peer[2].card(peer[1]), mo[2].card(mo[1])
+            contacts[key] = peer[2].pair(peer[1], mine, code=pairing_code(mine))['id']
+            mo[2].pair(mo[1], card, code=pairing_code(card))
+        room = a[0].create_room(a[1], 'Across HTTPS', [contacts['a']])
+        a[0].send_message(a[1], room['id'], 'one', 'hello mac')
+        share(pat, contacts['pat'], 'from pat')
+        loop = Federate(mo[2])
+
+        loop.run_pass()                                   # a pull from each listener
+        remote = mo[0].list_rooms(mo[1])[0]
+        assert [m['body'] for m in mo[0].get_room(mo[1], remote['id'])['messages']] == ['hello mac']
+        assert [layer['body'] for layer in mo[0].shared_layers(mo[1])] == ['from pat']
+
+        mo[0].send_message(mo[1], remote['id'], 'reply', 'hello back')
+        loop.run_pass()                                   # no pull is due; the reply is pushed to alice's listener
+        assert [m['body'] for m in a[0].get_room(a[1], room['id'])['messages']] == ['hello mac', 'hello back']
+
+        a[0].remove_participant(a[1], room['id'], contacts['a'])
+        mo[2].make_due()                                  # Check delivery now
+        loop.run_pass()                                   # the next pull carries the withdrawal
+        assert mo[0].list_rooms(mo[1]) == []
+        assert [layer['body'] for layer in mo[0].shared_layers(mo[1])] == ['from pat']
