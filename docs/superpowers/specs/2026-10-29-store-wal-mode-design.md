@@ -94,9 +94,10 @@ held by another thread (it must complete without waiting):
 Health (`app.py`) stays gated on purpose: it is how a stuck gate or a wedged store shows, to route-watch and to a
 person, so it must wait as a write would. These also stay gated, because they write or must be serialized: anything
 that can create the station identity (remote room reads, the lessons snapshot: `signatures.py`'s `_station_identity`
-relies on the gate so two processes can't both create it); the imprint sweep (its filesystem actions rely on the row staying put); every read that writes lazily
-(room reads closing a quiet breakout, `unread` touching cursors, `ship_for_key` updating `last_used`, `mentions`); and
-every read-then-write in one transaction (the lessons query's step 4, connector Task 8's tools, which write a receipt).
+relies on the gate so two processes can't both create it); the imprint sweep (its filesystem actions rely on the
+row staying put); every read that writes lazily (room reads closing a quiet breakout, `unread` touching cursors,
+`ship_for_key` updating `last_used`, `mentions`); and every read-then-write in one transaction (the lessons query's
+step 4, connector Task 8's tools, which write a receipt).
 
 A read on `reading()` that later decides a write already re-checks inside the deciding transaction today (auth then
 the route; `station_pending` then `station_decide`; `sync_once` then `_prepare`), so moving the read adds no gap. One

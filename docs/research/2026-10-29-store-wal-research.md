@@ -88,8 +88,9 @@ SQLite. All openers are local user units on the Pi.
   meanwhile. The hot-journal retry (:210-236) is rollback-specific.
 - [inferred] A backup copy keeps the source's WAL flag, so every later `mode=ro` open of a copy leaves an empty `-wal`
   and a 32 KB `-shm` beside it (seen on this Pi for engram's WAL graph.db:
-  2026-10-25-permissions-by-place-plan-review.md:1056-1057). Then `prune` never removes them (backups.py:83-144), `TEMP_NAME` never matches `.tmp-wal` (:30, 200-202),
-  and runbook steps 5 and 6 read leftovers as "a killed reconcile" (station-restore.md:92, 148).
+  2026-10-25-permissions-by-place-plan-review.md:1056-1057). Then `prune` never removes them (backups.py:83-144),
+  `TEMP_NAME` never matches `.tmp-wal` (:30, 200-202), and runbook steps 5 and 6 read leftovers as "a killed
+  reconcile" (station-restore.md:92, 148).
 - Copies of a live file by its main file only would miss committed pages still in a `-wal`: test helpers `set_aside`
   (test_restore.py:630), :861, :863, :1322; runbook step 6's `install` of restored.sqlite3 (:150), guarded today only by
   the `:148` glob. `copy_off` byte-copies the main file (backups.py:309-315). `_replaced` checks only `-journal` for
