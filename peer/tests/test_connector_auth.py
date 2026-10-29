@@ -1105,6 +1105,25 @@ def test_a_superseded_refresh_token_presented_again_revokes_the_grant(home):
     assert refresh(home, client, taken['refresh_token']).json() == {'error': 'invalid_grant'}
 
 
+def test_two_workers_that_refresh_one_token_at_once_lose_the_connection_together(home):
+    """Tardis, recording the trade the rule above makes: a client whose two workers refresh one token at once, each
+    keeping its own answer, looks like a split chain. Before, the worker left holding the revoked successor got
+    invalid_grant and the other carried on; now its next refresh, even half an hour on and after the other has rotated
+    again, revokes the grant, so both stop and the person reconnects. A client that refreshes one at a time loses
+    nothing."""
+    client, code = allowed(home)
+    shared = exchange(home, client, code).json()['refresh_token']
+    first = refresh(home, client, shared).json()  # worker one
+    second = refresh(home, client, shared).json()  # worker two, within the 60 s
+    home.clock[0] += 1800
+    later = refresh(home, client, second['refresh_token'])
+    assert later.status_code == 200 and bearer(home, later.json()['access_token'])
+    assert refresh(home, client, first['refresh_token']).json() == {'error': 'invalid_grant'}
+    assert [grant['revoked'] for grant in table(home, 'connector_grants')] == [home.clock[0]]
+    assert bearer(home, later.json()['access_token']) is None
+    assert refresh(home, client, later.json()['refresh_token']).json() == {'error': 'invalid_grant'}
+
+
 def test_reuse_after_60_seconds_revokes_the_grant(home):
     client, code = allowed(home)
     first = exchange(home, client, code).json()
