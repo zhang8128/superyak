@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import threading
 import time
 from .auth import Auth
 from .spaces import Spaces
@@ -55,6 +56,9 @@ CREATE TABLE IF NOT EXISTS room_members(room_id TEXT NOT NULL REFERENCES rooms(i
 CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id), author_id TEXT NOT NULL REFERENCES users(id), client_message_id TEXT NOT NULL, body TEXT NOT NULL, epoch INTEGER NOT NULL, created REAL NOT NULL, UNIQUE(room_id,author_id,client_message_id));
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
 '''
+
+JOURNAL_SIZE_LIMIT = 67108864  # store-wal-mode D2: a checkpointed WAL is cut back to 64 MB
+_reading = threading.local()  # store-wal-mode D3: this thread's reading() depth
 
 class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
@@ -128,18 +132,27 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
                 raise ValueError('Symlinked state is not allowed')
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *, wait=None):
+        """The one way to write: the dispatch gate, then BEGIN IMMEDIATE. `wait` bounds this call's SQLite lock wait
+        (health's 3 s); without it the Store's rule holds (30 s, or `busy_until`). Refused inside reading()."""
+        if self.in_reading():
+            raise RuntimeError('a write inside reading(): a gate-free snapshot never writes')
         with self.dispatch_gate:
-            with self._transaction() as db:
+            with self._transaction(wait) as db:
                 yield db
 
+    def _wait(self, wait=None):
+        if wait is not None:
+            return wait
+        return 30 if self._busy_until is None else max(0.001, min(30, self._busy_until - self._monotonic()))
+
     @contextmanager
-    def _transaction(self):
+    def _transaction(self, wait=None):
         self._check_paths()
-        wait = 30 if self._busy_until is None else max(0.001, min(30, self._busy_until - self._monotonic()))
-        db = sqlite3.connect(self.db_path, timeout=wait)
+        db = sqlite3.connect(self.db_path, timeout=self._wait(wait))
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA foreign_keys=ON')
+        db.execute(f'PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}')
         try:
             db.execute('BEGIN IMMEDIATE')
             yield db
@@ -155,6 +168,50 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             raise
         finally:
             db.close()
+
+    def in_reading(self):
+        """Whether this thread is inside reading() now."""
+        return getattr(_reading, 'depth', 0) > 0
+
+    @contextmanager
+    def reading(self):
+        """Store-wal-mode D3: one consistent snapshot that cannot write. In WAL mode it takes neither the dispatch gate
+        nor SQLite's write lock, so a pure read never waits for a write and no write waits for it; in any other mode it is
+        the gate plus a deferred BEGIN, as safe as a transaction. It refuses, in both modes, a thread that holds the gate
+        or is already inside reading(), and transaction() refuses inside it. Never hold it across an await or in a yield
+        dependency: its thread-local state and, in rollback mode, the gate belong to the thread that entered it."""
+        if self.in_reading():  # first, so a nested reading() says so in both modes (in rollback mode the outer holds the gate)
+            raise RuntimeError('reading() inside reading(): one snapshot at a time')
+        if self.dispatch_gate.held():
+            raise RuntimeError('reading() inside the dispatch gate: a gated caller reads in its own transaction')
+        self._check_paths()
+        db = sqlite3.connect(self.db_path, timeout=self._wait())
+        gated = False
+        try:
+            db.row_factory = sqlite3.Row
+            db.execute('PRAGMA query_only=ON')
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute(f'PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}')
+            if db.execute('PRAGMA journal_mode').fetchone()[0] != 'wal':
+                self.dispatch_gate.__enter__()
+                gated = True
+                db.execute(f'PRAGMA busy_timeout={int(self._wait() * 1000)}')  # the wait counted after the gate
+            db.execute('BEGIN')
+            _reading.depth = getattr(_reading, 'depth', 0) + 1
+            try:
+                yield db
+            except UnicodeError:
+                raise Problem(400, 'Text must be valid UTF-8') from None
+            finally:
+                _reading.depth -= 1
+        finally:
+            try:
+                if db.in_transaction:
+                    db.rollback()
+                db.close()
+            finally:
+                if gated:
+                    self.dispatch_gate.__exit__(None, None, None)
 
     def emit(self, db, kind, resource_id, resource_version, payload=None):
         """Append an event inside the caller's resource transaction."""

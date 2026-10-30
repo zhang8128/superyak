@@ -19,9 +19,11 @@ NAMED = ('superyak-lighthouse', 'superyak-door', 'superyak-ship', 'superyak-odo'
 
 
 def station(tmp_path):
+    """A store that has run (it holds dispatch.lock, as the live one does), in rollback mode whatever the suite's mode."""
     store = Store(tmp_path / 'station')
-    with store.transaction():  # a store that has run holds dispatch.lock, as the live one does
-        pass
+    with sqlite3.connect(store.db_path) as db:
+        db.execute('PRAGMA journal_mode=DELETE').fetchone()
+    db.close()
     return store
 
 

@@ -1423,6 +1423,8 @@ def test_a_restore_from_a_rollback_store_leaves_it_rollback(tmp_path, capsys):
     run_runbook(tmp_path, 3, '')
     store = Store(tmp_path / 'home' / '.local' / 'share' / 'superyak' / 'lighthouse')
     store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    with closing(sqlite3.connect(store.db_path)) as db:  # rollback mode whatever the suite's mode
+        db.execute('PRAGMA journal_mode=DELETE').fetchone()
     copy = staged(tmp_path, store)
     aside = copy.parent
     shutil.copyfile(copy, aside / 'chosen.sqlite3')

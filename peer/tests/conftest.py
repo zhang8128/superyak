@@ -1,5 +1,37 @@
+from contextlib import closing
+import os
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
+
+# Store-wal-mode plan Task 4: SUPERYAK_TEST_JOURNAL=wal runs the suite with every Store a test makes switched to WAL,
+# so each behaviour is tested in both modes. A test that pins rollback mode carries @pytest.mark.journal('delete').
+JOURNAL = os.environ.get('SUPERYAK_TEST_JOURNAL', 'delete')
+
+
+def pytest_collection_modifyitems(config, items):
+    if JOURNAL != 'wal':
+        return
+    pinned = pytest.mark.skip(reason='pins rollback mode; this run has SUPERYAK_TEST_JOURNAL=wal')
+    for item in items:
+        marker = item.get_closest_marker('journal')
+        if marker is not None and marker.args and marker.args[0] == 'delete':
+            item.add_marker(pinned)
+
+
+@pytest.fixture(autouse=True)
+def every_store_in_the_journal_mode_asked(monkeypatch):
+    if JOURNAL != 'wal':
+        return
+    from superyak_peer.db import Store
+    built = Store.__init__
+
+    def in_wal(self, *args, **kwargs):
+        built(self, *args, **kwargs)
+        with closing(sqlite3.connect(self.db_path)) as db:
+            db.execute('PRAGMA journal_mode=WAL').fetchone()
+    monkeypatch.setattr(Store, '__init__', in_wal)
 
 # Public route spec 6.1: Starlette's default client host, "testclient", is not an IP address, so the station treats it
 # as public. Every TestClient the suite builds runs as tailnet instead, unless the test passes its own client.
