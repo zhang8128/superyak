@@ -63,7 +63,7 @@ class Layers:
             return self._layer_json(self._owned_layer(db, actor, key))
 
     def get_layer(self, actor, key):
-        with self.transaction() as db:
+        with self.reading() as db:
             return self._layer_json(self._owned_layer(db, actor, key))
 
     def list_layers(self, actor):

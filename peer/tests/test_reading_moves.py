@@ -46,6 +46,7 @@ MOVED_READS = (
     'federate.Federate._pushed',
     'room_board.RoomBoard.board_counts',
     'room_board.RoomBoard.board_view',
+    'layers.Layers.get_layer',
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -70,6 +71,7 @@ CALLS = {
     'federate.Federate._pushed': lambda s: s.federate._pushed(),
     'room_board.RoomBoard.board_counts': lambda s: s.store.board_counts(s.ids['serenity']),
     'room_board.RoomBoard.board_view': lambda s: s.store.board_view(s.ids['andy']),
+    'layers.Layers.get_layer': lambda s: s.store.get_layer(s.ids['andy'], s.layer),
 }
 
 
