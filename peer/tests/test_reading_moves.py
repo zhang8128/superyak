@@ -169,7 +169,10 @@ def test_each_moved_read_runs_while_the_gate_and_a_write_are_held(busy_wal_store
 PACKAGE = Path(superyak_peer.__file__).parent
 SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 GATED_CALLS = {'transaction', 'reading', 'bounded', 'DispatchGate'}
-# The walk's named allowance: (the gated caller, the moved read the walk says it reaches), each with why it is not one.
+# The walk's named allowance, {(gated caller, the moved read the walk says it reaches): why it is no gated caller}. It is
+# empty: the one coincidence of names the walk meets, journal_mode.units_active naming subprocess.run and so
+# Federate.run (which reaches _requests), is never inside a gated block, since switch_journal calls it before it takes
+# the gate. A real gated caller is never allowed here; its read goes back on transaction().
 ALLOWED = {}
 
 
