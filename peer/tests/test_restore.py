@@ -2221,3 +2221,20 @@ def test_a_copy_from_before_receipts_takes_the_replaced_files(tmp_path, capsys):
     assert code == 0, err
     assert receipts_in(copy) == {since}
 
+
+def test_a_restore_keeps_why_a_connection_ended(tmp_path, capsys):
+    """Task 9a: a connection revoked since the copy keeps the replaced file's reason; one the restore itself revokes
+    says so."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    by_you, gone = connection(store, sam['id']), connection(store, sam['id'])
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:
+        db.execute("UPDATE connector_grants SET revoked=?, revoked_why='you' WHERE id=?", (store.clock(), by_you))
+        db.execute('DELETE FROM connector_grants WHERE id=?', (gone,))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    grants = grants_in(copy)
+    assert (grants[by_you]['revoked_why'], grants[gone]['revoked_why']) == ('you', 'restore')
+

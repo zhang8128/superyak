@@ -187,6 +187,7 @@ class ConnectorReads:
 
     def _receipt(self, db, grant, tool, seen, outcome, length):
         row = db.execute('SELECT redirect_host FROM connector_grants WHERE id=?', (grant['grant_id'],)).fetchone()
+        db.execute('UPDATE connector_grants SET last_used=? WHERE id=?', (self.clock(), grant['grant_id']))  # Task 9a
         db.execute('INSERT INTO connector_reads VALUES(?,?,?,?,?,?,?,?,?,?)',
                    (secrets.token_urlsafe(12), grant['grant_id'], grant['person_id'], row['redirect_host'] if row else '',
                     self.clock(), tool, json.dumps(seen.read), json.dumps(seen.refused), length, outcome))

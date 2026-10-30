@@ -30,6 +30,7 @@ from .imprints import Imprints, IMPRINT_SCHEMA
 from .room_cloud import RoomCloud, ROOM_CLOUD_SCHEMA
 from .connector import Connector, OAUTH_SCHEMA
 from .connector_reads import ConnectorReads, READS_SCHEMA
+from .connector_apps import ConnectorApps
 from .common import encode, Problem
 from .peer_store import PeerStore, PEER_SCHEMA
 from .dispatch import DispatchGate
@@ -56,7 +57,7 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL R
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
 '''
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads, ConnectorApps):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
 
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True, busy_until=None,
@@ -94,6 +95,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             imprint_columns = {row['name'] for row in db.execute('PRAGMA table_info(imprint_requests)')}
             if 'removal_files' not in imprint_columns:  # store imprints, final review M1: hashes kept before a removal
                 db.execute('ALTER TABLE imprint_requests ADD COLUMN removal_files TEXT')
+            grant_columns = {row['name'] for row in db.execute('PRAGMA table_info(connector_grants)')}
+            if 'revoked_why' not in grant_columns:  # connector Task 9a: why a connection ended (build:connector-revoke-reason)
+                db.execute('ALTER TABLE connector_grants ADD COLUMN revoked_why TEXT')
             ticket_columns = {row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
             if 'first_deferred' not in ticket_columns:  # ship-status fixes F3: the deferral a run resolved, on its ticket
                 db.execute('ALTER TABLE tickets ADD COLUMN first_deferred REAL')

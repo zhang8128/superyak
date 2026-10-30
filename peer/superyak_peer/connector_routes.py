@@ -347,3 +347,40 @@ def install(app, public_origin, callback):
         return JSONResponse({'error': 'Method not allowed'}, 405, headers={'allow': 'POST'})
 
     app.add_api_route('/mcp', not_allowed, methods=['GET', 'DELETE'])
+
+    # ---- Task 9a: Connected apps (a person's own connections), the admins' view and the new-connection notice. Persons
+    # only, on the home's own origin as every /api route is; a ship key gets 403 (current_user). Installed with the
+    # connector. A write checks its caller before it reads its body (the event-loop guard's walk). ----
+    from .app import actor, body, caller, current_user
+
+    @app.get('/api/connected-apps')
+    def connected_apps(request: Request):
+        return store.connected_apps(actor(request))
+
+    @app.get('/api/connected-apps/notice')
+    def connected_app_notice(request: Request):
+        return store.connected_app_notice(actor(request))
+
+    @app.get('/api/connected-apps/{key}/receipts')
+    def connected_app_receipts(key: str, request: Request):
+        return store.connected_app_receipts(actor(request), key)
+
+    @app.put('/api/connected-apps/{key}/rooms')
+    async def connected_app_rooms(key: str, request: Request):
+        who, data = await caller(current_user, request), await body(request)
+        rooms = data.get('rooms') if isinstance(data, dict) else None
+        return await run_in_threadpool(store.connected_app_rooms, who, key, rooms)
+
+    @app.post('/api/connected-apps/{key}/revoke')
+    async def connected_app_revoke(key: str, request: Request):
+        who = await caller(current_user, request)
+        return await run_in_threadpool(store.connected_app_revoke, who, key)
+
+    @app.get('/api/admin/connected-apps')
+    def admin_connected_apps(request: Request):
+        return store.admin_connected_apps(actor(request))
+
+    @app.post('/api/admin/connected-apps/{key}/revoke')
+    async def admin_connected_app_revoke(key: str, request: Request):
+        who = await caller(current_user, request)
+        return await run_in_threadpool(store.admin_connected_app_revoke, who, key)

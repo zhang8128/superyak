@@ -122,6 +122,7 @@ only-include = [
     "tests/test_chat_paging.py",
     "tests/test_chats.py",
     "tests/test_cli.py",
+    "tests/test_connector_apps.py",
     "tests/test_connector_auth.py",
     "tests/test_connector_mcp.py",
     "tests/test_connector_reads.py",

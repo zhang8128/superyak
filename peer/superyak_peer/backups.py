@@ -933,6 +933,8 @@ def _keep_connections_like_replaced(db, old, now, report):
         return
     there = {row[0]: row[1:] for row in old.execute(
         'SELECT id, person_id, client_id, redirect_host, rooms, ends, revoked FROM connector_grants')}
+    whys = (dict(old.execute('SELECT id, revoked_why FROM connector_grants'))  # read only when both files have it
+            if _has(old, 'connector_grants.revoked_why') else {})
     revoked = narrowed = shortened = 0
     for row in db.execute('SELECT id, person_id, client_id, redirect_host, rooms, ends FROM connector_grants '
                           'WHERE revoked IS NULL ORDER BY created, id').fetchall():
@@ -966,6 +968,9 @@ def _keep_connections_like_replaced(db, old, now, report):
                     continue
                 when, how = now, 'no room in both files, so a room it named may continue in a newer room'
         db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (when, row['id']))
+        if _has(db, 'connector_grants.revoked_why'):  # Task 9a: as the replaced file said, or the restore's own
+            why = whys.get(row['id']) if how == 'as in the replaced file' else None
+            db.execute('UPDATE connector_grants SET revoked_why=? WHERE id=?', (why or 'restore', row['id']))
         report['connections'].append(_connection_line(db, row, how))
         revoked += 1
     report['counts'].update({'connections revoked': revoked, 'connections narrowed': narrowed,
@@ -1061,6 +1066,8 @@ def _revoke_every_connection(db, old, now, report):
     rows = db.execute('SELECT id, person_id FROM connector_grants WHERE revoked IS NULL ORDER BY created, id').fetchall()
     for row in rows:
         db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (now, row['id']))
+        if _has(db, 'connector_grants.revoked_why'):
+            db.execute("UPDATE connector_grants SET revoked_why='restore' WHERE id=?", (row['id'],))
         report['connections'].append(_connection_line(db, row, 'no usable replaced file'))
     report['counts']['connections revoked'] = len(rows)
 
