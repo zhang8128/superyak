@@ -24,6 +24,7 @@ from superyak_peer.auth import token_hash
 from superyak_peer.common import Problem
 from superyak_peer.connector import REVOKED
 from superyak_peer.db import Store
+from superyak_peer.journal_mode import header_mode, switch_journal
 from superyak_peer.door import create_door
 
 
@@ -781,6 +782,30 @@ def test_a_second_unpair_run_is_not_called_swapped_after_an_absent_replaced_file
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced, '--unpair', peers['cut'][:12])
     assert code == 0, err
     assert absent in out and peer_rows(copy)[0][peers['cut']] == 0
+
+
+def test_restore_test_copies_a_wal_store_as_one_file(tmp_path):
+    """Store-wal-mode D4: the restore test's copy of a WAL store is one rollback-mode file too."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    target = tmp_path / 'scratch.sqlite3'
+    assert backups._restored_copy(store.db_path, target) is True
+    assert header_mode(target) == 'delete'
+
+
+def test_reconcile_refuses_a_wal_flagged_staged_copy(tmp_path, capsys):
+    """Store-wal-mode D4: a staged restored.sqlite3 in WAL can only come from a copy made outside the backup paths, and
+    step 6 would install its main file alone; the reconcile refuses it, and nothing is changed."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('PRAGMA journal_mode=WAL').fetchone()
+    before = copy.read_bytes()
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 1 and 'WAL' in err, err
+    assert copy.read_bytes() == before
 
 
 def test_reconcile_refuses_a_copy_that_is_not_a_station_database(tmp_path, capsys):
