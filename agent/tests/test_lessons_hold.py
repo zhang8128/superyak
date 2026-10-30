@@ -470,3 +470,12 @@ def test_the_hold_bytes_are_the_peers():
     finally:
         sys.dont_write_bytecode = before
     assert lessons_hold.HOLD_BYTES == lessons.HOLD_BYTES == 6
+
+
+def test_a_held_tools_name_is_found_only_in_its_own_call():
+    """Spec lesson-holds-on-tool-calls, item 3, in the provider's own filter of the answer: a held tool's name is found
+    only in a call to that tool, and a call to one holds no other value."""
+    post = 'mcp__station__station_post'
+    assert lessons_hold._contained(post, post) and not lessons_hold._contained(post, f'rg {post} agent/')
+    assert not lessons_hold._contained('station', post) and lessons_hold._contained('git push', 'git push origin')
+

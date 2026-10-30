@@ -29,6 +29,16 @@ from . import checklist_firing as fp, holds as hs, lessons_hook as lh
 
 KIND = 'lesson'
 HOLD_BYTES = 6  # only a `command` value of at least 6 bytes holds a command (section 8)
+# The tools the hold answers besides Bash (spec lesson-holds-on-tool-calls, item 3): a value equal to one holds only
+# that tool's call, and no other value holds a tool call. It must equal the peer's lessons.HELD_TOOLS.
+HELD_TOOLS = frozenset({'AskUserQuestion', 'mcp__station__station_post', 'mcp__station__station_claim'})
+
+
+def _contained(value, cut):
+    """lessons.contained, on this side: a held tool's name only in a call to that tool, nothing else in one."""
+    if value in HELD_TOOLS or cut in HELD_TOOLS:
+        return value == cut
+    return value in cut
 HEADS_MAX = 256  # a session's distinct heads; the oldest go first
 START_MARGIN = lh.START_MARGIN
 SAVE_MARGIN = 0.15  # before the entry gives up: its render, save and print once the provider has answered
@@ -147,7 +157,7 @@ def _candidates(command, record, now, limit, settings_path, env, monotonic, cloc
     got = []
     for lesson in answer:
         value = lesson.get('command')
-        if lesson['id'] in seen or lesson['match'] != 'words' or not value or value not in cut \
+        if lesson['id'] in seen or lesson['match'] != 'words' or not value or not _contained(value, cut) \
                 or len(value.encode('utf-8')) < HOLD_BYTES:
             continue
         text = lh.hold_reason(lesson, first=not got and limit == hs.HOLDS_PER_SESSION)

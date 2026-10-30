@@ -133,3 +133,11 @@ def test_the_hold_bytes_agree():
     from superyak_agent import lessons_hold
     from superyak_peer import lessons
     assert lessons_hold.HOLD_BYTES == lessons.HOLD_BYTES == 6
+
+
+def test_the_held_tools_agree():
+    """Spec lesson-holds-on-tool-calls, item 3 and N-d: the two sides list the same held tools, as they do HOLD_BYTES."""
+    from superyak_agent import lessons_hold
+    from superyak_peer import lessons
+    assert lessons_hold.HELD_TOOLS == lessons.HELD_TOOLS == {
+        'AskUserQuestion', 'mcp__station__station_post', 'mcp__station__station_claim'}

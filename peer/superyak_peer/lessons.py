@@ -26,6 +26,11 @@ LIVE_CAP = 32
 # hold contract, review M2). It must equal the hook's own HOLD_BYTES (agent/superyak_agent/lessons_hold.py). At a
 # prompt, any value this long matches.
 HOLD_BYTES = 6
+# The tools the hold answers besides Bash (spec lesson-holds-on-tool-calls, item 3). A value equal to one of them holds
+# only that tool's call and matches by words at no other event, and no other value holds a tool call, so a grep of the
+# name spends no lesson and `station` can't hold every post. It must equal the hook's own HELD_TOOLS
+# (agent/superyak_agent/lessons_hold.py).
+HELD_TOOLS = frozenset({'AskUserQuestion', 'mcp__station__station_post', 'mcp__station__station_claim'})
 RETRACT = re.compile(r'retract ([0-9a-f]{64}:[0-9a-f]{64})')
 FULL_ID = re.compile(r'[0-9a-f]{64}:[0-9a-f]{64}')
 SHORT = re.compile(r'[0-9a-f]{8}-[0-9a-f]{8}')
@@ -555,7 +560,8 @@ def prompt_answer(request, index, age, socket_path, deadline, monotonic):
             pool.append(item)
     matched = []
     for item in pool:
-        found = [(k, v) for k in APPLIES for v in item[k] if len(v.encode('utf-8')) >= HOLD_BYTES and v in prompt]
+        found = [(k, v) for k in APPLIES for v in item[k]
+                 if len(v.encode('utf-8')) >= HOLD_BYTES and v not in HELD_TOOLS and v in prompt]  # item 3
         if found:
             matched.append((-len(found), item['id'], item, next((v for k, v in found if k == 'command'), None)))
     matched.sort(key=lambda m: m[:2])
@@ -599,9 +605,18 @@ def answer_prompt(request, data_dir, socket_path, clock=time.time, monotonic=tim
     return prompt_answer(request, index, age, socket_path, near, monotonic)
 
 
+def contained(value, command):
+    """Whether `value` is found in `command`, a Bash command or a held tool's name: literally, except that a held tool's
+    name is found only in a call to that tool, and a call to a held tool holds no other value (item 3)."""
+    if value in HELD_TOOLS or command in HELD_TOOLS:
+        return value == command
+    return value in command
+
+
 def holding(values, command):
-    """The `command` values found literally in `command` that can hold it: at least HOLD_BYTES each (section 8)."""
-    return [v for v in values if len(v.encode('utf-8')) >= HOLD_BYTES and v in command]
+    """The `command` values found in `command` that can hold it: at least HOLD_BYTES each (section 8), found as
+    `contained` finds them."""
+    return [v for v in values if len(v.encode('utf-8')) >= HOLD_BYTES and contained(v, command)]
 
 
 def could_hold(command, ship, data_dir, seen=()):
@@ -639,9 +654,11 @@ def words(item, request):
     held = holding(item['command'], request['command'])
     if request['words_only']:
         return len(held), (held or [None])[0]
-    commands = [v for v in item['command'] if v in request['command']]
-    count = len(commands) + sum(1 for v in item['error'] if v in request['error'])
-    count += sum(1 for v in item['file'] if v in request['command'] or v in request['error'] or v in request['cwd'])
+    # A held tool's name matches at its own tool's hold alone, never at a failure or a session start (item 3, R1)
+    commands = [v for v in item['command'] if v not in HELD_TOOLS and v in request['command']]
+    count = len(commands) + sum(1 for v in item['error'] if v not in HELD_TOOLS and v in request['error'])
+    count += sum(1 for v in item['file'] if v not in HELD_TOOLS
+                 and (v in request['command'] or v in request['error'] or v in request['cwd']))
     return count, (held or commands or [None])[0]  # C43: one that can hold, when one matched
 
 
