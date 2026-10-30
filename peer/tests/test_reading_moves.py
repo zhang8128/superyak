@@ -34,6 +34,7 @@ MOVED_READS = (
     'ships.Ships.station_notices',
     'connector.Connector.bearer',
     'federation.Federation._due_rows',
+    'federation.Federation._pending_count',
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -50,6 +51,7 @@ CALLS = {
     'ships.Ships.station_notices': lambda s: s.store.station_notices(),
     'connector.Connector.bearer': lambda s: s.store.bearer(s.access, RESOURCE),
     'federation.Federation._due_rows': lambda s: s.fed._due_rows(20),
+    'federation.Federation._pending_count': lambda s: s.fed._pending_count(),
 }
 
 

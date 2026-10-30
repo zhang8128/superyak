@@ -387,7 +387,7 @@ class Federation:
 
     def _pending_count(self):
         """sync_once's pending count: every row still waiting, for any peer."""
-        with self.store.transaction() as db:
+        with self.store.reading() as db:
             return db.execute("SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed')").fetchone()[0]
 
     @staticmethod
