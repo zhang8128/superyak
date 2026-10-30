@@ -385,13 +385,13 @@ def test_the_restore_runbook_puts_the_federation_units_back_as_they_were():
     """Federation pull plan SF10 and Rio Grande's SF5: step 3 saves each federation unit's state with the watchers'
     (by pattern, so only installed ones), then disables and stops it, so a restart mid-restore can't start one writing
     into a half-restored database. Step 8 puts each back as it was, after the lighthouse. Elsewhere a command names
-    them only to filter step 3's list (a rollback whose carry refused, 10.4: off first, then on after the wait), so
-    nothing enables one that isn't installed, or one Andy turned off."""
+    them only to filter step 3's list: step 8's two lines hold them after a rollback until the carry's mark, and 10.4's
+    one line starts them after the wait. So nothing enables one that isn't installed, or one Andy turned off."""
     lines = (REPO / 'docs' / 'station-restore.md').read_text().splitlines()
     [capture] = [text for text in lines if 'list-units --all --plain --no-legend' in text]
     assert "'superyak-ship-*'" in capture and "'superyak-federat*'" in capture
     named = [text.strip() for text in lines if 'superyak-federat' in text and 'systemctl' in text and text != capture]
-    assert len(named) == 4 and all(text.startswith("for unit in $(awk '") and '"$ASIDE/watchers.txt"' in text
+    assert len(named) == 3 and all(text.startswith(('for unit in $(awk ', 'until [ ')) and '"$ASIDE/watchers.txt"' in text
                                    for text in named), named
     lighthouse = lines.index('   systemctl --user start superyak-lighthouse superyak-door')
     restored = [n for n, text in enumerate(lines) if 'watchers.txt' in text and 'systemctl --user start "$unit"' in text]

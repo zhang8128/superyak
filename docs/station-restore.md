@@ -206,7 +206,8 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    wormhole: if a room shows bridged that should not be, run `make station-unbridge ID=<short id>`. Put the units
    step 3 saved, the watchers and the federation units, back as they were, after the lighthouse: enable again those that
    were enabled, and start again those that were running (a crashed one restarting counts as running). Check each
-   started unit with `is-active`, then enable both timers again. A pull peer's deliveries resume about 5 minutes after
+   started unit with `is-active`, then enable both timers again. After a rollback (10.4), the two watcher lines leave
+   the federation units off unless 10.3's carry wrote `$ASIDE/carried`; 10.4 says how to start them then. A pull peer's deliveries resume about 5 minutes after
    step 5's reconcile: until then the listener answers its pulls "Replay", counts no failure and keeps its acks, so a
    copy's lost pull nonces can't be replayed (fix:restore-keeps-pull-nonces).
    ```bash
@@ -215,8 +216,8 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    for unit in superyak-ship superyak-odo; do systemctl --user enable --now "$unit"; done
    make station-rooms                                   # check the bridged column first
    systemctl --user enable --now superyak-wormhole
-   for unit in $(awk '$2 == "enabled=enabled" {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done   # the watchers step 3 saved as enabled
-   for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done   # and those it saved as running
+   for unit in $(awk -v hold="$(test -e "$ASIDE/restored-live" && test ! -e "$ASIDE/carried" && echo 1)" '$2 == "enabled=enabled" && !(hold && $1 ~ /^superyak-federat/) {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done   # the watchers step 3 saved as enabled
+   for unit in $(awk -v hold="$(test -e "$ASIDE/restored-live" && test ! -e "$ASIDE/carried" && echo 1)" '$3 ~ /^active=(active|activating|reloading)$/ && !(hold && $1 ~ /^superyak-federat/) {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done   # and those it saved as running
    for unit in superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do printf '%s ' "$unit"; systemctl --user is-active "$unit"; done
    systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer   # as make station-units does
    ```
@@ -257,29 +258,24 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        `make station-carry-nonces ASIDE="$ASIDE"`. The file put back lacks the nonces that station recorded while it
        was live, so a pull it served could otherwise be replayed. The carry copies them in from `$ASIDE/restored-live`
        exactly, depending on no clock (fix:pull-floor-after-rollback), and prints `Carried N of the M pull nonces the
-       restored station recorded`; 0 of 0 means it served no pull. Running it again adds nothing. It refuses, changing
-       nothing, when `$ASIDE` still holds a `peer.sqlite3` file (10.3's move hasn't run), when `restored-live` is missing
-       or damaged, when it isn't marked as the station restored from `$ASIDE`, or when `$ASIDE` isn't the newest
-       `replaced-*` directory (set it again with the line at the top). If it refused and you can't fix what it names,
-       follow 10.4's lines for a refused carry.
-    4. Run step 8's commands, in its order, once 10.3's carry printed `Carried`. They start the lighthouse and the door,
-       enable and start the ship, odo and wormhole, put the watchers step 3 saved back as they were, and enable the
-       timers again. Step 8's checks that act on step 5's report (the law layers, the members and admins, the `bridged`
-       column) are for a restored copy and don't apply to a rollback. If the carry refused, or you can't tell that it
-       printed `Carried`, run these two lines in place of step 8's two watcher lines, so the federation units step 3
-       saved stay off (step 8's check then shows them inactive):
+       restored station recorded`; 0 of 0 means it served no pull. Only then does it write `$ASIDE/carried`, which step
+       8 reads. Running it again adds nothing. It refuses, changing nothing, when `$ASIDE` still holds a `peer.sqlite3`
+       file (10.3's move hasn't run), when `restored-live` is missing or damaged, when it isn't marked as the station
+       restored from `$ASIDE`, or when `$ASIDE` isn't the newest `replaced-*` directory (set it again with the line at
+       the top). If it refused and you can't fix what it names, go on with 10.4: step 8 then leaves the federation units
+       off.
+    4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and
+       wormhole, put the watchers step 3 saved back as they were, and enable the timers again. Step 8's checks that act on
+       step 5's report (the law layers, the members and admins, the `bridged` column) are for a restored copy and don't
+       apply to a rollback. Its two watcher lines start the federation units only if 10.3's carry wrote
+       `$ASIDE/carried`. Without it, they leave those units off (step 8's check then shows them inactive), and this one
+       line starts them. It waits until the Pi's clock is synced (after a restart, fake-hwclock runs behind until NTP
+       syncs, so no time read before that can be trusted), then 10 minutes more, counted from that moment and not from
+       any recorded time. A pull the restored station served just before the stop, from a peer whose clock ran 300 s
+       ahead, passes the clock check for up to 10 minutes after the stop, and the stop came before this wait began. It
+       is one command, `&&` throughout, so stopping it with Ctrl-C at any point starts nothing. If it never says the
+       clock is synced, stop it and leave the units off, and say so in the room.
        ```bash
-       for unit in $(awk '$2 == "enabled=enabled" && $1 !~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done
-       for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ && $1 !~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done
-       ```
-       Then start those units with the lines below. The first waits until the Pi's clock is synced (after a restart,
-       fake-hwclock runs behind until NTP syncs, so no time read before that can be trusted), then 10 minutes more,
-       counted from that moment and not from any recorded time. A pull the restored station served just before the stop,
-       from a peer whose clock ran 300 s ahead, passes the clock check for up to 10 minutes after the stop, and the stop
-       came before this wait began. If it never says the clock is synced, leave the units off and say so in the room.
-       ```bash
-       until [ "$(timedatectl show -p NTPSynchronized --value)" = yes ]; do sleep 10; done; echo 'Clock synced; the federation units start in 10 minutes'; sleep 600
-       for unit in $(awk '$2 == "enabled=enabled" && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done
-       for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done
+       until [ "$(timedatectl show -p NTPSynchronized --value)" = yes ]; do sleep 10; done && echo 'Clock synced; the federation units start in 10 minutes' && sleep 600 && for unit in $(awk '$2 == "enabled=enabled" && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done && for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done
        ```
        The lighthouse, the door, the ships and the timers needn't wait.

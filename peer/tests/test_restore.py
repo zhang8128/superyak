@@ -534,6 +534,7 @@ def test_carry_nonces_adds_the_restored_stations_nonces_once_and_says_how_many(t
     live, restored = Store(tmp_path / 'lighthouse'), restored_live(aside)
     (aside.parent / f'{aside.name}.old').mkdir()       # sorts after it, but isn't a restore directory's name
     (aside.parent / 'replaced-notes.txt').write_text('')
+    (aside.parent / 'replaced-20261016-090000').mkdir()  # an earlier restore's (the third re-check's SF2: max, not min)
     with live.transaction() as db:
         db.execute("INSERT INTO pull_nonces VALUES('o', 'kept', 5)")
     with restored.transaction() as db:
@@ -543,9 +544,25 @@ def test_carry_nonces_adds_the_restored_stations_nonces_once_and_says_how_many(t
     assert code == 0, err
     assert out == f'Carried 2 of the 3 pull nonces the restored station recorded into {live.db_path}; it had the rest\n'
     assert nonces(live.db_path) == {('o', 'kept', 5), ('o', 'served', 6), ('p', 'served', 7)}
+    assert (aside / 'carried').read_text() == '2 of 3\n'   # what step 8 reads before it starts the federation units
     code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', aside)
     assert code == 0 and out.startswith('Carried 0 of the 3 pull nonces'), err
-    assert restored.db_path.read_bytes() == source
+    assert restored.db_path.read_bytes() == source and (aside / 'carried').read_text() == '0 of 3\n'
+
+
+def test_a_carry_that_cant_write_its_mark_says_so_and_step_8_still_holds(tmp_path, capsys):
+    """The nonces are carried, but $ASIDE/carried is a symlink, which it never follows: exit 1, saying the nonces were
+    carried and that step 8 leaves the federation units off, so 10.4's line starts them. Mutations: the mark written
+    through a symlink, CarryUnmarked uncaught (a traceback)."""
+    aside = tmp_path / 'backups' / 'replaced-20261017-120000'
+    live, restored = Store(tmp_path / 'lighthouse'), restored_live(aside)
+    with restored.transaction() as db:
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'served', 6)")
+    (aside / 'carried').symlink_to(tmp_path / 'elsewhere')
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', aside)
+    assert code == 1 and out == '' and 'nothing was changed' not in err, err
+    assert 'the nonces were carried (1 of 1)' in err and 'step 8 leaves the federation units off' in err, err
+    assert nonces(live.db_path) == {('o', 'served', 6)} and not (tmp_path / 'elsewhere').exists()
 
 
 def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
@@ -637,18 +654,39 @@ def test_carry_nonces_refuses_a_symlink_in_any_of_either_files_four_names(tmp_pa
     assert tree(tmp_path) == before
 
 
-def test_a_refused_carry_starts_the_federation_units_only_after_the_clock_syncs_and_10_minutes():
-    """The second re-check's should-fix: `uptime -s` read before NTP synced showed fake-hwclock's time, so the count
-    could start early and a replay pass. The refused path reads no recorded time now: it waits for the sync, then 600 s
-    from that moment, and only then runs the two lines that start the federation units. Mutations: the start lines
-    before the wait, the wait without the sync, a shorter sleep."""
+WAIT_SHIMS = {'timedatectl': '#!/bin/sh\necho "timedatectl $*" >> "$LOG"\necho yes\n',
+              'sleep': '#!/bin/sh\necho "sleep $*" >> "$LOG"\n[ "$1" = 600 ] && exit "${SLEEP_600:-0}"\nexit 0\n'}
+
+
+def test_a_refused_carry_starts_the_federation_units_in_one_command_after_the_sync_and_10_minutes(tmp_path):
+    """The second re-check's should-fix and the third's must-fix. `uptime -s` read before NTP synced showed fake-hwclock's
+    time, so the count could start early: the line reads no recorded time, and waits for the sync, then 600 s from that
+    moment. And the wait and the start lines were three commands, so a pasted block ran the start lines after Ctrl-C
+    ended the wait: they are one line now, `&&` throughout. Run with shims, an interrupted sleep (exit 130) starts
+    nothing, and one run to the end then starts the units step 3 saved. Mutations: the start lines on their own lines,
+    `;` after the sleep, the wait without the sync, a shorter sleep."""
     text = RUNBOOK.read_text()
-    lines = text.splitlines()
-    [wait] = [n for n, line in enumerate(lines) if 'NTPSynchronized' in line and line.strip().startswith('until ')]
-    assert '--value)" = yes ]; do sleep 10; done;' in lines[wait] and lines[wait].rstrip().endswith('; sleep 600')
-    starts = [n for n, line in enumerate(lines) if '$1 ~ /^superyak-federat/' in line]
-    assert starts == [wait + 1, wait + 2] and 'systemctl --user start "$unit"' in lines[wait + 2]
-    assert 'uptime -s' not in text and 'InactiveEnterTimestamp' not in text
+    [line] = [text.strip() for text in text.splitlines() if text.strip().startswith('until ') and 'NTPSynchronized' in text]
+    aside = tmp_path / 'replaced-20261017-120000'
+    aside.mkdir()
+    (aside / 'watchers.txt').write_text('superyak-ship-running.service enabled=enabled active=active\n'
+                                        'superyak-federate.service enabled=disabled active=inactive\n'
+                                        'superyak-federation-listen.service enabled=enabled active=active\n')
+    shim, log = tmp_path / 'bin', tmp_path / 'calls.log'
+    shim.mkdir()
+    for name, body in (('systemctl', SYSTEMCTL), *WAIT_SHIMS.items()):
+        (shim / name).write_text(body)
+        (shim / name).chmod(0o755)
+
+    def run(**env):
+        log.unlink(missing_ok=True)
+        subprocess.run(['bash', '-c', line], env={'PATH': f'{shim}:{os.environ["PATH"]}', 'ASIDE': str(aside),
+                                                  'LOG': str(log), **env}, capture_output=True, text=True, timeout=60)
+        return log.read_text().splitlines() if log.exists() else []
+    assert run(SLEEP_600='130') == ['timedatectl show -p NTPSynchronized --value', 'sleep 600']
+    assert run() == ['timedatectl show -p NTPSynchronized --value', 'sleep 600',
+                     '--user enable superyak-federation-listen.service', '--user start superyak-federation-listen.service']
+    assert 'uptime -s' not in RUNBOOK.read_text() and 'InactiveEnterTimestamp' not in RUNBOOK.read_text()
 
 
 def test_restore_directories_are_named_in_utc_so_the_newest_sorts_last():
@@ -1473,6 +1511,27 @@ def test_runbook_steps_3_and_8_put_each_watcher_back_as_it_was(tmp_path):
     federation = [call for call in calls if 'superyak-federat' in call and not call.startswith('--user is-active')]
     assert federation == ['--user enable superyak-federation-listen.service', '--user start superyak-federation-listen.service']
     assert 'make station-rooms' in calls
+
+
+def test_after_a_rollback_step_8_holds_the_federation_units_until_the_carry_wrote_its_mark(tmp_path):
+    """The third re-check's SF1: step 8's watcher lines started the federation units with no gate, so step 8 as written,
+    after a carry that refused, skipped the wait. After a rollback ($ASIDE/restored-live exists) they leave those units
+    off unless 10.3's carry wrote $ASIDE/carried. The other watchers start either way, and a restore with no rollback is
+    as before (the test above). Mutations: either line without the hold, the hold ignoring the mark."""
+    aside = tmp_path / 'replaced-20261017-120000'
+    aside.mkdir(mode=0o700)
+    run_runbook(tmp_path, 3, aside)
+    (tmp_path / 'states.txt').write_text(''.join(f'{unit} disabled inactive\n' for unit in WATCHERS))
+    (aside / 'restored-live').mkdir()
+
+    def started():
+        out, calls = run_runbook(tmp_path, 8, aside)
+        return [call for call in calls if call.startswith(('--user enable superyak-', '--user start superyak-'))
+                and ('federat' in call or 'ship-running' in call)]
+    assert started() == ['--user enable superyak-ship-running.service', '--user start superyak-ship-running.service']
+    (aside / 'carried').write_text('0 of 0\n')
+    assert started() == ['--user enable superyak-ship-running.service', '--user enable superyak-federation-listen.service',
+                         '--user start superyak-ship-running.service', '--user start superyak-federation-listen.service']
 
 
 def step_6(tmp_path, aside):

@@ -1066,6 +1066,13 @@ class CarryRefused(ValueError):
     """station-carry-nonces won't touch these files; nothing was changed."""
 
 
+class CarryUnmarked(Exception):
+    """The nonces were carried, but $ASIDE/carried, which step 8 reads, could not be written."""
+
+
+CARRIED_NAME = 'carried'
+
+
 def _symlinked(path):
     """The database or one of its sidecars is a symlink, as _refuse and Store._check_paths refuse."""
     return any(Path(f'{path}{end}').is_symlink() for end in ('', '-journal', '-wal', '-shm'))
@@ -1107,8 +1114,9 @@ def carry_pull_nonces(data_dir, aside):
     move hasn't run, so the live file is not the one put back); a source that is missing, symlinked the same way, the
     live file, without pull_nonces, damaged, or not marked as restored from $ASIDE; and a $ASIDE that isn't the
     newest replaced-<time> directory, as the runbook's ASIDE line names it (the re-check's nit 2: an earlier restore that
-    was also rolled back passed everything else). Returns (nonces added, nonces in
-    the source)."""
+    was also rolled back passed everything else). After the commit it writes $ASIDE/carried, without which step 8 leaves
+    the federation units off after a rollback (CarryUnmarked if it can't). Returns (nonces added, nonces in the
+    source)."""
     aside = Path(aside)
     live, source = Path(data_dir) / LIVE_NAME, aside / 'restored-live' / LIVE_NAME
     if _symlinked(live) or not live.is_file():
@@ -1148,6 +1156,14 @@ def carry_pull_nonces(data_dir, aside):
             if db.in_transaction:
                 db.execute('ROLLBACK')
             db.execute('DETACH DATABASE restored')
+    try:  # step 8 starts the federation units after a rollback only when this is there (the third re-check's SF1)
+        fd = os.open(aside / CARRIED_NAME, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as out:
+            out.write(f'{added} of {total}\n')
+    except OSError as error:
+        raise CarryUnmarked(f'the nonces were carried ({added} of {total}), but {aside / CARRIED_NAME} could not be '
+                            f'written ({error.strerror}), so step 8 leaves the federation units off: start them with '
+                            "10.4's line") from error
     return added, total
 
 

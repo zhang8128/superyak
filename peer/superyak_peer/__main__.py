@@ -743,11 +743,13 @@ def main(argv=None):
                 parser.exit(failed.code, f'station-backup: {failed.reason}\n')
             print(f'Checked copy: {written}')
         elif args.command == 'station-carry-nonces':
-            from .backups import CarryRefused, carry_pull_nonces
+            from .backups import CarryRefused, CarryUnmarked, carry_pull_nonces
             try:
                 added, total = carry_pull_nonces(args.data_dir, args.aside)
             except CarryRefused as refused:
                 parser.exit(1, f'station-carry-nonces: nothing was changed: {refused}\n')
+            except CarryUnmarked as unmarked:
+                parser.exit(1, f'station-carry-nonces: {unmarked}\n')
             except sqlite3.Error as error:  # the transaction rolled back, so neither file changed
                 parser.exit(1, f'station-carry-nonces: nothing was changed: {type(error).__name__}: {safe_line(error, 200)}\n')
             print(f'Carried {added} of the {total} pull nonces the restored station recorded into '
