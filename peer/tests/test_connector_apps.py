@@ -207,3 +207,25 @@ def test_no_hostile_input_is_a_500(connected):
             bad.append(('raw', raw, answer.status_code))
     assert bad == []
 
+
+def test_a_live_connection_without_a_usable_token_says_so(connected):
+    """After a restore took its tokens back, a connection can stay live with none left (Rio Grande's restore case): it
+    shows as not usable, so the person connects again."""
+    with connected.store.transaction() as db:
+        db.execute('DELETE FROM connector_tokens')
+    [app] = sam(connected).get('/api/connected-apps').json()
+    assert app['ended'] is None and app['usable'] is False
+
+
+def test_a_store_from_before_9a_gains_the_reason_column(tmp_path):
+    from superyak_peer.db import Store
+    import sqlite3
+    from contextlib import closing
+    store = Store(tmp_path / 'old')
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute('ALTER TABLE connector_grants DROP COLUMN revoked_why')
+        db.commit()
+    again = Store(tmp_path / 'old')
+    with again.transaction() as db:
+        assert 'revoked_why' in {row['name'] for row in db.execute('PRAGMA table_info(connector_grants)')}
+
