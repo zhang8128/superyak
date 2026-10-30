@@ -23,6 +23,11 @@ def _number(value):
     return value if type(value) in (int, float) and math.isfinite(value) else None
 
 
+def _text(value):
+    """A stored word as it is sent, else None: a column that isn't STRICT can hold a BLOB, which no answer can encode."""
+    return value if isinstance(value, str) else None
+
+
 def _list(value, item=str):
     """A JSON list of `item`s stored in a row, or None when it can't be read (M1)."""
     try:
@@ -138,9 +143,10 @@ class ConnectorApps:
     def connected_app_receipts(self, actor, grant_id, limit=RECEIPTS_LIMIT, before=None):
         """What a connection read, newest first, a page at a time (S1): `limit` receipts, and `before`, the cursor for
         the next page, or None. Rooms are named by title as the person sees them now, each looked up once a page. A
-        connection a restore removed is found by its receipts, which name their person."""
-        if type(limit) is not int or not 1 <= limit <= RECEIPTS_MAX or before is not None and (type(before) is not int
-                                                                                                or before < 0):
+        connection a restore removed is found by its receipts, which name their person. The cursor is the last receipt's
+        own random id, never the table's rowid: that counter is the whole home's, so its gaps would count everyone
+        else's calls (S6)."""
+        if type(limit) is not int or not 1 <= limit <= RECEIPTS_MAX:
             raise Problem(400, PAGE)
         with self.transaction() as db:
             self._person(db, actor)
@@ -150,9 +156,18 @@ class ConnectorApps:
                 (grant_id, actor, grant_id, actor)).fetchone()
             if not owned:
                 raise Problem(404, NO_SUCH)
-            rows = db.execute('SELECT rowid AS position, * FROM connector_reads WHERE grant_id=? AND person_id=? '
-                              + ('AND rowid<? ' if before is not None else '') + 'ORDER BY rowid DESC LIMIT ?',
-                              (grant_id, actor, *(() if before is None else (before,)), limit + 1)).fetchall()
+            position = ()
+            if before is not None:  # rowid ordering, resolved from the id on each page (Tardis): a VACUUM that renumbers
+                # rowids between pages can't leave the cursor on another receipt. Found only among this person's
+                # receipts of this connection; the person check is a second gate, as a grant has one person
+                found = db.execute('SELECT rowid FROM connector_reads WHERE id=? AND grant_id=? AND person_id=?',
+                                   (before, grant_id, actor)).fetchone()
+                if found is None:
+                    raise Problem(400, PAGE)
+                position = (found[0],)
+            rows = db.execute('SELECT * FROM connector_reads WHERE grant_id=? AND person_id=? '
+                              + ('AND rowid<? ' if position else '') + 'ORDER BY rowid DESC LIMIT ?',
+                              (grant_id, actor, *position, limit + 1)).fetchall()
             titles = {}
 
             def titled(room):
@@ -163,12 +178,12 @@ class ConnectorApps:
             for row in rows[:limit]:
                 refused = [item for item in _list(row['rooms_refused'], dict) or []
                            if isinstance(item.get('room'), str)]
-                receipts.append({'at': _number(row['at']), 'tool': row['tool'], 'size': row['size'],
-                                 'outcome': row['outcome'],
+                receipts.append({'at': _number(row['at']), 'tool': _text(row['tool']), 'size': _number(row['size']),
+                                 'outcome': _text(row['outcome']),
                                  'rooms_read': [{'room': room, 'title': titled(room)} for room in _list(row['rooms_read']) or []],
-                                 'rooms_refused': [{'room': item['room'], 'title': titled(item['room']), 'why': item.get('why')}
-                                                   for item in refused]})
-            return {'receipts': receipts, 'before': rows[limit - 1]['position'] if len(rows) > limit else None}
+                                 'rooms_refused': [{'room': item['room'], 'title': titled(item['room']),
+                                                    'why': _text(item.get('why'))} for item in refused]})
+            return {'receipts': receipts, 'before': rows[limit - 1]['id'] if len(rows) > limit else None}
 
     def connected_app_notice(self, actor):
         """{id, app, created} for the newest connection made in the last 7 days that is still live, else None: a stolen

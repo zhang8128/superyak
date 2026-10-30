@@ -307,7 +307,7 @@ def test_receipts_are_paged_newest_first(connected):
         if before is None:
             break
     assert len(seen) == 5 and seen == sorted(seen, reverse=True)
-    for bad in ('limit=0', 'limit=501', 'limit=x', 'before=x', 'before=-1'):
+    for bad in ('limit=0', 'limit=501', 'limit=x', 'before=x', 'before=-1', 'before=' + 'y' * 100):
         assert sam(connected).get(f"/api/connected-apps/{app['id']}/receipts?{bad}").status_code == 400, bad
 
 
@@ -392,4 +392,95 @@ def test_last_used_is_the_newest_receipt_when_that_is_later(connected):
     with connected.store.transaction() as db:
         db.execute('UPDATE connector_grants SET last_used=0')
     assert sam(connected).get('/api/connected-apps').json()[0]['last_used'] == connected.clock[0]
+
+
+# ---- the re-check's S6, T1, T2, N10 and N11 ----
+
+def test_the_cursor_tells_a_person_nothing_of_anyone_else(connected):
+    """S6: the cursor was the table's rowid, a counter the whole home shares, so its gaps counted other people's calls.
+    It is the person's own receipt's random id, found only inside this connection's and this person's receipts."""
+    person(connected, 'pat@example.org', 'Pat Example')
+    pat_client, pat_code = allowed(connected, state='st-pat')  # a second connection, then made Pat's
+    pat = exchange(connected, pat_client, pat_code).json()['access_token']
+    with connected.store.transaction() as db:
+        pat_id = db.execute("SELECT id FROM users WHERE username='pat@example.org'").fetchone()[0]
+        db.execute('UPDATE connector_grants SET person_id=? WHERE id=(SELECT grant_id FROM connector_tokens WHERE '
+                   "kind='access' ORDER BY rowid DESC LIMIT 1)", (pat_id,))
+    for _ in range(3):
+        read(connected)
+        for _ in range(5):  # Pat's calls between each of Sam's
+            mcp(connected, rpc('tools/call', {'name': 'rooms', 'arguments': {}}), pat)
+        connected.clock[0] += 2
+    [app] = [a for a in sam(connected).get('/api/connected-apps').json() if a['ended'] is None]
+    with connected.store.transaction() as db:
+        mine = {r[0] for r in db.execute('SELECT id FROM connector_reads WHERE grant_id=?', (app['id'],))}
+        theirs = db.execute('SELECT id FROM connector_reads WHERE grant_id!=? LIMIT 1', (app['id'],)).fetchone()[0]
+    cursor, cursors = None, []
+    for _ in range(5):
+        page = sam(connected).get(f"/api/connected-apps/{app['id']}/receipts?limit=1" + (f'&before={cursor}' if cursor else '')).json()
+        cursor = page['before']
+        if cursor is None:
+            break
+        cursors.append(cursor)
+    assert cursor is None and len(set(cursors)) == 2 and set(cursors) <= mine  # its own receipts' ids, no one's count
+    assert sam(connected).get(f"/api/connected-apps/{app['id']}/receipts?before={theirs}").status_code == 400
+
+
+def test_each_connection_pages_only_its_own_receipts(connected):
+    """T1: one person's two connections, each read once: each page holds only its own receipt."""
+    client, code = allowed(connected, state='st-second')
+    second = exchange(connected, client, code).json()['access_token']
+    read(connected)
+    mcp(connected, rpc('tools/call', {'name': 'rooms', 'arguments': {}}), second)
+    apps = sam(connected).get('/api/connected-apps').json()
+    assert len(apps) == 2
+    tools = sorted(sam(connected).get(f"/api/connected-apps/{app['id']}/receipts").json()['receipts'][0]['tool'] for app in apps)
+    assert tools == ['read_room', 'rooms'] and all(
+        len(sam(connected).get(f"/api/connected-apps/{app['id']}/receipts").json()['receipts']) == 1 for app in apps)
+    with connected.store.transaction() as db:  # a cursor from one connection is no cursor for the other
+        other = db.execute('SELECT id FROM connector_reads WHERE grant_id=?', (apps[0]['id'],)).fetchone()[0]
+    assert sam(connected).get(f"/api/connected-apps/{apps[1]['id']}/receipts?before={other}").status_code == 400
+
+
+def test_a_kept_room_the_person_left_cant_stay(connected):
+    andy = person(connected, 'andy@example.org', 'Andy Example')
+    theirs = connected.store.create_room(andy['id'], 'Shared', [connected.person['id']])['id']
+    [app] = sam(connected).get('/api/connected-apps').json()
+    assert sam(connected).put(f"/api/connected-apps/{app['id']}/rooms", json={'rooms': [theirs, connected.rooms[1]]}).status_code == 200
+    connected.store.remove_participant(andy['id'], theirs, connected.person['id'])
+    assert sam(connected).put(f"/api/connected-apps/{app['id']}/rooms", json={'rooms': [theirs]}).status_code == 400
+
+
+def test_a_kept_earlier_room_marked_later_is_refused_in_its_words(connected):
+    andy = person(connected, 'andy@example.org', 'Andy Example')
+    later = connected.store.add_participants(connected.person['id'], connected.rooms[0], [andy['id']])['id']
+    [app] = sam(connected).get('/api/connected-apps').json()
+    assert sam(connected).put(f"/api/connected-apps/{app['id']}/rooms", json={'rooms': [connected.rooms[0]]}).status_code == 200
+    marked = connected.store.mark_room(connected.person['id'], later, earlier=True)['marked']
+    assert connected.rooms[0] in marked
+    again = sam(connected).put(f"/api/connected-apps/{app['id']}/rooms", json={'rooms': [connected.rooms[0]]})
+    assert again.status_code == 400 and 'cloud' in again.json()['error']
+    assert read(connected).json()['result']['isError'] is True
+
+
+def test_identity_comes_before_the_page_arguments(connected):
+    """N10: no session and a bad limit or cursor is 401, as on every other route, not the page's 400."""
+    [app] = sam(connected).get('/api/connected-apps').json()
+    anonymous = TestClient(connected.app, base_url='http://testserver', headers={'origin': 'http://testserver'})
+    for bad in ('limit=x', 'before=%25'):
+        assert anonymous.get(f"/api/connected-apps/{app['id']}/receipts?{bad}").status_code == 401
+
+
+def test_a_damaged_receipt_never_breaks_its_page(connected):
+    """N11: a receipt a restore carried over damaged (an inf size, a refusal's why that is a number) 500ed the page."""
+    read(connected)
+    [app] = sam(connected).get('/api/connected-apps').json()
+    with connected.store.transaction() as db:
+        db.execute('INSERT INTO connector_reads VALUES(?,?,?,?,?,?,?,?,?,?)',
+                   ('r-bad', app['id'], connected.person['id'], 'claude.ai', connected.clock[0], b'\xff', '[]',
+                    json.dumps([{'room': connected.rooms[0], 'why': 1}]).replace('1}', 'Infinity}'), float('inf'), b'\xfe'))
+    page = sam(connected).get(f"/api/connected-apps/{app['id']}/receipts")
+    assert page.status_code == 200
+    bad = next(r for r in page.json()['receipts'] if r['size'] is None)
+    assert bad['rooms_refused'][0]['why'] is None and bad['tool'] is None and bad['outcome'] is None
 

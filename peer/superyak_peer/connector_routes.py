@@ -354,7 +354,7 @@ def install(app, public_origin, callback):
     # only, on the home's own origin as every /api route is; a ship key gets 403 (current_user). Installed with the
     # connector. A write checks its caller before it reads its body (the event-loop guard's walk). ----
     from .app import actor, body, caller, current_user
-    from .connector_apps import RECEIPTS_LIMIT
+    from .connector_apps import PAGE, RECEIPTS_LIMIT
 
     @app.get('/api/connected-apps')
     def connected_apps(request: Request):
@@ -366,13 +366,12 @@ def install(app, public_origin, callback):
 
     @app.get('/api/connected-apps/{key}/receipts')
     def connected_app_receipts(key: str, request: Request):
-        def whole(name):  # a page's limit and cursor, digits only, as app.py's paging reads them
-            value = request.query_params.get(name)
-            if value is not None and not re.fullmatch(r'[0-9]{1,15}', value):
-                raise Problem(400, f'{name} must be a whole number')
-            return None if value is None else int(value)
-        limit = whole('limit')
-        return store.connected_app_receipts(actor(request), key, RECEIPTS_LIMIT if limit is None else limit, whole('before'))
+        who = actor(request)  # who asks comes first, as on every route: a stranger's bad page is 401, not 400 (N10)
+        limit = request.query_params.get('limit')
+        if limit is not None and not re.fullmatch(r'[0-9]{1,15}', limit):  # digits, as app.py's paging reads them
+            raise Problem(400, PAGE)
+        return store.connected_app_receipts(who, key, RECEIPTS_LIMIT if limit is None else int(limit),
+                                            request.query_params.get('before'))  # a receipt's id, found or refused there
 
     @app.put('/api/connected-apps/{key}/rooms')
     async def connected_app_rooms(key: str, request: Request):
