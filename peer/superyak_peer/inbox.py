@@ -5,6 +5,7 @@ page loses nothing."""
 from contextlib import contextmanager
 import json
 import re
+import threading
 from .common import Problem, require
 
 READS_PER_MINUTE = 60
@@ -12,6 +13,7 @@ CURSOR_IDLE_DAYS = 30
 CURSORS_PER_SHIP = 100
 MAX_WAIT = 25
 WAITS_PER_SHIP = 2
+_BUDGET = threading.Lock()  # store-wal-mode D3: board_counts spends a ship's read budget outside the gate
 CURSOR_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')
 UNREAD_FROM = '''FROM events
     JOIN room_members ON room_members.room_id=events.resource_id AND room_members.user_id=?
@@ -96,12 +98,15 @@ class Inbox:
             raise Problem(403, 'Only a ship key can do this')
 
     def _inbox_budget(self, actor):
-        """Reads that don't wait are limited per ship, like posts. Kept in memory: a restart forgives the minute."""
-        now, reads = self.clock(), self.__dict__.setdefault('_inbox_reads', {})
-        recent = [t for t in reads.get(actor, []) if t > now - 60]
-        if len(recent) >= READS_PER_MINUTE:
-            raise Problem(429, 'This ship is reading too fast; wait a minute or use wait')
-        reads[actor] = recent + [now]
+        """Reads that don't wait are limited per ship, like posts. Kept in memory: a restart forgives the minute. Under a
+        lock of its own, so two reads at once (board_counts' outside the gate, directory's inside it) never drop one
+        another's entry."""
+        with _BUDGET:
+            now, reads = self.clock(), self.__dict__.setdefault('_inbox_reads', {})
+            recent = [t for t in reads.get(actor, []) if t > now - 60]
+            if len(recent) >= READS_PER_MINUTE:
+                raise Problem(429, 'This ship is reading too fast; wait a minute or use wait')
+            reads[actor] = recent + [now]
 
     def _cursor(self, db, actor, name):
         """The cursor's position, touched so a cursor in use is never pruned. A new name starts where the ship has

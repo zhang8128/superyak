@@ -1,20 +1,24 @@
 """The named pure reads off the gate (spec 2026-10-29-store-wal-mode D3, plan Task 5): each moved function runs on a WAL
 store while another thread holds the dispatch gate and an open write, and changes no table and no file; no gated caller
-reaches one; and one signed pull served twice at once is one replay."""
+reaches one; the inbox budget's shared state is locked; and one signed pull served twice at once is one replay."""
 import ast
 from collections import defaultdict
 from contextlib import closing
 import hashlib
+import itertools
 import json
 from pathlib import Path
 import sqlite3
+import sys
 import threading
 from types import SimpleNamespace
 
 import pytest
 
 import superyak_peer
+from superyak_peer import inbox
 from superyak_peer.common import Problem
+from superyak_peer.db import Store
 from superyak_peer.federate import Federate
 from superyak_peer.identity import canonical
 from superyak_peer.journal_mode import switch_journal
@@ -296,6 +300,30 @@ def test_no_gated_caller_reaches_a_moved_read():
     found = [(caller, line, reached) for caller, line, reached in package.gated_callers(package.reaching(MOVED_READS))
              if any((caller, name) not in ALLOWED for name in reached)]
     assert found == []
+
+
+def test_inbox_budget_is_locked(tmp_path, monkeypatch):
+    """D3: board_counts calls _inbox_budget outside the gate, so two threads can update one ship's minute at once. With
+    the cap patched high, an advancing clock and a switch every microsecond, two threads of 10,000 updates leave 20,000
+    entries; without the lock, one thread's read-modify-write drops the other's entries."""
+    ticks = itertools.count()
+    store = Store(tmp_path / 'station', signing=False, clock=lambda: NOW + next(ticks) * 1e-6)
+    monkeypatch.setattr(inbox, 'READS_PER_MINUTE', 10 ** 9)
+
+    def reads():
+        for _ in range(10_000):
+            store._inbox_budget('ship')
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=reads) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(300)
+    finally:
+        sys.setswitchinterval(interval)
+    assert len(store._inbox_reads['ship']) == 20_000
 
 
 def in_mode(store, mode):
