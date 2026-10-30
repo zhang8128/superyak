@@ -216,8 +216,8 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    for unit in superyak-ship superyak-odo; do systemctl --user enable --now "$unit"; done
    make station-rooms                                   # check the bridged column first
    systemctl --user enable --now superyak-wormhole
-   for unit in $(awk -v hold="$(test -e "$ASIDE/restored-live" && test ! -e "$ASIDE/carried" && echo 1)" '$2 == "enabled=enabled" && !(hold && $1 ~ /^superyak-federat/) {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done   # the watchers step 3 saved as enabled
-   for unit in $(awk -v hold="$(test -e "$ASIDE/restored-live" && test ! -e "$ASIDE/carried" && echo 1)" '$3 ~ /^active=(active|activating|reloading)$/ && !(hold && $1 ~ /^superyak-federat/) {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done   # and those it saved as running
+   for unit in $(awk -v hold="$(test -e "$ASIDE/restored-live" && { test -L "$ASIDE/carried" || test ! -f "$ASIDE/carried"; } && echo 1)" '$2 == "enabled=enabled" && !(hold && $1 ~ /^superyak-federat/) {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done   # the watchers step 3 saved as enabled
+   for unit in $(awk -v hold="$(test -e "$ASIDE/restored-live" && { test -L "$ASIDE/carried" || test ! -f "$ASIDE/carried"; } && echo 1)" '$3 ~ /^active=(active|activating|reloading)$/ && !(hold && $1 ~ /^superyak-federat/) {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done   # and those it saved as running
    for unit in superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do printf '%s ' "$unit"; systemctl --user is-active "$unit"; done
    systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer   # as make station-units does
    ```

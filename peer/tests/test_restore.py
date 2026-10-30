@@ -1517,7 +1517,9 @@ def test_after_a_rollback_step_8_holds_the_federation_units_until_the_carry_wrot
     """The third re-check's SF1: step 8's watcher lines started the federation units with no gate, so step 8 as written,
     after a carry that refused, skipped the wait. After a rollback ($ASIDE/restored-live exists) they leave those units
     off unless 10.3's carry wrote $ASIDE/carried. The other watchers start either way, and a restore with no rollback is
-    as before (the test above). Mutations: either line without the hold, the hold ignoring the mark."""
+    as before (the test above). Only a regular file counts, as the carry writes it: a directory or a symlink named
+    `carried` holds them too (round 4's nit 1). Mutations: either line without the hold, the hold ignoring the mark, `-e`
+    for `-f`, no symlink test."""
     aside = tmp_path / 'replaced-20261017-120000'
     aside.mkdir(mode=0o700)
     run_runbook(tmp_path, 3, aside)
@@ -1528,7 +1530,15 @@ def test_after_a_rollback_step_8_holds_the_federation_units_until_the_carry_wrot
         out, calls = run_runbook(tmp_path, 8, aside)
         return [call for call in calls if call.startswith(('--user enable superyak-', '--user start superyak-'))
                 and ('federat' in call or 'ship-running' in call)]
-    assert started() == ['--user enable superyak-ship-running.service', '--user start superyak-ship-running.service']
+    held = ['--user enable superyak-ship-running.service', '--user start superyak-ship-running.service']
+    assert started() == held
+    (aside / 'carried').mkdir()
+    assert started() == held
+    (aside / 'carried').rmdir()
+    (tmp_path / 'a-file').write_text('0 of 0\n')
+    (aside / 'carried').symlink_to(tmp_path / 'a-file')
+    assert started() == held
+    (aside / 'carried').unlink()
     (aside / 'carried').write_text('0 of 0\n')
     assert started() == ['--user enable superyak-ship-running.service', '--user enable superyak-federation-listen.service',
                          '--user start superyak-ship-running.service', '--user start superyak-federation-listen.service']
