@@ -401,10 +401,10 @@ class Federation:
         was used before the mark, by a request whose `at` passed the clock then: at most the mark plus 300 s. So the
         floor is the mark plus 300 s, whatever the copy's age or a peer's clock, and pulls wait out those 5 minutes
         once after a restore. A damaged mark falls back to this listener's own start, which follows every restore
-        (runbook step 8): closed for 300 s, and no longer. Not covered: a rollback, which puts back a file with no newer
-        mark (runbook 10.4 waits more than 10 minutes instead, until fix:pull-floor-after-rollback writes one); the
-        Pi's clock stepping backward between the stop and the reconcile; and a clock stepping back more than
-        NONCE_KEEP - 300 s between a prune and a replay, which a per-origin floor would close."""
+        (runbook step 8): closed for 300 s, and no longer. A rollback needs no floor: runbook 10.3 carries the restored
+        station's nonces into the file put back (backups.carry_pull_nonces, fix:pull-floor-after-rollback). Not
+        covered: the Pi's clock stepping backward between the stop and the reconcile; and a clock stepping back more
+        than NONCE_KEEP - 300 s between a prune and a replay, which a per-origin floor would close."""
         restored = self._restored_at(db)
         return (self._started if restored is None else restored) + 300
 

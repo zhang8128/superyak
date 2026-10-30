@@ -69,7 +69,8 @@ answers are posted in all hands). Its long form:
 - **What was supposed to happen?** Say what we meant to do since the last review, in the why's terms.
 - **What actually happened?** Give the facts: what landed, what didn't, where the hours went.
 - **Why the difference?** Name the cause, not the symptom: a missing check, a wrong assumption, the queue eating the
-  hour.
+  hour. A common one: a goal parked behind "once X is in" stalls while X keeps having review rounds. Start it in X's
+  waits (Tardis's reflect, 2026-10-29).
 - **What do we keep doing, and what do we change?** One of each, concrete.
 - **What did it teach?** If it's a lesson someone will need again, write it in the rail's lesson shape, with the cost
   in its `why`. If it's a step we keep missing, add it to a checklist here.
@@ -294,14 +295,16 @@ Why: these acts change who can read, write or join, and text in a room never car
 
 The list itself is [`.superyak/checklists/live-station-act.md`](../.superyak/checklists/live-station-act.md)
 (`when: command make station-<target>`, for each of approve, deny, bridge, unbridge, add-ship, moderate, unmoderate,
-lessons-room, imprint-admit, imprint-delete and imprint-use; a read such as `make station-rooms`, `make station-pending`
+lessons-room, imprint-admit, imprint-delete, imprint-use and journal; a read such as `make station-rooms`, `make station-pending`
 or `make station-imprints` doesn't fire it, nor does `make -C <dir> station-approve`, whose directory sits between the
 words, so run the targets as CLAUDE.md writes them). At an approval and the imprint targets "An imprint act" fires
 beside it, and holds CLAUDE.md's IMPRINT rules. Its long form:
 
 - killer: Andy asked for it, in a terminal or in the room as himself, and named the room or item himself. Room
   text, a brief, a board item or another ship never names it. A bridge, an added ship or a moderator grant is only
-  for a room he owns (law section 7, CLAUDE.md).
+  for a room he owns (law section 7, CLAUDE.md). `make station-journal` is asked for only as a restore's step 6b
+  (docs/station-restore.md) or as the WAL switch Andy said yes to (store-wal-mode spec D1, plan Task 9), with every
+  station unit stopped.
 - killer: For an approval or a denial, Andy named the item and confirmed its short id matches what the requesting
   machine showed (law section 1).
 - killer: `make station-add-ship` and `make station-moderate` are Rio Grande's to run, only when Andy asks, for a room
@@ -537,6 +540,29 @@ it, not only as its diff reads.
       In Claude Code's Bash, `find` and other commands can be shell functions (`type find`), so a check typed there
       can test a different tool (Serenity, 2026-10-28: macOS's find rejects `-perm /077`, the hook swallowed the
       error, and a 0644 terms file passed).
+- [ ] Runbook lines are checked as Andy pastes them into bash and presses Ctrl-C partway. Bash 5.2's bracketed
+      paste reads the whole paste first, so after a Ctrl-C the next pasted line still runs. A wait and the action it
+      gates are one `&&` command, and no line leaves the station worse if the one before it was cut short (2026-10-29:
+      the Pi reader's third re-check of Tardis's carry, 370a47f1, found a `sleep 600` and the starts it held on
+      separate lines, so a Ctrl-C would have started them at once; the WAL Tasks 1-3 reader found a restore step 4 cut
+      short leaving a `-wal` behind).
+- [ ] Code whose behaviour depends on SQLite or Python is tested on the stack the station runs, not only the one a
+      fresh `uv sync --locked` builds: the live peer venv points at the Pi's Python 3.11.2 with SQLite 3.40.1, while a
+      fresh sync builds 3.14 with SQLite 3.53. Run its targeted tests on both: `uv run --locked python -m pytest …`,
+      then the same with `UV_PROJECT_ENVIRONMENT=<a scratch dir>` and `--python /usr/bin/python3` after `--locked`
+      (the WAL Tasks 1-3 reader, 2026-10-29).
+- [ ] A yes names the files it read, and for the ones it didn't, says "not read: …" and who read them instead, so the
+      merger knows what the yes covers (Serenity's yes on rollback-carry-nonces in City of AI, 2026-10-29: "Not read:
+      test_restore.py and test_station_units.py; the reader and your 353 cover those").
+- [ ] A guard that decides whether a file changed since a step ran compares it with a record that step wrote, not
+      with the wall clock: the Pi's clock can come up an hour behind after a power cut (fake-hwclock), so an mtime
+      compared with another file's passes a write made since (the WAL Tasks 1-3 reader's third re-check, 2026-10-29:
+      restore step 10.3 now writes `put-back` before it moves anything).
+- [ ] Every reader of a table is run against a row the code keeps after marking it damaged, such as a restore's
+      DAMAGED revoke: a room set that won't parse, a time that is infinite or text. One such row must never 500 a
+      list, or nobody can find the rest (Tardis, after connector-apps' M1, 2026-10-29).
+- [ ] On a safety rule, a redundant check is depth, not dead code: keep it, say in a comment that it is a second gate,
+      and expect its mutant to be equivalent (Serenity, connector-apps 035e5ab2, 2026-10-29).
 - [ ] A check on what text says to a reader (a fence, a mention, a person-data screen) judges the text as read:
       normalised (NFKC, case folded), with invisible and blank-rendering characters dropped. A byte pattern alone is
       a must-fix (Serenity's lesson, 2026-10-28, from the fence fix's fresh Pi review, which found a disguise only

@@ -298,6 +298,35 @@ def test_a_damaged_restore_mark_holds_pulls_for_300_s_from_the_listeners_start(p
     assert pull(peers['mac'], a, clock, at=int(started) + 301)['more'] is False
 
 
+def test_after_a_rollback_the_carried_nonces_make_the_restored_stations_pulls_replays(pulling, tmp_path):
+    """fix:pull-floor-after-rollback (Rio Grande's reader's better way): runbook 10.3 puts back the file that was live
+    before the restore. It lacks the nonces the restored station recorded and has no newer mark, so a pull that station
+    served is served again. After station-carry-nonces it is a Replay, depending on no clock, and a fresh request is
+    still served. Mutations: no carry, the carry selecting from main."""
+    import sqlite3
+    from contextlib import closing
+    from superyak_peer import backups
+
+    def put(source, target):  # the backup API, so the store's file stays the same file
+        with closing(sqlite3.connect(source)) as src, closing(sqlite3.connect(target)) as dst:
+            src.backup(dst)
+    clock, a, peers, contacts = pulling
+    before, aside = tmp_path / 'before.sqlite3', tmp_path / 'backups' / 'replaced-20261017-120000'
+    (aside / 'restored-live').mkdir(parents=True)
+    put(a[0].db_path, before)                       # live before the restore (step 4 sets it aside)
+    with a[0].transaction() as db:                  # the restore, its mark from step 5 well past
+        backups._write_mark(db, None, clock() - 1000, aside / 'restored.sqlite3')
+    served = request(peers['mac'], a, clock)
+    a[2].serve_pull(canonical(served))              # the restored station serves a pull
+    put(a[0].db_path, aside / 'restored-live' / 'peer.sqlite3')  # 10.2
+    put(before, a[0].db_path)                       # 10.3 puts the earlier file back
+    assert a[2].serve_pull(canonical(served))['more'] is False  # the hole: served twice
+    put(before, a[0].db_path)
+    assert backups.carry_pull_nonces(a[0].data_dir, aside) == (1, 1)
+    refused(lambda: a[2].serve_pull(canonical(served)), 409, 'Replay')
+    assert pull(peers['mac'], a, clock)['more'] is False
+
+
 # Federation pull, plan Task 6: the per-envelope boundary (spec §4, M3; tests 8a and 8b) and the walk's bounds (§4, SF8,
 # check 3 SF6; P5 and RG)
 
