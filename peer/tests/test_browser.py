@@ -4452,3 +4452,16 @@ def test_p13_change_rooms_keeps_an_earlier_room_the_connection_holds(browser_pee
     with store.transaction() as db:
         [(rooms,)] = db.execute("SELECT rooms FROM connector_grants").fetchall()
     assert json.loads(rooms) == [care]
+
+
+def test_a_long_name_with_no_spaces_never_pushes_connections_sideways_on_a_phone(browser_peer):
+    """The 9b reader's N6 (probe P2): an account named with 200 letters and no space overflowed Connections at 390px
+    through the older `.item`, so the page scrolled sideways and its buttons left the screen."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    with store.transaction() as db:
+        db.execute("UPDATE users SET name=? WHERE id=?", ("L" * 200, patient))
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "organizer", viewport={"width": 390, "height": 844}) as (page, _):
+        page.get_by_role("link", name="Connections", exact=True).click()
+        expect(page.get_by_text("L" * 200).first).to_be_visible()
+        width = page.evaluate("document.documentElement.clientWidth")
+        assert page.evaluate("document.scrollingElement.scrollWidth") <= width
