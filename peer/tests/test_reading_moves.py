@@ -29,6 +29,7 @@ MOVED_READS = (
     'auth.Auth.session',
     'auth.Auth.session_is_valid',
     'auth.Auth.device_is_valid',
+    'ships.Ships.ship_key_is_valid',
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -40,6 +41,7 @@ CALLS = {
     'auth.Auth.session': lambda s: s.store.session(s.token),
     'auth.Auth.session_is_valid': lambda s: s.store.session_is_valid(s.token),
     'auth.Auth.device_is_valid': lambda s: s.store.device_is_valid(s.device, 'andy'),
+    'ships.Ships.ship_key_is_valid': lambda s: s.store.ship_key_is_valid(s.ship_key),
 }
 
 

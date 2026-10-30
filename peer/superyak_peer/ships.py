@@ -116,7 +116,7 @@ class Ships:
         and no presence; the route's own ship_for_key still writes those afterwards."""
         if not isinstance(key, str) or not 0 < len(key) <= 128:
             return False
-        with self.transaction() as db:
+        with self.reading() as db:
             return db.execute(
                 "SELECT 1 FROM ship_keys JOIN users ON users.id=ship_keys.ship_id WHERE key_hash=? AND revoked IS NULL AND users.kind='ship'",
                 (token_hash(key),),
