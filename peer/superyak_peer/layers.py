@@ -223,7 +223,7 @@ class Layers:
         return result + self.remote_layers(actor)
 
     def layer_revisions(self, actor, key):
-        with self.transaction() as db:
+        with self.reading() as db:
             row = self._owned_layer(db, actor, key)
             return [{'kind': 'note', **json.loads(r['snapshot']), 'id': key, 'owner_id': row['owner_id'], 'revision': r['revision'], 'draft_version': r['draft_version'], 'created': r['created']} for r in db.execute('SELECT * FROM layer_revisions WHERE layer_id=? ORDER BY revision', (key,))]
 

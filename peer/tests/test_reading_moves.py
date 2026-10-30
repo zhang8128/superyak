@@ -48,6 +48,7 @@ MOVED_READS = (
     'room_board.RoomBoard.board_view',
     'layers.Layers.get_layer',
     'layers.Layers.list_layers',
+    'layers.Layers.layer_revisions',
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -74,6 +75,7 @@ CALLS = {
     'room_board.RoomBoard.board_view': lambda s: s.store.board_view(s.ids['andy']),
     'layers.Layers.get_layer': lambda s: s.store.get_layer(s.ids['andy'], s.layer),
     'layers.Layers.list_layers': lambda s: s.store.list_layers(s.ids['andy']),
+    'layers.Layers.layer_revisions': lambda s: s.store.layer_revisions(s.ids['andy'], s.layer),
 }
 
 
