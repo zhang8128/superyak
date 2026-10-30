@@ -1310,6 +1310,155 @@ def test_runbook_steps_3_and_8_keep_the_sweep_and_lessons_timers_as_they_were(tm
     assert timers == ['--user enable --now superyak-imprint-sweep.timer']
 
 
+def wal_home_store(tmp_path):
+    """A WAL station in the runbook's HOME (~/.local/share/superyak/lighthouse), with the shims laid out."""
+    if not (tmp_path / 'home').exists():
+        run_runbook(tmp_path, 3, '')                     # only to lay out the shims and HOME; with ASIDE unset it does nothing
+    store = Store(tmp_path / 'home' / '.local' / 'share' / 'superyak' / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    return store
+
+
+def an_aside(tmp_path, label='replaced-20261017-120000'):
+    aside = tmp_path / 'backups' / label
+    aside.mkdir(parents=True, mode=0o700, exist_ok=True)
+    return aside
+
+
+def test_step_4_records_the_mode_once_the_store_has_moved(tmp_path):
+    """Store-wal-mode D5 (plan Task 3, its review's S6): step 4 writes $ASIDE/journal-mode only once peer.sqlite3 has left
+    the data directory, and only if no record exists. The fuser branch (nothing moved) writes none; a rerun after 10.3,
+    with $ASIDE/peer.sqlite3 gone, keeps the first record; with no database ever there it says delete. Mutations: the
+    record overwritten on a rerun; written while the store is still in the data directory."""
+    store, aside = wal_home_store(tmp_path), an_aside(tmp_path)
+    holder = open(store.db_path, 'rb')               # a process with the database open: the fuser branch
+    try:
+        out, _ = run_runbook(tmp_path, 4, aside)
+    finally:
+        holder.close()
+    assert 'NOT moved: a process has the database open' in out and not (aside / 'journal-mode').exists()
+    out, _ = run_runbook(tmp_path, 4, aside)
+    assert (aside / 'journal-mode').read_text() == 'wal\n' and (aside / 'peer.sqlite3').exists()
+    for f in aside.glob('peer.sqlite3*'):            # as after 10.3 moved them back and 10.2 moved those on
+        f.unlink()
+    run_runbook(tmp_path, 4, aside)
+    assert (aside / 'journal-mode').read_text() == 'wal\n'
+    fresh = an_aside(tmp_path, 'replaced-20261018-120000')
+    run_runbook(tmp_path, 4, fresh)                  # the data directory holds no database now
+    assert (fresh / 'journal-mode').read_text() == 'delete\n'
+
+
+def test_step_6b_switches_back_only_when_recorded(tmp_path):
+    """Store-wal-mode D5: step 6b runs make station-journal MODE=wal only when step 4 recorded wal."""
+    aside = an_aside(tmp_path)
+    run_runbook(tmp_path, 3, '')
+    (aside / 'journal-mode').write_text('wal\n')
+    out, calls = run_runbook(tmp_path, '6b', aside)
+    assert calls == ['make station-journal MODE=wal']
+    (aside / 'journal-mode').write_text('delete\n')
+    out, calls = run_runbook(tmp_path, '6b', aside)
+    assert calls == [] and 'Nothing to switch' in out
+    (aside / 'journal-mode').unlink()
+    out, calls = run_runbook(tmp_path, '6b', aside)
+    assert calls == [] and 'Nothing to switch' in out
+    out, calls = run_runbook(tmp_path, '6b', '')
+    assert calls == [] and 'NOT switched' in out
+
+
+def test_replaced_reads_a_set_aside_wal_file_through_its_wal(tmp_path):
+    """Store-wal-mode D5 (its review's M4): a set-aside WAL file whose newest commit is only in its -wal (the station
+    was killed) is compared, not treated as absent, and the commit is seen. It leaves a -shm in $ASIDE."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    keeper = sqlite3.connect(store.db_path)
+    keeper.execute('SELECT 1 FROM system_meta').fetchone()
+    try:
+        store.create_user('late', 'Late', 'long-password-late')
+        aside = an_aside(tmp_path)
+        for f in store.data_dir.glob('peer.sqlite3*'):   # copied as a killed station leaves them
+            shutil.copyfile(f, aside / f.name)
+    finally:
+        keeper.close()
+    old, why = backups._replaced(aside / 'peer.sqlite3')
+    try:
+        assert why is None
+        assert old.execute("SELECT count(*) FROM users WHERE username='late'").fetchone()[0] == 1
+    finally:
+        old.close()
+    assert (aside / 'peer.sqlite3-shm').exists()
+
+
+def nested_block(heading):
+    """The bash lines under a nested runbook step (step 10's 10.1 to 10.4) whose first line starts with `heading`."""
+    lines = RUNBOOK.read_text().splitlines()
+    start = next(number for number, line in enumerate(lines) if line.strip().startswith(heading))
+    begin = next(number for number in range(start, len(lines)) if lines[number].strip() == '```bash')
+    end = next(number for number in range(begin + 1, len(lines)) if lines[number].strip() == '```')
+    return textwrap.dedent('\n'.join(lines[begin + 1:end]))
+
+
+def test_a_restore_from_a_wal_store_through_6b(tmp_path, capsys):
+    """Store-wal-mode D5 end to end (the plan review's M3): a WAL station's copy is staged, step 4 sets the store aside and
+    records wal, the reconcile runs, step 6 installs a rollback-mode copy, and 6b's switch puts WAL back."""
+    store = wal_home_store(tmp_path)
+    copy = staged(tmp_path, store)
+    aside = copy.parent
+    shutil.copyfile(copy, aside / 'chosen.sqlite3')               # step 1's choice, which step 6's mark check reads
+    run_runbook(tmp_path, 4, aside)
+    assert (aside / 'journal-mode').read_text() == 'wal\n'
+    code, report, err = reconcile(capsys, '--db', copy, '--replaced', aside / 'peer.sqlite3')
+    assert code == 0, err
+    out, installed = step_6(tmp_path, aside)
+    assert installed is not None and header_mode(installed) == 'delete', out
+    out, calls = run_runbook(tmp_path, '6b', aside)
+    assert calls == ['make station-journal MODE=wal']
+    switch_journal(installed.parent, 'wal', active=lambda: [])   # what that make runs
+    assert header_mode(installed) == 'wal'
+
+
+def test_a_restore_from_a_rollback_store_leaves_it_rollback(tmp_path, capsys):
+    """Store-wal-mode D5: a rollback-mode station is recorded as delete, and 6b switches nothing."""
+    run_runbook(tmp_path, 3, '')
+    store = Store(tmp_path / 'home' / '.local' / 'share' / 'superyak' / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy = staged(tmp_path, store)
+    aside = copy.parent
+    shutil.copyfile(copy, aside / 'chosen.sqlite3')
+    run_runbook(tmp_path, 4, aside)
+    assert (aside / 'journal-mode').read_text() == 'delete\n'
+    code, report, err = reconcile(capsys, '--db', copy, '--replaced', aside / 'peer.sqlite3')
+    assert code == 0, err
+    out, installed = step_6(tmp_path, aside)
+    assert installed is not None, out
+    out, calls = run_runbook(tmp_path, '6b', aside)
+    assert calls == [] and header_mode(installed) == 'delete'
+
+
+def test_a_rollback_keeps_the_put_back_files_mode(tmp_path):
+    """Store-wal-mode D5: step 10.3 puts back the file step 4 set aside, with its sidecars, so a WAL store comes back
+    in WAL whatever mode the restored copy ran in."""
+    store, aside = wal_home_store(tmp_path), an_aside(tmp_path)
+    run_runbook(tmp_path, 4, aside)
+    data = store.data_dir
+    assert not (data / 'peer.sqlite3').exists() and header_mode(aside / 'peer.sqlite3') == 'wal'
+    env = {'PATH': f'{tmp_path / "bin"}:{os.environ["PATH"]}', 'HOME': str(tmp_path / 'home'), 'ASIDE': str(aside),
+           'LOG': str(tmp_path / 'calls.log'), 'UNITS': str(tmp_path / 'units.txt'), 'STATES': str(tmp_path / 'states.txt')}
+    subprocess.run(['bash', '-c', nested_block('3. Move the set-aside')], cwd=tmp_path, env=env, check=True,
+                   capture_output=True, text=True, timeout=60)
+    assert header_mode(data / 'peer.sqlite3') == 'wal'
+
+
+def test_the_carry_note_is_there_when_the_carry_is():
+    """Store-wal-mode plan Task 3 (its review's S13): once backups.carry_pull_nonces is on main, runbook 10.3 must say the
+    carry reads restored-live through its -wal, leaves a -shm there, and fails closed into 10.4's wait."""
+    if not hasattr(backups, 'carry_pull_nonces'):
+        pytest.skip('tardis/rollback-carry-nonces is not on this branch yet')
+    text = RUNBOOK.read_text()
+    assert '-shm' in text[text.index('carry'):] and 'fails closed' in text
+
+
 def step_6(tmp_path, aside):
     """Runbook step 6 as pasted, with HOME in tmp_path: (stdout, the installed peer.sqlite3 or None)."""
     if not (tmp_path / 'home').exists():

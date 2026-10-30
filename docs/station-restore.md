@@ -83,8 +83,12 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    elif fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the database open; stop everything again as in step 3'
    else for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$ASIDE"/; done
    fi
+   [ -d "$ASIDE" ] && [ ! -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ] && [ ! -e "$ASIDE/journal-mode" ] && python3 -I -c 'import os, sys; h = open(sys.argv[1], "rb").read(20) if os.path.exists(sys.argv[1]) else b""; print("wal" if h[18:20] == b"\x02\x02" else "delete")' "$ASIDE/peer.sqlite3" > "$ASIDE/journal-mode.new" && mv "$ASIDE/journal-mode.new" "$ASIDE/journal-mode"; cat "$ASIDE/journal-mode" 2>/dev/null   # the store's journal mode, for step 6b
    ls -la "$ASIDE" ~/.local/share/superyak/lighthouse/   # every peer.sqlite3 file is in $ASIDE, none in the data dir
    ```
+   The line after the move records the store's journal mode (`wal` or `delete`) in `$ASIDE/journal-mode`, read from
+   the set-aside file's header, once the database has left the data directory and only if no record exists, so a rerun
+   keeps the first one (`delete` when there was no database). Step 6b reads it.
    If it printed that step 4 ran before and the `ls` shows no `peer.sqlite3` file in the data directory, step 4 is
    done: go on. If one is there, it is a stray: deal with it in step 6's stray case before going on. If after the first
    run the `ls` shows `peer.sqlite3` in neither directory, the data directory had no database to set aside: run step 5
@@ -186,6 +190,17 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    The peer identity files stay where they are; nothing here moves them. A station that holds signed records refuses to start without its identity.json; restore the file rather than delete it. If it is truly lost, `station-new-identity` (API.md, Signed records) gives the station a new key on purpose. Run it with the lighthouse stopped; add `--endpoint https://HOST:PORT` when the station federates:
    ```bash
    uv run --locked --project peer python -m superyak_peer station-new-identity --data-dir ~/.local/share/superyak/lighthouse
+   ```
+6b. **Put the journal mode back.** Every copy is a rollback-mode file (store-wal-mode D4), so a store that ran in WAL
+   comes back in rollback mode until this step. It switches only when step 4 recorded `wal`, and with everything still
+   stopped. On a new disk where the lighthouse never ran, `station-journal` refuses for want of `dispatch.lock`: start
+   and stop the lighthouse once, then run this step again. With the store in WAL, the reconcile at step 5 read the
+   set-aside file through its `-wal` and left a `-shm` beside it in `$ASIDE`; that is SQLite's own and harmless.
+   ```bash
+   if [ ! -d "$ASIDE" ]; then echo 'NOT switched: ASIDE is not set; set it again (see the top)'
+   elif [ "$(cat "$ASIDE/journal-mode" 2>/dev/null)" = wal ]; then make station-journal MODE=wal
+   else echo "Nothing to switch: the store was $(cat "$ASIDE/journal-mode" 2>/dev/null || echo 'not recorded, so rollback') before the restore"
+   fi
    ```
 7. **Act on the report.** Change again any password it lists that was changed for a reason. Read each room brief it lists
    ("room briefs that differ"; the report never shows brief text) in the browser, and save again the one you want. Issue again any invitation
