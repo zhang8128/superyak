@@ -537,19 +537,20 @@ it, not only as its diff reads.
       In Claude Code's Bash, `find` and other commands can be shell functions (`type find`), so a check typed there
       can test a different tool (Serenity, 2026-10-28: macOS's find rejects `-perm /077`, the hook swallowed the
       error, and a 0644 terms file passed).
-- [ ] Runbook lines are checked as Andy pastes them into an interactive bash and interrupts one. Bash 5.2's
-      bracketed paste reads the whole paste first, so after a Ctrl-C the next pasted line still runs. A wait and the
-      action it gates are one `&&` command, and no line leaves the station worse if the one before it was cut short
-      (2026-10-29: Tardis's carry round 3 had a `sleep 600` and the starts it held as separate lines, so a Ctrl-C
-      would have started them at once; the WAL Tasks 1-3 reader found a restore step 4 cut short leaving a `-wal`
-      behind).
+- [ ] Runbook lines are checked as Andy pastes them into bash and presses Ctrl-C partway. Bash 5.2's bracketed
+      paste reads the whole paste first, so after a Ctrl-C the next pasted line still runs. A wait and the action it
+      gates are one `&&` command, and no line leaves the station worse if the one before it was cut short (2026-10-29:
+      the Pi reader's third re-check of Tardis's carry, 370a47f1, found a `sleep 600` and the starts it held on
+      separate lines, so a Ctrl-C would have started them at once; the WAL Tasks 1-3 reader found a restore step 4 cut
+      short leaving a `-wal` behind).
 - [ ] Code whose behaviour depends on SQLite or Python is tested on the stack the station runs, not only the one a
-      fresh worktree builds: the live peer venv points at the Pi's Python 3.11.2 with SQLite 3.40.1, while `uv sync
-      --locked` in a new worktree builds 3.14 with SQLite 3.53. Run its targeted tests on both, the second with
-      `UV_PROJECT_ENVIRONMENT=<a scratch dir> uv run --locked --python /usr/bin/python3` (the WAL Tasks 1-3 reader,
-      2026-10-29).
-- [ ] A yes names the files it read, and says "not read: …" for the ones it left to others, so the merger knows what
-      the yes covers (Serenity's yes on rollback-carry-nonces, 2026-10-29).
+      fresh `uv sync --locked` builds: the live peer venv points at the Pi's Python 3.11.2 with SQLite 3.40.1, while a
+      fresh sync builds 3.14 with SQLite 3.53. Run its targeted tests on both: `uv run --locked python -m pytest …`,
+      then the same with `UV_PROJECT_ENVIRONMENT=<a scratch dir>` and `--python /usr/bin/python3` after `--locked`
+      (the WAL Tasks 1-3 reader, 2026-10-29).
+- [ ] A yes names the files it read, and for the ones it didn't, says "not read: …" and who read them instead, so the
+      merger knows what the yes covers (Serenity's yes on rollback-carry-nonces in City of AI, 2026-10-29: "Not read:
+      test_restore.py and test_station_units.py; the reader and your 353 cover those").
 - [ ] A check on what text says to a reader (a fence, a mention, a person-data screen) judges the text as read:
       normalised (NFKC, case folded), with invisible and blank-rendering characters dropped. A byte pattern alone is
       a must-fix (Serenity's lesson, 2026-10-28, from the fence fix's fresh Pi review, which found a disguise only
