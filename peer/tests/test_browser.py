@@ -4041,6 +4041,10 @@ def test_connected_apps_shows_a_connection_changes_its_rooms_and_revokes_after_t
         expect(item.get_by_role("button", name="Revoke")).to_be_focused()
         item.get_by_role("button", name="Revoke").click()
         assert read(lab).status_code == 200 and revokes == []  # nothing ends before the confirm
+        page.get_by_role("link", name="Chats", exact=True).click()  # an open ask doesn't outlive the page (N3)
+        item = connected_apps(page)
+        expect(item.locator(".app-ask")).to_have_count(0)
+        item.get_by_role("button", name="Revoke").click()
         item.get_by_role("button", name="Yes, revoke").dblclick()
         expect(item).to_contain_text("You revoked it")
         expect(rooms).to_contain_text("It could read these rooms:")  # past tense once it has ended
@@ -4087,10 +4091,10 @@ def test_a_room_that_continues_in_a_new_one_is_offered_not_added(browser_peer):
     care, notes = (store.create_room(users["patient"]["id"], title, [])["id"] for title in ("Care plan", "Old notes"))
     read = connect_claude(browser_peer, "patient", [care, notes])
     later = store.add_participants(users["patient"]["id"], care, [users["family"]["id"]])["id"]
-    store.mark_room(users["patient"]["id"], notes)
     with store.transaction() as db:  # a time a restore left damaged shows as such, never as 1970 (9a's M1)
         db.execute("UPDATE connector_grants SET created='soon'")
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        store.mark_room(users["patient"]["id"], notes)  # after the home page loaded: #apps reads the home again (S3)
         item = connected_apps(page)
         expect(item).to_contain_text("Connected a time not recorded")
         expect(item).to_contain_text("Care plan continues in a new room. Let Claude read it?")
@@ -4161,7 +4165,7 @@ def test_a_super_admin_sees_each_connection_but_never_its_rooms_and_can_revoke_i
             expect(section.get_by_role("heading", name="Connected apps on this home")).to_be_visible()
             item = section.locator(".app-admin-item")
             expect(item).to_have_count(1)
-            expect(item).to_contain_text("<b>Alex</b> Patient")
+            expect(item).to_contain_text("<b>Alex</b> Patient (@patient)")  # two people can share a name (N5)
             expect(item).to_contain_text("claude.ai")
             expect(section).not_to_contain_text("Care plan")
             assert section.locator("b").count() == 0
@@ -4182,21 +4186,269 @@ def test_without_the_connector_there_is_no_connected_apps_link_or_notice(browser
 
 @pytest.mark.connector
 def test_on_a_phone_every_nav_link_sits_in_the_bar_and_takes_a_click(browser_peer):
-    """The phone's nav was a five-column grid in a 70px bar, so a sixth link and after drew over the first row; the plan's
-    measure reads receipts and revokes from a phone. One row now scrolls sideways, and a link under another can't be
-    clicked by Playwright, which checks what the pointer would hit."""
+    """The phone's nav drew links over each other, and then hid half of them in a row that gave no sign it scrolled (the
+    reader's S1). At 390px, the most common phone width, all ten links show in a two-row bar, none over another, and the
+    last one takes a real click: Playwright checks what the pointer would hit."""
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient", viewport={"width": 390, "height": 844}) as (page, _):
         bar = page.locator(".sidebar").bounding_box()
         boxes = [link.bounding_box() for link in page.locator(".nav a").all()]
         assert len(boxes) == 10
         for box in boxes:
+            assert 0 <= box["x"] and box["x"] + box["width"] <= 390, box  # in view, not scrolled off the bar's end
             assert bar["y"] <= box["y"] and box["y"] + box["height"] <= bar["y"] + bar["height"] + 0.5, (box, bar)
-        for first, second in zip(boxes, boxes[1:]):
-            assert first["x"] + first["width"] <= second["x"] + 0.5, (first, second)  # side by side, never drawn over
+            assert box["height"] <= 60, box  # a link the size of its cell, not stretched
+        for i, first in enumerate(boxes):
+            for second in boxes[i + 1:]:
+                apart = (first["x"] + first["width"] <= second["x"] + 0.5 or second["x"] + second["width"] <= first["x"] + 0.5
+                         or first["y"] + first["height"] <= second["y"] + 0.5 or second["y"] + second["height"] <= first["y"] + 0.5)
+                assert apart, (first, second)
         page.get_by_role("link", name="Connected apps").click()
         expect(page.get_by_role("heading", name="Connected apps", level=1)).to_be_visible()
-        page.mouse.move(0, 0)
-        current = page.locator('.nav a[aria-current="page"]')
-        expect(current).to_contain_text("Connected apps")
-        box = current.bounding_box()  # the page it shows is in view in the bar, not scrolled off its end
-        assert 0 <= box["x"] and box["x"] + box["width"] <= 390, box
+
+
+@pytest.mark.connector
+def test_on_a_laptop_screen_the_last_nav_link_is_reachable(browser_peer):
+    """M2: the desktop sidebar was 100vh and never scrolled, so on a 1366x768 laptop (a 657px viewport in Chrome) the
+    last link, Connected apps, sat below the fold and no click could reach it. Fonts differ (the Mac fits it at 657px),
+    so the test uses a shorter window, where every platform's last link is below the fold."""
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient", viewport={"width": 1366, "height": 520}) as (page, _):
+        page.get_by_role("link", name="Connected apps").click()
+        expect(page.get_by_role("heading", name="Connected apps", level=1)).to_be_visible()
+
+
+@pytest.mark.connector
+def test_the_notice_names_every_connection_of_the_last_7_days(browser_peer):
+    """M1: the notice named only the newest live connection, so a thief's connection two days old was hidden the moment
+    the person connected their own Claude. Each live connection made in the last 7 days has its own line and Revoke."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    care = store.create_room(patient, "Care plan", [])["id"]
+    older = connect_claude(browser_peer, "patient", [care])
+    with store.transaction() as db:
+        db.execute("UPDATE connector_grants SET created=created-2*86400")  # made two days ago
+    newer = connect(browser_peer, "patient", [care], "st-newer")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        lines = page.locator(".connector-notice li")
+        expect(lines).to_have_count(2)
+        expect(lines.first).to_contain_text("Claude was connected on")
+        lines.nth(1).get_by_role("button", name="Revoke").click()  # the older one
+        ask = page.locator(".app-ask")
+        expect(ask.get_by_role("button", name="Cancel")).to_be_focused()
+        ask.get_by_role("button", name="Yes, revoke").click()
+        expect(lines).to_have_count(1)
+    assert older(care).status_code == 401 and newer(care).status_code == 200
+
+
+@pytest.mark.connector
+def test_narrowing_from_all_rooms_says_why_an_earlier_room_is_not_offered(browser_peer):
+    """N2 (9a's N9): a connection to all rooms has no list to keep an earlier room by, so the form offers only current
+    rooms, and says so."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    care = store.create_room(users["patient"]["id"], "Care plan", [])["id"]
+    connect_claude(browser_peer, "patient", "*")
+    store.add_participants(users["patient"]["id"], care, [users["family"]["id"]])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        item = connected_apps(page)
+        item.get_by_role("button", name="Change rooms").click()
+        expect(item.locator(".app-rooms-form")).to_contain_text(
+            "A room that continues in a newer one is offered as the newer room: an earlier room can't be added here.")
+        expect(item.get_by_label("Care plan")).to_have_count(1)  # the current one only
+
+
+@pytest.mark.connector
+def test_a_room_marked_after_the_page_loaded_is_not_offered(browser_peer):
+    """S3: Connected apps reads the home again, so a room a member marked after the page loaded isn't offered, even one
+    the connection doesn't list (the list's own marks cover only its rooms)."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    care, other = (store.create_room(patient, title, [])["id"] for title in ("Care plan", "Other room"))
+    connect_claude(browser_peer, "patient", [care])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        store.mark_room(patient, other)  # after the home page loaded
+        item = connected_apps(page)
+        item.get_by_role("button", name="Change rooms").click()
+        expect(item.get_by_label("Care plan")).to_have_count(1)
+        expect(item.get_by_label("Other room")).to_have_count(0)
+
+
+@pytest.mark.connector
+def test_a_second_connections_receipts_open_while_the_first_still_loads(browser_peer):
+    """N4: one receipt read at a time for each connection, not for the page: the first connection's read is held open
+    while the second's list opens."""
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    care, lab = (store.create_room(patient, title, [])["id"] for title in ("Care plan", "Lab notes"))
+    one, two = connect_claude(browser_peer, "patient", [care]), connect(browser_peer, "patient", [lab], "st-two")
+    one(care)
+    two(lab)
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        items = connected_apps(page)
+        held = []
+        page.route(lambda url: "/receipts?" in url, lambda route: held.append(route) if not held else route.continue_())
+        items.nth(0).get_by_role("button", name="Show what it read").click()
+        items.nth(1).get_by_role("button", name="Show what it read").click()
+        expect(items.nth(1).locator(".receipt")).to_have_count(1)
+        held[0].continue_()
+        expect(items.nth(0).locator(".receipt")).to_have_count(1)
+
+
+# ---- The reader's six probes on 0a5ffc9f (City of AI 55352599), verbatim but for the `connector` marker each needs
+# here. They kill the eight mutants the tests above missed. ----
+EVIL = '"><img src=x onerror="window.__xss=1">'
+
+
+def connect(peer, username, rooms, state):
+    """connect_claude with its own `state`, so a second connection in the same second is its own request."""
+    from types import SimpleNamespace
+    from connector_support import a_fragment, decide, exchange, mcp, register, rpc, sent_back, sign_in
+    home = SimpleNamespace(app=peer["app"], store=peer["app"].state.store)
+    client = register(home.app).json()["client_id"]
+    view = sign_in(home, a_fragment(home, client, state=state), username, password=peer["password"])
+    assert view.status_code == 200, view.text
+    _, query = sent_back(decide(home, view.json(), rooms=rooms))
+    access = exchange(home, client, query["code"]).json()["access_token"]
+    return lambda room: mcp(home, rpc("tools/call", {"name": "read_room", "arguments": {"room": room}}), access)
+
+
+def xss_free(page):
+    assert page.evaluate("window.__xss") is None
+    assert page.locator("#main-content img, #main-content b, #main-content i").count() == 0
+
+
+@pytest.mark.connector
+def test_p1_titles_with_markup_in_every_place_the_page_shows_them(browser_peer):
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    care = store.create_room(patient, "<b>Care</b>" + EVIL, [])["id"]
+    long = store.create_room(patient, "L" * 200, [])["id"]
+    read = connect_claude(browser_peer, "patient", [care, long])
+    assert read(care).status_code == 200 and read(long).status_code == 200
+    store.add_participants(patient, care, [users["family"]["id"]])  # care continues in a new room: the offer
+    for viewport in ({"width": 1440, "height": 960}, {"width": 390, "height": 844}):
+        with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient", viewport=viewport) as (page, _):
+            item = connected_apps(page)
+            expect(item).to_contain_text("<b>Care</b>" + EVIL + " continues in a new room.")
+            add = item.locator('[data-action="app-room-add"]')
+            assert EVIL in add.get_attribute("aria-label")
+            xss_free(page)
+            item.get_by_role("button", name="Show what it read").click()
+            expect(item.locator(".receipt")).to_have_count(2)
+            xss_free(page)
+            item.get_by_role("button", name="Change rooms").click()
+            expect(item.locator(".app-rooms-form")).to_be_visible()
+            expect(item.locator(".app-rooms-form")).to_contain_text("<b>Care</b>" + EVIL)
+            xss_free(page)
+            width = page.evaluate("document.documentElement.clientWidth")
+            assert page.evaluate("document.scrollingElement.scrollWidth") <= width, viewport
+
+
+@pytest.mark.connector
+def test_p3_admin_section_never_asks_for_or_shows_rooms_or_receipts_whatever_the_server_sends(browser_peer):
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    connect_claude(browser_peer, "patient", [store.create_room(patient, "Care plan", [])["id"]])
+    with store.transaction() as db:
+        db.execute("UPDATE users SET is_super_admin=1 WHERE username='organizer'")
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+        asked = []
+        page.on("request", lambda request: asked.append(request.url) if "/connected-apps" in request.url else None)
+        def widened(route):
+            answer = route.fetch()
+            items = answer.json()
+            for item in items:
+                item.update(rooms=[{"room": "r1", "title": "Secret room", "cloud": False, "continues_in": None}],
+                            all_rooms=False, receipts=[{"at": 1, "tool": "read_room", "rooms_read": [{"room": "r1", "title": "Secret room"}]}],
+                            why="refresh_reused", usable=True)
+            route.fulfill(response=answer, body=json.dumps(items))
+        page.route("**/api/admin/connected-apps", widened)
+        page.get_by_role("link", name="Connections", exact=True).click()
+        section = page.locator(".connector-admin")
+        expect(section.locator(".app-admin-item")).to_have_count(1)
+        expect(section).not_to_contain_text("Secret room")
+        expect(section).not_to_contain_text("renewal")
+        expect(page.locator("#main-content")).not_to_contain_text("Secret room")
+        expect(section.locator('[data-action="app-receipts"], [data-action="app-rooms-edit"]')).to_have_count(0)
+        section.locator('[data-action="app-admin-revoke"]').click()
+        section.get_by_role("button", name="Yes, revoke").click()
+        expect(section.locator(".app-admin-item")).to_contain_text("Ended")
+        others = [url for url in asked if "/api/admin/connected-apps" not in url and not url.endswith("/api/connected-apps/notice")]
+        assert others == [], others
+
+
+@pytest.mark.connector
+def test_p4_a_revoke_that_meets_an_ended_connection_409(browser_peer):
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    read = connect_claude(browser_peer, "patient", [store.create_room(patient, "Care plan", [])["id"]])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        item = connected_apps(page)
+        item.get_by_role("button", name="Revoke").click()
+        with store.transaction() as db:
+            [(grant,)] = db.execute("SELECT id FROM connector_grants").fetchall()
+        store.connected_app_revoke(patient, grant)  # ended behind the page's back (another tab)
+        item.get_by_role("button", name="Yes, revoke").click()
+        expect(page.locator(".notice.error")).to_contain_text("This connection has ended")
+        expect(item).to_contain_text("You revoked it")
+        expect(item.locator(".app-ask")).to_have_count(0)
+        expect(item.get_by_role("button", name="Revoke")).to_have_count(0)
+        expect(page.locator(".connector-notice")).to_have_count(0)
+    assert read is not None
+
+
+@pytest.mark.connector
+def test_p5_a_rooms_save_that_meets_a_mark_400(browser_peer):
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    care = store.create_room(patient, "Care plan", [family])["id"]
+    lab = store.create_room(patient, "Lab notes", [])["id"]
+    connect_claude(browser_peer, "patient", [care, lab])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        item = connected_apps(page)
+        item.get_by_role("button", name="Change rooms").click()
+        item.get_by_label("Lab notes").uncheck()
+        store.mark_room(family, care)  # a member marks Care plan while the form is open
+        item.get_by_role("button", name="Save rooms").click()
+        expect(page.locator(".notice.error")).to_contain_text("keeps it away from cloud models")
+    with store.transaction() as db:
+        [(rooms,)] = db.execute("SELECT rooms FROM connector_grants").fetchall()
+    assert set(json.loads(rooms)) == {care, lab}
+
+
+@pytest.mark.connector
+def test_p9_receipts_of_two_connections_stay_apart(browser_peer):
+    store, patient = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    care, lab = (store.create_room(patient, title, [])["id"] for title in ("Care plan", "Lab notes"))
+    one = connect_claude(browser_peer, "patient", [care])
+    two = connect(browser_peer, "patient", [lab], "st-two")
+    for _ in range(3):
+        one(care)
+    two(lab)
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        items = connected_apps(page)
+        expect(items).to_have_count(2)
+        for index in range(2):
+            items.nth(index).get_by_role("button", name="Show what it read").click()
+        for index in range(2):  # both read at once now (N4), so wait for each list before reading it
+            expect(items.nth(index).locator(".receipt").first).to_be_visible()
+        texts = [items.nth(index).locator(".receipt").all_inner_texts() for index in range(2)]
+        assert sorted(len(t) for t in texts) == [1, 3]
+        for t in texts:
+            assert len({line.split(" · ")[-1] for line in t}) == 1
+
+
+@pytest.mark.connector
+def test_p13_change_rooms_keeps_an_earlier_room_the_connection_holds(browser_peer):
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    care = store.create_room(patient, "Care plan", [])["id"]
+    lab = store.create_room(patient, "Lab notes", [])["id"]
+    connect_claude(browser_peer, "patient", [care, lab])
+    store.add_participants(patient, care, [users["family"]["id"]])
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+        item = connected_apps(page)
+        item.get_by_role("button", name="Change rooms").click()
+        checked = item.locator('input[name="app-room"]:checked').evaluate_all("(els) => els.map((el) => el.value)")
+        assert care in checked and lab in checked, checked
+        item.get_by_label("Lab notes").uncheck()
+        item.get_by_role("button", name="Save rooms").click()
+        expect(page.locator(".notice", has_text="Rooms saved.")).to_be_visible()
+    with store.transaction() as db:
+        [(rooms,)] = db.execute("SELECT rooms FROM connector_grants").fetchall()
+    assert json.loads(rooms) == [care]

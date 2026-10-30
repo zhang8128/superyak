@@ -109,8 +109,10 @@ def test_another_person_cant_see_or_revoke_my_connection(connected):
 def test_admins_see_connections_but_never_rooms_or_receipts(connected):
     andy = admin(connected)
     [item] = andy.get('/api/admin/connected-apps').json()
-    assert set(item) == {'id', 'person', 'app', 'created', 'last_used', 'ends', 'ended'}
-    assert item['person'] == 'Sam Example' and 'sam@example.org' not in json.dumps(item)
+    assert set(item) == {'id', 'person', 'username', 'app', 'created', 'last_used', 'ends', 'ended'}
+    # the username beside the name, since two people can share one (9b's N5); a super admin already sees every
+    # username under Account support on the same page
+    assert (item['person'], item['username']) == ('Sam Example', 'sam@example.org')
     assert andy.get(f"/api/connected-apps/{item['id']}/receipts").status_code == 404
     assert andy.post(f"/api/admin/connected-apps/{item['id']}/revoke").status_code == 200
     assert read(connected).status_code == 401
@@ -122,16 +124,31 @@ def test_admins_see_connections_but_never_rooms_or_receipts(connected):
 
 def test_the_notice_shows_for_7_days(connected):
     [app] = sam(connected).get('/api/connected-apps').json()
-    assert sam(connected).get('/api/connected-apps/notice').json() == {'id': app['id'], 'app': 'claude.ai',
-                                                                       'created': app['created']}
+    assert sam(connected).get('/api/connected-apps/notice').json() == [{'id': app['id'], 'app': 'claude.ai',
+                                                                        'created': app['created']}]
     connected.clock[0] += WEEK + 1
-    assert sam(connected).get('/api/connected-apps/notice').json() is None
+    assert sam(connected).get('/api/connected-apps/notice').json() == []
+
+
+def test_the_notice_names_every_live_connection_of_the_last_7_days(connected):
+    """9b's M1: the newest alone hid a thief's older connection the moment the person connected their own Claude."""
+    connected.clock[0] += 2 * 86400
+    client, code = allowed(connected, state='st-own')
+    exchange(connected, client, code)
+    notice = sam(connected).get('/api/connected-apps/notice').json()
+    assert [entry['created'] for entry in notice] == [connected.clock[0], connected.clock[0] - 2 * 86400]  # newest first
+    connected.clock[0] += WEEK - 2 * 86400 + 1  # the older one is past its 7 days, the newer isn't
+    assert [entry['created'] for entry in sam(connected).get('/api/connected-apps/notice').json()] == [
+        connected.clock[0] - WEEK + 2 * 86400 - 1]
+    with connected.store.transaction() as db:  # one that ran out inside its 7 days is gone from it too (Tardis)
+        db.execute('UPDATE connector_grants SET ends=? WHERE created=?', (connected.clock[0] - 1, connected.clock[0] - WEEK + 2 * 86400 - 1))
+    assert sam(connected).get('/api/connected-apps/notice').json() == []
 
 
 def test_a_revoked_connection_shows_no_notice(connected):
     [app] = sam(connected).get('/api/connected-apps').json()
     sam(connected).post(f"/api/connected-apps/{app['id']}/revoke")
-    assert sam(connected).get('/api/connected-apps/notice').json() is None
+    assert sam(connected).get('/api/connected-apps/notice').json() == []
 
 
 def test_each_way_a_connection_ends_is_named(connected):

@@ -48,7 +48,7 @@ const state = {
   assistant: { enabled: false },
   assistance: {},
   sources: [],
-  connector: false, connectorNotice: null, apps: null, adminApps: null, appAsk: null, appRoomsEdit: null, appReceipts: {},
+  connector: false, connectorNotice: [], apps: null, adminApps: null, appAsk: null, appRoomsEdit: null, appReceipts: {}, appReceiptsBusy: {},
 };
 
 class ApiError extends Error {
@@ -114,7 +114,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = null; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = []; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.appReceiptsBusy = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -1355,8 +1355,8 @@ function appDate(value) {
 
 async function loadConnectorNotice() {
   // 404 means this home runs without the connector: no link, no notice. Another failure keeps the link and shows no notice.
-  try { return { on: true, notice: await api("/api/connected-apps/notice") }; }
-  catch (error) { if (error.status === 401) throw error; return { on: error.status !== 404, notice: null }; }
+  try { const notice = await api("/api/connected-apps/notice"); return { on: true, notice: Array.isArray(notice) ? notice : [] }; }
+  catch (error) { if (error.status === 401) throw error; return { on: error.status !== 404, notice: [] }; }
 }
 
 async function loadConnectedApps() {
@@ -1406,12 +1406,13 @@ async function appWrite(path, method, json, message) {
 
 // Receipts a page at a time, newest first. "Show earlier" sends the last page's cursor, a receipt's own id; when that
 // receipt has gone (the sweep takes one a year past its connection), the home answers 400 and the list starts again from
-// the newest rather than showing an error (Rio Grande, on 72889183). One read at a time, so a double click adds one page.
+// the newest rather than showing an error (Rio Grande, on 72889183). One read at a time for each connection, so a double
+// click adds one page and another connection's list still opens (the reader's N4).
 async function loadReceipts(appId, earlier) {
-  if (state.appReceiptsLoading) return;
+  if (state.appReceiptsBusy[appId]) return;
   const who = identityKey(state.me), shown = state.appReceipts[appId], cursor = earlier ? shown?.before : null;
   if (earlier && !cursor) return;
-  state.appReceiptsLoading = true;
+  state.appReceiptsBusy[appId] = true;
   let restart = false;
   try {
     const page = await api(`/api/connected-apps/${pathPart(appId)}/receipts?limit=${RECEIPT_PAGE}${cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`);
@@ -1423,7 +1424,7 @@ async function loadReceipts(appId, earlier) {
     if (cursor && error.status === 400) restart = true;
     else setFlash(error.message, true);
   } finally {
-    state.appReceiptsLoading = false;
+    delete state.appReceiptsBusy[appId];
   }
   if (restart) {
     setFlash("The list changed while you read it, so it starts again from the newest.");
@@ -1433,10 +1434,15 @@ async function loadReceipts(appId, earlier) {
   render();
 }
 
+// Every live connection made in the last 7 days has its own line, newest first: the newest alone hid a thief's older one
+// once the person connected their own (the reader's M1 on 9b).
 function connectorNotice() {
-  const notice = state.connectorNotice;
-  if (!notice) return "";
-  return `<div class="notice connector-notice"><p>${escapeHtml(appName(notice.app))} was connected on ${escapeHtml(appDate(notice.created))}. Not you? <button class="button danger secondary" type="button" data-action="app-notice-revoke" data-id="${escapeHtml(notice.id)}">Revoke</button></p></div>`;
+  const notices = Array.isArray(state.connectorNotice) ? state.connectorNotice : [];
+  if (!notices.length) return "";
+  return `<div class="notice connector-notice"><ul>${notices.map((notice) => {
+    const name = escapeHtml(appName(notice.app)), when = escapeHtml(appDate(notice.created));
+    return `<li>${name} was connected on ${when}. Not you? <button class="button danger secondary" type="button" data-action="app-notice-revoke" data-id="${escapeHtml(notice.id)}" aria-label="Revoke ${name}, connected ${when}">Revoke</button></li>`;
+  }).join("")}</ul></div>`;
 }
 
 // The rooms a person can choose for a connection: their current rooms on this home that no member keeps from cloud
@@ -1444,15 +1450,16 @@ function connectorNotice() {
 // (9a's S2). The home checks every change again.
 function appRoomChoices(app) {
   const chats = state.home?.chats || [], chosen = new Set(app.all_rooms ? [] : app.rooms.map((room) => room.room));
+  const marked = new Set(app.all_rooms ? [] : app.rooms.filter((room) => room.cloud).map((room) => room.room));  // the list's own, fresher (S3)
   const replaced = (room) => chats.some((other) => !other.origin && other.linked_room_id === room.id);
-  return chats.filter((room) => !room.cloud && (chosen.has(room.id) || (!room.origin && !room.breakout && !replaced(room))));
+  return chats.filter((room) => !room.cloud && !marked.has(room.id) && (chosen.has(room.id) || (!room.origin && !room.breakout && !replaced(room))));
 }
 
 function appRoomsForm(app) {
   const id = escapeHtml(app.id), chosen = new Set(app.all_rooms ? [] : app.rooms.map((room) => room.room)), name = escapeHtml(appName(app.app));
   const choices = appRoomChoices(app).map((room) => `<label class="choice"><input type="checkbox" name="app-room" value="${escapeHtml(room.id)}"${chosen.has(room.id) ? " checked" : ""}><span class="choice-copy"><strong>${escapeHtml(room.title)}</strong></span></label>`).join("")
     || `<p class="meta">You have no room it can read.</p>`;
-  return `<form class="app-rooms-form" data-id="${id}"><fieldset class="field"><legend>Rooms ${name} reads</legend><label class="choice"><input type="radio" name="app-scope" value="listed"${app.all_rooms ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices">${choices}</div><label class="choice"><input type="radio" name="app-scope" value="*"${app.all_rooms ? " checked" : ""}><span class="choice-copy"><strong>All my rooms, including new ones</strong><small>Except rooms a member keeps from cloud models.</small></span></label></fieldset><div class="button-row"><button class="button" type="submit">Save rooms</button><button class="button secondary" type="button" data-action="app-rooms-cancel" data-id="${id}">Cancel</button></div></form>`;
+  return `<form class="app-rooms-form" data-id="${id}"><fieldset class="field"><legend>Rooms ${name} reads</legend><label class="choice"><input type="radio" name="app-scope" value="listed"${app.all_rooms ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices">${choices}</div><label class="choice"><input type="radio" name="app-scope" value="*"${app.all_rooms ? " checked" : ""}><span class="choice-copy"><strong>All my rooms, including new ones</strong><small>Except rooms a member keeps from cloud models.</small></span></label>${app.all_rooms ? `<p class="meta">A room that continues in a newer one is offered as the newer room: an earlier room can't be added here.</p>` : ""}</fieldset><div class="button-row"><button class="button" type="submit">Save rooms</button><button class="button secondary" type="button" data-action="app-rooms-cancel" data-id="${id}">Cancel</button></div></form>`;
 }
 
 async function saveAppRooms(form) {
@@ -1522,6 +1529,7 @@ function connectedAppsView() {
 
 function adminAppItem(app) {
   const id = escapeHtml(app.id), person = escapeHtml(app.person), host = escapeHtml(app.app);
+  const who = `${person}${app.username ? ` (@${escapeHtml(app.username)})` : ""}`;  // two people can share a name (N5)
   const when = [`Connected ${appDate(app.created)}`, `last used ${app.last_used == null ? "never" : appDate(app.last_used)}`,
                 app.ended ? `ended ${appDate(app.ended.at)}` : `ends ${appDate(app.ends)}`].join(" · ");
   let controls = "";
@@ -1530,7 +1538,7 @@ function adminAppItem(app) {
       ? `<div class="board-ask app-ask" role="group" aria-label="Revoke this connection?"><p>Revoke ${person}'s connection to ${host}? It stops reading at once; they can connect again.</p><div class="button-row"><button class="button secondary" type="button" data-action="app-cancel" data-id="${id}">Cancel</button><button class="button danger" type="button" data-action="app-revoke-confirm" data-id="${id}">Yes, revoke</button></div></div>`
       : `<div class="button-row"><button class="button danger secondary" type="button" data-action="app-admin-revoke" data-id="${id}" aria-label="Revoke ${person}'s connection to ${host}">Revoke</button></div>`;
   }
-  return `<li class="app-admin-item" data-id="${id}"><p><strong>${person}</strong> · ${host}${app.ended ? ' <span class="badge failed">Ended</span>' : ""}</p><p class="meta">${escapeHtml(when)}</p>${controls}</li>`;
+  return `<li class="app-admin-item" data-id="${id}"><p><strong>${who}</strong> · ${host}${app.ended ? ' <span class="badge failed">Ended</span>' : ""}</p><p class="meta">${escapeHtml(when)}</p>${controls}</li>`;
 }
 
 function connectorAdminSection() {
@@ -1640,7 +1648,7 @@ async function loadRoute() {
       state.room = null;
     }
   }
-  if (route === "apps") await loadConnectedApps();
+  if (route === "apps") { try { await loadData(); } catch (_) { /* the view below reads what it can */ } await loadConnectedApps(); }  // fresh rooms and marks (S3)
   if (route === "connections" && state.connector && state.me.is_super_admin) await loadAdminApps();
   if (route === "grants") { try { await loadData(); } catch (_) { /* the view below reads what it can */ } await loadGrants(); }
   if (route === "board") { try { await loadData(); } catch (_) { /* the view below reads what it can */ } const who = identityKey(state.me); try { const view = await api("/api/board"); if (identityKey(state.me) === who) state.boardView = view; } catch (_) { if (identityKey(state.me) === who) state.boardView = null; } }
@@ -2726,6 +2734,7 @@ window.addEventListener("hashchange", async () => {
   if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;
+  if (!["apps", "connections"].includes(routeParts().route)) { state.appAsk = null; state.appRoomsEdit = null; }  // N3
   try {
     await loadRoute(); render();
     if (state.appAsk && routeParts().route === "apps") document.querySelector('.app-ask [data-action="app-cancel"]')?.focus();  // from the notice's Revoke

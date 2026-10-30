@@ -387,7 +387,9 @@ must be live first.
 - press Allow.
 
 A room any member keeps away from cloud models ("Never to a cloud model") can't be chosen. If someone marks it later,
-Claude can no longer read it.
+Claude can no longer read it from then on. A mark doesn't recall what Claude has already read, and it doesn't see text
+someone copies into another room by hand. A member on a paired home can't mark a room here yet, though their words in it
+reach Claude like anyone's.
 
 **What Claude can do.** Four read-only tools: List shared rooms, Read a room, Search shared rooms and Fetch a message.
 It can make 60 calls a minute and 2,000 a day per connection. It never reads a room on another home.
@@ -395,13 +397,14 @@ It can make 60 calls a minute and 2,000 a day per connection. It never reads a r
 **Connected apps.** Your home's Connected apps page lists each connection: the app, when it was made, last used and
 when it ends, and its rooms.
 - **Change rooms:** takes effect on Claude's next call.
-- **Receipts:** every call leaves one, saying when, which tool, and which rooms it read or was refused. A receipt
-  never records what was asked.
+- **Receipts:** every call leaves one, saying when, which tool, and which rooms it read or was refused, except a call
+  refused for going over the limit, which reads nothing. A receipt never records what was asked.
 - **Revoke:** ends the connection at once, so Claude's next call is refused. Disconnecting in Claude doesn't end the
   connection here. Revoke does.
 
-For 7 days after a connection is made, every page says "Claude was connected on <date>. Not you? Revoke." A stolen
-password then can't quietly become 30 days of reading.
+For 7 days after each connection is made, every page names it: "Claude was connected on <date>. Not you? Revoke."
+Each connection has its own line, so a stolen password can't quietly become 30 days of reading, even after you connect
+Claude yourself.
 
 **Admins.** A home's super admins see each connection's person, app and dates under Connections, and can revoke it.
 They never see its rooms or what it read.
