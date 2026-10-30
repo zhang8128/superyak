@@ -23,11 +23,12 @@ import tempfile
 import time
 import urllib.request
 from .auth import account_role, token_hash
+from .journal_mode import header_mode
 from .ships import safe_line
 
 STAMP = '%Y%m%dT%H%M%SZ'
 COPY_NAME = re.compile(r'peer-(\d{8}T\d{6}Z)\.sqlite3')
-TEMP_NAME = re.compile(r'\.peer-.+\.tmp(?:-journal)?')
+TEMP_NAME = re.compile(r'\.peer-.+\.tmp(?:-journal|-wal|-shm)?')
 KEEP_DAYS, KEEP_WEEKS = 14, 8
 TEMP_MAX_AGE = 86400
 STALE_AFTER = 36 * 3600
@@ -198,8 +199,16 @@ def rotation_lock(directory):
 
 
 def _remove_temporary(tmp):
-    for path in (Path(tmp), Path(f'{tmp}-journal')):
+    for path in (Path(tmp), Path(f'{tmp}-journal'), Path(f'{tmp}-wal'), Path(f'{tmp}-shm')):
         path.unlink(missing_ok=True)
+
+
+def _as_single_file(copy):
+    """Store-wal-mode D4: a copy is one self-contained rollback-mode file, whatever the live store's mode. The backup
+    API copies the source's WAL flag; journal_mode=DELETE clears it, and SQLite's answer is checked."""
+    answer = copy.execute('PRAGMA journal_mode=DELETE').fetchone()[0]
+    if answer != 'delete':
+        raise BackupError(1, f'the copy could not be made a single file (journal_mode={answer})')
 
 
 def free_bytes(path):
@@ -226,6 +235,7 @@ def _checked_copy(database, tmp, clock, sleep):
                         raise BackupError(10)
                     with closing(sqlite3.connect(tmp)) as copy:
                         source.backup(copy, pages=-1)
+                        _as_single_file(copy)
                         sound = _check(copy, 'integrity_check')
                 break
             except sqlite3.OperationalError as error:
@@ -1253,6 +1263,9 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     refuse_misnamed_replaced); the restore test calls this directly on its scratch peer.sqlite3."""
     db_path = Path(db_path).absolute()
     _refuse(db_path, live_data_dir)
+    if header_mode(db_path) == 'wal':  # store-wal-mode D4: every backup copy is a rollback-mode file
+        raise ReconcileRefused(f'{db_path} is in WAL mode, so step 6 would install its main file alone; stage a copy '
+                               'made by station-backup or station-restore-test, which are single files')
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0],
@@ -1488,6 +1501,7 @@ def _restored_copy(source, target):
     try:
         with closing(_read_only(source)) as copy_from, closing(sqlite3.connect(target)) as copy:
             copy_from.backup(copy, pages=-1)
+            _as_single_file(copy)
             return _check(copy, 'integrity_check')
     except sqlite3.DatabaseError:
         return False

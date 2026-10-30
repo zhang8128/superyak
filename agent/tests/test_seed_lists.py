@@ -7,7 +7,8 @@ from superyak_agent import checklists as cl
 REPO = Path(__file__).resolve().parents[2]
 SEED = REPO / '.superyak' / 'checklists'
 STATION_ACTS = ('approve', 'deny', 'bridge', 'unbridge', 'add-ship', 'moderate', 'unmoderate',
-                'lessons-room', 'imprint-admit', 'imprint-delete', 'imprint-use')   # the final review's I1
+                'lessons-room', 'imprint-admit', 'imprint-delete', 'imprint-use',   # the final review's I1
+                'journal')   # store-wal-mode Tasks 1-3 review's S3
 IMPRINT_ACTS = ('imprint-admit', 'imprint-delete', 'imprint-use', 'approve')
 TABLE = {
     'why-we-build': 'start; every 3h', 'each-hour': 'every 1h', 'reflect': 'every 3h',
@@ -20,7 +21,7 @@ TABLE = {
     'imprint-act': '; '.join(f'command make station-{t}' for t in IMPRINT_ACTS),
 }
 
-VERSIONS = {'imprint-act': 2, 'before-push': 2}   # F1: its content changed after it was on main
+VERSIONS = {'imprint-act': 2, 'before-push': 2, 'live-station-act': 2}   # F1: its content changed after it was on main
 
 
 def seed(list_id):
