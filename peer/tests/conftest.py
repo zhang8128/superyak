@@ -22,6 +22,8 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(autouse=True)
 def every_store_in_the_journal_mode_asked(monkeypatch):
+    """In a WAL run every Store this process builds is switched to WAL. A store that a CLI subprocess creates fresh is
+    built in that process and stays in rollback mode (the Tasks 4-5 review's nit)."""
     if JOURNAL != 'wal':
         return
     from superyak_peer.db import Store

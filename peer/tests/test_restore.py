@@ -939,33 +939,33 @@ def interrupted(source, target):
     writing.unlink()
 
 
-@pytest.mark.journal('delete')  # its hot-journal case is rollback mode's; its WAL twin is plan Task 7's
-def test_reconcile_says_why_the_replaced_file_was_treated_as_absent(tmp_path, capsys):
+@pytest.mark.parametrize('label', ['missing', pytest.param('hot', marks=pytest.mark.journal('delete')),  # rollback's
+                                   'empty-journal', 'zeroed-journal'])  # only the hot case is mode-bound (Tasks 4-5 nit)
+def test_reconcile_says_why_the_replaced_file_was_treated_as_absent(tmp_path, capsys, label):
     """Fix round 1 (review minor 2): no file at the --replaced path; a replaced file with a hot journal beside it; and a
     damaged one beside a journal SQLite wouldn't treat as hot (an empty one, or one whose header is still zero because
     its write never synced). Each fails closed with its own reason, and the journal is never touched."""
     store = Store(tmp_path / 'lighthouse')
     andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     serenity, key = docked(store, andy['id'], 'serenity')
-    cases = {'missing': ('there is no such file', None),
-             'hot': ('a hot journal beside it, peer.sqlite3-journal', None),
-             'empty-journal': ('it failed its check', b''),
-             'zeroed-journal': ('it failed its check', bytes(512))}
-    for label, (why, journal) in cases.items():
-        copy = staged(tmp_path, store, f'replaced-{label}')
-        replaced = copy.parent / 'peer.sqlite3'
-        if label == 'hot':
-            interrupted(store.db_path, replaced)
-        elif label != 'missing':
-            replaced.write_bytes(os.urandom(8192))
-            Path(f'{replaced}-journal').write_bytes(journal)
-        beside = Path(f'{replaced}-journal')
-        kept = beside.read_bytes() if beside.exists() else None
-        code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced)
-        assert code == 0, err
-        assert f'The replaced file was treated as absent ({why}).' in out.splitlines()[1], (label, out)
-        assert 'Ship keys revoked for: serenity.' in out.splitlines()
-        assert (beside.read_bytes() if beside.exists() else None) == kept
+    why, journal = {'missing': ('there is no such file', None),
+                    'hot': ('a hot journal beside it, peer.sqlite3-journal', None),
+                    'empty-journal': ('it failed its check', b''),
+                    'zeroed-journal': ('it failed its check', bytes(512))}[label]
+    copy = staged(tmp_path, store, f'replaced-{label}')
+    replaced = copy.parent / 'peer.sqlite3'
+    if label == 'hot':
+        interrupted(store.db_path, replaced)
+    elif label != 'missing':
+        replaced.write_bytes(os.urandom(8192))
+        Path(f'{replaced}-journal').write_bytes(journal)
+    beside = Path(f'{replaced}-journal')
+    kept = beside.read_bytes() if beside.exists() else None
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced)
+    assert code == 0, err
+    assert f'The replaced file was treated as absent ({why}).' in out.splitlines()[1], (label, out)
+    assert 'Ship keys revoked for: serenity.' in out.splitlines()
+    assert (beside.read_bytes() if beside.exists() else None) == kept
 
 
 def test_reconcile_refuses_a_copy_in_the_backups_rotation(tmp_path, capsys):
@@ -1232,8 +1232,8 @@ def runbook_block(step):
 
 
 def pi_only(block):
-    """The runbook runs on the Pi: a block that calls `fuser -s` (psmisc's) is skipped where fuser has no -s, as BSD's
-    on the Mac hasn't, so a Mac run says why instead of failing (Serenity's yes on wal-tasks-1-3)."""
+    """The runbook runs on the Pi: a block that calls `fuser -s` (psmisc's, on Linux) is skipped off Linux, where fuser
+    is BSD's and has no -s, so a Mac run says why instead of failing (Serenity's yes on wal-tasks-1-3)."""
     if 'fuser' in block and sys.platform != 'linux':
         pytest.skip('the restore runbook runs on the Pi; this fuser has no -s')
     return block

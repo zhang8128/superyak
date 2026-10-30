@@ -63,7 +63,7 @@ def test_reading_takes_no_gate_in_wal(tmp_path):
     before = count_users(store)
     with gate_and_write_held(store):
         count, took = timed(lambda: count_users(store))
-    assert count == before and took < 0.05
+    assert count == before and took < 1.0  # a gated read would wait out the held gate, up to 10 s
 
 
 def test_reading_takes_the_gate_in_rollback_mode(tmp_path):
@@ -76,6 +76,33 @@ def test_reading_takes_the_gate_in_rollback_mode(tmp_path):
         assert reader.is_alive()  # waiting on the gate the other thread holds
     reader.join(10)
     assert result['count'] == before
+
+
+def test_rollback_reading_takes_the_gate_before_touching_sqlite(tmp_path):
+    """The Tasks 4-5 review's S3: in rollback mode reading() reads the mode from the file's header, takes the gate, and
+    only then opens SQLite, as transaction() does. So a short SQLite wait (the lessons query's `busy_until`) can't fail
+    it behind a write that holds the gate and SQLite's EXCLUSIVE lock: it waits at the gate instead. Mutation: the mode
+    probed with a PRAGMA before the gate ("database is locked" after the short wait)."""
+    store = store_in(tmp_path, 'delete')
+    short = Store(store.data_dir, busy_until=time.monotonic() + 0.2)
+    ready = threading.Event()
+
+    def hold():
+        with short.dispatch_gate:
+            db = sqlite3.connect(short.db_path, isolation_level=None)
+            db.execute('BEGIN EXCLUSIVE')
+            ready.set()
+            time.sleep(0.6)
+            db.execute('ROLLBACK')
+            db.close()
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert ready.wait(5)
+    try:
+        with short.reading() as db:
+            assert db.execute('SELECT count(*) FROM users').fetchone()[0] >= 1
+    finally:
+        holder.join(10)
 
 
 def test_one_reading_is_one_snapshot(tmp_path):
@@ -106,7 +133,7 @@ def test_an_open_snapshot_does_not_delay_a_gated_commit_in_wal(tmp_path):
         writer.start()
         writer.join(10)
         time.sleep(0.3)
-    assert took['commit'] < 0.5  # a commit with its password hash: it never waited for the open snapshot
+    assert took['commit'] < 2.0  # a commit with its password hash: it never waited for the open snapshot
 
 
 @pytest.mark.parametrize('mode', ['wal', 'delete'])

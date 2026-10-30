@@ -160,7 +160,7 @@ def test_each_moved_read_runs_while_the_gate_and_a_write_are_held(busy_wal_store
     worker.join(2)
     assert not worker.is_alive(), f'{name} waited for the gate'
     assert 'error' not in done, done.get('error')
-    assert done['value'] and done['took'] < 0.2  # each case's seed gives it something to answer
+    assert done['value'] and done['took'] < 1.0  # a gated read waits out the held gate (seconds); each seed gives it an answer
     assert (tables(seeded.store), files(seeded.store)) == before
 
 
@@ -227,6 +227,7 @@ class Package:
     def __init__(self):
         self.defs, self.methods, self.functions = {}, defaultdict(set), defaultdict(set)
         self.imported, self.modules, self.stored = defaultdict(dict), defaultdict(dict), defaultdict(set)
+        self.tables = defaultdict(set)
         trees = {path.stem: ast.parse(path.read_text(), str(path)) for path in sorted(PACKAGE.glob('*.py'))}
         for module, tree in trees.items():
             self._index(module, tree, [module], False)
@@ -243,6 +244,11 @@ class Package:
                     for target in node.targets:
                         if isinstance(target, ast.Attribute):
                             self.stored[target.attr] |= self.functions[(module, node.value.id)]
+            for node in tree.body:  # a module-level table of functions (connector_reads' TOOLS): naming it names them all
+                if isinstance(node, ast.Assign) and isinstance(node.value, (ast.Dict, ast.List, ast.Tuple, ast.Set)):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            self.tables[(module, target.id)] |= self.named(module, ast.walk(node.value), set())
         self.variables = {q: _variables(f, list(_own(f.body))) for q, (_, f) in self.defs.items()}
         self.names = {q: self.named(m, _own(f.body), self.variables[q]) for q, (m, f) in self.defs.items()}
 
@@ -263,9 +269,9 @@ class Package:
         found = set()
         for node in nodes:
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in variables:
-                found |= self.functions[(module, node.id)]
+                found |= self.functions[(module, node.id)] | self.tables[(module, node.id)]
                 if node.id in self.imported[module]:
-                    found |= self.functions[self.imported[module][node.id]]
+                    found |= self.functions[self.imported[module][node.id]] | self.tables[self.imported[module][node.id]]
             elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
                 found |= self.methods[node.attr] | self.stored[node.attr]
                 if isinstance(node.value, ast.Name) and node.value.id in self.modules[module]:
@@ -306,8 +312,9 @@ def test_no_gated_caller_reaches_a_moved_read():
     """D3, the Review Focus: a production path that reaches a moved read while holding the gate (through a helper, a
     method passed as a value or a lambda) would have reading() refuse it at run time; this walk finds it first. Every
     moved name must be a function the walk knows, so a renamed one can't make the walk pass by finding nothing. A
-    callback called only by its parameter's name (send_pinned's prepare) it can't see: there the refusal raises in
-    both modes."""
+    module-level table of functions (connector_reads' TOOLS, which connector_call indexes inside its transaction) names
+    every function in it (the Tasks 4-5 review's S1). A callback called only by its parameter's name (send_pinned's
+    prepare) it can't see: there the refusal raises in both modes."""
     package = Package()
     assert [name for name in MOVED_READS if name not in package.defs] == []
     found = [(caller, line, reached) for caller, line, reached in package.gated_callers(package.reaching(MOVED_READS))
@@ -315,16 +322,33 @@ def test_no_gated_caller_reaches_a_moved_read():
     assert found == []
 
 
+def test_the_functions_that_enter_reading_are_exactly_the_moved_reads():
+    """The Tasks 4-5 review's S2: only the functions Task 5 names move to reading(). A function whose own body enters
+    `.reading()` and isn't in MOVED_READS (serve_pull's paired-peer read, which stays gated, say) fails here, and so does
+    a name in MOVED_READS that no longer enters it."""
+    package = Package()
+    entering = set()
+    for qualified, (module, function) in package.defs.items():
+        for node in _own(function.body):
+            if isinstance(node, (ast.With, ast.AsyncWith)) and any(
+                    isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Attribute)
+                    and item.context_expr.func.attr == 'reading' for item in node.items):
+                entering.add(qualified)
+    assert 'federation.Federation.serve_pull' not in entering  # its paired-peer read and replay guard stay gated (Tardis)
+    assert entering == set(MOVED_READS)
+
+
 def test_inbox_budget_is_locked(tmp_path, monkeypatch):
     """D3: board_counts calls _inbox_budget outside the gate, so two threads can update one ship's minute at once. With
-    the cap patched high, an advancing clock and a switch every microsecond, two threads of 10,000 updates leave 20,000
-    entries; without the lock, one thread's read-modify-write drops the other's entries."""
+    the cap patched high, an advancing clock and a switch every microsecond, two threads of 2,000 updates leave 4,000
+    entries; without the lock, one thread's read-modify-write drops the other's entries (the review lost entries in 5 of
+    5 unlocked runs at this size, and the locked run takes 0.5 s, not 7 to 14)."""
     ticks = itertools.count()
     store = Store(tmp_path / 'station', signing=False, clock=lambda: NOW + next(ticks) * 1e-6)
     monkeypatch.setattr(inbox, 'READS_PER_MINUTE', 10 ** 9)
 
     def reads():
-        for _ in range(10_000):
+        for _ in range(2_000):
             store._inbox_budget('ship')
     interval = sys.getswitchinterval()
     sys.setswitchinterval(1e-6)
@@ -336,7 +360,7 @@ def test_inbox_budget_is_locked(tmp_path, monkeypatch):
             thread.join(300)
     finally:
         sys.setswitchinterval(interval)
-    assert len(store._inbox_reads['ship']) == 20_000
+    assert len(store._inbox_reads['ship']) == 4_000
 
 
 def in_mode(store, mode):

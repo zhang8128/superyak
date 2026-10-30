@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 from .auth import Auth
+from .journal_mode import header_mode
 from .spaces import Spaces
 from .layers import Layers
 from .files import Files
@@ -177,41 +178,45 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
     def reading(self):
         """Store-wal-mode D3: one consistent snapshot that cannot write. In WAL mode it takes neither the dispatch gate
         nor SQLite's write lock, so a pure read never waits for a write and no write waits for it; in any other mode it is
-        the gate plus a deferred BEGIN, as safe as a transaction. It refuses, in both modes, a thread that holds the gate
-        or is already inside reading(), and transaction() refuses inside it. Never hold it across an await or in a yield
-        dependency: its thread-local state and, in rollback mode, the gate belong to the thread that entered it."""
+        the gate plus a deferred BEGIN, as safe as a transaction. The mode is read from the file's own header, which takes
+        no SQLite lock, so in rollback mode the gate comes before SQLite is touched at all, as in transaction(), and the
+        connection's wait is counted after it (the Tasks 4-5 review's S3). It refuses, in both modes, a thread that holds
+        the gate or is already inside reading(), and transaction() refuses inside it. Never hold it across an await or in
+        a yield dependency: its thread-local state and, in rollback mode, the gate belong to the thread that entered it."""
         if self.in_reading():  # first, so a nested reading() says so in both modes (in rollback mode the outer holds the gate)
             raise RuntimeError('reading() inside reading(): one snapshot at a time')
         if self.dispatch_gate.held():
             raise RuntimeError('reading() inside the dispatch gate: a gated caller reads in its own transaction')
         self._check_paths()
-        db = sqlite3.connect(self.db_path, timeout=self._wait())
-        gated = False
+        gated = header_mode(self.db_path) != 'wal'
+        if gated:
+            self.dispatch_gate.__enter__()
         try:
-            db.row_factory = sqlite3.Row
-            db.execute('PRAGMA query_only=ON')
-            db.execute('PRAGMA foreign_keys=ON')
-            db.execute(f'PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}')
-            if db.execute('PRAGMA journal_mode').fetchone()[0] != 'wal':
-                self.dispatch_gate.__enter__()
-                gated = True
-                db.execute(f'PRAGMA busy_timeout={int(self._wait() * 1000)}')  # the wait counted after the gate
-            db.execute('BEGIN')
-            _reading.depth = getattr(_reading, 'depth', 0) + 1
+            db = sqlite3.connect(self.db_path, timeout=self._wait())
             try:
-                yield db
-            except UnicodeError:
-                raise Problem(400, 'Text must be valid UTF-8') from None
+                db.row_factory = sqlite3.Row
+                db.execute('PRAGMA query_only=ON')
+                db.execute('PRAGMA foreign_keys=ON')
+                db.execute(f'PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}')
+                if not gated and db.execute('PRAGMA journal_mode').fetchone()[0] != 'wal':
+                    raise RuntimeError('reading(): the header says WAL and SQLite does not; switch the journal with every unit stopped')
+                db.execute('BEGIN')
+                _reading.depth = getattr(_reading, 'depth', 0) + 1
+                try:
+                    yield db
+                except UnicodeError:
+                    raise Problem(400, 'Text must be valid UTF-8') from None
+                finally:
+                    _reading.depth -= 1
             finally:
-                _reading.depth -= 1
+                try:
+                    if db.in_transaction:
+                        db.rollback()
+                finally:
+                    db.close()  # in a finally of its own, as _transaction closes, so a failed rollback pins no snapshot
         finally:
-            try:
-                if db.in_transaction:
-                    db.rollback()
-                db.close()
-            finally:
-                if gated:
-                    self.dispatch_gate.__exit__(None, None, None)
+            if gated:
+                self.dispatch_gate.__exit__(None, None, None)
 
     def emit(self, db, kind, resource_id, resource_version, payload=None):
         """Append an event inside the caller's resource transaction."""

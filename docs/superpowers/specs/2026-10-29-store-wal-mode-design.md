@@ -122,11 +122,13 @@ WAL brings costs of its own, named and bounded:
 
 `Store.reading()`:
 
-- opens its own connection with `PRAGMA query_only=ON` and `foreign_keys=ON`, and reads `PRAGMA journal_mode` first
-  (a fresh connection answers correctly before any read, p6);
+- reads the journal mode from the file's own header first (`header_mode()`, bytes 18-19, which takes no SQLite lock),
+  then opens its own connection with `PRAGMA query_only=ON` and `foreign_keys=ON`; in `wal` it also checks that SQLite
+  answers `wal` to `PRAGMA journal_mode` (a fresh connection answers correctly before any read, p6), and refuses if not;
 - in `wal`, starts a deferred `BEGIN` and takes neither the dispatch gate nor a write lock, so it reads one snapshot;
-- in any other mode, takes the dispatch gate and runs as a gated read, exactly as today, so rollback mode is never
-  worse than now (M1);
+- in any other mode, takes the dispatch gate before it opens SQLite at all, as `transaction()` does, and runs as a gated
+  read, so rollback mode is never worse than now (M1). Probing the mode with a PRAGMA first would take a brief SHARED
+  lock outside the gate, and a short wait could then fail behind a held write (the build review's S3, 2026-10-30);
 - refuses (raises) when entered by a thread that holds the gate, and `transaction()` refuses when entered inside
   `reading()` on the same thread, so the nested-write deadlock can't be built;
 - maps exceptions as `_transaction()` does (UTF-8 errors to 400, `Problem` kept or rolled back) and takes its timeout
