@@ -162,8 +162,8 @@ class ConnectorReads:
         """The grant as it stands in this transaction (the reader's should-fix: a revoke, or a room set narrowed, between
         bearer and the read let text out): its access token still unexpired and its connection still live and active,
         with the rooms and person read from the row now, else GrantGone."""
-        token = db.execute("SELECT expires FROM connector_tokens WHERE hash=? AND kind='access'",
-                           (grant.get('token'),)).fetchone()
+        token = db.execute("SELECT expires FROM connector_tokens WHERE hash=? AND kind='access' AND grant_id=?",
+                           (grant.get('token'), grant['grant_id'])).fetchone()  # bound to its grant (Task 8's re-check)
         live = self._live_grant(db, grant['grant_id'], now) if token is not None and now < token['expires'] else None
         if live is None:
             raise GrantGone()
@@ -373,10 +373,12 @@ class ConnectorReads:
         lines, kept, here = [line(message) for message in shaped], list(range(len(shaped))), at - begin
         while len(kept) > 1 and whole('\n'.join(lines[i] for i in kept)) > TEXT_CAP:
             kept.remove(max(kept, key=lambda i: (abs(i - here), i)))  # the farthest goes first, later before earlier
+        target = shaped[here]
         if whole('\n'.join(lines[i] for i in kept)) > TEXT_CAP:  # the message alone past the cap: its text is cut
-            lines[here] = line(fitted(shaped[here], lambda m: whole(line(m)) <= TEXT_CAP))
+            target = fitted(target, lambda m: whole(line(m)) <= TEXT_CAP)
+            lines[here] = line(target)
         result['text'] = '\n'.join(lines[i] for i in kept)
-        if len(kept) < len(lines) or '"text_cut":' in lines[here]:
+        if len(kept) < len(lines) or 'text_cut' in target:  # fitted's own mark, not a search of the line (Tardis)
             result['truncated'] = True
         seen.reading(room_id)
         return result
