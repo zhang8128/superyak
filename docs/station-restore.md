@@ -304,22 +304,25 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        show them in the data directory and none left in `$ASIDE`:
        ```bash
        if [ ! -e "$ASIDE/peer.sqlite3" ] && [ -e "$ASIDE/restored-live/peer.sqlite3" ] && [ -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ] && ls -d "$ASIDE"/peer.sqlite3-* >/dev/null 2>&1; then
-         if [ ~/.local/share/superyak/lighthouse/peer.sqlite3 -nt "$ASIDE/restored-live/peer.sqlite3" ]; then echo 'NOT moved: peer.sqlite3 was written after the restored station stopped, so a station ran on it without the sidecars left in $ASIDE; stop and ask in the room (read 10.3)'
+         if [ "$(stat -c '%s %.9Y' ~/.local/share/superyak/lighthouse/peer.sqlite3)" != "$(cat "$ASIDE/put-back" 2>/dev/null)" ] || [ ~/.local/share/superyak/lighthouse/peer.sqlite3 -nt "$ASIDE/restored-live/peer.sqlite3" ]; then echo 'NOT moved: peer.sqlite3 is not the file 10.3 put back, so a station ran on it without the sidecars left in $ASIDE; stop and ask in the room (read 10.3)'
          elif fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* "$ASIDE"/peer.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the database open; stop everything again as in step 3'
          else for f in "$ASIDE"/peer.sqlite3-*; do mv -n "$f" ~/.local/share/superyak/lighthouse/; done; if ls -d "$ASIDE"/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT done: a sidecar is still in $ASIDE (its name was in the data directory too, so mv -n left it); read 10.3'; else echo '10.3 was cut short before: moved the rest of its set back'; fi
          fi
        elif [ ! -e "$ASIDE/peer.sqlite3" ]; then echo 'NOT moved: $ASIDE holds no peer.sqlite3 (read 10.3)'
        elif [ -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ] || ls -d ~/.local/share/superyak/lighthouse/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT moved: a peer.sqlite3 file is in the data directory (read 10.3)'
-       else for f in "$ASIDE"/peer.sqlite3 "$ASIDE"/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" ~/.local/share/superyak/lighthouse/; done
+       else stat -c '%s %.9Y' "$ASIDE/peer.sqlite3" > "$ASIDE/put-back.new" && mv "$ASIDE/put-back.new" "$ASIDE/put-back" && for f in "$ASIDE"/peer.sqlite3 "$ASIDE"/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" ~/.local/share/superyak/lighthouse/; done   # its size and time first, for a rerun
        fi
        ls -la "$ASIDE" ~/.local/share/superyak/lighthouse/
        if [ -d "$ASIDE" ] && [ ! -e "$ASIDE/peer.sqlite3" ] && [ -e "$ASIDE/restored-live/peer.sqlite3" ] && ls -d "$ASIDE"/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT done: 10.3 was cut short and left sidecars in $ASIDE; run 10.3 again now, before anything else'; fi
        ```
        If the last line says `NOT done`, run 10.3 again at once: the lighthouse is still enabled, and a restart would
-       run it on the file without them. The rerun moves them only while the file in the data directory is older than
-       `restored-live`'s (the original was last written before step 3, the restored one after step 6). If the file was
-       written since, a station has run on it without them: they no longer fit it (a `-wal` moved back then breaks the
-       file), so leave them in `$ASIDE`, stop, and ask in the room before 10.4.
+       run it on the file without them. Before it moves anything, 10.3 records the file's size and time in
+       `$ASIDE/put-back` (`mv` keeps both). The rerun moves the sidecars only while the file in the data directory
+       still matches that record and is older than `restored-live`'s (the original was last written before step 3, the
+       restored one after step 6). The record is what holds when the clock comes up behind after a power cut (the Pi's
+       `fake-hwclock`), and the time is a second check. If the file was written since, a station has run on it without
+       them: they no longer fit it (a `-wal` moved back then breaks the file), so leave them in `$ASIDE`, stop, and ask
+       in the room before 10.4.
        If a `peer.sqlite3` file is in the data directory: when 10.2 ran, it is a stray, so set it aside with step 6's
        stray-case lines and run 10.3 again; when 10.2 didn't run, run 10.2 first.
     4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and

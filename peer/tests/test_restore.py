@@ -1648,7 +1648,12 @@ def cut_short_10_3(tmp_path):
     (aside / 'peer.sqlite3-wal').write_bytes(b'its newest commits')
     os.utime(data / 'peer.sqlite3', (1_800_000_000, 1_800_000_000))                  # before the restore's step 3
     os.utime(aside / 'restored-live' / 'peer.sqlite3', (1_800_003_600, 1_800_003_600))  # 10.1 stopped it an hour on
+    (aside / 'put-back').write_text(put_back_record(data / 'peer.sqlite3'))         # as 10.3 wrote it before its move
     return data, aside
+
+
+def put_back_record(path):
+    return subprocess.run(['stat', '-c', '%s %.9Y', str(path)], capture_output=True, text=True, check=True).stdout
 
 
 def test_a_cut_short_10_3_moves_the_rest_of_the_set_back(tmp_path):
@@ -1668,9 +1673,64 @@ def test_a_cut_short_10_3_never_moves_sidecars_onto_a_file_written_since(tmp_pat
     data, aside = cut_short_10_3(tmp_path)
     os.utime(data / 'peer.sqlite3', (1_800_007_200, 1_800_007_200))   # the restart wrote to it after 10.1
     out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
-    assert 'NOT moved: peer.sqlite3 was written after the restored station stopped' in out
+    assert 'NOT moved: peer.sqlite3 is not the file 10.3 put back' in out
     assert (aside / 'peer.sqlite3-wal').exists() and not (data / 'peer.sqlite3-wal').exists()
     assert 'NOT done: 10.3 was cut short' in out
+
+
+def test_a_cut_short_10_3_refuses_a_file_written_with_the_clock_behind(tmp_path):
+    """Re-check 3's M3: after a power cut the Pi's clock can come up behind (fake-hwclock), so a write to the bare file
+    can leave it older than restored-live's. The record 10.3 made before its move still catches it. The same holds with
+    no record at all. Mutation: the record check gone (only the time is compared)."""
+    data, aside = cut_short_10_3(tmp_path)
+    with open(data / 'peer.sqlite3', 'ab') as written:                 # the restart's write
+        written.write(b' and a write')
+    os.utime(data / 'peer.sqlite3', (1_800_000_100, 1_800_000_100))   # an hour before restored-live's
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert 'NOT moved: peer.sqlite3 is not the file 10.3 put back' in out and (aside / 'peer.sqlite3-wal').exists()
+    (aside / 'put-back').unlink()
+    os.utime(data / 'peer.sqlite3', (1_800_000_000, 1_800_000_000))
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert 'NOT moved: peer.sqlite3 is not the file 10.3 put back' in out and (aside / 'peer.sqlite3-wal').exists()
+
+
+def test_a_10_3_cut_short_by_its_loop_is_finished_by_its_rerun(tmp_path):
+    """M3 end to end: 10.3's loop cut after its first move (peer.sqlite3 back, its -wal still in $ASIDE), then 10.3 again:
+    the record the first run wrote lets the rerun finish the move, and nothing is left in $ASIDE."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'restored-live').mkdir(mode=0o700)
+    (aside / 'restored-live' / 'peer.sqlite3').write_bytes(b'restored')
+    (aside / 'peer.sqlite3').write_bytes(b'the station')
+    (aside / 'peer.sqlite3-wal').write_bytes(b'its newest commits')
+    os.utime(aside / 'peer.sqlite3', (1_700_000_000, 1_700_000_000))   # last written long before restored-live
+    cut = tmp_path / 'cut-bin'
+    cut.mkdir()
+    (cut / 'mv').write_text(f'#!/bin/sh\ncase "$1" in *put-back.new) exec {shutil.which("mv")} "$@" ;; esac\n'
+                            f'n=$(cat "{tmp_path}/mv-count" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "{tmp_path}/mv-count"\n'
+                            f'[ "$n" -ge 2 ] && {{ kill -9 $PPID; exit 130; }}\nexec {shutil.which("mv")} "$@"\n')
+    (cut / 'mv').chmod(0o755)
+    env = {'PATH': f'{cut}:{tmp_path / "bin"}:{os.environ["PATH"]}', 'HOME': str(tmp_path / 'home'), 'ASIDE': str(aside),
+           'LOG': str(tmp_path / 'calls.log'), 'UNITS': str(tmp_path / 'units.txt'), 'STATES': str(tmp_path / 'states.txt')}
+    subprocess.run(['bash', '-c', nested_block('3. Move the set-aside')], cwd=tmp_path, env=env, capture_output=True,
+                   text=True, timeout=60)
+    assert (data / 'peer.sqlite3').exists() and (aside / 'peer.sqlite3-wal').exists()   # cut after its first move
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert '10.3 was cut short before' in out and not list(aside.glob('peer.sqlite3*'))
+    assert (data / 'peer.sqlite3-wal').read_bytes() == b'its newest commits'
+
+
+def test_10_3_records_the_file_it_puts_back(tmp_path):
+    """M3: 10.3 writes the set-aside file's size and time to $ASIDE/put-back before it moves anything, and the moved file
+    still matches it. Mutation: no record (a rerun after a cut then refuses the very case it finishes)."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'peer.sqlite3').write_bytes(b'the station')
+    (aside / 'peer.sqlite3-wal').write_bytes(b'its newest commits')
+    before = put_back_record(aside / 'peer.sqlite3')
+    run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert (aside / 'put-back').read_text() == before == put_back_record(data / 'peer.sqlite3')
+    assert (data / 'peer.sqlite3-wal').exists()
 
 
 def test_a_cut_short_10_3_waits_for_a_held_file(tmp_path):
