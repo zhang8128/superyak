@@ -32,6 +32,9 @@ HOLD_BYTES = 6  # only a `command` value of at least 6 bytes holds a command (se
 # The tools the hold answers besides Bash (spec lesson-holds-on-tool-calls, item 3): a value equal to one holds only
 # that tool's call, and no other value holds a tool call. It must equal the peer's lessons.HELD_TOOLS.
 HELD_TOOLS = frozenset({'AskUserQuestion', 'mcp__station__station_post', 'mcp__station__station_claim'})
+HEADS_MAX = 256  # a session's distinct heads; the oldest go first
+START_MARGIN = lh.START_MARGIN
+SAVE_MARGIN = 0.15  # before the entry gives up: its render, save and print once the provider has answered
 
 
 def _contained(value, cut):
@@ -39,9 +42,6 @@ def _contained(value, cut):
     if value in HELD_TOOLS or cut in HELD_TOOLS:
         return value == cut
     return value in cut
-HEADS_MAX = 256  # a session's distinct heads; the oldest go first
-START_MARGIN = lh.START_MARGIN
-SAVE_MARGIN = 0.15  # before the entry gives up: its render, save and print once the provider has answered
 
 
 def head_digest(command):

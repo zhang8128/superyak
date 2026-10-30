@@ -658,6 +658,27 @@ def test_the_hold_line_counts_in_the_tool_result_and_in_its_error_form(rail):
     assert rail.sent()[-1]['seen'] == [A, B]
 
 
+POST_DENY = 'PreToolUse:mcp__station__station_post hook error: '  # Tardis's run on 2.1.312 (all hands 0ba39f1a)
+
+
+@pytest.mark.parametrize('confirmed, seen', [((), []), (('mcp__station__station_post',), [A, B])])
+def test_a_held_tools_deny_reads_back_only_once_that_tool_is_confirmed(rail, monkeypatch, confirmed, seen):
+    """Spec lesson-holds-on-tool-calls, item 9, on Tardis's conditions: a post's deny, in both forms Claude Code writes
+    it (copied from Tardis's run on 2.1.312), marks its lesson seen only once the tool is in CONFIRMED_TOOLS, the same
+    tuple the hold's matcher is built from; another tool's deny (Read's here) never does."""
+    from superyak_agent import holds
+    monkeypatch.setattr(holds, 'CONFIRMED_TOOLS', confirmed)
+    with rail.transcript.open('a') as stream:
+        stream.write(json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'is_error': True,
+                     'content': POST_DENY + lh.hold_reason(lesson(A, ship='serenity'))}]}}) + '\n')
+        stream.write(json.dumps({'type': 'user', 'toolUseResult': 'Error: ' + POST_DENY + lh.hold_reason(lesson(B))}) + '\n')
+        stream.write(json.dumps({'type': 'user', 'toolUseResult': 'Error: PreToolUse:Read hook error: '
+                                 + lh.hold_reason(lesson(C, ship='rio-grande'))}) + '\n')
+    rail.answers(*SERENITY)
+    rail.run('SessionStart', cwd=str(rail.root))
+    assert rail.sent()[-1]['seen'] == seen
+
+
 def test_session_start_prunes_a_temporary_file_a_killed_write_left(rail):
     """Rio Grande's nit: write_private's temporary file, left when a write was killed, goes with the old records; the
     current session's is kept, and nothing else in the folder is touched."""

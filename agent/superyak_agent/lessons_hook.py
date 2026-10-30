@@ -63,7 +63,13 @@ CHECKOUT = Path(__file__).resolve().parents[2]
 # team lines are marked by the tag defusing, so a room message can't add the header either. A record whose shape Claude
 # Code changes is read as no one's: its lessons show again, never stay hidden.
 ID_LINE = re.compile(rb'Lesson ([0-9a-f]{8}-[0-9a-f]{8}) from ([a-z][a-z0-9-]{1,31})(?=\\[nr]|["\r\n])')
-DENY = 'PreToolUse:Bash hook error: '  # Claude Code's own words before a PreToolUse hook's deny reason
+def deny_prefixes():
+    """Claude Code's own words before a PreToolUse hook's deny reason, one exact prefix for each tool the hold's matcher
+    names: Bash, and each held tool every ship has confirmed (spec lesson-holds-on-tool-calls, item 9, on Tardis's
+    conditions). A closed tuple matched with startswith, never a pattern, so another hook's deny can't mark a lesson
+    seen; it is read from holds.CONFIRMED_TOOLS each time, the tuple the matcher is built from, so the two can't part."""
+    from superyak_agent import holds   # standard library only below it, about 1 ms
+    return tuple(f'PreToolUse:{tool} hook error: ' for tool in ('Bash',) + tuple(holds.CONFIRMED_TOOLS))
 
 
 def _fence_follows(data, end, ship):
@@ -85,14 +91,15 @@ def _hook_texts(record):
             and attachment.get('hookEvent') in LIMITS:
         content = attachment.get('content')
         texts += [c for c in (content if isinstance(content, list) else [content]) if isinstance(c, str)]
+    prefixes = deny_prefixes()
     result = record.get('toolUseResult')
-    if isinstance(result, str) and result.startswith('Error: ' + DENY):
+    if isinstance(result, str) and result.startswith(tuple('Error: ' + prefix for prefix in prefixes)):
         texts.append(result)
     message = record.get('message')
     items = message.get('content') if isinstance(message, dict) else None
     for item in items if isinstance(items, list) else []:
         if isinstance(item, dict) and item.get('type') == 'tool_result' and item.get('is_error') is True \
-                and isinstance(item.get('content'), str) and item['content'].startswith(DENY):
+                and isinstance(item.get('content'), str) and item['content'].startswith(prefixes):
             texts.append(item['content'])
     return texts
 
