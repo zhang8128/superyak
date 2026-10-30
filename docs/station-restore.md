@@ -16,9 +16,10 @@ Before you start, know two things:
 
 Run every step on the Pi, from `~/superyak`, in one terminal that you keep open: the steps share `ASIDE`, the directory
 step 1 makes for this restore. If the terminal closes or the Pi restarts, open a new one in `~/superyak` and set `ASIDE`
-again with the line below; never run step 1 again for that. The directory names are the local time of step 1, all of
-one width, so the last one listed is the newest: this restore's. Check that its name holds the date and time you ran
-step 1. From step 4 on (until a rollback's 10.3) it holds `peer.sqlite3`.
+again with the line below; never run step 1 again for that. The directory names are the UTC time of step 1, all of
+one width, so the last one listed is the newest, this restore's, even across a daylight-saving change (local time
+repeats an hour when the clocks go back). Check that its name holds the UTC date and time you ran step 1 (`date -u`
+prints the time now). From step 4 on (until a rollback's 10.3) it holds `peer.sqlite3`.
 ```bash
 ASIDE=$(ls -d ~/.local/share/superyak/backups/replaced-* | tail -n 1); ls -la "$ASIDE"
 ```
@@ -41,7 +42,7 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    restore and copy the choice into it; later steps use that copy, and nothing in the rotation is needed again. Run this
    step once per restore; only a failed step 2 sends you back to it:
    ```bash
-   ASIDE=~/.local/share/superyak/backups/replaced-$(date +%Y%m%d-%H%M%S)
+   ASIDE=~/.local/share/superyak/backups/replaced-$(date -u +%Y%m%d-%H%M%S)
    install -d -m 700 "$ASIDE"
    install -m 600 ~/.local/share/superyak/backups/station/<chosen copy> "$ASIDE/chosen.sqlite3"
    ```

@@ -651,6 +651,16 @@ def test_a_refused_carry_starts_the_federation_units_only_after_the_clock_syncs_
     assert 'uptime -s' not in text and 'InactiveEnterTimestamp' not in text
 
 
+def test_restore_directories_are_named_in_utc_so_the_newest_sorts_last():
+    """Serenity's nit on 370a47f1: step 1 named the directory by local time, so in a fall-back hour a later restore could
+    sort before an earlier one, and the runbook's ASIDE line and the carry's newest check would both pick the older one.
+    UTC names sort by time, in the same form the carry counts. Mutation: `date` without -u."""
+    named = [line.strip() for line in RUNBOOK.read_text().splitlines()
+             if line.strip().startswith('ASIDE=~/.local/share/superyak/backups/replaced-$(')]
+    assert named == ['ASIDE=~/.local/share/superyak/backups/replaced-$(date -u +%Y%m%d-%H%M%S)']
+    assert backups.REPLACED_DIR.fullmatch(time.strftime('replaced-%Y%m%d-%H%M%S', time.gmtime()))
+
+
 def test_carry_nonces_leaves_a_hot_journal_and_exits_cleanly_on_a_database_error(tmp_path, capsys):
     """The re-check's SF2 (its probe q3): 10.1 killed the listener mid-transaction, so restored-live has a hot journal.
     The read-only attach refuses to roll it back, so the carry exits 1 and both files stay as they were, falling back
