@@ -1577,6 +1577,203 @@ def test_a_cut_short_10_2_moves_the_rest_of_the_set_on_its_rerun(tmp_path):
     assert (aside / 'restored-live' / 'peer.sqlite3-wal').read_bytes() == b'restored frames'
 
 
+def test_a_stray_move_cut_short_leaves_its_peer_sqlite3_never_sidecars_alone(tmp_path):
+    """Tasks 1-3 re-check's M1: the stray-case loop moves the stray's sidecars first and peer.sqlite3 last, so a move cut
+    short after one file leaves peer.sqlite3 in the data directory. Step 4 then calls it ran-before, not cut short, so it
+    never takes the stray's journal beside the original, and the stray case run again takes the rest. Mutation: the loop
+    moving peer.sqlite3 first (the journal is left alone, and step 4 moves it beside the original)."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'peer.sqlite3').write_bytes(b'the station')
+    (data / 'peer.sqlite3').write_bytes(b'a stray')
+    (data / 'peer.sqlite3-journal').write_bytes(b'the stray journal')
+    cut = tmp_path / 'cut-bin'
+    cut.mkdir()
+    (cut / 'mv').write_text(f'#!/bin/sh\nn=$(cat "{tmp_path}/mv-count" 2>/dev/null || echo 0); n=$((n + 1))\n'
+                            f'echo $n > "{tmp_path}/mv-count"\n[ "$n" -ge 2 ] && {{ kill -9 $PPID; exit 130; }}\nexec {shutil.which("mv")} "$@"\n')
+    (cut / 'mv').chmod(0o755)
+    heading = '- **A `peer.sqlite3` file is already in the data directory, and `$ASIDE/peer.sqlite3` exists'
+    env = {'PATH': f'{cut}:{tmp_path / "bin"}:{os.environ["PATH"]}', 'HOME': str(tmp_path / 'home'), 'ASIDE': str(aside),
+           'LOG': str(tmp_path / 'calls.log'), 'UNITS': str(tmp_path / 'units.txt'), 'STATES': str(tmp_path / 'states.txt')}
+    subprocess.run(['bash', '-c', nested_block(heading)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+    assert (data / 'peer.sqlite3').read_bytes() == b'a stray'      # one file moved, and it wasn't peer.sqlite3
+    out, _ = run_runbook(tmp_path, 4, aside)
+    assert 'step 4 ran before' in out and not (aside / 'peer.sqlite3-journal').exists()
+    for stray in aside.glob('stray-*'):              # a person runs it again seconds later, under a new stray-<time>
+        stray.rename(f'{stray}-earlier')
+    out, _ = run_nested(tmp_path, heading, aside)
+    assert not list(data.glob('peer.sqlite3*')) and not (aside / 'peer.sqlite3-journal').exists()
+    assert sorted(f.name for stray in aside.glob('stray-*') for f in stray.iterdir()) == ['peer.sqlite3', 'peer.sqlite3-journal']
+
+
+def test_a_cut_short_step_4_waits_for_a_held_file_and_says_it_is_not_done(tmp_path):
+    """The re-check's R3 and R2: the cut-short branch moves nothing while a process holds the set-aside file open (a reader
+    left open would trust a stale -shm), and the last line says NOT done while sidecars stay in the data directory.
+    Mutations: the branch's fuser check gone; no NOT-done line."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'peer.sqlite3').write_bytes(b'the station')
+    (data / 'peer.sqlite3-wal').write_bytes(b'the newest commits')
+    holder = open(aside / 'peer.sqlite3', 'rb')
+    try:
+        out, _ = run_runbook(tmp_path, 4, aside)
+    finally:
+        holder.close()
+    assert 'NOT moved: a process has the database open' in out and (data / 'peer.sqlite3-wal').exists()
+    assert 'NOT done: step 4 was cut short' in out
+    out, _ = run_runbook(tmp_path, 4, aside)
+    assert 'Step 4 was cut short before' in out and 'NOT done' not in out and not list(data.glob('peer.sqlite3*'))
+
+
+def test_step_4_leaves_a_rollbacks_sidecars_to_10_2(tmp_path):
+    """During a rollback ($ASIDE/restored-live exists) sidecars alone in the data directory are 10.2's: step 4's cut-short
+    branch never moves them beside the original, and the stray case names 10.2."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'peer.sqlite3').write_bytes(b'the station')
+    (aside / 'restored-live').mkdir(mode=0o700)
+    (aside / 'restored-live' / 'peer.sqlite3').write_bytes(b'restored')
+    (data / 'peer.sqlite3-wal').write_bytes(b'restored frames')
+    out, _ = run_runbook(tmp_path, 4, aside)
+    assert 'Step 4 was cut short' not in out and not (aside / 'peer.sqlite3-wal').exists()
+    out, _ = run_nested(tmp_path, '- **A `peer.sqlite3` file is already in the data directory, and `$ASIDE/peer.sqlite3` exists', aside)
+    assert 'run 10.2 again' in out and (data / 'peer.sqlite3-wal').exists()
+
+
+def cut_short_10_3(tmp_path):
+    """$ASIDE and the data directory as a 10.3 stopped after it moved peer.sqlite3 back leaves them: the original last
+    written before the restore, the restored one after it. (data, aside)."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'restored-live').mkdir(mode=0o700)
+    (aside / 'restored-live' / 'peer.sqlite3').write_bytes(b'restored')
+    (data / 'peer.sqlite3').write_bytes(b'the station, moved back')
+    (aside / 'peer.sqlite3-wal').write_bytes(b'its newest commits')
+    os.utime(data / 'peer.sqlite3', (1_800_000_000, 1_800_000_000))                  # before the restore's step 3
+    os.utime(aside / 'restored-live' / 'peer.sqlite3', (1_800_003_600, 1_800_003_600))  # 10.1 stopped it an hour on
+    (aside / 'put-back').write_text(put_back_record(data / 'peer.sqlite3'))         # as 10.3 wrote it before its move
+    return data, aside
+
+
+def put_back_record(path):
+    return subprocess.run(['stat', '-c', '%s %.9Y', str(path)], capture_output=True, text=True, check=True).stdout
+
+
+def test_a_cut_short_10_3_moves_the_rest_of_the_set_back(tmp_path):
+    """The re-check's R1: 10.3 stopped after it moved peer.sqlite3 back leaves its -wal in $ASIDE; the rerun moves it beside
+    the file, so 10.4 never starts the lighthouse on the main file alone."""
+    data, aside = cut_short_10_3(tmp_path)
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert '10.3 was cut short before' in out and 'NOT done' not in out and not list(aside.glob('peer.sqlite3*'))
+    assert (data / 'peer.sqlite3-wal').read_bytes() == b'its newest commits'
+
+
+def test_a_cut_short_10_3_never_moves_sidecars_onto_a_file_written_since(tmp_path):
+    """Re-check 2's M2: after a cut-short 10.3 a restart can run the lighthouse on the bare file; a -wal moved back onto
+    it then breaks it. The rerun moves nothing once the file is newer than restored-live's, and says so. The guard
+    compares with restored-live, not with the sidecar: a hot journal is written before the pages it guards, so its
+    file may be the older. Mutation: the guard gone (the stale -wal is moved back)."""
+    data, aside = cut_short_10_3(tmp_path)
+    os.utime(data / 'peer.sqlite3', (1_800_007_200, 1_800_007_200))   # the restart wrote to it after 10.1
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert 'NOT moved: peer.sqlite3 is not the file 10.3 put back' in out
+    assert (aside / 'peer.sqlite3-wal').exists() and not (data / 'peer.sqlite3-wal').exists()
+    assert 'NOT done: 10.3 was cut short' in out
+
+
+def test_a_cut_short_10_3_refuses_a_file_written_with_the_clock_behind(tmp_path):
+    """Re-check 3's M3: after a power cut the Pi's clock can come up behind (fake-hwclock), so a write to the bare file
+    can leave it older than restored-live's. The record 10.3 made before its move still catches it. The same holds with
+    no record at all. Mutation: the record check gone (only the time is compared)."""
+    data, aside = cut_short_10_3(tmp_path)
+    with open(data / 'peer.sqlite3', 'ab') as written:                 # the restart's write
+        written.write(b' and a write')
+    os.utime(data / 'peer.sqlite3', (1_800_000_100, 1_800_000_100))   # an hour before restored-live's
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert 'NOT moved: peer.sqlite3 is not the file 10.3 put back' in out and (aside / 'peer.sqlite3-wal').exists()
+    (aside / 'put-back').unlink()
+    os.utime(data / 'peer.sqlite3', (1_800_000_000, 1_800_000_000))
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert 'NOT moved: peer.sqlite3 is not the file 10.3 put back' in out and (aside / 'peer.sqlite3-wal').exists()
+
+
+def test_a_10_3_cut_short_by_its_loop_is_finished_by_its_rerun(tmp_path):
+    """M3 end to end: 10.3's loop cut after its first move (peer.sqlite3 back, its -wal still in $ASIDE), then 10.3 again:
+    the record the first run wrote lets the rerun finish the move, and nothing is left in $ASIDE."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'restored-live').mkdir(mode=0o700)
+    (aside / 'restored-live' / 'peer.sqlite3').write_bytes(b'restored')
+    (aside / 'peer.sqlite3').write_bytes(b'the station')
+    (aside / 'peer.sqlite3-wal').write_bytes(b'its newest commits')
+    os.utime(aside / 'peer.sqlite3', (1_700_000_000, 1_700_000_000))   # last written long before restored-live
+    cut = tmp_path / 'cut-bin'
+    cut.mkdir()
+    (cut / 'mv').write_text(f'#!/bin/sh\ncase "$1" in *put-back.new) exec {shutil.which("mv")} "$@" ;; esac\n'
+                            f'n=$(cat "{tmp_path}/mv-count" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "{tmp_path}/mv-count"\n'
+                            f'[ "$n" -ge 2 ] && {{ kill -9 $PPID; exit 130; }}\nexec {shutil.which("mv")} "$@"\n')
+    (cut / 'mv').chmod(0o755)
+    env = {'PATH': f'{cut}:{tmp_path / "bin"}:{os.environ["PATH"]}', 'HOME': str(tmp_path / 'home'), 'ASIDE': str(aside),
+           'LOG': str(tmp_path / 'calls.log'), 'UNITS': str(tmp_path / 'units.txt'), 'STATES': str(tmp_path / 'states.txt')}
+    subprocess.run(['bash', '-c', nested_block('3. Move the set-aside')], cwd=tmp_path, env=env, capture_output=True,
+                   text=True, timeout=60)
+    assert (data / 'peer.sqlite3').exists() and (aside / 'peer.sqlite3-wal').exists()   # cut after its first move
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert '10.3 was cut short before' in out and not list(aside.glob('peer.sqlite3*'))
+    assert (data / 'peer.sqlite3-wal').read_bytes() == b'its newest commits'
+
+
+def test_10_3_records_the_file_it_puts_back(tmp_path):
+    """M3: 10.3 writes the set-aside file's size and time to $ASIDE/put-back before it moves anything, and the moved file
+    still matches it. Mutation: no record (a rerun after a cut then refuses the very case it finishes)."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'peer.sqlite3').write_bytes(b'the station')
+    (aside / 'peer.sqlite3-wal').write_bytes(b'its newest commits')
+    before = put_back_record(aside / 'peer.sqlite3')
+    run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert (aside / 'put-back').read_text() == before == put_back_record(data / 'peer.sqlite3')
+    assert (data / 'peer.sqlite3-wal').exists()
+
+
+def test_a_cut_short_10_3_waits_for_a_held_file(tmp_path):
+    """Re-check 2's R1b: the 10.3 twin moves nothing while a process holds the file open. Mutation: its fuser gone."""
+    data, aside = cut_short_10_3(tmp_path)
+    holder = open(data / 'peer.sqlite3', 'rb')
+    try:
+        out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    finally:
+        holder.close()
+    assert 'NOT moved: a process has the database open' in out and (aside / 'peer.sqlite3-wal').exists()
+
+
+def test_the_cut_short_lines_say_not_done_when_mv_left_a_file(tmp_path):
+    """Re-check 2's Nb: when mv -n skips a name already at the target, the cut-short lines say NOT done, never that the
+    rest moved. Mutation: the success line unconditional."""
+    data, aside = cut_short_10_3(tmp_path)
+    (data / 'peer.sqlite3-wal').write_bytes(b'another -wal')
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert 'NOT done: a sidecar is still in $ASIDE' in out and '10.3 was cut short before' not in out
+    (aside / 'restored-live' / 'peer.sqlite3-wal').write_bytes(b'restored frames')
+    (data / 'peer.sqlite3').unlink()
+    out, _ = run_nested(tmp_path, '2. Move the live database', aside)
+    assert 'NOT done: a sidecar is still in the data directory' in out and '10.2 was cut short before' not in out
+
+
+def test_step_4_refuses_a_directory_where_a_rollback_finished(tmp_path):
+    """Re-check 2's S5: after a finished rollback ($ASIDE/restored-live there, peer.sqlite3 gone back), step 4 moves
+    nothing into that directory: a new restore starts at step 1, in a new one. Otherwise a cut-short move there would
+    look like 10.2's and land beside restored-live's file."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'restored-live').mkdir(mode=0o700)
+    (aside / 'restored-live' / 'peer.sqlite3').write_bytes(b'restored')
+    (data / 'peer.sqlite3').write_bytes(b'the station, after the rollback')
+    out, _ = run_runbook(tmp_path, 4, aside)
+    assert 'NOT moved: a rollback finished in this directory' in out
+    assert (data / 'peer.sqlite3').exists() and not (aside / 'peer.sqlite3').exists()
+
+
 def test_step_6b_new_disk_line_starts_and_stops_the_lighthouse(tmp_path):
     """Tasks 1-3 review's N6: the new-disk line starts the lighthouse, waits for dispatch.lock and stops it again."""
     data = home_data(tmp_path)
