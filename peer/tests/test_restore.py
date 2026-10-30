@@ -939,6 +939,7 @@ def interrupted(source, target):
     writing.unlink()
 
 
+@pytest.mark.journal('delete')  # its hot-journal case is rollback mode's; its WAL twin is plan Task 7's
 def test_reconcile_says_why_the_replaced_file_was_treated_as_absent(tmp_path, capsys):
     """Fix round 1 (review minor 2): no file at the --replaced path; a replaced file with a hot journal beside it; and a
     damaged one beside a journal SQLite wouldn't treat as hot (an empty one, or one whose header is still zero because

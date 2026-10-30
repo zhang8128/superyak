@@ -408,8 +408,9 @@ def test_federate_and_the_listener_refuse_a_lost_identity_and_make_none(tmp_path
         db.execute('DROP TABLE peer_delivery')  # as a store from before federation pull has it
     (store.data_dir / 'identity.json').unlink()
 
-    def files():
-        return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in store.data_dir.iterdir() if path.is_file()}
+    def files():  # leaving out the -wal and -shm a read-only open of a WAL store makes, which are SQLite's own
+        return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in store.data_dir.iterdir()
+                if path.is_file() and not path.name.endswith(('-wal', '-shm'))}
     before = files()
     for command, extra in (('federate', []), ('federation-listen', ['--port', '0'])):
         done = subprocess.run([sys.executable, '-m', 'superyak_peer', command, '--data-dir', str(store.data_dir), *extra],
