@@ -106,7 +106,8 @@ gate holds measured before bounded health merges.
 - [ ] **Step 2: Run** `cd peer && uv run --locked python -m pytest -q tests/test_journal_mode.py` — expect failures.
 - [ ] **Step 3: Implement** `journal_mode.py` (stdlib only) and `DispatchGate.held`. Connect with a `mode=rw` URI
   built as backups.py's `_read_only` builds its URI (quoting `?`, `#` and `%`), `timeout=0.1`, inside
-  `DispatchGate(data_dir / 'dispatch.lock')` (entered only after checking the file exists); on "database is locked" sleep 0.2 s and retry until `retry_seconds`.
+  `DispatchGate(data_dir / 'dispatch.lock')` (entered only after checking the file exists); on "database is locked"
+  sleep 0.2 s and retry until `retry_seconds`.
   The CLI prints `Journal mode: <before> -> <after>` and exits 1 with the reason on any refusal. Makefile
   `station-journal:` requires `MODE=` and passes `--data-dir "$(STATION_DATA)"`.
 - [ ] **Step 4: Runbook steps 3 and 8.** Step 3 gains its own lines, not edits to the watcher lines: for each of
