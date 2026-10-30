@@ -501,7 +501,7 @@ class Federation:
     def _pull_keys(self, origin):
         """_serve_pull's key listing: the origin's own waiting rows, at most PULL_ROWS (store-wal-mode D3: a pure read;
         each row is read again and prepared under its own hold of the gate)."""
-        with self.store.transaction() as db:
+        with self.store.reading() as db:
             return [r[0] for r in db.execute(
                 f"SELECT id FROM outbox WHERE status IN ('pending','failed') AND {THEIRS} ORDER BY event_seq, id LIMIT ?",
                 (origin, PULL_ROWS))]

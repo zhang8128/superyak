@@ -35,6 +35,7 @@ MOVED_READS = (
     'connector.Connector.bearer',
     'federation.Federation._due_rows',
     'federation.Federation._pending_count',
+    'federation.Federation._pull_keys',
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -52,6 +53,7 @@ CALLS = {
     'connector.Connector.bearer': lambda s: s.store.bearer(s.access, RESOURCE),
     'federation.Federation._due_rows': lambda s: s.fed._due_rows(20),
     'federation.Federation._pending_count': lambda s: s.fed._pending_count(),
+    'federation.Federation._pull_keys': lambda s: s.fed._pull_keys(s.pull_peer),
 }
 
 
