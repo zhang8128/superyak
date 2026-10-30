@@ -506,7 +506,7 @@ class Connector:
         from .auth import token_hash
         if not isinstance(token, str) or not token.startswith('syc_at_'):
             return None
-        with self.transaction() as db:
+        with self.reading() as db:
             now = self.clock()
             row = db.execute("SELECT * FROM connector_tokens WHERE hash=? AND kind='access'", (token_hash(token),)).fetchone()
             if row is None or not now < row['expires'] or row['resource'] != resource:
