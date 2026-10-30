@@ -20,7 +20,9 @@ RETRY_PAUSE = 0.2
 
 
 def header_mode(path):
-    """'wal' when the file's header says WAL (bytes 18-19 are 2 2), else 'delete'; a short header is not WAL."""
+    """'wal' when the file's header says WAL (bytes 18-19 are 2 2), else 'delete'; a short header is not WAL. Only for a
+    process that holds no open SQLite connection to this file (station-journal, a staged copy before it is opened): on
+    Linux, closing this descriptor drops every POSIX lock the process holds on the file, SQLite's included."""
     with open(path, 'rb') as file:
         header = file.read(20)
     return 'wal' if header[18:20] == b'\x02\x02' else 'delete'

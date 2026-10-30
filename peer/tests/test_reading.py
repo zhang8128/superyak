@@ -2,6 +2,8 @@
 with the gate in either mode, and unable to write; the station identity is created only under the gate."""
 from contextlib import closing, contextmanager
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 
@@ -9,6 +11,7 @@ import pytest
 
 from superyak_peer.common import Problem
 from superyak_peer.db import Store
+from superyak_peer.dispatch import GateTimeout
 from superyak_peer.journal_mode import switch_journal
 
 
@@ -20,6 +23,7 @@ def store_in(tmp_path, mode, **kwargs):
     else:
         with closing(sqlite3.connect(store.db_path)) as db:  # the suite may run in WAL; these cases pin a mode
             db.execute('PRAGMA journal_mode=DELETE').fetchone()
+    count_users(store)  # one read, so this Store learns the mode it now runs in, as a station does at its start
     return store
 
 
@@ -103,6 +107,76 @@ def test_rollback_reading_takes_the_gate_before_touching_sqlite(tmp_path):
             assert db.execute('SELECT count(*) FROM users').fetchone()[0] >= 1
     finally:
         holder.join(10)
+
+
+def test_reading_never_drops_this_process_s_sqlite_locks(tmp_path):
+    """The Tasks 4-5 re-check's M1: on Linux, closing any descriptor of a file drops every POSIX lock this process holds
+    on it, SQLite's included, so reading() never opens the store outside SQLite. Here a write in this process holds
+    SQLite's lock while another thread enters reading() and waits at the gate; another process is still refused the
+    write lock. Mutation: reading() reads the file's header with open() (the lock is dropped, and the other process
+    writes beside a held write)."""
+    store = store_in(tmp_path, 'delete')
+    ready, release = threading.Event(), threading.Event()
+
+    def hold():
+        with store.dispatch_gate:
+            db = sqlite3.connect(store.db_path, isolation_level=None)
+            db.execute('BEGIN IMMEDIATE')
+            ready.set()
+            release.wait(10)
+            db.execute('ROLLBACK')
+            db.close()
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert ready.wait(5)
+    reader = threading.Thread(target=lambda: count_users(store))
+    reader.start()
+    time.sleep(0.3)  # past anything reading() does before the gate
+    try:
+        other = subprocess.run([sys.executable, '-c', 'import sqlite3, sys; db = sqlite3.connect(sys.argv[1], timeout=0); '
+                                'db.execute("BEGIN IMMEDIATE")', str(store.db_path)], capture_output=True, text=True, timeout=30)
+    finally:
+        release.set()
+        holder.join(10)
+        reader.join(10)
+    assert other.returncode != 0 and 'locked' in other.stderr
+
+
+def test_rollback_reading_holds_the_gate_for_its_whole_block(tmp_path):
+    """The re-check's N5: in rollback mode the gate is held from before the connection until the block ends, so another
+    thread's bounded wait for it times out inside the block. Mutation: the gate let go once connected."""
+    store = store_in(tmp_path, 'delete')
+    result = {}
+
+    def other():
+        try:
+            with store.dispatch_gate.bounded(time.monotonic() + 0.3):
+                with store.dispatch_gate:
+                    result['entered'] = True
+        except GateTimeout:
+            result['timed out'] = True
+    with store.reading() as db:
+        db.execute('SELECT 1').fetchone()
+        waiter = threading.Thread(target=other)
+        waiter.start()
+        waiter.join(5)
+    assert result == {'timed out': True}
+
+
+def test_a_store_that_left_wal_is_read_under_the_gate_again(tmp_path):
+    """The re-check's N2: a Store that has seen WAL checks that SQLite still says so; once the store has left WAL it reads
+    under the gate again, so it waits for a held gate. Mutation: the check gone (it reads past the gate)."""
+    store = store_in(tmp_path, 'wal')
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute('PRAGMA journal_mode=DELETE').fetchone()
+    result = {}
+    with gate_and_write_held(store):
+        reader = threading.Thread(target=lambda: result.update(count=count_users(store)))
+        reader.start()
+        time.sleep(0.3)
+        assert reader.is_alive()  # it found rollback mode and waits at the gate
+    reader.join(10)
+    assert 'count' in result
 
 
 def test_one_reading_is_one_snapshot(tmp_path):

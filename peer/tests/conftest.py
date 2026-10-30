@@ -33,6 +33,7 @@ def every_store_in_the_journal_mode_asked(monkeypatch):
         built(self, *args, **kwargs)
         with closing(sqlite3.connect(self.db_path)) as db:
             db.execute('PRAGMA journal_mode=WAL').fetchone()
+        self._journal = 'wal'  # what __init__'s own read finds on a store that is WAL from the start (reading())
     monkeypatch.setattr(Store, '__init__', in_wal)
 
 # Public route spec 6.1: Starlette's default client host, "testclient", is not an IP address, so the station treats it

@@ -101,6 +101,8 @@ def busy_wal_store(tmp_path):
     clock = Clock(NOW - 8 * DAY)  # the room and the peers come first, so the breakout and the pull peer are quiet by NOW
     store, andy, fed = station(tmp_path / 'station', 'andy', clock)
     switch_journal(store.data_dir, 'wal', active=lambda: [])
+    with store.reading():  # this Store learns WAL before any case holds the gate, as a station does at its start
+        pass
     ships = {name: docked(store, andy, name) for name in SHIPS}
     ids = {'andy': andy, **{name: ship['id'] for name, (ship, _) in ships.items()}}
     first = store.create_room(andy, 'All hands', [ids['serenity'], ids['tardis']])['id']
@@ -369,6 +371,8 @@ def in_mode(store, mode):
     else:
         with closing(sqlite3.connect(store.db_path)) as db:  # the suite may run in WAL; this case pins a mode
             db.execute('PRAGMA journal_mode=DELETE').fetchone()
+    with store.reading():  # this Store learns the mode it now runs in
+        pass
 
 
 @pytest.mark.parametrize('mode', ['wal', 'delete'])
