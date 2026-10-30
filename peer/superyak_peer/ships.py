@@ -445,7 +445,7 @@ class Ships:
     def station_notices(self):
         """Trusted local workers only (Odo): what to announce in Ops. No HTTP route exposes this.
         Every interpolated value goes through safe_line: the text is posted in a room, where it must not mention anyone."""
-        with self.transaction() as db:
+        with self.reading() as db:
             now = self.clock()
             notices = [{'id': f'access-{r["id"]}', 'text': f'{safe_line(r["name"])} is asking to come aboard. Approve or deny under Connections → Access requests.'}
                        for r in db.execute("SELECT id,name FROM access_requests WHERE status='pending' AND expires>? ORDER BY created", (now,))]

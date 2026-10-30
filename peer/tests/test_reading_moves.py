@@ -31,6 +31,7 @@ MOVED_READS = (
     'auth.Auth.device_is_valid',
     'ships.Ships.ship_key_is_valid',
     'ships.Ships.station_rooms',
+    'ships.Ships.station_notices',
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -44,6 +45,7 @@ CALLS = {
     'auth.Auth.device_is_valid': lambda s: s.store.device_is_valid(s.device, 'andy'),
     'ships.Ships.ship_key_is_valid': lambda s: s.store.ship_key_is_valid(s.ship_key),
     'ships.Ships.station_rooms': lambda s: s.store.station_rooms('andy'),
+    'ships.Ships.station_notices': lambda s: s.store.station_notices(),
 }
 
 
