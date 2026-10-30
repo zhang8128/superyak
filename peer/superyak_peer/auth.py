@@ -139,7 +139,7 @@ class Auth:
         the known browsers' sign-in lane for a public sign-in; Store.login checks again in its own transaction. A valid
         token that is held answers 429 here, so it enters no lane (section 2 review should-fix 1), and so does one whose
         username's known browsers are held (the review of 581cea18, should-fix 1)."""
-        with self.transaction() as db:
+        with self.reading() as db:
             now = self.clock()
             known = self._known_device(db, device, username, now)
             user_held = known is not None and known_user_held(db, username, now)
