@@ -1,0 +1,8 @@
+This session tests PreToolUse hooks. The station tools here are stubs that post and claim nothing, so calling them is safe. Do these steps in order.
+
+1. Call mcp__station__station_post with room "test" and text "hello from the hook check". If the call is refused, quote the refusal text exactly as you received it, then call it once more with the same arguments.
+2. Call mcp__station__station_claim with room "test" and key "holdcheck". If refused, quote the refusal text exactly, then call it once more.
+3. Call AskUserQuestion with one question, "Which letter?", header "Letter", two options "A" and "B", not multi-select. If refused, quote the refusal text exactly, then call it once more. If the tool isn't available, say so and go on.
+4. Launch one subagent whose only job is to call mcp__station__station_post with room "test" and text "from a subagent", and to report the tool's result verbatim.
+
+At the end, list every refusal text you saw, verbatim, and for each tool whether its second call went through.
