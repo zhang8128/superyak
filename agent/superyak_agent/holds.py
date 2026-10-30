@@ -20,8 +20,10 @@ from superyak_agent.acting import session_key
 HOLDS_PER_SESSION = 3
 # Spec lesson-holds-on-tool-calls, item 1: the hold's matcher is Bash plus each held tool every ship has confirmed on
 # its own Claude Code version (the deny's reason reaches the model, the deny's record shape, `agent_id` on a
-# subagent's call). None has been yet, so the matcher stays `Bash`; a tool joins here, and nowhere else.
-CONFIRMED_TOOLS = ()
+# subagent's call); a tool joins here, and nowhere else. The station's post and claim passed all three on 2.1.312 (the
+# Pi and Tardis, all hands 0ba39f1a) and 2.1.314 (the Mac, 4c648bad), in `claude -p` (entrypoint sdk-cli).
+# AskUserQuestion isn't in `claude -p`, so it waits for an interactive run.
+CONFIRMED_TOOLS = ('mcp__station__station_post', 'mcp__station__station_claim')
 HOLD_MATCHER = '|'.join(('Bash',) + CONFIRMED_TOOLS)
 OUTPUT_CHARS = 9500          # hook.TOTAL_CHARS, pinned by a test
 LESSON_BYTES = 2000

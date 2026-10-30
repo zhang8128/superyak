@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 import pytest
-from superyak_agent import install
+from superyak_agent import holds, install
 from checklist_fakes import checkout, trust_dirs
 from test_install import SETTINGS_CONFIG
 
@@ -13,7 +13,7 @@ def test_dock_adds_a_bash_pretooluse_entry_with_the_guard(tmp_path):
     settings = tmp_path / 'settings.json'
     install.install_hooks(settings, SETTINGS_CONFIG, messages=False)
     assert json.loads(settings.read_text())['hooks']['PreToolUse'] == [
-        {'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': install.hold_command(SETTINGS_CONFIG) + ' || true', 'timeout': 5}]}]
+        {'matcher': holds.HOLD_MATCHER, 'hooks': [{'type': 'command', 'command': install.hold_command(SETTINGS_CONFIG) + ' || true', 'timeout': 5}]}]
     assert install.hold_command(SETTINGS_CONFIG) == install.shlex.join(
         [sys.executable, str(install.RUN_AGENT), 'hold', '--config', SETTINGS_CONFIG])
 
@@ -33,7 +33,7 @@ def test_the_hold_is_a_station_hook_and_its_neighbours_are_not():
     assert not install.is_station_hook(command.replace(' hold ', ' hold-log '))
 
 
-@pytest.mark.parametrize('entry', [{}, {'matcher': 'Bash', 'timeout': 10}])
+@pytest.mark.parametrize('entry', [{}, {'matcher': 'Bash', 'timeout': 10}, {'matcher': 'Bash', 'timeout': 5}])  # the last: today's dock
 def test_a_hold_entry_without_the_bash_matcher_or_with_an_old_timeout_is_replaced(tmp_path, entry):
     settings = tmp_path / 'settings.json'
     held = {'type': 'command', 'command': install.hold_command(SETTINGS_CONFIG) + ' || true'}
@@ -42,7 +42,7 @@ def test_a_hold_entry_without_the_bash_matcher_or_with_an_old_timeout_is_replace
     settings.write_text(json.dumps({'hooks': {'PreToolUse': [{**({'matcher': entry['matcher']} if 'matcher' in entry else {}), 'hooks': [held]}]}}))
     assert 'PreToolUse' in install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
     entries = json.loads(settings.read_text())['hooks']['PreToolUse']
-    assert [(e.get('matcher'), e['hooks'][0]['timeout']) for e in entries] == [('Bash', 5)]
+    assert [(e.get('matcher'), e['hooks'][0]['timeout']) for e in entries] == [(holds.HOLD_MATCHER, 5)]
 
 
 OLD_AGENT = ('import argparse\nparser = argparse.ArgumentParser(prog="superyak-agent")\n'
@@ -144,11 +144,11 @@ def test_a_damaged_or_unsafe_trust_file_is_left_as_it_is_and_named(tmp_path, cas
 
 
 def test_the_hold_matcher_is_one_constant_and_a_tool_joining_it_rewrites_the_entry(tmp_path, monkeypatch):
-    """Spec lesson-holds-on-tool-calls, items 1 and 12: the matcher is Bash plus the tools every ship has confirmed,
-    none yet; once one joins, dock rewrites today's Bash-only entry into one entry with the new matcher, and a second
-    dock changes nothing."""
-    from superyak_agent import holds
-    assert holds.CONFIRMED_TOOLS == () and holds.HOLD_MATCHER == 'Bash'
+    """Spec lesson-holds-on-tool-calls, items 1 and 12: the matcher is Bash plus the tools every ship has confirmed (the
+    station's post and claim, Task D); once another joins, dock rewrites the entry into one with the new matcher, and a
+    second dock changes nothing."""
+    assert holds.CONFIRMED_TOOLS == ('mcp__station__station_post', 'mcp__station__station_claim')  # Task D
+    assert holds.HOLD_MATCHER == 'Bash|mcp__station__station_post|mcp__station__station_claim'
     settings = tmp_path / 'settings.json'
     install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
     monkeypatch.setattr(holds, 'HOLD_MATCHER', 'Bash|AskUserQuestion')
