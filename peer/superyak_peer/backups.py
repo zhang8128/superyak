@@ -23,11 +23,12 @@ import tempfile
 import time
 import urllib.request
 from .auth import account_role, token_hash
+from .journal_mode import header_mode
 from .ships import safe_line
 
 STAMP = '%Y%m%dT%H%M%SZ'
 COPY_NAME = re.compile(r'peer-(\d{8}T\d{6}Z)\.sqlite3')
-TEMP_NAME = re.compile(r'\.peer-.+\.tmp(?:-journal)?')
+TEMP_NAME = re.compile(r'\.peer-.+\.tmp(?:-journal|-wal|-shm)?')
 KEEP_DAYS, KEEP_WEEKS = 14, 8
 TEMP_MAX_AGE = 86400
 STALE_AFTER = 36 * 3600
@@ -198,8 +199,16 @@ def rotation_lock(directory):
 
 
 def _remove_temporary(tmp):
-    for path in (Path(tmp), Path(f'{tmp}-journal')):
+    for path in (Path(tmp), Path(f'{tmp}-journal'), Path(f'{tmp}-wal'), Path(f'{tmp}-shm')):
         path.unlink(missing_ok=True)
+
+
+def _as_single_file(copy):
+    """Store-wal-mode D4: a copy is one self-contained rollback-mode file, whatever the live store's mode. The backup
+    API copies the source's WAL flag; journal_mode=DELETE clears it, and SQLite's answer is checked."""
+    answer = copy.execute('PRAGMA journal_mode=DELETE').fetchone()[0]
+    if answer != 'delete':
+        raise BackupError(1, f'the copy could not be made a single file (journal_mode={answer})')
 
 
 def free_bytes(path):
@@ -226,6 +235,7 @@ def _checked_copy(database, tmp, clock, sleep):
                         raise BackupError(10)
                     with closing(sqlite3.connect(tmp)) as copy:
                         source.backup(copy, pages=-1)
+                        _as_single_file(copy)
                         sound = _check(copy, 'integrity_check')
                 break
             except sqlite3.OperationalError as error:
@@ -1110,6 +1120,111 @@ def _resolve_peers(db, names):
 MARK_KEY = 'restore_reconcile'
 
 
+class CarryRefused(ValueError):
+    """station-carry-nonces won't touch these files; nothing was changed."""
+
+
+class CarryUnmarked(Exception):
+    """The nonces were carried, but $ASIDE/carried, which step 8 reads, could not be written."""
+
+
+CARRIED_NAME = 'carried'
+
+
+def _symlinked(path):
+    """The database or one of its sidecars is a symlink, as _refuse and Store._check_paths refuse."""
+    return any(Path(f'{path}{end}').is_symlink() for end in ('', '-journal', '-wal', '-shm'))
+
+
+def _has_table(db, name, schema='main'):
+    return db.execute(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def _marked_path(db, schema):
+    """The staged file's path in the schema's restore mark (_write_mark), or None when there is no usable mark."""
+    if not _has_table(db, 'system_meta', schema):
+        return None
+    row = db.execute(f'SELECT value FROM {schema}.system_meta WHERE key=?', (MARK_KEY,)).fetchone()
+    try:
+        path = json.loads(row[0])['path']
+    except (TypeError, ValueError, KeyError):
+        return None
+    return path if isinstance(path, str) and '\0' not in path else None  # realpath raises on a NUL
+
+
+REPLACED_DIR = re.compile(r'replaced-\d{8}-\d{6}')
+
+
+def _newest_replaced(backups):
+    """The newest restore directory's name: they are named by step 1's local time, all one width, so it sorts last."""
+    return max((path.name for path in backups.glob('replaced-*') if REPLACED_DIR.fullmatch(path.name)), default=None)
+
+
+def carry_pull_nonces(data_dir, aside):
+    """Runbook 10.3, after a rollback (fix:pull-floor-after-rollback, Rio Grande's reader's better way): the file put back
+    lacks the pull nonces the restored station recorded while it was live, so a pull it served could be replayed. This
+    copies them in from that station's file, which 10.2 moved to $ASIDE/restored-live, `INSERT OR IGNORE` from a
+    read-only attach: exact, depending on no clock, and a second run adds nothing. Run with the station stopped (10.1).
+    The source is named by this restore's directory, never by a file name a typo could change, and must be the station
+    restored from it: its restore mark names $ASIDE/restored.sqlite3 (re-check SF1: restored.sqlite3 itself, a rotation
+    copy or chosen.sqlite3 carried 0 and said all was well). Refused, with nothing changed: a live file that is missing,
+    has no pull_nonces, or is a symlink or has one among its sidecars; a $ASIDE that still holds peer.sqlite3 (10.3's
+    move hasn't run, so the live file is not the one put back); a source that is missing, symlinked the same way, the
+    live file, without pull_nonces, damaged, or not marked as restored from $ASIDE; and a $ASIDE that isn't the
+    newest replaced-<time> directory, as the runbook's ASIDE line names it (the re-check's nit 2: an earlier restore that
+    was also rolled back passed everything else). After the commit it writes $ASIDE/carried, without which step 8 leaves
+    the federation units off after a rollback (CarryUnmarked if it can't). Returns (nonces added, nonces in the
+    source)."""
+    aside = Path(aside)
+    live, source = Path(data_dir) / LIVE_NAME, aside / 'restored-live' / LIVE_NAME
+    if _symlinked(live) or not live.is_file():
+        raise CarryRefused(f'No peer database at {live} (or it or a sidecar is a symlink): nothing to carry into')
+    if any(path.name == LIVE_NAME or path.name.startswith(LIVE_NAME + '-') for path in aside.glob(LIVE_NAME + '*')):
+        raise CarryRefused(f"{aside} still holds a {LIVE_NAME} file, so 10.3's move hasn't run and {live} is not the file put back")
+    if _symlinked(source) or not source.is_file():
+        raise CarryRefused(f'No restored station at {source} (or it or a sidecar is a symlink): nothing to carry from '
+                           '(10.2 moves it there)')
+    if source.samefile(live):  # also a hard link to it
+        raise CarryRefused('The source is the live database itself')
+    # URIs: the live file opened `mode=rw` is never created, and the source attached `mode=ro` is never changed (a hot
+    # journal beside it, from a listener killed mid-transaction, is refused rather than rolled back into it)
+    with closing(sqlite3.connect(live.absolute().as_uri() + '?mode=rw', uri=True, timeout=30, isolation_level=None)) as db:
+        if not _has_table(db, 'pull_nonces'):
+            raise CarryRefused(f'{live} has no pull_nonces table, so it is not a station database')
+        db.execute('ATTACH DATABASE ? AS restored', (source.absolute().as_uri() + '?mode=ro',))
+        try:
+            if not _has_table(db, 'pull_nonces', 'restored'):
+                raise CarryRefused(f'{source} has no pull_nonces table, so it is not a station database')
+            checked = [row[0] for row in db.execute('PRAGMA restored.integrity_check(pull_nonces)')]
+            if checked != ['ok']:
+                raise CarryRefused(f'{source} fails its integrity check: {safe_line(checked[0], 120)}')
+            marked = _marked_path(db, 'restored')
+            if marked is None or os.path.realpath(marked) != os.path.realpath(aside / STAGED_NAME):
+                raise CarryRefused(f'{source} is not marked as the station restored from {aside / STAGED_NAME}')
+            newest = _newest_replaced(aside.resolve().parent)  # last, so each refusal above still names its own cause
+            if aside.resolve().name != newest:
+                raise CarryRefused(f"{aside} is not the newest replaced-<time> directory, which the runbook's ASIDE line "
+                                   f'names ({newest}), so it is not this restore')
+            total = db.execute('SELECT count(*) FROM restored.pull_nonces').fetchone()[0]
+            db.execute('BEGIN IMMEDIATE')
+            added = db.execute('INSERT OR IGNORE INTO main.pull_nonces(origin, nonce, at) '
+                               'SELECT origin, nonce, at FROM restored.pull_nonces').rowcount
+            db.execute('COMMIT')
+        finally:
+            if db.in_transaction:
+                db.execute('ROLLBACK')
+            db.execute('DETACH DATABASE restored')
+    try:  # step 8 starts the federation units after a rollback only when this is there (the third re-check's SF1)
+        fd = os.open(aside / CARRIED_NAME, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as out:
+            out.write(f'{added} of {total}\n')
+    except OSError as error:
+        raise CarryUnmarked(f'the nonces were carried ({added} of {total}), but {aside / CARRIED_NAME} could not be '
+                            f'written ({error.strerror}), so step 8 leaves the federation units off: start them with '
+                            "10.4's line") from error
+    return added, total
+
+
 def _write_mark(db, old, now, path):
     """Follow-up 1: the proof, inside the staged copy, that the reconcile ran on it. It is a system_meta row (the station's
     own key/value table, which a copy from before the system author lacks, so it is created here), written in the
@@ -1269,6 +1384,9 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     refuse_misnamed_replaced); the restore test calls this directly on its scratch peer.sqlite3."""
     db_path = Path(db_path).absolute()
     _refuse(db_path, live_data_dir)
+    if header_mode(db_path) == 'wal':  # store-wal-mode D4: every backup copy is a rollback-mode file
+        raise ReconcileRefused(f'{db_path} is in WAL mode, so step 6 would install its main file alone; stage a copy '
+                               'made by station-backup or station-restore-test, which are single files')
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0],
@@ -1504,6 +1622,7 @@ def _restored_copy(source, target):
     try:
         with closing(_read_only(source)) as copy_from, closing(sqlite3.connect(target)) as copy:
             copy_from.backup(copy, pages=-1)
+            _as_single_file(copy)
             return _check(copy, 'integrity_check')
     except sqlite3.DatabaseError:
         return False
