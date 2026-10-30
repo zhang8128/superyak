@@ -186,15 +186,15 @@ class ConnectorApps:
             return {'receipts': receipts, 'before': rows[limit - 1]['id'] if len(rows) > limit else None}
 
     def connected_app_notice(self, actor):
-        """{id, app, created} for the newest connection made in the last 7 days that is still live, else None: a stolen
-        password then doesn't quietly become 30 days of reading (spec "The new-connection notice")."""
+        """[{id, app, created}] for every connection made in the last 7 days that is still live, newest first: a stolen
+        password then doesn't quietly become 30 days of reading (spec "The new-connection notice"). Each one, not the
+        newest alone, which hid a thief's older connection once the person connected their own (9b's M1)."""
         with self.transaction() as db:
             self._person(db, actor)
             now = self.clock()
-            row = db.execute('SELECT id, redirect_host, created FROM connector_grants WHERE person_id=? AND created>? '
-                             'AND revoked IS NULL AND ends>? ORDER BY created DESC, id LIMIT 1',
-                             (actor, now - NOTICE_SECONDS, now)).fetchone()
-            return {'id': row['id'], 'app': row['redirect_host'], 'created': _number(row['created'])} if row else None
+            return [{'id': row['id'], 'app': row['redirect_host'], 'created': _number(row['created'])} for row in db.execute(
+                'SELECT id, redirect_host, created FROM connector_grants WHERE person_id=? AND created>? AND revoked IS NULL '
+                'AND ends>? ORDER BY created DESC, id', (actor, now - NOTICE_SECONDS, now)).fetchall()]
 
     def admin_connected_apps(self, actor):
         """The home's super admins see each connection's person (by display name), app, created, last used and end, and
@@ -204,10 +204,10 @@ class ConnectorApps:
             self._super_admin(db, actor)
             now = self.clock()
             items = []
-            for row in db.execute('SELECT connector_grants.*, users.name FROM connector_grants JOIN users ON '
+            for row in db.execute('SELECT connector_grants.*, users.name, users.username FROM connector_grants JOIN users ON '
                                   'users.id=connector_grants.person_id ORDER BY created DESC, connector_grants.id').fetchall():
                 ended = self._ended(row, now)
-                items.append({'id': row['id'], 'person': row['name'], 'app': row['redirect_host'],
+                items.append({'id': row['id'], 'person': row['name'], 'username': row['username'], 'app': row['redirect_host'],
                               'created': _number(row['created']), 'last_used': self._last_used(db, row),
                               'ends': _number(row['ends']), 'ended': {'at': ended['at']} if ended else None})
             return items
