@@ -33,7 +33,7 @@ class Federate:
 
     def _pushed(self):
         """Each listener's last successful push, to see which one a pass's push reached."""
-        with self.federation.store.transaction() as db:
+        with self.federation.store.reading() as db:
             return dict(db.execute("SELECT peer_id, last_success FROM peer_delivery WHERE mode='push'").fetchall())
 
     def run_pass(self):
