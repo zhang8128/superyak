@@ -33,6 +33,7 @@ MOVED_READS = (
     'ships.Ships.station_rooms',
     'ships.Ships.station_notices',
     'connector.Connector.bearer',
+    'federation.Federation._due_rows',
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -48,6 +49,7 @@ CALLS = {
     'ships.Ships.station_rooms': lambda s: s.store.station_rooms('andy'),
     'ships.Ships.station_notices': lambda s: s.store.station_notices(),
     'connector.Connector.bearer': lambda s: s.store.bearer(s.access, RESOURCE),
+    'federation.Federation._due_rows': lambda s: s.fed._due_rows(20),
 }
 
 

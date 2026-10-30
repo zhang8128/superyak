@@ -377,7 +377,7 @@ class Federation:
     def _due_rows(self, limit):
         """sync_once's work list: the push peers' due rows, each with its peer's card (store-wal-mode D3: a pure read; the
         writes stay in _prepare under the gate, which reads the row again)."""
-        with self.store.transaction() as db:
+        with self.store.reading() as db:
             return [dict(r) for r in db.execute(
                 "SELECT outbox.*, peers.card, remote_contacts.peer_id AS row_peer FROM outbox "
                 "JOIN remote_contacts ON contact_id=remote_contacts.id JOIN peers USING(peer_id) JOIN peer_delivery USING(peer_id) "
