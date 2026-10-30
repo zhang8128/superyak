@@ -111,8 +111,8 @@ class ConnectorApps:
                 kept = [] if row['rooms'] == '*' else _list(row['rooms']) or []
                 choosable = {room['room'] for room in self._consent_rooms(db, actor)
                              if room['earlier_of'] is None and not room['cloud']}
-                choosable |= {room for room in kept
-                              if self._member_title(db, actor, room) is not None and not self._marked(db, room)}
+                # S2: still in it; a marked one was refused above, in its own words
+                choosable |= {room for room in kept if self._member_title(db, actor, room) is not None}
                 if not set(rooms) <= choosable:
                     raise Problem(400, ROOMS_SHAPE)
             db.execute('UPDATE connector_grants SET rooms=? WHERE id=?', ('*' if rooms == '*' else json.dumps(rooms), row['id']))
