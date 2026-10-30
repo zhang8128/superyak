@@ -1637,18 +1637,78 @@ def test_step_4_leaves_a_rollbacks_sidecars_to_10_2(tmp_path):
     assert 'run 10.2 again' in out and (data / 'peer.sqlite3-wal').exists()
 
 
-def test_a_cut_short_10_3_moves_the_rest_of_the_set_back(tmp_path):
-    """The re-check's R1: 10.3 stopped after it moved peer.sqlite3 back leaves its -wal in $ASIDE; the rerun moves it beside
-    the file, so 10.4 never starts the lighthouse on the main file alone."""
+def cut_short_10_3(tmp_path):
+    """$ASIDE and the data directory as a 10.3 stopped after it moved peer.sqlite3 back leaves them: the original last
+    written before the restore, the restored one after it. (data, aside)."""
     data, aside = home_data(tmp_path), an_aside(tmp_path)
     data.mkdir(parents=True)
     (aside / 'restored-live').mkdir(mode=0o700)
     (aside / 'restored-live' / 'peer.sqlite3').write_bytes(b'restored')
     (data / 'peer.sqlite3').write_bytes(b'the station, moved back')
     (aside / 'peer.sqlite3-wal').write_bytes(b'its newest commits')
+    os.utime(data / 'peer.sqlite3', (1_800_000_000, 1_800_000_000))                  # before the restore's step 3
+    os.utime(aside / 'restored-live' / 'peer.sqlite3', (1_800_003_600, 1_800_003_600))  # 10.1 stopped it an hour on
+    return data, aside
+
+
+def test_a_cut_short_10_3_moves_the_rest_of_the_set_back(tmp_path):
+    """The re-check's R1: 10.3 stopped after it moved peer.sqlite3 back leaves its -wal in $ASIDE; the rerun moves it beside
+    the file, so 10.4 never starts the lighthouse on the main file alone."""
+    data, aside = cut_short_10_3(tmp_path)
     out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
-    assert '10.3 was cut short before' in out and not list(aside.glob('peer.sqlite3*'))
+    assert '10.3 was cut short before' in out and 'NOT done' not in out and not list(aside.glob('peer.sqlite3*'))
     assert (data / 'peer.sqlite3-wal').read_bytes() == b'its newest commits'
+
+
+def test_a_cut_short_10_3_never_moves_sidecars_onto_a_file_written_since(tmp_path):
+    """Re-check 2's M2: after a cut-short 10.3 a restart can run the lighthouse on the bare file; a -wal moved back onto
+    it then breaks it. The rerun moves nothing once the file is newer than restored-live's, and says so. The guard
+    compares with restored-live, not with the sidecar: a hot journal is written before the pages it guards, so its
+    file may be the older. Mutation: the guard gone (the stale -wal is moved back)."""
+    data, aside = cut_short_10_3(tmp_path)
+    os.utime(data / 'peer.sqlite3', (1_800_007_200, 1_800_007_200))   # the restart wrote to it after 10.1
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert 'NOT moved: peer.sqlite3 was written after the restored station stopped' in out
+    assert (aside / 'peer.sqlite3-wal').exists() and not (data / 'peer.sqlite3-wal').exists()
+    assert 'NOT done: 10.3 was cut short' in out
+
+
+def test_a_cut_short_10_3_waits_for_a_held_file(tmp_path):
+    """Re-check 2's R1b: the 10.3 twin moves nothing while a process holds the file open. Mutation: its fuser gone."""
+    data, aside = cut_short_10_3(tmp_path)
+    holder = open(data / 'peer.sqlite3', 'rb')
+    try:
+        out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    finally:
+        holder.close()
+    assert 'NOT moved: a process has the database open' in out and (aside / 'peer.sqlite3-wal').exists()
+
+
+def test_the_cut_short_lines_say_not_done_when_mv_left_a_file(tmp_path):
+    """Re-check 2's Nb: when mv -n skips a name already at the target, the cut-short lines say NOT done, never that the
+    rest moved. Mutation: the success line unconditional."""
+    data, aside = cut_short_10_3(tmp_path)
+    (data / 'peer.sqlite3-wal').write_bytes(b'another -wal')
+    out, _ = run_nested(tmp_path, '3. Move the set-aside', aside)
+    assert 'NOT done: a sidecar is still in $ASIDE' in out and '10.3 was cut short before' not in out
+    (aside / 'restored-live' / 'peer.sqlite3-wal').write_bytes(b'restored frames')
+    (data / 'peer.sqlite3').unlink()
+    out, _ = run_nested(tmp_path, '2. Move the live database', aside)
+    assert 'NOT done: a sidecar is still in the data directory' in out and '10.2 was cut short before' not in out
+
+
+def test_step_4_refuses_a_directory_where_a_rollback_finished(tmp_path):
+    """Re-check 2's S5: after a finished rollback ($ASIDE/restored-live there, peer.sqlite3 gone back), step 4 moves
+    nothing into that directory: a new restore starts at step 1, in a new one. Otherwise a cut-short move there would
+    look like 10.2's and land beside restored-live's file."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'restored-live').mkdir(mode=0o700)
+    (aside / 'restored-live' / 'peer.sqlite3').write_bytes(b'restored')
+    (data / 'peer.sqlite3').write_bytes(b'the station, after the rollback')
+    out, _ = run_runbook(tmp_path, 4, aside)
+    assert 'NOT moved: a rollback finished in this directory' in out
+    assert (data / 'peer.sqlite3').exists() and not (aside / 'peer.sqlite3').exists()
 
 
 def test_step_6b_new_disk_line_starts_and_stops_the_lighthouse(tmp_path):
