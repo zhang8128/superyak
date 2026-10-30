@@ -108,7 +108,7 @@ def test_a_damaged_store_is_refused_in_words(tmp_path):
     store = station(tmp_path)
     store.db_path.write_bytes(b'not a database at all ' * 50)
     before = store.db_path.read_bytes()
-    with pytest.raises(ValueError, match='nothing was changed'):
+    with pytest.raises(ValueError, match='SQLite refused the switch'):  # not 'stayed locked' (Serenity's survivor)
         switch_journal(store.data_dir, 'wal', active=none_active)
     assert store.db_path.read_bytes() == before
 

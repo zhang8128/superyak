@@ -1228,7 +1228,15 @@ def runbook_block(step):
     start = next(number for number, line in enumerate(lines) if line.startswith(f'{step}. **'))
     begin = next(number for number in range(start, len(lines)) if lines[number].strip() == '```bash')
     end = next(number for number in range(begin + 1, len(lines)) if lines[number].strip() == '```')
-    return textwrap.dedent('\n'.join(lines[begin + 1:end]))
+    return pi_only(textwrap.dedent('\n'.join(lines[begin + 1:end])))
+
+
+def pi_only(block):
+    """The runbook runs on the Pi: a block that calls `fuser -s` (psmisc's) is skipped where fuser has no -s, as BSD's
+    on the Mac hasn't, so a Mac run says why instead of failing (Serenity's yes on wal-tasks-1-3)."""
+    if 'fuser' in block and sys.platform != 'linux':
+        pytest.skip('the restore runbook runs on the Pi; this fuser has no -s')
+    return block
 
 
 def run_runbook(tmp_path, step, aside):
@@ -1406,7 +1414,7 @@ def nested_block(heading):
     start = next(number for number, line in enumerate(lines) if line.strip().startswith(heading))
     begin = next(number for number in range(start, len(lines)) if lines[number].strip() == '```bash')
     end = next(number for number in range(begin + 1, len(lines)) if lines[number].strip() == '```')
-    return textwrap.dedent('\n'.join(lines[begin + 1:end]))
+    return pi_only(textwrap.dedent('\n'.join(lines[begin + 1:end])))
 
 
 def test_a_restore_from_a_wal_store_through_6b(tmp_path, capsys):
