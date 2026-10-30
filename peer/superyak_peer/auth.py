@@ -270,7 +270,7 @@ class Auth:
         return result
 
     def session(self, token):
-        with self.transaction() as db:
+        with self.reading() as db:
             row = db.execute('SELECT users.*, sessions.csrf FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (token_hash(token or ''), self.clock())).fetchone()
             if not row or row['activation_pending'] or row['kind'] != 'person':
                 raise Problem(401, 'Sign in required')
