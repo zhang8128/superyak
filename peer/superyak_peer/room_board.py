@@ -213,7 +213,7 @@ class RoomBoard:
         """GET /api/board (5.x), for a person: open items from every current local room they belong to, grouped by room,
         each room's oldest first, with the per-room list's fields. Rooms come in the order of their oldest open item, and
         rooms with none are left out."""
-        with self.transaction() as db:
+        with self.reading() as db:
             rooms = []
             for room in self._my_current_rooms(db, actor):
                 rows = db.execute("SELECT * FROM board_items WHERE room_id=? AND state='open' ORDER BY created, rowid", (room['id'],)).fetchall()
