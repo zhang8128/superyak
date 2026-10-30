@@ -481,6 +481,262 @@ def test_the_pull_listener_reads_the_reconciles_own_mark_as_its_replay_floor(tmp
             assert abs(Federation._restored_at(db) - time.time()) < 60, args
 
 
+def carry(capsys, *args):
+    """station-carry-nonces; returns (exit code, stdout, stderr)."""
+    try:
+        cli(['station-carry-nonces', *map(str, args)])
+        code = 0
+    except SystemExit as stopped:
+        code = stopped.code
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def nonces(path):
+    with closing(sqlite3.connect(path)) as db:
+        return set(db.execute('SELECT origin, nonce, at FROM pull_nonces'))
+
+
+def restored_live(aside, marked=True):
+    """$ASIDE/restored-live after runbook 10.2: the restored station, with the mark step 5 left naming
+    $ASIDE/restored.sqlite3 (`marked` names another file instead, when it is a path)."""
+    store = Store(aside / 'restored-live')
+    if marked:
+        with store.transaction() as db:
+            backups._write_mark(db, None, 1.0, aside / 'restored.sqlite3' if marked is True else marked)
+    return store
+
+
+def tree(root):
+    """Every regular file under root and its bytes (symlinks not followed)."""
+    return {path: path.read_bytes() for path in sorted(root.rglob('*')) if path.is_file() and not path.is_symlink()}
+
+
+def unindexed_nonce(path):
+    """A pull_nonces row its index lacks, so the table's integrity check fails while a plain SELECT still reads it."""
+    with closing(sqlite3.connect(path)) as db:
+        entry = db.execute("SELECT type, name, tbl_name, rootpage, sql FROM sqlite_master WHERE name='pull_nonces_at'").fetchone()
+        db.execute('PRAGMA writable_schema=ON')
+        db.execute("DELETE FROM sqlite_master WHERE name='pull_nonces_at'")
+        db.commit()
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'unindexed', 9)")
+        db.execute('PRAGMA writable_schema=ON')
+        db.execute('INSERT INTO sqlite_master VALUES(?, ?, ?, ?, ?)', entry)
+        db.commit()
+
+
+def test_carry_nonces_adds_the_restored_stations_nonces_once_and_says_how_many(tmp_path, capsys):
+    """fix:pull-floor-after-rollback: runbook 10.3's carry adds the nonces the restored station recorded that the file
+    put back lacks, keeps the ones it has, says how many of how many and into which file, and a second run adds nothing
+    (10.2's resume note runs it again). The restored station's file is not changed. Mutation: INSERT OR REPLACE (each
+    run counts every nonce)."""
+    aside = tmp_path / 'backups' / 'replaced-20261017-120000'
+    live, restored = Store(tmp_path / 'lighthouse'), restored_live(aside)
+    (aside.parent / f'{aside.name}.old').mkdir()       # sorts after it, but isn't a restore directory's name
+    (aside.parent / 'replaced-notes.txt').write_text('')
+    (aside.parent / 'replaced-20261016-090000').mkdir()  # an earlier restore's (the third re-check's SF2: max, not min)
+    with live.transaction() as db:
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'kept', 5)")
+    with restored.transaction() as db:
+        db.executemany('INSERT INTO pull_nonces VALUES(?, ?, ?)', [('o', 'kept', 5), ('o', 'served', 6), ('p', 'served', 7)])
+    source = restored.db_path.read_bytes()
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', aside)
+    assert code == 0, err
+    assert out == f'Carried 2 of the 3 pull nonces the restored station recorded into {live.db_path}; it had the rest\n'
+    assert nonces(live.db_path) == {('o', 'kept', 5), ('o', 'served', 6), ('p', 'served', 7)}
+    assert (aside / 'carried').read_text() == '2 of 3\n'   # what step 8 reads before it starts the federation units
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', aside)
+    assert code == 0 and out.startswith('Carried 0 of the 3 pull nonces'), err
+    assert restored.db_path.read_bytes() == source and (aside / 'carried').read_text() == '0 of 3\n'
+
+
+def test_a_carry_that_cant_write_its_mark_says_so_and_step_8_still_holds(tmp_path, capsys):
+    """The nonces are carried, but $ASIDE/carried is a symlink, which it never follows: exit 1, saying the nonces were
+    carried and that step 8 leaves the federation units off, so 10.4's line starts them. Mutations: the mark written
+    through a symlink, CarryUnmarked uncaught (a traceback)."""
+    aside = tmp_path / 'backups' / 'replaced-20261017-120000'
+    live, restored = Store(tmp_path / 'lighthouse'), restored_live(aside)
+    with restored.transaction() as db:
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'served', 6)")
+    (aside / 'carried').symlink_to(tmp_path / 'elsewhere')
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', aside)
+    assert code == 1 and out == '' and 'nothing was changed' not in err, err
+    assert 'the nonces were carried (1 of 1)' in err and 'step 8 leaves the federation units off' in err, err
+    assert nonces(live.db_path) == {('o', 'served', 6)} and not (tmp_path / 'elsewhere').exists()
+
+
+def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
+    """Each refusal exits 1 saying nothing was changed and leaves every file as it was, creating none: no live file (a
+    mistyped --data-dir) or a live symlink; a $ASIDE still holding peer.sqlite3 or its journal (10.3's move hasn't run,
+    so the live file may be a stray); no restored station, or a symlink to it; the live file as its own source (by path
+    or a hard link); either side without pull_nonces; a source that fails its integrity check; a source with no restore
+    mark, a damaged one, or one naming another restore's directory (the re-check's SF1: a wrong file carried 0 and said
+    all was well); and a $ASIDE that is an earlier restore's, or not a replaced-<time> directory, though all else holds
+    (the second re-check's nit 2). Mutations: each check dropped (the carry goes through, or SQLite's error stands in
+    for the reason)."""
+    backups_dir = tmp_path / 'backups'
+    aside = backups_dir / 'replaced-20261017-120000'
+    live, restored = Store(tmp_path / 'lighthouse'), restored_live(aside)
+    with restored.transaction() as db:
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'served', 6)")
+    other = tmp_path / 'other'
+    other.mkdir()
+    with closing(sqlite3.connect(other / 'peer.sqlite3')) as db:
+        db.execute('CREATE TABLE notes(x)')
+        db.commit()
+    linked = tmp_path / 'linked'
+    linked.mkdir()
+    (linked / 'peer.sqlite3').symlink_to(live.db_path)
+    asides = {name: backups_dir / f'replaced-20261017-1{number:02d}000' for number, name in enumerate(
+        ('unmoved', 'journal', 'empty', 'symlinked', 'hard', 'plain', 'unmarked', 'elsewhere', 'damaged', 'broken', 'nul',
+         'earlier', 'wal', 'shm'), 3)}                      # each older than `aside`, the newest
+    asides['misnamed'] = backups_dir / 'my-restore'
+    for name in ('unmoved', 'journal', 'elsewhere', 'damaged', 'broken', 'nul', 'earlier', 'misnamed', 'wal', 'shm'):
+        restored_live(asides[name], marked=backups_dir / 'replaced-20250101-000000' / 'restored.sqlite3'
+                      if name == 'elsewhere' else True)
+    (asides['unmoved'] / 'peer.sqlite3').write_bytes(b'')
+    for name in ('journal', 'wal', 'shm'):   # a cut-short 10.3 leaves sidecars alone: the twin's state, in either mode
+        (asides[name] / f'peer.sqlite3-{name}').write_bytes(b'')
+    asides['empty'].mkdir()
+    (asides['symlinked'] / 'restored-live').mkdir(parents=True)
+    (asides['symlinked'] / 'restored-live' / 'peer.sqlite3').symlink_to(restored.db_path)
+    (asides['hard'] / 'restored-live').mkdir(parents=True)
+    os.link(live.db_path, asides['hard'] / 'restored-live' / 'peer.sqlite3')
+    (asides['plain'] / 'restored-live').mkdir(parents=True)
+    shutil.copyfile(other / 'peer.sqlite3', asides['plain'] / 'restored-live' / 'peer.sqlite3')
+    restored_live(asides['unmarked'], marked=False)
+    for name, value in (('damaged', 'not json'), ('nul', json.dumps({'at': 1.0, 'replaced': False,
+                                                                      'path': f'{asides["nul"] / "restored.sqlite3"}\0'}))):
+        with closing(sqlite3.connect(asides[name] / 'restored-live' / 'peer.sqlite3')) as db, db:
+            db.execute("UPDATE system_meta SET value=? WHERE key='restore_reconcile'", (value,))
+    unindexed_nonce(asides['broken'] / 'restored-live' / 'peer.sqlite3')
+    before = tree(tmp_path)
+    for data_dir, where, reason in (
+            (tmp_path / 'typo', aside, 'No peer database'),
+            (linked, aside, 'No peer database'),
+            (live.data_dir, asides['unmoved'], "10.3's move hasn't run"),
+            (live.data_dir, asides['journal'], "10.3's move hasn't run"),
+            (live.data_dir, asides['wal'], "10.3's move hasn't run"),
+            (live.data_dir, asides['shm'], "10.3's move hasn't run"),
+            (live.data_dir, asides['empty'], 'No restored station'),
+            (live.data_dir, asides['symlinked'], 'No restored station'),
+            (restored.data_dir, aside, 'the live database itself'),
+            (live.data_dir, asides['hard'], 'the live database itself'),
+            (other, aside, 'has no pull_nonces table'),
+            (live.data_dir, asides['plain'], 'has no pull_nonces table'),
+            (live.data_dir, asides['broken'], 'fails its integrity check'),
+            (live.data_dir, asides['unmarked'], 'is not marked as the station restored from'),
+            (live.data_dir, asides['elsewhere'], 'is not marked as the station restored from'),
+            (live.data_dir, asides['damaged'], 'is not marked as the station restored from'),
+            (live.data_dir, asides['nul'], 'is not marked as the station restored from'),
+            (live.data_dir, asides['earlier'], 'is not the newest replaced-<time> directory'),
+            (live.data_dir, asides['misnamed'], 'is not the newest replaced-<time> directory')):
+        code, out, err = carry(capsys, '--data-dir', data_dir, '--aside', where)
+        assert code == 1 and out == '' and 'nothing was changed' in err and reason in err, (data_dir, where, err)
+        assert tree(tmp_path) == before, (data_dir, where)
+    assert not (tmp_path / 'typo').exists()
+
+
+@pytest.mark.parametrize('side', ['live', 'source'])
+@pytest.mark.parametrize('end', ['', '-journal', '-wal', '-shm'])
+def test_carry_nonces_refuses_a_symlink_in_any_of_either_files_four_names(tmp_path, capsys, side, end):
+    """The WAL reviewer's should-fix and the second re-check's nit 3: the file, its -journal, -wal or -shm a symlink, on
+    either side, is refused before anything opens, with no byte changed. A sidecar's link dangles, which is_file()
+    wouldn't see. Mutations: either side's sidecars unchecked, or only the main name checked."""
+    aside = tmp_path / 'backups' / 'replaced-20261017-120000'
+    live, restored = Store(tmp_path / 'lighthouse'), restored_live(aside)
+    path = Path(f'{(live if side == "live" else restored).db_path}{end}')
+    if end:
+        path.symlink_to(tmp_path / 'nowhere')
+    else:
+        path.rename(path.with_name('real.sqlite3'))
+        path.symlink_to(path.with_name('real.sqlite3'))
+    before = tree(tmp_path)
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', aside)
+    assert code == 1 and out == '' and 'nothing was changed' in err and 'symlink' in err, err
+    assert tree(tmp_path) == before
+
+
+WAIT_SHIMS = {'timedatectl': '#!/bin/sh\necho "timedatectl $*" >> "$LOG"\necho yes\n',
+              'sleep': '#!/bin/sh\necho "sleep $*" >> "$LOG"\n[ "$1" = 600 ] && exit "${SLEEP_600:-0}"\nexit 0\n'}
+
+
+def test_a_refused_carry_starts_the_federation_units_in_one_command_after_the_sync_and_10_minutes(tmp_path):
+    """The second re-check's should-fix and the third's must-fix. `uptime -s` read before NTP synced showed fake-hwclock's
+    time, so the count could start early: the line reads no recorded time, and waits for the sync, then 600 s from that
+    moment. And the wait and the start lines were three commands, so a pasted block ran the start lines after Ctrl-C
+    ended the wait: they are one line now, `&&` throughout. Run with shims, an interrupted sleep (exit 130) starts
+    nothing, and one run to the end then starts the units step 3 saved. Mutations: the start lines on their own lines,
+    `;` after the sleep, the wait without the sync, a shorter sleep."""
+    text = RUNBOOK.read_text()
+    [line] = [text.strip() for text in text.splitlines() if text.strip().startswith('until ') and 'NTPSynchronized' in text]
+    aside = tmp_path / 'replaced-20261017-120000'
+    aside.mkdir()
+    (aside / 'watchers.txt').write_text('superyak-ship-running.service enabled=enabled active=active\n'
+                                        'superyak-federate.service enabled=disabled active=inactive\n'
+                                        'superyak-federation-listen.service enabled=enabled active=active\n')
+    shim, log = tmp_path / 'bin', tmp_path / 'calls.log'
+    shim.mkdir()
+    for name, body in (('systemctl', SYSTEMCTL), *WAIT_SHIMS.items()):
+        (shim / name).write_text(body)
+        (shim / name).chmod(0o755)
+
+    def run(**env):
+        log.unlink(missing_ok=True)
+        subprocess.run(['bash', '-c', line], env={'PATH': f'{shim}:{os.environ["PATH"]}', 'ASIDE': str(aside),
+                                                  'LOG': str(log), **env}, capture_output=True, text=True, timeout=60)
+        return log.read_text().splitlines() if log.exists() else []
+    assert run(SLEEP_600='130') == ['timedatectl show -p NTPSynchronized --value', 'sleep 600']
+    assert run() == ['timedatectl show -p NTPSynchronized --value', 'sleep 600',
+                     '--user enable superyak-federation-listen.service', '--user start superyak-federation-listen.service']
+    assert 'uptime -s' not in RUNBOOK.read_text() and 'InactiveEnterTimestamp' not in RUNBOOK.read_text()
+
+
+def test_restore_directories_are_named_in_utc_so_the_newest_sorts_last():
+    """Serenity's nit on 370a47f1: step 1 named the directory by local time, so in a fall-back hour a later restore could
+    sort before an earlier one, and the runbook's ASIDE line and the carry's newest check would both pick the older one.
+    UTC names sort by time, in the same form the carry counts. Mutation: `date` without -u."""
+    named = [line.strip() for line in RUNBOOK.read_text().splitlines()
+             if line.strip().startswith('ASIDE=~/.local/share/superyak/backups/replaced-$(')]
+    assert named == ['ASIDE=~/.local/share/superyak/backups/replaced-$(date -u +%Y%m%d-%H%M%S)']
+    assert backups.REPLACED_DIR.fullmatch(time.strftime('replaced-%Y%m%d-%H%M%S', time.gmtime()))
+
+
+def test_carry_nonces_leaves_a_hot_journal_and_exits_cleanly_on_a_database_error(tmp_path, capsys):
+    """The re-check's SF2 (its probe q3): 10.1 killed the listener mid-transaction, so restored-live has a hot journal.
+    The read-only attach refuses to roll it back, so the carry exits 1 and both files stay as they were, falling back
+    to 10.4's wait. A source that isn't a database, or whose pull_nonces lacks a column, also fails inside SQLite: exit 1
+    with the error's name, and the live file unchanged (the insert's transaction rolled back). Mutations: `mode=ro`
+    dropped (the journal is rolled back into the set-aside file and the carry goes on), no sqlite3.Error handler."""
+    backups_dir = tmp_path / 'backups'
+    live = Store(tmp_path / 'lighthouse')
+    hot, junk, narrow = (backups_dir / f'replaced-20261017-1{number}0000' for number in (2, 3, 4))
+    source = restored_live(backups_dir / 'replaced-20261017-110000', marked=hot / 'restored.sqlite3').db_path
+    with closing(sqlite3.connect(source, isolation_level=None)) as db:
+        db.execute('PRAGMA cache_size=1')  # so the open transaction spills its pages into the file, as a killed one leaves it
+        db.execute('BEGIN IMMEDIATE')
+        db.executemany('INSERT INTO pull_nonces VALUES(?, ?, ?)', [('o', f'{n:04d}' * 64, n) for n in range(2000)])
+        (hot / 'restored-live').mkdir(parents=True)
+        for suffix in ('', '-journal'):
+            shutil.copyfile(f'{source}{suffix}', hot / 'restored-live' / f'peer.sqlite3{suffix}')
+        db.execute('ROLLBACK')
+    (junk / 'restored-live').mkdir(parents=True)
+    (junk / 'restored-live' / 'peer.sqlite3').write_bytes(b'not a database' * 100)
+    (narrow / 'restored-live').mkdir(parents=True)
+    with closing(sqlite3.connect(narrow / 'restored-live' / 'peer.sqlite3')) as db:
+        db.execute('CREATE TABLE pull_nonces(origin, nonce)')
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'n')")
+        backups._write_mark(db, None, 1.0, narrow / 'restored.sqlite3')
+        db.commit()
+    before = tree(tmp_path)
+    assert (hot / 'restored-live' / 'peer.sqlite3-journal').stat().st_size > 0
+    for where, error in ((hot, 'OperationalError'), (junk, 'DatabaseError'), (narrow, 'OperationalError')):
+        code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', where)
+        assert code == 1 and out == '' and f'nothing was changed: {error}' in err, (where, err)
+        assert tree(tmp_path) == before, where
+
+
 def test_reconcile_unpair_refuses_an_ambiguous_id_and_changes_no_byte(tmp_path, capsys):
     """--unpair with a short id two peers share is refused (exit 2) and the staged copy is byte for byte unchanged, also when
     the refusal comes after other work. A full id picks the one peer even if another shares its prefix, and the report does
@@ -1285,6 +1541,35 @@ def test_runbook_steps_3_and_8_put_each_watcher_back_as_it_was(tmp_path):
     assert 'make station-rooms' in calls
 
 
+def test_after_a_rollback_step_8_holds_the_federation_units_until_the_carry_wrote_its_mark(tmp_path):
+    """The third re-check's SF1: step 8's watcher lines started the federation units with no gate, so step 8 as written,
+    after a carry that refused, skipped the wait. After a rollback ($ASIDE/restored-live exists) they leave those units
+    off unless 10.3's carry wrote $ASIDE/carried. The other watchers start either way, and a restore with no rollback is
+    as before (the test above). Only a regular file counts, as the carry writes it: a directory or a symlink named
+    `carried` holds them too (round 4's nit 1). Mutations: either line without the hold, the hold ignoring the mark, `-e`
+    for `-f`, no symlink test."""
+    aside = tmp_path / 'replaced-20261017-120000'
+    aside.mkdir(mode=0o700)
+    run_runbook(tmp_path, 3, aside)
+    (tmp_path / 'states.txt').write_text(''.join(f'{unit} disabled inactive\n' for unit in WATCHERS))
+    (aside / 'restored-live').mkdir()
+
+    def started():
+        out, calls = run_runbook(tmp_path, 8, aside)
+        return [call for call in calls if call.startswith(('--user enable superyak-', '--user start superyak-'))
+                and ('federat' in call or 'ship-running' in call)]
+    held = ['--user enable superyak-ship-running.service', '--user start superyak-ship-running.service']
+    assert started() == held
+    (aside / 'carried').mkdir()
+    assert started() == held
+    (aside / 'carried').rmdir()
+    (tmp_path / 'a-file').write_text('0 of 0\n')
+    (aside / 'carried').symlink_to(tmp_path / 'a-file')
+    assert started() == held
+    (aside / 'carried').unlink()
+    (aside / 'carried').write_text('0 of 0\n')
+    assert started() == ['--user enable superyak-ship-running.service', '--user enable superyak-federation-listen.service',
+                         '--user start superyak-ship-running.service', '--user start superyak-federation-listen.service']
 SWEEP_AND_INDEX = ('superyak-imprint-sweep.timer', 'superyak-lessons-index.timer', 'superyak-imprint-sweep.service',
                    'superyak-lessons-index.service')
 

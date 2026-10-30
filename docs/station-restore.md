@@ -16,9 +16,10 @@ Before you start, know two things:
 
 Run every step on the Pi, from `~/superyak`, in one terminal that you keep open: the steps share `ASIDE`, the directory
 step 1 makes for this restore. If the terminal closes or the Pi restarts, open a new one in `~/superyak` and set `ASIDE`
-again with the line below; never run step 1 again for that. The directory names are the local time of step 1, all of
-one width, so the last one listed is the newest: this restore's. Check that its name holds the date and time you ran
-step 1. From step 4 on (until a rollback's 10.3) it holds `peer.sqlite3`.
+again with the line below; never run step 1 again for that. The directory names are the UTC time of step 1, all of
+one width, so the last one listed is the newest, this restore's, even across a daylight-saving change (local time
+repeats an hour when the clocks go back). Check that its name holds the UTC date and time you ran step 1 (`date -u`
+prints the time now). From step 4 on (until a rollback's 10.3) it holds `peer.sqlite3`.
 ```bash
 ASIDE=$(ls -d ~/.local/share/superyak/backups/replaced-* | tail -n 1); ls -la "$ASIDE"
 ```
@@ -41,7 +42,7 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    restore and copy the choice into it; later steps use that copy, and nothing in the rotation is needed again. Run this
    step once per restore; only a failed step 2 sends you back to it:
    ```bash
-   ASIDE=~/.local/share/superyak/backups/replaced-$(date +%Y%m%d-%H%M%S)
+   ASIDE=~/.local/share/superyak/backups/replaced-$(date -u +%Y%m%d-%H%M%S)
    install -d -m 700 "$ASIDE"
    install -m 600 ~/.local/share/superyak/backups/station/<chosen copy> "$ASIDE/chosen.sqlite3"
    ```
@@ -257,7 +258,8 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    step 3 saved, the watchers and the federation units, back as they were, after the lighthouse: enable again those that
    were enabled, and start again those that were running (a crashed one restarting counts as running). Check each
    started unit with `is-active`, then enable both timers again, and the imprint-sweep and lessons-index timers step 3
-   saved in `timers.txt`. A pull peer's deliveries resume about 5 minutes after
+   saved in `timers.txt`. After a rollback (10.4), the two watcher lines leave the federation units off unless 10.3's
+   carry wrote `$ASIDE/carried`; 10.4 says how to start them then. A pull peer's deliveries resume about 5 minutes after
    step 5's reconcile: until then the listener answers its pulls "Replay", counts no failure and keeps its acks, so a
    copy's lost pull nonces can't be replayed (fix:restore-keeps-pull-nonces).
    ```bash
@@ -266,8 +268,8 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    for unit in superyak-ship superyak-odo; do systemctl --user enable --now "$unit"; done
    make station-rooms                                   # check the bridged column first
    systemctl --user enable --now superyak-wormhole
-   for unit in $(awk '$2 == "enabled=enabled" {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done   # the watchers step 3 saved as enabled
-   for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done   # and those it saved as running
+   for unit in $(awk -v hold="$(test -e "$ASIDE/restored-live" && { test -L "$ASIDE/carried" || test ! -f "$ASIDE/carried"; } && echo 1)" '$2 == "enabled=enabled" && !(hold && $1 ~ /^superyak-federat/) {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done   # the watchers step 3 saved as enabled
+   for unit in $(awk -v hold="$(test -e "$ASIDE/restored-live" && { test -L "$ASIDE/carried" || test ! -f "$ASIDE/carried"; } && echo 1)" '$3 ~ /^active=(active|activating|reloading)$/ && !(hold && $1 ~ /^superyak-federat/) {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done   # and those it saved as running
    for unit in superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do printf '%s ' "$unit"; systemctl --user is-active "$unit"; done
    systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer   # as make station-units does
    [ -d "$ASIDE" ] && for timer in $(cat "$ASIDE/timers.txt" 2>/dev/null); do systemctl --user enable --now "$timer"; done   # the timers step 3 saved as enabled
@@ -296,7 +298,7 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        If it says 10.2 ran before and `$ASIDE/peer.sqlite3` still exists, any `peer.sqlite3` file now in the data
        directory is a stray: set it aside with step 6's stray-case lines, then go on with 10.3. If `$ASIDE/peer.sqlite3`
        is gone, 10.3 has run: run 10.3 again, which finishes a move that was cut short (and otherwise moves nothing and
-       says why), then go on with 10.4.
+       says why), then its carry (below), which is safe to run again, then go on with 10.4.
     3. Move the set-aside `$ASIDE/peer.sqlite3` and its sidecars back, as one set. The lines move nothing, and print
        why, when `$ASIDE` holds no `peer.sqlite3` (10.3 ran before, or `ASIDE` is not this restore's directory) or a
        `peer.sqlite3` file is in the data directory. When 10.3 ran and was cut short (`peer.sqlite3` back in the data
@@ -325,12 +327,33 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        in the room before 10.4.
        If a `peer.sqlite3` file is in the data directory: when 10.2 ran, it is a stray, so set it aside with step 6's
        stray-case lines and run 10.3 again; when 10.2 didn't run, run 10.2 first.
+
+       Then carry the restored station's pull nonces into the file put back, still with everything stopped:
+       `make station-carry-nonces ASIDE="$ASIDE"`. The file put back lacks the nonces that station recorded while it
+       was live, so a pull it served could otherwise be replayed. The carry copies them in from `$ASIDE/restored-live`
+       exactly, depending on no clock (fix:pull-floor-after-rollback), and prints `Carried N of the M pull nonces the
+       restored station recorded`; 0 of 0 means it served no pull. Only then does it write `$ASIDE/carried`, which step
+       8 reads. Running it again adds nothing. In WAL mode it reads `restored-live` through its `-wal`, so a commit made
+       only there is carried too, and SQLite leaves a `-shm` beside it. Where it can't read that way (a `-wal` with no
+       `-shm`, in a directory it can't write), it refuses, and the rollback fails closed into 10.4's wait. It refuses,
+       changing neither database, when `$ASIDE` still holds a `peer.sqlite3` file or any of its sidecars (10.3's move
+       hasn't run, or was cut short: run 10.3 again first, as its `NOT done` line says), when `restored-live` is missing
+       or damaged, when it isn't marked as the station restored from `$ASIDE`, or when `$ASIDE` isn't the newest
+       `replaced-*` directory (set it again with the line at the top). In WAL mode, a refusal made after it has read
+       `restored-live` can leave the `-shm` SQLite makes there; nothing reads that file again. If it refused and you
+       can't fix what it names, go on with 10.4: step 8 then leaves the federation units off.
     4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and
-       wormhole, put the watchers step 3 saved back as they were, and enable the timers again. Step 8's checks that act
-       on step 5's report (the law layers, the members and admins, the `bridged` column) are for a restored copy and
-       don't apply to a rollback. If a federation unit was running, note the time 10.1 stopped it, and start it again
-       more than 10 minutes after that: the file put back lacks the pull nonces the restored station recorded and
-       carries no newer restore mark, and a pull it served just before the stop, from a peer whose clock ran 300 s
-       ahead, could pass the clock check for 10 minutes after the stop (fix:restore-keeps-pull-nonces). The lighthouse,
-       the door, the ships and the timers needn't wait. Until `fix:pull-floor-after-rollback` writes a mark at 10.3,
-       this wait is the guard.
+       wormhole, put the watchers step 3 saved back as they were, and enable the timers again. Step 8's checks that act on
+       step 5's report (the law layers, the members and admins, the `bridged` column) are for a restored copy and don't
+       apply to a rollback. Its two watcher lines start the federation units only if 10.3's carry wrote
+       `$ASIDE/carried`. Without it, they leave those units off (step 8's check then shows them inactive), and this one
+       line starts them. It waits until the Pi's clock is synced (after a restart, fake-hwclock runs behind until NTP
+       syncs, so no time read before that can be trusted), then 10 minutes more, counted from that moment and not from
+       any recorded time. A pull the restored station served just before the stop, from a peer whose clock ran 300 s
+       ahead, passes the clock check for up to 10 minutes after the stop, and the stop came before this wait began. It
+       is one command, `&&` throughout, so stopping it with Ctrl-C at any point starts nothing. If it never says the
+       clock is synced, stop it and leave the units off, and say so in the room.
+       ```bash
+       until [ "$(timedatectl show -p NTPSynchronized --value)" = yes ]; do sleep 10; done && echo 'Clock synced; the federation units start in 10 minutes' && sleep 600 && for unit in $(awk '$2 == "enabled=enabled" && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done && for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done
+       ```
+       The lighthouse, the door, the ships and the timers needn't wait.
