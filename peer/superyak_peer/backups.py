@@ -1087,6 +1087,14 @@ def _marked_path(db, schema):
     return path if isinstance(path, str) and '\0' not in path else None  # realpath raises on a NUL
 
 
+REPLACED_DIR = re.compile(r'replaced-\d{8}-\d{6}')
+
+
+def _newest_replaced(backups):
+    """The newest restore directory's name: they are named by step 1's local time, all one width, so it sorts last."""
+    return max((path.name for path in backups.glob('replaced-*') if REPLACED_DIR.fullmatch(path.name)), default=None)
+
+
 def carry_pull_nonces(data_dir, aside):
     """Runbook 10.3, after a rollback (fix:pull-floor-after-rollback, Rio Grande's reader's better way): the file put back
     lacks the pull nonces the restored station recorded while it was live, so a pull it served could be replayed. This
@@ -1097,7 +1105,9 @@ def carry_pull_nonces(data_dir, aside):
     copy or chosen.sqlite3 carried 0 and said all was well). Refused, with nothing changed: a live file that is missing,
     has no pull_nonces, or is a symlink or has one among its sidecars; a $ASIDE that still holds peer.sqlite3 (10.3's
     move hasn't run, so the live file is not the one put back); a source that is missing, symlinked the same way, the
-    live file, without pull_nonces, damaged, or not marked as restored from $ASIDE. Returns (nonces added, nonces in
+    live file, without pull_nonces, damaged, or not marked as restored from $ASIDE; and a $ASIDE that isn't the
+    newest replaced-<time> directory, as the runbook's ASIDE line names it (the re-check's nit 2: an earlier restore that
+    was also rolled back passed everything else). Returns (nonces added, nonces in
     the source)."""
     aside = Path(aside)
     live, source = Path(data_dir) / LIVE_NAME, aside / 'restored-live' / LIVE_NAME
@@ -1125,6 +1135,10 @@ def carry_pull_nonces(data_dir, aside):
             marked = _marked_path(db, 'restored')
             if marked is None or os.path.realpath(marked) != os.path.realpath(aside / STAGED_NAME):
                 raise CarryRefused(f'{source} is not marked as the station restored from {aside / STAGED_NAME}')
+            newest = _newest_replaced(aside.resolve().parent)  # last, so each refusal above still names its own cause
+            if aside.resolve().name != newest:
+                raise CarryRefused(f"{aside} is not the newest replaced-<time> directory, which the runbook's ASIDE line "
+                                   f'names ({newest}), so it is not this restore')
             total = db.execute('SELECT count(*) FROM restored.pull_nonces').fetchone()[0]
             db.execute('BEGIN IMMEDIATE')
             added = db.execute('INSERT OR IGNORE INTO main.pull_nonces(origin, nonce, at) '

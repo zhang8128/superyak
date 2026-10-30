@@ -258,22 +258,27 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        exactly, depending on no clock (fix:pull-floor-after-rollback), and prints `Carried N of the M pull nonces the
        restored station recorded`; 0 of 0 means it served no pull. Running it again adds nothing. It refuses, changing
        nothing, when `$ASIDE` still holds a `peer.sqlite3` file (10.3's move hasn't run), when `restored-live` is missing
-       or damaged, or when it isn't marked as the station restored from `$ASIDE`. If it refused and you can't fix what it
-       names, print when 10.1 stopped the listener; it prints nothing if the Pi has restarted since, and then count from
-       `uptime -s`, which is later:
-       ```bash
-       systemctl --user show -p InactiveEnterTimestamp --value superyak-federation-listen
-       ```
-    4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and
-       wormhole, put the watchers step 3 saved back as they were, and enable the timers again. Step 8's checks that act
-       on step 5's report (the law layers, the members and admins, the `bridged` column) are for a restored copy and
-       don't apply to a rollback. If 10.3's carry refused, run these two lines in place of step 8's two watcher lines,
-       so the federation units step 3 saved stay off (step 8's check then shows them inactive):
+       or damaged, when it isn't marked as the station restored from `$ASIDE`, or when `$ASIDE` isn't the newest
+       `replaced-*` directory (set it again with the line at the top). If it refused and you can't fix what it names,
+       follow 10.4's lines for a refused carry.
+    4. Run step 8's commands, in its order, once 10.3's carry printed `Carried`. They start the lighthouse and the door,
+       enable and start the ship, odo and wormhole, put the watchers step 3 saved back as they were, and enable the
+       timers again. Step 8's checks that act on step 5's report (the law layers, the members and admins, the `bridged`
+       column) are for a restored copy and don't apply to a rollback. If the carry refused, or you can't tell that it
+       printed `Carried`, run these two lines in place of step 8's two watcher lines, so the federation units step 3
+       saved stay off (step 8's check then shows them inactive):
        ```bash
        for unit in $(awk '$2 == "enabled=enabled" && $1 !~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done
        for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ && $1 !~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done
        ```
-       Run them again with `!~` changed to `~` only once `timedatectl show -p NTPSynchronized --value` prints `yes` and
-       more than 10 minutes have passed since the time 10.3 printed: a pull the restored station served just before the
-       stop, from a peer whose clock ran 300 s ahead, passes the clock check that long. The lighthouse, the door, the
-       ships and the timers needn't wait.
+       Then start those units with the lines below. The first waits until the Pi's clock is synced (after a restart,
+       fake-hwclock runs behind until NTP syncs, so no time read before that can be trusted), then 10 minutes more,
+       counted from that moment and not from any recorded time. A pull the restored station served just before the stop,
+       from a peer whose clock ran 300 s ahead, passes the clock check for up to 10 minutes after the stop, and the stop
+       came before this wait began. If it never says the clock is synced, leave the units off and say so in the room.
+       ```bash
+       until [ "$(timedatectl show -p NTPSynchronized --value)" = yes ]; do sleep 10; done; echo 'Clock synced; the federation units start in 10 minutes'; sleep 600
+       for unit in $(awk '$2 == "enabled=enabled" && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done
+       for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ && $1 ~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done
+       ```
+       The lighthouse, the door, the ships and the timers needn't wait.
