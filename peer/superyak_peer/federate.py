@@ -27,7 +27,7 @@ class Federate:
 
     def pull_cards(self):
         """The paired push peers' cards: the listeners a pull peer fetches from."""
-        with self.federation.store.transaction() as db:
+        with self.federation.store.reading() as db:
             cards = [json.loads(row[0]) for row in db.execute('SELECT card FROM peers WHERE paired=1')]
         return [card for card in cards if card.get('delivery', 'push') == 'push']
 
