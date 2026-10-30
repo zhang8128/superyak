@@ -23,11 +23,12 @@ import tempfile
 import time
 import urllib.request
 from .auth import account_role, token_hash
+from .journal_mode import header_mode
 from .ships import safe_line
 
 STAMP = '%Y%m%dT%H%M%SZ'
 COPY_NAME = re.compile(r'peer-(\d{8}T\d{6}Z)\.sqlite3')
-TEMP_NAME = re.compile(r'\.peer-.+\.tmp(?:-journal)?')
+TEMP_NAME = re.compile(r'\.peer-.+\.tmp(?:-journal|-wal|-shm)?')
 KEEP_DAYS, KEEP_WEEKS = 14, 8
 TEMP_MAX_AGE = 86400
 STALE_AFTER = 36 * 3600
@@ -198,8 +199,16 @@ def rotation_lock(directory):
 
 
 def _remove_temporary(tmp):
-    for path in (Path(tmp), Path(f'{tmp}-journal')):
+    for path in (Path(tmp), Path(f'{tmp}-journal'), Path(f'{tmp}-wal'), Path(f'{tmp}-shm')):
         path.unlink(missing_ok=True)
+
+
+def _as_single_file(copy):
+    """Store-wal-mode D4: a copy is one self-contained rollback-mode file, whatever the live store's mode. The backup
+    API copies the source's WAL flag; journal_mode=DELETE clears it, and SQLite's answer is checked."""
+    answer = copy.execute('PRAGMA journal_mode=DELETE').fetchone()[0]
+    if answer != 'delete':
+        raise BackupError(1, f'the copy could not be made a single file (journal_mode={answer})')
 
 
 def free_bytes(path):
@@ -226,6 +235,7 @@ def _checked_copy(database, tmp, clock, sleep):
                         raise BackupError(10)
                     with closing(sqlite3.connect(tmp)) as copy:
                         source.backup(copy, pages=-1)
+                        _as_single_file(copy)
                         sound = _check(copy, 'integrity_check')
                 break
             except sqlite3.OperationalError as error:
@@ -393,7 +403,11 @@ COMPARED = ('users.id', 'users.is_admin', 'users.is_super_admin', 'users.salt', 
             # is treated as absent, so every connection is revoked, never one left open as only "not compared"
             'connector_grants.id', 'connector_grants.person_id', 'connector_grants.client_id',
             'connector_grants.redirect_host', 'connector_grants.rooms', 'connector_grants.ends', 'connector_grants.revoked',
-            'connector_tokens.hash', 'connector_tokens.expires', 'connector_tokens.used')  # Task 6's tokens, the same way
+            'connector_tokens.hash', 'connector_tokens.expires', 'connector_tokens.used',  # Task 6's tokens, the same way
+            # Task 8's read receipts: a replaced file lacking a column is absent, so the copy's stay and the loss is said
+            'connector_reads.id', 'connector_reads.grant_id', 'connector_reads.person_id', 'connector_reads.app',
+            'connector_reads.at', 'connector_reads.tool', 'connector_reads.rooms_read', 'connector_reads.rooms_refused',
+            'connector_reads.size', 'connector_reads.outcome')
 
 
 class ReconcileRefused(ValueError):
@@ -1004,6 +1018,34 @@ def _keep_tokens_like_replaced(db, old, now, report):
     report['counts']['connector tokens taken back'] = taken
 
 
+RECEIPT_COLUMNS = ('id', 'grant_id', 'person_id', 'app', 'at', 'tool', 'rooms_read', 'rooms_refused', 'size', 'outcome')
+RECEIPTS_NOT_KEPT = ("Read receipts made since the copy could not be kept, since there was no usable replaced file to "
+                     "take them from: tell the people with connections that Connected apps no longer shows what was "
+                     "read between the copy and this restore.")
+
+
+def _keep_receipts_like_replaced(db, old, now, report):
+    """Task 8 (Rio Grande and Tardis, on the restore design): a receipt grants nothing, so the replaced file, the newer
+    and whole record, wins whole. Its receipts replace the copy's: one made since the copy comes back, and one a person
+    cleared since stays cleared, whatever Task 9 lets a person delete. A copy from before Task 8 has no table; it gains
+    one, or the receipts made since the deploy would be lost. Without a usable replaced file the copy's stay, and the
+    report says what was lost (RECEIPTS_NOT_KEPT)."""
+    from .connector_reads import READS_SCHEMA
+    if not _has(old, 'connector_reads'):
+        return
+    if not _has(db, 'connector_reads'):
+        for statement in filter(str.strip, READS_SCHEMA.split(';')):
+            db.execute(statement)  # one by one: executescript would commit the reconcile's transaction
+    if not _usable(db, old, report, *(f'connector_reads.{column}' for column in RECEIPT_COLUMNS)):
+        return
+    columns = ', '.join(RECEIPT_COLUMNS)
+    rows = old.execute(f'SELECT {columns} FROM connector_reads').fetchall()
+    db.execute('DELETE FROM connector_reads')
+    db.executemany(f'INSERT INTO connector_reads({columns}) VALUES({", ".join("?" * len(RECEIPT_COLUMNS))})',
+                   [tuple(row) for row in rows])
+    report['counts']['read receipts as in the replaced file'] = len(rows)
+
+
 def _revoke_every_token(db, old, now, report):
     """Task 6, without a usable replaced file: every token is revoked, as every connection is, the ones that ran out on
     their own just before included. The count is of the live ones."""
@@ -1326,6 +1368,9 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     refuse_misnamed_replaced); the restore test calls this directly on its scratch peer.sqlite3."""
     db_path = Path(db_path).absolute()
     _refuse(db_path, live_data_dir)
+    if header_mode(db_path) == 'wal':  # store-wal-mode D4: every backup copy is a rollback-mode file
+        raise ReconcileRefused(f'{db_path} is in WAL mode, so step 6 would install its main file alone; stage a copy '
+                               'made by station-backup or station-restore-test, which are single files')
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0],
@@ -1370,7 +1415,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                              _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
                              _add_member_changes_like_replaced,
                              _unpair_like_replaced, _hold_like_replaced, _keep_marks_like_replaced,
-                             _keep_connections_like_replaced, _keep_tokens_like_replaced, _report_differences):
+                             _keep_connections_like_replaced, _keep_tokens_like_replaced, _keep_receipts_like_replaced,
+                             _report_differences):
                     step(db, old, now, report)
             _unpair_named(db, old, named, report)
             _write_mark(db, old, now, db_path)
@@ -1403,7 +1449,7 @@ def describe_reconcile(report):
                      "compared: check them by hand in runbook step 8. Peer pairings were not compared either, and nothing was "
                      'unpaired: before the copy goes live (runbook step 5), peer pairings: list them and name any you had cut '
                      "off in UNPAIR=. Every owned ship's keys were revoked, so those machines dock again. " + MARKS_NOT_KEPT
-                     + ' ' + CONNECTIONS_NOT_KEPT)
+                     + ' ' + CONNECTIONS_NOT_KEPT + ' ' + RECEIPTS_NOT_KEPT)
     lines.append('Taken back: ' + ', '.join(f'{label} ({count})' for label, count in report['counts'].items()) + '.')
     for table, (before, after) in report['sequences'].items():
         if after != before:
@@ -1560,6 +1606,7 @@ def _restored_copy(source, target):
     try:
         with closing(_read_only(source)) as copy_from, closing(sqlite3.connect(target)) as copy:
             copy_from.backup(copy, pages=-1)
+            _as_single_file(copy)
             return _check(copy, 'integrity_check')
     except sqlite3.DatabaseError:
         return False

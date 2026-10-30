@@ -1,5 +1,7 @@
 """Remote connector, Task 7: `/mcp`, stateless JSON-RPC over POST (spec "`/mcp`: Streamable HTTP, by hand")."""
+import json
 import math
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,8 +34,10 @@ def test_initialize_list_call_ping_and_initialized(connected):
     assert [tool['name'] for tool in listed['result']['tools']] == ['rooms', 'read_room', 'search', 'fetch']
     called = mcp(connected, rpc('tools/call', {'name': 'rooms', 'arguments': {}}, id='three'), access(connected)).json()
     assert called['id'] == 'three' and called['result']['isError'] is False
-    assert called['result']['structuredContent'] == {'ok': True}  # Task 8's tools; a stub here
-    assert called['result']['content'] == [{'type': 'text', 'text': '{"ok":true}'}]  # as structuredContent is sent
+    listed = called['result']['structuredContent']
+    assert sorted(room['title'] for room in listed['rooms']) == ['Care plan', 'Lab notes']
+    assert called['result']['content'] == [{'type': 'text', 'text': json.dumps(listed, ensure_ascii=False,
+                                                                                 separators=(',', ':'))}]  # byte for byte
     assert mcp(connected, rpc('ping', id=4), access(connected)).json() == {'jsonrpc': '2.0', 'id': 4, 'result': {}}
 
 
@@ -250,9 +254,15 @@ def test_each_grant_has_its_own_limit(connected):
     (b'{"jsonrpc": "2.0", "id": 1, "method": "ping", "params": ' + b'[' * 30000 + b']' * 30000 + b'}', None),
 ])
 def test_a_message_that_isnt_one_json_rpc_request_is_400(connected, raw, code):
-    refused = mcp(connected, raw, access(connected))
+    # a server error answers 500 here, so a regression fails at once: raised, pytest's report of the deep row spins for
+    # minutes (the section 2 re-check's nit 1)
+    refused = mcp(connected, raw, access(connected), raise_server_exceptions=False)
     assert refused.status_code == 400 and refused.json()['id'] is None and set(refused.json()) == {'jsonrpc', 'id', 'error'}
-    assert refused.json()['error']['code'] == code if code is not None else refused.json()['error']['code'] in (-32700, -32600)
+    assert refused.json()['jsonrpc'] == '2.0'
+    if code is None:  # the deep row: Python 3.14's json.loads takes it, and the UTF-8 walk's RecursionError answers
+        code = -32600 if sys.version_info >= (3, 14) else refused.json()['error']['code']
+        assert code in (-32700, -32600)
+    assert refused.json()['error']['code'] == code
 
 
 def test_an_unknown_method_or_tool_is_a_json_rpc_error(connected):
@@ -283,7 +293,6 @@ def test_a_tool_call_gets_the_grant_bearer_gave(connected, monkeypatch):
         (grant['person_id'], grant['rooms'], name, arguments)) or {'ok': True})
     mcp(connected, rpc('tools/call', {'name': 'search', 'arguments': {'query': 'plan'}}), access(connected))
     mcp(connected, rpc('tools/call', {'name': 'rooms'}), access(connected))  # no arguments: an empty object
-    import json
     assert seen == [(connected.person['id'], json.dumps(connected.rooms), 'search', {'query': 'plan'}),
                     (connected.person['id'], json.dumps(connected.rooms), 'rooms', {})]
 

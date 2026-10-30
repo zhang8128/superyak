@@ -438,7 +438,12 @@ Origin; the consent page's posts keep it.
   isn't one JSON-RPC message (an escaped lone surrogate included) 400 with `-32700` or `-32600`. `tools/call` is limited
   to 60 a minute and 2,000 a day per connection: over either, 429 with `Retry-After`. A result carries
   `structuredContent` and the same JSON as text; a refusal is a result with `isError: true` and one sentence. The four
-  tools (`rooms`, `read_room`, `search`, `fetch`) are read-only.
+  tools (`rooms`, `read_room`, `search`, `fetch`) are read-only and read only rooms on this home that the connection's
+  person chose, is still in, and nobody has marked, asked again at every call. A refusal is one sentence: the room is
+  kept away from cloud models, isn't shared, is on another home, or "No such room.". Every call writes a receipt
+  (room ids, never an argument), and the limit is counted from them, so it holds across a restart. A result is cut at a
+  message or room boundary at 100,000 characters with `truncated` and the cursor to continue; one message alone past
+  that is kept with its text cut and `text_cut`, the number of characters left out.
 
 ## Grants
 

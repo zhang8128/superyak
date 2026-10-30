@@ -89,6 +89,10 @@ class DispatchGate(AbstractContextManager):
             raise
         return self
 
+    def held(self):
+        """Whether this thread holds the gate now (store-wal-mode D3: a gate-free read refuses to run inside it)."""
+        return getattr(self.state[1], 'depth', 0) > 0
+
     def __exit__(self, *args):
         lock, local = self.state
         local.depth -= 1

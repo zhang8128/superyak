@@ -18,6 +18,7 @@ import pytest
 from superyak_peer import backups
 from superyak_peer.__main__ import main as cli
 from superyak_peer.db import Store
+from superyak_peer.journal_mode import header_mode, switch_journal
 
 HOLD = ('import fcntl, os, sys, time\n'
         'fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR)\n'
@@ -523,3 +524,60 @@ def test_the_copy_and_its_folder_are_fsynced(tmp_path, monkeypatch):
     written = backups.run_backup(store.data_dir, rotation)
     stamp = backups.COPY_NAME.fullmatch(written.name)[1]
     assert calls == [(rotation / f'.peer-{stamp}-{os.getpid()}.tmp', []), (rotation, [written.name])]
+
+
+def wal_station(tmp_path):
+    """station(), switched to WAL as the live store will be (store-wal-mode Task 2)."""
+    store, rotation = station(tmp_path)
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    return store, rotation
+
+
+def test_a_copy_of_a_wal_store_is_one_rollback_file_with_every_commit(tmp_path):
+    """Store-wal-mode D4: a copy of a WAL store is one self-contained rollback-mode file. The backup API reads through
+    the -wal, so a commit that is only there is in the copy, and a read-only open of the copy leaves no sidecars.
+    Mutation: no journal_mode=DELETE on the copy (it keeps the WAL flag)."""
+    store, rotation = wal_station(tmp_path)
+    keeper = sqlite3.connect(store.db_path)  # an open connection keeps the next commit in the -wal, unchecked
+    keeper.execute('SELECT 1 FROM system_meta').fetchone()
+    try:
+        store.create_user('late', 'Late', 'long-password-late')
+        assert os.path.getsize(f'{store.db_path}-wal') > 0
+        written = backups.run_backup(store.data_dir, rotation, clock=lambda: NOW)
+    finally:
+        keeper.close()
+    assert header_mode(written) == 'delete' and ok(written)
+    with closing(sqlite3.connect(f'{written.as_uri()}?mode=ro', uri=True)) as copy:
+        assert copy.execute("SELECT count(*) FROM users WHERE username='late'").fetchone()[0] == 1
+    assert sorted(p.name for p in written.parent.iterdir() if p.name.startswith(written.name)) == [written.name]
+
+
+def test_a_stray_tmp_wal_is_pruned(tmp_path):
+    """Store-wal-mode D4: a crash mid-check can leave a temporary file's -wal or -shm; they are named and pruned as its
+    -journal is. Mutation: TEMP_NAME without the -wal and -shm names."""
+    for name in ('.peer-x.tmp-wal', '.peer-x.tmp-shm', '.peer-x.tmp-journal', '.peer-x.tmp'):
+        assert backups.TEMP_NAME.fullmatch(name), name
+    tmp = tmp_path / '.peer-x.tmp'
+    for suffix in ('', '-journal', '-wal', '-shm'):
+        Path(f'{tmp}{suffix}').write_bytes(b'')
+    backups._remove_temporary(tmp)
+    assert list(tmp_path.iterdir()) == []
+    old = time.time() - backups.TEMP_MAX_AGE - 60
+    for suffix in ('-wal', '-shm'):
+        stray = tmp_path / f'.peer-old.tmp{suffix}'
+        stray.write_bytes(b'')
+        os.utime(stray, (old, old))
+    backups.prune(tmp_path, time.time())
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_copy_sqlite_will_not_make_a_single_file_fails(tmp_path):
+    """Store-wal-mode D4: SQLite answers the mode it is in, so a copy it would not take out of WAL is a failed copy, not
+    a published one."""
+    class Stuck:
+        def execute(self, sql):
+            return type('Row', (), {'fetchone': lambda self: ('wal',)})()
+    with pytest.raises(backups.BackupError) as failed:
+        backups._as_single_file(Stuck())
+    assert failed.value.code == 1 and 'wal' in str(failed.value)
+

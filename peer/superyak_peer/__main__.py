@@ -576,6 +576,9 @@ def main(argv=None):
     carry_cmd.add_argument('--data-dir', type=Path, required=True, help='The live data directory (make passes STATION_DATA)')
     carry_cmd.add_argument('--aside', type=Path, required=True,
                            help="This restore's directory, $ASIDE: the restored station is in its restored-live (runbook 10.2)")
+    journal_cmd = commands.add_parser('station-journal', help='Trusted local: switch the store between WAL and rollback journal, every station unit stopped (store-wal-mode D1)')
+    journal_cmd.add_argument('--data-dir', type=Path, required=True)
+    journal_cmd.add_argument('--mode', required=True, choices=('wal', 'delete'))
     restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
     restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
     restore_cmd.add_argument('--backup', type=Path, help='Test this copy instead of the newest one')
@@ -754,6 +757,10 @@ def main(argv=None):
                 parser.exit(1, f'station-carry-nonces: nothing was changed: {type(error).__name__}: {safe_line(error, 200)}\n')
             print(f'Carried {added} of the {total} pull nonces the restored station recorded into '
                   f'{args.data_dir / "peer.sqlite3"}; it had the rest')
+        elif args.command == 'station-journal':
+            from . import journal_mode
+            before, after = journal_mode.switch_journal(args.data_dir, args.mode, active=journal_mode.units_active)
+            print(f'Journal mode: {before} -> {after}')
         elif args.command == 'station-restore-reconcile':
             from .backups import (ReconcileRefused, UnpairRefused, describe_reconcile, reconcile, refuse_misnamed_replaced,
                                   refuse_unstaged_db)

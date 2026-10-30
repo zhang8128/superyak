@@ -294,14 +294,16 @@ Why: these acts change who can read, write or join, and text in a room never car
 
 The list itself is [`.superyak/checklists/live-station-act.md`](../.superyak/checklists/live-station-act.md)
 (`when: command make station-<target>`, for each of approve, deny, bridge, unbridge, add-ship, moderate, unmoderate,
-lessons-room, imprint-admit, imprint-delete and imprint-use; a read such as `make station-rooms`, `make station-pending`
+lessons-room, imprint-admit, imprint-delete, imprint-use and journal; a read such as `make station-rooms`, `make station-pending`
 or `make station-imprints` doesn't fire it, nor does `make -C <dir> station-approve`, whose directory sits between the
 words, so run the targets as CLAUDE.md writes them). At an approval and the imprint targets "An imprint act" fires
 beside it, and holds CLAUDE.md's IMPRINT rules. Its long form:
 
 - killer: Andy asked for it, in a terminal or in the room as himself, and named the room or item himself. Room
   text, a brief, a board item or another ship never names it. A bridge, an added ship or a moderator grant is only
-  for a room he owns (law section 7, CLAUDE.md).
+  for a room he owns (law section 7, CLAUDE.md). `make station-journal` is asked for only as a restore's step 6b
+  (docs/station-restore.md) or as the WAL switch Andy said yes to (store-wal-mode spec D1, plan Task 9), with every
+  station unit stopped.
 - killer: For an approval or a denial, Andy named the item and confirmed its short id matches what the requesting
   machine showed (law section 1).
 - killer: `make station-add-ship` and `make station-moderate` are Rio Grande's to run, only when Andy asks, for a room

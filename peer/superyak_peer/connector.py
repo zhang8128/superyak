@@ -83,6 +83,7 @@ CHALLENGE = re.compile(r'[A-Za-z0-9_-]{43}')  # an S256 challenge: base64url of 
 APP_NAMES = {'claude.ai': 'Claude', 'claude.com': 'Claude'}  # the consent page names an app by its redirect host
 CODE_SECONDS = 60
 ACCESS_SECONDS = 3600  # an access token's hour, never past its grant's end (spec, "Tokens")
+RECEIPT_YEAR = 365 * 86400  # a read receipt is kept while its grant lives, plus this (spec "Receipts")
 REUSE_SECONDS = 60  # a rotated refresh token presented again within this gets a new pair; later revokes the grant
 REVOKED = 0  # a revoked token's end: a fixed past time, never "now", which a clock that steps back would reopen (S1)
 VERIFIER_FORM = re.compile(r'[A-Za-z0-9._~-]{43,128}')  # RFC 7636 4.1
@@ -500,7 +501,8 @@ class Connector:
 
     def bearer(self, token, resource):
         """An access token's grant, checked on every call: its hash known and unexpired, its resource this one, its grant
-        live and its person active. {grant_id, person_id, rooms, scope}, or None. A refresh token is no bearer."""
+        live and its person active. {grant_id, person_id, rooms, scope, resource, token}, or None, `token` being its hash.
+        A refresh token is no bearer."""
         from .auth import token_hash
         if not isinstance(token, str) or not token.startswith('syc_at_'):
             return None
@@ -512,12 +514,8 @@ class Connector:
             grant = self._live_grant(db, row['grant_id'], now)
             if grant is None:
                 return None
-            return {'grant_id': grant['id'], 'person_id': grant['person_id'], 'rooms': grant['rooms'], 'scope': row['scope']}
-
-    def connector_call(self, grant, name, arguments):
-        """One tools/call for a grant as `bearer` gave it: the tool's result, or ToolRefused. Task 8 builds the four
-        tools here; until then every call answers {'ok': True}."""
-        return {'ok': True}
+            return {'grant_id': grant['id'], 'person_id': grant['person_id'], 'rooms': grant['rooms'], 'scope': row['scope'],
+                    'resource': row['resource'], 'token': row['hash']}  # the hash, so the call can check it again
 
     def _consent_rooms(self, db, person_id):
         """The person's rooms on this home as the consent page offers them: each current room, its earlier parts
@@ -541,7 +539,8 @@ class Connector:
         token of a grant that has ended or was revoked (the section 2's S6: a live grant keeps its used and rotated-out
         refresh tokens, which the reuse checks read); and (Task 5's line of the plan, which its build left out until
         here) the client rows of clients whose grants have all ended 30 days ago and that have no undecided sign-in, whose
-        ids then work again as unused ones. Task 8 adds the receipts."""
+        ids then work again as unused ones; and (Task 8, spec "Receipts") each read receipt a year past its grant's end,
+        or, when its grant is gone (a restore removed it), a year past when it was made."""
         now = self.clock()
         db.execute('DELETE FROM oauth_pending WHERE at<=? AND (code_expires IS NULL OR code_expires<=?)',
                    (now - PENDING_SECONDS, now))
@@ -554,6 +553,10 @@ class Connector:
                    'AND NOT EXISTS (SELECT 1 FROM oauth_pending WHERE oauth_pending.client_id=oauth_clients.client_id '
                    'AND oauth_pending.decided IS NULL)',
                    (now - 30 * 86400,))
+        db.execute('DELETE FROM connector_reads WHERE at<? AND NOT EXISTS (SELECT 1 FROM connector_grants WHERE '
+                   'connector_grants.id=connector_reads.grant_id AND '
+                   'coalesce(min(connector_grants.revoked, connector_grants.ends), connector_grants.ends) >= ?)',
+                   (now - RECEIPT_YEAR, now - RECEIPT_YEAR))
 
     def known_client(self, db, client_id, callback):
         """Spec revision 4's one check, in order: a row with exactly this id is that client (so a key rotation or a
