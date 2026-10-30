@@ -27,8 +27,11 @@ def header_mode(path):
 
 
 def units_active():
-    """The station units that are running or changing state, one `systemctl --user is-active` per unit. A systemctl
-    that can't answer (an exit other than 0 or 3, or no state printed) refuses: the switch fails closed."""
+    """The station units that are running or changing state, one `systemctl --user is-active` per unit, decided by the
+    state it prints (it exits 3 for `activating` and `deactivating`), and any exit 0 counts as running whatever the
+    state. A systemctl that can't answer (an exit other than 0 or 3, or no state printed) refuses: the switch fails
+    closed. A unit that isn't loaded reads `inactive`, so a renamed unit isn't caught here:
+    test_every_station_service_is_stopped_first keeps STATION_UNITS_TO_STOP in step with peer/systemd."""
     active = []
     for unit in STATION_UNITS_TO_STOP:
         try:
@@ -38,14 +41,14 @@ def units_active():
         state = done.stdout.strip()
         if done.returncode not in (0, 3) or not state:
             raise ValueError(f'systemctl could not say whether {unit} is running (exit {done.returncode})')
-        if state in RUNNING:
+        if state in RUNNING or done.returncode == 0:
             active.append(unit)
     return active
 
 
 def _store_path(data_dir):
     data_dir = Path(data_dir).absolute()
-    if data_dir.is_symlink() or any((data_dir / name).is_symlink() for name in NAMES):
+    if data_dir.is_symlink() or any((data_dir / name).is_symlink() for name in NAMES + ('dispatch.lock',)):
         raise ValueError('Symlinked state is not allowed')
     database = data_dir / 'peer.sqlite3'
     if not database.is_file():
@@ -68,16 +71,19 @@ def switch_journal(data_dir, mode, *, active=None, retry_seconds=10.0, clock=tim
     running = (active or units_active)()
     if running:
         raise ValueError(f'Stop every station unit first; still running: {", ".join(running)}')
-    before = header_mode(database)
-    deadline = clock() + retry_seconds
     with DispatchGate(Path(data_dir).absolute() / 'dispatch.lock'):
+        before = header_mode(database)
+        deadline = clock() + retry_seconds  # from inside the gate, so a long wait for it still leaves the retries
         while True:
-            db = sqlite3.connect(database.as_uri() + '?mode=rw', uri=True, timeout=0.1)
+            try:
+                db = sqlite3.connect(database.as_uri() + '?mode=rw', uri=True, timeout=0.1)
+            except sqlite3.Error as error:
+                raise ValueError(f'SQLite refused the switch: {error}; nothing was changed') from None
             try:
                 answer = _set_mode(db, mode)
                 break
-            except sqlite3.OperationalError as error:
-                if 'locked' not in str(error):
+            except sqlite3.Error as error:  # a damaged header is a DatabaseError: "file is not a database"
+                if not (isinstance(error, sqlite3.OperationalError) and 'locked' in str(error)):
                     raise ValueError(f'SQLite refused the switch: {error}; nothing was changed') from None
                 if clock() >= deadline:
                     raise ValueError(f'The store stayed locked for {retry_seconds:g} s; nothing was changed') from None

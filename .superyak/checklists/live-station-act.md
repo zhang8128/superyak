@@ -1,8 +1,8 @@
 ---
 id: live-station-act
 title: A live station act
-when: command make station-approve; command make station-deny; command make station-bridge; command make station-unbridge; command make station-add-ship; command make station-moderate; command make station-unmoderate; command make station-lessons-room; command make station-imprint-admit; command make station-imprint-delete; command make station-imprint-use
-version: 1
+when: command make station-approve; command make station-deny; command make station-bridge; command make station-unbridge; command make station-add-ship; command make station-moderate; command make station-unmoderate; command make station-lessons-room; command make station-imprint-admit; command make station-imprint-delete; command make station-imprint-use; command make station-journal
+version: 2
 owner: ships of this repository
 see: docs/checklists.md#a-live-station-act-bridge-add-a-ship-moderate-approve-or-deny
 ---
