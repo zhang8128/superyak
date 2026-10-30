@@ -39,8 +39,8 @@ Only two places take the gate explicitly (federation.py:362 and :482), and each 
 The promise orders commits against the network write. But the gate also serializes things outside SQLite: identity
 creation (a file), the imprint sweep's filesystem acts, `_pending_imprints` reading staged files, and in-memory state
 such as `directory`'s `_inbox_budget`. So the line this spec draws is: **a read with no side effect anywhere (no commit,
-no file, no process, no shared memory) may leave the gate, and only in WAL mode; everything else stays inside.** In WAL a
-gate-free read sees one snapshot taken between two commits, so it never sees a half-done push.
+no file, no process, no shared memory) may leave the gate, and only in WAL mode; everything else stays inside.** In WAL
+a gate-free read sees one snapshot taken between two commits, so it never sees a half-done push.
 
 ## Goals
 
@@ -85,10 +85,10 @@ gate-free read sees one snapshot taken between two commits, so it never sees a h
    other connection is open);
 4. checks that the PRAGMA's answer is the mode asked for, prints the mode before and after, and is safe to run twice.
 
-The mode is a property of the file and persists. The lighthouse never switches it. Going back to `delete` checkpoints the
-WAL into the main file and removes the sidecars, which is this change's rollback, safe because `reading()` takes the gate
-again in rollback mode (D3). Switching the live store is a named act (N5): Andy, or a ship with his yes in the room,
-runs it with everything stopped, measures before and after (Measure), and posts both.
+The mode is a property of the file and persists. The lighthouse never switches it. Going back to `delete` checkpoints
+the WAL into the main file and removes the sidecars, which is this change's rollback, safe because `reading()` takes
+the gate again in rollback mode (D3). Switching the live store is a named act (N5): Andy, or a ship with his yes in the
+room, runs it with everything stopped, measures before and after (Measure), and posts both.
 
 Runbook step 3's list of stopped units gains the imprint-sweep and lessons-index timers, which it misses today.
 
