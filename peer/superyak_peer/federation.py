@@ -508,7 +508,7 @@ class Federation:
 
     def _pull_left(self, origin):
         """_serve_pull's remainder count: the origin's rows still waiting after the walk."""
-        with self.store.transaction() as db:
+        with self.store.reading() as db:
             return db.execute(f"SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed') AND {THEIRS}",
                               (origin,)).fetchone()[0]
 
