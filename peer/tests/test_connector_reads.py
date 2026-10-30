@@ -572,6 +572,7 @@ def test_fetch_stays_under_the_cap_measured_on_its_whole_json(connected):
     assert len(result['content'][0]['text']) <= TEXT_CAP
     line = json.loads(ok(result)['text'])
     assert line['id'] == alone and line['text_cut'] == 20000 - len(line['text']) > 0
+    assert ok(result)['truncated'] is True  # N8: fetch says it was cut when its one message was
 
 
 def test_a_revoke_or_a_narrowing_mid_call_is_seen_inside_the_read(connected, monkeypatch):
@@ -625,3 +626,28 @@ def test_an_access_token_revoked_mid_call_is_seen_inside_the_read(connected, mon
                  connected.tokens['access_token'])
     assert answer.status_code == 401 and 'after the token went' not in answer.text
 
+
+
+def test_the_token_rechecked_in_the_call_is_bound_to_its_grant(connected):
+    """Task 8's re-check, nit 2: _still_live read the token by hash and the grant by id apart. A token of another live
+    connection beside this grant's id is no token for it."""
+    import pytest
+    from connector_support import allowed, exchange
+    from superyak_peer.connector_reads import GrantGone
+    from connector_support import RESOURCE_URL
+    client, code = allowed(connected, state='st-other')
+    other = connected.store.bearer(exchange(connected, client, code).json()['access_token'], RESOURCE_URL)
+    mine = connected.store.bearer(connected.tokens['access_token'], RESOURCE_URL)
+    with pytest.raises(GrantGone):
+        connected.store.connector_call(mine | {'token': other['token']}, 'rooms', {})
+
+
+def test_a_cut_message_with_the_longest_author_name_stays_under_the_cap(connected):
+    """Tardis's unverified case: a paired home's name is at most 200 characters (identity.validate_card), each control
+    character six as JSON, so a cut message's floor stays far under the cap, in read_room and fetch alike."""
+    from superyak_peer.connector_reads import TEXT_CAP
+    remote_member(connected, connected.rooms[0], name=chr(1) * 200)
+    connected.clock[0] += 1
+    huge = remote_says(connected, connected.rooms[0], chr(1) * 20000)
+    for result in (call(connected, 'read_room', room=connected.rooms[0]), call(connected, 'fetch', id=huge)):
+        assert len(result['content'][0]['text']) <= TEXT_CAP and ok(result)

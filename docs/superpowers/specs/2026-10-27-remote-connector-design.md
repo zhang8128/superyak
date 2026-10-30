@@ -318,7 +318,8 @@ Every result follows these rules (D11):
 - It comes as `structuredContent`, with the same JSON as text in `content`. Results stay JSON, never text mixed into
   prose.
 - It is cut at a message boundary at 100,000 characters (Claude takes about 150,000), with `truncated: true` and the
-  cursor to continue from: `before` for a backward read, `seq` for a `since` read.
+  cursor to continue from: `before` for a backward read, `seq` for a `since` read. One message alone past that is kept
+  with its text cut and `text_cut`, the number of characters left out, so the cursor always moves past it.
 - A refusal is a tool result with `isError: true` and one plain sentence:
   - a marked room: "A member of this room keeps it away from cloud models."
   - a room outside the grant's set: "This room isn't shared with Claude. You can add it in Connected apps on your
