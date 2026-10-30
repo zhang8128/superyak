@@ -20,7 +20,9 @@ stdlib when imported).
 **Spec:** `docs/superpowers/specs/2026-10-29-store-wal-mode-design.md` (revision 2 as amended by its re-check,
 approved under law section 3). Research: `docs/research/2026-10-29-store-wal-research.md`.
 
-**Revision 2** of this plan applies its fresh review (must-fixes M1 to M7, should-fixes S1 to S13, nits): named
+**Revision 2** of this plan applies its fresh review (must-fixes M1 to M7, should-fixes S1 to S13, nits), and is
+amended by its re-check (approved with changes, applied as written: the five named services in the unit list, the
+rollback-only marks in Task 4, the timers disabled and kept off the watcher lines, Tardis's pinned pull replay test): named
 helpers for the inline reads, a transitive caller check and a nesting refusal in both modes, the suite run in WAL too,
 the snapshot test, the timers restored at step 8, a per-call wait and an async single-flight for health, and the long
 gate holds measured before bounded health merges.
@@ -58,8 +60,9 @@ gate holds measured before bounded health merges.
   received imprint, a failing push peer): its gate-held test seeds those rows and compares a dump hash (Task 5).
 - A backup taken while the newest commit is only in the `-wal`, then the station is killed before a checkpoint: the
   copy holds the commit and needs no sidecar (Task 2).
-- A production path that reaches a moved function while holding the gate, through a helper, a callback or a method
-  passed as a value: the transitive caller check finds it, and the refusal raises in both modes (Tasks 4 and 5).
+- A production path that reaches a moved function while holding the gate, through a helper or a method passed as a
+  value: the transitive caller check finds it; a callback called only by its parameter name it can't see, and there the
+  refusal raises at run time in both modes (Tasks 4 and 5).
 - Health under a flood while the gate is held for more than 3 s: one gate wait in all, 503s within 3 s, another sync
   route not delayed, and a check arriving mid-wait gets the same answer as the leader (Task 8).
 
@@ -75,7 +78,9 @@ gate holds measured before bounded health merges.
 
 **Interfaces:**
 - Produces: `DispatchGate.held(self) -> bool` (this thread's depth > 0).
-- Produces: `STATION_UNITS_TO_STOP: tuple[str, ...]`, every unit in `peer/systemd/*.service` except `superyak-alert@`.
+- Produces: `STATION_UNITS_TO_STOP: tuple[str, ...]`: `superyak-lighthouse`, `superyak-door`, `superyak-ship`,
+  `superyak-odo` and `superyak-wormhole` (their unit files live outside the repo), plus every unit in
+  `peer/systemd/*.service` except `superyak-alert@`.
 - Produces: `header_mode(path: Path) -> str`: `'wal'` when bytes 18-19 are `2 2`, else `'delete'` (a short or
   unreadable header counts as not WAL), read with a plain `open()`.
 - Produces: `units_active() -> list[str]`: one `systemctl --user is-active <unit>` per unit; `active`, `activating`,
@@ -92,22 +97,28 @@ gate holds measured before bounded health merges.
   (the directory listing unchanged each time); `test_refuses_while_a_unit_is_active` (the message names it, mode
   unchanged); `test_units_active_reads_systemctl` (a stub `systemctl` on PATH printing each state in turn: the five
   active states count, `inactive` and `failed` don't, exit 1 or a missing line raises); `test_every_station_service_is
-  _stopped_first` (`STATION_UNITS_TO_STOP` equals the `peer/systemd/*.service` names minus `superyak-alert@`);
+  _stopped_first` (`STATION_UNITS_TO_STOP` holds the five named services and is a superset of the
+  `peer/systemd/*.service` names minus `superyak-alert@`);
   `test_retries_locked_then_gives_up_unchanged`, in both directions (WAL to `delete` blocked by an idle open
   connection; `delete` to WAL blocked by a reader holding `BEGIN` mid-read), with a fake clock: ValueError after 10 s,
   `header_mode` unchanged; `test_switch_holds_the_gate`; `test_cli_prints_before_and_after` (with `active` stubbed
   through the module, not by patching a bound default).
 - [ ] **Step 2: Run** `cd peer && uv run --locked python -m pytest -q tests/test_journal_mode.py` — expect failures.
-- [ ] **Step 3: Implement** `journal_mode.py` (stdlib only) and `DispatchGate.held`. Connect with
-  `sqlite3.connect(f'file:{path}?mode=rw', uri=True, timeout=0.1)` inside `DispatchGate(data_dir / 'dispatch.lock')`
-  (entered only after checking the file exists); on "database is locked" sleep 0.2 s and retry until `retry_seconds`.
+- [ ] **Step 3: Implement** `journal_mode.py` (stdlib only) and `DispatchGate.held`. Connect with a `mode=rw` URI
+  built as backups.py's `_read_only` builds its URI (quoting `?`, `#` and `%`), `timeout=0.1`, inside
+  `DispatchGate(data_dir / 'dispatch.lock')` (entered only after checking the file exists); on "database is locked" sleep 0.2 s and retry until `retry_seconds`.
   The CLI prints `Journal mode: <before> -> <after>` and exits 1 with the reason on any refusal. Makefile
   `station-journal:` requires `MODE=` and passes `--data-dir "$(STATION_DATA)"`.
-- [ ] **Step 4: Runbook steps 3 and 8.** Step 3 records each of `superyak-imprint-sweep.timer` and
-  `superyak-lessons-index.timer`'s state (one `systemctl --user is-active` per unit) to `$ASIDE/timers.txt`, as it
-  does for watchers, then stops each timer and its `.service`; step 8 restarts only those recorded active. A timer not
-  installed (as on this Pi) records nothing and is left alone. Extend the existing step 3 and step 8 runbook test with
-  an installed and an absent timer.
+- [ ] **Step 4: Runbook steps 3 and 8.** Step 3 gains its own lines, not edits to the watcher lines: for each of
+  `superyak-imprint-sweep.timer` and `superyak-lessons-index.timer`, one `systemctl --user is-enabled` call (a missing
+  unit prints nothing and exits 1; `is-active` can't tell missing from inactive), recording the enabled ones to
+  `$ASIDE/timers.txt`; then each recorded timer is disabled and stopped, with its `.service` stopped, since both are
+  `WantedBy=timers.target` and a reboot mid-restore would start them on a half-restored store. They don't use the
+  watchers' `list-units --all --plain --no-legend` form, which test_station_units picks out as the one capture line.
+  Step 8 gains new lines after the two watcher lines, reading only `timers.txt`, that enable and start each recorded
+  timer; the two watcher lines and the `is-active` check line stay byte for byte, so the carry branch's 10.4 copies need
+  no change. Extend the existing step 3 and step 8 runbook test with an installed and an absent timer. Guard every new
+  line with `[ -d "$ASIDE" ]`.
 - [ ] **Step 5: Run** the tests above, `tests/test_station_units.py` and `tests/test_restore.py` — expect PASS.
 - [ ] **Step 6: Commit** `station-journal: the journal mode switched under the gate, decided by SQLite's lock`.
 
@@ -185,12 +196,14 @@ gate holds measured before bounded health merges.
   `Store.transaction(self, *, wait: float | None = None)` (a per-call SQLite busy wait; None keeps the Store's rule).
 - Produces: the environment variable `SUPERYAK_TEST_JOURNAL=wal`: an autouse fixture switches every Store a test
   creates to WAL right after it is made; tests that pin rollback mode carry `@pytest.mark.journal('delete')` and are
-  skipped in a WAL run.
+  skipped in a WAL run. This task marks every such test that exists (the research's list, and Tasks 1 to 3's tests
+  that start from a rollback store), so the first WAL run (Step 4) can pass; Task 7 adds their WAL twins.
 
 - [ ] **Step 1: Write the failing tests**: `test_reading_takes_no_gate_in_wal` (another thread holds the gate and an
   open `BEGIN IMMEDIATE` write; a `reading()` SELECT returns within 50 ms); `test_reading_takes_the_gate_in_rollback_
-  mode`; `test_one_reading_is_one_snapshot` (two SELECTs in one `reading()` see the same count while another thread
-  commits a row between them); `test_an_open_snapshot_does_not_delay_a_gated_commit_in_wal` (a `reading()` held 300 ms;
+  mode`; `test_one_reading_is_one_snapshot` (on a WAL store it builds itself: two SELECTs in one `reading()` see the same
+  count while another thread commits a row between them; in rollback mode the commit would wait, so this test is WAL
+  only); `test_an_open_snapshot_does_not_delay_a_gated_commit_in_wal` (a `reading()` held 300 ms;
   an INSERT on another thread commits within 50 ms); `test_reading_refuses_a_held_gate_and_nesting_in_both_modes`
   (parametrized `wal`/`delete`: inside `transaction()`, inside `dispatch_gate`, and inside another `reading()`, each
   raises before connecting); `test_transaction_refuses_inside_reading`; `test_transaction_works_after_a_reading_that_
@@ -204,8 +217,10 @@ gate holds measured before bounded health merges.
 - [ ] **Step 3: Implement** `reading()`: first refuse if `self.dispatch_gate.held()` or the thread-local depth is above
   0; then `_check_paths()`; connect; `PRAGMA query_only=ON`, `foreign_keys=ON`, `journal_size_limit=67108864`; read
   `PRAGMA journal_mode`; in `wal`, a deferred `BEGIN` with no gate; otherwise enter `self.dispatch_gate`, compute the
-  busy wait after entering it as `_transaction()` does, then `BEGIN`; increment the depth only after both succeed, and
-  decrement it in `finally`; roll back and close in `finally`; map exceptions as `_transaction()`. The docstring
+  busy wait after entering it as `_transaction()` does, then `BEGIN`; increment the depth only after both succeed, in a
+  `try` whose own `finally` decrements it, so a failure before the increment never decrements; roll back and close in
+  `finally`; a test makes `_check_paths` raise, then checks the depth is 0 and that `transaction()` inside a later
+  `reading()` still raises; map exceptions as `_transaction()`. The docstring
   forbids holding it across an `await` or in a yield dependency. `transaction()` raises RuntimeError('a write inside
   reading()') when the depth is above 0. `_station_identity`: if identity.json is missing and
   `not self.dispatch_gate.held()`, raise RuntimeError before `load_or_create`. The conftest fixture and marker.
@@ -228,7 +243,9 @@ gate holds measured before bounded health merges.
 - Consumes: `Store.reading()` (Task 4), `switch_journal` (Task 1).
 - Produces: `MOVED_READS: tuple[str, ...]` in `test_reading_moves.py`, the qualified names above, written literally.
 - Stays gated, by name: `directory`, `station_pending`, health, every lessons function, `active_layer`,
-  `shared_layers`, `preview_layer`, `can_deliver_layer`, and every lazily writing read.
+  `shared_layers`, `preview_layer`, `can_deliver_layer`, every lazily writing read, and in `serve_pull` the paired-peer
+  read (federation.py:425-426) and the one `BEGIN IMMEDIATE` transaction holding the prune, `_replay_floor`, the
+  `pull_nonces` lookup and its INSERT (:433-443), which decide a write.
 
 - [ ] **Step 1: Write the failing tests**: `test_each_moved_read_runs_while_the_gate_and_a_write_are_held`,
   parametrized over `MOVED_READS`. A fixture `busy_wal_store(tmp_path)` builds a WAL store seeded with a quiet
@@ -242,6 +259,11 @@ gate holds measured before bounded health merges.
   `with ...transaction()`, `with ...dispatch_gate`, `bounded(...)`, `with gate or nullcontext()` or `reading()` block,
   with one named allowance for the false positive the review found on main. `test_inbox_budget_is_locked`: the cap
   patched high, an advancing clock and `sys.setswitchinterval(1e-6)`, two threads of 10,000 updates; 20,000 entries.
+  `test_one_signed_pull_served_twice_at_once_is_one_replay` (Tardis's pin, in both modes): two threads serve the same
+  signed pull request; `_replay_floor` is patched so each caller signals and then waits up to 0.3 s for the other (the
+  correct code proceeds after 0.3 s because the second caller can't enter; a barrier would deadlock it); exactly one
+  is served, the other answers 409 with the message `Replay`, there is exactly one `pull_nonces` row, and no 500 (a
+  split check would reach the primary key as an IntegrityError, or the per-origin lock as `409 Busy`).
 - [ ] **Step 2: Run** them — expect every gate-held case to time out at its join, and the budget test to lose entries.
 - [ ] **Step 3: Extract** the four federation helpers first (one commit, no behaviour change, existing tests pass).
   Then move each function's `with self.transaction() as db:` to `with self.reading() as db:`, one function per
@@ -321,10 +343,12 @@ gate holds measured before bounded health merges.
   200 concurrent health checks, and a sync route that takes no gate answers within 100 ms); `test_a_check_after_the_
   gate_frees_answers_200`; `test_health_still_reads_the_store` (no system_meta answers 500, as today).
 - [ ] **Step 2: Run** them — expect failures.
-- [ ] **Step 3: Implement**: `async def health()`; the leader runs the gated read in `run_in_threadpool` under
-  `store.dispatch_gate.bounded(now + 3)` and `store.transaction(wait=3)`, and sets an asyncio future; followers await
-  the in-flight future; `GateTimeout` and "locked" answer 503 `{'ok': False}`. Add `health` to the event-loop guard's
-  walk if it isn't covered.
+- [ ] **Step 3: Implement**: `async def health()`; the single flight is its own asyncio task, created by the first
+  check and awaited by every check with `asyncio.shield`, so a request that disconnects never cancels it. The task runs
+  the gated read in `run_in_threadpool`, and the function handed to the threadpool enters
+  `store.dispatch_gate.bounded(now + 3)` itself (the bound is per thread) before `store.transaction(wait=3)`;
+  `GateTimeout` and "locked" answer 503 `{'ok': False}`. Add `health` to the event-loop guard's walk if it isn't
+  covered.
 - [ ] **Step 4: Run** `tests/test_health.py tests/test_event_loop.py` and agent's route_watch tests — expect PASS.
 - [ ] **Step 5: Commit** on its own branch, `Health: bounded at 3 s, one shared wait` (merged in Task 9).
 
@@ -350,7 +374,8 @@ gate holds measured before bounded health merges.
   (`make station-journal MODE=delete` with everything stopped). Nothing else in this task runs without it.
 - [ ] **Step 4: With the yes:**
   1. Deploy main, with Tasks 1 to 7 and Task 8 merged, to the Pi's checkout.
-  2. Make a fresh `ASIDE`, then stop everything with runbook step 3's lines.
+  2. Make a fresh `ASIDE` named `switch-<time>` (outside `replaced-*`, so no restore step mistakes it), then stop
+     everything with runbook step 3's lines.
   3. Run `make station-journal MODE=wal`.
   4. Start the station with step 8's lines, and read the lighthouse's stop time from the unit.
   5. Run `store_timing.py` again, post both tables, and watch health and route-watch for an hour.
