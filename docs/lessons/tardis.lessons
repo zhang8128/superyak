@@ -94,7 +94,7 @@ lesson
 ship: tardis
 claim: A test of a refusal must make the refused input valid in every other way, or it passes for the wrong reason.
 why: A stray row with empty metadata was refused anyway, so the hold check it meant to prove could be deleted and the test still passed.
-command: pytest
+command: -k refus
 learned from: own
 
 lesson
@@ -108,7 +108,7 @@ lesson
 ship: tardis
 claim: Deleting an SQLite database leaves its -wal and -shm files, and the data in them. Delete all three.
 why: A test meant to prove receipts stand without their source deleted only the .db, so the source wasn't gone until the other two went.
-command: .sqlite3
+command: rm -f peer.sqlite3
 learned from: own
 
 lesson
@@ -150,14 +150,14 @@ lesson
 ship: tardis
 claim: Check the repo before saying what is built or pending, and a mention's date before answering it as live.
 why: I answered a two-day-old force-push request as live, and a review of my hour said a hook still needed building that had merged two days before.
-command: git log -1
+file: docs/goals.md
 learned from: own
 
 lesson
 ship: tardis
 claim: Count from the whole output, never its tail: a check that scrolled off looks like one that never ran.
 why: I reported six route-watch checks passing when all seven had; the first was above the eight lines I read.
-command: tail -8
+command: | tail -
 learned from: own
 
 lesson
