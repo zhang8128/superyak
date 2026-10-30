@@ -18,6 +18,11 @@ from typing import NamedTuple
 from superyak_agent.acting import session_key
 
 HOLDS_PER_SESSION = 3
+# Spec lesson-holds-on-tool-calls, item 1: the hold's matcher is Bash plus each held tool every ship has confirmed on
+# its own Claude Code version (the deny's reason reaches the model, the deny's record shape, `agent_id` on a
+# subagent's call). None has been yet, so the matcher stays `Bash`; a tool joins here, and nowhere else.
+CONFIRMED_TOOLS = ()
+HOLD_MATCHER = '|'.join(('Bash',) + CONFIRMED_TOOLS)
 OUTPUT_CHARS = 9500          # hook.TOTAL_CHARS, pinned by a test
 LESSON_BYTES = 2000
 RECORD_SUFFIX = '.holds'

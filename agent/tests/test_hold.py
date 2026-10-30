@@ -181,7 +181,8 @@ def test_a_subagent_is_never_held(ship):
 
 
 @pytest.mark.parametrize('bad', [{'tool_name': 'Read'}, {'hook_event_name': 'PostToolUse'}, {'tool_input': {'command': 5}},
-                                 {'tool_input': 'git push'}, {'session_id': None}])
+                                 {'tool_input': 'git push'}, {'session_id': None},
+                                 {'tool_name': ['mcp__station__station_post']}, {'tool_name': 'mcp__station__station_postx'}])
 def test_anything_but_a_main_agents_bash_call_prints_nothing(ship, bad):
     assert hold.decide({**payload(ship, 'git push x'), **bad}, ship.home, 10.0, time.monotonic()) is None
 
@@ -533,3 +534,49 @@ def test_the_hold_is_named_in_help(capsys):
     with pytest.raises(SystemExit):
         entry.main(['--help'])
     assert 'hold' in capsys.readouterr().out
+
+
+# ---- Spec lesson-holds-on-tool-calls, Task B: the hold answers a held tool's call by the tool's name alone (items 2,
+# 5, 7, 8 and 11). ----
+LESSON = 'Held once: lesson L1 from tardis applies.\n[the fenced lesson]'
+
+
+def tool_payload(ship, tool, **extra):
+    return {'hook_event_name': 'PreToolUse', 'tool_name': tool, 'session_id': 's1', 'cwd': str(ship.repo),
+            'tool_input': {'room': 'r', 'text': 'git push origin main'}, **extra}
+
+
+@pytest.mark.parametrize('tool', sorted(lessons_hold.HELD_TOOLS))
+def test_a_held_tools_call_is_held_by_its_name_alone_and_says_call_it_again(ship, tool):
+    asked = []
+
+    def lessons(command, record, now, limit):
+        asked.append(command)
+        return [holds.Hold('lesson', f'lesson:{command}', LESSON)]
+    out = hold.decide(tool_payload(ship, tool), ship.home, 10.0, time.monotonic(), lessons=lessons)['hookSpecificOutput']
+    assert asked == [tool]   # the name, never the input's text, which here would match a checklist
+    assert out['permissionDecision'] == 'deny'
+    assert out['permissionDecisionReason'] == LESSON + '\n\nCall it again if you still want it.'
+
+
+def test_a_tool_call_asks_no_checklist(ship):
+    """Item 7: a list whose `when` names the tool fires at a Bash command holding the name, never at the tool's call."""
+    write_list(ship.repo / '.superyak' / 'checklists', 'at-a-post', when='command mcp__station__station_post',
+               items=('Read the post twice.',))
+    trust_dirs(ship.home / 'checklists', ship.repo / '.superyak' / 'checklists')
+    assert hold.decide(tool_payload(ship, 'mcp__station__station_post'), ship.home, 10.0, time.monotonic(),
+                       lessons=lambda *a: []) is None
+    bash = decide(ship, 'echo mcp__station__station_post', now=11.0, lessons=lambda *a: [])  # the control: it loads
+    assert 'Read the post twice.' in bash['hookSpecificOutput']['permissionDecisionReason']
+
+
+@pytest.mark.parametrize('tool', ['mcp__station__station_read', 'Edit', 'WebFetch'])
+def test_a_tool_that_isnt_held_is_never_held_whatever_a_lesson_says(ship, tool):
+    held = lambda *a: [holds.Hold('lesson', 'lesson:x', LESSON)]  # noqa: E731
+    assert hold.decide(tool_payload(ship, tool), ship.home, 10.0, time.monotonic(), lessons=held) is None
+
+
+def test_a_subagents_tool_call_is_never_held(ship):
+    held = lambda *a: [holds.Hold('lesson', 'lesson:x', LESSON)]  # noqa: E731
+    assert hold.decide(tool_payload(ship, 'AskUserQuestion', agent_id='a1'), ship.home, 10.0, time.monotonic(),
+                       lessons=held) is None

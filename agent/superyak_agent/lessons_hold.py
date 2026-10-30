@@ -134,10 +134,18 @@ def _candidates(command, record, now, limit, settings_path, env, monotonic, cloc
         return []  # only a head's first appearance asks, so a re-run passes straight through
     if could_hold(cut, settings['ship'], settings['data_dir']) is not True:
         return []  # no lesson's command value is in it: nothing more is read, no query, no receipt, nothing recorded
+
+    def given_up():
+        """A head that gave up after could_hold said yes may ask again, except a held tool's: its head never changes, so
+        each later call would wait out the budget again, and on a loaded Pi nothing would ever be held (lesson-holds
+        item 10, N-b). That head is recorded as asked."""
+        if cut in HELD_TOOLS:
+            record['lessons'] = {'heads': (heads + [digest])[-HEADS_MAX:], 'holds': keys}
+        return []
     own = lh.strings(lh.read_state(lh.state_path(settings, session_id)), 'shown')
     shown_there = lh.transcript_ids(session.get('transcript'), deadline, monotonic=monotonic)
     if shown_there is None:
-        return []  # a transcript not read to its end holds nothing
+        return given_up()  # a transcript not read to its end holds nothing
     # The newest SEEN_MAX, as the query and could_hold take them, and the answer is filtered on these same ids: one
     # shown longer ago may hold again, since dropping it after the query answered would leave its receipt for a
     # lesson never shown (Rio Grande's correction, from his reviewer's S3).
@@ -148,12 +156,12 @@ def _candidates(command, record, now, limit, settings_path, env, monotonic, cloc
         return []
     budget_ms = int((deadline - monotonic() - START_MARGIN) * 1000)
     if budget_ms <= 0:
-        return []  # too late for the query to answer before the entry gives up: it isn't started
+        return given_up()  # too late for the query to answer before the entry gives up: it isn't started
     request = {'ship': settings['ship'], 'command': cut, 'words_only': True, 'limit': limit,
                'seen': seen, 'budget_ms': budget_ms}
     answer = lh.ask(settings, request, deadline, monotonic)
     if answer is None:
-        return []  # late or failing: the head may ask again
+        return given_up()  # late or failing: a Bash head may ask again
     got = []
     for lesson in answer:
         value = lesson.get('command')

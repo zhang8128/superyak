@@ -21,6 +21,7 @@ from pathlib import Path
 from superyak_agent import acting, checklist_firing as fp, checklist_hold, holds, lessons_hold
 
 RERUN = 'Re-run the same command if you still want it.'
+RERUN_TOOL = 'Call it again if you still want it.'  # a held tool's call has no command to re-run (lesson-holds item 8)
 WORKER = 'superyak-hold'
 
 
@@ -35,18 +36,24 @@ class _Run:
 
 
 def _call(payload):
-    """(command, session id, cwd, transcript) for a main agent's Bash call, else None. No file I/O (M2)."""
-    if not isinstance(payload, dict) or payload.get('hook_event_name') != 'PreToolUse' or payload.get('tool_name') != 'Bash':
+    """(command, session id, cwd, transcript, tool call) for a main agent's Bash call or call to a held tool, else None.
+    A held tool's command is its own name, never anything from its input (spec lesson-holds-on-tool-calls, item 2), so
+    a post's text matches nothing. No file I/O (M2)."""
+    if not isinstance(payload, dict) or payload.get('hook_event_name') != 'PreToolUse':
+        return None
+    tool = payload.get('tool_name')
+    if not isinstance(tool, str) or tool != 'Bash' and tool not in lessons_hold.HELD_TOOLS:
         return None
     if payload.get('agent_id') is not None:   # a subagent is never held (D14)
         return None
     tool_input = payload.get('tool_input')
-    command = tool_input.get('command') if isinstance(tool_input, dict) else None
+    command = tool if tool != 'Bash' else tool_input.get('command') if isinstance(tool_input, dict) else None
     session = payload.get('session_id')
     if not isinstance(command, str) or not isinstance(session, str) or not session:   # Ruling 8
         return None
     cwd, transcript = payload.get('cwd'), payload.get('transcript_path')
-    return command, session, cwd if isinstance(cwd, str) else None, transcript if isinstance(transcript, str) else None
+    return (command, session, cwd if isinstance(cwd, str) else None, transcript if isinstance(transcript, str) else None,
+            tool != 'Bash')
 
 
 def _output(**fields):
@@ -84,13 +91,22 @@ def _log(path, lines):
             pass
 
 
+class _NoLists:
+    """At a tool call the hold asks only the lessons provider (lesson-holds item 7): no checklist, and no pass spent."""
+    def candidates(self, command, record, now, limit):
+        return []
+
+    def spend(self, command, record):
+        return False
+
+
 def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
-    command, session, cwd, transcript = call
+    command, session, cwd, transcript, tool_call = call
     if not (home / 'station.json').is_file():   # an undocked machine gets no ship home and no sessions folder (Ruling 44)
         return
     if acting.verdict(home, acting.session_project(cwd))[0] != 'act':   # inside the read window (M2)
         return
-    lists_here = checklist_hold.provider(home, cwd, command)
+    lists_here = _NoLists() if tool_call else checklist_hold.provider(home, cwd, command)
     path = holds.record_path(home / 'sessions', session)
     with holds.open_record(path, read_by, monotonic) as opened:
         if monotonic() >= read_by:
@@ -107,7 +123,7 @@ def _work(run, call, home, now, read_by, hold_by, monotonic, lessons):
                        holds.HOLDS_PER_SESSION - len(lists)) if left else []
         if left and (lists or got):
             parts = [checklist_hold.first_line(record, lists[0])] if lists else []
-            parts += [h.text for h in lists + got] + [RERUN]
+            parts += [h.text for h in lists + got] + [RERUN_TOOL if tool_call else RERUN]
             record['holds'] = count + 1
             result = _output(permissionDecision='deny', permissionDecisionReason='\n\n'.join(parts))
         else:   # the command goes through, and spends its passes: a re-run's is saved though nothing prints (M1)

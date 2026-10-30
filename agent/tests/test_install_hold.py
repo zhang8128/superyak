@@ -141,3 +141,17 @@ def test_a_damaged_or_unsafe_trust_file_is_left_as_it_is_and_named(tmp_path, cas
     assert (os.readlink(path) if path.is_symlink() else path.read_bytes(), os.lstat(path).st_mode) == before
     with pytest.raises(OSError):                       # `checklists trust` reports an OSError and trusts nothing
         install.add_trusted(own, superyak / '.superyak' / 'checklists')
+
+
+def test_the_hold_matcher_is_one_constant_and_a_tool_joining_it_rewrites_the_entry(tmp_path, monkeypatch):
+    """Spec lesson-holds-on-tool-calls, items 1 and 12: the matcher is Bash plus the tools every ship has confirmed,
+    none yet; once one joins, dock rewrites today's Bash-only entry into one entry with the new matcher, and a second
+    dock changes nothing."""
+    from superyak_agent import holds
+    assert holds.CONFIRMED_TOOLS == () and holds.HOLD_MATCHER == 'Bash'
+    settings = tmp_path / 'settings.json'
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    monkeypatch.setattr(holds, 'HOLD_MATCHER', 'Bash|AskUserQuestion')
+    assert 'PreToolUse' in install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    assert [e['matcher'] for e in json.loads(settings.read_text())['hooks']['PreToolUse']] == ['Bash|AskUserQuestion']
+    assert 'PreToolUse' not in install.install_hooks(settings, SETTINGS_CONFIG, messages=True)

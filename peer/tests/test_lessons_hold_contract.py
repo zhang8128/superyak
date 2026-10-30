@@ -141,3 +141,28 @@ def test_the_held_tools_agree():
     from superyak_peer import lessons
     assert lessons_hold.HELD_TOOLS == lessons.HELD_TOOLS == {
         'AskUserQuestion', 'mcp__station__station_post', 'mcp__station__station_claim'}
+
+
+TOOL_LESSON = lesson_body(claim='Posts are cut at 20,000 characters.', command=('mcp__station__station_post',))
+
+
+def test_a_tools_lesson_holds_its_first_call_and_never_a_grep_of_its_name(world):
+    """Spec lesson-holds-on-tool-calls, items 2, 3 and 10, through the real entry, provider and query: a Bash grep that
+    names the tool holds nothing and asks nothing; the session's first post is held, receipted once and ends "Call it
+    again if you still want it."; the second post goes through."""
+    from superyak_agent import hold
+    store, _, home, tmp_path, lay = world
+    lay(TOOL_LESSON)
+
+    def run(tool, command=None):
+        given = {'command': command} if command is not None else {'room': 'r', 'text': 'git rev-parse HEAD'}
+        payload = {'hook_event_name': 'PreToolUse', 'tool_name': tool, 'session_id': 's1', 'cwd': str(tmp_path),
+                   'tool_input': given}
+        return hold.decide(payload, home, time.time(), time.monotonic())
+
+    assert run('Bash', 'rg mcp__station__station_post agent/') is None and queries(store) == 0
+    first = run('mcp__station__station_post')['hookSpecificOutput']
+    assert first['permissionDecision'] == 'deny' and 'Posts are cut' in first['permissionDecisionReason']
+    assert first['permissionDecisionReason'].endswith('Call it again if you still want it.')
+    assert run('mcp__station__station_post') is None
+    assert queries(store) == 1 and receipted(store) == ['Posts are cut at 20,000 characters.']

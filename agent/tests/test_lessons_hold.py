@@ -479,3 +479,29 @@ def test_a_held_tools_name_is_found_only_in_its_own_call():
     assert lessons_hold._contained(post, post) and not lessons_hold._contained(post, f'rg {post} agent/')
     assert not lessons_hold._contained('station', post) and lessons_hold._contained('git push', 'git push origin')
 
+
+# ---- Spec lesson-holds-on-tool-calls, item 10 and N-b: a tool's head never changes, so at a tool call a query that
+# fails, answers late or is never started, after could_hold said yes, records the head as asked. ----
+POST = 'mcp__station__station_post'
+
+
+@pytest.mark.parametrize('flag, text', [('exit', '3'), ('sleep', '3')])
+def test_at_a_tool_call_a_failing_or_late_query_records_the_head(rail, flag, text):
+    rail.answers(lesson(A, command=POST))
+    rail.flag(flag, text)
+    rec = record(rail=rail)
+    assert ask(rail, command=POST, rec=rec) == []
+    assert rec['lessons'] == {'heads': [lessons_hold.head_digest(POST)], 'holds': []}
+
+
+def test_at_a_tool_call_a_transcript_not_read_in_time_or_a_spent_budget_records_the_head(rail, monkeypatch):
+    rail.answers(lesson(A, command=POST))
+    monkeypatch.setattr(lessons_hold.lh, 'transcript_ids', lambda *a, **k: None)
+    rec = record(rail=rail)
+    assert ask(rail, command=POST, rec=rec) == [] and rail.sent() == []
+    assert rec['lessons'] == {'heads': [lessons_hold.head_digest(POST)], 'holds': []}
+    monkeypatch.undo()
+    monkeypatch.setattr(lessons_hold, 'START_MARGIN', 5.0)
+    rec = record(rail=rail)
+    assert ask(rail, command=POST, rec=rec) == [] and rail.sent() == []
+    assert rec['lessons'] == {'heads': [lessons_hold.head_digest(POST)], 'holds': []}
