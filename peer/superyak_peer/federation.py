@@ -76,6 +76,7 @@ class _NoIdentity:
 NO_IDENTITY = _NoIdentity()
 TRUST_KEYS = ('signing_key', 'certificate', 'fingerprint', 'endpoint')  # a known peer's, never replaced
 HELD = 'SELECT 1 FROM contact_holds WHERE contact_id=remote_contacts.id'  # a contact waiting for its own code (SF3)
+THEIRS = 'contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?)'  # an outbox row for this peer's contacts
 
 class Federation:
     def __init__(self, store, *, endpoint, identity=None):
@@ -339,13 +340,7 @@ class Federation:
             return {**result, 'busy':True}
         try:
             self.collect()
-            with self.store.transaction() as db:
-                work = [dict(r) for r in db.execute(
-                    "SELECT outbox.*, peers.card, remote_contacts.peer_id AS row_peer FROM outbox "
-                    "JOIN remote_contacts ON contact_id=remote_contacts.id JOIN peers USING(peer_id) JOIN peer_delivery USING(peer_id) "
-                    "WHERE status IN ('pending','failed') AND peer_delivery.mode='push' "
-                    "AND (peer_delivery.next_attempt IS NULL OR peer_delivery.next_attempt<=?) ORDER BY event_seq, outbox.id LIMIT ?",
-                    (self.store.clock(), min(100, max(1, limit))))]
+            work = self._due_rows(limit)
             failing = set()
             for row in work:
                 if row['row_peer'] in failing:
@@ -374,11 +369,26 @@ class Federation:
                 if effect == 'failure':
                     failing.add(row['row_peer'])
                 result[status] = result.get(status, 0) + 1
-            with self.store.transaction() as db:
-                result['pending'] = db.execute("SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed')").fetchone()[0]
+            result['pending'] = self._pending_count()
             return result
         finally:
             self._sync_lock.release()
+
+    def _due_rows(self, limit):
+        """sync_once's work list: the push peers' due rows, each with its peer's card (store-wal-mode D3: a pure read; the
+        writes stay in _prepare under the gate, which reads the row again)."""
+        with self.store.transaction() as db:
+            return [dict(r) for r in db.execute(
+                "SELECT outbox.*, peers.card, remote_contacts.peer_id AS row_peer FROM outbox "
+                "JOIN remote_contacts ON contact_id=remote_contacts.id JOIN peers USING(peer_id) JOIN peer_delivery USING(peer_id) "
+                "WHERE status IN ('pending','failed') AND peer_delivery.mode='push' "
+                "AND (peer_delivery.next_attempt IS NULL OR peer_delivery.next_attempt<=?) ORDER BY event_seq, outbox.id LIMIT ?",
+                (self.store.clock(), min(100, max(1, limit))))]
+
+    def _pending_count(self):
+        """sync_once's pending count: every row still waiting, for any peer."""
+        with self.store.transaction() as db:
+            return db.execute("SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed')").fetchone()[0]
 
     @staticmethod
     def _restored_at(db):
@@ -457,24 +467,19 @@ class Federation:
         its own rows only (review MF2), each prepared under its own hold of the gate, never one across rows."""
         import time
         from .transport import PULL_CAP
-        theirs = 'contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?)'
         with self.store.transaction() as db:
             for key in value['ack']:
-                db.execute(f"UPDATE outbox SET status='delivered' WHERE id=? AND status IN ('pending','failed') AND {theirs}",
+                db.execute(f"UPDATE outbox SET status='delivered' WHERE id=? AND status IN ('pending','failed') AND {THEIRS}",
                            (key, origin))
             for refusal in value['refused']:
                 db.execute(f"UPDATE outbox SET status='refused', last_error=? WHERE id=? AND status IN ('pending','failed') "
-                           f"AND {theirs}", (str(refusal['code']), refusal['event_id'], origin))
+                           f"AND {THEIRS}", (str(refusal['code']), refusal['event_id'], origin))
             db.execute('UPDATE peer_delivery SET last_pull=? WHERE peer_id=?', (now, origin))  # "last pulled from us"
             self._peer_outcome(db, origin, 'reset', None, now)  # a verified pull it makes here resets it (spec §7)
         self.collect()
         envelopes, size, started = [], 0, time.monotonic()
         if value['limit']:
-            with self.store.transaction() as db:
-                keys = [r[0] for r in db.execute(
-                    f"SELECT id FROM outbox WHERE status IN ('pending','failed') AND {theirs} ORDER BY event_seq, id LIMIT ?",
-                    (origin, PULL_ROWS))]
-            for key in keys:
+            for key in self._pull_keys(origin):
                 if len(envelopes) >= value['limit'] or time.monotonic() - started >= self.pull_walk_seconds:
                     break
                 self._between_rows(key)
@@ -491,10 +496,21 @@ class Federation:
                     continue  # the row stays as it was: nothing is written in the transaction that raised (plan nit 24)
                 envelopes.append(body)
                 size += encoded
+        return {'ok': True, 'envelopes': envelopes, 'more': self._pull_left(origin) > len(envelopes)}
+
+    def _pull_keys(self, origin):
+        """_serve_pull's key listing: the origin's own waiting rows, at most PULL_ROWS (store-wal-mode D3: a pure read;
+        each row is read again and prepared under its own hold of the gate)."""
         with self.store.transaction() as db:
-            left = db.execute(f"SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed') AND {theirs}",
+            return [r[0] for r in db.execute(
+                f"SELECT id FROM outbox WHERE status IN ('pending','failed') AND {THEIRS} ORDER BY event_seq, id LIMIT ?",
+                (origin, PULL_ROWS))]
+
+    def _pull_left(self, origin):
+        """_serve_pull's remainder count: the origin's rows still waiting after the walk."""
+        with self.store.transaction() as db:
+            return db.execute(f"SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed') AND {THEIRS}",
                               (origin,)).fetchone()[0]
-        return {'ok': True, 'envelopes': envelopes, 'more': left > len(envelopes)}
 
     def pull_once(self, card, *, send=None, sleep=time.sleep):
         """Spec §6, the puller: one pull from the listener `card` names. Rounds follow plan P12, and every answer to the
