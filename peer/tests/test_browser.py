@@ -4071,16 +4071,23 @@ def test_the_new_connection_notice_shows_on_every_page_and_its_revoke_asks_first
         ask.get_by_role("button", name="Yes, revoke").click()
         expect(page.locator(".app-item")).to_contain_text("You revoked it")
         expect(notice).to_have_count(0)
+        with store.transaction() as db:  # a reason nobody recorded reads `unknown` (9a's N1), said in words
+            db.execute("UPDATE connector_grants SET revoked_why=NULL")
+        page.reload()
+        expect(page.locator(".app-item")).to_contain_text("Why it ended wasn't recorded.")
     assert read(care).status_code == 401
 
 
 @pytest.mark.connector
 def test_a_room_that_continues_in_a_new_one_is_offered_not_added(browser_peer):
-    """Spec: "<title> continues in a new room. Let Claude read it?" The new room is added only when the person says so."""
+    """Spec: "<title> continues in a new room. Let Claude read it?" The new room is added only when the person says so.
+    A listed room it can no longer read (marked since) is left out of that change and named, so the home doesn't refuse
+    the whole of it (Tardis's nit on 0a5ffc9f)."""
     store, users = browser_peer["app"].state.store, browser_peer["users"]
-    care = store.create_room(users["patient"]["id"], "Care plan", [])["id"]
-    read = connect_claude(browser_peer, "patient", [care])
+    care, notes = (store.create_room(users["patient"]["id"], title, [])["id"] for title in ("Care plan", "Old notes"))
+    read = connect_claude(browser_peer, "patient", [care, notes])
     later = store.add_participants(users["patient"]["id"], care, [users["family"]["id"]])["id"]
+    store.mark_room(users["patient"]["id"], notes)
     with store.transaction() as db:  # a time a restore left damaged shows as such, never as 1970 (9a's M1)
         db.execute("UPDATE connector_grants SET created='soon'")
     with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, "patient") as (page, _):
@@ -4089,7 +4096,7 @@ def test_a_room_that_continues_in_a_new_one_is_offered_not_added(browser_peer):
         expect(item).to_contain_text("Care plan continues in a new room. Let Claude read it?")
         assert read(later).json()["result"]["isError"] is True
         item.get_by_role("button", name="Let Claude read the new Care plan").click()
-        expect(page.locator(".notice", has_text="Rooms saved.")).to_be_visible()
+        expect(page.locator(".notice", has_text="Rooms saved. Claude reads them from its next call. Left out, since Claude can't read them now: Old notes.")).to_be_visible()
         expect(item).not_to_contain_text("continues in a new room")
     assert read(later).json()["result"]["isError"] is False
 

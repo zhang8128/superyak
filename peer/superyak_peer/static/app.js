@@ -1340,7 +1340,8 @@ const APP_ENDED = new Map([
   ["restore", "A restore of this home removed it; what it read is still listed."], ["damaged", "Its record is damaged, so nothing can use it."],
   ["code_reused", "Its sign-in code was used twice, which can mean it was copied, so the home ended it."],
   ["refresh_reused", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
-  ["split_chain", "Its renewal was used twice, which can mean it was copied, so the home ended it."]]);
+  ["split_chain", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
+  ["unknown", "Why it ended wasn't recorded."]]);  // a NULL reason, from before 9a recorded one (9a's N1)
 const APP_REFUSED = new Map([["marked", "a member keeps it from cloud models"], ["not_shared", "not shared with this app"], ["remote", "on another home"], ["no_such", "no such room"]]);
 const RECEIPT_PAGE = 20;
 
@@ -2498,8 +2499,15 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "app-rooms-cancel") { state.appRoomsEdit = null; render(); }
   if (action === "app-room-add") {
+    // The listed rooms it can still read, and the new one. A listed room left since or marked since would make the home
+    // refuse the whole change, so it is left out and named (Tardis's nit on 0a5ffc9f); it reads that room no longer anyway.
     const app = (state.apps || []).find((item) => item.id === target.dataset.id);
-    if (app && !app.all_rooms) await appWrite(`/api/connected-apps/${pathPart(app.id)}/rooms`, "PUT", { rooms: [...app.rooms.map((room) => room.room), target.dataset.room] }, `Rooms saved. ${appName(app.app)} reads them from its next call.`);
+    if (app && !app.all_rooms) {
+      const name = appName(app.app), readable = new Set(appRoomChoices(app).map((room) => room.id));
+      const left = app.rooms.filter((room) => !readable.has(room.room)).map((room) => room.title);
+      await appWrite(`/api/connected-apps/${pathPart(app.id)}/rooms`, "PUT", { rooms: [...app.rooms.filter((room) => readable.has(room.room)).map((room) => room.room), target.dataset.room] },
+                     `Rooms saved. ${name} reads them from its next call.${left.length ? ` Left out, since ${name} can't read them now: ${left.join(", ")}.` : ""}`);
+    }
   }
   if (action === "app-receipts" || action === "app-receipts-earlier") await loadReceipts(target.dataset.id, action === "app-receipts-earlier");
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
