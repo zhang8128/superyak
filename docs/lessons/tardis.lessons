@@ -194,3 +194,10 @@ claim: Name time-sorted directories in UTC: local time repeats an hour when the 
 why: Restore directories named by local time could, in a fall-back hour, point the rollback carry at the older restore.
 command: date +%Y%m%d-%H%M%S
 learned from: serenity
+
+lesson
+ship: tardis
+claim: Every value a read route hands out is output: ask what each id, cursor or count tells a person about anyone else.
+why: A receipts cursor was the table's rowid, a counter for the whole home, so its gaps showed how busy other people's connections were.
+file: peer/superyak_peer/connector_apps.py
+learned from: serenity
