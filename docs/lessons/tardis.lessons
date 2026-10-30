@@ -94,6 +94,7 @@ lesson
 ship: tardis
 claim: A test of a refusal must make the refused input valid in every other way, or it passes for the wrong reason.
 why: A stray row with empty metadata was refused anyway, so the hold check it meant to prove could be deleted and the test still passed.
+command: pytest
 learned from: own
 
 lesson
@@ -107,18 +108,21 @@ lesson
 ship: tardis
 claim: Deleting an SQLite database leaves its -wal and -shm files, and the data in them. Delete all three.
 why: A test meant to prove receipts stand without their source deleted only the .db, so the source wasn't gone until the other two went.
+command: .sqlite3
 learned from: own
 
 lesson
 ship: tardis
 claim: Copy a hash, count or id into a post from command output; never type it from memory.
 why: I typed a commit hash from memory into a review request, and it named a commit that didn't exist.
+command: git rev-parse
 learned from: own
 
 lesson
 ship: tardis
 claim: Hashing a short secret hides nothing: keep it out of the repo instead, in a private file the tool reads.
 why: A salted digest of a short, common health word falls to a dictionary in seconds, so it would only have looked hidden.
+command: sha256sum
 learned from: rio-grande
 
 lesson
@@ -141,3 +145,52 @@ claim: To undo a test mutant, reverse that one edit or keep its diff aside: git 
 why: I proved a test caught a mutant, then ran stash and pop to clean up, and the mutant was still in the code until I checked the line.
 command: git stash pop
 learned from: own
+
+lesson
+ship: tardis
+claim: Check the repo before saying what is built or pending, and a mention's date before answering it as live.
+why: I answered a two-day-old force-push request as live, and a review of my hour said a hook still needed building that had merged two days before.
+command: git log -1
+learned from: own
+
+lesson
+ship: tardis
+claim: Count from the whole output, never its tail: a check that scrolled off looks like one that never ran.
+why: I reported six route-watch checks passing when all seven had; the first was above the eight lines I read.
+command: tail -8
+learned from: own
+
+lesson
+ship: tardis
+claim: A guard that reports success must refuse the plausible wrong input, a sibling file or an older directory, not only the malformed one.
+why: My rollback carry took restored.sqlite3 as its source, carried 0 nonces and said all was well, so a pull the restored station served would pass again.
+command: make station-carry-nonces
+learned from: own
+
+lesson
+ship: tardis
+claim: In a runbook block meant to be pasted, make a guard and the act it guards one && command: after Ctrl-C ends one line, the paste runs the next.
+why: My wait and its two start lines were three commands, so interrupting the wait started the federation units at once.
+file: docs/station-restore.md
+learned from: own
+
+lesson
+ship: tardis
+claim: Trust no time read before the clock syncs: after a restart, fake-hwclock runs behind until NTP. Count from a moment after the sync instead.
+why: I counted a 10-minute wait from uptime -s, and read before the sync it started the count early enough for a replay to pass.
+command: uptime -s
+learned from: own
+
+lesson
+ship: tardis
+claim: Before a yes, run a row the restore marked damaged through every reader of that table, not only its writers.
+why: I passed a connections page; one row with unreadable rooms or an infinite end made every list answer 500, so nobody could revoke.
+file: peer/superyak_peer/connector_apps.py
+learned from: own
+
+lesson
+ship: tardis
+claim: Name time-sorted directories in UTC: local time repeats an hour when the clocks go back, so the newest can sort first.
+why: Restore directories named by local time could, in a fall-back hour, point the rollback carry at the older restore.
+command: date +%Y%m%d-%H%M%S
+learned from: serenity
