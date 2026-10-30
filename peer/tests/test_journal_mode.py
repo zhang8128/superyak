@@ -86,11 +86,40 @@ def test_refuses_a_symlink_among_the_four_names(tmp_path, name):
     assert listing(store.data_dir) == before
 
 
+def test_refuses_a_symlinked_data_dir_or_gate_file(tmp_path):
+    """The data directory itself, or dispatch.lock, as a symlink is refused by name (the review's J6 and N4)."""
+    store = station(tmp_path)
+    link = tmp_path / 'link'
+    link.symlink_to(store.data_dir)
+    with pytest.raises(ValueError, match='ymlink'):
+        switch_journal(link, 'wal', active=none_active)
+    lock = store.data_dir / 'dispatch.lock'
+    os.replace(lock, tmp_path / 'lock-elsewhere')
+    lock.symlink_to(tmp_path / 'lock-elsewhere')
+    with pytest.raises(ValueError, match='ymlink'):
+        switch_journal(store.data_dir, 'wal', active=none_active)
+    assert header_mode(store.db_path) == 'delete'
+
+
+def test_a_damaged_store_is_refused_in_words(tmp_path):
+    """A file that isn't a database ends as "nothing was changed", not a traceback (the review's N1), and keeps its bytes."""
+    store = station(tmp_path)
+    store.db_path.write_bytes(b'not a database at all ' * 50)
+    before = store.db_path.read_bytes()
+    with pytest.raises(ValueError, match='nothing was changed'):
+        switch_journal(store.data_dir, 'wal', active=none_active)
+    assert store.db_path.read_bytes() == before
+
+
 def test_refuses_while_a_unit_is_active(tmp_path):
     store = station(tmp_path)
     with pytest.raises(ValueError, match='superyak-odo.service'):
         switch_journal(store.data_dir, 'wal', active=lambda: ['superyak-odo.service'])
     assert header_mode(store.db_path) == 'delete'
+
+
+# systemd 252's `is-active` (the Pi's) exits 0 only for these; `activating` and `deactivating` exit 3 (the review's S1)
+EXIT_0 = ('active', 'reloading', 'refreshing')
 
 
 def stub_systemctl(tmp_path, monkeypatch, states, code=None):
@@ -100,7 +129,7 @@ def stub_systemctl(tmp_path, monkeypatch, states, code=None):
     script = bin_dir / 'systemctl'
     lines = ['#!/bin/sh', 'unit="$3"', 'case "$unit" in']
     for unit, state in states.items():
-        exit_code = code if code is not None else (0 if state == 'active' else 3)
+        exit_code = code if code is not None else (0 if state in EXIT_0 else 3)
         lines.append(f'  {unit}) {"echo " + state if state else ":"}; exit {exit_code} ;;')
     lines += ['  *) echo inactive; exit 3 ;;', 'esac']
     script.write_text('\n'.join(lines) + '\n')
@@ -110,7 +139,15 @@ def stub_systemctl(tmp_path, monkeypatch, states, code=None):
 
 @pytest.mark.parametrize('state', ['active', 'activating', 'deactivating', 'reloading', 'refreshing'])
 def test_units_active_counts_every_running_state(tmp_path, monkeypatch, state):
-    stub_systemctl(tmp_path, monkeypatch, {'superyak-door.service': state}, code=0)
+    """By the state printed, with systemctl's own exit codes: a lighthouse in `activating (auto-restart)` exits 3 and is
+    still running. Mutation: running decided by exit 0 alone."""
+    stub_systemctl(tmp_path, monkeypatch, {'superyak-door.service': state})
+    assert units_active() == ['superyak-door.service']
+
+
+def test_units_active_counts_any_exit_0_as_running(tmp_path, monkeypatch):
+    """A state this code doesn't know, from a newer systemd, with exit 0 is counted as running (the review's N3)."""
+    stub_systemctl(tmp_path, monkeypatch, {'superyak-door.service': 'maintenance'}, code=0)
     assert units_active() == ['superyak-door.service']
 
 

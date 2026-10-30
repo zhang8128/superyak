@@ -56,8 +56,10 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    Running these lines again, after a restart or from steps 6 and 10, keeps the list from the first run. The ship, odo,
    wormhole, the listed units and both timers are disabled as well as stopped, so a restart starts none of them before
    step 8 does: federate and the listener would write into a half-restored database. The imprint-sweep and
-   lessons-index timers, where installed and enabled, are saved in `$ASIDE/timers.txt` (by `is-enabled`, so one that
-   isn't installed is never named), then disabled and stopped with their services; step 8 enables them again. The
+   lessons-index timers that are enabled are saved in `$ASIDE/timers.txt` (by `is-enabled`, so one that isn't installed
+   is never named) and disabled; step 8 enables them again. Both of those timers and both their services are stopped
+   every time, enabled or not, since one started by hand runs too; a unit that isn't installed only prints "not
+   loaded". The restore test's service is stopped as well: step 6b's switch refuses while any station unit runs. The
    lighthouse and the door stay enabled: step 8 starts them first anyway.
    ```bash
    if [ ! -d "$ASIDE" ]; then echo 'NOT stopped: ASIDE is not set; set it again (see the top), then run these lines again'
@@ -65,20 +67,26 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
      test -e "$ASIDE/watchers.txt" || { units=$(systemctl --user list-units --all --plain --no-legend 'superyak-ship-*' 'superyak-federat*') && for unit in $(printf '%s\n' "$units" | awk '{print $1}'); do echo "$unit enabled=$(systemctl --user is-enabled "$unit") active=$(systemctl --user is-active "$unit")"; done > "$ASIDE/watchers.new" && mv "$ASIDE/watchers.new" "$ASIDE/watchers.txt"; }; cat "$ASIDE/watchers.txt"
      systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer   # a restart must not run a catch-up backup on a half-restored station
      test -e "$ASIDE/timers.txt" || { for timer in superyak-imprint-sweep.timer superyak-lessons-index.timer; do [ "$(systemctl --user is-enabled "$timer" 2>/dev/null)" = enabled ] && echo "$timer"; done > "$ASIDE/timers.new"; mv "$ASIDE/timers.new" "$ASIDE/timers.txt"; }; cat "$ASIDE/timers.txt"
-     for timer in $(cat "$ASIDE/timers.txt"); do systemctl --user disable --now "$timer"; systemctl --user stop "${timer%.timer}.service"; done   # the sweep and the lessons index, where installed
+     for timer in $(cat "$ASIDE/timers.txt"); do systemctl --user disable "$timer"; done   # the record step 8 enables again
+    for unit in superyak-imprint-sweep.timer superyak-lessons-index.timer superyak-imprint-sweep.service superyak-lessons-index.service; do systemctl --user stop "$unit"; done   # every time, enabled or not
      for unit in superyak-ship superyak-odo superyak-wormhole $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user disable --now "$unit"; done
-     systemctl --user stop superyak-backup.service superyak-door superyak-odo superyak-wormhole superyak-ship superyak-lighthouse
+     systemctl --user stop superyak-backup.service superyak-restore-test.service superyak-door superyak-odo superyak-wormhole superyak-ship superyak-lighthouse
      systemctl --user list-units 'superyak-*'
    fi
    ```
    Stop any unit the last list still shows as active: `systemctl --user stop <unit>`.
 4. **Set the current state aside.** Move the station's database and its sidecars into `$ASIDE`, as one set. The lines
    move nothing, and print why, when `ASIDE` is not set, when `$ASIDE` already holds a `peer.sqlite3` file (step 4 ran
-   before), or when a process still has the database open (`fuser -v ~/.local/share/superyak/lighthouse/peer.sqlite3*`
+   before; but when it ran and was cut short, they move the rest of the set, below), or when a process still has the
+   database open (`fuser -v ~/.local/share/superyak/lighthouse/peer.sqlite3*`
    shows which: stop everything again as in step 3). A `peer.sqlite3-journal` left beside the restored file would be
    applied to it and corrupt it.
    ```bash
    if [ ! -d "$ASIDE" ]; then echo 'NOT moved: ASIDE is not set; set it again (see the top)'
+   elif [ -e "$ASIDE/peer.sqlite3" ] && [ ! -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ] && ls -d ~/.local/share/superyak/lighthouse/peer.sqlite3-* >/dev/null 2>&1; then
+     if fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* "$ASIDE"/peer.sqlite3* "$ASIDE"/restored.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the database open; stop everything again as in step 3'
+     else EARLY="$ASIDE/early-$(date +%Y%m%d-%H%M%S)" && install -d -m 700 "$EARLY" && { for f in "$ASIDE"/restored.sqlite3*; do [ -e "$f" ] && mv -n "$f" "$EARLY"/; done; for f in ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$ASIDE/${f##*/}" ] && mv -n "$ASIDE/${f##*/}" "$EARLY"/; mv -n "$f" "$ASIDE"/; done; echo "Step 4 was cut short before: moved the rest of its set into \$ASIDE, and any staged copy into $EARLY; run step 5 next, both lines"; }
+     fi
    elif [ -e "$ASIDE/peer.sqlite3" ] || ls -d "$ASIDE"/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT moved: $ASIDE already holds a peer.sqlite3 file, so step 4 ran before. A peer.sqlite3 file in the data directory now is a stray: see step 6, the stray case'
    elif fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the database open; stop everything again as in step 3'
    else for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$ASIDE"/; done
@@ -89,6 +97,11 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    The line after the move records the store's journal mode (`wal` or `delete`) in `$ASIDE/journal-mode`, read from
    the set-aside file's header, once the database has left the data directory and only if no record exists, so a rerun
    keeps the first one (`delete` when there was no database). Step 6b reads it.
+   If it printed that step 4 was cut short before, a run stopped partway had moved `peer.sqlite3` but left some of its
+   sidecars in the data directory; in WAL the `-wal` holds the station's newest commits, and a reconcile reading the
+   set-aside file without it would compare an older state. This run moved them beside it. A staged copy step 5 made
+   from the part it had, and what that read left beside the set-aside file, went into `$ASIDE/early-…`, so step 6 can't
+   install it: run step 5 again (both lines), and its `UNPAIR=` run too if you made one.
    If it printed that step 4 ran before and the `ls` shows no `peer.sqlite3` file in the data directory, step 4 is
    done: go on. If one is there, it is a stray: deal with it in step 6's stray case before going on. If after the first
    run the `ls` shows `peer.sqlite3` in neither directory, the data directory had no database to set aside: run step 5
@@ -160,6 +173,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    fi
    ```
    Go on only when it prints `INSTALLED`. If it prints `NOT installed`, do not go on, and read which case you are in:
+   - **Only `peer.sqlite3-…` sidecars are in the data directory, no `peer.sqlite3`:** step 4 (or 10.2, in a rollback)
+     was cut short while it moved the set. They are the rest of that set, not a stray, and the stray-case lines below
+     refuse them: run that step again, and it moves them where the rest went.
    - **A `peer.sqlite3` file is already in the data directory, and `$ASIDE/peer.sqlite3` exists: the stray case.** Step 4
      ran, and what is in the data directory now is a new, empty database (something opened the data directory, or the
      Pi restarted), not the station. Stop everything again as in step 3, then move the stray set into a new directory
@@ -169,6 +185,7 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
      ```bash
      STRAY="$ASIDE/stray-$(date +%Y%m%d-%H%M%S)"
      if [ ! -e "$ASIDE/peer.sqlite3" ]; then echo 'NOT moved: $ASIDE holds no peer.sqlite3, so this is not the stray case (read step 6)'
+     elif [ ! -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ]; then echo 'NOT moved: only sidecars are in the data directory, the rest of the set step 4 (or 10.2) was moving when it was cut short; run that step again (read step 6)'
      elif fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the stray open; stop everything again as in step 3'
      else mkdir -m 700 "$STRAY" && for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$STRAY"/; done; ls -la "$STRAY"
      fi
@@ -193,14 +210,19 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    ```
 6b. **Put the journal mode back.** Every copy is a rollback-mode file (store-wal-mode D4), so a store that ran in WAL
    comes back in rollback mode until this step. It switches only when step 4 recorded `wal`, and with everything still
-   stopped. On a new disk where the lighthouse never ran, `station-journal` refuses for want of `dispatch.lock`: start
-   and stop the lighthouse once, then run this step again. With the store in WAL, the reconcile at step 5 read the
+   stopped: it refuses while any station unit runs, the monthly restore test's included. With the store in WAL, the reconcile at step 5 read the
    set-aside file through its `-wal` and left a `-shm` beside it in `$ASIDE`; that is SQLite's own and harmless.
    ```bash
    if [ ! -d "$ASIDE" ]; then echo 'NOT switched: ASIDE is not set; set it again (see the top)'
    elif [ "$(cat "$ASIDE/journal-mode" 2>/dev/null)" = wal ]; then make station-journal MODE=wal
    else echo "Nothing to switch: the store was $(cat "$ASIDE/journal-mode" 2>/dev/null || echo 'not recorded, so rollback') before the restore"
    fi
+   ```
+   On a new disk where the lighthouse never ran, `station-journal` refuses for want of `dispatch.lock`, which the
+   lighthouse makes as it starts. Start it, wait for the file and stop it, all on one line, then run this step again
+   (if the line is interrupted the lighthouse may still be running, and this step refuses until step 3 stops it):
+   ```bash
+   systemctl --user start superyak-lighthouse && timeout 30 sh -c 'until [ -e ~/.local/share/superyak/lighthouse/dispatch.lock ]; do sleep 1; done'; systemctl --user stop superyak-lighthouse; ls -l ~/.local/share/superyak/lighthouse/dispatch.lock
    ```
 7. **Act on the report.** Change again any password it lists that was changed for a reason. Read each room brief it lists
    ("room briefs that differ"; the report never shows brief text) in the browser, and save again the one you want. Issue again any invitation
@@ -247,11 +269,16 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
     1. Stop everything: set `ASIDE` again if the terminal closed (see the top), and run step 3's lines again. Its first
        line keeps the watchers list from step 3's first run.
     2. Move the live database and its sidecars, as one set, into `$ASIDE/restored-live`. The lines move nothing, and
-       print why, when `ASIDE` is not set, when `restored-live` already holds a `peer.sqlite3` file (10.2 ran before),
-       or when a process still has the database open (stop everything again). The `ls` must show the data directory
+       print why, when `ASIDE` is not set, when `restored-live` already holds a `peer.sqlite3` file (10.2 ran before;
+       but when it ran and was cut short, leaving sidecars and no `peer.sqlite3` in the data directory, they move the
+       rest of the set there), or when a process still has the database open (stop everything again). The `ls` must show the data directory
        without any `peer.sqlite3` file:
        ```bash
        if [ ! -d "$ASIDE" ]; then echo 'NOT moved: ASIDE is not set; set it again (see the top)'
+       elif [ -e "$ASIDE/restored-live/peer.sqlite3" ] && [ ! -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ] && ls -d ~/.local/share/superyak/lighthouse/peer.sqlite3-* >/dev/null 2>&1; then
+         if fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* "$ASIDE"/restored-live/peer.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the database open; stop everything again as in step 3'
+         else for f in ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do mv -n "$f" "$ASIDE/restored-live"/; done; echo '10.2 was cut short before: moved the rest of its set into $ASIDE/restored-live'
+         fi
        elif [ -e "$ASIDE/restored-live/peer.sqlite3" ] || ls -d "$ASIDE"/restored-live/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT moved: $ASIDE/restored-live already holds a peer.sqlite3 file, so 10.2 ran before (read 10.2)'
        elif fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the database open; stop everything again as in step 3'
        else install -d -m 700 "$ASIDE/restored-live" && for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$ASIDE/restored-live"/; done

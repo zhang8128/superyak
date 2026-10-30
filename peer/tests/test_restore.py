@@ -1285,13 +1285,18 @@ def test_runbook_steps_3_and_8_put_each_watcher_back_as_it_was(tmp_path):
     assert 'make station-rooms' in calls
 
 
+SWEEP_AND_INDEX = ('superyak-imprint-sweep.timer', 'superyak-lessons-index.timer', 'superyak-imprint-sweep.service',
+                   'superyak-lessons-index.service')
+
+
 def test_runbook_steps_3_and_8_keep_the_sweep_and_lessons_timers_as_they_were(tmp_path):
     """Store-wal-mode plan Task 1 (the plan review's M5 and its re-check's R-S1): step 3 saves which of the imprint-sweep
     and lessons-index timers are enabled, by `is-enabled` (`is-active` can't tell a missing unit from a stopped one),
-    then disables and stops each with its service, so a reboot mid-restore can't start one on a half-restored store.
-    Step 8 enables and starts only those again, on lines of their own after the watchers'. A timer not installed is
-    never named. A second step 3 keeps the first record. Mutation: step 8 starting both timers, or step 3 stopping
-    without disabling."""
+    and disables those, so a reboot mid-restore can't start one on a half-restored store. It stops both timers and both
+    services on every run, enabled or not (Tasks 1-3 review's S2: one started by hand runs too), and the restore test's
+    service with the rest (its N5). Step 8 enables and starts only the saved ones again, on lines of their own after the
+    watchers'. A timer not installed is never saved or disabled. A second step 3 keeps the first record. Mutation: step 8
+    starting both timers, step 3 stopping without disabling, or stopping only the saved timers."""
     aside = tmp_path / 'replaced-20261017-120000'
     aside.mkdir(mode=0o700)
     run_runbook(tmp_path, 3, '')                                   # lays out the shims and the state files
@@ -1299,12 +1304,16 @@ def test_runbook_steps_3_and_8_keep_the_sweep_and_lessons_timers_as_they_were(tm
         states.write('superyak-imprint-sweep.timer enabled active\n')  # the lessons-index timer isn't installed
     out, calls = run_runbook(tmp_path, 3, aside)
     assert (aside / 'timers.txt').read_text() == 'superyak-imprint-sweep.timer\n'
-    assert '--user disable --now superyak-imprint-sweep.timer' in calls
-    assert '--user stop superyak-imprint-sweep.service' in calls
-    assert [call for call in calls if 'lessons-index' in call] == ['--user is-enabled superyak-lessons-index.timer']
+    assert '--user disable superyak-imprint-sweep.timer' in calls
+    assert all(f'--user stop {unit}' in calls for unit in SWEEP_AND_INDEX)
+    assert [call for call in calls if 'lessons-index' in call] == ['--user is-enabled superyak-lessons-index.timer',
+                                                                   '--user stop superyak-lessons-index.timer',
+                                                                   '--user stop superyak-lessons-index.service']
+    assert any(call.startswith('--user stop superyak-backup.service superyak-restore-test.service ') for call in calls)
     (tmp_path / 'states.txt').write_text('superyak-imprint-sweep.timer disabled inactive\n')   # as step 3 left it
-    run_runbook(tmp_path, 3, aside)
+    out, calls = run_runbook(tmp_path, 3, aside)
     assert (aside / 'timers.txt').read_text() == 'superyak-imprint-sweep.timer\n'
+    assert all(f'--user stop {unit}' in calls for unit in SWEEP_AND_INDEX)
     out, calls = run_runbook(tmp_path, 8, aside)
     timers = [call for call in calls if 'imprint-sweep' in call or 'lessons-index' in call]
     assert timers == ['--user enable --now superyak-imprint-sweep.timer']
@@ -1448,6 +1457,130 @@ def test_a_rollback_keeps_the_put_back_files_mode(tmp_path):
     subprocess.run(['bash', '-c', nested_block('3. Move the set-aside')], cwd=tmp_path, env=env, check=True,
                    capture_output=True, text=True, timeout=60)
     assert header_mode(data / 'peer.sqlite3') == 'wal'
+
+
+def home_data(tmp_path):
+    if not (tmp_path / 'home').exists():
+        run_runbook(tmp_path, 3, '')                     # only to lay out the shims and HOME; with ASIDE unset it does nothing
+    return tmp_path / 'home' / '.local' / 'share' / 'superyak' / 'lighthouse'
+
+
+def run_nested(tmp_path, heading, aside):
+    """The bash lines under `heading` (see nested_block), run as run_runbook runs a step: (stdout, the shimmed calls)."""
+    log = tmp_path / 'calls.log'
+    log.unlink(missing_ok=True)
+    env = {'PATH': f'{tmp_path / "bin"}:{os.environ["PATH"]}', 'HOME': str(tmp_path / 'home'), 'ASIDE': str(aside),
+           'LOG': str(log), 'UNITS': str(tmp_path / 'units.txt'), 'STATES': str(tmp_path / 'states.txt')}
+    ran = subprocess.run(['bash', '-c', nested_block(heading)], cwd=tmp_path, env=env, capture_output=True, text=True,
+                         timeout=60)
+    return ran.stdout, log.read_text().splitlines() if log.exists() else []
+
+
+def killed_wal_station(tmp_path):
+    """A WAL station killed with a revoke only in its -wal, in the runbook's HOME as the kill left it, and step 1's copy
+    from before the revoke: (the staged copy, the revoked ship's key, the data directory)."""
+    data = home_data(tmp_path)
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    serenity, key = docked(store, andy['id'], 'serenity')
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    copy = staged(tmp_path, store)
+    shutil.copyfile(copy, copy.parent / 'chosen.sqlite3')
+    keeper = sqlite3.connect(store.db_path)              # an open connection keeps the revoke in the -wal
+    keeper.execute('SELECT 1 FROM system_meta').fetchone()
+    try:
+        store.revoke_ship(andy['id'], serenity['id'])
+        data.mkdir(parents=True)
+        for f in store.data_dir.glob('peer.sqlite3*'):
+            shutil.copyfile(f, data / f.name)
+        (data / 'dispatch.lock').touch()
+    finally:
+        keeper.close()
+    main_alone = tmp_path / 'main-alone.sqlite3'
+    shutil.copyfile(data / 'peer.sqlite3', main_alone)
+    with closing(sqlite3.connect(main_alone)) as db:     # the scenario is real: without its -wal the key reads unrevoked
+        assert db.execute('SELECT count(*) FROM ship_keys WHERE revoked IS NULL').fetchone()[0] >= 1
+    return copy, key, data
+
+
+def test_a_step_4_cut_short_moves_the_rest_of_the_set_on_its_rerun(tmp_path, capsys):
+    """Tasks 1-3 review's S4: a step 4 interrupted after it moved peer.sqlite3 leaves the -wal, which holds the revoke, in
+    the data directory. Its rerun moves the rest of the set beside the set-aside file, so the reconcile sees the revoke
+    and the restored station refuses the key. Mutation: the rerun calling it "ran before" (the -wal stays behind)."""
+    copy, key, data = killed_wal_station(tmp_path)
+    aside = copy.parent
+    shutil.move(data / 'peer.sqlite3', aside / 'peer.sqlite3')   # step 4's loop, stopped after its first move
+    out, _ = run_runbook(tmp_path, 4, aside)
+    assert 'Step 4 was cut short before' in out
+    assert not list(data.glob('peer.sqlite3*')) and (aside / 'peer.sqlite3-wal').stat().st_size > 0
+    shutil.copyfile(aside / 'chosen.sqlite3', copy)                 # step 5, both lines, as the rerun says
+    code, report, err = reconcile(capsys, '--db', copy, '--replaced', aside / 'peer.sqlite3')
+    assert code == 0, err
+    out, installed = step_6(tmp_path, aside)
+    assert installed is not None, out
+    with pytest.raises(Problem):
+        Store(installed.parent).ship_for_key(key)
+
+
+def test_a_step_4_cut_short_after_step_5_ran_sends_step_5_round_again(tmp_path, capsys):
+    """S4, when step 5 already ran on the part step 4 had moved: its read-only open left an empty -wal and a -shm in $ASIDE,
+    and its staged copy compared an older state. The rerun moves those and the staged copy into $ASIDE/early-…, so step
+    6 refuses until step 5 runs again; then the revoke holds. Mutation: the staged copy left in place (step 6 installs
+    it, and the key works)."""
+    copy, key, data = killed_wal_station(tmp_path)
+    aside = copy.parent
+    shutil.move(data / 'peer.sqlite3', aside / 'peer.sqlite3')
+    code, _, err = reconcile(capsys, '--db', copy, '--replaced', aside / 'peer.sqlite3')   # step 5 on a part of the set
+    assert code == 0, err
+    assert (aside / 'peer.sqlite3-wal').stat().st_size == 0
+    out, _ = run_runbook(tmp_path, 4, aside)
+    assert 'Step 4 was cut short before' in out and not list(data.glob('peer.sqlite3*'))
+    early = next(aside.glob('early-*'))
+    assert (early / 'restored.sqlite3').exists() and (early / 'peer.sqlite3-wal').stat().st_size == 0
+    assert (aside / 'peer.sqlite3-wal').stat().st_size > 0 and not copy.exists()
+    out, installed = step_6(tmp_path, aside)
+    assert installed is None and 'NOT installed' in out
+    shutil.copyfile(aside / 'chosen.sqlite3', copy)                 # step 5 again: its first line stages a fresh copy
+    code, _, err = reconcile(capsys, '--db', copy, '--replaced', aside / 'peer.sqlite3')
+    assert code == 0, err
+    out, installed = step_6(tmp_path, aside)
+    assert installed is not None, out
+    with pytest.raises(Problem):
+        Store(installed.parent).ship_for_key(key)
+
+
+def test_the_stray_case_refuses_a_set_of_sidecars_alone(tmp_path):
+    """S4: sidecars with no peer.sqlite3 in the data directory are the rest of a set step 4 or 10.2 was moving, not a
+    stray: the stray-case lines move nothing and send you back to that step."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'peer.sqlite3').write_bytes(b'set aside')
+    (data / 'peer.sqlite3-wal').write_bytes(b'the newest commits')
+    out, _ = run_nested(tmp_path, '- **A `peer.sqlite3` file is already in the data directory, and `$ASIDE/peer.sqlite3` exists', aside)
+    assert 'NOT moved: only sidecars are in the data directory' in out
+    assert (data / 'peer.sqlite3-wal').read_bytes() == b'the newest commits' and not list(aside.glob('stray-*'))
+
+
+def test_a_cut_short_10_2_moves_the_rest_of_the_set_on_its_rerun(tmp_path):
+    """S4 in a rollback: 10.2 stopped after it moved peer.sqlite3 into restored-live; its rerun moves the sidecars left
+    in the data directory there too, so 10.3 can put the set-aside file back without a foreign -wal beside it."""
+    data, aside = home_data(tmp_path), an_aside(tmp_path)
+    data.mkdir(parents=True)
+    (aside / 'restored-live').mkdir(mode=0o700)
+    (aside / 'restored-live' / 'peer.sqlite3').write_bytes(b'restored')
+    (data / 'peer.sqlite3-wal').write_bytes(b'restored frames')
+    out, _ = run_nested(tmp_path, '2. Move the live database', aside)
+    assert '10.2 was cut short before' in out and not list(data.glob('peer.sqlite3*'))
+    assert (aside / 'restored-live' / 'peer.sqlite3-wal').read_bytes() == b'restored frames'
+
+
+def test_step_6b_new_disk_line_starts_and_stops_the_lighthouse(tmp_path):
+    """Tasks 1-3 review's N6: the new-disk line starts the lighthouse, waits for dispatch.lock and stops it again."""
+    data = home_data(tmp_path)
+    data.mkdir(parents=True)
+    (data / 'dispatch.lock').touch()                     # what the lighthouse makes as it starts
+    out, calls = run_nested(tmp_path, 'On a new disk where the lighthouse never ran', an_aside(tmp_path))
+    assert calls == ['--user start superyak-lighthouse', '--user stop superyak-lighthouse']
 
 
 def test_the_carry_note_is_there_when_the_carry_is():
