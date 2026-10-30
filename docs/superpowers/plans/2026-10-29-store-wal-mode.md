@@ -301,7 +301,11 @@ gate holds measured before bounded health merges.
 - [ ] **Step 3: Implement** as the Interfaces say; the lighthouse's checkpoint thread runs every 3,600 s and stops in
   the lifespan's exit, where the keeper closes too. No VACUUM of the live store, here or as the size notice's advice:
   connector-apps pages receipts by `connector_reads`' rowid, whose TEXT primary key lets a VACUUM renumber it, so a
-  VACUUM waits until that cursor changes (Tardis, on connector-apps 035e5ab2).
+  VACUUM waits until that cursor changes (Tardis, on connector-apps 035e5ab2). The keeper connection opens after
+  `Store.__init__`'s `os.open`/`os.close` of peer.sqlite3, and no second Store is built in a process that holds a
+  keeper: on Linux, closing any descriptor of the file drops every POSIX lock the process holds on it, the keeper's
+  included (the Tasks 4-5 re-check's M1; Tardis and Serenity). Its test builds a second Store beside a keeper and
+  shows another process still refused the write lock, or refuses the second Store.
 - [ ] **Step 4: Run** `tests/test_wal_costs.py tests/test_station_units.py`, in both journal modes — expect PASS.
 - [ ] **Step 5: Commit** `WAL's costs bounded: a keeper per process, a non-blocking checkpoint, a size notice`.
 
