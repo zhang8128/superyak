@@ -1,6 +1,6 @@
 """The named pure reads off the gate (spec 2026-10-29-store-wal-mode D3, plan Task 5): each moved function runs on a WAL
 store while another thread holds the dispatch gate and an open write, and changes no table and no file; no gated caller
-reaches one."""
+reaches one; and one signed pull served twice at once is one replay."""
 import ast
 from collections import defaultdict
 from contextlib import closing
@@ -14,10 +14,13 @@ from types import SimpleNamespace
 import pytest
 
 import superyak_peer
+from superyak_peer.common import Problem
 from superyak_peer.federate import Federate
+from superyak_peer.identity import canonical
 from superyak_peer.journal_mode import switch_journal
 from conftest import paired
 from test_federation_outcomes import Clock, station
+from test_federation_pull import request as pull_request
 from test_presence import docked
 from test_reading import gate_and_write_held, timed
 
@@ -267,3 +270,54 @@ def test_no_gated_caller_reaches_a_moved_read():
     found = [(caller, line, reached) for caller, line, reached in package.gated_callers(package.reaching(MOVED_READS))
              if any((caller, name) not in ALLOWED for name in reached)]
     assert found == []
+
+
+def in_mode(store, mode):
+    if mode == 'wal':
+        switch_journal(store.data_dir, 'wal', active=lambda: [])
+    else:
+        with closing(sqlite3.connect(store.db_path)) as db:  # the suite may run in WAL; this case pins a mode
+            db.execute('PRAGMA journal_mode=DELETE').fetchone()
+
+
+@pytest.mark.parametrize('mode', ['wal', 'delete'])
+def test_one_signed_pull_served_twice_at_once_is_one_replay(tmp_path, monkeypatch, mode):
+    """Tardis's pin: serve_pull's prune, replay floor, nonce lookup and INSERT stay one gated BEGIN IMMEDIATE, in both
+    modes. Two threads serve the same signed request, and _replay_floor makes each caller signal, then wait up to 0.3 s
+    for the other: the correct code goes on after 0.3 s, since the second caller can't enter (a barrier would deadlock
+    it). Exactly one is served and the other answers 409 Replay, with one pull_nonces row and no 500. A split check
+    would reach the primary key as an IntegrityError, or the per-origin lock as 409 Busy."""
+    clock = Clock()
+    listener, mac = station(tmp_path / 'a', 'alice', clock), station(tmp_path / 'mac', 'mo', clock, mode='pull')
+    paired(listener[2], listener[1], mac[2].card(mac[1]))
+    paired(mac[2], mac[1], listener[2].card(listener[1]))
+    in_mode(listener[0], mode)
+    raw = canonical(pull_request(mac, listener, clock))
+    floor, arrived, both = listener[2]._replay_floor, [], threading.Event()
+
+    def meeting(db):
+        arrived.append(threading.get_ident())
+        if len(arrived) == 2:
+            both.set()
+        both.wait(0.3)
+        return floor(db)
+    monkeypatch.setattr(listener[2], '_replay_floor', meeting)
+    outcomes = []
+
+    def serve():
+        try:
+            outcomes.append(listener[2].serve_pull(raw))
+        except Problem as answer:
+            outcomes.append((answer.status, answer.message))
+        except Exception as error:  # noqa: BLE001 - what the route would answer with a 500
+            outcomes.append(error)
+    threads = [threading.Thread(target=serve) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert len(arrived) == 2
+    assert [o['ok'] for o in outcomes if isinstance(o, dict)] == [True]
+    assert [o for o in outcomes if not isinstance(o, dict)] == [(409, 'Replay')]
+    with listener[0].transaction() as db:
+        assert db.execute('SELECT count(*) FROM pull_nonces WHERE origin=?', (mac[2].identity.peer_id,)).fetchone()[0] == 1
