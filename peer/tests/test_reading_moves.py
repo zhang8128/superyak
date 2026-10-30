@@ -37,6 +37,7 @@ MOVED_READS = (
     'federation.Federation._pending_count',
     'federation.Federation._pull_keys',
     'federation.Federation._pull_left',
+    'federate.Federate._requests',
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -56,6 +57,7 @@ CALLS = {
     'federation.Federation._pending_count': lambda s: s.fed._pending_count(),
     'federation.Federation._pull_keys': lambda s: s.fed._pull_keys(s.pull_peer),
     'federation.Federation._pull_left': lambda s: s.fed._pull_left(s.pull_peer),
+    'federate.Federate._requests': lambda s: s.federate._requests(),
 }
 
 

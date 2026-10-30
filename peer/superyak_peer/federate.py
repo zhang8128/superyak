@@ -21,7 +21,7 @@ class Federate:
         self.seen_requests = None  # "Check delivery now" counts in peer_meta; a change makes every pull due (P11)
 
     def _requests(self):
-        with self.federation.store.transaction() as db:
+        with self.federation.store.reading() as db:
             row = db.execute("SELECT value FROM peer_meta WHERE key='sync_requests'").fetchone()
         return row[0] if row else None
 
