@@ -67,7 +67,7 @@ class Layers:
             return self._layer_json(self._owned_layer(db, actor, key))
 
     def list_layers(self, actor):
-        with self.transaction() as db:
+        with self.reading() as db:
             return [self._layer_json(r) for r in db.execute('SELECT * FROM layers WHERE owner_id=? ORDER BY id', (actor,))]
 
     def save_layer(self, actor, key, data):
