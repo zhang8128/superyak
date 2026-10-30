@@ -89,6 +89,8 @@ class ConnectorApps:
     def connected_app_revoke(self, actor, grant_id):
         with self.transaction() as db:
             row = self._connection(db, actor, grant_id)
+            if self._ended(row, self.clock()) is not None:  # its record stays true: "ended", or who ended it (Tardis)
+                raise Problem(409, ENDED)
             self._end_connection(db, row['id'], 'you')
             return self._app_entry(db, actor, self._connection(db, actor, grant_id), self.clock())
 
@@ -138,8 +140,10 @@ class ConnectorApps:
     def admin_connected_app_revoke(self, actor, grant_id):
         with self.transaction() as db:
             self._super_admin(db, actor)
-            row = db.execute('SELECT id FROM connector_grants WHERE id=?', (grant_id if isinstance(grant_id, str) else '',)).fetchone()
+            row = db.execute('SELECT * FROM connector_grants WHERE id=?', (grant_id if isinstance(grant_id, str) else '',)).fetchone()
             if row is None:
                 raise Problem(404, NO_SUCH)
+            if self._ended(row, self.clock()) is not None:
+                raise Problem(409, ENDED)
             self._end_connection(db, row['id'], 'admin')
             return {'id': row['id'], 'ended': True}

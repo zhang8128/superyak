@@ -229,3 +229,23 @@ def test_a_store_from_before_9a_gains_the_reason_column(tmp_path):
     with again.transaction() as db:
         assert 'revoked_why' in {row['name'] for row in db.execute('PRAGMA table_info(connector_grants)')}
 
+
+
+def test_an_ended_connection_cant_be_revoked_again(connected):
+    """Tardis's nit: revoking a connection that already ran to its end wrote "ended by you" over "ended". An ended one,
+    by any way, answers 409 and its record stays as it was."""
+    [app] = sam(connected).get('/api/connected-apps').json()
+    connected.clock[0] += 31 * 86400
+    assert sam(connected).post(f"/api/connected-apps/{app['id']}/revoke").status_code == 409
+    andy = admin(connected)
+    assert andy.post(f"/api/admin/connected-apps/{app['id']}/revoke").status_code == 409
+    assert sam(connected).get('/api/connected-apps').json()[0]['ended']['why'] == 'ended'
+    with connected.store.transaction() as db:
+        assert db.execute('SELECT revoked, revoked_why FROM connector_grants').fetchone()[:] == (None, None)
+
+
+def test_a_revoked_connection_revoked_again_keeps_who_ended_it(connected):
+    [app] = sam(connected).get('/api/connected-apps').json()
+    assert sam(connected).post(f"/api/connected-apps/{app['id']}/revoke").status_code == 200
+    assert admin(connected).post(f"/api/admin/connected-apps/{app['id']}/revoke").status_code == 409
+    assert sam(connected).get('/api/connected-apps').json()[0]['ended']['why'] == 'you'
