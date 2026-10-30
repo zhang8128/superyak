@@ -590,13 +590,14 @@ def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
     (linked / 'peer.sqlite3').symlink_to(live.db_path)
     asides = {name: backups_dir / f'replaced-20261017-1{number:02d}000' for number, name in enumerate(
         ('unmoved', 'journal', 'empty', 'symlinked', 'hard', 'plain', 'unmarked', 'elsewhere', 'damaged', 'broken', 'nul',
-         'earlier'), 3)}                                    # each older than `aside`, the newest
+         'earlier', 'wal', 'shm'), 3)}                      # each older than `aside`, the newest
     asides['misnamed'] = backups_dir / 'my-restore'
-    for name in ('unmoved', 'journal', 'elsewhere', 'damaged', 'broken', 'nul', 'earlier', 'misnamed'):
+    for name in ('unmoved', 'journal', 'elsewhere', 'damaged', 'broken', 'nul', 'earlier', 'misnamed', 'wal', 'shm'):
         restored_live(asides[name], marked=backups_dir / 'replaced-20250101-000000' / 'restored.sqlite3'
                       if name == 'elsewhere' else True)
     (asides['unmoved'] / 'peer.sqlite3').write_bytes(b'')
-    (asides['journal'] / 'peer.sqlite3-journal').write_bytes(b'')
+    for name in ('journal', 'wal', 'shm'):   # a cut-short 10.3 leaves sidecars alone: the twin's state, in either mode
+        (asides[name] / f'peer.sqlite3-{name}').write_bytes(b'')
     asides['empty'].mkdir()
     (asides['symlinked'] / 'restored-live').mkdir(parents=True)
     (asides['symlinked'] / 'restored-live' / 'peer.sqlite3').symlink_to(restored.db_path)
@@ -616,6 +617,8 @@ def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
             (linked, aside, 'No peer database'),
             (live.data_dir, asides['unmoved'], "10.3's move hasn't run"),
             (live.data_dir, asides['journal'], "10.3's move hasn't run"),
+            (live.data_dir, asides['wal'], "10.3's move hasn't run"),
+            (live.data_dir, asides['shm'], "10.3's move hasn't run"),
             (live.data_dir, asides['empty'], 'No restored station'),
             (live.data_dir, asides['symlinked'], 'No restored station'),
             (restored.data_dir, aside, 'the live database itself'),

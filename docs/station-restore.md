@@ -335,12 +335,13 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        restored station recorded`; 0 of 0 means it served no pull. Only then does it write `$ASIDE/carried`, which step
        8 reads. Running it again adds nothing. In WAL mode it reads `restored-live` through its `-wal`, so a commit made
        only there is carried too, and SQLite leaves a `-shm` beside it. Where it can't read that way (a `-wal` with no
-       `-shm`, in a directory it can't write), it refuses, and the rollback fails closed into 10.4's wait. It refuses, changing nothing, when `$ASIDE` still holds a `peer.sqlite3`
-       file or any of its sidecars (10.3's move hasn't run, or was cut short: run 10.3 again first, as its `NOT done`
-       line says), when `restored-live` is missing or damaged, when it isn't marked as the station
-       restored from `$ASIDE`, or when `$ASIDE` isn't the newest `replaced-*` directory (set it again with the line at
-       the top). If it refused and you can't fix what it names, go on with 10.4: step 8 then leaves the federation units
-       off.
+       `-shm`, in a directory it can't write), it refuses, and the rollback fails closed into 10.4's wait. It refuses,
+       changing neither database, when `$ASIDE` still holds a `peer.sqlite3` file or any of its sidecars (10.3's move
+       hasn't run, or was cut short: run 10.3 again first, as its `NOT done` line says), when `restored-live` is missing
+       or damaged, when it isn't marked as the station restored from `$ASIDE`, or when `$ASIDE` isn't the newest
+       `replaced-*` directory (set it again with the line at the top). In WAL mode, a refusal made after it has read
+       `restored-live` can leave the `-shm` SQLite makes there; nothing reads that file again. If it refused and you
+       can't fix what it names, go on with 10.4: step 8 then leaves the federation units off.
     4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and
        wormhole, put the watchers step 3 saved back as they were, and enable the timers again. Step 8's checks that act on
        step 5's report (the law layers, the members and admins, the `bridged` column) are for a restored copy and don't
