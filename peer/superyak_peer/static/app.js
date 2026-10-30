@@ -48,6 +48,7 @@ const state = {
   assistant: { enabled: false },
   assistance: {},
   sources: [],
+  connector: false, connectorNotice: null, apps: null, adminApps: null, appAsk: null, appRoomsEdit: null, appReceipts: {},
 };
 
 class ApiError extends Error {
@@ -113,7 +114,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.connectorNotice = null; state.apps = null; state.adminApps = null; state.appAsk = null; state.appRoomsEdit = null; state.appReceipts = {}; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -143,7 +144,7 @@ async function api(path, options = {}) {
 function routeParts() {
   const raw = location.hash.replace(/^#\/?/, "") || "home";
   const [route, id] = raw.split("/");
-  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections", "accounts"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
+  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections", "apps", "accounts"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
 }
 
 function navLink(route, label, icon) {
@@ -172,6 +173,7 @@ function layout(content) {
         ${navLink("spaces", "Circles & projects", "◎")}
         ${navLink("research", "Research & data", "⌕")}
         ${navLink("connections", "Connections", "↔")}
+        ${state.connector ? navLink("apps", "Connected apps", "⇄") : ""}
         ${state.imprints ? navLink("accounts", "Accounts", "☺") : ""}
       </nav>
       <div class="sidebar-foot">Private work stays on this peer until you choose an audience.</div>
@@ -192,6 +194,7 @@ function layout(content) {
         </button>
       </header>
       <main class="content" id="main-content" tabindex="-1">
+        ${connectorNotice()}
         ${state.flash ? `<div class="notice ${state.flash.error ? "error" : ""}" role="status">${escapeHtml(state.flash.message)}</div>` : ""}
         ${content}
       </main>
@@ -1323,7 +1326,218 @@ function connectionsView() {
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and type the code the other machine shows.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
     ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card and preview it. Then read the pairing code on the other machine’s own screen and type it here.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${state.pairPreview.endpoint ? escapeHtml(state.pairPreview.endpoint) : "Fetches from us: it has no address, and pulls what we hold for it"}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><form id="pair-confirm-form"><div class="field"><label for="pair-code">Type the code shown on the other machine</label><input class="input code-box" id="pair-code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(state.pairCode)}"></div><button class="button" type="submit">Pair this peer</button></form></div>` : ""}</section>` : ""}
-    ${shipsSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
+    ${shipsSection()}${connectorAdminSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
+}
+
+// Remote connector, Task 9b (spec "Receipts and revoking"): the person's connections to apps such as Claude (the page
+// never says "grants"), each one's rooms, what it read, changing its rooms, and Revoke, which asks first; the notice for
+// 7 days after a connection; and the super admins' view, which never holds rooms or receipts. Each list is read again
+// after every write. Hosts, titles and every other string from the home are escaped where shown.
+const APP_NAMES = new Map([["claude.ai", "Claude"], ["claude.com", "Claude"]]);  // connector.py APP_NAMES, by redirect host
+const APP_TOOLS = new Map([["rooms", "List shared rooms"], ["read_room", "Read a room"], ["search", "Search shared rooms"], ["fetch", "Fetch a message"]]);
+const APP_ENDED = new Map([
+  ["you", "You revoked it."], ["admin", "An admin of this home revoked it."], ["ended", "It reached its end date."],
+  ["restore", "A restore of this home removed it; what it read is still listed."], ["damaged", "Its record is damaged, so nothing can use it."],
+  ["code_reused", "Its sign-in code was used twice, which can mean it was copied, so the home ended it."],
+  ["refresh_reused", "Its renewal was used twice, which can mean it was copied, so the home ended it."],
+  ["split_chain", "Its renewal was used twice, which can mean it was copied, so the home ended it."]]);
+const APP_REFUSED = new Map([["marked", "a member keeps it from cloud models"], ["not_shared", "not shared with this app"], ["remote", "on another home"], ["no_such", "no such room"]]);
+const RECEIPT_PAGE = 20;
+
+function appName(host) {
+  return APP_NAMES.get(host) || String(host || "An app");
+}
+
+function appDate(value) {
+  return typeof value === "number" ? formatDate(value) : "a time not recorded";  // a damaged row sends null (9a's M1)
+}
+
+async function loadConnectorNotice() {
+  // 404 means this home runs without the connector: no link, no notice. Another failure keeps the link and shows no notice.
+  try { return { on: true, notice: await api("/api/connected-apps/notice") }; }
+  catch (error) { if (error.status === 401) throw error; return { on: error.status !== 404, notice: null }; }
+}
+
+async function loadConnectedApps() {
+  const who = identityKey(state.me);
+  try { const apps = await api("/api/connected-apps"); if (identityKey(state.me) === who) state.apps = apps; }
+  catch (error) { if (error.status === 401) throw error; if (identityKey(state.me) === who) state.apps = null; }
+}
+
+async function loadAdminApps() {
+  const who = identityKey(state.me);
+  try { const apps = await api("/api/admin/connected-apps"); if (identityKey(state.me) === who) state.adminApps = apps; }
+  catch (error) { if (error.status === 401) throw error; if (identityKey(state.me) === who) state.adminApps = null; }
+}
+
+// One connection write at a time, as grants do: a second click while one is on its way would meet the first one's own
+// revoke as "This connection has ended" and show it as a failure. The lists and the notice are read again after every
+// write, so the page shows what the home holds.
+async function appWrite(path, method, json, message) {
+  if (state.appSaving) return false;
+  let done = false;
+  state.appSaving = true;
+  const who = identityKey(state.me);
+  try {
+    await api(path, { method, json });
+    if (identityKey(state.me) !== who) return false;
+    state.appAsk = null; state.appRoomsEdit = null;
+    setFlash(message);
+    done = true;
+  } catch (error) {
+    if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return false; }
+    if (identityKey(state.me) === who) setFlash(error.message, true);
+  } finally {
+    state.appSaving = false;
+    if (state.me && identityKey(state.me) === who) {
+      try {
+        const route = routeParts().route, [connector] = await Promise.all([loadConnectorNotice(), route === "apps" ? loadConnectedApps() : null,
+          route === "connections" && state.me.is_super_admin ? loadAdminApps() : null]);
+        if (identityKey(state.me) === who) state.connectorNotice = connector.notice;
+      } catch (error) {
+        if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return false; }
+      }
+      render();
+    }
+  }
+  return done;
+}
+
+// Receipts a page at a time, newest first. "Show earlier" sends the last page's cursor, a receipt's own id; when that
+// receipt has gone (the sweep takes one a year past its connection), the home answers 400 and the list starts again from
+// the newest rather than showing an error (Rio Grande, on 72889183). One read at a time, so a double click adds one page.
+async function loadReceipts(appId, earlier) {
+  if (state.appReceiptsLoading) return;
+  const who = identityKey(state.me), shown = state.appReceipts[appId], cursor = earlier ? shown?.before : null;
+  if (earlier && !cursor) return;
+  state.appReceiptsLoading = true;
+  let restart = false;
+  try {
+    const page = await api(`/api/connected-apps/${pathPart(appId)}/receipts?limit=${RECEIPT_PAGE}${cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`);
+    if (identityKey(state.me) !== who) return;
+    state.appReceipts[appId] = { receipts: cursor ? [...shown.receipts, ...page.receipts] : page.receipts, before: page.before };
+  } catch (error) {
+    if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+    if (identityKey(state.me) !== who) return;
+    if (cursor && error.status === 400) restart = true;
+    else setFlash(error.message, true);
+  } finally {
+    state.appReceiptsLoading = false;
+  }
+  if (restart) {
+    setFlash("The list changed while you read it, so it starts again from the newest.");
+    await loadReceipts(appId, false);
+    return;
+  }
+  render();
+}
+
+function connectorNotice() {
+  const notice = state.connectorNotice;
+  if (!notice) return "";
+  return `<div class="notice connector-notice"><p>${escapeHtml(appName(notice.app))} was connected on ${escapeHtml(appDate(notice.created))}. Not you? <button class="button danger secondary" type="button" data-action="app-notice-revoke" data-id="${escapeHtml(notice.id)}">Revoke</button></p></div>`;
+}
+
+// The rooms a person can choose for a connection: their current rooms on this home that no member keeps from cloud
+// models, and a room the connection already has that they are still in, so a list can be narrowed without losing it
+// (9a's S2). The home checks every change again.
+function appRoomChoices(app) {
+  const chats = state.home?.chats || [], chosen = new Set(app.all_rooms ? [] : app.rooms.map((room) => room.room));
+  const replaced = (room) => chats.some((other) => !other.origin && other.linked_room_id === room.id);
+  return chats.filter((room) => !room.cloud && (chosen.has(room.id) || (!room.origin && !room.breakout && !replaced(room))));
+}
+
+function appRoomsForm(app) {
+  const id = escapeHtml(app.id), chosen = new Set(app.all_rooms ? [] : app.rooms.map((room) => room.room)), name = escapeHtml(appName(app.app));
+  const choices = appRoomChoices(app).map((room) => `<label class="choice"><input type="checkbox" name="app-room" value="${escapeHtml(room.id)}"${chosen.has(room.id) ? " checked" : ""}><span class="choice-copy"><strong>${escapeHtml(room.title)}</strong></span></label>`).join("")
+    || `<p class="meta">You have no room it can read.</p>`;
+  return `<form class="app-rooms-form" data-id="${id}"><fieldset class="field"><legend>Rooms ${name} reads</legend><label class="choice"><input type="radio" name="app-scope" value="listed"${app.all_rooms ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices">${choices}</div><label class="choice"><input type="radio" name="app-scope" value="*"${app.all_rooms ? " checked" : ""}><span class="choice-copy"><strong>All my rooms, including new ones</strong><small>Except rooms a member keeps from cloud models.</small></span></label></fieldset><div class="button-row"><button class="button" type="submit">Save rooms</button><button class="button secondary" type="button" data-action="app-rooms-cancel" data-id="${id}">Cancel</button></div></form>`;
+}
+
+async function saveAppRooms(form) {
+  const app = (state.apps || []).find((item) => item.id === form.dataset.id);
+  if (!app || state.appSaving) return;
+  const all = form.querySelector('[name="app-scope"]:checked')?.value === "*";
+  const rooms = all ? "*" : [...form.querySelectorAll('[name="app-room"]:checked')].map((input) => input.value);
+  if (rooms !== "*" && !rooms.length) { setFlash("Choose at least one room, or all your rooms.", true); render(); return; }
+  await appWrite(`/api/connected-apps/${pathPart(app.id)}/rooms`, "PUT", { rooms }, `Rooms saved. ${appName(app.app)} reads them from its next call.`);
+}
+
+function appRoomsList(app, live) {
+  const name = escapeHtml(appName(app.app));
+  if (app.damaged) return `<div class="app-rooms"><p class="meta">Its room list is damaged, so it can't read any room. Revoke it, then connect again.</p></div>`;
+  const verb = live ? "It reads" : "It could read";  // an ended connection reads nothing
+  if (app.all_rooms) return `<div class="app-rooms"><p>${verb} all your rooms on this home, including new ones, except rooms a member keeps from cloud models.</p></div>`;
+  if (!app.rooms.length) return "";  // a connection a restore removed: only its receipts are left
+  const ids = new Set(app.rooms.map((room) => room.room));
+  const rows = app.rooms.map((room) => {
+    const next = room.continues_in, offer = live && next && !ids.has(next.room)
+      ? `<p class="app-offer">${escapeHtml(room.title)} continues in a new room. Let ${name} read it? <button class="button secondary" type="button" data-action="app-room-add" data-id="${escapeHtml(app.id)}" data-room="${escapeHtml(next.room)}" aria-label="Let ${name} read the new ${escapeHtml(next.title)}">Yes, add it</button></p>` : "";
+    return `<li>${escapeHtml(room.title)}${room.cloud ? ' <span class="badge cloud-badge">Never to a cloud model</span>' : ""}${offer}</li>`;
+  }).join("");
+  return `<div class="app-rooms"><p class="meta">${verb} these rooms:</p><ul>${rows}</ul></div>`;
+}
+
+function receiptItem(receipt) {
+  const parts = [appDate(receipt.at), APP_TOOLS.get(receipt.tool) || "A call"];
+  // "refused" alone only when no refused room is named: a room the person isn't in is never recorded (spec "Receipts")
+  if (receipt.outcome === "failed" || (receipt.outcome === "refused" && !receipt.rooms_refused.length)) parts.push(receipt.outcome);
+  if (receipt.rooms_read.length) parts.push(`Read: ${receipt.rooms_read.map((room) => room.title).join(", ")}`);
+  if (receipt.rooms_refused.length) parts.push(`Refused: ${receipt.rooms_refused.map((room) => `${room.title} (${APP_REFUSED.get(room.why) || "refused"})`).join(", ")}`);
+  return `<li class="receipt">${escapeHtml(parts.join(" · "))}</li>`;
+}
+
+function appReceipts(app) {
+  const id = escapeHtml(app.id), shown = state.appReceipts[app.id];
+  if (!shown) return `<div class="button-row"><button class="button secondary" type="button" data-action="app-receipts" data-id="${id}">Show what it read</button></div>`;
+  const list = shown.receipts.length ? `<ol class="receipts">${shown.receipts.map(receiptItem).join("")}</ol>` : `<p class="meta">It hasn't read anything.</p>`;
+  return `<section class="app-receipts"><h3>What it read</h3><p class="meta">Each call: when, what it did, and the rooms it read or was refused. Never what was asked.</p>${list}${shown.before ? `<div class="button-row"><button class="button secondary" type="button" data-action="app-receipts-earlier" data-id="${id}">Show earlier</button></div>` : ""}</section>`;
+}
+
+function appItem(app) {
+  const id = escapeHtml(app.id), host = String(app.app || ""), name = appName(host), ended = app.ended, live = !ended;
+  const title = APP_NAMES.has(host) ? `${name} (${host})` : name;
+  const when = [`Connected ${appDate(app.created)}`, `last used ${app.last_used == null ? "never" : appDate(app.last_used)}`,
+                ended ? `ended ${appDate(ended.at)}` : `ends ${appDate(app.ends)}`].join(" · ");
+  const status = ended ? `<p><span class="badge failed">Ended</span> ${escapeHtml(APP_ENDED.get(ended.why) || "")}</p>`
+    : app.usable ? "" : `<p class="meta">Its sign-in has lapsed: ${escapeHtml(name)} asks you to connect again before it reads anything.</p>`;
+  let controls = "";
+  if (live) {
+    const ask = state.appAsk?.id === app.id && !state.appAsk.admin;
+    controls = ask
+      ? `<div class="board-ask app-ask" role="group" aria-label="Revoke this connection?"><p>Revoke this connection? ${escapeHtml(name)} stops reading your rooms at once. Disconnecting in ${escapeHtml(name)} alone doesn't end it.</p><div class="button-row"><button class="button secondary" type="button" data-action="app-cancel" data-id="${id}">Cancel</button><button class="button danger" type="button" data-action="app-revoke-confirm" data-id="${id}">Yes, revoke</button></div></div>`
+      : `<div class="button-row">${app.damaged ? "" : `<button class="button secondary" type="button" data-action="app-rooms-edit" data-id="${id}">Change rooms</button>`}<button class="button danger secondary" type="button" data-action="app-revoke" data-id="${id}" aria-label="Revoke ${escapeHtml(name)}, connected ${escapeHtml(appDate(app.created))}">Revoke</button></div>`;
+  }
+  const rooms = live && state.appRoomsEdit === app.id && !app.damaged ? appRoomsForm(app) : appRoomsList(app, live);
+  return `<li class="app-item card" data-id="${id}"><h2>${escapeHtml(title)}</h2><p class="meta">${escapeHtml(when)}</p>${status}${rooms}${controls}${appReceipts(app)}</li>`;
+}
+
+function connectedAppsView() {
+  const head = `<header class="page-head"><div><p class="eyebrow">Your home, from Claude</p><h1 id="apps-title" tabindex="-1">Connected apps</h1><p class="lede">An app you connect reads the rooms you choose, and nothing else, until its connection ends or you revoke it. It can't post or change anything.</p><p class="meta">Disconnecting in Claude doesn't end the connection here. Revoke does.</p></div></header>`;
+  if (!state.connector) return `${head}<p class="meta">This home has no connector for apps.</p>`;
+  if (!Array.isArray(state.apps)) return `${head}<p class="meta">Connected apps could not be read. Refresh to try again.</p>`;
+  return `${head}${state.apps.length ? `<ul class="app-list">${state.apps.map(appItem).join("")}</ul>` : `<p class="meta">No app is connected to your home.</p>`}`;
+}
+
+function adminAppItem(app) {
+  const id = escapeHtml(app.id), person = escapeHtml(app.person), host = escapeHtml(app.app);
+  const when = [`Connected ${appDate(app.created)}`, `last used ${app.last_used == null ? "never" : appDate(app.last_used)}`,
+                app.ended ? `ended ${appDate(app.ended.at)}` : `ends ${appDate(app.ends)}`].join(" · ");
+  let controls = "";
+  if (!app.ended) {
+    controls = state.appAsk?.id === app.id && state.appAsk.admin
+      ? `<div class="board-ask app-ask" role="group" aria-label="Revoke this connection?"><p>Revoke ${person}'s connection to ${host}? It stops reading at once; they can connect again.</p><div class="button-row"><button class="button secondary" type="button" data-action="app-cancel" data-id="${id}">Cancel</button><button class="button danger" type="button" data-action="app-revoke-confirm" data-id="${id}">Yes, revoke</button></div></div>`
+      : `<div class="button-row"><button class="button danger secondary" type="button" data-action="app-admin-revoke" data-id="${id}" aria-label="Revoke ${person}'s connection to ${host}">Revoke</button></div>`;
+  }
+  return `<li class="app-admin-item" data-id="${id}"><p><strong>${person}</strong> · ${host}${app.ended ? ' <span class="badge failed">Ended</span>' : ""}</p><p class="meta">${escapeHtml(when)}</p>${controls}</li>`;
+}
+
+function connectorAdminSection() {
+  if (!state.connector || !state.me.is_super_admin) return "";
+  const apps = state.adminApps;
+  const body = !Array.isArray(apps) ? `<p class="meta">Connected apps could not be read. Refresh to try again.</p>`
+    : apps.length ? `<ul class="app-admin-list">${apps.map(adminAppItem).join("")}</ul>` : `<p class="meta">No one has connected an app to this home.</p>`;
+  return `<section class="section card connector-admin" aria-labelledby="connector-admin-title"><h2 id="connector-admin-title" tabindex="-1">Connected apps on this home</h2><p class="meta">Each person's connections to apps such as Claude. You can end one. Its rooms and what it read stay that person's own.</p>${body}</section>`;
 }
 
 function profileDialog() {
@@ -1368,7 +1582,7 @@ async function loadData() {
     ]);
     if (!valid()) return false;
     if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
-    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList, ships, imprints] = await Promise.all([
+    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList, ships, imprints, connector] = await Promise.all([
       api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
       api("/api/sources").catch(() => null),
       Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
@@ -1381,6 +1595,7 @@ async function loadData() {
       home.user.is_admin ? api("/api/access-requests") : [],
       api("/api/ships"),
       loadImprints(),
+      loadConnectorNotice(),
     ]);
     if (!valid()) return false;
     const previousActive = state.activeLayers;
@@ -1389,7 +1604,7 @@ async function loadData() {
       return active ? [[result.id, active]] : [];
     }));
     const activeLayerErrors = Object.fromEntries(activePairs.flatMap(result => result.error ? [[result.id, result.error.message]] : []));
-    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges, ships, imprints });
+    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges, ships, imprints, connector: connector.on, connectorNotice: connector.notice });
     return true;
   } catch (error) { if (!valid()) return false; throw error; }
 }
@@ -1424,6 +1639,8 @@ async function loadRoute() {
       state.room = null;
     }
   }
+  if (route === "apps") await loadConnectedApps();
+  if (route === "connections" && state.connector && state.me.is_super_admin) await loadAdminApps();
   if (route === "grants") { try { await loadData(); } catch (_) { /* the view below reads what it can */ } await loadGrants(); }
   if (route === "board") { try { await loadData(); } catch (_) { /* the view below reads what it can */ } const who = identityKey(state.me); try { const view = await api("/api/board"); if (identityKey(state.me) === who) state.boardView = view; } catch (_) { if (identityKey(state.me) === who) state.boardView = null; } }
   if (route === "shared") {
@@ -1452,12 +1669,18 @@ function closeDialogs() {
 function render() {
   if (!state.me || !state.home) return;
   const route = routeParts().route;
-  const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView, accounts: accountsView }[route]();
+  const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView, apps: connectedAppsView, accounts: accountsView }[route]();
   const focused = document.activeElement;
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
   const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
   app.innerHTML = layout(view);
+  // On a phone the nav is one row that scrolls sideways (app.css): bring the current page's link into view in it. Only the
+  // nav's own scroll moves, never the page's, so a render far down a page stays where it is.
+  const nav = app.querySelector(".nav"), current = nav?.querySelector('[aria-current="page"]');
+  if (nav && current && nav.scrollWidth > nav.clientWidth) {
+    nav.scrollLeft += current.getBoundingClientRect().left - nav.getBoundingClientRect().left - (nav.clientWidth - current.offsetWidth) / 2;
+  }
   const dialogs = app.querySelectorAll("dialog");
   for (const dialog of dialogs) {
     dialog.showModal();
@@ -1472,7 +1695,7 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
-  document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", accounts: "Accounts" }[route]} · Superyak`;
+  document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections", apps: "Connected apps", accounts: "Accounts" }[route]} · Superyak`;
 }
 
 async function refresh(message = null) {
@@ -2125,6 +2348,7 @@ document.addEventListener("submit", async (event) => {
   if (form.id === "brief-form") await saveBrief(form);
   if (form.id === "board-post-form") await postBoardItem(form);
   if (form.id === "grant-form") await makeGrant(form);
+  if (form.matches(".app-rooms-form")) await saveAppRooms(form);
   if (form.id === "board-done-form") await boardWrite("/board/done", { key: form.dataset.key, outcome: form.elements.outcome.value }, "Marked done.", { focusKey: form.dataset.key });
   if (form.id === "message-form") await sendMessage(form);
   if (form.id === "pair-preview-form") await previewPair(form);
@@ -2243,6 +2467,41 @@ document.addEventListener("click", async (event) => {
     // A refused revoke re-renders its ask: focus goes back to "Yes, revoke". With the ask gone (sign-in shown, another account) nothing is focused.
     else if (state.grantAsk?.id === target.dataset.id) document.querySelector('.grant-ask [data-action="grant-revoke-confirm"]')?.focus();
   }
+  if (action === "app-notice-revoke") {
+    state.appAsk = { id: target.dataset.id, admin: false };
+    if (routeParts().route !== "apps") { location.hash = "apps"; return; }  // the hashchange loads the list and focuses Cancel
+    render();
+    document.querySelector('.app-ask [data-action="app-cancel"]')?.focus();
+  }
+  if (action === "app-revoke" || action === "app-admin-revoke") {
+    state.appAsk = { id: target.dataset.id, admin: action === "app-admin-revoke" };
+    render();
+    document.querySelector('.app-ask [data-action="app-cancel"]')?.focus();  // the safe choice
+  }
+  if (action === "app-cancel") {
+    const admin = state.appAsk?.admin;
+    state.appAsk = null;
+    render();
+    document.querySelector(`[data-action="${admin ? "app-admin-revoke" : "app-revoke"}"][data-id="${CSS.escape(target.dataset.id)}"]`)?.focus();
+  }
+  if (action === "app-revoke-confirm" && state.appAsk?.id === target.dataset.id) {
+    const admin = state.appAsk.admin, id = pathPart(target.dataset.id);
+    const done = await appWrite(admin ? `/api/admin/connected-apps/${id}/revoke` : `/api/connected-apps/${id}/revoke`, "POST", undefined,
+                                "Connection revoked. It reads nothing from now on.");
+    if (done) document.querySelector(admin ? "#connector-admin-title" : "#apps-title")?.focus();
+    else if (state.appAsk?.id === target.dataset.id) document.querySelector('.app-ask [data-action="app-revoke-confirm"]')?.focus();
+  }
+  if (action === "app-rooms-edit") {
+    state.appRoomsEdit = target.dataset.id;
+    render();
+    document.querySelector(`.app-rooms-form[data-id="${CSS.escape(target.dataset.id)}"] input`)?.focus();
+  }
+  if (action === "app-rooms-cancel") { state.appRoomsEdit = null; render(); }
+  if (action === "app-room-add") {
+    const app = (state.apps || []).find((item) => item.id === target.dataset.id);
+    if (app && !app.all_rooms) await appWrite(`/api/connected-apps/${pathPart(app.id)}/rooms`, "PUT", { rooms: [...app.rooms.map((room) => room.room), target.dataset.room] }, `Rooms saved. ${appName(app.app)} reads them from its next call.`);
+  }
+  if (action === "app-receipts" || action === "app-receipts-earlier") await loadReceipts(target.dataset.id, action === "app-receipts-earlier");
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
   if (action === "cloud-mark" && state.room) await markRoom(state.room, document.getElementById("cloud-earlier")?.checked ?? true);
   if (action === "cloud-clear" && state.room) await clearMark(state.room);
@@ -2459,7 +2718,10 @@ window.addEventListener("hashchange", async () => {
   if (takeImprintCode()) { await refresh(); return; }
   state.flash = null;
   state.transitionNote = null;
-  try { await loadRoute(); render(); }
+  try {
+    await loadRoute(); render();
+    if (state.appAsk && routeParts().route === "apps") document.querySelector('.app-ask [data-action="app-cancel"]')?.focus();  // from the notice's Revoke
+  }
   catch (error) { setFlash(error.message, true); render(); }
 });
 

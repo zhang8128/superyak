@@ -217,8 +217,9 @@ dialog::backdrop { background: rgba(14,31,28,.48); backdrop-filter: blur(2px); }
   .shell { display: block; padding-bottom: 76px; }
   .sidebar { position: fixed; inset: auto 0 0; z-index: 30; width: 100%; height: 70px; padding: 7px 8px max(7px, env(safe-area-inset-bottom)); border: 0; border-top: 1px solid var(--line); }
   .sidebar .brand, .sidebar-foot { display: none; }
-  .nav { height: 100%; margin: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; }
-  .nav a { min-width: 0; min-height: 52px; padding: 5px 2px; flex-direction: column; justify-content: center; gap: 1px; font-size: 10px; line-height: 1.1; text-align: center; }
+  /* One row that scrolls sideways: a five-column grid in a 70px bar drew its sixth link and after over the first row. */
+  .nav { height: 100%; margin: 0; display: flex; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .nav a { flex: 0 0 72px; min-width: 0; min-height: 52px; padding: 5px 2px; flex-direction: column; justify-content: center; gap: 1px; font-size: 10px; line-height: 1.1; text-align: center; }
   .nav-icon { height: 19px; font-size: 15px; }
   .topbar { min-height: 70px; padding: 10px 16px; }
   .space-picker select { max-width: 170px; font-size: 14px; }
@@ -338,6 +339,16 @@ a.button { display: inline-block; text-decoration: none; }
 .grant-list { list-style: none; margin: 0; padding: 0; }
 .grant-item { padding: 10px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .grant-item p { margin: 0 0 6px; }
+/* Connected apps (remote connector, Task 9b): as the grant list, one card per connection; receipts a quiet list. */
+.app-list, .app-admin-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.app-item, .app-admin-item { overflow-wrap: anywhere; }
+.app-item h2 { margin: 0 0 4px; font-size: 1.1rem; }
+.app-item p, .app-admin-item p { margin: 0 0 6px; }
+.app-admin-item { padding: 10px 0; border-top: 1px solid var(--line); }
+.app-rooms ul { margin: 0 0 8px; padding-left: 20px; }
+.app-offer { margin: 4px 0 0; }
+.connector-notice p { margin: 0; }
+.receipts { margin: 0 0 8px; padding-left: 20px; font-size: 0.9rem; }
 .grant-make form { display: grid; gap: 12px; max-width: 720px; }
 .carry-brief-text { max-height: 200px; margin-top: 10px; padding: 12px 14px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 
