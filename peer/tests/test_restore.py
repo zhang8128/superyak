@@ -1260,6 +1260,31 @@ def test_runbook_steps_3_and_8_put_each_watcher_back_as_it_was(tmp_path):
     assert 'make station-rooms' in calls
 
 
+def test_runbook_steps_3_and_8_keep_the_sweep_and_lessons_timers_as_they_were(tmp_path):
+    """Store-wal-mode plan Task 1 (the plan review's M5 and its re-check's R-S1): step 3 saves which of the imprint-sweep
+    and lessons-index timers are enabled, by `is-enabled` (`is-active` can't tell a missing unit from a stopped one),
+    then disables and stops each with its service, so a reboot mid-restore can't start one on a half-restored store.
+    Step 8 enables and starts only those again, on lines of their own after the watchers'. A timer not installed is
+    never named. A second step 3 keeps the first record. Mutation: step 8 starting both timers, or step 3 stopping
+    without disabling."""
+    aside = tmp_path / 'replaced-20261017-120000'
+    aside.mkdir(mode=0o700)
+    run_runbook(tmp_path, 3, '')                                   # lays out the shims and the state files
+    with open(tmp_path / 'states.txt', 'a') as states:
+        states.write('superyak-imprint-sweep.timer enabled active\n')  # the lessons-index timer isn't installed
+    out, calls = run_runbook(tmp_path, 3, aside)
+    assert (aside / 'timers.txt').read_text() == 'superyak-imprint-sweep.timer\n'
+    assert '--user disable --now superyak-imprint-sweep.timer' in calls
+    assert '--user stop superyak-imprint-sweep.service' in calls
+    assert [call for call in calls if 'lessons-index' in call] == ['--user is-enabled superyak-lessons-index.timer']
+    (tmp_path / 'states.txt').write_text('superyak-imprint-sweep.timer disabled inactive\n')   # as step 3 left it
+    run_runbook(tmp_path, 3, aside)
+    assert (aside / 'timers.txt').read_text() == 'superyak-imprint-sweep.timer\n'
+    out, calls = run_runbook(tmp_path, 8, aside)
+    timers = [call for call in calls if 'imprint-sweep' in call or 'lessons-index' in call]
+    assert timers == ['--user enable --now superyak-imprint-sweep.timer']
+
+
 def step_6(tmp_path, aside):
     """Runbook step 6 as pasted, with HOME in tmp_path: (stdout, the installed peer.sqlite3 or None)."""
     if not (tmp_path / 'home').exists():

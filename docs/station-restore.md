@@ -55,13 +55,17 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    puts each back as it was, so a unit you had stopped stays stopped, and one that isn't installed is never named.
    Running these lines again, after a restart or from steps 6 and 10, keeps the list from the first run. The ship, odo,
    wormhole, the listed units and both timers are disabled as well as stopped, so a restart starts none of them before
-   step 8 does: federate and the listener would write into a half-restored database. The lighthouse and the door stay
-   enabled: step 8 starts them first anyway.
+   step 8 does: federate and the listener would write into a half-restored database. The imprint-sweep and
+   lessons-index timers, where installed and enabled, are saved in `$ASIDE/timers.txt` (by `is-enabled`, so one that
+   isn't installed is never named), then disabled and stopped with their services; step 8 enables them again. The
+   lighthouse and the door stay enabled: step 8 starts them first anyway.
    ```bash
    if [ ! -d "$ASIDE" ]; then echo 'NOT stopped: ASIDE is not set; set it again (see the top), then run these lines again'
    else
      test -e "$ASIDE/watchers.txt" || { units=$(systemctl --user list-units --all --plain --no-legend 'superyak-ship-*' 'superyak-federat*') && for unit in $(printf '%s\n' "$units" | awk '{print $1}'); do echo "$unit enabled=$(systemctl --user is-enabled "$unit") active=$(systemctl --user is-active "$unit")"; done > "$ASIDE/watchers.new" && mv "$ASIDE/watchers.new" "$ASIDE/watchers.txt"; }; cat "$ASIDE/watchers.txt"
      systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer   # a restart must not run a catch-up backup on a half-restored station
+     test -e "$ASIDE/timers.txt" || { for timer in superyak-imprint-sweep.timer superyak-lessons-index.timer; do [ "$(systemctl --user is-enabled "$timer" 2>/dev/null)" = enabled ] && echo "$timer"; done > "$ASIDE/timers.new"; mv "$ASIDE/timers.new" "$ASIDE/timers.txt"; }; cat "$ASIDE/timers.txt"
+     for timer in $(cat "$ASIDE/timers.txt"); do systemctl --user disable --now "$timer"; systemctl --user stop "${timer%.timer}.service"; done   # the sweep and the lessons index, where installed
      for unit in superyak-ship superyak-odo superyak-wormhole $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user disable --now "$unit"; done
      systemctl --user stop superyak-backup.service superyak-door superyak-odo superyak-wormhole superyak-ship superyak-lighthouse
      systemctl --user list-units 'superyak-*'
@@ -207,7 +211,8 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    wormhole: if a room shows bridged that should not be, run `make station-unbridge ID=<short id>`. Put the units
    step 3 saved, the watchers and the federation units, back as they were, after the lighthouse: enable again those that
    were enabled, and start again those that were running (a crashed one restarting counts as running). Check each
-   started unit with `is-active`, then enable both timers again. A pull peer's deliveries resume about 5 minutes after
+   started unit with `is-active`, then enable both timers again, and the imprint-sweep and lessons-index timers step 3
+   saved in `timers.txt`. A pull peer's deliveries resume about 5 minutes after
    step 5's reconcile: until then the listener answers its pulls "Replay", counts no failure and keeps its acks, so a
    copy's lost pull nonces can't be replayed (fix:restore-keeps-pull-nonces).
    ```bash
@@ -220,6 +225,7 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done   # and those it saved as running
    for unit in superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(awk '$3 ~ /^active=(active|activating|reloading)$/ {print $1}' "$ASIDE/watchers.txt"); do printf '%s ' "$unit"; systemctl --user is-active "$unit"; done
    systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer   # as make station-units does
+   [ -d "$ASIDE" ] && for timer in $(cat "$ASIDE/timers.txt" 2>/dev/null); do systemctl --user enable --now "$timer"; done   # the timers step 3 saved as enabled
    ```
 9. **Say in the room** what was restored and from when. Everything said after the copy's time is gone.
 10. **Rolling back** (only if the restored station is wrong; once it has taken posts, rolling back loses them too):
