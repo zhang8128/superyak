@@ -237,8 +237,7 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        ```
        If it says 10.2 ran before and `$ASIDE/peer.sqlite3` still exists, any `peer.sqlite3` file now in the data
        directory is a stray: set it aside with step 6's stray-case lines, then go on with 10.3. If `$ASIDE/peer.sqlite3`
-       is gone, 10.3's move has run: run 10.3's carry (below), which is safe to run again, and go on with 10.4 only
-       once it printed its count.
+       is gone, 10.3's move has run: run 10.3's carry (below), which is safe to run again, then go on with 10.4.
     3. Move the set-aside `$ASIDE/peer.sqlite3` and its sidecars back, as one set. The lines move nothing, and print
        why, when `$ASIDE` holds no `peer.sqlite3` (10.3 ran before, or `ASIDE` is not this restore's directory) or a
        `peer.sqlite3` file is in the data directory. The `ls` must show them in the data directory and none left in
@@ -254,14 +253,27 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        stray-case lines and run 10.3 again; when 10.2 didn't run, run 10.2 first.
 
        Then carry the restored station's pull nonces into the file put back, still with everything stopped:
-       `make station-carry-nonces FROM="$ASIDE/restored-live/peer.sqlite3"`. The file put back lacks the nonces that
-       station recorded while it was live, so a pull it served could otherwise be replayed. The carry copies them in
-       exactly, depending on no clock (fix:pull-floor-after-rollback). It prints how many it added; running it again
-       adds nothing. If it refuses (say `restored-live` is damaged), nothing changed: note the time 10.1 stopped the
-       federation units, and in 10.4 start them only more than 10 minutes after it, since a pull the restored station
-       served just before the stop, from a peer whose clock ran 300 s ahead, could pass the clock check that long.
+       `make station-carry-nonces ASIDE="$ASIDE"`. The file put back lacks the nonces that station recorded while it
+       was live, so a pull it served could otherwise be replayed. The carry copies them in from `$ASIDE/restored-live`
+       exactly, depending on no clock (fix:pull-floor-after-rollback), and prints `Carried N of the M pull nonces the
+       restored station recorded`; 0 of 0 means it served no pull. Running it again adds nothing. It refuses, changing
+       nothing, when `$ASIDE` still holds a `peer.sqlite3` file (10.3's move hasn't run), when `restored-live` is missing
+       or damaged, or when it isn't marked as the station restored from `$ASIDE`. If it refused and you can't fix what it
+       names, print when 10.1 stopped the listener; it prints nothing if the Pi has restarted since, and then count from
+       `uptime -s`, which is later:
+       ```bash
+       systemctl --user show -p InactiveEnterTimestamp --value superyak-federation-listen
+       ```
     4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and
        wormhole, put the watchers step 3 saved back as they were, and enable the timers again. Step 8's checks that act
        on step 5's report (the law layers, the members and admins, the `bridged` column) are for a restored copy and
-       don't apply to a rollback. Start a federation unit only once 10.3's carry printed its count, or, if it refused,
-       more than 10 minutes after 10.1 stopped it. The lighthouse, the door, the ships and the timers needn't wait.
+       don't apply to a rollback. If 10.3's carry refused, run these two lines in place of step 8's two watcher lines,
+       so the federation units step 3 saved stay off (step 8's check then shows them inactive):
+       ```bash
+       for unit in $(awk '$2 == "enabled=enabled" && $1 !~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable "$unit"; done
+       for unit in $(awk '$3 ~ /^active=(active|activating|reloading)$/ && $1 !~ /^superyak-federat/ {print $1}' "$ASIDE/watchers.txt"); do systemctl --user start "$unit"; done
+       ```
+       Run them again with `!~` changed to `~` only once `timedatectl show -p NTPSynchronized --value` prints `yes` and
+       more than 10 minutes have passed since the time 10.3 printed: a pull the restored station served just before the
+       stop, from a peer whose clock ran 300 s ahead, passes the clock check that long. The lighthouse, the door, the
+       ships and the timers needn't wait.

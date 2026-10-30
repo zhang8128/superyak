@@ -101,7 +101,7 @@ help:
 	@echo "make station-backup [OUTPUT=…]  On the Pi: a checked copy of the station database (the rotation, or OUTPUT)"
 	@echo "make station-restore-test [BACKUP=…]  On the Pi: boot a throwaway station from the newest copy (or BACKUP)"
 	@echo "make station-restore-reconcile DB=… [REPLACED=…] [UNPAIR='id …']  On the Pi: runbook step 5 (docs/station-restore.md)"
-	@echo "make station-carry-nonces FROM=…  On the Pi, after a rollback: runbook step 10.3 (docs/station-restore.md)"
+	@echo "make station-carry-nonces ASIDE=…  On the Pi, after a rollback: runbook step 10.3 (docs/station-restore.md)"
 	@echo "make station-alerts     On the Pi: show the alert queue and what is held back"
 	@echo "make station-units      On the Pi: install the backup timers and the alert drop-ins; make station-units-remove undoes it"
 	@echo "make station-lessons-room ID=… [CONFIRM=…]  On the Pi: show, then record, the lessons room (first rail)"
@@ -426,8 +426,8 @@ station-restore-reconcile:
 	uv run --locked --project peer python -m superyak_peer station-restore-reconcile --db "$(DB)" --live-data-dir "$(STATION_DATA)"$(if $(REPLACED), --replaced "$(REPLACED)")$(foreach peer,$(UNPAIR), --unpair "$(peer)")
 
 station-carry-nonces:
-	@test -n "$(FROM)" || { echo 'Usage: make station-carry-nonces FROM=<$$ASIDE/restored-live/peer.sqlite3, runbook step 10.2>'; exit 2; }
-	uv run --locked --project peer python -m superyak_peer station-carry-nonces --data-dir "$(STATION_DATA)" --from "$(FROM)"
+	@test -n "$(ASIDE)" || { echo 'Usage: make station-carry-nonces ASIDE="$$ASIDE" (this restore'"'"'s directory, runbook step 10.3)'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer station-carry-nonces --data-dir "$(STATION_DATA)" --aside "$(ASIDE)"
 
 station-alerts:
 	uv run --locked --project peer python -m superyak_peer station-alerts --data-dir "$(STATION_DATA)"

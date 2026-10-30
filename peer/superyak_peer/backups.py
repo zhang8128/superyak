@@ -1066,32 +1066,59 @@ class CarryRefused(ValueError):
     """station-carry-nonces won't touch these files; nothing was changed."""
 
 
-def _has_nonces(db, schema='main'):
-    return db.execute(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='table' AND name='pull_nonces'").fetchone() is not None
+def _has_table(db, name, schema='main'):
+    return db.execute(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
 
-def carry_pull_nonces(data_dir, source):
+def _marked_path(db, schema):
+    """The staged file's path in the schema's restore mark (_write_mark), or None when there is no usable mark."""
+    if not _has_table(db, 'system_meta', schema):
+        return None
+    row = db.execute(f'SELECT value FROM {schema}.system_meta WHERE key=?', (MARK_KEY,)).fetchone()
+    try:
+        path = json.loads(row[0])['path']
+    except (TypeError, ValueError, KeyError):
+        return None
+    return path if isinstance(path, str) and '\0' not in path else None  # realpath raises on a NUL
+
+
+def carry_pull_nonces(data_dir, aside):
     """Runbook 10.3, after a rollback (fix:pull-floor-after-rollback, Rio Grande's reader's better way): the file put back
     lacks the pull nonces the restored station recorded while it was live, so a pull it served could be replayed. This
-    copies them in from that station's set-aside file, `INSERT OR IGNORE` from a read-only attach: exact, depending on no
-    clock, and a second run adds nothing. Run with the station stopped (10.1). Refused, with nothing changed: a live
-    file that is missing, a symlink, or has no pull_nonces (it never makes one), and a source that is missing or isn't a
-    station's file. Returns how many nonces were added."""
-    live, source = Path(data_dir) / 'peer.sqlite3', Path(source)
+    copies them in from that station's file, which 10.2 moved to $ASIDE/restored-live, `INSERT OR IGNORE` from a
+    read-only attach: exact, depending on no clock, and a second run adds nothing. Run with the station stopped (10.1).
+    The source is named by this restore's directory, never by a file name a typo could change, and must be the station
+    restored from it: its restore mark names $ASIDE/restored.sqlite3 (re-check SF1: restored.sqlite3 itself, a rotation
+    copy or chosen.sqlite3 carried 0 and said all was well). Refused, with nothing changed: a live file that is missing,
+    a symlink or has no pull_nonces; a $ASIDE that still holds peer.sqlite3 (10.3's move hasn't run, so the live file is
+    not the one put back); a source that is missing, a symlink, the live file, without pull_nonces, damaged, or not
+    marked as restored from $ASIDE. Returns (nonces added, nonces in the source)."""
+    aside = Path(aside)
+    live, source = Path(data_dir) / LIVE_NAME, aside / 'restored-live' / LIVE_NAME
     if live.is_symlink() or not live.is_file():
         raise CarryRefused(f'No peer database at {live} (or it is a symlink): nothing to carry into')
+    if any(path.name == LIVE_NAME or path.name.startswith(LIVE_NAME + '-') for path in aside.glob(LIVE_NAME + '*')):
+        raise CarryRefused(f"{aside} still holds a {LIVE_NAME} file, so 10.3's move hasn't run and {live} is not the file put back")
     if source.is_symlink() or not source.is_file():
-        raise CarryRefused(f'No set-aside database at {source} (or it is a symlink): nothing to carry from')
+        raise CarryRefused(f'No restored station at {source} (or it is a symlink): nothing to carry from (10.2 moves it there)')
     if source.samefile(live):  # also a hard link to it
         raise CarryRefused('The source is the live database itself')
-    # URIs: the live file opened `mode=rw` is never created, and the source attached `mode=ro` is never changed
+    # URIs: the live file opened `mode=rw` is never created, and the source attached `mode=ro` is never changed (a hot
+    # journal beside it, from a listener killed mid-transaction, is refused rather than rolled back into it)
     with closing(sqlite3.connect(live.absolute().as_uri() + '?mode=rw', uri=True, timeout=30, isolation_level=None)) as db:
-        if not _has_nonces(db):
+        if not _has_table(db, 'pull_nonces'):
             raise CarryRefused(f'{live} has no pull_nonces table, so it is not a station database')
         db.execute('ATTACH DATABASE ? AS restored', (source.absolute().as_uri() + '?mode=ro',))
         try:
-            if not _has_nonces(db, 'restored'):
+            if not _has_table(db, 'pull_nonces', 'restored'):
                 raise CarryRefused(f'{source} has no pull_nonces table, so it is not a station database')
+            checked = [row[0] for row in db.execute('PRAGMA restored.integrity_check(pull_nonces)')]
+            if checked != ['ok']:
+                raise CarryRefused(f'{source} fails its integrity check: {safe_line(checked[0], 120)}')
+            marked = _marked_path(db, 'restored')
+            if marked is None or os.path.realpath(marked) != os.path.realpath(aside / STAGED_NAME):
+                raise CarryRefused(f'{source} is not marked as the station restored from {aside / STAGED_NAME}')
+            total = db.execute('SELECT count(*) FROM restored.pull_nonces').fetchone()[0]
             db.execute('BEGIN IMMEDIATE')
             added = db.execute('INSERT OR IGNORE INTO main.pull_nonces(origin, nonce, at) '
                                'SELECT origin, nonce, at FROM restored.pull_nonces').rowcount
@@ -1100,7 +1127,7 @@ def carry_pull_nonces(data_dir, source):
             if db.in_transaction:
                 db.execute('ROLLBACK')
             db.execute('DETACH DATABASE restored')
-    return added
+    return added, total
 
 
 def _write_mark(db, old, now, path):

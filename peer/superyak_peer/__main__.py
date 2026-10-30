@@ -574,8 +574,8 @@ def main(argv=None):
     carry_cmd = commands.add_parser('station-carry-nonces', help='Trusted local, with the station stopped: after a rollback '
                                     "(runbook 10.3), copy the restored station's pull nonces into the file put back")
     carry_cmd.add_argument('--data-dir', type=Path, required=True, help='The live data directory (make passes STATION_DATA)')
-    carry_cmd.add_argument('--from', dest='source', type=Path, required=True,
-                           help="The restored station's set-aside database: $ASIDE/restored-live/peer.sqlite3 (runbook 10.2)")
+    carry_cmd.add_argument('--aside', type=Path, required=True,
+                           help="This restore's directory, $ASIDE: the restored station is in its restored-live (runbook 10.2)")
     restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
     restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
     restore_cmd.add_argument('--backup', type=Path, help='Test this copy instead of the newest one')
@@ -745,12 +745,13 @@ def main(argv=None):
         elif args.command == 'station-carry-nonces':
             from .backups import CarryRefused, carry_pull_nonces
             try:
-                added = carry_pull_nonces(args.data_dir, args.source)
+                added, total = carry_pull_nonces(args.data_dir, args.aside)
             except CarryRefused as refused:
                 parser.exit(1, f'station-carry-nonces: nothing was changed: {refused}\n')
             except sqlite3.Error as error:  # the transaction rolled back, so neither file changed
                 parser.exit(1, f'station-carry-nonces: nothing was changed: {type(error).__name__}: {safe_line(error, 200)}\n')
-            print(f'Carried {added} pull nonces from the restored station: its served pulls are replays now')
+            print(f'Carried {added} of the {total} pull nonces the restored station recorded into '
+                  f'{args.data_dir / "peer.sqlite3"}; it had the rest')
         elif args.command == 'station-restore-reconcile':
             from .backups import (ReconcileRefused, UnpairRefused, describe_reconcile, reconcile, refuse_misnamed_replaced,
                                   refuse_unstaged_db)

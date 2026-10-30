@@ -311,15 +311,18 @@ def test_after_a_rollback_the_carried_nonces_make_the_restored_stations_pulls_re
         with closing(sqlite3.connect(source)) as src, closing(sqlite3.connect(target)) as dst:
             src.backup(dst)
     clock, a, peers, contacts = pulling
-    before, aside = tmp_path / 'before.sqlite3', tmp_path / 'restored-live.sqlite3'
-    put(a[0].db_path, before)                       # live before the restore (runbook 10.2 sets it aside)
+    before, aside = tmp_path / 'before.sqlite3', tmp_path / 'backups' / 'replaced-20261017-120000'
+    (aside / 'restored-live').mkdir(parents=True)
+    put(a[0].db_path, before)                       # live before the restore (step 4 sets it aside)
+    with a[0].transaction() as db:                  # the restore, its mark from step 5 well past
+        backups._write_mark(db, None, clock() - 1000, aside / 'restored.sqlite3')
     served = request(peers['mac'], a, clock)
     a[2].serve_pull(canonical(served))              # the restored station serves a pull
-    put(a[0].db_path, aside)
+    put(a[0].db_path, aside / 'restored-live' / 'peer.sqlite3')  # 10.2
     put(before, a[0].db_path)                       # 10.3 puts the earlier file back
     assert a[2].serve_pull(canonical(served))['more'] is False  # the hole: served twice
     put(before, a[0].db_path)
-    assert backups.carry_pull_nonces(a[0].data_dir, aside) == 1
+    assert backups.carry_pull_nonces(a[0].data_dir, aside) == (1, 1)
     refused(lambda: a[2].serve_pull(canonical(served)), 409, 'Replay')
     assert pull(peers['mac'], a, clock)['more'] is False
 
