@@ -1066,6 +1066,11 @@ class CarryRefused(ValueError):
     """station-carry-nonces won't touch these files; nothing was changed."""
 
 
+def _symlinked(path):
+    """The database or one of its sidecars is a symlink, as _refuse and Store._check_paths refuse."""
+    return any(Path(f'{path}{end}').is_symlink() for end in ('', '-journal', '-wal', '-shm'))
+
+
 def _has_table(db, name, schema='main'):
     return db.execute(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
@@ -1090,17 +1095,19 @@ def carry_pull_nonces(data_dir, aside):
     The source is named by this restore's directory, never by a file name a typo could change, and must be the station
     restored from it: its restore mark names $ASIDE/restored.sqlite3 (re-check SF1: restored.sqlite3 itself, a rotation
     copy or chosen.sqlite3 carried 0 and said all was well). Refused, with nothing changed: a live file that is missing,
-    a symlink or has no pull_nonces; a $ASIDE that still holds peer.sqlite3 (10.3's move hasn't run, so the live file is
-    not the one put back); a source that is missing, a symlink, the live file, without pull_nonces, damaged, or not
-    marked as restored from $ASIDE. Returns (nonces added, nonces in the source)."""
+    has no pull_nonces, or is a symlink or has one among its sidecars; a $ASIDE that still holds peer.sqlite3 (10.3's
+    move hasn't run, so the live file is not the one put back); a source that is missing, symlinked the same way, the
+    live file, without pull_nonces, damaged, or not marked as restored from $ASIDE. Returns (nonces added, nonces in
+    the source)."""
     aside = Path(aside)
     live, source = Path(data_dir) / LIVE_NAME, aside / 'restored-live' / LIVE_NAME
-    if live.is_symlink() or not live.is_file():
-        raise CarryRefused(f'No peer database at {live} (or it is a symlink): nothing to carry into')
+    if _symlinked(live) or not live.is_file():
+        raise CarryRefused(f'No peer database at {live} (or it or a sidecar is a symlink): nothing to carry into')
     if any(path.name == LIVE_NAME or path.name.startswith(LIVE_NAME + '-') for path in aside.glob(LIVE_NAME + '*')):
         raise CarryRefused(f"{aside} still holds a {LIVE_NAME} file, so 10.3's move hasn't run and {live} is not the file put back")
-    if source.is_symlink() or not source.is_file():
-        raise CarryRefused(f'No restored station at {source} (or it is a symlink): nothing to carry from (10.2 moves it there)')
+    if _symlinked(source) or not source.is_file():
+        raise CarryRefused(f'No restored station at {source} (or it or a sidecar is a symlink): nothing to carry from '
+                           '(10.2 moves it there)')
     if source.samefile(live):  # also a hard link to it
         raise CarryRefused('The source is the live database itself')
     # URIs: the live file opened `mode=rw` is never created, and the source attached `mode=ro` is never changed (a hot

@@ -548,8 +548,9 @@ def test_carry_nonces_adds_the_restored_stations_nonces_once_and_says_how_many(t
 
 def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
     """Each refusal exits 1 saying nothing was changed and leaves every file as it was, creating none: no live file (a
-    mistyped --data-dir) or a live symlink; a $ASIDE still holding peer.sqlite3 or its journal (10.3's move hasn't run,
-    so the live file may be a stray); no restored station, or a symlink to it; the live file as its own source (by path
+    mistyped --data-dir), or a live file or one of its sidecars a symlink; a $ASIDE still holding peer.sqlite3 or its
+    journal (10.3's move hasn't run, so the live file may be a stray); no restored station, or it or one of its sidecars
+    a symlink (the WAL reviewer's should-fix, as _refuse and _check_paths); the live file as its own source (by path
     or a hard link); either side without pull_nonces; a source that fails its integrity check; and a source with no
     restore mark, a damaged one, or one naming another restore's directory (the re-check's SF1: a wrong file carried 0
     and said all was well). Mutations: each check dropped (the carry goes through, or SQLite's error stands in for the
@@ -567,10 +568,12 @@ def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
     linked = tmp_path / 'linked'
     linked.mkdir()
     (linked / 'peer.sqlite3').symlink_to(live.db_path)
+    sidelinked = Store(tmp_path / 'sidelinked').data_dir   # a real file, its journal a symlink (as _check_paths refuses)
+    (sidelinked / 'peer.sqlite3-journal').symlink_to(tmp_path / 'elsewhere-journal')
     asides = {name: backups_dir / f'replaced-20261017-1{number:02d}000' for number, name in enumerate(
-        ('unmoved', 'journal', 'empty', 'symlinked', 'hard', 'plain', 'unmarked', 'elsewhere', 'damaged', 'broken', 'nul'),
-        3)}
-    for name in ('unmoved', 'journal', 'elsewhere', 'damaged', 'broken', 'nul'):
+        ('unmoved', 'journal', 'empty', 'symlinked', 'hard', 'plain', 'unmarked', 'elsewhere', 'damaged', 'broken', 'nul',
+         'walinked'), 3)}
+    for name in ('unmoved', 'journal', 'elsewhere', 'damaged', 'broken', 'nul', 'walinked'):
         restored_live(asides[name], marked=backups_dir / 'replaced-20250101-000000' / 'restored.sqlite3'
                       if name == 'elsewhere' else True)
     (asides['unmoved'] / 'peer.sqlite3').write_bytes(b'')
@@ -588,14 +591,17 @@ def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
         with closing(sqlite3.connect(asides[name] / 'restored-live' / 'peer.sqlite3')) as db, db:
             db.execute("UPDATE system_meta SET value=? WHERE key='restore_reconcile'", (value,))
     unindexed_nonce(asides['broken'] / 'restored-live' / 'peer.sqlite3')
+    (asides['walinked'] / 'restored-live' / 'peer.sqlite3-wal').symlink_to(tmp_path / 'elsewhere-wal')
     before = tree(tmp_path)
     for data_dir, where, reason in (
             (tmp_path / 'typo', aside, 'No peer database'),
             (linked, aside, 'No peer database'),
+            (sidelinked, aside, 'No peer database'),
             (live.data_dir, asides['unmoved'], "10.3's move hasn't run"),
             (live.data_dir, asides['journal'], "10.3's move hasn't run"),
             (live.data_dir, asides['empty'], 'No restored station'),
             (live.data_dir, asides['symlinked'], 'No restored station'),
+            (live.data_dir, asides['walinked'], 'No restored station'),
             (restored.data_dir, aside, 'the live database itself'),
             (live.data_dir, asides['hard'], 'the live database itself'),
             (other, aside, 'has no pull_nonces table'),
