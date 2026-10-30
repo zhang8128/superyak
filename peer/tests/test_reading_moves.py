@@ -27,6 +27,7 @@ from test_reading import gate_and_write_held, timed
 # The functions D3 lets leave the gate, by module and qualified name. Every other read stays on transaction().
 MOVED_READS = (
     'auth.Auth.session',
+    'auth.Auth.session_is_valid',
 )
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -36,6 +37,7 @@ SHIPS = ('serenity', 'tardis', 'defiant')
 # Each moved read as the busy store's case calls it: what a route or a worker passes it there.
 CALLS = {
     'auth.Auth.session': lambda s: s.store.session(s.token),
+    'auth.Auth.session_is_valid': lambda s: s.store.session_is_valid(s.token),
 }
 
 

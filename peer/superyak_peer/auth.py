@@ -281,7 +281,7 @@ class Auth:
         check still runs afterwards."""
         if not isinstance(token, str):
             return False
-        with self.transaction() as db:
+        with self.reading() as db:
             row = db.execute('SELECT users.activation_pending, users.kind FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (token_hash(token), self.clock())).fetchone()
         return row is not None and not row['activation_pending'] and row['kind'] == 'person'
 
