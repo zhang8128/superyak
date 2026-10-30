@@ -2238,3 +2238,35 @@ def test_a_restore_keeps_why_a_connection_ended(tmp_path, capsys):
     grants = grants_in(copy)
     assert (grants[by_you]['revoked_why'], grants[gone]['revoked_why']) == ('you', 'restore')
 
+
+def test_a_copy_from_before_the_reason_gains_it_and_the_replaced_files(tmp_path, capsys):
+    """N2: a copy taken before 9a lacks connector_grants.revoked_why; the reconcile adds it, as it adds the receipts
+    table, so the replaced file's reasons come across."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    by_you = connection(store, sam['id'])
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('ALTER TABLE connector_grants DROP COLUMN revoked_why')
+        db.commit()
+    with store.transaction() as db:
+        db.execute("UPDATE connector_grants SET revoked=?, revoked_why='you' WHERE id=?", (store.clock(), by_you))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert grants_in(copy)[by_you]['revoked_why'] == 'you'
+
+
+def test_without_a_replaced_file_a_copy_from_before_the_reason_records_the_restore(tmp_path, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam')
+    live = connection(store, sam['id'])
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('ALTER TABLE connector_grants DROP COLUMN revoked_why')
+        db.commit()
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    assert grants_in(copy)[live]['revoked_why'] == 'restore'
+

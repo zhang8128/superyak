@@ -920,6 +920,13 @@ def _keep_connector_key_like_replaced(db, old, report):
     report['counts']['connector key kept from the replaced file'] = 1
 
 
+def _reason_column(db):
+    """Task 9a's N2: a copy taken before revoked_why existed gains it here, as _keep_receipts_like_replaced gives a copy
+    its table, so the replaced file's reasons come across (serve would add it later, empty)."""
+    if _has(db, 'connector_grants') and not _has(db, 'connector_grants.revoked_why'):
+        db.execute('ALTER TABLE connector_grants ADD COLUMN revoked_why TEXT')
+
+
 def _keep_connections_like_replaced(db, old, now, report):
     """fix:restore-keeps-connector-revocations, with a usable replaced file: a connection is access, so each one the copy
     has takes the replaced file's restrictions, matched by grant id. Its revoke, with the same time; a revoke now when
@@ -933,7 +940,8 @@ def _keep_connections_like_replaced(db, old, now, report):
         return
     there = {row[0]: row[1:] for row in old.execute(
         'SELECT id, person_id, client_id, redirect_host, rooms, ends, revoked FROM connector_grants')}
-    whys = (dict(old.execute('SELECT id, revoked_why FROM connector_grants'))  # read only when both files have it
+    _reason_column(db)
+    whys = (dict(old.execute('SELECT id, revoked_why FROM connector_grants'))  # read when the replaced file has it
             if _has(old, 'connector_grants.revoked_why') else {})
     revoked = narrowed = shortened = 0
     for row in db.execute('SELECT id, person_id, client_id, redirect_host, rooms, ends FROM connector_grants '
@@ -1063,6 +1071,7 @@ def _revoke_every_connection(db, old, now, report):
         report['counts']['connector key made new'] = 1
     if not _usable(db, None, report, *CONNECTION_COMPARED, *CONNECTION_NAMED):
         return
+    _reason_column(db)  # each revoke below records the restore as its reason, a copy from before 9a included
     rows = db.execute('SELECT id, person_id FROM connector_grants WHERE revoked IS NULL ORDER BY created, id').fetchall()
     for row in rows:
         db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (now, row['id']))

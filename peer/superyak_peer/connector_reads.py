@@ -15,6 +15,7 @@ from .connector import ToolRefused
 READS_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS connector_reads(id TEXT PRIMARY KEY, grant_id TEXT NOT NULL, person_id TEXT NOT NULL, app TEXT NOT NULL, at REAL NOT NULL, tool TEXT NOT NULL, rooms_read TEXT NOT NULL, rooms_refused TEXT NOT NULL, size INTEGER NOT NULL, outcome TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS connector_reads_by_grant ON connector_reads(grant_id, at);
+CREATE INDEX IF NOT EXISTS connector_reads_by_person ON connector_reads(person_id, grant_id);
 '''
 # connector_reads: one row per tools/call. `rooms_read` is a JSON list of room ids and `rooms_refused` a JSON list of
 # {room, why}, a room recorded only when the person is in it; `outcome` is ok, refused or failed. It names its person

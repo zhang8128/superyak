@@ -1,8 +1,10 @@
-"""The remote connector's routes, installed only with `serve --public-origin` (connector plan, Task 3). Each answers 404
-on any other origin, needs no session, and checks what it needs itself; none sends CORS headers. An async route here
+"""The remote connector's routes, installed only with `serve --public-origin` (connector plan, Task 3). Each OAuth and
+/mcp route answers 404 on any other origin, needs no session, and checks what it needs itself; none sends CORS headers.
+Task 9a's Connected apps routes are /api routes like the rest: a signed-in person on the home's own origins. An async route here
 runs every identity check and store call in the threadpool, never on the event loop (fix:actor-off-the-event-loop); a
 sync one runs there anyway."""
 import json
+import re
 from urllib.parse import parse_qsl, urlencode
 
 from fastapi import Request
@@ -352,6 +354,7 @@ def install(app, public_origin, callback):
     # only, on the home's own origin as every /api route is; a ship key gets 403 (current_user). Installed with the
     # connector. A write checks its caller before it reads its body (the event-loop guard's walk). ----
     from .app import actor, body, caller, current_user
+    from .connector_apps import RECEIPTS_LIMIT
 
     @app.get('/api/connected-apps')
     def connected_apps(request: Request):
@@ -363,7 +366,13 @@ def install(app, public_origin, callback):
 
     @app.get('/api/connected-apps/{key}/receipts')
     def connected_app_receipts(key: str, request: Request):
-        return store.connected_app_receipts(actor(request), key)
+        def whole(name):  # a page's limit and cursor, digits only, as app.py's paging reads them
+            value = request.query_params.get(name)
+            if value is not None and not re.fullmatch(r'[0-9]{1,15}', value):
+                raise Problem(400, f'{name} must be a whole number')
+            return None if value is None else int(value)
+        limit = whole('limit')
+        return store.connected_app_receipts(actor(request), key, RECEIPTS_LIMIT if limit is None else limit, whole('before'))
 
     @app.put('/api/connected-apps/{key}/rooms')
     async def connected_app_rooms(key: str, request: Request):

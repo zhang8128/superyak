@@ -572,6 +572,7 @@ def test_fetch_stays_under_the_cap_measured_on_its_whole_json(connected):
     assert len(result['content'][0]['text']) <= TEXT_CAP
     line = json.loads(ok(result)['text'])
     assert line['id'] == alone and line['text_cut'] == 20000 - len(line['text']) > 0
+    assert ok(result)['truncated'] is True  # N8: fetch says it was cut when its one message was
 
 
 def test_a_revoke_or_a_narrowing_mid_call_is_seen_inside_the_read(connected, monkeypatch):
