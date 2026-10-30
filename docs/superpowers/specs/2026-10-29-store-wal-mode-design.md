@@ -4,10 +4,14 @@ Revision 2, 2026-10-29. Rio Grande (the Pi). Board item `spec:store-wal-mode` (C
 Research, with file:line sources: docs/research/2026-10-29-store-wal-research.md (read-only, on main 26433c84).
 Review of revision 1, with probes p1 to p6 on scratch stores: City of AI, message 4adf3108 (a fresh Pi reviewer).
 
-Revision 2 applies that review. Must-fixes: the gate-free read runs only in WAL mode (M1); writes are kept out of it by
-rules the code enforces, not by `query_only` alone, and the lessons lists stay gated (M2); the switch is decided by
-SQLite's lock under the gate, not by `fuser` (M3); the restore's `_replaced` needs no change, and the mode is recorded
-and restored by named steps (M4). Should-fixes S1 to S7 and the nits are applied below.
+Revision 2 is amended by the re-check of revision 2 (APPROVE WITH CHANGES, applied as written): health's waiters share
+one answer, the checkpoint is PASSIVE plus a 100 ms TRUNCATE without the gate, the keeper runs one PRAGMA at open, and
+bounded health merges with the switch; `station_pending` stays wholly gated, and `_inbox_budget` gets a lock.
+
+Revision 2 applies the first review. Must-fixes: the gate-free read runs only in WAL mode (M1); writes are kept out of
+it by rules the code enforces, not by `query_only` alone, and the lessons lists stay gated (M2); the switch is decided
+by SQLite's lock under the gate, not by `fuser` (M3); the restore's `_replaced` needs no change, and the mode is
+recorded and restored by named steps (M4). Should-fixes S1 to S7 and the nits are applied below.
 
 ## Why
 
@@ -100,13 +104,19 @@ rollback journal (the reviewer confirmed it). The disk is NVMe (ext4).
 WAL brings costs of its own, named and bounded:
 
 - **Growth.** With readers always overlapping, the `-wal` grew to 39 MB in 4 s (p5a), because a checkpoint can't pass
-  an open snapshot. So the store sets `PRAGMA journal_size_limit` (64 MB), the station's hourly sweep runs a gated
-  `wal_checkpoint(TRUNCATE)`, and `station-notices` raises a notice when the `-wal` passes 64 MB.
+  an open snapshot. So every connection sets `PRAGMA journal_size_limit` (64 MB; the setting is per connection), the
+  lighthouse runs `wal_checkpoint(PASSIVE)` hourly plus `wal_checkpoint(TRUNCATE)` on a connection with a 100 ms busy
+  timeout, with no gate (a gated or unbounded TRUNCATE blocked a post 2.44 s behind a 3 s reader, p8b; PASSIVE never
+  blocks), and `station-notices` raises a notice when the `-wal` passes 64 MB.
 - **Who pays the checkpoint.** The last connection to close pays it, and that can be a gate-free reader (5.6 ms for
   3.9 MB, p5b). Accepted, and measured as read p99 including close.
 - **Idle commits.** A post on an idle store took 2.4 ms in WAL against 1.85 ms in rollback, because every close is a
-  last close (p5c). Each long-running process (the lighthouse, the door) keeps one idle connection open for its life,
-  which brought it to 1.20 ms and lets `fuser` see the process. That connection runs no statements.
+  last close (p5c). Each long-running process (the lighthouse, the door, federate and the federation listener) keeps
+  one keeper connection open for its life (`check_same_thread=False`, since another thread may close it). It runs one
+  `PRAGMA journal_mode` at open, then nothing: with that, a post's p50 was 0.80 ms and the `-wal` was kept between
+  commits (p7b). It never holds a cursor or a transaction (one unfinished cursor made TRUNCATE answer busy for good,
+  p8); a test checks its `in_transaction` is false and that a TRUNCATE completes with it open. It also lets `fuser`
+  see the process.
 
 ### D3. A gate-free read path, in WAL only
 
@@ -129,8 +139,9 @@ out by two rules the code enforces:
 1. `_station_identity` refuses to create `identity.json` unless the calling thread holds the gate (it may still load
    an existing one). So no gate-free read can create the identity, even by a path nobody listed.
 2. Each moved function gets a test that runs it inside `reading()` on a WAL store while another thread holds the gate
-   and an open write: it must complete without waiting, and must leave the data directory's file list and every table
-   unchanged. A function that writes, creates a file or opens its own transaction fails that test.
+   and an open write: it must complete without waiting, and must leave the data directory's file list (apart from
+   `-wal` and `-shm`) and every table unchanged. A function that writes, creates a file or opens its own transaction
+   fails that test.
 
 Functions move to `reading()` only from this list:
 
@@ -138,9 +149,6 @@ Functions move to `reading()` only from this list:
 - the public route's checks, `ship_key_is_valid` (`ships.py`);
 - the connector's `bearer` only (`connector.py`); `_live_grant` and `check_client` are also called inside writing
   transactions, so they stay as helpers and run in whatever transaction calls them;
-- `station_pending` (`ships.py`) for its database rows only; `_pending_imprints`' staged-file reads stay gated, so the
-  command reads rows in `reading()` and the staged files in a gated read after it (N3: an imprint being removed can
-  show its row without its request for that moment, display only);
 - `station_rooms` and `station_notices` (`ships.py`);
 - federate's read passes (`federate.py`) and `sync_once`'s work list and pending count (`federation.py`), whose writes
   stay in `_prepare` under the gate;
@@ -150,8 +158,12 @@ Functions move to `reading()` only from this list:
   (whose remote branch the review flagged), `shared_layers`, `preview_layer` and `can_deliver_layer` stay gated unless
   the build's gate-held test shows one pure, and then it is named in the commit (S7).
 
-These stay gated: health (S1, below); `directory` (`presence.py`), because `_inbox_budget` is shared memory updated
-there and would lose updates between threads (N2); every lessons function, because `lessons_list` reaches
+`board_counts` already calls `_inbox_budget` outside the gate today (room_board.py:195), so the budget's shared memory
+gets its own `threading.Lock` in phase 1, which closes that race for both callers.
+
+These stay gated: health (S1, below); `station_pending`, whose staged-file reads must stay gated and gain nothing from
+a split; `directory` (`presence.py`), until `_inbox_budget`'s lock lands and its gate-held test passes, when it may
+move by name in that commit; every lessons function, because `lessons_list` reaches
 `_station_identity` through `_lessons_snapshot` and the range includes writers (M2, N1); anything that can create the
 station identity; the imprint sweep; every read that writes lazily (room reads closing a quiet breakout, `unread`
 touching cursors, `ship_for_key` updating `last_used`, `mentions`); and every read-then-write in one transaction (the
@@ -178,11 +190,17 @@ paths). The backup API reads through the WAL, so a copy taken while the store is
 - The runbook already moves `peer.sqlite3` with its `-journal`, `-wal` and `-shm` together, and every symlink check
   covers all four names. Both stay.
 - **Step 4 records the mode.** After the move, a plain Python `open()` reads header bytes 18-19 of
-  `$ASIDE/peer.sqlite3` (`2 2` is WAL, `1 1` rollback) and writes `wal` or `delete` to `$ASIDE/journal-mode`. With no
-  database to set aside (a store that never started), it writes `delete`.
+  `$ASIDE/peer.sqlite3` (`2 2` is WAL, `1 1` rollback) and writes `wal` or `delete` to `$ASIDE/journal-mode`. It
+  writes `delete` only when `$ASIDE/peer.sqlite3` is absent (a store that never started), not when nothing moved on
+  this run, so a rerun of step 4 keeps the first record.
 - The reconcile works on `restored.sqlite3`, a rollback-mode copy (D4), so step 6's `install` copies one complete file.
 - **Step 6b** (after step 6, before step 8 starts anything): if `$ASIDE/journal-mode` says `wal`, run
-  `make station-journal MODE=wal`; if it says `delete` or is missing, do nothing and say so. A rerun is safe.
+  `make station-journal MODE=wal`; if it says `delete` or is missing, do nothing and say so. A rerun is safe. On a new
+  disk where the lighthouse never ran, station-journal refuses for want of `dispatch.lock`: start and stop the
+  lighthouse once, then run 6b again.
+- **Step 10.3's carry** (`backups.carry_pull_nonces`) reads restored-live through its `-wal`, which needs
+  restored-live's directory writable or its `-shm` present, and leaves a `-shm` there. Without either it fails closed
+  with "nothing was changed" into 10.4's wait (the review's p10c), and it keeps the put-back file's own mode (p10b).
 - A rollback (step 10) puts back the file set aside at step 4 with its sidecars, as today, so it keeps its own mode.
 - `_replaced` needs no change (M4): opened read-only through SQLite, it reads a set-aside WAL file through its `-wal`
   and compares correctly (p4c). A test pins that, and the runbook notes the `-shm` it creates in `$ASIDE`.
@@ -211,8 +229,14 @@ describes; the owner-mention plan and spec stop saying the store already runs in
 
 Health stays on the gate on purpose: it is how a stuck gate or a wedged store shows, to route-watch and to a person.
 But after D3 it is the only public, unauthenticated route on the gate, and its wait is unbounded, so a flood could park
-every threadpool worker. So health takes the gate through `bounded(3 s)` and answers 503 on timeout (inside
-route-watch's 15 s), and at most one health check waits for the gate at a time; others answer 503 at once.
+every threadpool worker. So health takes the gate through `bounded(3 s)`, with its SQLite busy wait bounded to the same
+3 s, and answers 503 on timeout (inside route-watch's 15 s). A check arriving while another waits shares its answer,
+waiting at most the same 3 s, so a flood holds one gate wait, not one per request (answering the others 503 at once let
+one polling client fail route-watch's probe in 60 of 60 tries, the review's p9; sharing failed it in 0 of 58).
+
+Bounded health makes any gate hold over 3 s read as an outage, for example `_sweep_orphans` hashing imprint files inside
+its transaction. So S1 merges with the switch (step 4 of the order of work), not before, and the sweep's long holds
+are measured first.
 
 ## Phase 2 (named now, built later)
 
@@ -253,7 +277,8 @@ open), room reads and `unread` (they write lazily), and connector tool calls (re
 - `station-journal`: refuses a missing store and creates nothing; refuses without `dispatch.lock` and creates none;
   refuses while a unit is active (stubbed `systemctl`); switches both ways under the gate; retries "locked" and gives up
   at 10 s with the store unchanged; a second run changes nothing.
-- Health: a held gate makes it answer 503 within 3 s, and a second waiting health check answers 503 at once.
+- Health: a held gate makes it answer 503 within 3 s, and a check arriving meanwhile shares that answer within the same
+  3 s.
 - A backup copy taken from a WAL store answers `delete`, passes `integrity_check`, holds a commit that was only in the
   `-wal`, and a `mode=ro` open of it leaves no sidecars; a stray `.tmp-wal` is pruned.
 - The reconcile refuses a WAL-flagged staged copy; `_replaced` compares a set-aside WAL file correctly.
@@ -264,14 +289,15 @@ open), room reads and `unread` (they write lazily), and connector tool calls (re
 
 1. `station-journal` and its tests (D1), runbook step 3's timers; backup copies in rollback mode (D4); the restore
    runbook's step 4 record and step 6b, and `_replaced`'s pinning test (D5).
-2. `reading()` and its tests (D3), `_station_identity`'s gate rule, then the listed functions moved one at a time, each
-   with its gate-held test on a WAL store; health bounded (S1).
+2. `reading()` and its tests (D3), `_station_identity`'s gate rule, `_inbox_budget`'s lock, then the listed functions
+   moved one at a time, each with its gate-held test on a WAL store.
 3. The keeper connection, `journal_size_limit`, the sweep's checkpoint and the notice (D2); read-only openers and the
    tests and docs that assume rollback mode (D6, D7).
-4. Measure before; the live switch as a named act with everything stopped; measure after; post both.
+4. Measure before (including the longest gate holds); bounded health (S1); the live switch as a named act with
+   everything stopped; measure after; post both.
 
 Everything in steps 1 to 3 is safe to merge before the switch: in rollback mode `reading()` takes the gate, so the
-station behaves as today until step 4.
+station behaves as today until step 4. S1 is not, which is why it moves with the switch.
 
 ## Decisions
 
