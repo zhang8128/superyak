@@ -193,7 +193,7 @@ class RoomBoard:
         active claim) and how many are taken. The room with the oldest waiting item comes first, rooms with nothing
         waiting last, ties by room id. Counts against the ship's 60 reads a minute, as the directory does."""
         self._inbox_budget(actor)
-        with self.transaction() as db:
+        with self.reading() as db:
             now, found = self.clock(), []
             for room in self._my_current_rooms(db, actor):
                 waiting = taken = 0
