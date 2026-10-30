@@ -258,7 +258,7 @@ class Ships:
     def station_rooms(self, username):
         """Trusted local operator only: the current rooms this person owns, with member usernames and whether
         the wormhole ship is in them. A room replaced by a linked one (added members) is not current."""
-        with self.transaction() as db:
+        with self.reading() as db:
             actor, wormhole = self._operator(db, username), self._wormhole_id(db)
             rooms = []
             for room in self._current_rooms(db, actor):
