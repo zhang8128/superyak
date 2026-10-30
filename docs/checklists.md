@@ -69,7 +69,8 @@ answers are posted in all hands). Its long form:
 - **What was supposed to happen?** Say what we meant to do since the last review, in the why's terms.
 - **What actually happened?** Give the facts: what landed, what didn't, where the hours went.
 - **Why the difference?** Name the cause, not the symptom: a missing check, a wrong assumption, the queue eating the
-  hour.
+  hour. A common one: a goal parked behind "once X is in" stalls while X keeps having review rounds. Start it in X's
+  waits (Tardis's reflect, 2026-10-29).
 - **What do we keep doing, and what do we change?** One of each, concrete.
 - **What did it teach?** If it's a lesson someone will need again, write it in the rail's lesson shape, with the cost
   in its `why`. If it's a step we keep missing, add it to a checklist here.
@@ -551,6 +552,15 @@ it, not only as its diff reads.
 - [ ] A yes names the files it read, and for the ones it didn't, says "not read: …" and who read them instead, so the
       merger knows what the yes covers (Serenity's yes on rollback-carry-nonces in City of AI, 2026-10-29: "Not read:
       test_restore.py and test_station_units.py; the reader and your 353 cover those").
+- [ ] A guard that decides whether a file changed since a step ran compares it with a record that step wrote, not
+      with the wall clock: the Pi's clock can come up an hour behind after a power cut (fake-hwclock), so an mtime
+      compared with another file's passes a write made since (the WAL Tasks 1-3 reader's third re-check, 2026-10-29:
+      restore step 10.3 now writes `put-back` before it moves anything).
+- [ ] Every reader of a table is run against a row the code keeps after marking it damaged, such as a restore's
+      DAMAGED revoke: a room set that won't parse, a time that is infinite or text. One such row must never 500 a
+      list, or nobody can find the rest (Tardis, after connector-apps' M1, 2026-10-29).
+- [ ] On a safety rule, a redundant check is depth, not dead code: keep it, say in a comment that it is a second gate,
+      and expect its mutant to be equivalent (Serenity, connector-apps 035e5ab2, 2026-10-29).
 - [ ] A check on what text says to a reader (a fence, a mention, a person-data screen) judges the text as read:
       normalised (NFKC, case folded), with invisible and blank-rendering characters dropped. A byte pattern alone is
       a must-fix (Serenity's lesson, 2026-10-28, from the fence fix's fresh Pi review, which found a disguise only
