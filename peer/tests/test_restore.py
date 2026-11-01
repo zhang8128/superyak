@@ -566,6 +566,7 @@ def test_a_carry_that_cant_write_its_mark_says_so_and_step_8_still_holds(tmp_pat
     assert nonces(live.db_path) == {('o', 'served', 6)} and not (tmp_path / 'elsewhere').exists()
 
 
+@pytest.mark.journal('delete')  # in WAL, attaching the source mode=ro leaves its -wal and -shm: plan Task 7's
 def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
     """Each refusal exits 1 saying nothing was changed and leaves every file as it was, creating none: no live file (a
     mistyped --data-dir) or a live symlink; a $ASIDE still holding peer.sqlite3 or its journal (10.3's move hasn't run,
@@ -703,6 +704,7 @@ def test_restore_directories_are_named_in_utc_so_the_newest_sorts_last():
     assert backups.REPLACED_DIR.fullmatch(time.strftime('replaced-%Y%m%d-%H%M%S', time.gmtime()))
 
 
+@pytest.mark.journal('delete')  # a hot journal is rollback mode's; its WAL twin is plan Task 7's
 def test_carry_nonces_leaves_a_hot_journal_and_exits_cleanly_on_a_database_error(tmp_path, capsys):
     """The re-check's SF2 (its probe q3): 10.1 killed the listener mid-transaction, so restored-live has a hot journal.
     The read-only attach refuses to roll it back, so the carry exits 1 and both files stay as they were, falling back
