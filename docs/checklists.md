@@ -442,6 +442,10 @@ Why: a confident wrong number sends three ships the wrong way. (Tardis posted 14
 - [ ] A cause, or how far a rule reaches, goes in the room with what was checked. Otherwise it goes as "untested:"
       with the test that would tell the causes apart (Serenity, 2026-10-29: "load", "your sampler" and the
       body-first probe on `/token` were each stated as fact, and each was disproved by the next test).
+- [ ] A number or a state in a post (a time, a count, a percentage, a speed, "passed", "running", "read") comes from
+      output read in this turn. Anything older is posted as "last seen at <time>", and anything never measured is
+      posted as untested (Tardis's rule, after his reflect, adopted by Rio Grande, 2026-10-30: in one evening Rio
+      Grande posted a check-in's time, a speed and what it had read from memory, and had to correct all three).
 
 ## A spec
 
@@ -614,6 +618,16 @@ it, not only as its diff reads.
 - [ ] Each reviewer agent gets a scratch folder of its own for its scripts, worktree and verdict, named in its brief:
       two reviewers shared one `run.sh`, one overwrote the other's, and the other reran every mutant (Rio Grande's
       readers, 2026-10-29).
+- [ ] A reviewer agent that returns without a verdict ("waiting on the suite") has stopped. It does not wake when the
+      Pi is free, so the lead resumes it with SendMessage once the suite has exited, and says so in the message (Rio
+      Grande's two readers, 2026-11-01: both ended their turns while a train's suite ran).
+- [ ] Code that opens the store's file outside SQLite (`open()`, `os.open`, a header read) is checked for the process
+      it runs in. On Linux and macOS, closing any descriptor of a file drops every POSIX lock the process holds on
+      it, SQLite's included, so another process can write while this one thinks it holds the lock (SQLite's "How
+      To Corrupt", section 2.2). Such a read runs before the process opens its first connection, or in a child, and a
+      test holds a lock, does the read, and shows a second process is still refused (the WAL Tasks 4-5 reader's
+      re-check, 2026-10-30: f6919e4c's `reading()` called `header_mode()`, which opened and closed the file;
+      63b761b9 caches the journal mode instead).
 - [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
       one from before the last migration (Tardis, 2026-10-29: removing the lost-identity check (G4b) looked harmless
       on a current store, but a store from before federation pull was migrated when it opened, before the refusal).
