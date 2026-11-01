@@ -305,7 +305,9 @@ gate holds measured before bounded health merges.
   `Store.__init__`'s `os.open`/`os.close` of peer.sqlite3, and no second Store is built in a process that holds a
   keeper: on Linux, closing any descriptor of the file drops every POSIX lock the process holds on it, the keeper's
   included (the Tasks 4-5 re-check's M1; Tardis and Serenity). Its test builds a second Store beside a keeper and
-  shows another process still refused the write lock, or refuses the second Store.
+  shows another process still refused the write lock, or refuses the second Store. The same rule covers the `-wal`
+  and the `-shm`, where WAL mode keeps its locks: the keeper and the size notice `stat` them and never `open()` them
+  (re-check 2 of Tasks 4-5), and the size notice's test fails if either is opened.
 - [ ] **Step 4: Run** `tests/test_wal_costs.py tests/test_station_units.py`, in both journal modes — expect PASS.
 - [ ] **Step 5: Commit** `WAL's costs bounded: a keeper per process, a non-blocking checkpoint, a size notice`.
 
