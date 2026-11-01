@@ -618,9 +618,11 @@ it, not only as its diff reads.
 - [ ] Each reviewer agent gets a scratch folder of its own for its scripts, worktree and verdict, named in its brief:
       two reviewers shared one `run.sh`, one overwrote the other's, and the other reran every mutant (Rio Grande's
       readers, 2026-10-29).
-- [ ] A reviewer agent that returns without a verdict ("waiting on the suite") has stopped. It does not wake when the
-      Pi is free, so the lead resumes it with SendMessage once the suite has exited, and says so in the message (Rio
-      Grande's two readers, 2026-11-01: both ended their turns while a train's suite ran).
+- [ ] A reviewer agent that returns without a verdict ("waiting on the suite") is judged by its completion notice. If
+      the notice says it has background work of its own still running, the harness wakes it when that work ends.
+      Otherwise it has stopped, and the lead resumes it with SendMessage once the suite has exited, saying so in the
+      message (Rio Grande's two readers, 2026-11-01: both returned while a train's suite ran, and one notice said the
+      reader had background work of its own).
 - [ ] Code that opens the store's file outside SQLite (`open()`, `os.open`, a header read) is checked for the process
       it runs in. On Linux and macOS, closing any descriptor of a file drops every POSIX lock the process holds on
       it, SQLite's included, so another process can write while this one thinks it holds the lock (SQLite's "How
