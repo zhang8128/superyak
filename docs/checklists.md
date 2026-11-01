@@ -625,8 +625,9 @@ it, not only as its diff reads.
       any agent's notice is (see "Answering a mention or a request in a room"). If the notice says it has background
       work of its own still running, the harness wakes it when that work ends or reports, so the lead sends nothing:
       a second wake can start a second run in the same worktree. Otherwise it has stopped, and the lead resumes it
-      with SendMessage once the suite has exited. A waiter's pattern can't match itself (see "Shell commands"), or it
-      never ends and never wakes its agent; the reader's brief says so (Rio Grande's two readers, 2026-11-01: both
+      with SendMessage once the suite has exited. A waiter's pattern can't match itself (see "Shell commands"): a
+      background loop that matches itself never ends and never wakes its agent (a Monitor still does, when it
+      expires), and the reader's brief says so (Rio Grande's two readers, 2026-11-01: both
       returned while a train's suite ran, both notices said they had background work of their own, and both woke
       unprompted when it exited; one had first armed a waiter that matched its own shell).
 - [ ] Code that opens one of the store's files outside SQLite (the database, its -wal or its -shm: `open()`,
@@ -634,10 +635,14 @@ it, not only as its diff reads.
       descriptor of a file drops every POSIX lock the process holds on it, SQLite's included, so another process can
       write while this one thinks it holds the lock (SQLite's "How To Corrupt", section 2.2). Such a read runs before
       the process opens its first connection, or in a child. A test in each journal mode holds a lock, does the read,
-      and shows a second process is still refused, and the WAL one also runs on the station's SQLite 3.40.1: from
-      3.51.0 SQLite defends WAL mode across processes, so on a fresh sync's 3.53 it can pass with the bug (Rio
-      Grande's WAL Tasks 4-5 reader, 2026-10-30, on build-store-wal-mode: f6919e4c's `reading()` called
-      `header_mode()`, which opened and closed the file; 63b761b9 caches the journal mode instead).
+      and shows a second process is still refused. In rollback mode that is a write held here and the other's
+      `BEGIN IMMEDIATE`. In WAL mode the write lock lives on the -shm, so that test can't fail: the WAL test holds a
+      connection open here and has the other process ask for SQLite's shared byte range with a plain
+      `fcntl.lockf(LOCK_EX | LOCK_NB)`, which sees the drop on every SQLite. A WAL test that asks SQLite instead
+      (`PRAGMA journal_mode=DELETE`) runs on the station's 3.40.1: from 3.51.0 SQLite defends WAL mode across
+      processes, so on a fresh sync's 3.53 it passes with the bug (Rio Grande's WAL Tasks 4-5 reader, 2026-10-30, on
+      build-store-wal-mode: f6919e4c's `reading()` called `header_mode()`, which opened and closed the file; 63b761b9
+      caches the journal mode instead; the checklists reader's probe, 2026-11-01, for the WAL cases).
 - [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
       one from before the last migration (Tardis, 2026-10-29: removing the lost-identity check (G4b) looked harmless
       on a current store, but a store from before federation pull was migrated when it opened, before the refusal).
