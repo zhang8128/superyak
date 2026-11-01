@@ -327,7 +327,10 @@ gate holds measured before bounded health merges.
 
 - [ ] **Step 1: Mark** the rollback-assuming tests `@pytest.mark.journal('delete')` and give each a WAL twin where both
   apply: the held-reader tests' WAL case asserts the commit is not blocked; test_federate's directory hash excludes
-  `-wal` and `-shm`; `set_aside` and the other copies use the backup API.
+  `-wal` and `-shm`; `set_aside` and the other copies use the backup API. conftest's WAL switch reads `PRAGMA
+  journal_mode` first and sets `_journal = 'wal'` only when its own switch changed the mode, so a test of what
+  `__init__` learns (`test_a_store_opened_on_a_wal_file_reads_past_the_gate_on_its_first_read`) still fails a dropped
+  `__init__` cache line in a `SUPERYAK_TEST_JOURNAL=wal` run (re-check 3 of Tasks 4-5, its nit).
 - [ ] **Step 2: Run** the whole peer suite in both modes — expect PASS.
 - [ ] **Step 3: Amend** the docs as listed: PROTOCOL.md says gate-free reads in WAL take no part in the promise and
   why; the docstrings say which mode they describe and what a read-only open creates; the owner-mention docs stop
