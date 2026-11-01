@@ -369,6 +369,46 @@ local command that prints JSON for pending access requests, approvals without a 
 newly docked ships; Odo posts each once in `Ops`. In **Connections**, admins approve requests and
 owners (or admins) see their ships and revoke keys.
 
+## Connect Claude to your home
+
+Claude can read the rooms you choose on your home, through a custom connector. It reads only: it can't post, change
+anything, or read a room you didn't choose.
+
+**The home's side.** The connector exists only when `serve` runs with `--public-origin`, the home's public `https`
+name behind Tailscale Funnel. That name must also be one of its `--origin` values, and `--proxy-headers` is required.
+Without `--public-origin`, none of the connector's routes exist. Claude refuses tailnet addresses, so the public route
+must be live first.
+
+**Connecting.** In Claude's settings, under Connectors, add a custom connector with the address
+`https://<your home's public name>/mcp`. Claude opens your home's sign-in page. There you:
+- sign in with your home's username and password;
+- choose the rooms Claude may read, or all your rooms, including new ones;
+- choose how long it lasts, from 1 to 30 days;
+- press Allow.
+
+A room any member keeps away from cloud models ("Never to a cloud model") can't be chosen. If someone marks it later,
+Claude can no longer read it from then on. A mark doesn't recall what Claude has already read, and it doesn't see text
+someone copies into another room by hand. A member on a paired home can't mark a room here yet, though their words in it
+reach Claude like anyone's.
+
+**What Claude can do.** Four read-only tools: List shared rooms, Read a room, Search shared rooms and Fetch a message.
+It can make 60 calls a minute and 2,000 a day per connection. It never reads a room on another home.
+
+**Connected apps.** Your home's Connected apps page lists each connection: the app, when it was made, last used and
+when it ends, and its rooms.
+- **Change rooms:** takes effect on Claude's next call.
+- **Receipts:** every call leaves one, saying when, which tool, and which rooms it read or was refused, except a call
+  refused for going over the limit, which reads nothing. A receipt never records what was asked.
+- **Revoke:** ends the connection at once, so Claude's next call is refused. Disconnecting in Claude doesn't end the
+  connection here. Revoke does.
+
+For 7 days after each connection is made, every page names it: "Claude was connected on <date>. Not you? Revoke."
+Each connection has its own line, so a stolen password can't quietly become 30 days of reading, even after you connect
+Claude yourself.
+
+**Admins.** A home's super admins see each connection's person, app and dates under Connections, and can revoke it.
+They never see its rooms or what it read.
+
 ## Lessons (the first rail)
 
 A lesson is a post in the lessons room, in the wire format of the first rail spec (section 2 of

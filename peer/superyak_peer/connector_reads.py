@@ -15,6 +15,7 @@ from .connector import ToolRefused
 READS_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS connector_reads(id TEXT PRIMARY KEY, grant_id TEXT NOT NULL, person_id TEXT NOT NULL, app TEXT NOT NULL, at REAL NOT NULL, tool TEXT NOT NULL, rooms_read TEXT NOT NULL, rooms_refused TEXT NOT NULL, size INTEGER NOT NULL, outcome TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS connector_reads_by_grant ON connector_reads(grant_id, at);
+CREATE INDEX IF NOT EXISTS connector_reads_by_person ON connector_reads(person_id, grant_id);
 '''
 # connector_reads: one row per tools/call. `rooms_read` is a JSON list of room ids and `rooms_refused` a JSON list of
 # {room, why}, a room recorded only when the person is in it; `outcome` is ok, refused or failed. It names its person
@@ -162,8 +163,8 @@ class ConnectorReads:
         """The grant as it stands in this transaction (the reader's should-fix: a revoke, or a room set narrowed, between
         bearer and the read let text out): its access token still unexpired and its connection still live and active,
         with the rooms and person read from the row now, else GrantGone."""
-        token = db.execute("SELECT expires FROM connector_tokens WHERE hash=? AND kind='access'",
-                           (grant.get('token'),)).fetchone()
+        token = db.execute("SELECT expires FROM connector_tokens WHERE hash=? AND kind='access' AND grant_id=?",
+                           (grant.get('token'), grant['grant_id'])).fetchone()  # bound to its grant (Task 8's re-check)
         live = self._live_grant(db, grant['grant_id'], now) if token is not None and now < token['expires'] else None
         if live is None:
             raise GrantGone()
@@ -187,6 +188,7 @@ class ConnectorReads:
 
     def _receipt(self, db, grant, tool, seen, outcome, length):
         row = db.execute('SELECT redirect_host FROM connector_grants WHERE id=?', (grant['grant_id'],)).fetchone()
+        db.execute('UPDATE connector_grants SET last_used=? WHERE id=?', (self.clock(), grant['grant_id']))  # Task 9a
         db.execute('INSERT INTO connector_reads VALUES(?,?,?,?,?,?,?,?,?,?)',
                    (secrets.token_urlsafe(12), grant['grant_id'], grant['person_id'], row['redirect_host'] if row else '',
                     self.clock(), tool, json.dumps(seen.read), json.dumps(seen.refused), length, outcome))
@@ -373,10 +375,12 @@ class ConnectorReads:
         lines, kept, here = [line(message) for message in shaped], list(range(len(shaped))), at - begin
         while len(kept) > 1 and whole('\n'.join(lines[i] for i in kept)) > TEXT_CAP:
             kept.remove(max(kept, key=lambda i: (abs(i - here), i)))  # the farthest goes first, later before earlier
+        target = shaped[here]
         if whole('\n'.join(lines[i] for i in kept)) > TEXT_CAP:  # the message alone past the cap: its text is cut
-            lines[here] = line(fitted(shaped[here], lambda m: whole(line(m)) <= TEXT_CAP))
+            target = fitted(target, lambda m: whole(line(m)) <= TEXT_CAP)
+            lines[here] = line(target)
         result['text'] = '\n'.join(lines[i] for i in kept)
-        if len(kept) < len(lines) or '"text_cut":' in lines[here]:
+        if len(kept) < len(lines) or 'text_cut' in target:  # fitted's own mark, not a search of the line (Tardis)
             result['truncated'] = True
         seen.reading(room_id)
         return result

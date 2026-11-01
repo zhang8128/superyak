@@ -403,7 +403,8 @@ def test_the_connector_routes_are_walked_too(tmp_path, monkeypatch):
     origin = 'https://home.example'
     app = create_app(tmp_path / 'peer', allowed_origins=['http://testserver', origin], public_origin=origin)
     answers, seen = anonymous_answers(app, origin, monkeypatch)
-    assert {'register', 'signin', 'decision', 'token', 'mcp'} <= set(seen)  # /mcp is walked: its token comes first
+    assert {'register', 'signin', 'decision', 'token', 'mcp', 'connected_app_rooms', 'connected_app_revoke',
+            'admin_connected_app_revoke'} <= set(seen)  # /mcp and Task 9a's writes are walked: identity first
     assert {route: answer for route, answer in answers.items() if answer[0] not in (401, 403) or answer[1]} == {}
 
 

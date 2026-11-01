@@ -1,8 +1,10 @@
-"""The remote connector's routes, installed only with `serve --public-origin` (connector plan, Task 3). Each answers 404
-on any other origin, needs no session, and checks what it needs itself; none sends CORS headers. An async route here
+"""The remote connector's routes, installed only with `serve --public-origin` (connector plan, Task 3). Each OAuth and
+/mcp route answers 404 on any other origin, needs no session, and checks what it needs itself; none sends CORS headers.
+Task 9a's Connected apps routes are /api routes like the rest: a signed-in person on the home's own origins. An async route here
 runs every identity check and store call in the threadpool, never on the event loop (fix:actor-off-the-event-loop); a
 sync one runs there anyway."""
 import json
+import re
 from urllib.parse import parse_qsl, urlencode
 
 from fastapi import Request
@@ -347,3 +349,46 @@ def install(app, public_origin, callback):
         return JSONResponse({'error': 'Method not allowed'}, 405, headers={'allow': 'POST'})
 
     app.add_api_route('/mcp', not_allowed, methods=['GET', 'DELETE'])
+
+    # ---- Task 9a: Connected apps (a person's own connections), the admins' view and the new-connection notice. Persons
+    # only, on the home's own origin as every /api route is; a ship key gets 403 (current_user). Installed with the
+    # connector. A write checks its caller before it reads its body (the event-loop guard's walk). ----
+    from .app import actor, body, caller, current_user
+    from .connector_apps import PAGE, RECEIPTS_LIMIT
+
+    @app.get('/api/connected-apps')
+    def connected_apps(request: Request):
+        return store.connected_apps(actor(request))
+
+    @app.get('/api/connected-apps/notice')
+    def connected_app_notice(request: Request):
+        return store.connected_app_notice(actor(request))
+
+    @app.get('/api/connected-apps/{key}/receipts')
+    def connected_app_receipts(key: str, request: Request):
+        who = actor(request)  # who asks comes first, as on every route: a stranger's bad page is 401, not 400 (N10)
+        limit = request.query_params.get('limit')
+        if limit is not None and not re.fullmatch(r'[0-9]{1,15}', limit):  # digits, as app.py's paging reads them
+            raise Problem(400, PAGE)
+        return store.connected_app_receipts(who, key, RECEIPTS_LIMIT if limit is None else int(limit),
+                                            request.query_params.get('before'))  # a receipt's id, found or refused there
+
+    @app.put('/api/connected-apps/{key}/rooms')
+    async def connected_app_rooms(key: str, request: Request):
+        who, data = await caller(current_user, request), await body(request)
+        rooms = data.get('rooms') if isinstance(data, dict) else None
+        return await run_in_threadpool(store.connected_app_rooms, who, key, rooms)
+
+    @app.post('/api/connected-apps/{key}/revoke')
+    async def connected_app_revoke(key: str, request: Request):
+        who = await caller(current_user, request)
+        return await run_in_threadpool(store.connected_app_revoke, who, key)
+
+    @app.get('/api/admin/connected-apps')
+    def admin_connected_apps(request: Request):
+        return store.admin_connected_apps(actor(request))
+
+    @app.post('/api/admin/connected-apps/{key}/revoke')
+    async def admin_connected_app_revoke(key: str, request: Request):
+        who = await caller(current_user, request)
+        return await run_in_threadpool(store.admin_connected_app_revoke, who, key)

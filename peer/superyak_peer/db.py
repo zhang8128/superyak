@@ -31,6 +31,7 @@ from .imprints import Imprints, IMPRINT_SCHEMA
 from .room_cloud import RoomCloud, ROOM_CLOUD_SCHEMA
 from .connector import Connector, OAUTH_SCHEMA
 from .connector_reads import ConnectorReads, READS_SCHEMA
+from .connector_apps import ConnectorApps
 from .common import encode, Problem
 from .peer_store import PeerStore, PEER_SCHEMA
 from .dispatch import DispatchGate
@@ -60,7 +61,7 @@ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEX
 JOURNAL_SIZE_LIMIT = 67108864  # store-wal-mode D2: a checkpointed WAL is cut back to 64 MB
 _reading = threading.local()  # store-wal-mode D3: this thread's reading() depth
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads, ConnectorApps):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
     _journal = None  # the journal mode this Store last read under the gate (store-wal-mode D3)
 
@@ -102,6 +103,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             imprint_columns = {row['name'] for row in db.execute('PRAGMA table_info(imprint_requests)')}
             if 'removal_files' not in imprint_columns:  # store imprints, final review M1: hashes kept before a removal
                 db.execute('ALTER TABLE imprint_requests ADD COLUMN removal_files TEXT')
+            grant_columns = {row['name'] for row in db.execute('PRAGMA table_info(connector_grants)')}
+            if 'revoked_why' not in grant_columns:  # connector Task 9a: why a connection ended (build:connector-revoke-reason)
+                db.execute('ALTER TABLE connector_grants ADD COLUMN revoked_why TEXT')
             ticket_columns = {row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
             if 'first_deferred' not in ticket_columns:  # ship-status fixes F3: the deferral a run resolved, on its ticket
                 db.execute('ALTER TABLE tickets ADD COLUMN first_deferred REAL')

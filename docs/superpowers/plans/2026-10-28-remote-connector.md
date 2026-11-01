@@ -550,8 +550,9 @@ def test_search_and_fetch_urls(connected):  # url == 'https://home.example/#chat
   all_rooms}]` (titles resolved at read time, never stored; `continues_in` is `{room, title}` when the room continues
   in a newer linked room the person is in); `PUT /api/connected-apps/{id}/rooms` `{rooms}` (Task 5's validation);
   `POST /api/connected-apps/{id}/revoke`; `GET /api/connected-apps/{id}/receipts`; `GET /api/connected-apps/notice`
-  → `{id, app, created}` for a connection made within 7 days, else null. Admins (super admins): `GET
-  /api/admin/connected-apps` → `[{id, person, app, created, last_used, ends}]` and `POST
+  → `[{id, app, created}]` for every live connection made within 7 days, newest first (amended by 9b's reader, M1:
+  the newest alone hid a thief's older one). Admins (super admins): `GET /api/admin/connected-apps` →
+  `[{id, person, username, app, created, last_used, ends}]` (username added by 9b's N5) and `POST
   /api/admin/connected-apps/{id}/revoke`. Persons only; installed with the connector.
 - In app.js: the route `apps` in `routeParts` (app.js:143) and `connectedAppsView()`; `connectorAdminSection()` in
   `connectionsView` (app.js:1196); the notice banner in `layout()` (app.js:158): "Claude was connected on <date>. Not

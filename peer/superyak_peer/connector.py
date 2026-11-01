@@ -36,7 +36,7 @@ def issuer_metadata(issuer):
 # restore copies it as it is, since a client grants nothing by itself.
 OAUTH_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY, name TEXT, grant_types TEXT NOT NULL, created REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS connector_grants(id TEXT PRIMARY KEY, person_id TEXT NOT NULL REFERENCES users(id), client_id TEXT NOT NULL, redirect_host TEXT NOT NULL, rooms TEXT NOT NULL, scope TEXT NOT NULL, created REAL NOT NULL, ends REAL NOT NULL, last_used REAL, revoked REAL);
+CREATE TABLE IF NOT EXISTS connector_grants(id TEXT PRIMARY KEY, person_id TEXT NOT NULL REFERENCES users(id), client_id TEXT NOT NULL, redirect_host TEXT NOT NULL, rooms TEXT NOT NULL, scope TEXT NOT NULL, created REAL NOT NULL, ends REAL NOT NULL, last_used REAL, revoked REAL, revoked_why TEXT);
 CREATE TABLE IF NOT EXISTS connector_tokens(hash TEXT PRIMARY KEY, kind TEXT NOT NULL, grant_id TEXT NOT NULL REFERENCES connector_grants(id), scope TEXT NOT NULL, resource TEXT NOT NULL, expires REAL NOT NULL, rotated_from TEXT, used REAL, code_hash TEXT);
 CREATE INDEX IF NOT EXISTS connector_tokens_by_code ON connector_tokens(code_hash);
 CREATE INDEX IF NOT EXISTS connector_tokens_by_parent ON connector_tokens(rotated_from);
@@ -435,7 +435,8 @@ class Connector:
                     or not hmac.compare_digest(challenge, row['challenge'])):
                 raise OAuthError(400, 'invalid_grant')  # before any write: a code alone proves nothing
             if db.execute('SELECT 1 FROM connector_tokens WHERE code_hash=? LIMIT 1', (row['code_hash'],)).fetchone():
-                db.execute('UPDATE connector_grants SET revoked=? WHERE id=? AND revoked IS NULL', (now, row['grant_id']))
+                db.execute("UPDATE connector_grants SET revoked=?, revoked_why='code_reused' WHERE id=? AND revoked IS NULL",
+                           (now, row['grant_id']))
                 db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?',
                            (REVOKED, row['grant_id'], REVOKED))
                 refused = OAuthError(400, 'invalid_grant')  # raised after the commit, so the revoke stays
@@ -477,7 +478,8 @@ class Connector:
             # its chain was split, and one branch isn't the client's. So it revokes the grant, both branches with it
             # (the security review); the person reconnects either way.
             if not now < row['expires'] or row['used'] is not None and now - row['used'] >= REUSE_SECONDS:
-                db.execute('UPDATE connector_grants SET revoked=? WHERE id=?', (now, grant['id']))
+                why = 'split_chain' if not now < row['expires'] else 'refresh_reused'  # build:connector-revoke-reason
+                db.execute('UPDATE connector_grants SET revoked=?, revoked_why=? WHERE id=?', (now, why, grant['id']))
                 db.execute('UPDATE connector_tokens SET expires=? WHERE grant_id=? AND expires>?', (REVOKED, grant['id'], REVOKED))
                 refused = OAuthError(400, 'invalid_grant')
             else:
