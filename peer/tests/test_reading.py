@@ -142,6 +142,41 @@ def test_reading_never_drops_this_process_s_sqlite_locks(tmp_path):
     assert other.returncode != 0 and 'locked' in other.stderr
 
 
+# Another process asks for SQLite's whole shared byte range exclusively (os_unix.c: SHARED_FIRST is PENDING_BYTE + 2,
+# SHARED_SIZE 510), without waiting, and says whether it got it.
+TRY_SHARED_RANGE = ('import fcntl, sys\nwith open(sys.argv[1], "r+b") as f:\n    try:\n'
+                    '        fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB, 510, 0x40000002)\n'
+                    '    except OSError:\n        print("refused")\n    else:\n        print("got")\n')
+
+
+def test_wal_reading_never_drops_this_process_s_sqlite_locks(tmp_path):
+    """Re-check 2's should-fix: the WAL twin of the test above. A connection this process holds open on a WAL store
+    keeps SQLite's SHARED lock on the file, and a gate-free reading() must leave it there: once it is dropped, another
+    process that closes its last connection thinks it is the last one and deletes the -wal (a row committed after it was
+    seen 0 of 1 on SQLite 3.40.1). The probe is a plain fcntl lock in another process, so it sees the drop whatever the
+    SQLite, 3.51.0's WAL defenses included. Mutation: header_mode() read in the WAL branch (the other process gets
+    it)."""
+    store = store_in(tmp_path, 'wal')
+    probe = [sys.executable, '-c', TRY_SHARED_RANGE, str(store.db_path)]
+    with closing(sqlite3.connect(store.db_path)) as held:
+        held.execute('SELECT count(*) FROM users').fetchone()  # open: SQLite holds its WAL-mode SHARED lock from here
+        assert subprocess.run(probe, capture_output=True, text=True, timeout=30).stdout == 'refused\n'  # the control
+        assert store._journal == 'wal'  # so the read below takes the gate-free branch
+        count_users(store)
+        after = subprocess.run(probe, capture_output=True, text=True, timeout=30)
+    assert after.stdout == 'refused\n', after.stderr
+
+
+def test_a_store_opened_on_a_wal_file_reads_past_the_gate_on_its_first_read(tmp_path):
+    """Re-check 2's C2: __init__ learns the mode in its migration transaction, so a Store opened on a WAL store (a
+    station's restart) takes no gate even on its very first read. Mutation: __init__'s cache line gone (that first read
+    waits for the held gate)."""
+    store = Store(store_in(tmp_path, 'wal').data_dir)
+    with gate_and_write_held(store):
+        count, took = timed(lambda: count_users(store))
+    assert count >= 1 and took < 1.0  # a gated read would wait out the held gate, up to 10 s
+
+
 def test_rollback_reading_holds_the_gate_for_its_whole_block(tmp_path):
     """The re-check's N5: in rollback mode the gate is held from before the connection until the block ends, so another
     thread's bounded wait for it times out inside the block. Mutation: the gate let go once connected."""
