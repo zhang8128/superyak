@@ -111,7 +111,7 @@ h3 { margin: 0; font-size: 17px; }
 .item-list { display: grid; gap: 10px; }
 .item { width: 100%; min-height: 76px; padding: 16px 18px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); text-align: left; text-decoration: none; }
 button.item:hover, a.item:hover { border-color: var(--sage); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(36,45,42,.05); }
-.item-main { min-width: 0; }
+.item-main { min-width: 0; overflow-wrap: anywhere; }  /* a name with no space wraps, never pushes the page (9b's N6) */
 .item-main strong, .item-main span { display: block; }
 .item-main span, .meta { margin-top: 3px; color: var(--muted); font-size: 13px; }
 .item-side { flex: none; color: var(--muted); font-size: 13px; text-align: right; }
