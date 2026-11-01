@@ -17,6 +17,14 @@ AGENT = "agent:default"
 FROM, UNTIL = "2026-11-01", "2027-01-31"
 
 
+@pytest.fixture(autouse=True)
+def cli_clock(monkeypatch):
+    """The CLI's clock, pinned inside the tests' own calendar: proposals here are filed at T("2026-11-02") and expire
+    PROPOSAL_DAYS (7) later, so on the real clock sign, decline and proposals refused them from 2026-11-09 00:00 UTC
+    (fix:engram-tests-calendar, found by moving engram's clock ahead)."""
+    monkeypatch.setattr(permission_cli, "_now", lambda: T("2026-11-03"))
+
+
 def sel(audience=(PARKS,), **objects):
     obj = {"kinds": ["memory"], "stores": "*", "layers": "*", "lanes": "*", "collections": ["collection:andy/c"],
            "memories": "*"}
