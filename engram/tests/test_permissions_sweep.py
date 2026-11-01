@@ -123,6 +123,10 @@ def enforce_house_with_a_pending_note(tmp_path):
     house, led = _world(tmp_path, "enforce", 1)
     store, ep = led.source, led.eps[0]
     sid = led.sid
+    # The first note is written at the episode's created_at, which add_episode takes from the clock. Made before the
+    # fixed times below, it stays the oldest note on any day; from 2026-11-01 the clock's was newer than `pending`.
+    store.conn.execute("UPDATE episodes SET created_at = '2026-10-01T00:00:00+00:00' WHERE id = ?", (ep,))
+    store.conn.commit()
 
     def listener(phase, rows, target):
         if phase == "after":
