@@ -243,9 +243,11 @@ kick:
 check-agent:
 	cd agent && uv run --locked --extra dev python -m pytest -q -ra --tb=short
 
+MUTANTS_SCRATCH ?= /var/tmp
+
 mutants:
-	@test -n "$(SPEC)" || { echo 'Usage: make mutants SPEC=<spec.json> [HEAD=<reviewed head>] (scripts/mutants.py says what a spec holds)'; exit 2; }
-	python3 -I scripts/mutants.py "$(SPEC)"$(if $(HEAD), --head "$(HEAD)")
+	@test -n "$(SPEC)" || { echo 'Usage: make mutants SPEC=<spec.json> [HEAD=<reviewed head>] [MUTANTS_SCRATCH=/var/tmp] (scripts/mutants.py says what a spec holds)'; exit 2; }
+	python3 -I scripts/mutants.py "$(SPEC)" --scratch "$(MUTANTS_SCRATCH)"$(if $(HEAD), --head "$(HEAD)")
 
 setup-peer:
 	cd peer && uv sync --locked --python "$(PYTHON_VERSION)"

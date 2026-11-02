@@ -17,7 +17,8 @@ The spec is a JSON file:
        {"name": "any command", "file": "x.py", "old": "a", "new": "b", "run": ["sh", "-c", "..."], "cwd": "."}]}
 
 `old` is an exact substring that must occur once in the file at the head; a site found 0 or 2+ times is not run and
-says how many times it was found. A mutant with `project` runs `pytest -q -x <tests>` in that project's own venv,
+says how many times it was found, as is a mutant of the wrong shape, with what is wrong. `make mutants` puts the
+worktree in /var/tmp (MUTANTS_SCRATCH), on disk: the Pi's /tmp is RAM-backed, and the venvs are copied into it. A mutant with `project` runs `pytest -q -x <tests>` in that project's own venv,
 made in the worktree with `uv sync --frozen` and the `sync` arguments (agent needs `--extra dev`); the worktree's own
 venv, so a subprocess run with `python -I` imports the mutated code too. `sync` may name further projects to make
 (agent's lessons tests run peer's). A mutant with `run` runs that command from `cwd` in the worktree instead. Each
@@ -39,6 +40,12 @@ DEFAULT_SYNC = {'agent': ['--extra', 'dev']}
 FIELDS = ('name', 'file', 'old', 'new')
 
 
+def fail(message):
+    """The reason, printed to stderr, and the exit-2 exception to raise with it."""
+    print(message, file=sys.stderr)
+    return SystemExit(2)
+
+
 def git(*args, cwd):
     return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
@@ -48,30 +55,35 @@ def last_line(text):
     return lines[-1].strip() if lines else ''
 
 
+def problem(mutant):
+    """What is wrong with one mutant's shape, or None; such a mutant is not run, and the rest are (Rio Grande's note)."""
+    if not isinstance(mutant, dict) or not all(isinstance(mutant.get(key), str) for key in FIELDS):
+        return 'it needs string "name", "file", "old" and "new"'
+    if mutant['old'] == mutant['new'] or not mutant['old']:
+        return '"old" must be non-empty and differ from "new"'
+    runs = isinstance(mutant.get('run'), list) and mutant['run'] and all(isinstance(a, str) for a in mutant['run'])
+    tests = isinstance(mutant.get('project'), str) and isinstance(mutant.get('tests'), list) and mutant['tests']
+    if bool(runs) == bool(tests):
+        return 'give either "run" or "project" with "tests"'
+    return None
+
+
 def read_spec(path):
-    """The spec's mutants, checked for shape; SystemExit(2) naming what is wrong."""
+    """(mutants, sync, timeout), the spec's own shape checked; SystemExit(2) naming what is wrong. A mutant of the wrong
+    shape is kept, and mutate() reports it as not run."""
     try:
         spec = json.loads(Path(path).read_text())
     except (OSError, ValueError) as error:
-        raise SystemExit(f'mutants: cannot read {path}: {error}') from None
+        raise fail(f'mutants: cannot read {path}: {error}') from None
     mutants = spec.get('mutants') if isinstance(spec, dict) else None
     if not isinstance(mutants, list) or not mutants:
-        raise SystemExit('mutants: the spec needs a non-empty "mutants" list')
-    for number, mutant in enumerate(mutants, 1):
-        if not isinstance(mutant, dict) or not all(isinstance(mutant.get(key), str) for key in FIELDS):
-            raise SystemExit(f'mutants: mutant {number} needs string "name", "file", "old" and "new"')
-        if mutant['old'] == mutant['new'] or not mutant['old']:
-            raise SystemExit(f'mutants: {mutant["name"]}: "old" must be non-empty and differ from "new"')
-        runs = isinstance(mutant.get('run'), list) and mutant['run'] and all(isinstance(a, str) for a in mutant['run'])
-        tests = isinstance(mutant.get('project'), str) and isinstance(mutant.get('tests'), list) and mutant['tests']
-        if bool(runs) == bool(tests):
-            raise SystemExit(f'mutants: {mutant["name"]}: give either "run" or "project" with "tests"')
+        raise fail('mutants: the spec needs a non-empty "mutants" list')
     sync = spec.get('sync', {})
     if not isinstance(sync, dict) or not all(isinstance(v, list) for v in sync.values()):
-        raise SystemExit('mutants: "sync" maps a project to a list of `uv sync` arguments')
+        raise fail('mutants: "sync" maps a project to a list of `uv sync` arguments')
     timeout = spec.get('timeout', 600)
     if type(timeout) not in (int, float) or timeout <= 0:
-        raise SystemExit('mutants: "timeout" is a number of seconds')
+        raise fail('mutants: "timeout" is a number of seconds')
     return mutants, sync, timeout
 
 
@@ -119,15 +131,20 @@ def sync(tree, projects, extra):
 def mutate(mutants, tree, extra, timeout):
     """One (name, verdict, last line) per mutant, run in order in the worktree."""
     results, sites = [], {}
-    for mutant in mutants:
+    shaped = [mutant for mutant in mutants if problem(mutant) is None]
+    for mutant in shaped:
         path = tree / mutant['file']
-        found = path.read_text().count(mutant['old']) if path.is_file() else 0
-        sites[mutant['name']] = found
-    projects = {m['project'] for m in mutants if 'project' in m} | set(extra)
+        sites[id(mutant)] = path.read_text().count(mutant['old']) if path.is_file() else 0
+    projects = {m['project'] for m in shaped if 'project' in m} | set(extra)
     broken = sync(tree, projects, extra) if projects else set()
     baselines = {}
-    for mutant in mutants:
-        name, found = mutant['name'], sites[mutant['name']]
+    for number, mutant in enumerate(mutants, 1):
+        wrong = problem(mutant)
+        if wrong is not None:
+            name = mutant.get('name') if isinstance(mutant, dict) and isinstance(mutant.get('name'), str) else None
+            results.append((name or f'mutant {number}', 'not run', wrong))
+            continue
+        name, found = mutant['name'], sites[id(mutant)]
         if found != 1:
             results.append((name, 'not run', f'site found {found} times in {mutant["file"]}, not once'))
             continue
@@ -148,7 +165,7 @@ def mutate(mutants, tree, extra, timeout):
         finally:
             git('checkout', '--', mutant['file'], cwd=tree)
         if git('status', '--porcelain', '--untracked-files=no', cwd=tree):
-            raise SystemExit(f'mutants: the worktree did not come back clean after {name}; stopping')
+            raise fail(f'mutants: the worktree did not come back clean after {name}; stopping')
         verdict = 'killed (timeout)' if passed is None else 'SURVIVED' if passed else 'killed'
         results.append((name, verdict, line))
     return results
@@ -165,7 +182,7 @@ def main(argv=None):
         repo = Path(git('rev-parse', '--show-toplevel', cwd=Path.cwd()))
         head = git('rev-parse', '--verify', f'{args.head}^{{commit}}', cwd=repo)
     except subprocess.CalledProcessError as error:
-        raise SystemExit(f'mutants: {last_line(error.stderr) or error}') from None
+        raise fail(f'mutants: {last_line(error.stderr) or error}') from None
     for stray in strays(repo):
         print(f'A stray worktree from an earlier run: {stray} (git worktree remove --force {stray})')
     base = Path(tempfile.mkdtemp(prefix=PREFIX, dir=args.scratch))

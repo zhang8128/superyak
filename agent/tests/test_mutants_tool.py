@@ -93,11 +93,23 @@ def test_a_stray_worktree_from_an_earlier_run_is_named(repo, tmp_path):
     assert code == 0 and f'A stray worktree from an earlier run: {stray}' in out, out
 
 
-@pytest.mark.parametrize('bad', [{}, {'mutants': []}, {'mutants': [{'name': 'n', 'file': 'calc.py', 'old': 'a'}]},
-                                 {'mutants': [{'name': 'n', 'file': 'calc.py', 'old': 'a', 'new': 'a', 'run': ['x']}]},
-                                 {'mutants': [{'name': 'n', 'file': 'calc.py', 'old': 'a', 'new': 'b'}]}])
+@pytest.mark.parametrize('bad', [{}, {'mutants': []}, {'mutants': [mutant('m', 'x * 2', 'x * 3')], 'timeout': 0},
+                                 {'mutants': [mutant('m', 'x * 2', 'x * 3')], 'sync': {'agent': '--extra dev'}}])
 def test_a_spec_of_the_wrong_shape_is_refused_before_anything_runs(repo, tmp_path, bad):
     spec = tmp_path / 'spec.json'
     spec.write_text(json.dumps(bad))
     done = subprocess.run([sys.executable, '-I', str(TOOL), str(spec)], cwd=repo, capture_output=True, text=True)
-    assert done.returncode != 0 and done.stderr.startswith('mutants: ') and git(repo, 'worktree', 'list').count('\n') == 0
+    assert done.returncode == 2 and done.stderr.startswith('mutants: ') and git(repo, 'worktree', 'list').count('\n') == 0
+
+
+def test_a_mutant_of_the_wrong_shape_is_not_run_and_the_rest_are(repo, tmp_path):
+    """Rio Grande's note on b831314e: one mutant's bad shape no longer stops the spec; it is not run, with the reason,
+    as a site not found once is. Mutation: a shape problem raised (the run stops, and the good mutant isn't run)."""
+    code, out = mutants(repo, tmp_path, mutant('times three', 'x * 2', 'x * 3'),
+                        {'name': 'no new', 'file': 'calc.py', 'old': 'x'}, mutant('same', 'x * 2', 'x * 2'),
+                        {'name': 'both', 'file': 'calc.py', 'old': 'x * 2', 'new': 'x', 'run': ['true'],
+                         'project': 'agent', 'tests': ['t']}, 'not a mutant')
+    assert code == 1, out
+    assert verdicts(out) == {'times three': 'killed', 'no new': 'not run', 'same': 'not run', 'both': 'not run',
+                             'mutant 5': 'not run'}
+    assert 'needs string "name", "file", "old" and "new"' in out and 'differ from "new"' in out and 'either "run"' in out
