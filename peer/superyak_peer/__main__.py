@@ -192,6 +192,10 @@ def describe_bridge(room, changed, bridge):
     return f'Unbridged. Wormhole left the {where}.'
 
 
+def describe_open_room(room, names):
+    return f'Opened {named_room(room)} with you and ' + ', '.join(safe_line(n) for n in names) + f'; its full id is {room["id"]}.'
+
+
 def describe_add_ship(room, ship):
     return f'Added {safe_line(ship)} to a new {named_room(room)} with the same members; {carried_along(room)}'
 
@@ -549,6 +553,11 @@ def main(argv=None):
     add_ship.add_argument('--id', required=True, help='Short id from station-rooms (at least 4 characters)')
     add_ship.add_argument('--ship', required=True, help="The ship's username: one of the room owner's own ships, not wormhole")
     add_ship.add_argument('--as', dest='person', required=True, help='The room owner; only they can change the members')
+    open_room = commands.add_parser('station-open-room', help="Trusted local: open a new room a person owns, with them and ships of their own")
+    open_room.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    open_room.add_argument('--title', required=True, help="The room's title")
+    open_room.add_argument('--ship', action='append', required=True, help="One of the owner's own ships (repeat for each)")
+    open_room.add_argument('--as', dest='person', required=True, help='The room owner')
     moderate = commands.add_parser('station-moderate', help="Trusted local: let a person in a room, or one of the owner's own ships in it, add and remove its members")
     moderate.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     moderate.add_argument('--id', required=True, help='Short id from station-rooms (at least 4 characters)')
@@ -725,6 +734,9 @@ def main(argv=None):
         elif args.command == 'station-add-ship':
             room, ship = Store(args.data_dir, signing=False).station_add_ship(args.person, args.id, args.ship)
             print(describe_add_ship(room, ship))
+        elif args.command == 'station-open-room':
+            room = Store(args.data_dir, signing=False).station_open_room(args.person, args.title, args.ship)
+            print(describe_open_room(room, sorted({s.strip().lower() for s in args.ship if s.strip()})))
         elif args.command == 'station-moderate':
             names = {'add': 'add_member', 'remove': 'remove_member'}  # anything else passes through for the store to refuse
             actions = [names.get(a.strip(), a.strip()) for a in args.actions.split(',')]
@@ -922,7 +934,11 @@ def main(argv=None):
             store = Store(args.data_dir)
             from .federate import Federate
             from .federation import Federation
-            Federate(Federation(store, endpoint=None, identity=PeerIdentity.load_or_create(store.data_dir))).run()
+            store.keep_open()  # store-wal-mode D2: one keeper for the process's life, after its one Store
+            try:
+                Federate(Federation(store, endpoint=None, identity=PeerIdentity.load_or_create(store.data_dir))).run()
+            finally:
+                store.close_keeper()
         elif args.command == 'federation-listen':
             # plan P9 and nit 18: nothing is created in a directory that isn't a peer's, and nothing serves a pull peer
             if not (args.data_dir / 'peer.sqlite3').is_file():
@@ -947,9 +963,13 @@ def main(argv=None):
             from .listener import create_listener
             import uvicorn
             app = create_listener(None, federation=Federation(store, endpoint=None, identity=identity))
-            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(identity.cert_path),
-                        ssl_keyfile=str(identity.key_path), access_log=False,
-                        timeout_graceful_shutdown=SHUTDOWN_GRACE)
+            store.keep_open()  # store-wal-mode D2: one keeper for the process's life, after its one Store
+            try:
+                uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(identity.cert_path),
+                            ssl_keyfile=str(identity.key_path), access_log=False,
+                            timeout_graceful_shutdown=SHUTDOWN_GRACE)
+            finally:
+                store.close_keeper()
         elif args.command == 'door':
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback

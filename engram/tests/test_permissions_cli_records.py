@@ -1,6 +1,7 @@
 """Task 26A: engram-permissions allow, deny, revoke, shorten, narrow, grants, sign, decline, proposals
 (P 7.1 to 7.7; U14, U18, U26, R26, R27)."""
 import json
+import time
 
 import pytest
 
@@ -15,6 +16,7 @@ from tests.permissions_support import (ANDY, HOME, T, cli_home, cli_home_with_ho
 PARKS = "place:la-county/parks-and-rec"
 AGENT = "agent:default"
 FROM, UNTIL = "2026-11-01", "2027-01-31"
+REAL_NOW = permission_cli._now   # before the pin below replaces it in every test
 
 
 @pytest.fixture(autouse=True)
@@ -320,6 +322,29 @@ def test_proposals_lists_open_ones_with_words_and_needs_no_yes(cli_home, fake_tt
     out = capsys.readouterr().out
     assert pid in out and "Share collection andy/c with " + PARKS in out and AGENT in out
     assert ledger_bytes(cli_home) == before
+
+
+def test_sign_and_decline_refuse_an_expired_proposal_before_asking(cli_home, fake_tty, capsys, monkeypatch):
+    """The CLI's own expiry check (7.7; the calendar fix's review, S1): a proposal filed at T("2026-11-02") expires
+    PROPOSAL_DAYS (7) later, and from then sign and decline refuse it before printing its words or asking for the yes,
+    so no yes is spent on a refusal the ledger would make after it; proposals lists none. Mutation: _proposal_of's
+    expiry check gone (sign asks, and only the ledger refuses)."""
+    pid = file_parks_proposal(cli_home)
+    monkeypatch.setattr(permission_cli, "_now", lambda: T("2026-11-09"))
+    before = ledger_bytes(cli_home)
+    capsys.readouterr()
+    for verb in ("sign", "decline"):
+        assert run([verb, pid], fake_tty) == 1
+        out, err = capsys.readouterr()
+        assert "has expired" in err and "code:" not in out, (verb, out, err)
+    assert ledger_bytes(cli_home) == before
+    assert main(["proposals"]) == 0 and "No open proposals" in capsys.readouterr().out
+
+
+def test_the_cli_clock_is_the_real_clock():
+    """Every other test here pins permission_cli._now; this one checks the clock it replaces is the real one, so a fast
+    or slow _now fails a test rather than waiting for a calendar date (the review's mutant D1, 400 days fast)."""
+    assert abs(REAL_NOW() - time.time()) <= 2
 
 
 def test_proposals_says_when_there_are_none(cli_home, capsys):

@@ -26,13 +26,17 @@ def sign_first(store):
 
 
 SYNC_SECONDS = 5
+CHECKPOINT_SECONDS = 3600  # store-wal-mode D2: the lighthouse checkpoints the store hourly
 
 @asynccontextmanager
 async def federation_lifespan(app):
     """serve --sync's worker (federation pull plan P11): federate's pass every SYNC_SECONDS, or at once when "Check
     delivery now" wakes it. Passes are counted, so the button can answer after the pass it woke. A pass that raises
-    is logged and the worker goes on (nit 9): one OperationalError used to end it silently."""
+    is logged and the worker goes on (nit 9): one OperationalError used to end it silently. Store-wal-mode D2: the
+    lighthouse's keeper is open for the lifespan, and Store.checkpoint runs every CHECKPOINT_SECONDS on a worker
+    thread; the exit stops the checkpoints, then closes the keeper."""
     from .federate import Federate
+    await asyncio.to_thread(app.state.store.keep_open)  # after the Store is built: create_app built it
     stop, app.state.sync_wake = asyncio.Event(), asyncio.Event()
     app.state.sync_started = app.state.sync_finished = 0
     async def worker():
@@ -57,15 +61,30 @@ async def federation_lifespan(app):
                 await asyncio.wait_for(stop.wait(), timeout=imprints.SIGN_INTERVAL)
             except asyncio.TimeoutError:
                 pass
+    async def checkpointer():
+        while True:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=CHECKPOINT_SECONDS)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await asyncio.to_thread(app.state.store.checkpoint)
+            except Exception:  # noqa: BLE001 - logged; the next hour's goes on
+                log.exception('A checkpoint failed')
     task = asyncio.create_task(worker()) if app.state.sync_enabled else None
     signing = asyncio.create_task(signer()) if app.state.imprints_dir is not None else None
+    checkpoints = asyncio.create_task(checkpointer())
     try:
         yield
     finally:
         stop.set()
-        for running in (task, signing):
-            if running:
-                await running
+        try:
+            for running in (task, signing, checkpoints):
+                if running:
+                    await running
+        finally:
+            await asyncio.to_thread(app.state.store.close_keeper)
 
 def install(app):
     from .app import actor, body, caller, current_user

@@ -7,7 +7,7 @@ from superyak_agent import checklists as cl
 REPO = Path(__file__).resolve().parents[2]
 SEED = REPO / '.superyak' / 'checklists'
 STATION_ACTS = ('approve', 'deny', 'bridge', 'unbridge', 'add-ship', 'moderate', 'unmoderate',
-                'lessons-room', 'imprint-admit', 'imprint-delete', 'imprint-use',   # the final review's I1
+                'imprint-admit', 'imprint-delete', 'imprint-use',   # the final review's I1
                 'journal')   # store-wal-mode Tasks 1-3 review's S3
 IMPRINT_ACTS = ('imprint-admit', 'imprint-delete', 'imprint-use', 'approve')
 TABLE = {
@@ -21,7 +21,7 @@ TABLE = {
     'imprint-act': '; '.join(f'command make station-{t}' for t in IMPRINT_ACTS),
 }
 
-VERSIONS = {'imprint-act': 2, 'before-push': 2, 'live-station-act': 2, 'each-hour': 2}   # F1: its content changed after it was on main
+VERSIONS = {'imprint-act': 2, 'before-push': 2, 'live-station-act': 3, 'each-hour': 3, 'merging-to-main': 2}   # F1: its content changed after it was on main
 
 
 def seed(list_id):
@@ -81,7 +81,7 @@ def test_a_live_station_act_fires_at_each_make_target_over_ssh_too_and_not_at_a_
     for target in STATION_ACTS:
         assert matches('live-station-act', f'make station-{target} ID=abc')
     assert matches('live-station-act', "ssh andy@smart 'cd ~/superyak && make station-approve ID=abc'")   # plan review M1
-    assert matches('live-station-act', 'make station-lessons-room ID=abc CONFIRM=x7k2')
+    assert not matches('live-station-act', 'make station-lessons-room ID=abc CONFIRM=x7k2')   # administration (Andy, 2026-11-02)
     for read in ('make station-rooms', 'make station-pending', 'make station-imprints'):
         assert not matches('live-station-act', read), read
     # Section 2's N2: `make -C <dir>` puts the directory between the words, so it fires neither station list.
@@ -118,11 +118,6 @@ def test_at_an_approval_both_station_lists_fit_in_one_hold():                   
 PINNED = {   # Rulings 50 and 51: an item is never looser than the law or CLAUDE.md, in the list and in its long form
     'live-station-act': ('a room he owns', 'a board item or another ship never', 'For an approval or a denial',
                          "Rio Grande's terminal", 'RE-DOCK', 'NAME TAKEN', "the grant's short id and the room's",
-                         # the final review's I1 and I2, and section 2's S4 (CLAUDE.md's lessons-room paragraph)
-                         "`make station-lessons-room` is Rio Grande's, only when Andy asks", 'CONFIRM=<code>',
-                         'The first run records nothing', 'only when he confirms those members and peers',
-                         'the full id it prints and post it in all hands',
-                         'takes no new member from this station', "Rio Grande included, can't be added back",
                          "by short id and kind, never a requester's name, contact or note"),
     'imprint-act': (  # section 2's S4: CLAUDE.md's IMPRINT paragraph, moved out of live-station-act
         "count of other people's memories is above 0 until gate G18 is passed", "the one the owner's machine showed",

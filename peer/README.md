@@ -416,7 +416,7 @@ A lesson is a post in the lessons room, in the wire format of the first rail spe
 its own sessions' queries; nothing is asked of another peer. The command is
 `python -m superyak_peer.lessons <verb> --data-dir D`, and make wraps each verb (`LESSONS_DATA`, the station's by default):
 
-- `station-room` (`make station-lessons-room ID=… [CONFIRM=…]`), on the origin only: shows the room Andy names, its
+- `station-room` (`make station-lessons-room ID=… [CONFIRM=…]`), on the origin only: shows the room the operator names, its
   members and listed peers, and a confirm code; run again with the code, it records the room.
 - `room` (`make lessons-room ID=<origin peer id>:<room id> [CONFIRM=…]`), on another peer: shows the same room's title,
   its owner, its members as this peer sees them, and a confirm code; run again with the code, it records the room.

@@ -1,5 +1,6 @@
 """Public door: only access requests and their status. `tailscale funnel` publishes this
 process alone; it has no sessions, reads no cookies and serves no browser interface."""
+from contextlib import asynccontextmanager
 import time
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -51,8 +52,18 @@ class DoorBoundary:
         await self.app(scope, replay, secure_send)
 
 
+@asynccontextmanager
+async def kept_open(app):
+    """Store-wal-mode D2: the door's keeper, open for its life, once create_door has built its Store."""
+    await run_in_threadpool(app.state.store.keep_open)
+    try:
+        yield
+    finally:
+        await run_in_threadpool(app.state.store.close_keeper)
+
+
 def create_door(data_dir, *, clock=time.time):
-    app = FastAPI(title='Superyak door', docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title='Superyak door', docs_url=None, redoc_url=None, openapi_url=None, lifespan=kept_open)
     store = app.state.store = Store(data_dir, clock=clock, signing=False)  # G4a: the door keeps no key in memory
 
     @app.exception_handler(Problem)

@@ -2,8 +2,10 @@
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
+import time
 from .auth import token_hash, public_user
 from .common import BRIEF_CHANGED, REPLACED_ROOMS, Problem, require, text, uid
 
@@ -13,6 +15,7 @@ UNCOLLECTED_KEY_LIFETIME = 3600
 SHIP_NAME = re.compile(r'[a-z][a-z0-9-]{1,31}')
 CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 POSTS_PER_MINUTE = 30
+WAL_NOTICE_BYTES = 67108864  # store-wal-mode D2: station-notices speaks up once peer.sqlite3-wal passes 64 MB
 MENTION = re.compile(r'(?<![\w@])@([a-z0-9][a-z0-9_.-]{1,63})', re.IGNORECASE)
 # A name shown as code, in quotes or on a quoted line is talked about, not addressed. Each span
 # stops at its own opening mark too, so unclosed marks cannot make one message cost quadratic time.
@@ -38,6 +41,23 @@ def safe_line(value, limit=80):
     a run on that ship's machine, so no '@' survives; control characters and newlines cannot start a new line."""
     value = ''.join(c if c.isprintable() else ' ' for c in str(value))
     return ' '.join(value.split()).replace('@', '(at)')[:limit].rstrip()
+
+
+def wal_notice(db_path, now):
+    """Store-wal-mode D2: one notice a day (Odo announces an id once) while peer.sqlite3-wal is past WAL_NOTICE_BYTES,
+    its size in MB rounded up. The size is read with stat: neither it nor the -shm, where WAL mode keeps its locks, is
+    opened outside SQLite (re-check 2 of Tasks 4-5). Its advice names no VACUUM: connector-apps pages receipts by
+    connector_reads' rowid, which a VACUUM may renumber."""
+    try:
+        size = os.stat(f'{db_path}-wal').st_size
+    except FileNotFoundError:  # rollback mode, or WAL with no connection open
+        return None
+    if size <= WAL_NOTICE_BYTES:
+        return None
+    return {'id': f'wal-large-{time.strftime("%Y-%m-%d", time.gmtime(now))}',
+            'text': f'Station alert: peer.sqlite3-wal has grown to {-(-size // 1048576)} MB, over its 64 MB mark, so '
+                    'checkpoints are not catching up; a reader that stays open holds it there. Restarting the station '
+                    'units checkpoints it when the last connection closes.'}
 
 
 def short_id(prefix):
@@ -339,6 +359,28 @@ class Ships:
                 raise Problem(409, f'{said} is already a member of room {room["id"][:6]}; nothing changed')
             return self._station_add(db, actor, room, row['id'], carry, 'adding the ship', 'station-add-ship'), name
 
+    def station_open_room(self, username, title, ships):
+        """Trusted local operator only: open a new room the person owns, with them and the named ships of their own as
+        its members (the lessons room, say). Boring administration: no person is added, so nothing here admits anyone,
+        and a room that comes out wrong is replaced by another. A person, another owner's ship, an ownerless one (the
+        station's own and wormhole) and an unknown name are refused before anything is written. Returns the room."""
+        names = sorted({name.strip().lower() for name in ships if isinstance(name, str) and name.strip()})
+        if not names:
+            raise Problem(400, 'Name at least one of your ships')
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            members = []
+            for name in names:
+                row, said = db.execute('SELECT id,kind,owner_id FROM users WHERE username=?', (name,)).fetchone(), safe_line(name)
+                if row is None:
+                    raise Problem(404, f'There is no ship named {said}')
+                if row['kind'] != 'ship':
+                    raise Problem(400, f'{said} is not a ship; this adds only your own ships')
+                if row['owner_id'] != actor:
+                    raise Problem(403, f"{said} is not one of {safe_line(username)}'s ships")
+                members.append(row['id'])
+            return self._create_room(db, actor, title, members)
+
     def station_decide(self, username, prefix, approve, *, imprints_root=None):
         """Trusted local operator only: approve or refuse one pending item by a short id,
         acting as the named person. Returns (item, result); never returns keys or tokens."""
@@ -475,4 +517,5 @@ class Ships:
                     notices.append({'id': f'push-failing-{r["peer_id"][:16]}-{int(r["failing_since"])}',
                                     'text': f'Delivery to {safe_line(r["names"])} has failed for a day. It keeps retrying; '
                                             'check that peer and its address under Connections.'})
-            return notices
+            large = wal_notice(self.db_path, now)
+            return notices + [large] if large else notices

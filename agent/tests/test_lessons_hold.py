@@ -166,9 +166,11 @@ def test_a_failing_query_or_missing_index_holds_nothing(rail, flag, text):
 
 
 def test_a_transcript_not_read_to_its_end_holds_nothing(rail):
+    """At a Bash call it records nothing either, so the head may ask again (the Tasks A to D reader's N2)."""
     rail.transcript.mkdir()
     rail.answers(lesson(A, command=GLOB))
-    assert ask(rail) == [] and rail.sent() == []
+    rec = record(rail=rail)
+    assert ask(rail, rec=rec) == [] and rail.sent() == [] and rec == record(rail=rail)
 
 
 @pytest.mark.parametrize('value, holds', [('watch', False), ('teamd', False), ('hook', True), ('', True)])
@@ -470,3 +472,82 @@ def test_the_hold_bytes_are_the_peers():
     finally:
         sys.dont_write_bytecode = before
     assert lessons_hold.HOLD_BYTES == lessons.HOLD_BYTES == 6
+
+
+def test_the_held_tools_are_the_peers():
+    """The Tasks A to D reader's N5: the agent suite pins the two HELD_TOOLS equal as well, as it pins HOLD_BYTES."""
+    peer, before = str(lh.CHECKOUT / 'peer'), sys.dont_write_bytecode
+    if peer not in sys.path:
+        sys.path.append(peer)
+    sys.dont_write_bytecode = True
+    try:
+        from superyak_peer import lessons
+    finally:
+        sys.dont_write_bytecode = before
+    assert lessons_hold.HELD_TOOLS == lessons.HELD_TOOLS
+
+
+def test_a_held_tools_name_is_found_only_in_its_own_call():
+    """Spec lesson-holds-on-tool-calls, item 3, in the provider's own filter of the answer: a held tool's name is found
+    only in a call to that tool, and a call to one holds no other value."""
+    post = 'mcp__station__station_post'
+    assert lessons_hold._contained(post, post) and not lessons_hold._contained(post, f'rg {post} agent/')
+    assert not lessons_hold._contained('station', post) and lessons_hold._contained('git push', 'git push origin')
+
+
+# ---- Spec lesson-holds-on-tool-calls, item 10 and N-b: a tool's head never changes, so at a tool call a query that
+# fails, answers late or is never started, after could_hold said yes, records the head as asked. ----
+POST = 'mcp__station__station_post'
+
+
+def this_checkouts(rail, monkeypatch):
+    """The stub query stands in for this checkout's own, which a tool call requires (spec item 13)."""
+    query = lh.read_settings(rail.settings)['query']
+    monkeypatch.setattr(lh, 'default_query', lambda: query)
+
+
+@pytest.mark.parametrize('flag, text', [('exit', '3'), ('sleep', '3')])
+def test_at_a_tool_call_a_failing_or_late_query_records_the_head(rail, monkeypatch, flag, text):
+    this_checkouts(rail, monkeypatch)
+    rail.answers(lesson(A, command=POST))
+    rail.flag(flag, text)
+    rec = record(rail=rail)
+    assert ask(rail, command=POST, rec=rec) == []
+    assert rec['lessons'] == {'heads': [lessons_hold.head_digest(POST)], 'holds': []}
+
+
+def test_at_a_tool_call_a_transcript_not_read_in_time_or_a_spent_budget_records_the_head(rail, monkeypatch):
+    this_checkouts(rail, monkeypatch)
+    rail.answers(lesson(A, command=POST))
+    monkeypatch.setattr(lessons_hold.lh, 'transcript_ids', lambda *a, **k: None)
+    rec = record(rail=rail)
+    assert ask(rail, command=POST, rec=rec) == [] and rail.sent() == []
+    assert rec['lessons'] == {'heads': [lessons_hold.head_digest(POST)], 'holds': []}
+    monkeypatch.undo()
+    this_checkouts(rail, monkeypatch)
+    monkeypatch.setattr(lessons_hold, 'START_MARGIN', 5.0)
+    rec = record(rail=rail)
+    assert ask(rail, command=POST, rec=rec) == [] and rail.sent() == []
+    assert rec['lessons'] == {'heads': [lessons_hold.head_digest(POST)], 'holds': []}
+
+
+def test_at_a_tool_call_a_query_from_another_checkout_asks_nothing_and_holds_nothing(rail, monkeypatch):
+    """Spec lesson-holds-on-tool-calls, item 13 (N-e), the Tasks A to D reader's M1: could_hold runs this checkout's
+    matching, so a settings `query` naming another checkout could answer lessons this side drops, leaving receipts
+    nobody saw. At a tool call such a query never runs: no could_hold, no query, nothing held or recorded. A Bash
+    command still runs the settings' query as named, and a tool call holds once the query is this checkout's.
+    Mutation: the check gone (the stub, another checkout's here, is asked and the post is held)."""
+    found, asked = lesson(A, command=POST), []
+
+    def could_hold(*args):
+        asked.append(args)
+        return True
+    rail.answers(found)
+    rec = record(rail=rail)
+    assert ask(rail, command=POST, rec=rec, could_hold=could_hold) == []
+    assert asked == [] and rail.sent() == [] and rec == record(rail=rail)
+    rail.answers(lesson(A, command=GLOB))
+    assert len(ask(rail)) == 1 and len(rail.sent()) == 1   # the control: at Bash the settings' query, as before
+    this_checkouts(rail, monkeypatch)
+    rail.answers(found)
+    assert ask(rail, command=POST) == [holds.Hold('lesson', key(POST, A), lh.hold_reason(found))]
