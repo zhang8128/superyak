@@ -44,9 +44,10 @@ def safe_line(value, limit=80):
 
 
 def wal_notice(db_path, now):
-    """Store-wal-mode D2: one notice a day while peer.sqlite3-wal is past WAL_NOTICE_BYTES. Its size is read with stat:
-    neither it nor the -shm, where WAL mode keeps its locks, is opened outside SQLite (re-check 2 of Tasks 4-5). Its
-    advice names no VACUUM: connector-apps pages receipts by connector_reads' rowid, which a VACUUM may renumber."""
+    """Store-wal-mode D2: one notice a day (Odo announces an id once) while peer.sqlite3-wal is past WAL_NOTICE_BYTES,
+    its size in MB rounded up. The size is read with stat: neither it nor the -shm, where WAL mode keeps its locks, is
+    opened outside SQLite (re-check 2 of Tasks 4-5). Its advice names no VACUUM: connector-apps pages receipts by
+    connector_reads' rowid, which a VACUUM may renumber."""
     try:
         size = os.stat(f'{db_path}-wal').st_size
     except FileNotFoundError:  # rollback mode, or WAL with no connection open
@@ -54,9 +55,9 @@ def wal_notice(db_path, now):
     if size <= WAL_NOTICE_BYTES:
         return None
     return {'id': f'wal-large-{time.strftime("%Y-%m-%d", time.gmtime(now))}',
-            'text': f'Station alert: peer.sqlite3-wal is {size // 1048576} MB, past its 64 MB mark, so checkpoints '
-                    'are not catching up; a reader that stays open holds it there. Restarting the station units '
-                    'checkpoints it when the last connection closes.'}
+            'text': f'Station alert: peer.sqlite3-wal has grown to {-(-size // 1048576)} MB, over its 64 MB mark, so '
+                    'checkpoints are not catching up; a reader that stays open holds it there. Restarting the station '
+                    'units checkpoints it when the last connection closes.'}
 
 
 def short_id(prefix):

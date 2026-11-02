@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import threading
 import time
 from .auth import Auth
@@ -86,8 +87,12 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         # never opened outside SQLite: a second Store beside a keeper leaves its lock alone (store-wal-mode Task 6).
         try:
             os.close(os.open(self.db_path, os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW, 0o600))
-        except FileExistsError:
-            pass
+        except FileExistsError:  # lstat, not open: a link planted since _check_paths is refused before chmod follows it
+            mode = os.lstat(self.db_path).st_mode
+            if stat.S_ISLNK(mode):
+                raise ValueError('Symlinked state is not allowed') from None
+            if not stat.S_ISREG(mode):
+                raise ValueError(f'{self.db_path} is not a regular file') from None
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
             db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA + ROOM_CLOUD_SCHEMA + OAUTH_SCHEMA + READS_SCHEMA)
@@ -284,7 +289,12 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         """Store-wal-mode D2, the lighthouse's hourly checkpoint: PASSIVE, which never waits, then TRUNCATE on a
         connection whose busy wait is CHECKPOINT_WAIT, so a long reader makes it give up rather than hold SQLite's write
         lock behind that reader (a gated or unbounded TRUNCATE kept a post waiting 2.44 s behind a 3 s reader, p8b).
-        Neither takes the gate. TRUNCATE's (busy, log, checkpointed); in rollback mode both do nothing, (0, -1, -1)."""
+        Neither takes the gate. TRUNCATE's (busy, log, checkpointed). The mode this Store last read (its cached
+        _journal) decides: in any other mode it opens nothing and returns (0, -1, -1), since PRAGMA wal_checkpoint reads
+        the schema, and that took SHARED outside the gate and answered "locked" beside another process's commit (the
+        fresh review's S2). A stale cache only skips or runs one hourly checkpoint."""
+        if self._journal != 'wal':
+            return 0, -1, -1
         self._check_paths()
         db = sqlite3.connect(self.db_path, timeout=CHECKPOINT_WAIT)
         try:
