@@ -83,4 +83,11 @@ What we see now, measured this week:
 5. **An error budget.** A revert is allowed. Count reverts each week in Reflect, and tighten only where the count is
    over budget.
 
+**Weekly: the embedding model.** Andy, 2026-11-02: "don't be shy to update the embedding model as new ones come out
+that you should research probably weekly". Each week, compare the current model (nomic-embed-text-v1.5, 768
+dimensions, about 1.1 GB resident) with new ones, on retrieval quality, resident memory, CPU speed on the Pi, ONNX
+support and Matryoshka dimensions. Propose a switch when one is better on memory without losing quality. A switch is a
+migration: vectors from different models don't mix, so every store re-embeds, and every neighbour that shares through
+a lighthouse moves at once, with the embedder refusing a mixed model until then.
+
 Each week's Reflect reviews this roadmap and the map: what moved, what stalled, what we changed or reverted.
