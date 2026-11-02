@@ -616,6 +616,7 @@ def test_a_held_dispatch_gate_is_waited_for_only_until_the_budget_ends(lessons_s
     assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
 
 
+@pytest.mark.journal('delete')  # a held reader blocks a commit only in rollback mode; its WAL twin is plan Task 7's
 def test_the_commit_waits_for_a_reader_only_until_the_budget_ends(lessons_station, monkeypatch):
     """The fresh review's S1: the station's database keeps a rollback journal, so step 4's commit waits for every
     reader's SHARED lock, and a reader outside the dispatch gate (the nightly backup's copy) can hold one past the
@@ -660,6 +661,7 @@ def held_reader(store):
     return reader
 
 
+@pytest.mark.journal('delete')  # a held reader blocks a commit only in rollback mode; its WAL twin is plan Task 7's
 @pytest.mark.parametrize('words_only', [True, False], ids=['words only', 'with Near'])
 def test_a_reader_from_before_the_query_is_waited_for_only_until_the_budget_ends(lessons_station, words_only):
     """fix:lessons-query-open-and-budget-bounds: a reader that holds SHARED from before the query starts (the nightly
@@ -688,6 +690,7 @@ def test_a_reader_from_before_the_query_is_waited_for_only_until_the_budget_ends
     assert [e['claim'] for e in answer['lessons']] == ['Words.'] and counts(store) == (1, 1)
 
 
+@pytest.mark.journal('delete')  # a held reader blocks a commit only in rollback mode; its WAL twin is plan Task 7's
 def test_the_query_verb_answers_nothing_within_its_budget_beside_a_reader(lessons_station, tmp_path):
     """The review's S3, through the process the hook runs: beside a held reader, `query` with budget_ms 3000 exits 0
     with {"lessons": []} inside its budget, and writes no receipt (before the fix: 30 s, then a traceback). The budget

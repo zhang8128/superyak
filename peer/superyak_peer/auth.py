@@ -139,7 +139,7 @@ class Auth:
         the known browsers' sign-in lane for a public sign-in; Store.login checks again in its own transaction. A valid
         token that is held answers 429 here, so it enters no lane (section 2 review should-fix 1), and so does one whose
         username's known browsers are held (the review of 581cea18, should-fix 1)."""
-        with self.transaction() as db:
+        with self.reading() as db:
             now = self.clock()
             known = self._known_device(db, device, username, now)
             user_held = known is not None and known_user_held(db, username, now)
@@ -270,7 +270,7 @@ class Auth:
         return result
 
     def session(self, token):
-        with self.transaction() as db:
+        with self.reading() as db:
             row = db.execute('SELECT users.*, sessions.csrf FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (token_hash(token or ''), self.clock())).fetchone()
             if not row or row['activation_pending'] or row['kind'] != 'person':
                 raise Problem(401, 'Sign in required')
@@ -281,7 +281,7 @@ class Auth:
         check still runs afterwards."""
         if not isinstance(token, str):
             return False
-        with self.transaction() as db:
+        with self.reading() as db:
             row = db.execute('SELECT users.activation_pending, users.kind FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (token_hash(token), self.clock())).fetchone()
         return row is not None and not row['activation_pending'] and row['kind'] == 'person'
 

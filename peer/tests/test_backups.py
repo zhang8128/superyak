@@ -270,6 +270,7 @@ os._exit(0)
 '''
 
 
+@pytest.mark.journal('delete')  # a hot journal is rollback mode's; its WAL twin is plan Task 7's
 def test_a_hot_journal_after_a_power_cut_is_retried_never_called_damage(tmp_path):
     """Review Focus 4 (S8): a power cut mid-commit leaves a hot journal. The read-only open succeeds and the first read
     fails with SQLITE_READONLY_ROLLBACK. The backup retries for 60 s, then exits 1, never 12, and leaves the live file
