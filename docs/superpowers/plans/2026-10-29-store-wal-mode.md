@@ -301,7 +301,13 @@ gate holds measured before bounded health merges.
 - [ ] **Step 3: Implement** as the Interfaces say; the lighthouse's checkpoint thread runs every 3,600 s and stops in
   the lifespan's exit, where the keeper closes too. No VACUUM of the live store, here or as the size notice's advice:
   connector-apps pages receipts by `connector_reads`' rowid, whose TEXT primary key lets a VACUUM renumber it, so a
-  VACUUM waits until that cursor changes (Tardis, on connector-apps 035e5ab2).
+  VACUUM waits until that cursor changes (Tardis, on connector-apps 035e5ab2). The keeper connection opens after
+  `Store.__init__`'s `os.open`/`os.close` of peer.sqlite3, and no second Store is built in a process that holds a
+  keeper: on Linux, closing any descriptor of the file drops every POSIX lock the process holds on it, the keeper's
+  included (the Tasks 4-5 re-check's M1; Tardis and Serenity). Its test builds a second Store beside a keeper and
+  shows another process still refused the write lock, or refuses the second Store. The same rule covers the `-wal`
+  and the `-shm`, where WAL mode keeps its locks: the keeper and the size notice `stat` them and never `open()` them
+  (re-check 2 of Tasks 4-5), and the size notice's test fails if either is opened.
 - [ ] **Step 4: Run** `tests/test_wal_costs.py tests/test_station_units.py`, in both journal modes — expect PASS.
 - [ ] **Step 5: Commit** `WAL's costs bounded: a keeper per process, a non-blocking checkpoint, a size notice`.
 
@@ -321,7 +327,19 @@ gate holds measured before bounded health merges.
 
 - [ ] **Step 1: Mark** the rollback-assuming tests `@pytest.mark.journal('delete')` and give each a WAL twin where both
   apply: the held-reader tests' WAL case asserts the commit is not blocked; test_federate's directory hash excludes
-  `-wal` and `-shm`; `set_aside` and the other copies use the backup API.
+  `-wal` and `-shm`; `set_aside` and the other copies use the backup API. conftest's WAL switch reads `PRAGMA
+  journal_mode` first and sets `_journal = 'wal'` only when its own switch changed the mode, so a test of what
+  `__init__` learns (`test_a_store_opened_on_a_wal_file_reads_past_the_gate_on_its_first_read`) still fails a dropped
+  `__init__` cache line in a `SUPERYAK_TEST_JOURNAL=wal` run (re-check 3 of Tasks 4-5, its nit). Restore 10.3's
+  `carry_nonces` attaches the restored source `mode=ro`; on a WAL source SQLite creates its `-wal` and `-shm`, which a
+  read-only connection can't remove, so a carry (a refusal after the attach, or a success) leaves two files beside
+  `$ASIDE/restored-live/peer.sqlite3`, and its comment "the source attached `mode=ro` is never changed" is rollback
+  mode's. Before Task 9's switch the carry leaves no file it didn't find there, and three WAL twins pin it:
+  `test_carry_nonces_refuses_and_changes_no_byte`'s, run for the eight cases that reach the ATTACH (`plain`, `broken`,
+  `unmarked`, `elsewhere`, `damaged`, `nul`, `earlier`, `misnamed`; the other eleven come out of its journal mark and
+  run in both modes); `test_carry_nonces_leaves_a_hot_journal_...`'s (a `-wal` left by a killed listener); and
+  `test_carry_nonces_adds_the_restored_stations_nonces_once_...`'s, comparing `tree()` of `restored-live`, not only
+  peer.sqlite3's bytes (train 1101t's WAL run and the Tasks 4-5 re-check 4, 2026-11-01).
 - [ ] **Step 2: Run** the whole peer suite in both modes — expect PASS.
 - [ ] **Step 3: Amend** the docs as listed: PROTOCOL.md says gate-free reads in WAL take no part in the promise and
   why; the docstrings say which mode they describe and what a read-only open creates; the owner-mention docs stop
