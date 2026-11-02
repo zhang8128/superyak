@@ -561,6 +561,16 @@ def main(argv=None):
     unmoderate.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     unmoderate.add_argument('--grant', required=True, help='The grant short id (at least 4 characters, with or without #)')
     unmoderate.add_argument('--as', dest='person', required=True, help='The room owner who made the grant')
+    sitting_cmd = commands.add_parser('merge-sitting', help='Trusted local, on the station checkout: fast-forward main to an '
+                                      'approved train, back up, restart and check the station, push (docs/assemblies.md)')
+    sitting_cmd.add_argument('--repo', type=Path, default=Path('.'))
+    sitting_cmd.add_argument('--train', required=True, help='The approved train commit')
+    sitting_cmd.add_argument('--tree', help='The tree the verdict named; a train with another tree is refused')
+    sitting_cmd.add_argument('--host', required=True, help='The public host name, sent with the health and route probes')
+    sitting_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    sitting_cmd.add_argument('--backup-dir', type=Path, help='The rotation (default: backups/station beside the data dir)')
+    sitting_cmd.add_argument('--dry-run', action='store_true', help='Check and list the train; change nothing')
+    sitting_cmd.add_argument('--no-push', action='store_true', help='Leave main unpushed (a security fix live before its code is public)')
     backup_cmd = commands.add_parser('station-backup', help='Trusted local: a checked copy of the station database into the rotation')
     backup_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     backup_cmd.add_argument('--backup-dir', type=Path, help='The rotation (default: backups/station beside the data dir)')
@@ -737,6 +747,22 @@ def main(argv=None):
                           file=sys.stderr)
                     listed = []
                 print(json.dumps(listed + extra, indent=2))
+        elif args.command == 'merge-sitting':
+            from .backups import BackupError, default_backup_dir, run_backup
+            from .sitting import Sitting, Stopped
+
+            def backup():
+                try:
+                    return run_backup(args.data_dir, args.backup_dir or default_backup_dir(args.data_dir))
+                except BackupError as failed:
+                    raise Stopped(f'the backup failed: {failed.reason}') from failed
+            try:
+                code = Sitting(args.repo, args.train, host=args.host, backup=backup, tree=args.tree,
+                               push=not args.no_push, dry_run=args.dry_run).sit()
+            except Stopped as stopped:
+                parser.exit(1, f'SITTING: stopped, main unchanged: {stopped}\n')
+            if code:
+                parser.exit(code)
         elif args.command == 'station-backup':
             from .backups import BackupError, default_backup_dir, run_backup
             try:

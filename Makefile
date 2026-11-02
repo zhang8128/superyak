@@ -80,7 +80,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats
+.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -98,6 +98,7 @@ help:
 	@echo "make station-add-ship ID=… SHIP=…  On the Pi: add one of your own ships to a room you own (APPROVER=andy)"
 	@echo "make station-moderate ID=… GRANTEE=…  On the Pi: let someone moderate a room you own (APPROVER=andy)"
 	@echo "make station-unmoderate GRANT=…  On the Pi: end a moderate grant by its short id"
+	@echo "make merge-sitting TRAIN=… [TREE=…] [DRY=1]  On the Pi: back up, fast-forward main, restart and check, push"
 	@echo "make station-backup [OUTPUT=…]  On the Pi: a checked copy of the station database (the rotation, or OUTPUT)"
 	@echo "make station-restore-test [BACKUP=…]  On the Pi: boot a throwaway station from the newest copy (or BACKUP)"
 	@echo "make station-restore-reconcile DB=… [REPLACED=…] [UNPAIR='id …']  On the Pi: runbook step 5 (docs/station-restore.md)"
@@ -414,6 +415,10 @@ station-moderate:
 station-unmoderate:
 	@test -n "$(GRANT)" || { echo 'Usage: make station-unmoderate GRANT=<grant short id> [APPROVER=andy]'; exit 2; }
 	uv run --locked --project peer python -m superyak_peer station-unmoderate --data-dir "$(STATION_DATA)" --grant "$(GRANT)" --as "$(APPROVER)"
+
+merge-sitting:
+	@test -n "$$TRAIN" || { echo 'Usage: make merge-sitting TRAIN=<approved train commit> [TREE=<tree the verdict named>] [DRY=1] [NO_PUSH=1] (docs/assemblies.md)'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer merge-sitting --repo "$(CURDIR)" --train "$$TRAIN" --host "$(patsubst https://%,%,$(STATION))" --data-dir "$(STATION_DATA)" --backup-dir "$(STATION_BACKUPS)"$${TREE:+ --tree "$$TREE"}$${DRY:+ --dry-run}$${NO_PUSH:+ --no-push}
 
 station-backup:
 	uv run --locked --project peer python -m superyak_peer station-backup --data-dir "$(STATION_DATA)" --backup-dir "$(STATION_BACKUPS)"$(if $(OUTPUT), --output "$(OUTPUT)")
