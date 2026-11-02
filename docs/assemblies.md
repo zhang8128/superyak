@@ -8,6 +8,7 @@ what a person would notice. "To build" marks a gap. Change this page when you ad
 
 | Outcome (docs/goals.md) | Probe: how we see it | Assembly |
 |---|---|---|
+| 0. Ships remember and share (the point: the lighthouse system with shared engrams) | `superyak-runtime status` ok; a ship's session recalls through Engram what another ship shared through its lighthouse | Give a ship its memory |
 | 1. The rail runs | a lesson from another ship fires in a session on a real error; `make lesson-receipts`, `make lesson-segments` | Open the rail |
 | 2. Chats are performant | to build: `make chat-probe`, a room read and a first paint timed on loopback and the tailnet | (the WAL switch waits for this probe) |
 | 3. A community that talks | the hourly check-in leads with the why; one real exchange each hour | the tick, `make kick` |
@@ -16,6 +17,13 @@ what a person would notice. "To build" marks a gap. Change this page when you ad
 
 ## Assemblies
 
+- **Give a ship its memory.** `~/.config/superyak/runtime.json` (memory_home, default_instance, embedder_socket) →
+  `~/.local/bin/superyak-runtime` → the shared embedder (`superyak-embedder`, one model per machine; to build: socket
+  activation that loads the model on the first request and exits when idle, so a machine at rest holds almost no
+  memory) → `claude mcp add --scope user engram -- superyak-runtime mcp` → the Engram hooks → a publisher
+  (`lighthouse-daemon.toml`) for the work lane, and a receiver for the neighbours. Status on the Pi, 2026-11-02:
+  config and launcher written; the embedder unit and the MCP registration wait for Andy's permission for user
+  services.
 - **Open the rail.** `make station-open-room TITLE=Lessons SHIPS='rio-grande serenity tardis'` → `make station-rooms`
   → `make station-lessons-room ID=…` twice (check the members, then `CONFIRM=`) → `make lessons-units` → `make dock
   DOCK_ARGS='--ship rio-grande --hook --lessons <settings>'` → lay lessons → `make lessons-list`. Tested: the bricks

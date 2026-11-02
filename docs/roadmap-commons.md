@@ -64,7 +64,12 @@ What we see now, measured this week:
 
 ## Roadmap (each step: the measure, and what reverting means)
 
-0. **The rail runs (today).** Open the rail (docs/assemblies.md). Measure: one of Tardis's lessons fires in Rio
+0. **Ships remember and share: the point.** Andy, 2026-11-02: "the whole point of this is to use the lighthouse
+   system with the shared engrams and shared memory", and "engram should be able to be run with very little memory
+   in theory… rarely accessed paths could be on disk". Give Rio Grande its Engram (docs/assemblies.md, "Give a ship its
+   memory"), then Tardis, then share a work-lane memory between them through a lighthouse. Measure: one ship's session
+   recalls what the other shared, and a machine at rest holds almost no Engram memory. Revert: the runtime is opt-in.
+0b. **The rail runs (today).** Open the rail (docs/assemblies.md). Measure: one of Tardis's lessons fires in Rio
    Grande's session on a real error within an hour. Revert: open a new room.
 1. **Probes for the outcomes.** `make chat-probe` (goal 2). The rail's receipts and segments already exist (goal 1).
    Measure: each outcome on the map has a number. Revert: nothing to revert.
