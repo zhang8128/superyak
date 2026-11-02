@@ -339,6 +339,28 @@ class Ships:
                 raise Problem(409, f'{said} is already a member of room {room["id"][:6]}; nothing changed')
             return self._station_add(db, actor, room, row['id'], carry, 'adding the ship', 'station-add-ship'), name
 
+    def station_open_room(self, username, title, ships):
+        """Trusted local operator only: open a new room the person owns, with them and the named ships of their own as
+        its members (the lessons room, say). Boring administration: no person is added, so nothing here admits anyone,
+        and a room that comes out wrong is replaced by another. A person, another owner's ship, an ownerless one (the
+        station's own and wormhole) and an unknown name are refused before anything is written. Returns the room."""
+        names = sorted({name.strip().lower() for name in ships if isinstance(name, str) and name.strip()})
+        if not names:
+            raise Problem(400, 'Name at least one of your ships')
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            members = []
+            for name in names:
+                row, said = db.execute('SELECT id,kind,owner_id FROM users WHERE username=?', (name,)).fetchone(), safe_line(name)
+                if row is None:
+                    raise Problem(404, f'There is no ship named {said}')
+                if row['kind'] != 'ship':
+                    raise Problem(400, f'{said} is not a ship; this adds only your own ships')
+                if row['owner_id'] != actor:
+                    raise Problem(403, f"{said} is not one of {safe_line(username)}'s ships")
+                members.append(row['id'])
+            return self._create_room(db, actor, title, members)
+
     def station_decide(self, username, prefix, approve, *, imprints_root=None):
         """Trusted local operator only: approve or refuse one pending item by a short id,
         acting as the named person. Returns (item, result); never returns keys or tokens."""

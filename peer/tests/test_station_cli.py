@@ -660,3 +660,45 @@ def test_station_unmoderate_says_so_when_the_grant_covers_no_current_room(fleet,
             db.execute('INSERT INTO rooms VALUES(?,?,?,1,?)', (fork, f.andy['id'], 'Fork', newer))
     out = run(capsys, store, 'station-unmoderate', '--grant', grant['id'][:4], '--as', 'andy')
     assert out == f'Ended grant #{grant["id"][:4]}. It covers no current room, so no room was told.\n'
+
+
+def open_room(capsys, store, title, *ships, who='andy'):
+    return run(capsys, store, 'station-open-room', '--title', title, *[a for s in ships for a in ('--ship', s)], '--as', who)
+
+
+def test_opening_a_room_makes_one_the_person_owns_with_their_own_ships(fleet, capsys):
+    """Andy, 2026-11-02: a room of his own ships is boring administration, not an act for him; Rio Grande opens the
+    lessons room itself. The room is new, owned by the person, and holds them and exactly the ships named (case and
+    repeats folded). Mutation: the owner left out of the members, or the room owned by the operator's first ship."""
+    f, store = fleet, fleet.store
+    out = open_room(capsys, store, 'Lessons', 'Rio-Grande', 'tardis', 'tardis')
+    room = next(r for r in store.station_rooms('andy') if r['title'] == 'Lessons')
+    assert room['members'] == ['andy', 'rio-grande', 'tardis']
+    assert store.get_room(f.andy['id'], room['id'])['owner_id'] == f.andy['id']
+    assert f'Opened room {room["id"][:6]} Lessons with you and rio-grande, tardis; its full id is {room["id"]}.' in out
+
+
+@pytest.mark.parametrize('ship, message', [
+    ('doctor', 'doctor is not a ship'),                  # a person: this never admits anyone
+    ('kestrel', "kestrel is not one of andy's ships"),   # Jenn's ship
+    ('odo', "odo is not one of andy's ships"),           # the station's own, ownerless
+    ('wormhole', "wormhole is not one of andy's ships"),
+    ('nobody', 'There is no ship named nobody'),
+])
+def test_opening_a_room_refuses_anyone_but_the_owner_s_own_ships_and_writes_nothing(fleet, capsys, ship, message):
+    """A person, another owner's ship, an ownerless one and an unknown name are refused before anything is written, even
+    beside a ship that would pass. Mutation: any one of the checks dropped."""
+    store = fleet.store
+    before = [r['id'] for r in store.station_rooms('andy')]
+    with pytest.raises(SystemExit):
+        open_room(capsys, store, 'Lessons', 'rio-grande', ship)
+    assert message in capsys.readouterr().err
+    assert [r['id'] for r in store.station_rooms('andy')] == before
+
+
+def test_opening_a_room_as_a_ship_or_with_no_ship_is_refused(fleet, capsys):
+    store = fleet.store
+    with pytest.raises(SystemExit):
+        open_room(capsys, store, 'Lessons', 'tardis', who='rio-grande')   # only a person opens a room of their ships
+    with pytest.raises(Problem, match='at least one'):
+        store.station_open_room('andy', 'Lessons', ['  '])
