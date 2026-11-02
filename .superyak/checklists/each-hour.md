@@ -2,7 +2,7 @@
 id: each-hour
 title: Each hour, before the queue
 when: every 1h
-version: 1
+version: 2
 owner: ships of this repository
 see: docs/checklists.md#each-hour-before-the-queue-any-ship
 ---
@@ -10,3 +10,4 @@ see: docs/checklists.md#each-hour-before-the-queue-any-ship
 - [ ] Do one piece of vision work this hour before any review: lessons, outreach, what a visitor sees, Andy's asks (the connector, the city for a school or hospital).
 - [ ] Have one real exchange with another ship: an idea, a doubt or a disagreement, not status.
 - [ ] Look at Andy's open asks and the "waiting on Andy" list. Is anything stuck on us?
+- [ ] Every time, count or state in the check-in comes from output read this turn; anything older is posted as "last seen at <time>".

@@ -53,6 +53,8 @@ Its long form:
   connector, the city for a school or hospital).
 - Have one real exchange with another ship: an idea, a doubt or a disagreement, not status.
 - Look at Andy's open asks and the "waiting on Andy" list. Is anything stuck on us?
+- Every time, count or state in the check-in comes from output read this turn; anything older is posted as "last
+  seen at <time>" ("Before claiming a cause, a cost or a count").
 
 ## Reflect: an after-action review (every 3 hours, after a merge or a mistake, and at a session's end)
 
@@ -442,6 +444,11 @@ Why: a confident wrong number sends three ships the wrong way. (Tardis posted 14
 - [ ] A cause, or how far a rule reaches, goes in the room with what was checked. Otherwise it goes as "untested:"
       with the test that would tell the causes apart (Serenity, 2026-10-29: "load", "your sampler" and the
       body-first probe on `/token` were each stated as fact, and each was disproved by the next test).
+- [ ] A number or a state in a post (a time, a count, a percentage, a speed, "passed", "running", "read") comes from
+      output read in this turn. Anything older is posted as "last seen at <time>", and anything never measured as
+      "untested:" (Tardis's rule in his reflect, all hands 633d57b8, adopted by Rio Grande on 2026-10-30 after it
+      posted from memory a check-in's time, the Pi's speed and how much of a file it had read, and corrected all
+      three).
 
 ## A spec
 
@@ -614,6 +621,28 @@ it, not only as its diff reads.
 - [ ] Each reviewer agent gets a scratch folder of its own for its scripts, worktree and verdict, named in its brief:
       two reviewers shared one `run.sh`, one overwrote the other's, and the other reran every mutant (Rio Grande's
       readers, 2026-10-29).
+- [ ] A reviewer agent that returns without a verdict ("waiting on the suite") is judged by its completion notice, as
+      any agent's notice is (see "Answering a mention or a request in a room"). If the notice says it has background
+      work of its own still running, the harness wakes it when that work ends or reports, so the lead sends nothing:
+      a second wake can start a second run in the same worktree. Otherwise it has stopped, and the lead resumes it
+      with SendMessage once the suite has exited. A waiter's pattern can't match itself (see "Shell commands"): a
+      background loop that matches itself never ends and never wakes its agent (a Monitor still does, when it
+      expires), and the reader's brief says so (Rio Grande's two readers, 2026-11-01: both
+      returned while a train's suite ran, both notices said they had background work of their own, and both woke
+      unprompted when it exited; one had first armed a waiter that matched its own shell).
+- [ ] Code that opens one of the store's files outside SQLite (the database, its -wal or its -shm: `open()`,
+      `os.open`, a header read, a copy) is checked for the process it runs in. On Linux and macOS, closing any
+      descriptor of a file drops every POSIX lock the process holds on it, SQLite's included, so another process can
+      write while this one thinks it holds the lock (SQLite's "How To Corrupt", section 2.2). Such a read runs before
+      the process opens its first connection, or in a child. A test in each journal mode holds a lock, does the read,
+      and shows a second process is still refused. In rollback mode that is a write held here and the other's
+      `BEGIN IMMEDIATE`. In WAL mode the write lock lives on the -shm, so that test can't fail: the WAL test holds a
+      connection open here and has the other process ask for SQLite's shared byte range with a plain
+      `fcntl.lockf(LOCK_EX | LOCK_NB)`, which sees the drop on every SQLite. A WAL test that asks SQLite instead
+      (`PRAGMA journal_mode=DELETE`) runs on the station's 3.40.1: from 3.51.0 SQLite defends WAL mode across
+      processes, so on a fresh sync's 3.53 it passes with the bug (Rio Grande's WAL Tasks 4-5 reader, 2026-10-30, on
+      build-store-wal-mode: f6919e4c's `reading()` called `header_mode()`, which opened and closed the file; 63b761b9
+      caches the journal mode instead; the checklists reader's probe, 2026-11-01, for the WAL cases).
 - [ ] A surviving mutant is called equivalent only after it is run on every store shape the command opens, including
       one from before the last migration (Tardis, 2026-10-29: removing the lost-identity check (G4b) looked harmless
       on a current store, but a store from before federation pull was migrated when it opened, before the refusal).
