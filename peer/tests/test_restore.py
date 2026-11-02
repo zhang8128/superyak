@@ -526,11 +526,19 @@ def unindexed_nonce(path):
         db.commit()
 
 
-def test_carry_nonces_adds_the_restored_stations_nonces_once_and_says_how_many(tmp_path, capsys):
+def in_mode(path, mode):
+    """The database switched to rollback ('delete') or WAL mode; its last connection's close leaves no sidecar."""
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute(f'PRAGMA journal_mode={mode}').fetchone()[0] == mode
+
+
+@pytest.mark.parametrize('mode', ['delete', 'wal'])
+def test_carry_nonces_adds_the_restored_stations_nonces_once_and_says_how_many(tmp_path, capsys, mode):
     """fix:pull-floor-after-rollback: runbook 10.3's carry adds the nonces the restored station recorded that the file
     put back lacks, keeps the ones it has, says how many of how many and into which file, and a second run adds nothing
-    (10.2's resume note runs it again). The restored station's file is not changed. Mutation: INSERT OR REPLACE (each
-    run counts every nonce)."""
+    (10.2's resume note runs it again). The restored station's directory is not changed, in either mode: no byte, and
+    no file added beside it (store-wal-mode Task 7, the Tasks 4-5 re-check 4). Mutations: INSERT OR REPLACE (each run
+    counts every nonce); a WAL source attached `mode=ro` without a -wal (it gains a -wal and a -shm)."""
     aside = tmp_path / 'backups' / 'replaced-20261017-120000'
     live, restored = Store(tmp_path / 'lighthouse'), restored_live(aside)
     (aside.parent / f'{aside.name}.old').mkdir()       # sorts after it, but isn't a restore directory's name
@@ -540,7 +548,9 @@ def test_carry_nonces_adds_the_restored_stations_nonces_once_and_says_how_many(t
         db.execute("INSERT INTO pull_nonces VALUES('o', 'kept', 5)")
     with restored.transaction() as db:
         db.executemany('INSERT INTO pull_nonces VALUES(?, ?, ?)', [('o', 'kept', 5), ('o', 'served', 6), ('p', 'served', 7)])
-    source = restored.db_path.read_bytes()
+    in_mode(restored.db_path, mode)
+    source = tree(aside / 'restored-live')
+    assert [p for p in source if p.name.startswith('peer.sqlite3')] == [restored.db_path]   # no sidecar, as a clean stop leaves it
     code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', aside)
     assert code == 0, err
     assert out == f'Carried 2 of the 3 pull nonces the restored station recorded into {live.db_path}; it had the rest\n'
@@ -548,7 +558,7 @@ def test_carry_nonces_adds_the_restored_stations_nonces_once_and_says_how_many(t
     assert (aside / 'carried').read_text() == '2 of 3\n'   # what step 8 reads before it starts the federation units
     code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', aside)
     assert code == 0 and out.startswith('Carried 0 of the 3 pull nonces'), err
-    assert restored.db_path.read_bytes() == source and (aside / 'carried').read_text() == '0 of 3\n'
+    assert tree(aside / 'restored-live') == source and (aside / 'carried').read_text() == '0 of 3\n'
 
 
 def test_a_carry_that_cant_write_its_mark_says_so_and_step_8_still_holds(tmp_path, capsys):
@@ -566,16 +576,9 @@ def test_a_carry_that_cant_write_its_mark_says_so_and_step_8_still_holds(tmp_pat
     assert nonces(live.db_path) == {('o', 'served', 6)} and not (tmp_path / 'elsewhere').exists()
 
 
-@pytest.mark.journal('delete')  # in WAL, attaching the source mode=ro leaves its -wal and -shm: plan Task 7's
-def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
-    """Each refusal exits 1 saying nothing was changed and leaves every file as it was, creating none: no live file (a
-    mistyped --data-dir) or a live symlink; a $ASIDE still holding peer.sqlite3 or its journal (10.3's move hasn't run,
-    so the live file may be a stray); no restored station, or a symlink to it; the live file as its own source (by path
-    or a hard link); either side without pull_nonces; a source that fails its integrity check; a source with no restore
-    mark, a damaged one, or one naming another restore's directory (the re-check's SF1: a wrong file carried 0 and said
-    all was well); and a $ASIDE that is an earlier restore's, or not a replaced-<time> directory, though all else holds
-    (the second re-check's nit 2). Mutations: each check dropped (the carry goes through, or SQLite's error stands in
-    for the reason)."""
+def refusals(tmp_path):
+    """The refusal tests' files, and their cases as (data dir, $ASIDE, reason): those refused before the source is
+    attached, and those refused after it."""
     backups_dir = tmp_path / 'backups'
     aside = backups_dir / 'replaced-20261017-120000'
     live, restored = Store(tmp_path / 'lighthouse'), restored_live(aside)
@@ -612,31 +615,62 @@ def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
         with closing(sqlite3.connect(asides[name] / 'restored-live' / 'peer.sqlite3')) as db, db:
             db.execute("UPDATE system_meta SET value=? WHERE key='restore_reconcile'", (value,))
     unindexed_nonce(asides['broken'] / 'restored-live' / 'peer.sqlite3')
+    before_attach = [
+        (tmp_path / 'typo', aside, 'No peer database'),
+        (linked, aside, 'No peer database'),
+        (live.data_dir, asides['unmoved'], "10.3's move hasn't run"),
+        (live.data_dir, asides['journal'], "10.3's move hasn't run"),
+        (live.data_dir, asides['wal'], "10.3's move hasn't run"),
+        (live.data_dir, asides['shm'], "10.3's move hasn't run"),
+        (live.data_dir, asides['empty'], 'No restored station'),
+        (live.data_dir, asides['symlinked'], 'No restored station'),
+        (restored.data_dir, aside, 'the live database itself'),
+        (live.data_dir, asides['hard'], 'the live database itself'),
+        (other, aside, 'has no pull_nonces table')]
+    after_attach = [
+        (live.data_dir, asides['plain'], 'has no pull_nonces table'),
+        (live.data_dir, asides['broken'], 'fails its integrity check'),
+        (live.data_dir, asides['unmarked'], 'is not marked as the station restored from'),
+        (live.data_dir, asides['elsewhere'], 'is not marked as the station restored from'),
+        (live.data_dir, asides['damaged'], 'is not marked as the station restored from'),
+        (live.data_dir, asides['nul'], 'is not marked as the station restored from'),
+        (live.data_dir, asides['earlier'], 'is not the newest replaced-<time> directory'),
+        (live.data_dir, asides['misnamed'], 'is not the newest replaced-<time> directory')]
+    return before_attach, after_attach
+
+
+def refused_changing_nothing(capsys, tmp_path, cases):
     before = tree(tmp_path)
-    for data_dir, where, reason in (
-            (tmp_path / 'typo', aside, 'No peer database'),
-            (linked, aside, 'No peer database'),
-            (live.data_dir, asides['unmoved'], "10.3's move hasn't run"),
-            (live.data_dir, asides['journal'], "10.3's move hasn't run"),
-            (live.data_dir, asides['wal'], "10.3's move hasn't run"),
-            (live.data_dir, asides['shm'], "10.3's move hasn't run"),
-            (live.data_dir, asides['empty'], 'No restored station'),
-            (live.data_dir, asides['symlinked'], 'No restored station'),
-            (restored.data_dir, aside, 'the live database itself'),
-            (live.data_dir, asides['hard'], 'the live database itself'),
-            (other, aside, 'has no pull_nonces table'),
-            (live.data_dir, asides['plain'], 'has no pull_nonces table'),
-            (live.data_dir, asides['broken'], 'fails its integrity check'),
-            (live.data_dir, asides['unmarked'], 'is not marked as the station restored from'),
-            (live.data_dir, asides['elsewhere'], 'is not marked as the station restored from'),
-            (live.data_dir, asides['damaged'], 'is not marked as the station restored from'),
-            (live.data_dir, asides['nul'], 'is not marked as the station restored from'),
-            (live.data_dir, asides['earlier'], 'is not the newest replaced-<time> directory'),
-            (live.data_dir, asides['misnamed'], 'is not the newest replaced-<time> directory')):
+    for data_dir, where, reason in cases:
         code, out, err = carry(capsys, '--data-dir', data_dir, '--aside', where)
         assert code == 1 and out == '' and 'nothing was changed' in err and reason in err, (data_dir, where, err)
         assert tree(tmp_path) == before, (data_dir, where)
+
+
+def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
+    """Each refusal before the source is attached exits 1 saying nothing was changed and leaves every file as it was,
+    creating none: no live file (a mistyped --data-dir) or a live symlink; a $ASIDE still holding peer.sqlite3 or its
+    journal (10.3's move hasn't run, so the live file may be a stray); no restored station, or a symlink to it; the live
+    file as its own source (by path or a hard link); and a live file without pull_nonces. In both journal modes: the
+    eleven come out of rollback mode's mark (the Tasks 4-5 re-check 4's nit). Mutations: each check dropped (the carry
+    goes through, or SQLite's error stands in for the reason)."""
+    before_attach, _ = refusals(tmp_path)
+    refused_changing_nothing(capsys, tmp_path, before_attach)
     assert not (tmp_path / 'typo').exists()
+
+
+@pytest.mark.parametrize('mode', ['delete', 'wal'])
+def test_carry_nonces_refuses_after_the_attach_and_adds_no_file_in_either_mode(tmp_path, capsys, mode):
+    """The refusals made once the source is attached, each source in either journal mode: a source without pull_nonces;
+    one that fails its integrity check; one with no restore mark, a damaged one, or one naming another restore's
+    directory (the re-check's SF1: a wrong file carried 0 and said all was well); and a $ASIDE that is an earlier
+    restore's, or not a replaced-<time> directory, though all else holds (the second re-check's nit 2). Each exits 1
+    saying nothing was changed and leaves every file as it was, adding none beside a WAL source (store-wal-mode Task 7).
+    Mutations: each check dropped; a WAL source attached `mode=ro` without a -wal (it gains a -wal and a -shm)."""
+    _, after_attach = refusals(tmp_path)
+    for _, where, _ in after_attach:
+        in_mode(where / 'restored-live' / 'peer.sqlite3', mode)
+    refused_changing_nothing(capsys, tmp_path, after_attach)
 
 
 @pytest.mark.parametrize('side', ['live', 'source'])
@@ -704,7 +738,7 @@ def test_restore_directories_are_named_in_utc_so_the_newest_sorts_last():
     assert backups.REPLACED_DIR.fullmatch(time.strftime('replaced-%Y%m%d-%H%M%S', time.gmtime()))
 
 
-@pytest.mark.journal('delete')  # a hot journal is rollback mode's; its WAL twin is plan Task 7's
+@pytest.mark.journal('delete')  # a hot journal is rollback mode's; its WAL twin is the test after this one
 def test_carry_nonces_leaves_a_hot_journal_and_exits_cleanly_on_a_database_error(tmp_path, capsys):
     """The re-check's SF2 (its probe q3): 10.1 killed the listener mid-transaction, so restored-live has a hot journal.
     The read-only attach refuses to roll it back, so the carry exits 1 and both files stay as they were, falling back
@@ -737,6 +771,43 @@ def test_carry_nonces_leaves_a_hot_journal_and_exits_cleanly_on_a_database_error
         code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', where)
         assert code == 1 and out == '' and f'nothing was changed: {error}' in err, (where, err)
         assert tree(tmp_path) == before, where
+
+
+def test_carry_nonces_reads_a_wal_a_killed_listener_left_and_adds_no_file(tmp_path, capsys):
+    """Store-wal-mode Task 7, the WAL twin of the test above: a listener killed in WAL mode leaves a -wal and its -shm
+    beside restored-live, with a commit the file alone lacks. The carry reads through them, so a nonce committed only
+    there is carried, and adds no file beside it; the file and its -wal keep their bytes (a read may update the -shm's
+    index). A -wal without its -shm is refused, changing nothing, since reading it would create one. Mutations: the
+    source attached `immutable=1` though a -wal is there (its nonce is missed: 0 of 0), the -shm check dropped (a -shm
+    is created)."""
+    backups_dir = tmp_path / 'backups'
+    live = Store(tmp_path / 'lighthouse')
+    lone, killed = backups_dir / 'replaced-20261017-110000', backups_dir / 'replaced-20261017-120000'  # killed is newest
+
+    def left_by_a_killed_listener(where, *ends):
+        source = restored_live(tmp_path / 'build' / where.name, marked=where / 'restored.sqlite3').db_path
+        in_mode(source, 'wal')
+        with closing(sqlite3.connect(source)) as db:
+            db.execute('PRAGMA wal_autocheckpoint=0')
+            db.execute("INSERT INTO pull_nonces VALUES('o', 'only-in-the-wal', 8)")
+            db.commit()
+            (where / 'restored-live').mkdir(parents=True)
+            for end in ends:   # copied while the connection is open, as the kill leaves them
+                shutil.copyfile(f'{source}{end}', where / 'restored-live' / f'peer.sqlite3{end}')
+        return where / 'restored-live' / 'peer.sqlite3'
+    left_by_a_killed_listener(lone, '', '-wal')
+    source = left_by_a_killed_listener(killed, '', '-wal', '-shm')
+    before = tree(tmp_path)
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', lone)
+    assert code == 1 and out == '' and 'nothing was changed' in err and 'a -wal without its -shm' in err, err
+    assert tree(tmp_path) == before
+    kept = {path: tree(source.parent)[path] for path in (source, Path(f'{source}-wal'))}
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', killed)
+    assert code == 0 and out.startswith('Carried 1 of the 1 pull nonces'), (out, err)
+    assert ('o', 'only-in-the-wal', 8) in nonces(live.db_path)
+    after = tree(source.parent)
+    assert sorted(after) == sorted(path for path in before if path.parent == source.parent)
+    assert {path: after[path] for path in kept} == kept
 
 
 def test_reconcile_unpair_refuses_an_ambiguous_id_and_changes_no_byte(tmp_path, capsys):
@@ -2079,12 +2150,14 @@ def test_step_6b_new_disk_line_starts_and_stops_the_lighthouse(tmp_path):
 
 
 def test_the_carry_note_is_there_when_the_carry_is():
-    """Store-wal-mode plan Task 3 (its review's S13): once backups.carry_pull_nonces is on main, runbook 10.3 must say the
-    carry reads restored-live through its -wal, leaves a -shm there, and fails closed into 10.4's wait."""
+    """Store-wal-mode plan Task 3 (its review's S13), as Task 7 left the carry: runbook 10.3 must say the carry reads
+    restored-live through the -wal and -shm a killed listener left, adds no file there, and fails closed into 10.4's
+    wait."""
     if not hasattr(backups, 'carry_pull_nonces'):
         pytest.skip('tardis/rollback-carry-nonces is not on this branch yet')
     text = RUNBOOK.read_text()
     assert '-shm' in text[text.index('carry'):] and 'fails closed' in text
+    assert 'It adds no file beside `restored-live`.' in text
 
 
 def step_6(tmp_path, aside):
