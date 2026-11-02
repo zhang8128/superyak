@@ -45,7 +45,11 @@ in-process model. `superyak-runtime` sets the variable from `embedder_socket` in
 2026-10-02: an Engram server peaks ~320 MB with it, versus ~1.8 GB loading its
 own model. Local inference batches by a padded-token budget, truncates at 2048
 tokens and disables the ONNX arena; fastembed's default (256 texts padded to
-the longest) OOM-killed startup maintenance at 16 GB on 2026-10-01.
+the longest) OOM-killed startup maintenance at 16 GB on 2026-10-01. The
+in-process model loads on the first embed and is dropped after
+`ENGRAM_EMBED_IDLE_SECONDS` (default 300; 0 keeps it) without one. Measured on
+the Pi 2026-11-02 through the superyak-memory plugin: 241 MB at rest, 1.09 GB
+after the first embed, about 2.6 s to load.
 
 **Dedup:** LLM-based pragmatic equivalence via Ollama (default: `gemma4:31b`).
 Falls back to embedding similarity if unavailable. `ENGRAM_DEDUP_MODEL` env var.

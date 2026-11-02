@@ -6,6 +6,9 @@ Supports task-specific prefixes for better clustering vs retrieval quality.
 
 from __future__ import annotations
 
+import os
+import threading
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -20,6 +23,20 @@ _CACHE_DIR = str(Path.home() / ".kairos" / "models" / "fastembed")
 _MAX_TOKENS = 2048  # nomic-embed-text-v1.5's trained context
 _BATCH_TOKEN_BUDGET = 4096  # padded tokens per ONNX run
 _CHARS_PER_TOKEN = 3  # conservative estimate for English prose and code
+# Seconds without an embed before the in-process model is dropped (0 keeps it for the life of the process). Loading
+# it again costs about 2.6 s on the Pi; holding it costs about 850 MB (measured 2026-11-02: 241 MB at rest, 1.09 GB
+# after the first embed).
+_IDLE_SECONDS = float(os.environ.get("ENGRAM_EMBED_IDLE_SECONDS", "300"))
+
+
+def _return_freed_heap() -> None:
+    """Hand freed heap pages back to the system (glibc keeps them otherwise; elsewhere a no-op)."""
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 def _token_budget_batches(texts: list[str]) -> list[list[int]]:
@@ -70,17 +87,62 @@ class NomicEmbedProvider:
     MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
     DIMENSION = 768
 
-    def __init__(self) -> None:
-        from fastembed import TextEmbedding
+    def __init__(self, idle_seconds: float | None = None) -> None:
+        # The model loads on the first embed, not here, and is dropped again after idle_seconds without one: a process
+        # that rarely embeds (a session that only reads, a store with nothing to backfill) holds it only while it
+        # uses it, about 850 MB on the Pi (Andy, 2026-11-02: "engram should be able to be run with very little
+        # memory", "rarely accessed paths could be on disk").
+        self._model = None
+        self._loading = threading.Lock()
+        self._busy = 0
+        self._last_used = 0.0
+        self._idle_seconds = _IDLE_SECONDS if idle_seconds is None else idle_seconds
+        self._unload_timer: threading.Timer | None = None
 
-        # Without the arena, ONNX Runtime returns each run's buffers instead of
-        # keeping the largest batch's allocation for the life of the process.
-        self._model = TextEmbedding(
-            model_name=self.MODEL_NAME, cache_dir=_CACHE_DIR, enable_cpu_mem_arena=False,
-        )
-        # The tokenizer config allows 8192 tokens; past the trained context,
-        # attention cost grows without improving the embedding.
-        self._model.model.tokenizer.enable_truncation(max_length=_MAX_TOKENS)
+    def _loaded(self):
+        with self._loading:  # one load, however many threads embed first at once
+            return self._load_locked()
+
+    def _load_locked(self):
+        if self._model is None:
+            from fastembed import TextEmbedding
+
+            # Without the arena, ONNX Runtime returns each run's buffers instead of
+            # keeping the largest batch's allocation for the life of the process.
+            model = TextEmbedding(
+                model_name=self.MODEL_NAME, cache_dir=_CACHE_DIR, enable_cpu_mem_arena=False,
+            )
+            # The tokenizer config allows 8192 tokens; past the trained context,
+            # attention cost grows without improving the embedding.
+            model.model.tokenizer.enable_truncation(max_length=_MAX_TOKENS)
+            self._model = model
+        return self._model
+
+    def is_loaded(self) -> bool:
+        return self._model is not None
+
+    def _arm_unload_locked(self) -> None:
+        if self._idle_seconds <= 0:
+            return
+        if self._unload_timer is not None:
+            self._unload_timer.cancel()
+        timer = threading.Timer(self._idle_seconds, self._unload_if_idle)
+        timer.daemon = True  # never keeps a finished process alive
+        self._unload_timer = timer
+        timer.start()
+
+    def _unload_if_idle(self) -> None:
+        with self._loading:
+            if self._busy or self._model is None:
+                return
+            if time.monotonic() - self._last_used < self._idle_seconds:
+                return  # a later embed armed its own timer
+            self._model = None
+            self._unload_timer = None
+        import gc
+
+        gc.collect()
+        _return_freed_heap()
 
     def dimension(self) -> int:
         return self.DIMENSION
@@ -96,7 +158,16 @@ class NomicEmbedProvider:
         import numpy as np
 
         prefixed = [f"{prefix}: {t}" for t in texts]
-        embeddings = _embed_bounded(self._model, prefixed)
+        with self._loading:
+            model = self._load_locked()
+            self._busy += 1
+        try:
+            embeddings = _embed_bounded(model, prefixed)
+        finally:
+            with self._loading:
+                self._busy -= 1
+                self._last_used = time.monotonic()
+                self._arm_unload_locked()
         # Normalize to unit vectors for consistent cosine similarity via L2 distance
         results = []
         for e in embeddings:

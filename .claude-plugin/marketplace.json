@@ -1,0 +1,14 @@
+{
+  "name": "superyak",
+  "owner": {
+    "name": "Superyak"
+  },
+  "description": "Superyak's plugins for a ship's Claude Code sessions",
+  "plugins": [
+    {
+      "name": "superyak-memory",
+      "source": "./plugins/superyak-memory",
+      "description": "Engram memory for a Superyak ship's sessions"
+    }
+  ]
+}

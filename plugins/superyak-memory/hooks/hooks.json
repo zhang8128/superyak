@@ -1,0 +1,23 @@
+{
+  "description": "Engram's hooks for this session: wake orients it from memory, nudge surfaces what bears on each prompt, sleep keeps a session's residue. They read the store and never load the embedding model.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/engram\" hook wake", "timeout": 10 }]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/engram\" hook nudge", "timeout": 10 }]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/engram\" hook sleep", "timeout": 5 }]
+      }
+    ]
+  }
+}

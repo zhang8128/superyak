@@ -1,0 +1,8 @@
+{
+  "name": "superyak-memory",
+  "version": "0.1.0",
+  "description": "Engram memory for a Superyak ship's sessions: the engram MCP server from this checkout, sharing one embedder per machine when it runs",
+  "author": {
+    "name": "Superyak"
+  }
+}
