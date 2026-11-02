@@ -123,6 +123,11 @@ def _candidates(command, record, now, limit, settings_path, env, monotonic, cloc
     if settings is None:
         return []  # before anything reads the command: a ship without the lessons hook pays for nothing (S3)
     cut = command[:lh.CUTS['command']]
+    if cut in HELD_TOOLS and settings['query'] != lh.default_query():
+        # Spec lesson-holds-on-tool-calls, item 13 (N-e; the Tasks A to D reader's M1): could_hold runs this checkout's
+        # matching, so a query naming another checkout could answer lessons this side then drops, leaving receipts
+        # nobody saw, and outrank the tool's own lesson. At a tool call nothing is asked or recorded; Bash is as before.
+        return []
     session, digest = record.get('session'), head_digest(cut)
     session_id = session.get('id') if isinstance(session, dict) else None
     if not isinstance(session_id, str) or not session_id or digest is None:

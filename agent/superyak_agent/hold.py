@@ -1,4 +1,5 @@
-"""`run_agent.py hold`: the one PreToolUse entry on Bash, for checklists and lessons (spec, The hold; Rulings 13, 31-36).
+"""`run_agent.py hold`: the one PreToolUse entry, on Bash and each confirmed held tool, for checklists and lessons (spec,
+The hold; Rulings 13, 31-36; spec lesson-holds-on-tool-calls).
 
 It runs before every Bash command on every ship, so it never stalls one, prints a deny, a list as context past the cap,
 or nothing (never allow, ask or updatedInput), and never raises. Standard library only, plus acting, checklists,
@@ -36,13 +37,15 @@ class _Run:
 
 
 def _call(payload):
-    """(command, session id, cwd, transcript, tool call) for a main agent's Bash call or call to a held tool, else None.
-    A held tool's command is its own name, never anything from its input (spec lesson-holds-on-tool-calls, item 2), so
-    a post's text matches nothing. No file I/O (M2)."""
+    """(command, session id, cwd, transcript, tool call) for a main agent's Bash call or call to a confirmed held tool,
+    else None. A held tool's command is its own name, never anything from its input (spec lesson-holds-on-tool-calls,
+    item 2), so a post's text matches nothing. The gate is holds.CONFIRMED_TOOLS, the tuple the matcher and the
+    readback are built from, not HELD_TOOLS, which only matches: a matcher a later checkout wrote can't route a tool
+    here whose deny this checkout wouldn't read back (the Tasks A to D reader's S2). No file I/O (M2)."""
     if not isinstance(payload, dict) or payload.get('hook_event_name') != 'PreToolUse':
         return None
     tool = payload.get('tool_name')
-    if not isinstance(tool, str) or tool != 'Bash' and tool not in lessons_hold.HELD_TOOLS:
+    if not isinstance(tool, str) or tool != 'Bash' and tool not in holds.CONFIRMED_TOOLS:
         return None
     if payload.get('agent_id') is not None:   # a subagent is never held (D14)
         return None

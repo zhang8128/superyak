@@ -546,7 +546,7 @@ def tool_payload(ship, tool, **extra):
             'tool_input': {'room': 'r', 'text': 'git push origin main'}, **extra}
 
 
-@pytest.mark.parametrize('tool', sorted(lessons_hold.HELD_TOOLS))
+@pytest.mark.parametrize('tool', holds.CONFIRMED_TOOLS)
 def test_a_held_tools_call_is_held_by_its_name_alone_and_says_call_it_again(ship, tool):
     asked = []
 
@@ -578,5 +578,40 @@ def test_a_tool_that_isnt_held_is_never_held_whatever_a_lesson_says(ship, tool):
 
 def test_a_subagents_tool_call_is_never_held(ship):
     held = lambda *a: [holds.Hold('lesson', 'lesson:x', LESSON)]  # noqa: E731
-    assert hold.decide(tool_payload(ship, 'AskUserQuestion', agent_id='a1'), ship.home, 10.0, time.monotonic(),
-                       lessons=held) is None
+    assert hold.decide(tool_payload(ship, 'mcp__station__station_post', agent_id='a1'), ship.home, 10.0,
+                       time.monotonic(), lessons=held) is None
+
+
+def test_the_hold_answers_only_confirmed_tools_and_every_one_is_held(ship, monkeypatch):
+    """The Tasks A to D reader's S2: the hold is gated on CONFIRMED_TOOLS, which the matcher and the readback are built
+    from, not on HELD_TOOLS. A tool that is held but not confirmed (the claim, here; AskUserQuestion today) is never
+    answered, so a matcher a later checkout's dock wrote can't bring a deny this checkout won't read back. Mutation:
+    `_call` gated on HELD_TOOLS again (the claim is held)."""
+    assert set(holds.CONFIRMED_TOOLS) <= lessons_hold.HELD_TOOLS
+    held = lambda *a: [holds.Hold('lesson', 'lesson:x', LESSON)]  # noqa: E731
+    monkeypatch.setattr(holds, 'CONFIRMED_TOOLS', ('mcp__station__station_post',))
+    for tool in ('mcp__station__station_claim', 'AskUserQuestion'):
+        assert hold.decide(tool_payload(ship, tool), ship.home, 10.0, time.monotonic(), lessons=held) is None
+    post = hold.decide(tool_payload(ship, 'mcp__station__station_post'), ship.home, 11.0, time.monotonic(), lessons=held)
+    assert post['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
+# ---- The Tasks A to D reader's S1: a tool call's deny shares the session's 3 with Bash (spec item 6). ----
+def post_held(ship, now):
+    held = lambda *a: [holds.Hold('lesson', f'lesson:post:{now}', LESSON)]  # noqa: E731
+    return hold.decide(tool_payload(ship, 'mcp__station__station_post'), ship.home, now, time.monotonic(), lessons=held)
+
+
+def test_after_three_bash_holds_a_posts_lesson_prints_nothing(ship):
+    """Mutation: a tool call ignores the cap (the post gets a fourth deny)."""
+    outs = [decide(ship, f'git push origin b{n}', now=10.0 + n)['hookSpecificOutput'] for n in range(3)]
+    assert [o['permissionDecision'] for o in outs] == ['deny'] * 3
+    assert post_held(ship, 20.0) is None and saved(ship)['holds'] == 3
+
+
+def test_a_posts_hold_counts_so_bash_holds_stop_at_three_in_all(ship):
+    """Mutation: a tool call's deny not counted (the third Bash command is held too)."""
+    assert post_held(ship, 10.0)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    outs = [decide(ship, f'git push origin b{n}', now=11.0 + n)['hookSpecificOutput'] for n in range(3)]
+    assert [o.get('permissionDecision') for o in outs] == ['deny', 'deny', None]
+    assert set(outs[2]) == {'hookEventName', 'additionalContext'} and saved(ship)['holds'] == 3

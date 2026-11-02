@@ -659,24 +659,48 @@ def test_the_hold_line_counts_in_the_tool_result_and_in_its_error_form(rail):
 
 
 POST_DENY = 'PreToolUse:mcp__station__station_post hook error: '  # Tardis's run on 2.1.312 (all hands 0ba39f1a)
+CONFIRMED = ('mcp__station__station_post', 'mcp__station__station_claim')  # holds.CONFIRMED_TOOLS, pinned below
 
 
-@pytest.mark.parametrize('confirmed, seen', [((), []), (('mcp__station__station_post',), [A, B])])
-def test_a_held_tools_deny_reads_back_only_once_that_tool_is_confirmed(rail, monkeypatch, confirmed, seen):
-    """Spec lesson-holds-on-tool-calls, item 9, on Tardis's conditions: a post's deny, in both forms Claude Code writes
-    it (copied from Tardis's run on 2.1.312), marks its lesson seen only once the tool is in CONFIRMED_TOOLS, the same
-    tuple the hold's matcher is built from; another tool's deny (Read's here) never does."""
+def test_the_readback_tests_cover_every_confirmed_tool():
     from superyak_agent import holds
-    monkeypatch.setattr(holds, 'CONFIRMED_TOOLS', confirmed)
+    assert CONFIRMED == holds.CONFIRMED_TOOLS
+
+
+@pytest.mark.parametrize('confirmed', [False, True])
+@pytest.mark.parametrize('tool', CONFIRMED)
+def test_a_held_tools_deny_reads_back_only_once_that_tool_is_confirmed(rail, monkeypatch, tool, confirmed):
+    """Spec lesson-holds-on-tool-calls, item 9, on Tardis's conditions: a held tool's deny, in both forms Claude Code
+    writes it (the shape of Tardis's run on 2.1.312, the claim's as the post's), marks its lesson seen only while the tool
+    is in CONFIRMED_TOOLS, the same tuple the hold's matcher is built from; another tool's deny (Read's here) never
+    does. Every confirmed tool, not the post's alone (the Tasks A to D reader's S3). Mutation: the readback built from
+    the first confirmed tool only (the claim's deny is read as no one's)."""
+    from superyak_agent import holds
+    monkeypatch.setattr(holds, 'CONFIRMED_TOOLS', tuple(t for t in holds.CONFIRMED_TOOLS if confirmed or t != tool))
+    deny = f'PreToolUse:{tool} hook error: '
     with rail.transcript.open('a') as stream:
         stream.write(json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'is_error': True,
-                     'content': POST_DENY + lh.hold_reason(lesson(A, ship='serenity'))}]}}) + '\n')
-        stream.write(json.dumps({'type': 'user', 'toolUseResult': 'Error: ' + POST_DENY + lh.hold_reason(lesson(B))}) + '\n')
+                     'content': deny + lh.hold_reason(lesson(A, ship='serenity'))}]}}) + '\n')
+        stream.write(json.dumps({'type': 'user', 'toolUseResult': 'Error: ' + deny + lh.hold_reason(lesson(B))}) + '\n')
         stream.write(json.dumps({'type': 'user', 'toolUseResult': 'Error: PreToolUse:Read hook error: '
                                  + lh.hold_reason(lesson(C, ship='rio-grande'))}) + '\n')
     rail.answers(*SERENITY)
     rail.run('SessionStart', cwd=str(rail.root))
-    assert rail.sent()[-1]['seen'] == seen
+    assert rail.sent()[-1]['seen'] == ([A, B] if confirmed else [])
+
+
+@pytest.mark.parametrize('form', ['tool_result', 'toolUseResult'])
+def test_a_confirmed_deny_after_other_text_marks_nothing_seen(rail, form):
+    """The Tasks A to D reader's S3: Claude Code's own words start the record's text, matched with startswith as the
+    spec requires, so an error that carries a deny's words after other text (a tool's own output quoting one) marks
+    nothing seen. Mutation: containment for startswith."""
+    text = 'The call failed: ' + POST_DENY + lh.hold_reason(lesson(A, ship='serenity'))
+    line = ({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'is_error': True, 'content': text}]}}
+            if form == 'tool_result' else {'type': 'user', 'toolUseResult': 'Error: ' + text})
+    rail.transcript.write_text(json.dumps(line) + '\n')
+    rail.answers(*SERENITY)
+    rail.run('SessionStart', cwd=str(rail.root))
+    assert rail.sent()[-1]['seen'] == []
 
 
 def test_session_start_prunes_a_temporary_file_a_killed_write_left(rail):
