@@ -516,9 +516,11 @@ be able to do this yourself. open it up" (Andy, 2026-11-02; CLAUDE.md).
 - [ ] The origin opens and records the room: Rio Grande runs
       `make station-open-room TITLE=… SHIPS='rio-grande'` (a room Andy owns, with him and Rio Grande; each other ship
       joins through its own machine's paired peer, never docked here), then `make station-lessons-room ID=<short id>`. The
-      first run shows the members, the peers and a confirm code; Rio Grande checks they are Andy and his own ships and
-      runs it again with `CONFIRM=<code>`. A recorded room takes no new member from this station; if one is needed,
-      open a new lessons room. Rio Grande posts the full id it prints in all hands.
+      first run shows the members, the peers and a confirm code; Rio Grande checks they are Andy, Rio Grande and only
+      remote members on peers listed as Andy's (`PEERS="<paired peer id> …"`), and runs it again with `CONFIRM=<code>`.
+      A recorded room takes no new member from this station, and the station records no room outside its chain; a
+      ship on another machine joins through its paired peer, listed with PEERS. Rio Grande posts the full id it prints
+      in all hands.
 - [ ] Every other peer runs `make lessons-room ID=<origin peer id>:<room id> LESSONS_DATA=<that peer's data dir>` as
       soon as the room first syncs there, before that peer's ship or Andy's account there posts in it. The first run
       records nothing: it shows the room's title, its owner, its members and a confirm code. The agent checks that room,

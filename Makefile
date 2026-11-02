@@ -443,8 +443,9 @@ station-alerts:
 	uv run --locked --project peer python -m superyak_peer station-alerts --data-dir "$(STATION_DATA)"
 
 station-lessons-room:
-	@test -n "$(ID)" || { echo 'Usage: make station-lessons-room ID=<short id from make station-rooms> [CONFIRM=<the code it showed>] [LESSONS_SHIP=rio-grande] [APPROVER=andy]'; exit 2; }
-	$(LESSONS) station-room --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --ship "$(LESSONS_SHIP)"$(if $(CONFIRM), --confirm "$(CONFIRM)")
+	@test -n "$(ID)" || { echo 'Usage: make station-lessons-room ID=<short id from make station-rooms> [PEERS="<paired peer id> …"] [CONFIRM=<the code it showed>] [LESSONS_SHIP=rio-grande] [APPROVER=andy]'; exit 2; }
+	@set -f; peers=; for p in $$PEERS; do peers="$$peers --peer $$p"; done; \
+	$(LESSONS) station-room --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --ship "$(LESSONS_SHIP)" $$peers$(if $(CONFIRM), --confirm "$(CONFIRM)")
 
 lessons-room:
 	@test -n "$(ID)" || { echo 'Usage: make lessons-room ID=<origin peer id>:<room id> [CONFIRM=<the code it showed>] [LESSONS_DATA=<this peer data dir>]'; exit 2; }

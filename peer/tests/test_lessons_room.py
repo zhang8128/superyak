@@ -283,6 +283,20 @@ def test_the_station_room_verb_shows_then_records(origin):
     assert run_lessons('where', '--data-dir', store.data_dir).stdout.strip() == f'{store._own_peer_id()}:{room}'
 
 
+def test_the_station_room_verb_lists_a_paired_peer_and_refuses_one_that_isnt(origin):
+    store, andy, rio, room = origin
+    tardis_peer = 'e' * 64
+    with store.transaction() as db:
+        db.execute('INSERT INTO peers VALUES(?,?,1)', (tardis_peer, '{}'))
+    base = ('station-room', '--data-dir', store.data_dir, '--id', room[:6], '--as', 'andy', '--ship', 'rio-grande')
+    shown = run_lessons(*base, '--peer', tardis_peer)
+    assert shown.returncode == 0 and f'Listed peers: {tardis_peer[:12]}' in shown.stdout
+    without = run_lessons(*base)
+    assert shown.stdout.split('Confirm code: ')[1][:8] != without.stdout.split('Confirm code: ')[1][:8]  # the code covers the peers
+    unpaired = run_lessons(*base, '--peer', 'f' * 64)
+    assert unpaired.returncode != 0 and 'is not paired here' in (unpaired.stdout + unpaired.stderr)
+
+
 # Task 6: the other peers
 def test_lessons_ship_makes_a_keyless_ship_for_a_person_and_refuses_the_rest(origin):
     store, andy, rio, room = origin
