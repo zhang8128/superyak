@@ -18,12 +18,14 @@ what a person would notice. "To build" marks a gap. Change this page when you ad
 ## Assemblies
 
 - **Give a ship its memory.** `~/.config/superyak/runtime.json` (memory_home, default_instance, embedder_socket) →
-  `~/.local/bin/superyak-runtime` → the shared embedder (`superyak-embedder`, one model per machine; to build: socket
-  activation that loads the model on the first request and exits when idle, so a machine at rest holds almost no
-  memory) → `claude mcp add --scope user engram -- superyak-runtime mcp` → the Engram hooks → a publisher
-  (`lighthouse-daemon.toml`) for the work lane, and a receiver for the neighbours. Status on the Pi, 2026-11-02:
-  config and launcher written; the embedder unit and the MCP registration wait for Andy's permission for user
-  services.
+  the superyak-memory plugin (`claude plugin marketplace add <checkout>`, then `claude plugin install
+  superyak-memory@superyak`; plugins/superyak-memory/README.md): Engram's MCP server and its wake and sleep hooks, the
+  model loaded on the first embed and dropped after five idle minutes → optionally the shared embedder
+  (`superyak-embedder`, one model per machine, which also turns on the per-prompt nudge) → a publisher
+  (`lighthouse-daemon.toml`) for the work lane, and a receiver for the neighbours. Status on the Pi, 2026-11-02: the
+  config is written; the plugin is on branch engram-plugin (241 MB at rest, 1.13 GB while the model is loaded, 254 MB
+  after the idle drop), and it is installed by a person, since the harness refuses a session installing plugins into
+  itself.
 - **Open the rail.** `make station-open-room TITLE=Lessons SHIPS='rio-grande serenity tardis'` → `make station-rooms`
   → `make station-lessons-room ID=…` twice (check the members, then `CONFIRM=`) → `make lessons-units` → `make dock
   DOCK_ARGS='--ship rio-grande --hook --lessons <settings>'` → lay lessons → `make lessons-list`. Tested: the bricks
@@ -33,12 +35,15 @@ what a person would notice. "To build" marks a gap. Change this page when you ad
   onboarding).
 - **Keep the station safe.** `make station-backup`, `make station-restore-test`, `make station-alerts`; a restore is
   docs/station-restore.md. Tested: the restore test runs on a timer.
-- **Merge a train.** To build: `make train MEMBERS='<head> …'`, which scratch-merges each onto main, builds the train,
+- **Merge sitting** comes first (docs/roadmap-commons.md, step 2). **Merge a train.** To build: `make train MEMBERS='<head> …'`, which scratch-merges each onto main, builds the train,
   runs every suite a member touches (peer in both journal modes) and prints one report.
 - **Merge sitting.** To build: `make merge-sitting TRAIN=<branch>`, which does the backup, the fast-forward, the tree
   and old-history checks, the restarts with each stop read, health and the probes, and the push, then prints the
   announcement. The merge checklist becomes "run it and read its report".
-- **Review a branch.** A brief from one template (to write once), sized to the risk (docs/roadmap-commons.md, step 3).
+- **Mutant check.** To build (Tardis): `make mutants FILE=<sites>`, which applies each listed replacement, runs the
+  named tests, restores the file, checks it with cmp and prints a killed/survived table.
+- **Review a branch.** A brief from one template (to write once), sized to the risk (principle 1 and the law draft's
+  tiers in docs/roadmap-commons.md); a partner's advisory read of reversible code is optional.
 
 ## Who decides what
 

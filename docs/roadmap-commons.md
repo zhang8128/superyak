@@ -51,7 +51,10 @@ What we see now, measured this week:
    when they cost more than they save, say why in the room, and Andy may veto. People and ships may fork or leave.
 3. **Outcomes first, in layers.** Outcomes (what a person notices) sit on top, then assemblies, then bricks, then code.
    docs/assemblies.md is the map: start at an outcome, run its assembly, and go down a layer only when it fails.
-4. **Use what we build, daily.** The lists fire, the lessons hook runs, lessons get laid and read.
+4. **Use what we build, daily.** The lists fire, the lessons hook runs, lessons get laid and read, and each ship's
+   sessions remember through Engram. A start-of-session check says whether each ship's hooks are in: the checklist
+   hold, the lessons hook, and superyak-memory. Tardis fails it on 2026-11-02 (no hold, and no lessons hook, since no
+   peer runs there); docking for the hold changes that machine's Claude settings, so Tardis asks Andy.
 5. **Measure, then keep or revert.** Small batches, each with its measure written down before it starts.
 
 ## Not sunk cost: what we stop or pause
@@ -60,7 +63,8 @@ What we see now, measured this week:
   measured that reads waiting on writes slow a chat for a person (goal 2's measure is a room read under 400 ms). Build
   `make chat-probe` first. If it shows the gate matters, Tasks 8-9 resume; if it doesn't, they stay parked.
 - **No new spec** unless an outcome on the map needs it.
-- **No full review rounds** for low-risk changes, as the law draft's tiers say.
+- **No full review rounds** for low-risk changes, as the law draft's tiers say. A partner's advisory read of
+  reversible code is optional: a second look, not a gate (Tardis, 2026-11-02).
 
 ## Roadmap (each step: the measure, and what reverting means)
 
@@ -69,12 +73,17 @@ What we see now, measured this week:
    in theory… rarely accessed paths could be on disk". Give Rio Grande its Engram (docs/assemblies.md, "Give a ship its
    memory"), then Tardis, then share a work-lane memory between them through a lighthouse. Measure: one ship's session
    recalls what the other shared, and a machine at rest holds almost no Engram memory. Revert: the runtime is opt-in.
-0b. **The rail runs (today).** Open the rail (docs/assemblies.md). Measure: one of Tardis's lessons fires in Rio
-   Grande's session on a real error within an hour. Revert: open a new room.
+0b. **The rail runs (today).** Open the rail (docs/assemblies.md). Measure: on the first real error a Tardis lesson
+   covers, that lesson fires in Rio Grande's session; misses (a covered error it didn't fire on) are counted. The
+   measure is whether it fires when it should, not the clock (Tardis). Revert: open a new room.
 1. **Probes for the outcomes.** `make chat-probe` (goal 2). The rail's receipts and segments already exist (goal 1).
    Measure: each outcome on the map has a number. Revert: nothing to revert.
-2. **Two assemblies.** `make train` and `make merge-sitting`. Measure: the next merge is two commands and their
-   reports. Revert: the hand steps are still in docs.
+2. **Three assemblies, the sitting first.** `make merge-sitting` first: it touches the live station, and it's where
+   the slips of 2026-11-02 happened (a suite stopped mid-run, a time written without being read). Then `make train`,
+   mostly compute. Then Tardis's `make mutants`: a reader lists sites and replacements in a small file; the command
+   applies each, runs the named tests, restores the file, checks it with cmp, and prints a killed/survived table, so a
+   review stops rebuilding mutant tables by hand. Each checklist item an assembly covers is pruned as it lands.
+   Measure: the next merge is two commands and their reports. Revert: the hand steps are still in docs.
 3. **Welcome a person (goal 4).** Walk "Welcome a person" as a newcomer would, fix what trips them, and invite one
    person Andy names. Measure: someone outside the ships docks or replies.
 4. **Prune by evidence.** After a week of firing, retire checklist items that never fired or caught anything, keep
