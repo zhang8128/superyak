@@ -187,6 +187,8 @@ only-include = [
     "tests/test_packaging.py",
     "tests/test_presence.py",
     "tests/test_public_route.py",
+    "tests/test_reading.py",
+    "tests/test_reading_moves.py",
     "tests/test_replies.py",
     "tests/test_restore.py",
     "tests/test_room_brief.py",
@@ -269,4 +271,5 @@ only-include = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["sync_worker: the browser peer runs serve --sync's worker, which passes only when Check delivery now wakes it",
-           "connector: the browser peer runs with the remote connector on, at connector_support's public origin"]
+           "connector: the browser peer runs with the remote connector on, at connector_support's public origin",
+           "journal(mode): the test pins the store's journal mode; skipped in a SUPERYAK_TEST_JOURNAL run of the other mode"]

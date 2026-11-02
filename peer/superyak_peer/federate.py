@@ -21,19 +21,19 @@ class Federate:
         self.seen_requests = None  # "Check delivery now" counts in peer_meta; a change makes every pull due (P11)
 
     def _requests(self):
-        with self.federation.store.transaction() as db:
+        with self.federation.store.reading() as db:
             row = db.execute("SELECT value FROM peer_meta WHERE key='sync_requests'").fetchone()
         return row[0] if row else None
 
     def pull_cards(self):
         """The paired push peers' cards: the listeners a pull peer fetches from."""
-        with self.federation.store.transaction() as db:
+        with self.federation.store.reading() as db:
             cards = [json.loads(row[0]) for row in db.execute('SELECT card FROM peers WHERE paired=1')]
         return [card for card in cards if card.get('delivery', 'push') == 'push']
 
     def _pushed(self):
         """Each listener's last successful push, to see which one a pass's push reached."""
-        with self.federation.store.transaction() as db:
+        with self.federation.store.reading() as db:
             return dict(db.execute("SELECT peer_id, last_success FROM peer_delivery WHERE mode='push'").fetchall())
 
     def run_pass(self):

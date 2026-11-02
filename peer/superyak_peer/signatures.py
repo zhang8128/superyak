@@ -80,6 +80,9 @@ class Signatures:
             if db is None:
                 with self.transaction() as own:
                     return self._station_identity(own)
+            if not (self.data_dir / 'identity.json').is_file() and not self.dispatch_gate.held():
+                # store-wal-mode D3: a gate-free read (or any caller without the gate) may load the identity, never create it
+                raise RuntimeError('the station identity is created only under the dispatch gate')
             refuse_a_lost_identity(self.data_dir, db)  # G4b: never a new key over signed records, whoever opened the store
             self._identity = PeerIdentity.load_or_create(self.data_dir)
         return self._identity

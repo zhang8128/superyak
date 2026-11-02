@@ -566,6 +566,7 @@ def test_a_carry_that_cant_write_its_mark_says_so_and_step_8_still_holds(tmp_pat
     assert nonces(live.db_path) == {('o', 'served', 6)} and not (tmp_path / 'elsewhere').exists()
 
 
+@pytest.mark.journal('delete')  # in WAL, attaching the source mode=ro leaves its -wal and -shm: plan Task 7's
 def test_carry_nonces_refuses_and_changes_no_byte(tmp_path, capsys):
     """Each refusal exits 1 saying nothing was changed and leaves every file as it was, creating none: no live file (a
     mistyped --data-dir) or a live symlink; a $ASIDE still holding peer.sqlite3 or its journal (10.3's move hasn't run,
@@ -703,6 +704,7 @@ def test_restore_directories_are_named_in_utc_so_the_newest_sorts_last():
     assert backups.REPLACED_DIR.fullmatch(time.strftime('replaced-%Y%m%d-%H%M%S', time.gmtime()))
 
 
+@pytest.mark.journal('delete')  # a hot journal is rollback mode's; its WAL twin is plan Task 7's
 def test_carry_nonces_leaves_a_hot_journal_and_exits_cleanly_on_a_database_error(tmp_path, capsys):
     """The re-check's SF2 (its probe q3): 10.1 killed the listener mid-transaction, so restored-live has a hot journal.
     The read-only attach refuses to roll it back, so the carry exits 1 and both files stay as they were, falling back
@@ -1195,32 +1197,33 @@ def interrupted(source, target):
     writing.unlink()
 
 
-def test_reconcile_says_why_the_replaced_file_was_treated_as_absent(tmp_path, capsys):
+@pytest.mark.parametrize('label', ['missing', pytest.param('hot', marks=pytest.mark.journal('delete')),  # rollback's
+                                   'empty-journal', 'zeroed-journal'])  # only the hot case is mode-bound (Tasks 4-5 nit)
+def test_reconcile_says_why_the_replaced_file_was_treated_as_absent(tmp_path, capsys, label):
     """Fix round 1 (review minor 2): no file at the --replaced path; a replaced file with a hot journal beside it; and a
     damaged one beside a journal SQLite wouldn't treat as hot (an empty one, or one whose header is still zero because
     its write never synced). Each fails closed with its own reason, and the journal is never touched."""
     store = Store(tmp_path / 'lighthouse')
     andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     serenity, key = docked(store, andy['id'], 'serenity')
-    cases = {'missing': ('there is no such file', None),
-             'hot': ('a hot journal beside it, peer.sqlite3-journal', None),
-             'empty-journal': ('it failed its check', b''),
-             'zeroed-journal': ('it failed its check', bytes(512))}
-    for label, (why, journal) in cases.items():
-        copy = staged(tmp_path, store, f'replaced-{label}')
-        replaced = copy.parent / 'peer.sqlite3'
-        if label == 'hot':
-            interrupted(store.db_path, replaced)
-        elif label != 'missing':
-            replaced.write_bytes(os.urandom(8192))
-            Path(f'{replaced}-journal').write_bytes(journal)
-        beside = Path(f'{replaced}-journal')
-        kept = beside.read_bytes() if beside.exists() else None
-        code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced)
-        assert code == 0, err
-        assert f'The replaced file was treated as absent ({why}).' in out.splitlines()[1], (label, out)
-        assert 'Ship keys revoked for: serenity.' in out.splitlines()
-        assert (beside.read_bytes() if beside.exists() else None) == kept
+    why, journal = {'missing': ('there is no such file', None),
+                    'hot': ('a hot journal beside it, peer.sqlite3-journal', None),
+                    'empty-journal': ('it failed its check', b''),
+                    'zeroed-journal': ('it failed its check', bytes(512))}[label]
+    copy = staged(tmp_path, store, f'replaced-{label}')
+    replaced = copy.parent / 'peer.sqlite3'
+    if label == 'hot':
+        interrupted(store.db_path, replaced)
+    elif label != 'missing':
+        replaced.write_bytes(os.urandom(8192))
+        Path(f'{replaced}-journal').write_bytes(journal)
+    beside = Path(f'{replaced}-journal')
+    kept = beside.read_bytes() if beside.exists() else None
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced)
+    assert code == 0, err
+    assert f'The replaced file was treated as absent ({why}).' in out.splitlines()[1], (label, out)
+    assert 'Ship keys revoked for: serenity.' in out.splitlines()
+    assert (beside.read_bytes() if beside.exists() else None) == kept
 
 
 def test_reconcile_refuses_a_copy_in_the_backups_rotation(tmp_path, capsys):
@@ -1483,7 +1486,15 @@ def runbook_block(step):
     start = next(number for number, line in enumerate(lines) if line.startswith(f'{step}. **'))
     begin = next(number for number in range(start, len(lines)) if lines[number].strip() == '```bash')
     end = next(number for number in range(begin + 1, len(lines)) if lines[number].strip() == '```')
-    return textwrap.dedent('\n'.join(lines[begin + 1:end]))
+    return pi_only(textwrap.dedent('\n'.join(lines[begin + 1:end])))
+
+
+def pi_only(block):
+    """The runbook runs on the Pi: a block that calls `fuser -s` (psmisc's, on Linux) is skipped off Linux, where fuser
+    is BSD's and has no -s, so a Mac run says why instead of failing (Serenity's yes on wal-tasks-1-3)."""
+    if 'fuser' in block and sys.platform != 'linux':
+        pytest.skip('the restore runbook runs on the Pi; this fuser has no -s')
+    return block
 
 
 def run_runbook(tmp_path, step, aside):
@@ -1690,7 +1701,7 @@ def nested_block(heading):
     start = next(number for number, line in enumerate(lines) if line.strip().startswith(heading))
     begin = next(number for number in range(start, len(lines)) if lines[number].strip() == '```bash')
     end = next(number for number in range(begin + 1, len(lines)) if lines[number].strip() == '```')
-    return textwrap.dedent('\n'.join(lines[begin + 1:end]))
+    return pi_only(textwrap.dedent('\n'.join(lines[begin + 1:end])))
 
 
 def test_a_restore_from_a_wal_store_through_6b(tmp_path, capsys):
@@ -1717,6 +1728,8 @@ def test_a_restore_from_a_rollback_store_leaves_it_rollback(tmp_path, capsys):
     run_runbook(tmp_path, 3, '')
     store = Store(tmp_path / 'home' / '.local' / 'share' / 'superyak' / 'lighthouse')
     store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    with closing(sqlite3.connect(store.db_path)) as db:  # rollback mode whatever the suite's mode
+        db.execute('PRAGMA journal_mode=DELETE').fetchone()
     copy = staged(tmp_path, store)
     aside = copy.parent
     shutil.copyfile(copy, aside / 'chosen.sqlite3')

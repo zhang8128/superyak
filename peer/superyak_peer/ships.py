@@ -116,7 +116,7 @@ class Ships:
         and no presence; the route's own ship_for_key still writes those afterwards."""
         if not isinstance(key, str) or not 0 < len(key) <= 128:
             return False
-        with self.transaction() as db:
+        with self.reading() as db:
             return db.execute(
                 "SELECT 1 FROM ship_keys JOIN users ON users.id=ship_keys.ship_id WHERE key_hash=? AND revoked IS NULL AND users.kind='ship'",
                 (token_hash(key),),
@@ -258,7 +258,7 @@ class Ships:
     def station_rooms(self, username):
         """Trusted local operator only: the current rooms this person owns, with member usernames and whether
         the wormhole ship is in them. A room replaced by a linked one (added members) is not current."""
-        with self.transaction() as db:
+        with self.reading() as db:
             actor, wormhole = self._operator(db, username), self._wormhole_id(db)
             rooms = []
             for room in self._current_rooms(db, actor):
@@ -467,7 +467,7 @@ class Ships:
     def station_notices(self):
         """Trusted local workers only (Odo): what to announce in Ops. No HTTP route exposes this.
         Every interpolated value goes through safe_line: the text is posted in a room, where it must not mention anyone."""
-        with self.transaction() as db:
+        with self.reading() as db:
             now = self.clock()
             notices = [{'id': f'access-{r["id"]}', 'text': f'{safe_line(r["name"])} is asking to come aboard. Approve or deny under Connections → Access requests.'}
                        for r in db.execute("SELECT id,name FROM access_requests WHERE status='pending' AND expires>? ORDER BY created", (now,))]
