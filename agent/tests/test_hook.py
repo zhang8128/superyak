@@ -39,6 +39,28 @@ def test_output_is_capped(station, ship_config, tmp_path):
     assert len(text) <= 4000 and 'message 24' in text and 'message 4 ' not in text
 
 
+def test_new_messages_are_read_back_by_pages_to_the_cursor_never_the_whole_room(station, ship_config, tmp_path):
+    """Paged reads (Tardis and Rio Grande, all hands 2e59ae3a): 300 old messages, then 150 new ones, more than a page.
+    The hook reads the newest pages backwards (`limit`, then `before`) until it reaches the cursor, never the whole
+    room, and every new message is shown or counted: the note names the first new one, which is on the second page.
+    Mutations: one page only (the note starts 50 messages late), a whole read."""
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    for n in range(300):
+        fake.say(room, jenn, f'old {n}')
+    run(fake, config_path, now=fake.clock)
+    first = fake.say(room, jenn, 'new 0')
+    for n in range(1, 150):
+        fake.say(room, jenn, f'new {n}')
+    fake.requests.clear()
+    text = run(fake, config_path, now=fake.clock + 10)
+    gets = [r['query'] for r in fake.requests if r['method'] == 'GET' and r['path'] == f'/api/chats/{room}']
+    assert gets == ['limit=100', 'before=350&limit=100']
+    shown = text.count('Room Promenade, message ')
+    assert 'new 149' in text and 'old 299' not in text and f'{150 - shown} earlier messages not shown' in text
+    assert f'start={first["id"]}' in text
+
+
 def test_unreachable_station_or_missing_config_prints_nothing(station, ship_config, tmp_path):
     fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
     run(fake, config_path, now=fake.clock)
