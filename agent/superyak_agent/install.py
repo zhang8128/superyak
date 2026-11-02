@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from . import holds
 from .station import StationError, client_for, read_json, write_private
 
 AGENT_DIR = Path(__file__).resolve().parents[1]
@@ -132,10 +133,11 @@ def _same_hook(command, wanted):
 
 
 def _hold_entry_current(entries):
-    """Whether every installed station hold sits in a Bash-matcher entry with the hold's timeout (N10)."""
+    """Whether every installed station hold sits in an entry with the hold's matcher (holds.HOLD_MATCHER, exactly) and
+    the hold's timeout (N10; lesson-holds item 12)."""
     for entry in entries:
         for h in entry.get('hooks', []):
-            if is_station_hook(h.get('command')) and (entry.get('matcher') != 'Bash' or h.get('timeout') != HOLD_TIMEOUT):
+            if is_station_hook(h.get('command')) and (entry.get('matcher') != holds.HOLD_MATCHER or h.get('timeout') != HOLD_TIMEOUT):
                 return False
     return True
 
@@ -161,7 +163,7 @@ def install_hooks(settings_path, config_path, messages, backup=None):
             if hooks:
                 kept.append({**entry, 'hooks': hooks} if len(hooks) != len(entry.get('hooks', [])) else entry)
         if event == 'PreToolUse':
-            kept.append({'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': wanted, 'timeout': HOLD_TIMEOUT}]})
+            kept.append({'matcher': holds.HOLD_MATCHER, 'hooks': [{'type': 'command', 'command': wanted, 'timeout': HOLD_TIMEOUT}]})
         else:
             kept.append({'hooks': [{'type': 'command', 'command': wanted, 'timeout': 10}]})
         settings['hooks'][event] = kept
