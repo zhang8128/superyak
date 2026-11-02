@@ -561,10 +561,11 @@ def main(argv=None):
     unmoderate.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     unmoderate.add_argument('--grant', required=True, help='The grant short id (at least 4 characters, with or without #)')
     unmoderate.add_argument('--as', dest='person', required=True, help='The room owner who made the grant')
-    sitting_cmd = commands.add_parser('merge-sitting', help='Trusted local, on the station checkout: fast-forward main to an '
-                                      'approved train, back up, restart and check the station, push (docs/assemblies.md)')
+    sitting_cmd = commands.add_parser('merge-sitting', help='Trusted local, on the station checkout: back up, fast-forward main '
+                                      'to an approved train commit, restart and check the station, push; minutes long, '
+                                      'so run it in the background (superyak_peer/sitting.py)')
     sitting_cmd.add_argument('--repo', type=Path, default=Path('.'))
-    sitting_cmd.add_argument('--train', required=True, help='The approved train commit')
+    sitting_cmd.add_argument('--train', required=True, help='The approved train commit id (never a branch name)')
     sitting_cmd.add_argument('--tree', help='The tree the verdict named; a train with another tree is refused')
     sitting_cmd.add_argument('--host', required=True, help='The public host name, sent with the health and route probes')
     sitting_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))

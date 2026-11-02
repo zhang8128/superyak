@@ -98,7 +98,7 @@ help:
 	@echo "make station-add-ship ID=… SHIP=…  On the Pi: add one of your own ships to a room you own (APPROVER=andy)"
 	@echo "make station-moderate ID=… GRANTEE=…  On the Pi: let someone moderate a room you own (APPROVER=andy)"
 	@echo "make station-unmoderate GRANT=…  On the Pi: end a moderate grant by its short id"
-	@echo "make merge-sitting TRAIN=… [TREE=…] [DRY=1]  On the Pi: back up, fast-forward main, restart and check, push"
+	@echo "make merge-sitting TRAIN=<commit id> [TREE=…] [DRY=1] [NO_PUSH=1]  On the Pi: back up, fast-forward, restart, check, push (in the background)"
 	@echo "make station-backup [OUTPUT=…]  On the Pi: a checked copy of the station database (the rotation, or OUTPUT)"
 	@echo "make station-restore-test [BACKUP=…]  On the Pi: boot a throwaway station from the newest copy (or BACKUP)"
 	@echo "make station-restore-reconcile DB=… [REPLACED=…] [UNPAIR='id …']  On the Pi: runbook step 5 (docs/station-restore.md)"
@@ -417,7 +417,7 @@ station-unmoderate:
 	uv run --locked --project peer python -m superyak_peer station-unmoderate --data-dir "$(STATION_DATA)" --grant "$(GRANT)" --as "$(APPROVER)"
 
 merge-sitting:
-	@test -n "$$TRAIN" || { echo 'Usage: make merge-sitting TRAIN=<approved train commit> [TREE=<tree the verdict named>] [DRY=1] [NO_PUSH=1] (docs/assemblies.md)'; exit 2; }
+	@test -n "$$TRAIN" || { echo 'Usage: make merge-sitting TRAIN=<approved train commit id> [TREE=<tree the verdict named>] [DRY=1] [NO_PUSH=1]; minutes long: run it in the background'; exit 2; }
 	uv run --locked --project peer python -m superyak_peer merge-sitting --repo "$(CURDIR)" --train "$$TRAIN" --host "$(patsubst https://%,%,$(STATION))" --data-dir "$(STATION_DATA)" --backup-dir "$(STATION_BACKUPS)"$${TREE:+ --tree "$$TREE"}$${DRY:+ --dry-run}$${NO_PUSH:+ --no-push}
 
 station-backup:

@@ -1,12 +1,21 @@
-"""The merge sitting (docs/assemblies.md): one command and its report instead of a dozen hand steps.
+"""The merge sitting: one command and its report instead of a dozen hand steps.
 
-On the station's own checkout: check that the approved train fast-forwards main (its tree, if the verdict named one,
-and no commit from the old history), back up the station, fast-forward, restart the lighthouse and read its stop from
-the unit, check health and the closed routes, restart the other services and check each, push main once, and print
-the announcement. A failed check after the fast-forward puts main back where it was, restarts the services on it and
-pushes nothing. Andy, 2026-11-02: "reference a tested millenium falcon instead of each individual atom".
+On the station's own checkout: check that the approved train commit fast-forwards main (its tree, if the verdict
+named one, no commit from the old history, nothing untracked where the train adds a file, the units running from this
+checkout), back up the station, fast-forward, sync peer's environment when the train changes its lock, restart the
+lighthouse and read its stop from the unit, check health and that the connector's routes stay closed, restart the
+other services, let them settle and check each, push the exact commit once, and print the report for the
+announcement. A failed check, a crash or a signal after the fast-forward puts main back, restarts on it and pushes
+nothing. Andy, 2026-11-02: "reference a tested millenium falcon instead of each individual atom".
+
+It takes minutes: run it in the background, or with a 10-minute timeout.
 """
+import fcntl
+import re
+import signal
 import subprocess
+import time
+from datetime import datetime
 from pathlib import Path
 
 OLD_HISTORY_BASE = '60dd85175a1709627be63a4678694029c5721b74'
@@ -15,46 +24,81 @@ OTHER_UNITS = ('superyak-door', 'superyak-ship', 'superyak-odo', 'superyak-wormh
 # The connector isn't deployed (a person's act), so its routes stay closed on the public host.
 PROBES = {'/mcp': '404', '/token': '404', '/api/connected-apps': '404', '/api/connected-apps/notice': '404',
           '/api/admin/connected-apps': '404'}
-HEALTH_WAIT = ('--retry', '60', '--retry-connrefused', '--retry-delay', '1', '--retry-max-time', '90')
+HEALTH_WAIT = ('--max-time', '5', '--retry', '60', '--retry-connrefused', '--retry-delay', '1', '--retry-max-time', '90')
+PROBE_WAIT = ('--max-time', '10')
+SETTLE_SECONDS = 15  # a unit that dies at import reads active for a moment after its restart
+SLOW_STOP_SECONDS = 6  # past the lighthouse's 5 s grace (SHUTDOWN_GRACE)
+LOCKED_INPUTS = ('peer/uv.lock', 'peer/pyproject.toml')  # the units run peer/.venv as it is
+COMMIT_ID = re.compile(r'[0-9a-f]{7,40}')
 
 
 class Stopped(Exception):
-    """The sitting stopped before changing anything, or after putting main back."""
+    """The sitting stopped before the fast-forward, with main unchanged."""
+
+
+class Interrupted(BaseException):
+    """A signal arrived while main was moved."""
+
+
+def _interrupt(signum, _frame):
+    raise Interrupted(signal.Signals(signum).name)
 
 
 def run_command(argv, cwd):
     done = subprocess.run(list(argv), cwd=cwd, capture_output=True, text=True)
-    return done.returncode, (done.stdout + done.stderr).strip()
+    return done.returncode, done.stdout.strip(), done.stderr.strip()
+
+
+def stop_seconds(exited, inactive):
+    """Seconds between two systemd timestamps ('Mon 2026-11-02 11:18:15.222427 PST'), or None if unreadable."""
+    try:
+        def parse(value):
+            return datetime.strptime(' '.join(value.split()[1:3]), '%Y-%m-%d %H:%M:%S.%f')
+        return (parse(inactive) - parse(exited)).total_seconds()
+    except (ValueError, IndexError, AttributeError):
+        return None
 
 
 class Sitting:
     def __init__(self, repo, train, *, host, backup, tree=None, port=7435, push=True, dry_run=False,
-                 base=OLD_HISTORY_BASE, run=run_command, say=print):
+                 base=OLD_HISTORY_BASE, settle=SETTLE_SECONDS, run=run_command, say=print, pause=time.sleep):
         self.repo, self.train, self.host, self.backup, self.tree = Path(repo), train, host, backup, tree
-        self.port, self.push, self.dry_run, self.base, self._run, self.say = port, push, dry_run, base, run, say
-        self.report = []
+        self.port, self.push, self.dry_run, self.base, self.settle = port, push, dry_run, base, settle
+        self._run, self.say, self.pause = run, say, pause
+        self.report, self.restarted = [], False
 
     def run(self, *argv):
         return self._run(argv, self.repo)
 
     def git(self, *args, check=True):
-        code, out = self.run('git', *args)
+        code, out, err = self.run('git', *args)
         if check and code:
-            raise Stopped(f'git {" ".join(args)} failed: {out}')
+            raise Stopped(f'git {args[0]} failed: {err or out}')
         return out
 
     def note(self, line):
         self.report.append(line)
         self.say(line)
 
+    def unit(self, name, *props):
+        out = self.run('systemctl', '--user', 'show', '--timestamp=us', f'{name}.service',
+                       *(f'--property={p}' for p in props))[1]
+        return dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
+
+    def http(self, path, wait):
+        return self.run('curl', '-s', *wait, '-o', '/dev/null', '-w', '%{http_code}', '-H', f'Host: {self.host}',
+                        '-H', 'X-Forwarded-Proto: https', f'http://127.0.0.1:{self.port}{path}')[1]
+
     def preconditions(self):
+        if not COMMIT_ID.fullmatch(self.train):
+            raise Stopped(f'TRAIN must be the approved commit id, not a name: {self.train!r}')
         if self.git('symbolic-ref', '--short', 'HEAD', check=False) != 'main':
             raise Stopped('the checkout is not on main')
         if self.git('status', '--porcelain', '--untracked-files=no'):
             raise Stopped('the checkout has changes to tracked files')
         commit = self.git('rev-parse', '--verify', '--quiet', f'{self.train}^{{commit}}', check=False)
         if not commit:
-            raise Stopped(f'no commit named {self.train}')
+            raise Stopped(f'no commit {self.train}')
         old = self.git('rev-parse', 'HEAD')
         if commit == old:
             raise Stopped('main is already there')
@@ -64,53 +108,90 @@ class Sitting:
         if self.tree and self.tree != tree:
             raise Stopped(f'tree {tree} is not the approved {self.tree}')
         reachable = set(self.git('rev-list', commit, '--not', self.base).split())
-        descendants = set(self.git('rev-list', '--ancestry-path', f'{self.base}..{commit}').split())
-        if reachable - descendants:
-            raise Stopped(f'{len(reachable - descendants)} commits from the old history, such as '
-                          f'{sorted(reachable - descendants)[0][:8]}')
+        old_history = reachable - set(self.git('rev-list', '--ancestry-path', f'{self.base}..{commit}').split())
+        if old_history:
+            raise Stopped(f'{len(old_history)} commits from the old history, such as {sorted(old_history)[0][:8]}')
         remote = self.git('ls-remote', 'origin', 'refs/heads/main').split()
         if not remote or remote[0] != old:
             raise Stopped(f'origin main is {remote[0][:8] if remote else "missing"}, not this main {old[:8]}')
+        added = [path for path in self.git('diff', '--name-only', '--diff-filter=A', old, commit).splitlines()
+                 if (self.repo / path).exists() or (self.repo / path).is_symlink()]
+        if added:
+            raise Stopped(f'the train adds {added[0]}, which is already here untracked; move it aside')
+        if f'{self.repo.resolve()}/' not in self.unit(FIRST_UNIT, 'ExecStart').get('ExecStart', ''):
+            raise Stopped(f'{FIRST_UNIT} does not run from {self.repo.resolve()}')
         return old, commit, tree
 
-    def unit(self, name, *props):
-        out = self.run('systemctl', '--user', 'show', '--timestamp=us', f'{name}.service',
-                       *(f'--property={p}' for p in props))[1]
-        return dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
+    def locked_inputs_changed(self, old, commit):
+        return bool(self.git('diff', '--name-only', old, commit, '--', *LOCKED_INPUTS, check=False))
 
-    def http(self, path, *wait):
-        return self.run('curl', '-s', *wait, '-o', '/dev/null', '-w', '%{http_code}', '-H', f'Host: {self.host}',
-                        '-H', 'X-Forwarded-Proto: https', f'http://127.0.0.1:{self.port}{path}')[1]
+    def sync(self):
+        code, _, err = self.run('uv', 'sync', '--locked', '-q', '--project', 'peer')
+        self.note(f'peer environment synced to {self.git("rev-parse", "--short", "HEAD", check=False)}'
+                  + ('' if not code else f': FAILED, {err[-200:]}'))
+        return [] if not code else ['uv sync failed']
 
     def restart_and_check(self):
         """Restart and check every unit, the lighthouse first. Returns what failed, empty when all passed."""
-        failed = []
+        failed, self.restarted = [], True
         if self.run('systemctl', '--user', 'restart', f'{FIRST_UNIT}.service')[0]:
             failed.append(f'{FIRST_UNIT} did not restart')
         stop = self.unit(FIRST_UNIT, 'ActiveExitTimestamp', 'InactiveEnterTimestamp')
-        self.note(f'{FIRST_UNIT} stopped {stop.get("ActiveExitTimestamp", "?")}, '
-                  f'inactive {stop.get("InactiveEnterTimestamp", "?")} (read from the unit)')
-        health = self.http('/api/health', *HEALTH_WAIT)
+        seconds = stop_seconds(stop.get('ActiveExitTimestamp'), stop.get('InactiveEnterTimestamp'))
+        took = 'unreadable' if seconds is None else f'{seconds:.2f} s'
+        slow = seconds is not None and seconds > SLOW_STOP_SECONDS
+        self.note(f'{FIRST_UNIT} stop, read from the unit: {stop.get("ActiveExitTimestamp", "?")} to '
+                  f'{stop.get("InactiveEnterTimestamp", "?")} ({took}{", past the 5 s grace: read why" if slow else ""})')
+        health = self.http('/api/health', HEALTH_WAIT)
         self.note(f'health HTTP {health}')
         if health != '200':
             failed.append(f'health answered {health}')
-        probes = {path: self.http(path) for path in PROBES}
+        probes = {path: self.http(path, PROBE_WAIT) for path in PROBES}
         self.note('closed routes: ' + ', '.join(f'{path} {code}' for path, code in probes.items()))
         failed += [f'{path} answered {code}, not {PROBES[path]}' for path, code in probes.items() if code != PROBES[path]]
         for name in OTHER_UNITS:
             if self.run('systemctl', '--user', 'restart', f'{name}.service')[0]:
                 failed.append(f'{name} did not restart')
-        states = {name: self.run('systemctl', '--user', 'is-active', f'{name}.service')[1]
-                  for name in (FIRST_UNIT, *OTHER_UNITS)}
-        self.note('units: ' + ', '.join(f'{name.removeprefix("superyak-")} {state}' for name, state in states.items()))
-        failed += [f'{name} is {state}' for name, state in states.items() if state != 'active']
+        self.pause(self.settle)
+        states = {name: self.unit(name, 'ActiveState', 'NRestarts') for name in (FIRST_UNIT, *OTHER_UNITS)}
+        self.note(f'units after {self.settle} s: ' + ', '.join(
+            f'{name.removeprefix("superyak-")} {state.get("ActiveState", "?")} ({state.get("NRestarts", "?")} restarts)'
+            for name, state in states.items()))
+        failed += [f'{name} is {state.get("ActiveState", "unreadable")}, with {state.get("NRestarts", "?")} restarts'
+                   for name, state in states.items()
+                   if state.get('ActiveState') != 'active' or state.get('NRestarts') != '0']
         warnings = self.run('journalctl', '--user', '-u', f'{FIRST_UNIT}.service', '--since', '-2min', '-p', 'warning',
                             '--no-pager', '-q')[1]
         if warnings:
             self.note('lighthouse warnings in the last 2 minutes (read them):\n' + '\n'.join(warnings.splitlines()[-3:]))
         return failed
 
+    def put_back(self, old, commit, failed, backup, resync):
+        here = self.git('rev-parse', 'HEAD', check=False)
+        if here == commit:
+            code, _, err = self.run('git', 'reset', '-q', '--keep', old)
+            if code:
+                self.note(f'SITTING: main is still at {commit[:8]}: putting it back was refused ({err[-200:]}). Read git '
+                          f'status and the units now. Failed: {"; ".join(failed)}')
+                return
+        elif here != old:
+            self.note(f'SITTING: main is at {here[:8]}, neither {old[:8]} nor the train; left as it is. Read git status '
+                      f'and the units now. Failed: {"; ".join(failed)}')
+            return
+        again = (self.sync() if resync else []) or self.restart_and_check()
+        self.note(f'SITTING: put main back to {old[:8]} and restarted ({"checks pass" if not again else "; ".join(again)}); '
+                  f'nothing pushed. Failed: {"; ".join(failed)}. The backup taken first: {backup}')
+
     def sit(self):
+        lock_path = self.repo / self.git('rev-parse', '--git-path', 'merge-sitting.lock')
+        with open(lock_path, 'w') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise Stopped('another merge sitting is running on this checkout') from None
+            return self._sit()
+
+    def _sit(self):
         old, commit, tree = self.preconditions()
         members = self.git('log', '--first-parent', '--format=%h %s', f'{old}..{commit}').splitlines()
         self.note(f'main {old[:8]} -> {commit[:8]}, tree {tree}; no commit from the old history')
@@ -119,31 +200,51 @@ class Sitting:
         if self.dry_run:
             self.note('SITTING: dry run, nothing changed')
             return 0
-        self.note(f'backup: {self.backup()}')
-        self.git('merge', '--ff-only', '-q', commit)
+        backup = self.backup()
+        self.note(f'backup: {backup}')
+        if self.git('rev-parse', 'HEAD') != old:
+            raise Stopped('main moved during the backup')
+        trapped = {}
         try:
-            return self.after_fast_forward(old, commit, members)
-        except Stopped as stopped:  # main moved: say where it is, never "unchanged"
-            here = self.run('git', 'rev-parse', '--short', 'HEAD')[1]
-            self.note(f'SITTING: stopped after the fast-forward, with main at {here}: {stopped}. Read git status and '
-                      'the units before anything else.')
-            return 1
+            for sig in (signal.SIGTERM, signal.SIGHUP):
+                trapped[sig] = signal.signal(sig, _interrupt)
+        except ValueError:  # not the main thread: nothing to trap
+            pass
+        try:
+            return self._move(old, commit, members, backup)
+        finally:
+            for sig, handler in trapped.items():
+                signal.signal(sig, handler)
 
-    def after_fast_forward(self, old, commit, members):
-        failed = self.restart_and_check()
+    def _move(self, old, commit, members, backup):
+        resync = self.locked_inputs_changed(old, commit)
+        try:
+            self.git('merge', '--ff-only', '-q', commit)
+            failed = (self.sync() if resync else []) or self.restart_and_check()
+        except BaseException as error:  # a crash or a signal with main moved: put it back, then report it
+            if not self.restarted and self.git('rev-parse', 'HEAD', check=False) == old:
+                raise Stopped(f'the fast-forward did not happen: {type(error).__name__} {error}') from error
+            failed = [f'{type(error).__name__} {error}'.strip()]
         if failed:
-            self.git('reset', '-q', '--hard', old)
-            again = self.restart_and_check()
-            self.note(f'SITTING: reverted to {old[:8]} and restarted ({"checks pass" if not again else "; ".join(again)}); '
-                      f'main not pushed. Failed: {"; ".join(failed)}')
+            self.put_back(old, commit, failed, backup, resync)
             return 1
-        if self.push:
-            code, out = self.run('git', 'push', 'origin', 'main')
-            pushed = self.git('ls-remote', 'origin', 'refs/heads/main').split()
-            if code or not pushed or pushed[0] != commit:
-                self.note(f'SITTING: the station runs {commit[:8]}, but the push failed: {out[-300:]}')
-                return 1
-            self.note(f'pushed: origin main {commit[:8]}')
-        self.note(f'SITTING: done. Announce: merged {commit[:8]} to main ({len(members)} merges); the lighthouse stop, '
-                  'health, closed routes and units above; not checked here: the off-tailnet probe through Funnel.')
+        if not self.push:
+            self.note(f'SITTING: done, and main is NOT pushed (NO_PUSH). Once the fix is live and checked, push it: '
+                      f'git push origin {commit}:refs/heads/main')
+            return 0
+        try:
+            code, _, err = self.run('git', 'push', 'origin', f'{commit}:refs/heads/main')
+            remote = self.run('git', 'ls-remote', 'origin', 'refs/heads/main')[1].split()
+        except Interrupted as signal_name:
+            self.note(f'SITTING: interrupted ({signal_name}) during the push; the station runs {commit[:8]}. Read '
+                      'origin main before anything else.')
+            return 1
+        if code or not remote or remote[0] != commit:
+            self.note(f'SITTING: the station runs {commit[:8]}, but origin main is '
+                      f'{remote[0][:8] if remote else "unreadable"}: {err[-300:] or "the push did not land"}. Push it '
+                      f'again by hand: git push origin {commit}:refs/heads/main')
+            return 1
+        self.note(f'pushed: origin main {commit[:8]}')
+        self.note(f'SITTING: done. Merged {commit[:8]} to main ({len(members)} merges); the report above is the '
+                  'announcement. Not checked here: the off-tailnet probe through Funnel.')
         return 0
