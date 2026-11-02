@@ -43,29 +43,42 @@ def _idle_seconds_from_env() -> float:
     return seconds
 
 
-# ONNX Runtime's weight prepacking keeps a second, GEMM-ready copy of the weights: off, the fp32 model loads at
-# +535 MB instead of +853 MB on the Pi, about 11% slower (measured 2026-11-02, research_notes "Superyak language
-# landscape 2026"). Same weights, so stored vectors stay valid (tests/test_embeddings.py pins the agreement).
+# ONNX Runtime's weight prepacking keeps a second, GEMM-ready copy of the weights. Off, an Engram process with the fp32
+# model held 635 MB after load instead of 943 MB on the Pi, embedding about 13% slower (measured 2026-11-02 on 77 real
+# texts with a probe, not a test: vector cosine min 1.000000000, the largest score change 2.6e-7, no decision flipped
+# at 0.60, 0.75 or 0.85, top-5 unchanged for 77 of 77). Same weights, so stored vectors stay valid.
 _NO_PREPACKING = ("session.disable_prepacking", "1")
+_PATCHING = threading.Lock()  # one patched load at a time in the process, so no load restores another's patch
 
 
 def _without_prepacking(load):
     """Run fastembed's model load with prepacking off. fastembed 0.7.4 passes only `enable_cpu_mem_arena` through to
-    ONNX Runtime, so its own hook for session options also sets this entry, for the load only (under the caller's
-    lock), and is put back after."""
-    from fastembed.common.onnx_model import OnnxModel
+    ONNX Runtime, so its own hook for session options also sets this entry, for this load only, and is put back after,
+    however the load ends. Without that hook (another fastembed), the model loads with prepacking on: more memory,
+    the same vectors, and a warning that says so."""
+    import sys
 
-    original = OnnxModel.__dict__["add_extra_session_options"]
-
-    def add_extra_session_options(cls, session_options, extra_options):
-        original.__func__(cls, session_options, extra_options)
-        session_options.add_session_config_entry(*_NO_PREPACKING)
-
-    OnnxModel.add_extra_session_options = classmethod(add_extra_session_options)
     try:
-        return load()
-    finally:
-        OnnxModel.add_extra_session_options = original
+        from fastembed.common.onnx_model import OnnxModel
+    except ImportError:
+        OnnxModel = None
+    with _PATCHING:  # read the hook inside the lock, or a second load would keep the first one's patch as "original"
+        original = OnnxModel.__dict__.get("add_extra_session_options") if OnnxModel is not None else None
+        if not isinstance(original, classmethod):
+            print("engram: this fastembed has no session-options hook; the embedding model loads with ONNX Runtime's "
+                  "weight prepacking on (about 300 MB more)", file=sys.stderr)
+            return load()
+        hook = original.__func__
+
+        def add_extra_session_options(cls, session_options, extra_options):
+            hook(cls, session_options, extra_options)
+            session_options.add_session_config_entry(*_NO_PREPACKING)
+
+        OnnxModel.add_extra_session_options = classmethod(add_extra_session_options)
+        try:
+            return load()
+        finally:
+            OnnxModel.add_extra_session_options = original
 
 
 def _return_freed_heap() -> None:

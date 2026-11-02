@@ -266,8 +266,52 @@ def test_nomic_idle_zero_keeps_the_model(fake_fastembed):
 
 def test_nomic_loads_without_weight_prepacking_and_puts_fastembeds_hook_back(nomic_provider):
     from fastembed.common.onnx_model import OnnxModel
+    before = OnnxModel.__dict__["add_extra_session_options"]
     session = nomic_provider._loaded().model.model
     assert session.get_session_options().get_session_config_entry("session.disable_prepacking") == "1"
     assert not session.get_session_options().enable_cpu_mem_arena
-    assert OnnxModel.__dict__["add_extra_session_options"].__func__.__name__ == "add_extra_session_options"
-    assert OnnxModel.__dict__["add_extra_session_options"].__func__.__qualname__.startswith("OnnxModel.")
+    assert OnnxModel.__dict__["add_extra_session_options"] is before
+
+
+def test_the_hook_comes_back_after_a_load_that_fails():
+    from fastembed.common.onnx_model import OnnxModel
+    from embeddings import _without_prepacking
+    before = OnnxModel.__dict__["add_extra_session_options"]
+
+    def failing_load():
+        assert OnnxModel.__dict__["add_extra_session_options"] is not before  # patched during the load
+        raise RuntimeError("the model file is missing")
+    with pytest.raises(RuntimeError, match="missing"):
+        _without_prepacking(failing_load)
+    assert OnnxModel.__dict__["add_extra_session_options"] is before
+
+
+def test_without_fastembeds_hook_the_model_still_loads_and_says_why(monkeypatch, capsys):
+    import sys
+    import types
+    from embeddings import _without_prepacking
+    monkeypatch.setitem(sys.modules, "fastembed", types.ModuleType("fastembed"))  # a fastembed with no common package
+    monkeypatch.delitem(sys.modules, "fastembed.common.onnx_model", raising=False)
+    monkeypatch.delitem(sys.modules, "fastembed.common", raising=False)
+    assert _without_prepacking(lambda: "loaded") == "loaded"
+    assert "weight prepacking on" in capsys.readouterr().err
+
+
+def test_two_loads_at_once_never_leave_the_hook_patched():
+    import threading
+    from fastembed.common.onnx_model import OnnxModel
+    from embeddings import _without_prepacking
+    before, entered, release = OnnxModel.__dict__["add_extra_session_options"], threading.Event(), threading.Event()
+
+    def slow_load():
+        entered.set()
+        assert release.wait(5)
+    first = threading.Thread(target=_without_prepacking, args=(slow_load,))
+    first.start()
+    assert entered.wait(5)
+    second = threading.Thread(target=_without_prepacking, args=(lambda: None,))
+    second.start()  # waits for the first load's patch window to close
+    release.set()
+    first.join(5)
+    second.join(5)
+    assert OnnxModel.__dict__["add_extra_session_options"] is before
