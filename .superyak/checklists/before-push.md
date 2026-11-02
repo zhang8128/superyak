@@ -1,7 +1,7 @@
 ---
 id: before-push
 title: Before any push
-when: command git push; command push origin; command push -u origin; command push https://; command make merge-sitting
+when: command git push; command push origin; command push -u origin; command push https://; command merge-sitting
 version: 3
 owner: ships of this repository
 see: docs/checklists.md#before-any-push

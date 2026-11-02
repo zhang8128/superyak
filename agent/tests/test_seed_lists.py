@@ -13,10 +13,10 @@ IMPRINT_ACTS = ('imprint-admit', 'imprint-delete', 'imprint-use', 'approve')
 TABLE = {
     'why-we-build': 'start; every 3h', 'each-hour': 'every 1h', 'reflect': 'every 3h',
     # make merge-sitting pushes main and restarts the units in subprocesses, which no hold sees: both lists fire at it
-    'before-push': 'command git push; command push origin; command push -u origin; command push https://; command make merge-sitting',
+    'before-push': 'command git push; command push origin; command push -u origin; command push https://; command merge-sitting',
     'merging-to-main': ('command git push origin main; command push origin main; '
                         'command push https://github.com/zhang8128/superyak.git main; command systemctl --user restart superyak-; '
-                        'command make merge-sitting'),
+                        'command merge-sitting'),
     'before-work': 'claim', 'session-start': 'start',
     'live-station-act': '; '.join(f'command make station-{t}' for t in STATION_ACTS),
     # section 2's S4: an IMPRINT is approved with make station-approve, so its list fires there too
@@ -65,6 +65,9 @@ def test_before_any_push_holds_the_ways_ships_really_push(command):             
 def test_merging_to_main_fires_at_the_main_push_or_the_units_restart_and_not_at_a_merge():
     for command in ('git push origin main', 'git -C /x push origin main', 'systemctl --user restart superyak-peer.service',
                     'make merge-sitting TRAIN=236eb9f8 TREE=d9c1a507', 'cd /home/andy/superyak && make merge-sitting TRAIN=abc1234',
+                    'make -C /home/andy/superyak merge-sitting TRAIN=abc1234', 'make TRAIN=abc1234 merge-sitting',
+                    'make -s merge-sitting TRAIN=abc1234',
+                    'uv run --project .worktrees/sitting/peer python -m superyak_peer merge-sitting --train abc1234',
                     "ssh andy@smart '… && systemctl --user restart superyak-peer'",
                     "git -c 'credential.helper=!gh auth git-credential' push https://github.com/zhang8128/superyak.git main"):
         assert matches('merging-to-main', command), command
@@ -74,6 +77,8 @@ def test_merging_to_main_fires_at_the_main_push_or_the_units_restart_and_not_at_
         assert not matches('merging-to-main', command), command
     assert matches('before-push', 'git push gh main')                      # it gets only Before any push
     assert matches('before-push', 'make merge-sitting TRAIN=236eb9f8')     # the sitting pushes main in a subprocess
+    assert matches('before-push', 'make -C /home/andy/superyak merge-sitting TRAIN=236eb9f8')
+    assert not matches('merging-to-main', 'git checkout build-merge-sitting')  # a branch named for it is not a sitting
     # Section 2's N2: a known false fire, a branch whose name starts with main (the words are a literal piece).
     assert matches('merging-to-main', 'git push origin main-x')
     # A known false fire, pinned so its cost stays visible: Ruling 27's literal `push origin main` matches the " push"

@@ -207,9 +207,10 @@ once for each claimed item). Its long form:
 ## Before any push
 
 The list itself is [`.superyak/checklists/before-push.md`](../.superyak/checklists/before-push.md)
-(`when: command git push; command push origin; command push -u origin; command push https://; command make
-merge-sitting`, so a push through `git -C <path>` or the Mac's credential helper is held too, and so is the sitting,
-which pushes main in a subprocess no hold sees). Its long form:
+(`when: command git push; command push origin; command push -u origin; command push https://; command
+merge-sitting`, so a push through `git -C <path>` or the Mac's credential helper is held too, and so is the sitting
+however it is spelt (`make merge-sitting`, `make -C <checkout> merge-sitting`, the CLI), since it pushes main in a
+subprocess no hold sees). Its long form:
 
 - No commit in the push comes from the old history (main before the 2026-10-27 scrub), which brings the scrubbed
   files back. The base check alone (`git merge-base --is-ancestor 60dd851 HEAD`) misses an old ref merged into a
@@ -246,8 +247,8 @@ this list adds to it and never subtracts.
 The list itself is [`.superyak/checklists/merging-to-main.md`](../.superyak/checklists/merging-to-main.md). Its
 `when:` is the push to main (`git push origin main`, `push origin main`, or
 `push https://github.com/zhang8128/superyak.git main`) or a Pi unit's restart (`systemctl --user restart superyak-`),
-whichever comes first: for a security fix the restart comes first. `make merge-sitting` fires it too, since the sitting
-restarts the units and pushes main in subprocesses. Its run is recorded after the last item. A push to
+whichever comes first: for a security fix the restart comes first. `merge-sitting` in any spelling (make, `make -C`, the
+CLI) fires it too, since the sitting restarts the units and pushes main in subprocesses. Its run is recorded after the last item. A push to
 main spelt another way (`git push` from main, `HEAD:main`, or to another remote's name, as `git push gh main`) gets
 only "Before any push". A known false fire: `git push origin main-x`, a branch whose name starts with `main`, holds
 it too, since the words are a literal piece of the command. Its long form:

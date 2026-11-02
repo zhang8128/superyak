@@ -1,7 +1,7 @@
 ---
 id: merging-to-main
 title: Merging to main
-when: command git push origin main; command push origin main; command push https://github.com/zhang8128/superyak.git main; command systemctl --user restart superyak-; command make merge-sitting
+when: command git push origin main; command push origin main; command push https://github.com/zhang8128/superyak.git main; command systemctl --user restart superyak-; command merge-sitting
 version: 3
 owner: ships of this repository
 see: docs/checklists.md#merging-to-main-law-section-2
