@@ -301,17 +301,20 @@ def test_two_loads_at_once_never_leave_the_hook_patched():
     import threading
     from fastembed.common.onnx_model import OnnxModel
     from embeddings import _without_prepacking
-    before, entered, release = OnnxModel.__dict__["add_extra_session_options"], threading.Event(), threading.Event()
+    before = OnnxModel.__dict__["add_extra_session_options"]
+    entered1, release1, entered2 = threading.Event(), threading.Event(), threading.Event()
 
-    def slow_load():
-        entered.set()
-        assert release.wait(5)
-    first = threading.Thread(target=_without_prepacking, args=(slow_load,))
+    def first_load():
+        entered1.set()
+        assert release1.wait(5)
+    first = threading.Thread(target=_without_prepacking, args=(first_load,))
     first.start()
-    assert entered.wait(5)
-    second = threading.Thread(target=_without_prepacking, args=(lambda: None,))
-    second.start()  # waits for the first load's patch window to close
-    release.set()
+    assert entered1.wait(5)
+    second = threading.Thread(target=_without_prepacking, args=(entered2.set,))
+    second.start()
+    assert not entered2.wait(0.3)  # the second load waits for the first one's patch window to close
+    release1.set()
     first.join(5)
+    assert entered2.wait(5)
     second.join(5)
     assert OnnxModel.__dict__["add_extra_session_options"] is before
