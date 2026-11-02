@@ -76,6 +76,11 @@ class Signals:
         return False
 
 
+def say_now(line):
+    """Each report line reaches a log at once: a background run's log shows where it is, and a SIGKILL keeps it."""
+    print(line, flush=True)
+
+
 def run_command(argv, cwd):
     done = subprocess.run(list(argv), cwd=cwd, capture_output=True, text=True)
     return done.returncode, done.stdout.strip(), done.stderr.strip()
@@ -93,7 +98,7 @@ def stop_seconds(exited, inactive):
 
 class Sitting:
     def __init__(self, repo, train, *, host, backup, tree=None, port=7435, push=True, dry_run=False,
-                 base=OLD_HISTORY_BASE, settle=SETTLE_SECONDS, run=run_command, say=print, pause=time.sleep):
+                 base=OLD_HISTORY_BASE, settle=SETTLE_SECONDS, run=run_command, say=say_now, pause=time.sleep):
         self.repo, self.train, self.host, self.backup, self.tree = Path(repo), train, host, backup, tree
         self.port, self.push, self.dry_run, self.base, self.settle = port, push, dry_run, base, settle
         self._run, self.say, self.pause = run, say, pause

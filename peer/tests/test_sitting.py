@@ -440,3 +440,13 @@ def test_a_fast_forward_cut_short_says_the_checkout_is_partly_written(station):
     with pytest.raises(Stopped, match='partly written files'):
         made.sit()
     assert host.restarts() == []
+
+
+def test_each_report_line_is_flushed_at_once(monkeypatch):
+    import builtins
+    from superyak_peer.sitting import say_now
+    seen = []
+    monkeypatch.setattr(builtins, 'print', lambda *args, **kwargs: seen.append(kwargs))
+    say_now('main a -> b')
+    assert seen == [{'flush': True}]
+    assert Sitting('.', 'abc1234', host='h', backup=lambda: '').say is say_now
