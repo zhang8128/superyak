@@ -203,20 +203,22 @@ def test_nomic_drops_the_model_when_idle_and_loads_it_again(fake_fastembed):
 
 def test_nomic_keeps_the_model_while_an_embed_runs(fake_fastembed):
     import threading
+    import time
 
-    provider = NomicEmbedProvider(idle_seconds=0.01)
+    provider = NomicEmbedProvider(idle_seconds=60)  # no timer fires during the test; it calls the unload itself
     fake_fastembed.entered, fake_fastembed.release = threading.Event(), threading.Event()
     worker = threading.Thread(target=provider.embed, args=(["a"],))
     worker.start()
     try:
         assert fake_fastembed.entered.wait(5)
-        provider._unload_if_idle()  # idle by the clock, but an embed is running
+        provider._last_used = time.monotonic() - 120  # idle by the clock, but an embed is running
+        provider._unload_if_idle()
         assert provider.is_loaded()
     finally:
         fake_fastembed.release.set()
         worker.join(5)
     provider._unload_timer.cancel()
-    provider._last_used = 0.0  # long idle, nothing running
+    provider._last_used = time.monotonic() - 120  # idle, and nothing running
     provider._unload_if_idle()
     assert not provider.is_loaded()
 
@@ -245,7 +247,7 @@ def test_nomic_a_timer_that_fires_early_waits_out_the_rest(fake_fastembed):
     assert not provider.is_loaded()
 
 
-@pytest.mark.parametrize("value", ["soon", "-1", "nan"])
+@pytest.mark.parametrize("value", ["soon", "-1", "nan", "inf", "1e12"])
 def test_nomic_a_bad_idle_setting_names_the_variable(monkeypatch, value):
     monkeypatch.setenv("ENGRAM_EMBED_IDLE_SECONDS", value)
     with pytest.raises(ValueError, match="ENGRAM_EMBED_IDLE_SECONDS"):

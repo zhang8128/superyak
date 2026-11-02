@@ -8,7 +8,7 @@
     {
       "name": "engram",
       "description": "Layered memory — episodes, semantics, and instincts that evolve across sessions",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": {
         "name": "kairos"
       },

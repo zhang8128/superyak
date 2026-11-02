@@ -37,8 +37,9 @@ def _idle_seconds_from_env() -> float:
         seconds = float(value)
     except ValueError:
         seconds = -1.0
-    if not seconds >= 0:  # also refuses nan
-        raise ValueError(f"ENGRAM_EMBED_IDLE_SECONDS must be a number of seconds, 0 or more; got {value!r}")
+    if not 0 <= seconds <= threading.TIMEOUT_MAX:  # also refuses nan and inf, which a timer can't wait out
+        raise ValueError(f"ENGRAM_EMBED_IDLE_SECONDS must be a number of seconds from 0 to {threading.TIMEOUT_MAX:.0f}; "
+                         f"got {value!r}")
     return seconds
 
 
