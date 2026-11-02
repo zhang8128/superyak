@@ -883,11 +883,36 @@ def test_reconcile_refuses_a_hard_link_and_a_same_or_older_replaced_file(tmp_pat
         assert touched.read_bytes() == before
 
 
+def copied(source, target):
+    """A store's file copied through SQLite's backup API, never byte for byte (store-wal-mode D7, plan Task 7): while a
+    connection holds a WAL store open, commits sit in its -wal that the main file alone lacks. The backup API copies the
+    header's WAL flag too, so the copy keeps the source's journal mode, and needs no -wal."""
+    with closing(sqlite3.connect(source)) as db, closing(sqlite3.connect(target)) as out:
+        db.backup(out)
+    return target
+
+
 def set_aside(store, copy):
-    """Runbook step 4: the live database moved into the restore's directory as peer.sqlite3, beside the staged copy."""
-    original = copy.parent / 'peer.sqlite3'
-    shutil.copyfile(store.db_path, original)
-    return original
+    """Runbook step 4: the live database moved into the restore's directory as peer.sqlite3, beside the staged copy. Its
+    copy holds what the moved set holds, a -wal's commits included, in the store's own journal mode."""
+    return copied(store.db_path, copy.parent / 'peer.sqlite3')
+
+
+def test_set_aside_holds_a_commit_that_is_only_in_the_wal(tmp_path):
+    """Plan Task 7: the suite's copies of a live store go through the backup API, so a commit that is only in a WAL
+    store's -wal, while a connection holds the store open, is in the copy, and the copy keeps the store's mode.
+    Mutation: set_aside's copy made with shutil.copyfile (the main file alone lacks the commit)."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(store.db_path)) as keeper:
+        keeper.execute('SELECT 1 FROM system_meta').fetchone()   # an open connection keeps the next commit in the -wal
+        store.create_user('late', 'Late', 'long-password-late')
+        original = set_aside(store, copy)
+    assert header_mode(original) == 'wal'
+    with closing(sqlite3.connect(original)) as db:
+        assert db.execute("SELECT count(*) FROM users WHERE username='late'").fetchone()[0] == 1
 
 
 def files_beside(*paths):
@@ -1141,9 +1166,9 @@ def test_reconcile_treats_a_replaced_file_that_isnt_this_stations_as_absent(tmp_
         if label == 'empty':
             replaced.write_bytes(b'')
         elif label == 'elsewhere':
-            shutil.copyfile(elsewhere.db_path, replaced)
+            copied(elsewhere.db_path, replaced)
         else:
-            shutil.copyfile(store.db_path, replaced)
+            copied(store.db_path, replaced)
             with closing(sqlite3.connect(replaced)) as db:
                 db.execute('DELETE FROM ship_keys')
                 db.commit()
@@ -1185,8 +1210,7 @@ def test_reconcile_reports_the_error_sqlite_rolled_back_on(tmp_path, monkeypatch
 def interrupted(source, target):
     """target as a write interrupted mid-transaction leaves it: the file, and beside it a hot journal. With synchronous
     off SQLite writes the journal's header at once, so a copy taken mid-write is what a power cut leaves."""
-    writing = target.parent / 'writing.sqlite3'
-    shutil.copyfile(source, writing)
+    writing = copied(source, target.parent / 'writing.sqlite3')
     with closing(sqlite3.connect(writing, isolation_level=None)) as writer:
         writer.execute('PRAGMA synchronous=OFF')
         writer.execute('BEGIN IMMEDIATE')
@@ -1198,7 +1222,7 @@ def interrupted(source, target):
 
 
 @pytest.mark.parametrize('label', ['missing', pytest.param('hot', marks=pytest.mark.journal('delete')),  # rollback's
-                                   'empty-journal', 'zeroed-journal'])  # only the hot case is mode-bound (Tasks 4-5 nit)
+                                   'empty-journal', 'zeroed-journal'])  # only the hot case is mode-bound; WAL's: below
 def test_reconcile_says_why_the_replaced_file_was_treated_as_absent(tmp_path, capsys, label):
     """Fix round 1 (review minor 2): no file at the --replaced path; a replaced file with a hot journal beside it; and a
     damaged one beside a journal SQLite wouldn't treat as hot (an empty one, or one whose header is still zero because
@@ -1224,6 +1248,42 @@ def test_reconcile_says_why_the_replaced_file_was_treated_as_absent(tmp_path, ca
     assert f'The replaced file was treated as absent ({why}).' in out.splitlines()[1], (label, out)
     assert 'Ship keys revoked for: serenity.' in out.splitlines()
     assert (beside.read_bytes() if beside.exists() else None) == kept
+
+
+KILLED_MID_WRITE = '''import os, sqlite3, sys
+db = sqlite3.connect(sys.argv[1], isolation_level=None)
+db.execute('PRAGMA cache_size=1')
+db.execute('BEGIN IMMEDIATE')
+db.execute("UPDATE users SET name='mid-write'")
+db.execute('CREATE TABLE filler(v TEXT)')
+db.executemany('INSERT INTO filler VALUES(?)', [('x' * 500,) for _ in range(2000)])
+os._exit(0)
+'''
+
+
+def test_in_wal_a_replaced_file_a_killed_writer_left_is_compared_and_its_wal_left_alone(tmp_path, capsys):
+    """The WAL counterpart of the test above's hot case (plan Task 7): a WAL writer killed mid-transaction leaves its
+    spilled pages in the -wal as frames with no commit frame, not a hot journal, so the replaced file is not treated as
+    absent. It is compared as of its last commit (the killed update unseen, serenity's key kept), and its main file and
+    -wal are left byte for byte (the -shm is SQLite's index, which a reader writes). Mutation: `mode=ro` dropped from
+    `_read_only` (`_replaced`'s connection, closing last, deletes the -wal)."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    serenity, key = docked(store, andy['id'], 'serenity')
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    copy = staged(tmp_path, store)
+    replaced = set_aside(store, copy)
+    subprocess.run([sys.executable, '-I', '-c', KILLED_MID_WRITE, str(replaced)], check=True)
+    wal = Path(f'{replaced}-wal')
+    assert header_mode(replaced) == 'wal' and wal.stat().st_size > 0 and not Path(f'{replaced}-journal').exists()
+    main, frames = replaced.read_bytes(), wal.read_bytes()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced)
+    assert code == 0, err
+    assert out.splitlines()[1] == 'Compared with the replaced file.' and 'Ship keys revoked for: serenity.' not in out, out
+    assert replaced.read_bytes() == main and wal.read_bytes() == frames
+    with closing(sqlite3.connect(replaced.as_uri() + '?mode=ro', uri=True)) as db:
+        assert db.execute("SELECT count(*) FROM users WHERE name='mid-write'").fetchone()[0] == 0
+    assert go_live(copy, tmp_path / 'live').ship_for_key(key)['username'] == 'serenity'
 
 
 def test_reconcile_refuses_a_copy_in_the_backups_rotation(tmp_path, capsys):

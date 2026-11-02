@@ -39,9 +39,12 @@ def refuse_a_lost_identity(data_dir, db):
 
 
 def refuse_a_lost_identity_before_the_store(data_dir):
-    """G4b for `serve --peer-tls`, which checks before any Store opens: the database read-only, so nothing is created or
-    migrated; a missing database holds no signed records. One that can't be read (say, a hot journal a read-only
-    connection can't roll back) refuses with its name, since it can't rule signed records out."""
+    """G4b for `serve --peer-tls`, which checks before any Store opens: the database read-only, so nothing is migrated
+    and, in rollback mode, nothing is created. On a WAL store the read-only open makes SQLite's -shm (and an empty -wal)
+    beside it when the directory is writable, and leaves them if it closes last; they are SQLite's own, gone at the next
+    read-write last close (store-wal-mode D6). A missing database holds no signed records. One that can't be read (say,
+    a hot journal a read-only connection can't roll back) refuses with its name, since it can't rule signed records
+    out."""
     database = Path(data_dir).absolute() / 'peer.sqlite3'
     if database.is_file():
         try:

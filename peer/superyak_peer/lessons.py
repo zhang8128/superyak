@@ -1226,9 +1226,10 @@ class Lessons:
         """Section 5 step 4: one short transaction re-checks each candidate against the room as it stands, keeps the
         first 3 that pass, writes a receipt for each and one query row. Once `deadline` on `monotonic` has passed (the
         hook's budget; None without one), it writes nothing and answers nothing (Serenity's review of first-rail, S1).
-        The station's database keeps a rollback journal, so the commit waits for every reader's lock, and a reader
-        outside the dispatch gate (the nightly backup's copy) can hold one: with a deadline, that wait is the time left,
-        and a commit it refuses is rolled back and answers nothing (the fresh review's S1)."""
+        In rollback mode the commit waits for every reader's SHARED lock, and a reader outside the dispatch gate (the
+        nightly backup's copy) can hold one: with a deadline, that wait is the time left, and a commit it refuses is
+        rolled back and answers nothing (the fresh review's S1). In WAL mode no reader blocks the commit (store-wal-mode
+        Task 7's twins in test_lessons_index); the same bound applies to the wait for another writer."""
         import sqlite3
         try:
             with self.transaction() as db:

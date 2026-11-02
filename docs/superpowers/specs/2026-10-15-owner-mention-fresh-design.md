@@ -170,7 +170,8 @@ is free text, and `old` and `answered` are new values. Restart the lighthouse an
 odo and wormhole watchers for the prompt. Each machine's watcher gets the prompt sentences when it updates.
 
 Live check, needing no person's login: copy the live database with SQLite's backup API (the backups tool, or the same
-call the merge backup uses; never `cp`, because the database runs in WAL mode), open the copy with a throwaway store in
+call the merge backup uses; never `cp`, because a byte copy of a database being written can be torn, and in WAL mode,
+which the store didn't run in then, it lacks the commits in the `-wal`), open the copy with a throwaway store in
 the test style, never the live file, issue tickets there for one old owner mention and one fresh one, and check `old`
 and `build`. Delete the copy afterwards.
 

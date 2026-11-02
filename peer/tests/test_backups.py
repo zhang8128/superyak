@@ -270,7 +270,7 @@ os._exit(0)
 '''
 
 
-@pytest.mark.journal('delete')  # a hot journal is rollback mode's; its WAL twin is plan Task 7's
+@pytest.mark.journal('delete')  # a hot journal is rollback mode's; its WAL twin is the next test
 def test_a_hot_journal_after_a_power_cut_is_retried_never_called_damage(tmp_path):
     """Review Focus 4 (S8): a power cut mid-commit leaves a hot journal. The read-only open succeeds and the first read
     fails with SQLITE_READONLY_ROLLBACK. The backup retries for 60 s, then exits 1, never 12, and leaves the live file
@@ -291,6 +291,30 @@ def test_a_hot_journal_after_a_power_cut_is_retried_never_called_damage(tmp_path
     assert failed.value.code == 1 and f'could not be copied for {backups.RETRY_SECONDS} s' in failed.value.reason
     assert store.db_path.read_bytes() == live and journal.read_bytes() == hot
     assert names(rotation) == []
+
+
+def test_in_wal_a_power_cut_mid_commit_is_copied_past_at_once_and_its_wal_left_alone(tmp_path):
+    """The WAL twin of the test above (plan Task 7): in WAL mode the killed writer's spilled pages are frames in the
+    -wal with no commit frame, so there is no hot journal. The read-only open reads past them at once (no retry, no
+    sleep), the copy is one rollback-mode file holding every committed row and none of the killed update, and the live
+    file and its -wal are left byte for byte (the -shm is SQLite's index, which a reader writes). Mutation: `mode=ro`
+    dropped from the source's open (closing last, it checkpoints and deletes the killed writer's -wal)."""
+    store, rotation = station(tmp_path)
+    switch_journal(store.data_dir, 'wal', active=lambda: [])
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute('CREATE TABLE filler(v TEXT)')
+        db.executemany('INSERT INTO filler VALUES(?)', [('x' * 500,) for _ in range(2000)])
+        db.commit()
+    subprocess.run([sys.executable, '-I', '-c', CRASH, str(store.db_path)], check=True)   # the cache spills, then "power off"
+    wal = Path(f'{store.db_path}-wal')
+    assert wal.stat().st_size > 0 and not Path(f'{store.db_path}-journal').exists()
+    live, frames = store.db_path.read_bytes(), wal.read_bytes()
+    slept = []
+    copy = backups.run_backup(store.data_dir, rotation, sleep=slept.append)
+    assert slept == [] and names(rotation) == [copy.name] and ok(copy) and header_mode(copy) == 'delete'
+    with closing(sqlite3.connect(copy)) as db:
+        assert db.execute("SELECT count(*), sum(v LIKE '%y') FROM filler").fetchone() == (2000, 0)
+    assert store.db_path.read_bytes() == live and wal.read_bytes() == frames
 
 
 def test_a_pruning_failure_exits_1_and_says_the_new_copy_is_in_place(tmp_path, monkeypatch, capsys):

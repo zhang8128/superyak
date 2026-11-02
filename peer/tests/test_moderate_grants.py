@@ -265,10 +265,9 @@ def test_appointment_and_end_notices_pass_names_through_safe_line(city):
         assert db.execute('SELECT count(*) FROM mentions').fetchone()[0] == 0
 
 
-import shutil
 import sqlite3
 from contextlib import closing
-from test_restore import reconcile as run_reconcile, staged
+from test_restore import copied, reconcile as run_reconcile, staged
 
 
 def logged(path):
@@ -314,7 +313,7 @@ def test_a_replaced_file_without_the_act_log_is_treated_as_absent(city, tmp_path
     moderate(c.store, c.andy, c.jenn, c.room)
     copy = staged(tmp_path, c.store)
     replaced = copy.parent / 'peer.sqlite3'
-    shutil.copyfile(c.store.db_path, replaced)
+    copied(c.store.db_path, replaced)
     with closing(sqlite3.connect(replaced)) as db:
         db.execute('DROP TABLE member_changes')
         db.commit()

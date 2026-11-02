@@ -23,7 +23,10 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture(autouse=True)
 def every_store_in_the_journal_mode_asked(monkeypatch):
     """In a WAL run every Store this process builds is switched to WAL. A store that a CLI subprocess creates fresh is
-    built in that process and stays in rollback mode (the Tasks 4-5 review's nit)."""
+    built in that process and stays in rollback mode (the Tasks 4-5 review's nit). The mode is read first, and this
+    Store's `_journal` is set only when this switch changed it: a Store opened on a file already in WAL keeps what its
+    own __init__ learned, so a test of that (test_reading's first-read test) still fails a dropped cache line in a WAL
+    run (plan Task 7, re-check 3 of Tasks 4-5, its nit)."""
     if JOURNAL != 'wal':
         return
     from superyak_peer.db import Store
@@ -32,8 +35,10 @@ def every_store_in_the_journal_mode_asked(monkeypatch):
     def in_wal(self, *args, **kwargs):
         built(self, *args, **kwargs)
         with closing(sqlite3.connect(self.db_path)) as db:
-            db.execute('PRAGMA journal_mode=WAL').fetchone()
-        self._journal = 'wal'  # what __init__'s own read finds on a store that is WAL from the start (reading())
+            switched = (db.execute('PRAGMA journal_mode').fetchone()[0] != 'wal'
+                        and db.execute('PRAGMA journal_mode=WAL').fetchone()[0] == 'wal')
+        if switched:
+            self._journal = 'wal'  # what __init__'s own read finds on a store that is WAL from the start (reading())
     monkeypatch.setattr(Store, '__init__', in_wal)
 
 # Public route spec 6.1: Starlette's default client host, "testclient", is not an IP address, so the station treats it

@@ -201,7 +201,12 @@ Obsolete pending revisions become `withdrawn`; a subsequent current event carrie
 the correction or tombstone. Local edits never perform network I/O.
 
 The final-dispatch boundary uses a reentrant thread lock plus POSIX `flock` shared
-by all Store transactions for that state. **The dial verifies the exact DER pin and
+by all Store transactions for that state; every write, and every read with a side
+effect (a commit, a file, a process or shared memory), takes it. In WAL mode the pure reads on
+`Store.reading()` leave the gate and take no part in this promise: a read that commits
+nothing cannot pass a final dispatch write, and it sees one snapshot taken between two
+commits, never a half-done push. In rollback mode `reading()` takes the gate (the
+store-wal-mode spec, D3). **The dial verifies the exact DER pin and
 nothing else:** TLS 1.3 at minimum, no chain, name or date check, and after the
 handshake, before any byte is written, the SHA-256 of the peer's DER certificate must
 equal the card's `fingerprint` (a mismatch is a peer failure, "certificate differs").
@@ -269,7 +274,9 @@ client_message_id only for authorized message/reply records, with no message bod
 not a distributed availability guarantee or an audit export of others' content.
 
 Only new `peer/` application state is affected. POSIX locking targets macOS/Linux
-(including the Pi); multiple database processes must use these Store gates. External
+(including the Pi); multiple database processes must use these Store gates for every
+write and every read with a side effect; only `reading()`'s pure reads in WAL mode
+leave them (above). External
 SQL writers, operator-edited private files and other implementations are outside
 this coordination boundary. Disk growth is durable and operator-managed; there is
 no automatic retention cleanup or replay-expiry shortcut in this slice, except pull
