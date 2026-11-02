@@ -7,7 +7,7 @@ owner: ships of this repository
 see: docs/checklists.md#merging-to-main-law-section-2
 ---
 - [ ] killer: Safety code (authority, permissions, the public route, a person's data, the ledger) merges only on each partner's explicit yes posted in the room, the section 2 approver's among them.
-- [ ] killer: Partners: Rio Grande, Serenity, Tardis; an author's branch is its yes; silence is no consent. One Andy says is out reviews on return. No ship pushes straight to main (law §7).
+- [ ] killer: Partners: Rio Grande, Serenity, Tardis; an author's branch is its yes. No ship's silence counts as consent; one Andy says is out reviews on return. No ship pushes straight to main (law §7).
 - [ ] Only Rio Grande and Serenity merge to main, on a verdict posted whole in the room: Rio Grande's for a Serenity branch; Serenity's, or a fresh Pi reviewer's that took no part, for a Rio Grande one.
 - [ ] Main is merged into the branch (never a rebase), and the merge commit is the one the verdict names. An unpushed merge is agreed by tree: `git rev-parse <commit>^{tree}` on both machines.
 - [ ] Pi suites pass (engram, peer, agent, as touched); a known failure is named and fails alike on main here. GitHub CI: a pushed head's before merge, main's after; red holds it unless known and boarded.
