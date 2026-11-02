@@ -261,3 +261,13 @@ def test_nomic_idle_zero_keeps_the_model(fake_fastembed):
     provider.embed(["a"])
     time.sleep(0.1)
     assert provider.is_loaded() and provider._unload_timer is None
+
+
+
+def test_nomic_loads_without_weight_prepacking_and_puts_fastembeds_hook_back(nomic_provider):
+    from fastembed.common.onnx_model import OnnxModel
+    session = nomic_provider._loaded().model.model
+    assert session.get_session_options().get_session_config_entry("session.disable_prepacking") == "1"
+    assert not session.get_session_options().enable_cpu_mem_arena
+    assert OnnxModel.__dict__["add_extra_session_options"].__func__.__name__ == "add_extra_session_options"
+    assert OnnxModel.__dict__["add_extra_session_options"].__func__.__qualname__.startswith("OnnxModel.")

@@ -43,6 +43,31 @@ def _idle_seconds_from_env() -> float:
     return seconds
 
 
+# ONNX Runtime's weight prepacking keeps a second, GEMM-ready copy of the weights: off, the fp32 model loads at
+# +535 MB instead of +853 MB on the Pi, about 11% slower (measured 2026-11-02, research_notes "Superyak language
+# landscape 2026"). Same weights, so stored vectors stay valid (tests/test_embeddings.py pins the agreement).
+_NO_PREPACKING = ("session.disable_prepacking", "1")
+
+
+def _without_prepacking(load):
+    """Run fastembed's model load with prepacking off. fastembed 0.7.4 passes only `enable_cpu_mem_arena` through to
+    ONNX Runtime, so its own hook for session options also sets this entry, for the load only (under the caller's
+    lock), and is put back after."""
+    from fastembed.common.onnx_model import OnnxModel
+
+    original = OnnxModel.__dict__["add_extra_session_options"]
+
+    def add_extra_session_options(cls, session_options, extra_options):
+        original.__func__(cls, session_options, extra_options)
+        session_options.add_session_config_entry(*_NO_PREPACKING)
+
+    OnnxModel.add_extra_session_options = classmethod(add_extra_session_options)
+    try:
+        return load()
+    finally:
+        OnnxModel.add_extra_session_options = original
+
+
 def _return_freed_heap() -> None:
     """Hand freed heap pages back to the system (glibc keeps them otherwise; elsewhere a no-op)."""
     try:
@@ -123,9 +148,9 @@ class NomicEmbedProvider:
 
             # Without the arena, ONNX Runtime returns each run's buffers instead of
             # keeping the largest batch's allocation for the life of the process.
-            model = TextEmbedding(
+            model = _without_prepacking(lambda: TextEmbedding(
                 model_name=self.MODEL_NAME, cache_dir=_CACHE_DIR, enable_cpu_mem_arena=False,
-            )
+            ))
             # The tokenizer config allows 8192 tokens; past the trained context,
             # attention cost grows without improving the embedding.
             model.model.tokenizer.enable_truncation(max_length=_MAX_TOKENS)
