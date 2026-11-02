@@ -762,6 +762,9 @@ def main(argv=None):
                                push=not args.no_push, dry_run=args.dry_run).sit()
             except Stopped as stopped:
                 parser.exit(1, f'SITTING: stopped, main unchanged: {stopped}\n')
+            except BaseException as escaped:  # noqa: BLE001 - never end a sitting without a SITTING line
+                parser.exit(1, f'SITTING: ended by {type(escaped).__name__} {escaped}; read git status, origin main and '
+                               'the units before anything else\n')
             if code:
                 parser.exit(code)
         elif args.command == 'station-backup':

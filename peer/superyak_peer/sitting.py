@@ -8,7 +8,8 @@ other services, let them settle and check each, push the exact commit once, and 
 announcement. A failed check, a crash or a signal after the fast-forward puts main back, restarts on it and pushes
 nothing. Andy, 2026-11-02: "reference a tested millenium falcon instead of each individual atom".
 
-It takes minutes: run it in the background, or with a 10-minute timeout.
+It takes minutes: run it in the background, or with a 10-minute timeout, from a shell or tmux, never from a run
+that superyak-ship woke (restarting superyak-ship stops the watcher that holds that run).
 """
 import fcntl
 import re
@@ -40,8 +41,39 @@ class Interrupted(BaseException):
     """A signal arrived while main was moved."""
 
 
-def _interrupt(signum, _frame):
-    raise Interrupted(signal.Signals(signum).name)
+class Signals:
+    """While main is moved: the first SIGTERM, SIGHUP or SIGINT raises Interrupted; every later one, and any during
+    the put-back, is only counted, so nothing cuts the put-back short. `uv run` forwards a signal to its child, so a
+    single ^C or SIGTERM can arrive twice."""
+
+    TRAPPED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+    def __init__(self):
+        self.raised, self.held, self.saved = False, 0, {}
+
+    def __enter__(self):
+        try:
+            for sig in self.TRAPPED:
+                self.saved[sig] = signal.signal(sig, self._arrived)
+        except ValueError:  # not the main thread: nothing to trap
+            pass
+        return self
+
+    def _arrived(self, signum, _frame):
+        if self.raised:
+            self.held += 1
+            return
+        self.raised = True
+        raise Interrupted(signal.Signals(signum).name)
+
+    def hold(self):
+        """From here on every signal is only counted (the put-back)."""
+        self.raised = True
+
+    def __exit__(self, *_exc):
+        for sig, handler in self.saved.items():
+            signal.signal(sig, handler)
+        return False
 
 
 def run_command(argv, cwd):
@@ -99,14 +131,18 @@ class Sitting:
         commit = self.git('rev-parse', '--verify', '--quiet', f'{self.train}^{{commit}}', check=False)
         if not commit:
             raise Stopped(f'no commit {self.train}')
+        if not commit.startswith(self.train):  # a branch whose name looks like a commit id
+            raise Stopped(f'{self.train} names {commit[:8]}, not a commit starting with it')
         old = self.git('rev-parse', 'HEAD')
         if commit == old:
             raise Stopped('main is already there')
         if self.run('git', 'merge-base', '--is-ancestor', old, commit)[0]:
             raise Stopped(f'not a fast-forward: main {old[:8]} is not in {commit[:8]}')
         tree = self.git('rev-parse', f'{commit}^{{tree}}')
-        if self.tree and self.tree != tree:
-            raise Stopped(f'tree {tree} is not the approved {self.tree}')
+        if self.tree:
+            approved = self.git('rev-parse', '--verify', '--quiet', f'{self.tree}^{{tree}}', check=False)
+            if not COMMIT_ID.fullmatch(self.tree) or approved != tree or not approved.startswith(self.tree):
+                raise Stopped(f'tree {tree} is not the approved {self.tree}')
         reachable = set(self.git('rev-list', commit, '--not', self.base).split())
         old_history = reachable - set(self.git('rev-list', '--ancestry-path', f'{self.base}..{commit}').split())
         if old_history:
@@ -114,8 +150,8 @@ class Sitting:
         remote = self.git('ls-remote', 'origin', 'refs/heads/main').split()
         if not remote or remote[0] != old:
             raise Stopped(f'origin main is {remote[0][:8] if remote else "missing"}, not this main {old[:8]}')
-        added = [path for path in self.git('diff', '--name-only', '--diff-filter=A', old, commit).splitlines()
-                 if (self.repo / path).exists() or (self.repo / path).is_symlink()]
+        added = [path for path in self.git('diff', '-z', '--name-only', '--diff-filter=A', old, commit).split('\0')
+                 if path and ((self.repo / path).exists() or (self.repo / path).is_symlink())]
         if added:
             raise Stopped(f'the train adds {added[0]}, which is already here untracked; move it aside')
         if f'{self.repo.resolve()}/' not in self.unit(FIRST_UNIT, 'ExecStart').get('ExecStart', ''):
@@ -126,7 +162,7 @@ class Sitting:
         return bool(self.git('diff', '--name-only', old, commit, '--', *LOCKED_INPUTS, check=False))
 
     def sync(self):
-        code, _, err = self.run('uv', 'sync', '--locked', '-q', '--project', 'peer')
+        code, _, err = self.run('uv', 'sync', '--locked', '-q', '--project', 'peer')  # the units run peer/.venv
         self.note(f'peer environment synced to {self.git("rev-parse", "--short", "HEAD", check=False)}'
                   + ('' if not code else f': FAILED, {err[-200:]}'))
         return [] if not code else ['uv sync failed']
@@ -166,7 +202,8 @@ class Sitting:
             self.note('lighthouse warnings in the last 2 minutes (read them):\n' + '\n'.join(warnings.splitlines()[-3:]))
         return failed
 
-    def put_back(self, old, commit, failed, backup, resync):
+    def put_back(self, old, commit, failed, backup, resync, signals):
+        signals.hold()
         here = self.git('rev-parse', 'HEAD', check=False)
         if here == commit:
             code, _, err = self.run('git', 'reset', '-q', '--keep', old)
@@ -178,9 +215,16 @@ class Sitting:
             self.note(f'SITTING: main is at {here[:8]}, neither {old[:8]} nor the train; left as it is. Read git status '
                       f'and the units now. Failed: {"; ".join(failed)}')
             return
-        again = (self.sync() if resync else []) or self.restart_and_check()
+        def held():
+            return f' {signals.held} more signals arrived and were held.' if signals.held else ''
+        if resync and self.sync():
+            self.note(f'SITTING: put main back to {old[:8]}, but its uv sync failed, so nothing was restarted on it: the '
+                      f'units may still run {commit[:8]}. Read them now. Nothing pushed. Failed: {"; ".join(failed)}. '
+                      f'The backup taken first: {backup}.{held()}')
+            return
+        again = self.restart_and_check()
         self.note(f'SITTING: put main back to {old[:8]} and restarted ({"checks pass" if not again else "; ".join(again)}); '
-                  f'nothing pushed. Failed: {"; ".join(failed)}. The backup taken first: {backup}')
+                  f'nothing pushed. Failed: {"; ".join(failed)}. The backup taken first: {backup}.{held()}')
 
     def sit(self):
         lock_path = self.repo / self.git('rev-parse', '--git-path', 'merge-sitting.lock')
@@ -197,6 +241,8 @@ class Sitting:
         self.note(f'main {old[:8]} -> {commit[:8]}, tree {tree}; no commit from the old history')
         for line in members:
             self.note(f'  {line[:110]}')
+        if self.locked_inputs_changed(old, commit):
+            self.note('  the train changes peer\'s lock inputs: the sitting runs uv sync before the restart')
         if self.dry_run:
             self.note('SITTING: dry run, nothing changed')
             return 0
@@ -204,29 +250,25 @@ class Sitting:
         self.note(f'backup: {backup}')
         if self.git('rev-parse', 'HEAD') != old:
             raise Stopped('main moved during the backup')
-        trapped = {}
-        try:
-            for sig in (signal.SIGTERM, signal.SIGHUP):
-                trapped[sig] = signal.signal(sig, _interrupt)
-        except ValueError:  # not the main thread: nothing to trap
-            pass
-        try:
-            return self._move(old, commit, members, backup)
-        finally:
-            for sig, handler in trapped.items():
-                signal.signal(sig, handler)
+        with Signals() as signals:
+            return self._move(old, commit, members, backup, signals)
 
-    def _move(self, old, commit, members, backup):
+    def _move(self, old, commit, members, backup, signals):
         resync = self.locked_inputs_changed(old, commit)
         try:
             self.git('merge', '--ff-only', '-q', commit)
             failed = (self.sync() if resync else []) or self.restart_and_check()
         except BaseException as error:  # a crash or a signal with main moved: put it back, then report it
+            signals.hold()
             if not self.restarted and self.git('rev-parse', 'HEAD', check=False) == old:
-                raise Stopped(f'the fast-forward did not happen: {type(error).__name__} {error}') from error
+                lock = self.repo / self.git('rev-parse', '--git-path', 'index.lock', check=False)
+                left = f'; git left {lock}: remove it once no git runs here' if lock.exists() else ''
+                if self.git('status', '--porcelain', '--untracked-files=no', check=False):
+                    left += '; the checkout has partly written files: read git status before anything else'
+                raise Stopped(f'the fast-forward did not happen: {type(error).__name__} {error}{left}') from error
             failed = [f'{type(error).__name__} {error}'.strip()]
         if failed:
-            self.put_back(old, commit, failed, backup, resync)
+            self.put_back(old, commit, failed, backup, resync, signals)
             return 1
         if not self.push:
             self.note(f'SITTING: done, and main is NOT pushed (NO_PUSH). Once the fix is live and checked, push it: '

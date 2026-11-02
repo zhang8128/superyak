@@ -1,5 +1,7 @@
 """The merge sitting (superyak_peer.sitting): real git in a scratch station checkout, stand-ins for the units and HTTP."""
 import fcntl
+import os
+import signal
 import subprocess
 
 import pytest
@@ -46,10 +48,15 @@ class Host:
         self.health, self.probes, self.states, self.restart_codes = '200', dict(PROBES), {}, {}
         self.exec_start = f'{{ path={repo.resolve()}/peer/.venv/bin/python ; argv[]=... }}'
         self.stop = ('Mon 2026-11-02 11:18:15.222427 PST', 'Mon 2026-11-02 11:18:15.592136 PST')
-        self.sync_code, self.fail_once = 0, None
+        self.sync_code, self.fail_once, self.signals, self.on_first_curl = 0, None, [], None
 
     def __call__(self, argv, cwd):
         self.calls.append((tuple(argv), git(self.repo, 'rev-parse', 'HEAD')))
+        if self.signals and self.signals[0][0] in (argv[0], tuple(argv[:2])):  # real signals, sent in this order
+            os.kill(os.getpid(), self.signals.pop(0)[1])
+        if argv[0] == 'curl' and self.on_first_curl:
+            action, self.on_first_curl = self.on_first_curl, None
+            action()
         if self.fail_once and self.fail_once[0] == argv[0]:  # fails the first such call only
             failure, self.fail_once = self.fail_once[1], None
             raise failure
@@ -82,13 +89,18 @@ class Host:
 
 def sitting(station, host, **options):
     backups, lines = [], []
+    during_backup = options.pop('during_backup', None)
 
     def backup():
         backups.append(git(station['repo'], 'rev-parse', 'HEAD'))
+        if during_backup:
+            during_backup()
         return '/backups/peer-1.sqlite3'
 
+    options.setdefault('settle', 0)
+    options.setdefault('pause', lambda _seconds: None)
     made = Sitting(station['repo'], options.pop('train', station['train']), host='station.invalid', backup=backup,
-                   base=station['base'], settle=0, run=host, say=lines.append, pause=lambda _seconds: None, **options)
+                   base=station['base'], run=host, say=lines.append, **options)
     return made, backups, lines
 
 
@@ -143,7 +155,8 @@ def test_no_push_leaves_origin_and_says_the_push_is_owed(station):
     assert 'NOT pushed' in lines[-1] and f"git push origin {station['train']}:refs/heads/main" in lines[-1]
 
 
-@pytest.mark.parametrize('broken', ['health', 'route', 'failed unit', 'crashing unit', 'restart refused', 'slow stop'])
+@pytest.mark.parametrize('broken', ['health', 'route', 'failed unit', 'crashing unit', 'restart refused', 'slow stop',
+                                    'lighthouse restart refused', 'lighthouse failed'])
 def test_a_failed_check_puts_main_back_restarts_on_it_and_pushes_nothing(station, broken):
     host = Host(station['repo'])
     if broken == 'health':
@@ -156,6 +169,10 @@ def test_a_failed_check_puts_main_back_restarts_on_it_and_pushes_nothing(station
         host.states['superyak-door'] = 'crashing'
     elif broken == 'restart refused':
         host.restart_codes['superyak-ship'] = 1
+    elif broken == 'lighthouse restart refused':
+        host.restart_codes[FIRST_UNIT] = 1
+    elif broken == 'lighthouse failed':
+        host.states[FIRST_UNIT] = 'failed'
     else:  # a slow stop is reported, not a failure
         host.stop = ('Mon 2026-11-02 11:18:15.000000 PST', 'Mon 2026-11-02 11:18:23.500000 PST')
         made, _, lines = sitting(station, host)
@@ -166,7 +183,8 @@ def test_a_failed_check_puts_main_back_restarts_on_it_and_pushes_nothing(station
     assert_put_back(station, host, lines)
     assert {'health': 'health answered 000', 'route': '/mcp answered 200, not 404',
             'failed unit': 'superyak-odo is failed', 'crashing unit': 'superyak-door is active, with 2 restarts',
-            'restart refused': 'superyak-ship did not restart'}[broken] in lines[-1]
+            'restart refused': 'superyak-ship did not restart', 'lighthouse restart refused': f'{FIRST_UNIT} did not restart',
+            'lighthouse failed': f'{FIRST_UNIT} is failed'}[broken] in lines[-1]
 
 
 @pytest.mark.parametrize('error', [RuntimeError('curl crashed'), Interrupted('SIGTERM'), KeyboardInterrupt()])
@@ -190,11 +208,12 @@ def test_a_refused_push_leaves_the_station_on_the_train_and_says_so(station):
     assert 'the station runs' in lines[-1] and 'Push it again by hand' in lines[-1]
 
 
-def test_a_train_that_changes_peers_lock_syncs_before_the_restart_and_again_when_put_back(station):
+@pytest.mark.parametrize('lock_input', ['peer/uv.lock', 'peer/pyproject.toml'])
+def test_a_train_that_changes_peers_lock_syncs_before_the_restart_and_again_when_put_back(station, lock_input):
     repo = station['repo']
     git(repo, 'checkout', '-q', 'train')
     (repo / 'peer').mkdir()
-    commit(repo, 'peer/uv.lock', 'new lock')
+    commit(repo, lock_input, 'new lock')
     train = head(station)
     git(repo, 'checkout', '-q', 'main')
     host = Host(repo)
@@ -203,8 +222,12 @@ def test_a_train_that_changes_peers_lock_syncs_before_the_restart_and_again_when
     assert made.sit() == 1
     synced_on = [short for argv, short in host.calls if argv[0] == 'uv']
     assert synced_on == [train, station['old']]  # the new lock, then the old one after putting main back
+    assert all('--locked' in argv for argv in host.ran('uv'))
     assert host.restarts() == []  # a failed sync restarts nothing
     assert head(station) == station['old'] and 'uv sync failed' in lines[-1]
+    assert 'nothing was restarted on it' in lines[-1] and 'and restarted' not in lines[-1]
+    dry, _, dry_lines = sitting(station, Host(repo), train=train, dry_run=True)
+    assert dry.sit() == 0 and any('runs uv sync before the restart' in line for line in dry_lines)
 
 
 def test_not_a_fast_forward_is_refused_before_the_backup(station):
@@ -277,3 +300,143 @@ def test_a_fast_forward_that_fails_changes_nothing_and_restarts_nothing(station)
     with pytest.raises(Stopped, match='the fast-forward did not happen'):
         made.sit()
     assert head(station) == station['old'] and host.restarts() == [] and backups == [station['old']]
+
+
+@pytest.mark.parametrize('first', [signal.SIGTERM, signal.SIGINT, signal.SIGHUP])
+def test_real_signals_put_main_back_and_later_ones_are_held(station, first):
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+    host = Host(station['repo'])
+    # one during the health check, then two more while main is put back (uv run forwards a signal twice)
+    host.signals = [('curl', first), (('git', 'reset'), signal.SIGTERM), (('systemctl', '--user'), signal.SIGINT)]
+    made, _, lines = sitting(station, host)
+    assert made.sit() == 1
+    assert_put_back(station, host, lines)
+    assert 'Interrupted' in lines[-1] and '2 more signals arrived and were held' in lines[-1]
+    assert {sig: signal.getsignal(sig) for sig in before} == before  # the station's own handlers are back
+
+
+def test_a_signal_during_the_push_is_reported_and_main_stays_on_the_train(station):
+    host = Host(station['repo'])
+    original = host.__call__
+
+    def push_interrupted(argv, cwd):
+        if argv[:2] == ('git', 'push'):
+            raise Interrupted('SIGTERM')
+        return original(argv, cwd)
+    made, _, lines = sitting(station, push_interrupted)
+    assert made.sit() == 1
+    assert head(station) == station['train'] and 'interrupted (SIGTERM) during the push' in lines[-1]
+
+
+def test_a_tracked_edit_during_the_sitting_is_kept_and_main_is_not_put_back_over_it(station):
+    host = Host(station['repo'])
+    host.health = '000'
+    host.on_first_curl = lambda: (station['repo'] / 'member').write_text('an edit made mid-sitting')
+    made, _, lines = sitting(station, host)
+    assert made.sit() == 1
+    assert head(station) == station['train']
+    assert (station['repo'] / 'member').read_text() == 'an edit made mid-sitting'
+    assert 'putting it back was refused' in lines[-1]
+
+
+def test_main_moved_elsewhere_mid_sitting_is_left_as_it_is(station):
+    host = Host(station['repo'])
+    host.health = '000'
+    host.on_first_curl = lambda: commit(station['repo'], 'someone-else')
+    made, _, lines = sitting(station, host)
+    assert made.sit() == 1
+    assert 'neither' in lines[-1] and 'left as it is' in lines[-1]
+
+
+def test_main_moving_during_the_backup_stops_before_the_fast_forward(station):
+    host = Host(station['repo'])
+    made, _, _ = sitting(station, host, during_backup=lambda: commit(station['repo'], 'during-backup'))
+    with pytest.raises(Stopped, match='main moved during the backup'):
+        made.sit()
+    assert host.restarts() == []
+
+
+def test_the_waits_are_bounded_and_the_units_settle(station):
+    host, pauses = Host(station['repo']), []
+    tree = git(station['repo'], 'rev-parse', f"{station['train']}^{{tree}}")
+    made, _, _ = sitting(station, host, settle=7, pause=pauses.append, tree=tree[:8])
+    assert made.sit() == 0  # the approved tree passes, named short as a verdict names it
+    assert pauses == [7]
+    health = [argv for argv in host.ran('curl') if argv[-1].endswith('/api/health')]
+    probes = [argv for argv in host.ran('curl') if not argv[-1].endswith('/api/health')]
+    assert health and all('--max-time' in argv and '--retry-connrefused' in argv for argv in health)
+    assert len(probes) == len(PROBES) and all('--max-time' in argv for argv in probes)
+
+
+def test_a_branch_named_like_a_commit_id_is_refused(station):
+    name = 'abcdef1' if not station['train'].startswith('abcdef1') else 'fedcba1'
+    git(station['repo'], 'branch', name, station['train'])
+    made, backups, _ = sitting(station, Host(station['repo']), train=name)
+    with pytest.raises(Stopped, match=f'{name} names'):
+        made.sit()
+    assert backups == []
+
+
+@pytest.mark.parametrize('flags, expected', [([], {'dry_run': False, 'push': True}),
+                                             (['--dry-run'], {'dry_run': True, 'push': True}),
+                                             (['--no-push'], {'dry_run': False, 'push': False})])
+def test_the_cli_passes_dry_run_and_no_push(monkeypatch, tmp_path, flags, expected):
+    import superyak_peer.sitting as sitting_module
+    from superyak_peer.__main__ import main
+    seen = {}
+
+    class Recorder:
+        def __init__(self, repo, train, **options):
+            seen.update(options, train=train)
+
+        def sit(self):
+            return 0
+    monkeypatch.setattr(sitting_module, 'Sitting', Recorder)
+    main(['merge-sitting', '--repo', str(tmp_path), '--train', 'abc1234', '--host', 'h', '--data-dir', str(tmp_path), *flags])
+    assert {key: seen[key] for key in expected} == expected and seen['train'] == 'abc1234'
+
+
+def test_the_cli_never_ends_a_sitting_without_a_sitting_line(monkeypatch, tmp_path, capsys):
+    import superyak_peer.sitting as sitting_module
+    from superyak_peer.__main__ import main
+
+    class Crashing:
+        def __init__(self, *_args, **_options):
+            pass
+
+        def sit(self):
+            raise KeyboardInterrupt()
+    monkeypatch.setattr(sitting_module, 'Sitting', Crashing)
+    with pytest.raises(SystemExit) as ended:
+        main(['merge-sitting', '--repo', str(tmp_path), '--train', 'abc1234', '--host', 'h', '--data-dir', str(tmp_path)])
+    assert ended.value.code == 1 and 'SITTING: ended by KeyboardInterrupt' in capsys.readouterr().err
+
+
+def test_the_default_settle_outlasts_a_unit_dying_at_import():
+    from superyak_peer.sitting import SETTLE_SECONDS
+    assert SETTLE_SECONDS >= 10  # Restart=on-failure brings a unit back within seconds; it must be seen restarting
+
+
+def test_a_signal_during_a_put_back_that_a_failed_check_started_is_held(station):
+    host = Host(station['repo'])
+    host.health = '000'  # no signal starts this put-back
+    host.signals = [(('git', 'reset'), signal.SIGTERM)]
+    made, _, lines = sitting(station, host)
+    assert made.sit() == 1
+    assert_put_back(station, host, lines)
+    assert '1 more signals arrived and were held' in lines[-1]
+
+
+def test_a_fast_forward_cut_short_says_the_checkout_is_partly_written(station):
+    host = Host(station['repo'])
+    original = host.__call__
+
+    def merge_cut_short(argv, cwd):
+        if argv[:2] == ('git', 'merge'):
+            (station['repo'] / 'base').write_text('half of the checkout')
+            raise Interrupted('SIGTERM')
+        return original(argv, cwd)
+    made, _, _ = sitting(station, merge_cut_short)
+    with pytest.raises(Stopped, match='partly written files'):
+        made.sit()
+    assert host.restarts() == []
