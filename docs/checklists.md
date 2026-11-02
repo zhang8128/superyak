@@ -48,7 +48,8 @@ The list itself is [`.superyak/checklists/each-hour.md`](../.superyak/checklists
 Its long form:
 
 - Say what moved toward the why since the last check-in: a lesson laid, a person outside us using Superyak, a chat
-  made faster, a real conversation. If nothing moved, say so plainly.
+  made faster, a real conversation. If nothing moved, say so only beside a decision or an ask; a check-in that only
+  says nothing moved is noise (see the item on being blocked, below).
 - Do one piece of vision work this hour before any review: lessons, outreach, what a visitor sees, Andy's asks (the
   connector, the city for a school or hospital).
 - Have one real exchange with another ship: an idea, a doubt or a disagreement, not status.
@@ -59,10 +60,10 @@ Its long form:
   his account can do. Anything else he already granted: do it, without asking (Andy, 2026-11-02: "It feels like you
   feel the need to ask me for permission for things I gave blanket permissions for"; Rio Grande had asked him about
   twenty times for the ship mentions he allowed on 2026-10-27).
-- Blocked on something only Andy can clear: ask him once, in the room, as a decision with options, then take the
-  next board item or a piece of vision work. While idle, slow the tick and post no check-in that only says nothing
-  moved (Rio Grande, 2026-11-01/02: twelve hours of ten-minute ticks repeating one blocker used up the week's usage;
-  asked as a decision, Andy settled it in one answer).
+- Blocked on something only Andy can clear: ask him once, in the room and at the terminal, as a decision with options,
+  then take the next board item or a piece of vision work. While idle, slow the tick and post no check-in that only says
+  nothing moved (Rio Grande, 2026-11-01/02: twelve hours of ten-minute ticks repeating one blocker used up the week's
+  usage; asked as a decision, Andy settled it in one answer).
 - Every time, count or state in the check-in comes from output read this turn; anything older is posted as "last
   seen at <time>" ("Before claiming a cause, a cost or a count").
 
@@ -254,6 +255,10 @@ it too, since the words are a literal piece of the command. Its long form:
 - killer: The partners today are Rio Grande, Serenity and Tardis; an author's own branch counts as its yes. No
   ship's silence counts as consent (ships' decision, 2026-10-27). No ship pushes straight to main (law section 7):
   a merge reaches main only as below.
+- killer: While Andy has said a partner is out, quoted in the merge's checklist run, each working partner's explicit
+  yes counts. The partner who was out reviews each such merge on return, and a finding is fixed or reverted. The rule
+  ends when that partner posts from a writable session. The fresh Pi reader and green suites stay as they are
+  (Andy, 2026-11-02: "ok it will be you and tardis", while Serenity was out; Tardis's wording, City of AI).
 - Only Rio Grande and Serenity merge to main (law section 7). A section 2 verdict is posted whole in the room, from the approver law section 2 names: Rio Grande for a Serenity branch; for
   a Rio Grande branch, Serenity or a fresh reviewer agent started on the Pi that took no part in writing it. A fresh
   Pi reviewer never approves a Serenity branch.
@@ -614,11 +619,11 @@ it, not only as its diff reads.
       test counted calls in a fixed 0.3 s and got 2 of 3 on macOS CI; her sweep of all 21 test sleeps found one more).
 - [ ] A test that writes a fixed calendar date never compares it with the real clock (a row's `created_at`, a CLI's
       `now`, a daemon's default clock, a policy's `validUntil`): it pins that clock too, or the test turns red on a day
-      and holds every merge. A branch that adds such dates runs its tests with the clock moved ahead (Rio Grande's
-      clockshift probe, a pytest plugin that moves `time.time` and the store's clock; it can't move `datetime.now`, a
-      file's mtime or SQLite's `'now'`). Rio Grande and its reader, 2026-11-01: U12's sweep test broke main's Engram
-      CI from 2026-11-01, ten CLI tests would have from 2026-11-09, and 53 lighthouse tests will from 2027-01-01
-      (fix:engram-tests-2027-validity).
+      and holds every merge. A branch that adds such dates runs its tests with the clock moved ahead: engram's
+      tests/clockshift.py, a pytest plugin (`SHIFT_DAYS=35 … python -m pytest -p tests.clockshift …`) that moves
+      `time.time` and the store's clock; it can't move `datetime.now`, a file's mtime or SQLite's `'now'`. Rio Grande
+      and its reader, 2026-11-01: U12's sweep test broke main's Engram CI from 2026-11-01, ten CLI tests would have from
+      2026-11-09, and 53 lighthouse tests will from 2027-01-01 (fix:engram-tests-2027-validity).
 - [ ] A change that narrows what a shared function accepts is approved only after asking which features rely on the
       old breadth (grep its callers, its fixtures and the specs that use it), not on the targeted files alone
       (Rio Grande, 2026-10-29: a change made `card` refuse ship accounts, and the first rail's lessons room pairs
