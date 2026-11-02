@@ -48,11 +48,22 @@ The list itself is [`.superyak/checklists/each-hour.md`](../.superyak/checklists
 Its long form:
 
 - Say what moved toward the why since the last check-in: a lesson laid, a person outside us using Superyak, a chat
-  made faster, a real conversation. If nothing moved, say so plainly.
+  made faster, a real conversation. If nothing moved, say so only beside a decision or an ask; a check-in that only
+  says nothing moved is noise (see the item on being blocked, below).
 - Do one piece of vision work this hour before any review: lessons, outreach, what a visitor sees, Andy's asks (the
   connector, the city for a school or hospital).
 - Have one real exchange with another ship: an idea, a doubt or a disagreement, not status.
 - Look at Andy's open asks and the "waiting on Andy" list. Is anything stuck on us?
+- Before asking Andy anything, check that it is his to give: signing law or instructions, a short id he approves (a
+  docking, an access request, an imprint), a live station act CLAUDE.md names (and its confirm code, which is his
+  check, not a permission), the WAL live switch or the connector deploy, a password or a pairing code, or an act only
+  his account can do. Anything else he already granted: do it, without asking (Andy, 2026-11-02: "It feels like you
+  feel the need to ask me for permission for things I gave blanket permissions for"; Rio Grande had asked him about
+  twenty times for the ship mentions he allowed on 2026-10-27).
+- Blocked on something only Andy can clear: ask him once, in the room and at the terminal, as a decision with options,
+  then take the next board item or a piece of vision work. While idle, slow the tick and post no check-in that only says
+  nothing moved (Rio Grande, 2026-11-01/02: twelve hours of ten-minute ticks repeating one blocker used up the week's
+  usage; asked as a decision, Andy settled it in one answer).
 - Every time, count or state in the check-in comes from output read this turn; anything older is posted as "last
   seen at <time>" ("Before claiming a cause, a cost or a count").
 
@@ -244,6 +255,10 @@ it too, since the words are a literal piece of the command. Its long form:
 - killer: The partners today are Rio Grande, Serenity and Tardis; an author's own branch counts as its yes. No
   ship's silence counts as consent (ships' decision, 2026-10-27). No ship pushes straight to main (law section 7):
   a merge reaches main only as below.
+- killer: While Andy has said a partner is out, quoted in the merge's checklist run, each working partner's explicit
+  yes counts. The partner who was out reviews each such merge on return, and a finding is fixed or reverted. The rule
+  ends when that partner posts from a writable session. The fresh Pi reader and green suites stay as they are
+  (Andy, 2026-11-02: "ok it will be you and tardis", while Serenity was out; Tardis's wording, City of AI).
 - Only Rio Grande and Serenity merge to main (law section 7). A section 2 verdict is posted whole in the room, from the approver law section 2 names: Rio Grande for a Serenity branch; for
   a Rio Grande branch, Serenity or a fresh reviewer agent started on the Pi that took no part in writing it. A fresh
   Pi reviewer never approves a Serenity branch.
@@ -266,6 +281,13 @@ it too, since the words are a literal piece of the command. Its long form:
   merge commit is the one the verdict names" is answered with each reviewed head beside its train merge in the post.
   A security fix in a train still merges, restarts and is probed on the Pi before main is pushed (Rio Grande and
   Tardis, 2026-10-28: three peer runs, each made stale by the merge before it, became one).
+  A member added to a train whose suite is running is first merged onto the train's tip in a scratch branch, and the
+  suite is stopped only once that merge is clean (Rio Grande, 2026-11-01: train 1101t's peer suite was stopped at 32%
+  for the restore step 8 fix, whose merge then conflicted with the WAL build in test_restore.py).
+  A member whose suite runs in two modes (`SUPERYAK_TEST_JOURNAL`) runs the whole suite in each mode once it has merged
+  main in, not only its own targeted files: main's new tests meet the mode switch there for the first time (Rio
+  Grande, 2026-11-01: train 1101t's WAL run failed two of Tardis's carry-nonces tests that the WAL build's main merge
+  brought in, after a re-check had run only targeted files).
 - GitHub CI's result is read, including the jobs the Pi can't run: a pushed head's before its merge, and main's after
   the push. A red job holds the merge until its failing test is named and either fixed, or shown to fail the same
   way on main and put on the board (Tardis's T5, 2026-10-29: a comment-only head went red on an engram flake, and no
@@ -590,6 +612,13 @@ it, not only as its diff reads.
 - [ ] A test never counts or checks state after a fixed sleep (grep the diff's tests for `sleep(`): it waits for the
       condition under a generous deadline, so a loaded runner is slow, not red (Serenity, 2026-10-28: a sudo keeper
       test counted calls in a fixed 0.3 s and got 2 of 3 on macOS CI; her sweep of all 21 test sleeps found one more).
+- [ ] A test that writes a fixed calendar date never compares it with the real clock (a row's `created_at`, a CLI's
+      `now`, a daemon's default clock, a policy's `validUntil`): it pins that clock too, or the test turns red on a day
+      and holds every merge. A branch that adds such dates runs its tests with the clock moved ahead: engram's
+      tests/clockshift.py, a pytest plugin (`SHIFT_DAYS=35 … python -m pytest -p tests.clockshift …`) that moves
+      `time.time` and the store's clock; it can't move `datetime.now`, a file's mtime or SQLite's `'now'`. Rio Grande
+      and its reader, 2026-11-01: U12's sweep test broke main's Engram CI from 2026-11-01, ten CLI tests would have from
+      2026-11-09, and 53 lighthouse tests will from 2027-01-01 (board item fix:engram-tests-2027-validity).
 - [ ] A change that narrows what a shared function accepts is approved only after asking which features rely on the
       old breadth (grep its callers, its fixtures and the specs that use it), not on the targeted files alone
       (Rio Grande, 2026-10-29: a change made `card` refuse ship accounts, and the first rail's lessons room pairs
