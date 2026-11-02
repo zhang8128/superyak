@@ -59,11 +59,13 @@ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEX
 '''
 
 JOURNAL_SIZE_LIMIT = 67108864  # store-wal-mode D2: a checkpointed WAL is cut back to 64 MB
+CHECKPOINT_WAIT = 0.1  # store-wal-mode D2: TRUNCATE's busy wait, so a long reader makes it give up, not block a post
 _reading = threading.local()  # store-wal-mode D3: this thread's reading() depth
 
 class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads, ConnectorApps):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
     _journal = None  # the journal mode this Store last read under the gate (store-wal-mode D3)
+    _keeper = None  # the connection keep_open() holds for a long-running process (store-wal-mode D2)
 
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True, busy_until=None,
                  monotonic=time.monotonic):
@@ -79,10 +81,13 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         os.chmod(self.data_dir, 0o700)
         self.db_path = self.data_dir / 'peer.sqlite3'
         self.dispatch_gate = DispatchGate(self.data_dir / 'dispatch.lock')
-        # Created here once, before this Store opens any connection. On Linux, closing a descriptor drops every POSIX lock
-        # this process holds on the file, SQLite's included, so never open the store outside SQLite while one is open.
-        fd = os.open(self.db_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        os.close(fd)
+        # Created here only when missing (O_EXCL), before this Store opens any connection. On Linux, closing a descriptor
+        # drops every POSIX lock this process holds on the file, SQLite's and a keeper's included, so an existing store is
+        # never opened outside SQLite: a second Store beside a keeper leaves its lock alone (store-wal-mode Task 6).
+        try:
+            os.close(os.open(self.db_path, os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW, 0o600))
+        except FileExistsError:
+            pass
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
             db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA + ROOM_CLOUD_SCHEMA + OAUTH_SCHEMA + READS_SCHEMA)
@@ -250,6 +255,44 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
                     db.rollback()
             finally:
                 db.close()  # in a finally of its own, as _transaction closes, so a failed rollback pins no snapshot
+
+    def keep_open(self):
+        """Store-wal-mode D2: the one connection a long-running process keeps open for its life, so no commit is a last
+        close that pays a checkpoint and deletes the -wal (p5c, p7b), and fuser sees the process. It runs one statement,
+        PRAGMA journal_mode, at open and then nothing: no cursor, no transaction (one unfinished cursor made TRUNCATE
+        answer busy for good, p8), and no journal_size_limit. check_same_thread=False, since another thread may close
+        it. Open it after the Store is built and build no second Store in its process: closing any descriptor of the
+        file drops every POSIX lock the process holds on it, this one's included. A second call keeps the first."""
+        if self._keeper is not None:
+            return
+        self._check_paths()
+        keeper = sqlite3.connect(self.db_path, check_same_thread=False)
+        try:
+            keeper.execute('PRAGMA journal_mode').fetchall()
+        except BaseException:
+            keeper.close()
+            raise
+        self._keeper = keeper
+
+    def close_keeper(self):
+        """The keeper closed at its process's end, if one is open."""
+        keeper, self._keeper = self._keeper, None
+        if keeper is not None:
+            keeper.close()
+
+    def checkpoint(self):
+        """Store-wal-mode D2, the lighthouse's hourly checkpoint: PASSIVE, which never waits, then TRUNCATE on a
+        connection whose busy wait is CHECKPOINT_WAIT, so a long reader makes it give up rather than hold SQLite's write
+        lock behind that reader (a gated or unbounded TRUNCATE kept a post waiting 2.44 s behind a 3 s reader, p8b).
+        Neither takes the gate. TRUNCATE's (busy, log, checkpointed); in rollback mode both do nothing, (0, -1, -1)."""
+        self._check_paths()
+        db = sqlite3.connect(self.db_path, timeout=CHECKPOINT_WAIT)
+        try:
+            db.execute(f'PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}')
+            db.execute('PRAGMA wal_checkpoint(PASSIVE)').fetchall()
+            return tuple(db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone())
+        finally:
+            db.close()
 
     def emit(self, db, kind, resource_id, resource_version, payload=None):
         """Append an event inside the caller's resource transaction."""

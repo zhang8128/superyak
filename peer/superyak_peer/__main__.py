@@ -892,7 +892,11 @@ def main(argv=None):
             store = Store(args.data_dir)
             from .federate import Federate
             from .federation import Federation
-            Federate(Federation(store, endpoint=None, identity=PeerIdentity.load_or_create(store.data_dir))).run()
+            store.keep_open()  # store-wal-mode D2: one keeper for the process's life, after its one Store
+            try:
+                Federate(Federation(store, endpoint=None, identity=PeerIdentity.load_or_create(store.data_dir))).run()
+            finally:
+                store.close_keeper()
         elif args.command == 'federation-listen':
             # plan P9 and nit 18: nothing is created in a directory that isn't a peer's, and nothing serves a pull peer
             if not (args.data_dir / 'peer.sqlite3').is_file():
@@ -917,9 +921,13 @@ def main(argv=None):
             from .listener import create_listener
             import uvicorn
             app = create_listener(None, federation=Federation(store, endpoint=None, identity=identity))
-            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(identity.cert_path),
-                        ssl_keyfile=str(identity.key_path), access_log=False,
-                        timeout_graceful_shutdown=SHUTDOWN_GRACE)
+            store.keep_open()  # store-wal-mode D2: one keeper for the process's life, after its one Store
+            try:
+                uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(identity.cert_path),
+                            ssl_keyfile=str(identity.key_path), access_log=False,
+                            timeout_graceful_shutdown=SHUTDOWN_GRACE)
+            finally:
+                store.close_keeper()
         elif args.command == 'door':
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback

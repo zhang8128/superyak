@@ -205,6 +205,7 @@ only-include = [
     "tests/test_station_cli.py",
     "tests/test_station_units.py",
     "tests/test_transport.py",
+    "tests/test_wal_costs.py",
     "uv.lock",
 ]
 

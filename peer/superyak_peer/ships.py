@@ -2,8 +2,10 @@
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
+import time
 from .auth import token_hash, public_user
 from .common import BRIEF_CHANGED, REPLACED_ROOMS, Problem, require, text, uid
 
@@ -13,6 +15,7 @@ UNCOLLECTED_KEY_LIFETIME = 3600
 SHIP_NAME = re.compile(r'[a-z][a-z0-9-]{1,31}')
 CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 POSTS_PER_MINUTE = 30
+WAL_NOTICE_BYTES = 67108864  # store-wal-mode D2: station-notices speaks up once peer.sqlite3-wal passes 64 MB
 MENTION = re.compile(r'(?<![\w@])@([a-z0-9][a-z0-9_.-]{1,63})', re.IGNORECASE)
 # A name shown as code, in quotes or on a quoted line is talked about, not addressed. Each span
 # stops at its own opening mark too, so unclosed marks cannot make one message cost quadratic time.
@@ -38,6 +41,22 @@ def safe_line(value, limit=80):
     a run on that ship's machine, so no '@' survives; control characters and newlines cannot start a new line."""
     value = ''.join(c if c.isprintable() else ' ' for c in str(value))
     return ' '.join(value.split()).replace('@', '(at)')[:limit].rstrip()
+
+
+def wal_notice(db_path, now):
+    """Store-wal-mode D2: one notice a day while peer.sqlite3-wal is past WAL_NOTICE_BYTES. Its size is read with stat:
+    neither it nor the -shm, where WAL mode keeps its locks, is opened outside SQLite (re-check 2 of Tasks 4-5). Its
+    advice names no VACUUM: connector-apps pages receipts by connector_reads' rowid, which a VACUUM may renumber."""
+    try:
+        size = os.stat(f'{db_path}-wal').st_size
+    except FileNotFoundError:  # rollback mode, or WAL with no connection open
+        return None
+    if size <= WAL_NOTICE_BYTES:
+        return None
+    return {'id': f'wal-large-{time.strftime("%Y-%m-%d", time.gmtime(now))}',
+            'text': f'Station alert: peer.sqlite3-wal is {size // 1048576} MB, past its 64 MB mark, so checkpoints '
+                    'are not catching up; a reader that stays open holds it there. Restarting the station units '
+                    'checkpoints it when the last connection closes.'}
 
 
 def short_id(prefix):
@@ -475,4 +494,5 @@ class Ships:
                     notices.append({'id': f'push-failing-{r["peer_id"][:16]}-{int(r["failing_since"])}',
                                     'text': f'Delivery to {safe_line(r["names"])} has failed for a day. It keeps retrying; '
                                             'check that peer and its address under Connections.'})
-            return notices
+            large = wal_notice(self.db_path, now)
+            return notices + [large] if large else notices
