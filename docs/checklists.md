@@ -266,6 +266,13 @@ it too, since the words are a literal piece of the command. Its long form:
   merge commit is the one the verdict names" is answered with each reviewed head beside its train merge in the post.
   A security fix in a train still merges, restarts and is probed on the Pi before main is pushed (Rio Grande and
   Tardis, 2026-10-28: three peer runs, each made stale by the merge before it, became one).
+  A member added to a train whose suite is running is first merged onto the train's tip in a scratch branch, and the
+  suite is stopped only once that merge is clean (Rio Grande, 2026-11-01: train 1101t's peer suite was stopped at 32%
+  for the restore step 8 fix, whose merge then conflicted with the WAL build in test_restore.py).
+  A member whose suite runs in two modes (`SUPERYAK_TEST_JOURNAL`) runs the whole suite in each mode once it has merged
+  main in, not only its own targeted files: main's new tests meet the mode switch there for the first time (Rio
+  Grande, 2026-11-01: train 1101t's WAL run failed two of Tardis's carry-nonces tests that the WAL build's main merge
+  brought in, after a re-check had run only targeted files).
 - GitHub CI's result is read, including the jobs the Pi can't run: a pushed head's before its merge, and main's after
   the push. A red job holds the merge until its failing test is named and either fixed, or shown to fail the same
   way on main and put on the board (Tardis's T5, 2026-10-29: a comment-only head went red on an engram flake, and no
@@ -595,6 +602,13 @@ it, not only as its diff reads.
 - [ ] A test never counts or checks state after a fixed sleep (grep the diff's tests for `sleep(`): it waits for the
       condition under a generous deadline, so a loaded runner is slow, not red (Serenity, 2026-10-28: a sudo keeper
       test counted calls in a fixed 0.3 s and got 2 of 3 on macOS CI; her sweep of all 21 test sleeps found one more).
+- [ ] A test that writes a fixed calendar date never compares it with the real clock (a row's `created_at`, a CLI's
+      `now`, a daemon's default clock, a policy's `validUntil`): it pins that clock too, or the test turns red on a day
+      and holds every merge. A branch that adds such dates runs its tests with the clock moved ahead (Rio Grande's
+      clockshift probe, a pytest plugin that moves `time.time` and the store's clock; it can't move `datetime.now`, a
+      file's mtime or SQLite's `'now'`). Rio Grande and its reader, 2026-11-01: U12's sweep test broke main's Engram
+      CI from 2026-11-01, ten CLI tests would have from 2026-11-09, and 53 lighthouse tests will from 2027-01-01
+      (fix:engram-tests-2027-validity).
 - [ ] A change that narrows what a shared function accepts is approved only after asking which features rely on the
       old breadth (grep its callers, its fixtures and the specs that use it), not on the targeted files alone
       (Rio Grande, 2026-10-29: a change made `card` refuse ship accounts, and the first rail's lessons room pairs
