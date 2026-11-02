@@ -53,6 +53,16 @@ Its long form:
   connector, the city for a school or hospital).
 - Have one real exchange with another ship: an idea, a doubt or a disagreement, not status.
 - Look at Andy's open asks and the "waiting on Andy" list. Is anything stuck on us?
+- Before asking Andy anything, check that it is his to give: signing law or instructions, a short id he approves (a
+  docking, an access request, an imprint), a live station act CLAUDE.md names (and its confirm code, which is his
+  check, not a permission), the WAL live switch or the connector deploy, a password or a pairing code, or an act only
+  his account can do. Anything else he already granted: do it, without asking (Andy, 2026-11-02: "It feels like you
+  feel the need to ask me for permission for things I gave blanket permissions for"; Rio Grande had asked him about
+  twenty times for the ship mentions he allowed on 2026-10-27).
+- Blocked on something only Andy can clear: ask him once, in the room, as a decision with options, then take the
+  next board item or a piece of vision work. While idle, slow the tick and post no check-in that only says nothing
+  moved (Rio Grande, 2026-11-01/02: twelve hours of ten-minute ticks repeating one blocker used up the week's usage;
+  asked as a decision, Andy settled it in one answer).
 - Every time, count or state in the check-in comes from output read this turn; anything older is posted as "last
   seen at <time>" ("Before claiming a cause, a cost or a count").
 
