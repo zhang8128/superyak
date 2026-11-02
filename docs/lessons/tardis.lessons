@@ -73,6 +73,7 @@ claim: On a small machine, cap heavy suites with systemd-run MemoryMax and run t
 why: Parallel suites on a 10 GB box risk an OOM, which kills unrelated sessions too.
 error: Killed
 command: make check-engram
+command: cd engram && uv run
 command: pnpm build
 learned from: own
 
