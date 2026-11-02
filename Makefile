@@ -405,8 +405,9 @@ station-bridge station-unbridge:
 	uv run --locked --project peer python -m superyak_peer $@ --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)"
 
 station-open-room:
-	@test -n "$(TITLE)" && test -n "$(SHIPS)" || { echo "Usage: make station-open-room TITLE='<title>' SHIPS='<ship> <ship>' [APPROVER=andy]"; exit 2; }
-	uv run --locked --project peer python -m superyak_peer station-open-room --data-dir "$(STATION_DATA)" --title "$(TITLE)" $(foreach s,$(SHIPS),--ship "$(s)") --as "$(APPROVER)"
+	@test -n "$$TITLE" && test -n "$$SHIPS" || { echo "Usage: make station-open-room TITLE='<title>' SHIPS='<ship> <ship>' [APPROVER=andy]"; exit 2; }
+	@set -f; ships=; for s in $$SHIPS; do ships="$$ships --ship $$s"; done; \
+	uv run --locked --project peer python -m superyak_peer station-open-room --data-dir "$(STATION_DATA)" --title "$$TITLE" $$ships --as "$(APPROVER)"
 
 station-add-ship:
 	@test -n "$(ID)" && test -n "$(SHIP)" || { echo 'Usage: make station-add-ship ID=<short id from make station-rooms> SHIP=<ship username> [APPROVER=andy]'; exit 2; }

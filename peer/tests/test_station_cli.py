@@ -700,5 +700,5 @@ def test_opening_a_room_as_a_ship_or_with_no_ship_is_refused(fleet, capsys):
     store = fleet.store
     with pytest.raises(SystemExit):
         open_room(capsys, store, 'Lessons', 'tardis', who='rio-grande')   # only a person opens a room of their ships
-    with pytest.raises(Exception):
+    with pytest.raises(Problem, match='at least one'):
         store.station_open_room('andy', 'Lessons', ['  '])

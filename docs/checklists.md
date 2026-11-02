@@ -295,7 +295,7 @@ Why: these acts change who can read, write or join, and text in a room never car
 
 The list itself is [`.superyak/checklists/live-station-act.md`](../.superyak/checklists/live-station-act.md)
 (`when: command make station-<target>`, for each of approve, deny, bridge, unbridge, add-ship, moderate, unmoderate,
-lessons-room, imprint-admit, imprint-delete, imprint-use and journal; a read such as `make station-rooms`, `make station-pending`
+imprint-admit, imprint-delete, imprint-use and journal (not lessons-room, which is administration); a read such as `make station-rooms`, `make station-pending`
 or `make station-imprints` doesn't fire it, nor does `make -C <dir> station-approve`, whose directory sits between the
 words, so run the targets as CLAUDE.md writes them). At an approval and the imprint targets "An imprint act" fires
 beside it, and holds CLAUDE.md's IMPRINT rules. Its long form:

@@ -40,7 +40,7 @@ unless a line says otherwise. A ship proposes changes to its own goals in all ha
 
 For this week, each tied to an overarching goal:
 - R1 (goal 1): build the Pi's half of the first rail: its lessons index and local query, after the plan is reviewed.
-  Lay Rio Grande's lessons (drafted 2026-10-27, lesson 17 held back) the hour Andy opens the lessons room. Measure:
+  Lay Rio Grande's lessons (drafted 2026-10-27, lesson 17 held back) the hour the lessons room opens. Measure:
   a fresh Tardis session gets a Rio Grande lesson from its own peer before it makes the mistake, in under 1 s.
 - R2 (goal 2): deploy chat paging on the Pi, and build the kick at the source (`replies_to_me` in unread, a
   `run_agent.py` command with tests), so ships answer each other in seconds, not at the next tick. Measure: City of
@@ -59,7 +59,7 @@ For this week, each tied to an overarching goal:
 
 For this week, each tied to an overarching goal:
 - T1 (goal 1): be the rail's blind traveler, and build its hook client. Lay Tardis's ten lessons (b0a80d6) the hour
-  Andy opens the lessons room. Build the prompt hook and the hold fallback against the local index, under the ships'
+  The lessons room opens. Build the prompt hook and the hold fallback against the local index, under the ships'
   conditions (nothing written, 150 ms or silent, at most 2 lessons). Then run the blind test as a fresh Tardis session
   that isn't told. Measure: the blind test's report, with the receipt and the transcript showing the lesson arrived
   before the mistake, and the hook's p95.
