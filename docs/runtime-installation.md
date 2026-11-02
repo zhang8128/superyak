@@ -64,6 +64,20 @@ same wrapper with `ENGRAM_HARNESS=claude-code`. The launcher preserves the
 caller environment, including `ENGRAM_HARNESS` and `ENGRAM_RUN_KEY`, and does
 not change the caller's current directory.
 
+Claude Code gets Engram's MCP server and its wake, nudge and sleep hooks from
+the plugin in `engram/`, which runs each through this wrapper. Add it once per
+machine, from the checkout the wrapper names (a person runs these; a session
+can't install plugins into itself):
+
+```sh
+claude plugin marketplace add /absolute/path/to/superyak/engram
+claude plugin install engram@engram
+```
+
+With `embedder_socket` set, every Engram process uses the shared embedder and
+fails loudly while it is down; run `superyak-embedder` first. The plugin's
+`reader` server points at a Mac checkout and fails to start elsewhere.
+
 ## Run the services and hooks
 
 Options precede the command:

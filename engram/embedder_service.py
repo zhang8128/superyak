@@ -3,8 +3,10 @@
 Every Engram server, hook and daemon used to load nomic-embed-text-v1.5
 itself, about 1 GB resident each. Four sessions held four copies, and
 simultaneous startup maintenance OOM-killed a 19 GB machine (2026-10-01).
-This service loads the model once and runs one batch at a time, so the
-machine-wide embedding peak stays bounded however many agents connect.
+This service holds the one model and runs one batch at a time, so the
+machine-wide embedding peak stays bounded however many agents connect. The
+model loads on the first request and is dropped after
+ENGRAM_EMBED_IDLE_SECONDS (default 300) without one.
 Clients select it with ENGRAM_EMBEDDER_SOCKET (see embeddings.py).
 
 Protocol: one request per connection over a Unix socket. Each message is a

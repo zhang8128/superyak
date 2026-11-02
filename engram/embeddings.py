@@ -23,10 +23,23 @@ _CACHE_DIR = str(Path.home() / ".kairos" / "models" / "fastembed")
 _MAX_TOKENS = 2048  # nomic-embed-text-v1.5's trained context
 _BATCH_TOKEN_BUDGET = 4096  # padded tokens per ONNX run
 _CHARS_PER_TOKEN = 3  # conservative estimate for English prose and code
-# Seconds without an embed before the in-process model is dropped (0 keeps it for the life of the process). Loading
-# it again costs about 2.6 s on the Pi; holding it costs about 850 MB (measured 2026-11-02: 241 MB at rest, 1.09 GB
-# after the first embed).
-_IDLE_SECONDS = float(os.environ.get("ENGRAM_EMBED_IDLE_SECONDS", "300"))
+# Seconds without an embed before an in-process model is dropped (ENGRAM_EMBED_IDLE_SECONDS; 0 keeps it for the life
+# of the process). Loading it again costs about 2.6 s on the Pi; holding it costs about 850 MB (measured 2026-11-02: an
+# Engram server at 241 MB at rest, 1.09 GB after the first embed).
+_IDLE_DEFAULT = 300.0
+
+
+def _idle_seconds_from_env() -> float:
+    value = os.environ.get("ENGRAM_EMBED_IDLE_SECONDS", "").strip()
+    if not value:
+        return _IDLE_DEFAULT
+    try:
+        seconds = float(value)
+    except ValueError:
+        seconds = -1.0
+    if not seconds >= 0:  # also refuses nan
+        raise ValueError(f"ENGRAM_EMBED_IDLE_SECONDS must be a number of seconds, 0 or more; got {value!r}")
+    return seconds
 
 
 def _return_freed_heap() -> None:
@@ -96,7 +109,7 @@ class NomicEmbedProvider:
         self._loading = threading.Lock()
         self._busy = 0
         self._last_used = 0.0
-        self._idle_seconds = _IDLE_SECONDS if idle_seconds is None else idle_seconds
+        self._idle_seconds = _idle_seconds_from_env() if idle_seconds is None else idle_seconds
         self._unload_timer: threading.Timer | None = None
 
     def _loaded(self):
@@ -135,8 +148,13 @@ class NomicEmbedProvider:
         with self._loading:
             if self._busy or self._model is None:
                 return
-            if time.monotonic() - self._last_used < self._idle_seconds:
-                return  # a later embed armed its own timer
+            left = self._idle_seconds - (time.monotonic() - self._last_used)
+            if left > 0:
+                if self._unload_timer is threading.current_thread():  # this timer fired early: wait out the rest
+                    self._unload_timer = threading.Timer(left, self._unload_if_idle)
+                    self._unload_timer.daemon = True
+                    self._unload_timer.start()
+                return  # otherwise a later embed armed its own timer
             self._model = None
             self._unload_timer = None
         import gc
@@ -157,6 +175,8 @@ class NomicEmbedProvider:
         """
         import numpy as np
 
+        if not texts:
+            return []  # nothing to embed loads nothing
         prefixed = [f"{prefix}: {t}" for t in texts]
         with self._loading:
             model = self._load_locked()
