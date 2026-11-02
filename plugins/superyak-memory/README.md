@@ -12,6 +12,9 @@ claude plugin marketplace add "$PWD"
 claude plugin install superyak-memory@superyak
 ```
 
+An installed copy runs from Claude Code's plugin cache, so the launcher finds the checkout the marketplace was added
+from (`SUPERYAK_REPO` overrides). `claude --plugin-dir plugins/superyak-memory` runs it straight from a checkout.
+
 Settings come from `~/.config/superyak/runtime.json` (`memory_home`, `default_instance`, `embedder_socket`;
 `SUPERYAK_RUNTIME_CONFIG` names another file). Without it, memory lives under `$HOME/.engram` in the instance
 `default`.

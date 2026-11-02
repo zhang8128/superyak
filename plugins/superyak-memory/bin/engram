@@ -7,7 +7,31 @@
 # Nudge embeds each prompt, so it runs only with the shared embedder: in its own process it would load the model (about
 # 850 MB, 2.6 s on the Pi) on every prompt.
 set -eu
-repo=${SUPERYAK_REPO:-$(cd "$(dirname "$0")/../../.." && pwd)}
+here=$(cd "$(dirname "$0")/../../.." && pwd)
+if [ -n "${SUPERYAK_REPO:-}" ]; then
+  repo=$SUPERYAK_REPO
+elif [ -f "$here/engram/server.py" ]; then
+  repo=$here  # run from a checkout (claude --plugin-dir)
+else
+  # An installed copy runs from Claude Code's plugin cache, outside any checkout: use the checkout the superyak
+  # marketplace was added from (`claude plugin marketplace add <checkout>`).
+  repo=$(python3 -I -c '
+import json, os, sys
+try:
+    entry = json.load(open(sys.argv[1])).get("superyak") or {}
+except (OSError, ValueError, AttributeError):
+    entry = {}
+source = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+for place in (source.get("path"), entry.get("installLocation")):
+    if isinstance(place, str) and os.path.isfile(os.path.join(place, "engram", "server.py")):
+        print(place)
+        break
+' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/known_marketplaces.json" 2>/dev/null || true)
+  if [ -z "$repo" ]; then
+    echo "superyak-memory: can't find the Superyak checkout; set SUPERYAK_REPO, or add the marketplace from it" >&2
+    exit 1
+  fi
+fi
 python="$repo/engram/.venv/bin/python"
 if [ ! -x "$python" ]; then
   echo "superyak-memory: no Engram environment at $repo/engram/.venv; run make setup-engram there" >&2
