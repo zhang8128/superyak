@@ -143,7 +143,121 @@ def test_nomic_bounded_batches_match_single_batch(nomic_provider):
     texts = ["short", "a much longer sentence " * 120, "medium length text " * 10, "tiny"]
     bounded = nomic_provider.embed(texts, prefix="clustering")
     prefixed = [f"clustering: {t}" for t in texts]
-    single = list(nomic_provider._model.embed(prefixed, batch_size=len(prefixed)))
+    single = list(nomic_provider._loaded().embed(prefixed, batch_size=len(prefixed)))
     for got, raw in zip(bounded, single):
         expected = np.array(raw) / np.linalg.norm(raw)
         assert np.allclose(got, expected, atol=1e-4)
+
+
+# --- Load on first embed, drop when idle (Andy, 2026-11-02: "engram should be able to be run with very little memory") ---
+
+class _FakeTextEmbedding:
+    loads = 0
+    entered = None  # threading.Event: set when an embed starts
+    release = None  # threading.Event: the embed waits for it
+
+    def __init__(self, **_kwargs):
+        type(self).loads += 1
+        truncation = lambda max_length: None  # noqa: E731
+        self.model = type("M", (), {"tokenizer": type("T", (), {"enable_truncation": staticmethod(truncation)})()})()
+
+    def embed(self, texts, batch_size=None):
+        cls = type(self)
+        if cls.entered is not None:
+            cls.entered.set()
+            assert cls.release.wait(5)
+        return [[3.0, 4.0] for _ in texts]
+
+
+@pytest.fixture
+def fake_fastembed(monkeypatch):
+    import fastembed
+
+    _FakeTextEmbedding.loads = 0
+    _FakeTextEmbedding.entered = _FakeTextEmbedding.release = None
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+    return _FakeTextEmbedding
+
+
+def test_nomic_loads_nothing_until_the_first_embed(fake_fastembed):
+    provider = NomicEmbedProvider(idle_seconds=0)
+    assert not provider.is_loaded() and fake_fastembed.loads == 0
+    assert provider.embed(["a", "b"]) == [[0.6, 0.8], [0.6, 0.8]]
+    provider.embed(["c"])
+    assert provider.is_loaded() and fake_fastembed.loads == 1
+
+
+def test_nomic_drops_the_model_when_idle_and_loads_it_again(fake_fastembed):
+    import time
+
+    provider = NomicEmbedProvider(idle_seconds=0.2)
+    provider.embed(["a"])
+    assert provider.is_loaded()
+    deadline = time.monotonic() + 5
+    while provider.is_loaded() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not provider.is_loaded()
+    assert provider.embed(["b"]) == [[0.6, 0.8]]
+    assert fake_fastembed.loads == 2
+
+
+def test_nomic_keeps_the_model_while_an_embed_runs(fake_fastembed):
+    import threading
+    import time
+
+    provider = NomicEmbedProvider(idle_seconds=60)  # no timer fires during the test; it calls the unload itself
+    fake_fastembed.entered, fake_fastembed.release = threading.Event(), threading.Event()
+    worker = threading.Thread(target=provider.embed, args=(["a"],))
+    worker.start()
+    try:
+        assert fake_fastembed.entered.wait(5)
+        provider._last_used = time.monotonic() - 120  # idle by the clock, but an embed is running
+        provider._unload_if_idle()
+        assert provider.is_loaded()
+    finally:
+        fake_fastembed.release.set()
+        worker.join(5)
+    provider._unload_timer.cancel()
+    provider._last_used = time.monotonic() - 120  # idle, and nothing running
+    provider._unload_if_idle()
+    assert not provider.is_loaded()
+
+
+def test_nomic_an_empty_embed_loads_nothing(fake_fastembed):
+    provider = NomicEmbedProvider(idle_seconds=0)
+    assert provider.embed([]) == [] and not provider.is_loaded()
+
+
+def test_nomic_a_timer_that_fires_early_waits_out_the_rest(fake_fastembed):
+    import time
+
+    provider = NomicEmbedProvider(idle_seconds=60)
+    provider.embed(["a"])
+    provider._unload_timer.cancel()
+    provider._idle_seconds = 0.3
+    provider._last_used = time.monotonic()
+    provider._unload_timer = early = __import__("threading").Timer(0, provider._unload_if_idle)
+    early.daemon = True
+    early.start()  # fires at once, before the idle time is up
+    early.join(5)
+    assert provider.is_loaded() and provider._unload_timer is not early
+    deadline = time.monotonic() + 5
+    while provider.is_loaded() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not provider.is_loaded()
+
+
+@pytest.mark.parametrize("value", ["soon", "-1", "nan", "inf", "1e12"])
+def test_nomic_a_bad_idle_setting_names_the_variable(monkeypatch, value):
+    monkeypatch.setenv("ENGRAM_EMBED_IDLE_SECONDS", value)
+    with pytest.raises(ValueError, match="ENGRAM_EMBED_IDLE_SECONDS"):
+        NomicEmbedProvider()
+
+
+def test_nomic_idle_zero_keeps_the_model(fake_fastembed):
+    import time
+
+    provider = NomicEmbedProvider(idle_seconds=0)
+    provider.embed(["a"])
+    time.sleep(0.1)
+    assert provider.is_loaded() and provider._unload_timer is None
