@@ -514,8 +514,8 @@ be able to do this yourself. open it up" (Andy, 2026-11-02; CLAUDE.md).
 - [ ] Before the room opens, the review's S1 and S4 fixes are on main.
 - [ ] Tardis's half of the hook is on main with its three conditions from Serenity's review (City of AI, bc36b360).
 - [ ] The origin opens and records the room: Rio Grande runs
-      `make station-open-room TITLE=… SHIPS='rio-grande serenity tardis'` (a room Andy owns, with him and only his own
-      ships), then `make station-lessons-room ID=<short id>`. The
+      `make station-open-room TITLE=… SHIPS='rio-grande'` (a room Andy owns, with him and Rio Grande; each other ship
+      joins through its own machine's paired peer, never docked here), then `make station-lessons-room ID=<short id>`. The
       first run shows the members, the peers and a confirm code; Rio Grande checks they are Andy and his own ships and
       runs it again with `CONFIRM=<code>`. A recorded room takes no new member from this station; if one is needed,
       open a new lessons room. Rio Grande posts the full id it prints in all hands.
