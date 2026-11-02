@@ -1,5 +1,5 @@
 """A probe, not a test: run engram's tests with the clock moved ahead, to find tests that pin a calendar date against
-the real clock before the calendar reaches them (fix:engram-tests-calendar: U12 broke main's CI on 2026-11-01).
+the real clock before the calendar reaches them (board item fix:engram-tests-calendar: U12 broke main's CI on 2026-11-01).
 
     cd engram && SHIFT_DAYS=35 LIGHTHOUSE_REPO=../lighthouse uv run --locked --extra dev \
         python -m pytest -p tests.clockshift tests/test_permissions_*.py

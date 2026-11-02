@@ -623,7 +623,7 @@ it, not only as its diff reads.
       tests/clockshift.py, a pytest plugin (`SHIFT_DAYS=35 … python -m pytest -p tests.clockshift …`) that moves
       `time.time` and the store's clock; it can't move `datetime.now`, a file's mtime or SQLite's `'now'`. Rio Grande
       and its reader, 2026-11-01: U12's sweep test broke main's Engram CI from 2026-11-01, ten CLI tests would have from
-      2026-11-09, and 53 lighthouse tests will from 2027-01-01 (fix:engram-tests-2027-validity).
+      2026-11-09, and 53 lighthouse tests will from 2027-01-01 (board item fix:engram-tests-2027-validity).
 - [ ] A change that narrows what a shared function accepts is approved only after asking which features rely on the
       old breadth (grep its callers, its fixtures and the specs that use it), not on the targeted files alone
       (Rio Grande, 2026-10-29: a change made `card` refuse ship accounts, and the first rail's lessons room pairs
