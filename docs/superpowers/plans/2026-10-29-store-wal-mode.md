@@ -334,9 +334,12 @@ gate holds measured before bounded health merges.
   `carry_nonces` attaches the restored source `mode=ro`; on a WAL source SQLite creates its `-wal` and `-shm`, which a
   read-only connection can't remove, so a carry (a refusal after the attach, or a success) leaves two files beside
   `$ASIDE/restored-live/peer.sqlite3`, and its comment "the source attached `mode=ro` is never changed" is rollback
-  mode's. Before Task 9's switch the carry leaves no file it didn't find there, and the WAL twins of
-  `test_carry_nonces_refuses_and_changes_no_byte` and `test_carry_nonces_leaves_a_hot_journal_...` (a `-wal` left by a
-  killed listener) pin it (train 1101t's WAL run, 2026-11-01).
+  mode's. Before Task 9's switch the carry leaves no file it didn't find there, and three WAL twins pin it:
+  `test_carry_nonces_refuses_and_changes_no_byte`'s, run for the eight cases that reach the ATTACH (`plain`, `broken`,
+  `unmarked`, `elsewhere`, `damaged`, `nul`, `earlier`, `misnamed`; the other eleven come out of its journal mark and
+  run in both modes); `test_carry_nonces_leaves_a_hot_journal_...`'s (a `-wal` left by a killed listener); and
+  `test_carry_nonces_adds_the_restored_stations_nonces_once_...`'s, comparing `tree()` of `restored-live`, not only
+  peer.sqlite3's bytes (train 1101t's WAL run and the Tasks 4-5 re-check 4, 2026-11-01).
 - [ ] **Step 2: Run** the whole peer suite in both modes — expect PASS.
 - [ ] **Step 3: Amend** the docs as listed: PROTOCOL.md says gate-free reads in WAL take no part in the promise and
   why; the docstrings say which mode they describe and what a read-only open creates; the owner-mention docs stop
