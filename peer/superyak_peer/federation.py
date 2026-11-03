@@ -15,6 +15,7 @@ from .identity import (PeerIdentity, validate_card, verify_envelope, verify_pull
 from .common import Problem, require, uid, encode, text, linked_room_ok
 from .owner_trust import (TRUST_CAP, plain_name, code_current, contact_trust, latest_grant, live_trust, owner_eligible,
                           settle_owner_trust, trust_window)
+from .lessons import lessons_listed_here
 from .ships import SHIP_NAME
 
 class Obsolete(Exception):
@@ -161,7 +162,7 @@ class Federation:
                 return self.identity.card(None, dict(user), delivery='pull')
             return self.identity.card(self.endpoint, dict(user))
 
-    def pair(self, actor, card, *, code):
+    def pair(self, actor, card, *, code, lessons_line_shown=False):
         """fix:pairing-code (federation-pull spec §2): an admin pairs a card only with the other side's code, typed off
         that machine's screen. One check, here, after the admin check; the confirmation keeps the card's code, never
         the typed text. A retired peer is refused before any code is read (owner trust S11), and once the writes are
@@ -214,8 +215,11 @@ class Federation:
             contact = dict(db.execute('SELECT c.id, c.peer_id, c.user_id, l.label AS name FROM remote_contacts c JOIN contact_labels l '
                                       'ON l.id=c.id WHERE c.peer_id=? AND c.user_id=?',  # shown by its label (Task 6)
                                       (card['peer_id'], card['participant']['id'])).fetchone())
-            db.execute('INSERT INTO pairing_confirmations VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET '
-                       'code=excluded.code, confirmed=excluded.confirmed', (contact['id'], expected, self.store.clock()))
+            line = 1 if lessons_line_shown and lessons_listed_here(db, card['peer_id']) else 0  # the flag counts only for a peer listed now
+            db.execute('INSERT INTO pairing_confirmations(contact_id, code, confirmed, typed_by, lessons_line) VALUES(?,?,?,?,?) '
+                       'ON CONFLICT(contact_id) DO UPDATE SET code=excluded.code, confirmed=excluded.confirmed, '
+                       'typed_by=excluded.typed_by, lessons_line=excluded.lessons_line',
+                       (contact['id'], expected, self.store.clock(), actor, line))
             # Any hold of an owner ends its trust (N13), whatever made the hold: the MF2 holds just above, or a hold
             # with no revocation beside it (a restore's), so typing a held owner's code can't bring its trust back.
             settle_owner_trust(db, self.store.clock())

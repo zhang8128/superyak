@@ -1440,6 +1440,7 @@ LESSON_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS lessons_room(id INTEGER PRIMARY KEY CHECK(id=1), room_key TEXT NOT NULL, ship_id TEXT REFERENCES users(id), recorded REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS lessons_peers(peer_id TEXT PRIMARY KEY REFERENCES peers(peer_id), recorded REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS lesson_receipts(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), lesson_id TEXT NOT NULL, author_id TEXT NOT NULL, angle REAL);
+CREATE TABLE IF NOT EXISTS lessons_addable(contact_id TEXT PRIMARY KEY REFERENCES remote_contacts(id), code_digest TEXT NOT NULL, typed_by TEXT, listed REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS lesson_receipts_by_created ON lesson_receipts(created);
 CREATE TABLE IF NOT EXISTS lesson_queries(id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id), nearest REAL, shown INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS lesson_repeats(id TEXT PRIMARY KEY, created REAL NOT NULL, ship_id TEXT NOT NULL REFERENCES users(id),
@@ -1447,6 +1448,13 @@ CREATE TABLE IF NOT EXISTS lesson_repeats(id TEXT PRIMARY KEY, created REAL NOT 
     how TEXT NOT NULL CHECK(how IN ('receipt','read')), receipt_id TEXT REFERENCES lesson_receipts(id), hook TEXT NOT NULL CHECK(hook IN ('on','off')),
     CHECK((how='receipt') = (receipt_id IS NOT NULL)));
 '''
+
+
+def lessons_listed_here(db, peer_id):
+    """Ruling 1: the lessons room is recorded at this origin (its key has no ':') and `peer_id` is one of its listed peers."""
+    record = db.execute('SELECT room_key FROM lessons_room WHERE id=1').fetchone()
+    return (record is not None and ':' not in record['room_key']
+            and db.execute('SELECT 1 FROM lessons_peers WHERE peer_id=?', (peer_id,)).fetchone() is not None)
 
 
 class Malformed(ValueError):

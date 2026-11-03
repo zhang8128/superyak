@@ -55,11 +55,11 @@ class Members:
             return safe_line(row['name'], 40)
         return contact_line(db, member_id, 40) or safe_line(member_id[:6], 40)
 
-    def _record_change(self, db, change, room_id, member_id, actor_id, grant_id, new_room_id=None, earlier_rooms=0, claims_released=0):
+    def _record_change(self, db, change, room_id, member_id, actor_id, grant_id, *, reason=None, new_room_id=None, earlier_rooms=0, claims_released=0):
         key = uid()
-        db.execute('INSERT INTO member_changes(id,grant_id,actor_id,member_id,change,room_id,new_room_id,earlier_rooms,claims_released,created)'
-                   ' VALUES(?,?,?,?,?,?,?,?,?,?)',
-                   (key, grant_id, actor_id, member_id, change, room_id, new_room_id, earlier_rooms, claims_released, self.clock()))
+        db.execute('INSERT INTO member_changes(id,grant_id,actor_id,member_id,change,room_id,new_room_id,earlier_rooms,claims_released,created,reason)'
+                   ' VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                   (key, grant_id, actor_id, member_id, change, room_id, new_room_id, earlier_rooms, claims_released, self.clock(), reason))
         return key
 
     def _act_room(self, db, actor, key, adding):
@@ -150,6 +150,7 @@ class Members:
         room's chain is a removal with no grant by the owner (or by no one)."""
         chain = self._rooms_back(db, room_id)
         last = db.execute(f'SELECT change, grant_id, actor_id FROM member_changes WHERE member_id=? AND room_id IN ({",".join("?" * len(chain))})'
+                          " AND (reason IS NULL OR reason != 'held')"
                           ' ORDER BY created DESC, rowid DESC LIMIT 1', (member_id, *chain)).fetchone()
         return (last is not None and last['change'] == 'remove' and not last['grant_id']
                 and (not last['actor_id'] or last['actor_id'] == owner_id))

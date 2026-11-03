@@ -416,6 +416,9 @@ COMPARED = ('users.id', 'users.is_admin', 'users.is_super_admin', 'users.salt', 
             'connector_reads.size', 'connector_reads.outcome',
             # owner trust (spec item 7): a replaced file lacking one is absent, so every trust is revoked, never one whose
             # revocation or retirement it may have lost left live
+            # lessons room adds (Task 1): who typed a code, whether the line was shown, a change's reason, the addable list
+            'pairing_confirmations.typed_by', 'pairing_confirmations.lessons_line', 'member_changes.reason',
+            'lessons_addable.contact_id', 'lessons_addable.code_digest', 'lessons_addable.typed_by', 'lessons_addable.listed',
             *TRUST_COMPARED)
 
 

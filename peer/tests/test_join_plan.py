@@ -56,7 +56,7 @@ def test_a_joined_machine_has_nothing_left_here_and_follows_the_chain(station):
     db.execute("INSERT INTO peers VALUES(?, '{}', 1)", (PEER,))
     for cid, name in (('c-andy', 'Andy'), ('c-ship', 'Tardis')):
         db.execute('INSERT INTO remote_contacts VALUES(?, ?, ?, ?)', (cid, PEER, cid, name))
-        db.execute("INSERT INTO pairing_confirmations VALUES(?, 'code', 0)", (cid,))
+        db.execute("INSERT INTO pairing_confirmations(contact_id, code, confirmed) VALUES(?, 'code', 0)", (cid,))
     db.execute('INSERT INTO lessons_peers VALUES(?, 0)', (PEER,))
     db.execute("INSERT INTO rooms(id, owner_id, title, epoch, linked_room_id) VALUES('r2', 'u-andy', 'Lessons', 1, 'r1')")
     db.executemany("INSERT INTO remote_room_members VALUES('r2', ?)", [('c-andy',), ('c-ship',)])  # the chain's next room
@@ -71,7 +71,7 @@ def test_members_missing_from_the_current_room_are_named_and_a_held_contact_isnt
     db.execute("INSERT INTO peers VALUES(?, '{}', 1)", (PEER,))
     for cid, name in (('c-andy', 'Andy'), ('c-ship', 'Tardis')):
         db.execute('INSERT INTO remote_contacts VALUES(?, ?, ?, ?)', (cid, PEER, cid, name))
-        db.execute("INSERT INTO pairing_confirmations VALUES(?, 'code', 0)", (cid,))
+        db.execute("INSERT INTO pairing_confirmations(contact_id, code, confirmed) VALUES(?, 'code', 0)", (cid,))
     db.execute("INSERT INTO contact_holds VALUES('c-ship', 0)")
     db.commit()
     steps = plan(data, PEER, run=host())
@@ -99,7 +99,7 @@ def live_contacts(db, *names):
     for name in names:
         cid = 'c-' + name.lower()
         db.execute('INSERT INTO remote_contacts VALUES(?, ?, ?, ?)', (cid, PEER, cid, name))
-        db.execute("INSERT INTO pairing_confirmations VALUES(?, 'code', 0)", (cid,))
+        db.execute("INSERT INTO pairing_confirmations(contact_id, code, confirmed) VALUES(?, 'code', 0)", (cid,))
     db.commit()
 
 
