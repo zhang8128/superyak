@@ -165,8 +165,8 @@ uninvited extras and category re-ranking), its `session_id` in `context`, and it
 are a footpath of memories touched, the trail of section 1.
 
 The claim is weaker than E1's, and framed so (Tardis, 2026-11-03): it's about **what Engram surfaced together**.
-Revision 1 got REVISE from a fresh reviewer (statistician frame). Its five must-fixes and its should-fixes are folded
-in below.
+Revision 1 got REVISE from a fresh reviewer (statistician frame). Revision 2 got APPROVE WITH CHANGES, and those
+changes are folded in here (revision 3).
 
 **What biases the targets, said plainly.**
 - **Meaning made them.** Returned ids are ranked by similarity to each query, so meaning starts ahead by
@@ -174,13 +174,18 @@ in below.
 - **Recency is `1/(1 + days since creation)`** (server.py ~:1731), not time since the last return. Under the old
   `additive` default (weight 0.4) it decided about half the winners on the September store, so it changes which ids
   are in a set. That's why the primary period is the `tiebreak` default's (recency at most 0.02); the `additive`
-  period is reported apart.
+  period is reported apart. The log doesn't record the mode. So the primary period starts at the date of the commit
+  that made `tiebreak` the default, and the run first checks that the store's `config.toml` doesn't override
+  `recency_mode`. If it does, the run stops.
 - **The ranker feeds itself** through access-driven decay. Rarely accessed episodes go cold and lose their vectors.
   That's handled by the universe below. Dream and instinct biases are blended into the query; they aren't modelled,
   and they're named in the report.
+- **One session id can hold several footpaths.** Claude Code subagents share their parent's Engram server, so their
+  recalls interleave under one `session_id`. This blurs order, and it's named, not modelled.
 
 **The universe.** At a step into recall `b`, every arm ranks only memories that have a stored vector now and whose
-`created_at` is at or before `b`'s time. The target is `(b ∖ a)` within that universe. A step is dropped when `a` has
+`created_at` is at or before `b`'s time. It's drawn from **every** memory in the episode and semantic vector tables,
+not only the memories some recall named. Otherwise the pool would already know which memories get returned later. The target is `(b ∖ a)` within that universe. A step is dropped when `a` has
 no vectors or its target is empty, and the dropped shares are reported. Recalls of the `instinct` layer (which can
 fall back to "all instincts") are excluded from the primary run and reported apart.
 
@@ -189,7 +194,8 @@ A step goes from `a` to the next `b`, and counts only when `Jaccard(a, b) ≤ 0.
 was. Results are also reported by `|b ∖ a|` and by Jaccard band.
 
 **The split, by time.** One cutoff `T`, at the 80th percentile of recall times in the primary period.
-- **Training:** only recall pairs with both times before `T`.
+- **Training:** only recall pairs with both times before `T` and inside the primary period, passing the same Jaccard
+  rule and collapse as the test.
 - **Test:** sessions whose first recall is after `T`.
 - The report gives "training steps after the cutoff" (it must be 0) and rounds `T` to the day.
 
@@ -198,35 +204,41 @@ was. Results are also reported by `|b ∖ a|` and by Jaccard band.
 - (i′) **nearest to any:** by the smallest angle to any of `a`'s ids;
 - (ii) **use:** training transition counts from `a`'s ids to the next recall's **new** ids (`y ∈ b ∖ a`, mirroring the
   target), summed over `a`'s ids;
-- (iii) **popularity:** by how often each memory was returned in training. It gets matched slots: as many
-  non-backfill slots as (ii) used at that step, then (i);
+- (iii) **popularity:** by how often each memory was returned in training. It runs in two forms, and both are in the
+  max: pure, as in E1, where it beat use; and matched, with as many non-backfill slots as (ii) used at that step,
+  then (i);
 - (iv) **co-retrieval:** training counts of memories returned in the **same** recall as `a`'s ids, summed over them.
   This is (ii)'s twin with no order in it;
 - (v) **session history:** ids returned earlier in the same session, before `a`, newest first.
 
-**Pre-registered outcomes.** On the primary steps, `D = hit@10(ii) − max(i, i′, iii, iv, v)`, with the max taken
+**Pre-registered outcomes.** On the primary steps, `D = hit@10(ii) − max(i, i′, iii pure, iii matched, iv, v)`, with the max taken
 inside each resample. The interval comes from a bootstrap clustered by session, 10,000 resamples, BCa. The smallest
 effect of interest is `δ = 0.05`.
 - **Holds:** the interval's lower bound is above 0.
 - **Fails:** its upper bound is below δ.
 - **Inconclusive:** anything else.
-- A bootstrap clustered by day must agree with the session one, or the result is inconclusive.
+- A bootstrap clustered by day must give the same one of the three outcomes as the session one, or the result is
+  inconclusive. BCa's acceleration comes from a leave-one-cluster-out jackknife.
 - **Too little data:** fewer than 200 test steps, or fewer than 20 test sessions, or one session holding over 15% of
   the steps. The run then reports "insufficient" and claims nothing.
 
 **Built-in checks.**
-- **A null:** (ii) is also computed with the recalls' order shuffled within each training session. If the shuffled
-  (ii) ties the real one, order carries nothing. Then rails, which are directed edges, aren't warranted even if C1′
-  holds.
+- **A null for order:** (ii) is also computed with the recalls' order shuffled within each training session.
+  - There are 20 seeded shuffles, averaged. After each shuffle, the collapse, the Jaccard rule and the `b ∖ a`
+    mirroring are rebuilt as for real order.
+  - `D_order = hit@10(ii) − hit@10(ii shuffled)` on the primary steps, with the same bootstrap.
+  - **Order carries information only if `D_order`'s lower bound is above 0.** Otherwise order ties, and rails,
+    which are directed edges, aren't warranted even if C1′ holds.
 - **Counts:** the share of test steps where (ii) had no counts (so it equalled (i)) is reported, and so is `D` on the
   steps that had counts.
 - **Also reported:** hit@{1,5}; hit rate by the support of (ii)'s top edge (the C2 analogue); and the uptake subset
   (steps whose `b` was marked `used`), which is descriptive only, with its size and its explicit-versus-auto mix in
   training and in test.
 
-**A smoke run first, never on a person's store.** The script runs once on the Pi's own Engram store and once on a
-synthetic log with a planted order effect and a planted no-order effect. The real run happens only once the synthetic
-one shows that (ii) passes on the first and fails on the second.
+**A smoke run first, before Andy's store.** The script runs on a synthetic log with a planted order effect and a
+planted no-order effect, and on the Pi's own Engram store. That store holds station chat, so it has people's words
+too; the same read rules apply. The real run happens only once the synthetic run shows (ii) **holds** on the planted
+order effect and **doesn't hold** on the no-order one.
 
 **What's read, and how.**
 - **Only through SQL projections:** `json_extract(context,'$.session_id')`, `json_extract(context,'$.recall_id')`, the
@@ -235,7 +247,10 @@ one shows that (ii) passes on the first and fails on the second.
 - **Also:** each named memory's `created_at` and its stored vector.
 - **Vectors** stay in memory only, never in scratch or on disk.
 - **The store** is opened as the live file with a `mode=ro` URI, with no copy made. So section 8's rule on store
-  copies isn't touched.
+  copies isn't touched. Everything is read inside **one read transaction**, so a recall or a decay pass landing
+  mid-run can't make the log and the vectors disagree. A long read holds up WAL checkpoints, which is harmless.
+- **One run, under 512 MiB.** The only rerun is section 7's rerun once the test steps have doubled, with the design
+  unchanged.
 - **Exceptions** are caught so that no row is ever printed. The output is aggregate numbers only, with no ids, text,
   queries or times finer than a day.
 
@@ -252,8 +267,10 @@ back to the station. Running it on his store is his yes, asked once, with this l
 - **C1 fails:** stop the rail work and write down why (chat isn't memory use, the cover, the window). Rerun on a real
   Engram store once one holds a few hundred memories touched across sessions. (E1 failed on 2026-11-03; E1′ is that
   rerun, section 6′.)
-- **E1′ holds** (and its shuffled null doesn't tie): build trails from recall logs, smallest first, as "C1 holds" says,
-  with recalls as footpaths.
+- **E1′ holds, and order carries information** (`D_order`'s lower bound above 0): build trails from recall logs,
+  smallest first, as "C1 holds" says, with recalls as footpaths.
+- **E1′ holds, but order ties:** use is informative but undirected. Build co-use only (undirected edges between
+  memories surfaced in sequence), observed and never steering. No rails, no A*, until a later run shows order.
 - **E1′ fails:** the trails part of the rail stops for Engram too. Say why, and keep the lessons rail and sharing.
 - **E1′ is inconclusive or insufficient:** build nothing for trails. Rerun once the test steps have doubled.
 
