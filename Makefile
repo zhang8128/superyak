@@ -80,7 +80,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: merge-sitting join-machine-plan imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats mutants
+.PHONY: merge-sitting imprint-plan imprint-read imprint-send imprint-status imprint-withdraw imprint-shorten imprint-verify station-imprints station-imprint-admit station-imprint-use station-imprint-use-run station-imprint-delete dock kick install-hooks station-share-link station-pending station-approve station-deny station-rooms station-trust-list station-pair-trusted station-bridge station-unbridge station-add-ship station-open-room station-moderate station-unmoderate station-backup station-restore-test station-restore-reconcile station-journal station-carry-nonces station-alerts station-units station-units-remove federation-units federation-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe station-lessons-room lessons-room lessons-where lessons-ship lessons-check lessons-list lesson-receipts lesson-segments lessons-units lessons-units-remove lessons-prompt-near lessons-timing lesson-repeat lesson-repeats join-machine-plan mutants
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -94,6 +94,8 @@ help:
 	@echo "make station-pending      On the Pi: list waiting dockings and access requests by short id"
 	@echo "make station-approve ID=… On the Pi: approve one (APPROVER=andy); make station-deny ID=… refuses it"
 	@echo "make station-rooms     On the Pi: list the rooms you own (APPROVER=andy) by short id, and which are bridged"
+	@echo "make station-pair-trusted  On the Pi: pair another machine's ship with no code, within an owner trust: CARD= ASSERTION= SHIP=<this ship>"
+	@echo "make station-trust-list  On the Pi: list each owner trust and the ships it paired, with full participant ids"
 	@echo "make station-bridge ID=… On the Pi: bridge a room to Stanley's aDNA lattice (adds Wormhole); make station-unbridge ID=… stops"
 	@echo "make station-add-ship ID=… SHIP=…  On the Pi: add one of your own ships to a room you own (APPROVER=andy)"
 	@echo "make station-open-room TITLE=… SHIPS='a b'  On the Pi: open a new room you own with your own ships (APPROVER=andy)"
@@ -407,6 +409,18 @@ station-imprint-delete:
 
 station-rooms:
 	uv run --locked --project peer python -m superyak_peer station-rooms --data-dir "$(STATION_DATA)" --as "$(APPROVER)"
+
+station-trust-list:
+	uv run --locked --project peer python -m superyak_peer station-trust-list --data-dir "$(STATION_DATA)"
+
+# CARD, ASSERTION and SHIP reach the recipe through the environment, never as shell text: a `$(...)` or a backtick in
+# a path stays a string.
+station-pair-trusted: export PT_CARD = $(CARD)
+station-pair-trusted: export PT_ASSERTION = $(ASSERTION)
+station-pair-trusted: export PT_SHIP = $(SHIP)
+station-pair-trusted:
+	@test -n "$$PT_CARD" && test -n "$$PT_ASSERTION" && test -n "$$PT_SHIP" || { echo 'Usage: make station-pair-trusted CARD=<card file> ASSERTION=<assertion file> SHIP=<this ship username> (both files from export-ship on the other machine)'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer pair-trusted --data-dir "$(STATION_DATA)" --card "$$PT_CARD" --assertion "$$PT_ASSERTION" --as "$$PT_SHIP"
 
 station-bridge station-unbridge:
 	@test -n "$(ID)" || { echo 'Usage: make $@ ID=<short id from make station-rooms> [APPROVER=andy]'; exit 2; }

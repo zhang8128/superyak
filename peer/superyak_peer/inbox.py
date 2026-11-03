@@ -142,8 +142,9 @@ class Inbox:
             row = db.execute('SELECT id,username,name,kind,owner_id FROM users WHERE id=?', (author_id,)).fetchone()
             return dict(row) if row else {'id': author_id, 'username': None, 'name': None, 'kind': 'unknown', 'owner_id': None}
         peer, actor = author_id.split(':', 1)
-        contact = db.execute('SELECT name FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer, actor)).fetchone()
-        return {'id': author_id, 'username': None, 'name': contact['name'] if contact else None, 'kind': 'remote', 'owner_id': None}
+        contact = db.execute('SELECT l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id '
+                             'WHERE c.peer_id=? AND c.user_id=?', (peer, actor)).fetchone()  # by its label (owner trust)
+        return {'id': author_id, 'username': None, 'name': contact['label'] if contact else None, 'kind': 'remote', 'owner_id': None}
 
     def unread(self, actor, cursor=None, limit=30, counted=True, breakouts=False):
         """breakouts: breakouts=mentions (breakouts S6). The page then holds only what the session shows: breakout

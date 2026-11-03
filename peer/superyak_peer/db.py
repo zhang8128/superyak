@@ -26,6 +26,7 @@ from .breakouts import Breakouts, BREAKOUT_SCHEMA
 from .signatures import Signatures, SIGNATURE_SCHEMA
 from .grants import Grants, GRANT_SCHEMA
 from .moderators import Moderators, MODERATE_SCHEMA
+from .owner_trust import OwnerTrust, OWNER_TRUST_SCHEMA
 from .members import Members
 from .lessons import Lessons, LESSON_SCHEMA
 from .imprints import Imprints, IMPRINT_SCHEMA
@@ -63,7 +64,7 @@ JOURNAL_SIZE_LIMIT = 67108864  # store-wal-mode D2: a checkpointed WAL is cut ba
 CHECKPOINT_WAIT = 0.1  # store-wal-mode D2: TRUNCATE's busy wait, so a long reader makes it give up, not block a post
 _reading = threading.local()  # store-wal-mode D3: this thread's reading() depth
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads, ConnectorApps):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants, Moderators, OwnerTrust, Members, Lessons, Imprints, RoomCloud, Connector, ConnectorReads, ConnectorApps):
     _busy_until, _monotonic = None, staticmethod(time.monotonic)
     _journal = None  # the journal mode this Store last read under the gate (store-wal-mode D3)
     _keeper = None  # the connection keep_open() holds for a long-running process (store-wal-mode D2)
@@ -95,7 +96,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
                 raise ValueError(f'{self.db_path} is not a regular file') from None
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
-            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA + ROOM_CLOUD_SCHEMA + OAUTH_SCHEMA + READS_SCHEMA)
+            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA + MODERATE_SCHEMA + OWNER_TRUST_SCHEMA + LESSON_SCHEMA + IMPRINT_SCHEMA + ROOM_CLOUD_SCHEMA + OAUTH_SCHEMA + READS_SCHEMA)
         # Additive migration preserves every existing identity and credential.
         with self.transaction() as db:
             self._journal = db.execute('PRAGMA journal_mode').fetchone()[0]  # under the gate (reading())

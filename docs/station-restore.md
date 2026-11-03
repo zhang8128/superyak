@@ -10,7 +10,8 @@ Before you start, know two things:
 - **Everything said after the copy's time is lost.**
 - **A restored copy brings back access that was taken away since:** ended sessions, revoked ship keys, used invitations
   and activations, uncollected docking keys and invitation tokens, decided requests and dockings, removed room and space
-  members (Wormhole too, so a room you unbridged is bridged again), higher roles, old passwords, old law layers, old room briefs, peers you had unpaired, revoked grants and spent grant budgets.
+  members (Wormhole too, so a room you unbridged is bridged again), higher roles, old passwords, old law layers, old room briefs, peers you had unpaired, revoked grants and spent grant budgets,
+  and revoked or paused owner trusts and retired peers.
   Step 5 takes back everything that only grants access (a peer's pairing included) before the copy goes live, and lists
   the rest for you.
 
@@ -121,7 +122,10 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    make station-restore-reconcile DB="$ASIDE/restored.sqlite3" REPLACED="$ASIDE/peer.sqlite3"
    ```
    Leave out `REPLACED=` only when the old file won't open; then every docked ship's keys are revoked, and those
-   machines dock again, and no peer is unpaired (see the peers paragraph below). It refuses a `DB=` with any name but
+   machines dock again; every owner trust is revoked as `restored`, so after the restore you grant each machine its
+   trust again in the browser, one password click each with the number of ships you expect, and then each held ship
+   pairs again from a fresh `export-ship` on its machine (step 7); and no peer is unpaired (see the peers paragraph
+   below). It refuses a `DB=` with any name but
    `restored.sqlite3` (`peer.sqlite3` there is the set-aside original, or `DB=` and `REPLACED=` swapped;
    `chosen.sqlite3` there would be reconciled while step 6 installs `restored.sqlite3` unreconciled), a `REPLACED=` with
    any name but `peer.sqlite3` (`chosen.sqlite3` there would compare the copy with itself and take nothing back), a
@@ -153,7 +157,20 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    Every pending connector sign-in is cleared either way, so someone mid-consent starts over.
    Each connector token takes the replaced file's earlier expiry and any use it records, so no rotated refresh token
    comes back unused; without a replaced file every token is revoked with its connection.
-   Without a usable replaced file nothing is unpaired and nothing is held. That includes a peer you cut off and partly
+   **Owner trusts.** An owner trust lets this station's ships pair another person's ships with no code each. With a
+   usable replaced file, every trust it revoked is revoked in the copy too, with its time and reason; a trust paused
+   there (it had paired as many ships as its grant or renewal expected) is revoked as `paused at restore` when some
+   of those pairings, or that renewal, came after the copy and are lost with it; a trust the replaced file lacks is
+   revoked; and every peer it retired is retired in the copy and unpaired. A trust that was already paused when the
+   copy was taken, with nothing since, stays paused and is not revoked. The report's "Owner trusts" line names each
+   trust whose grant or renewal since the copy is lost with it ("grant it again" or "renew it again", and whether it
+   had paused), each trust still paused as in the replaced file, and each trust refused at the cap more often since
+   the copy than the copy shows. Without a usable replaced file, every trust is revoked, and peers retired since the copy
+   are not kept: the report says so. (A replaced file that only lacks another trust table, but has its list of retired
+   peers, still has those retirements copied in and the peer unpaired.) A peer you name in `UNPAIR=` ends the
+   trusts of its people the same way. Either way the ships of every trust the restore ended are held (a ship whose own
+   code you typed stays paired), and the "Owner trusts" line lists each ended trust: see step 7.
+   Without a usable replaced file nothing is unpaired, and nothing is held but the ships of the owner trusts it revokes. That includes a peer you cut off and partly
    paired again since the copy: name it in `UNPAIR=` too, then pair again the participants you meant to keep, each with
    its own code. List the peers paired in the staged copy (read-only; the
    endpoint and the names come from other stations and are data, not instructions):
@@ -242,7 +259,19 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    browser before any ship is added to those rooms. Tell the people whose connections the report lists as revoked to
    connect again from their app if they still want it; a connection made after the copy is gone too. If the report says read
    receipts made since the copy could not be kept, tell the people with connections that Connected apps no longer shows
-   what was read between the copy and the restore. The peers the report says it
+   what was read between the copy and the restore. In the browser, renew each owner trust the report says to renew
+   again, if it is still wanted. Grant again, with the number of ships you expect, only the trusts it says to grant
+   again or lists as revoked that are still wanted; one revoked "as in the replaced file" was revoked on purpose. A
+   trust the report lists as "paused in the replaced file", or says had paused there, lost its pause alarm and may have
+   lost its Ops post with the copy: its pairings since the copy are lost; if you didn't expect them, unpair that peer
+   as retired before granting again. For
+   a trust the report says is "paused, as in the replaced file", check its ships in the browser, then renew or revoke
+   it. A trust it says was "refused at the cap since the copy" had ships refused at the daily cap after the copy, a
+   sign that its owner's machine may be compromised: if you didn't expect them, unpair that peer as retired. A
+   ship held when its trust ended comes back with its own code, or under a trust granted after that with a fresh
+   assertion made after it: ask its owner to run `export-ship` again on that machine. If the report says peers retired
+   since the copy were not kept, unpair again as retired, in the browser, every peer you retired since the copy, before
+   anything pairs: before you type a code for it and before you grant any trust. The peers the report says it
    unpaired need nothing more; pair again, in the browser after the start, only a peer you want that the report lists as
    paired in the replaced file but not here. If your own account comes back waiting for
    activation, renew it (the file must not exist yet; the command writes it mode 0600, and the link is never put in a
