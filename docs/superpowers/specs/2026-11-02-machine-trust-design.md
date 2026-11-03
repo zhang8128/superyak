@@ -1,7 +1,7 @@
 # Owner trust: a confirmed person's ships pair without a code each
 
-Rio Grande, 2026-11-02. Revision 4, after the fresh review of revision 1 (M1, M2, S1 to S5) and its re-checks (M3, S6 to S9; M4, S10).
-Status: approved by a fresh Pi reviewer at revision 4 (0292d44f), with S11 and N13 folded in after (law section 3).
+Rio Grande, 2026-11-02. Revision 5: the expected count (item 4a), from Tardis's review during the build. Revision 4, after the fresh review of revision 1 (M1, M2, S1 to S5) and its re-checks (M3, S6 to S9; M4, S10).
+Status: approved by a fresh Pi reviewer at revision 4 (0292d44f), with S11 and N13 folded in after (law section 3). Revision 5 waits for its own fresh review.
 
 ## Why
 
@@ -64,6 +64,20 @@ person whose own account a person confirmed with a code.
    Holding the owner, by unpair, a restore or a revoke, holds every ship made under its trust (M3).
 4. **The cap:** at most 200 contacts per owner trust per day, counted from `trust_confirmations` by day (UTC). A
    refusal at the cap writes nothing but a station notice (below).
+4a. **The expected count (revision 5):** a grant, and each renewal, says how many ships the person expects that host to
+   pair ("expect up to <n>"), a whole number from 1 to 10,000, 50 unless he says otherwise. Once the contacts paired
+   under that grant since its latest grant or renewal row reach the count, the trust is **paused**: `pair-trusted`
+   refuses with "paused after <n> pairings; renew or revoke in the browser", writing nothing, and the next pairing
+   takes a renewal with the password (which may raise the count). The pause is computed from `trust_confirmations`,
+   never stored, so a restore can't lose one. At the moment a trust pauses, Odo posts a one-off Ops notice at once:
+   "Owner trust for <owner> on <peer 12> paused after <n> pairings; renew or revoke it in the browser." Its id names
+   the grant and the row it counts from, so each pause posts once.
+   - **Why:** on a host whose signing key an attacker holds, every assertion is valid, so nothing is refused and no
+     refusal notice can post (Tardis, 2026-11-02). The count makes the person say what he expects; exceeding it stops
+     the trust and tells a person to look within one pairing, where the daily digest tells them the next day.
+   - The cap of 200 a day (item 4) stays as a ceiling under the count. A trust-made ship lands in no room, since
+     membership stays Andy's act, so the worst a hostile host does before the pause is fill Connections with labelled
+     ships, which a revoke holds.
 5. **Notices:** one digest line per owner trust per day (UTC), posted by Odo once per digest id like other station
    notices (when it posts, at the first pairing or after the day ends, is the plan's to decide, N12), built in `station_notices` from `trust_confirmations`, not
    through Odo's alert path, which is built for unit failures and keeps only 20 (S7). Its text says how many ships were
@@ -106,7 +120,8 @@ person whose own account a person confirmed with a code.
 - Per person contact, in each direction, the typed code (as today): two codes per machine. Plus one browser
   confirmation with his password on the importing station, every 90 days at most. The same grant on Tardis's peer,
   for the station's ships, is Andy's act there too, as Tardis's peer's admin.
-- Per ship, nothing, up to 200 a day per owner trust: a host with 1,000 of his ships takes 5 days, or a higher cap,
+- Per ship, nothing, up to the count he expects (item 4a) and 200 a day per owner trust: a host with 1,000 of his ships is one
+  grant saying "expect up to 1,000", and takes 5 days at the cap, or a higher cap,
   which is a decision for the plan.
 - The trust rests on the exporting peer's word. Its admins can make ships "owned by" Andy's account there. On his own
   machines that is Andy. On a shared host, its other admins are trusted for his ships, and that is what he grants.
@@ -136,7 +151,8 @@ Each refusal writes nothing:
   assertion succeeds;
 - `pair` of a retired peer id, whatever code is typed (S11);
 - a contact that already exists;
-- the cap.
+- the cap;
+- a trust at its expected count (paused), until a renewal; and a renewal with a higher count pairs again.
 
 Revoking holds every contact made under the trust (and withdraws their outbox rows), holding the owner holds its ships,
 a new trust re-pairs a held ship only with an assertion issued after the revocation, and a restore can't bring a revoked
