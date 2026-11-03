@@ -131,8 +131,8 @@ def install(app):
         """Disconnects the peer; with {"retire": true}, for a host that may be compromised, also retires it (owner trust
         spec item 6, S11). No body, or retire false, unpairs as before."""
         who = await caller(current_user, request)
-        data = await body(request) if (await request.body()).strip() else {}
-        retire = data.get('retire', False)
+        sent = (await request.body()).strip()  # old callers send no body at all
+        retire = (await body(request)).get('retire', False) if sent else False
         if type(retire) is not bool:
             raise Problem(400, 'retire is true or false')
         return await run_in_threadpool(fed.unpair, who, contact_id, retire=retire)
