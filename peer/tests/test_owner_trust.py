@@ -514,6 +514,9 @@ def test_trust_confirmations_are_indexed_for_the_cap_and_the_labels(trusted):
             "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM trust_confirmations WHERE grant_id='g' AND day='d'"))
         label = ' '.join(r[-1] for r in db.execute("EXPLAIN QUERY PLAN SELECT label FROM contact_labels WHERE id='x'"))
     assert 'trust_confirmations_grant_day' in cap and 'trust_confirmations_contact' in label
+    with trusted.station.transaction() as db:
+        window = ' '.join(r[-1] for r in db.execute('EXPLAIN QUERY PLAN SELECT COUNT(*) FROM trust_confirmations WHERE window_seq=1'))
+    assert 'trust_confirmations_window' in window
 
 
 def test_a_held_owner(trusted):

@@ -28,6 +28,8 @@ BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
     # The cap's count and contact_labels' latest confirmation per contact, by index rather than by scan (ruling, Task 3).
     'CREATE INDEX IF NOT EXISTS trust_confirmations_contact ON trust_confirmations(contact_id, confirmed)',
     'CREATE INDEX IF NOT EXISTS trust_confirmations_grant_day ON trust_confirmations(grant_id, day)',
+    # trust_window's count of one window, by index.
+    'CREATE INDEX IF NOT EXISTS trust_confirmations_window ON trust_confirmations(window_seq)',
     '''CREATE TABLE IF NOT EXISTS trust_cap_refusals(grant_id TEXT NOT NULL, day TEXT NOT NULL,
   refused INTEGER NOT NULL, PRIMARY KEY(grant_id, day))''',
     '''CREATE TABLE IF NOT EXISTS retired_peers(peer_id TEXT PRIMARY KEY, retired REAL NOT NULL, by_id TEXT)''',
