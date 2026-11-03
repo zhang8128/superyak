@@ -146,15 +146,28 @@ def test_invalid_policy_stops_before_query(crossing, change):
     assert calls == []
 
 
-def test_no_config_or_context_is_inert(tmp_path, monkeypatch):
+def test_no_context_is_inert(tmp_path, monkeypatch):
     def fail(**kw): raise AssertionError("must not consult")
     monkeypatch.setattr(neighbors, "neighbor_arm", fail)
-    for context in (None, "memory/technical"):
-        response = {"results": [{"id": "local", "score": 0.7}], "recall_id": "r", "margin": {"gap": 0.2}}
-        original = deepcopy(response)
-        neighbors.attach_neighbors(response, query="query", context_id=context, purpose="session-recall",
-                                   storage=Log(), session_id="s", receiver="engram", engram_home=tmp_path)
-        assert response == original
+    response = {"results": [{"id": "local", "score": 0.7}], "recall_id": "r", "margin": {"gap": 0.2}}
+    original = deepcopy(response)
+    neighbors.attach_neighbors(response, query="query", context_id=None, purpose="session-recall",
+                               storage=Log(), session_id="s", receiver="engram", engram_home=tmp_path)
+    assert response == original
+
+
+@pytest.mark.parametrize("receiver, code", [("engram", "RECEIVER_DISABLED"), (None, "NO_RECEIVER")])
+def test_an_asked_neighbor_that_cannot_be_reached_says_so(tmp_path, monkeypatch, receiver, code):
+    """A recall that names a lighthouse context but reaches no neighbor says so (Rio Grande's Engram test,
+    2026-11-03): local results alone, returned silently, would let a ship think it searched shared memory."""
+    def fail(**kw): raise AssertionError("must not consult")
+    monkeypatch.setattr(neighbors, "neighbor_arm", fail)
+    response = {"results": [{"id": "local", "score": 0.7}], "recall_id": "r", "margin": {"gap": 0.2}}
+    neighbors.attach_neighbors(response, query="query", context_id="memory/technical", purpose="session-recall",
+                               storage=Log(), session_id="s", receiver=receiver, engram_home=tmp_path)
+    assert response["results"] == [{"id": "local", "score": 0.7}]
+    assert response["neighbors"]["diagnostics"] == [{"code": code}]
+    assert response["neighbors"]["delivered"] == [] and "neighbors" in response["degraded"]
 
 
 def test_receiver_can_weight_peers_without_transitive_discovery(crossing, monkeypatch):

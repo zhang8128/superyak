@@ -22,6 +22,13 @@ def _empty(code):
                 degraded=True, diagnostics=[{"code": code}])
 
 
+def _say_unreached(response, code):
+    """An asked-for neighbor that couldn't be consulted: an empty result naming why, and `neighbors` in degraded."""
+    response["neighbors"] = _empty(code)
+    response.setdefault("degraded", []).append("neighbors")
+    return response
+
+
 def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
                  receiver, publishers, socket_path, policy_path, timeout_s=2.0, now=None):
     """Consult only explicit peers and persist a content-free receipt before delivery.
@@ -181,9 +188,14 @@ def neighbor_arm(*, query, context, purpose, k, storage, session_id, recall_id,
 
 
 def attach_neighbors(response, *, query, context_id, purpose, storage, session_id, receiver, engram_home):
-    """Final MCP response seam; opt-in settings and declared context are both required."""
-    if context_id is None or not receiver:
+    """Final MCP response seam; opt-in settings and declared context are both required. A recall that names no
+    context is inert. One that names a context but reaches no neighbor, because this server has no named receiver
+    or that receiver isn't enabled, says so in `neighbors` and `degraded`, so a caller never takes local results
+    alone for a search of shared memory (Rio Grande's Engram test, 2026-11-03)."""
+    if context_id is None:
         return response
+    if not receiver:
+        return _say_unreached(response, "NO_RECEIVER")
     try:
         if not isinstance(receiver, str) or not NAME.fullmatch(receiver):
             raise ValueError("INVALID_RECEIVER")
@@ -191,7 +203,7 @@ def attach_neighbors(response, *, query, context_id, purpose, storage, session_i
         instance = Path(engram_home) / ".engram" / "instances" / receiver
         settings = load_settings(instance / "lighthouse-receiver.toml")
         if settings is None:
-            return response
+            return _say_unreached(response, "RECEIVER_DISABLED")
         # The server may fall back to its default DB when a named store is absent.
         if Path(storage.db_path).resolve() != (instance / "graph.db").resolve():
             raise ValueError("RECEIVER_STORE_MISMATCH")
