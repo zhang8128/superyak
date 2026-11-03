@@ -383,6 +383,45 @@ def test_federation_units_install_and_remove_only_their_own_files(tmp_path):
                                               '--user daemon-reload']
 
 
+@pytest.mark.parametrize('target, data_var', [('federation-units', 'FEDERATION_DATA'), ('lessons-units', 'LESSONS_DATA'),
+                                              ('station-units', 'STATION_DATA')])
+def test_a_checkout_away_from_home_superyak_is_linked_there_and_anything_else_there_refused(tmp_path, target, data_var):
+    """The units run from %h/superyak (Tardis, 2026-11-02: federate failed 203/EXEC from ~/Projects/superyak). Each unit
+    target links ~/superyak to the checkout when nothing is there, leaves a link already naming it, and refuses, before
+    it installs anything, when ~/superyak is another directory or a link elsewhere or dangling: one home holds one.
+    Mutations: the link step gone (no link), the refusal gone (units installed beside another checkout)."""
+    units, data, home, shim = tmp_path / 'systemd-user', tmp_path / 'data', tmp_path / 'home', tmp_path / 'bin'
+    for directory in (units, data, home, shim):
+        directory.mkdir()
+    (data / 'peer.sqlite3').write_bytes(b'')
+    (shim / 'systemctl').write_text('#!/bin/sh\nexit 0\n')
+    (shim / 'systemctl').chmod(0o755)
+    env = {**os.environ, 'HOME': str(home), 'PATH': f'{shim}:{os.environ["PATH"]}'}
+
+    def make():
+        return subprocess.run(['make', '-s', target, f'SYSTEMD_USER={units}', f'{data_var}={data}'], cwd=REPO, env=env,
+                              capture_output=True, text=True, timeout=60)
+    link = home / 'superyak'
+    first = make()
+    assert first.returncode == 0, first.stderr
+    assert link.is_symlink() and link.resolve() == REPO.resolve() and 'Linked' in first.stdout
+    again = make()
+    assert again.returncode == 0 and 'Linked' not in again.stdout and link.resolve() == REPO.resolve()
+    elsewhere = tmp_path / 'another checkout'
+    elsewhere.mkdir()
+    for occupant in ('dir', 'other link', 'dangling'):
+        link.unlink() if link.is_symlink() else shutil.rmtree(link)
+        if occupant == 'dir':
+            link.mkdir()
+        else:
+            link.symlink_to(elsewhere if occupant == 'other link' else tmp_path / 'gone')
+        shutil.rmtree(units)
+        units.mkdir()
+        refused = make()
+        assert refused.returncode != 0 and 'One home holds one ~/superyak' in refused.stdout + refused.stderr, occupant
+        assert list(units.iterdir()) == [], occupant   # refused before anything was installed
+
+
 def test_the_restore_runbook_puts_the_federation_units_back_as_they_were():
     """Federation pull plan SF10 and Rio Grande's SF5: step 3 saves each federation unit's state with the watchers'
     (by pattern, so only installed ones), then disables and stops it, so a restart mid-restore can't start one writing
