@@ -151,7 +151,8 @@ class Federation:
     def pair(self, actor, card, *, code):
         """fix:pairing-code (federation-pull spec §2): an admin pairs a card only with the other side's code, typed off
         that machine's screen. One check, here, after the admin check; the confirmation keeps the card's code, never
-        the typed text."""
+        the typed text. A retired peer is refused before any code is read (owner trust S11), and once the writes are
+        done the owner-trust invariant settles (settle_owner_trust)."""
         card = validate_card(card)
         if self.identity is not NO_IDENTITY and card['peer_id'] == self.identity.peer_id:  # no identity: no card of ours
             raise Problem(400, 'Cannot pair this peer with itself')

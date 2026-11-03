@@ -854,6 +854,8 @@ def test_repairing_the_owners_peer_does_not_bring_the_trust_back(trusted, paired
     refuses(t, 403, 'trust')  # the old assertion, with no trust
     grant((t.station, t.admin, t.owner, None))
     refuses(t, 403, 'revoked')  # and under a new trust: it was issued before the unpair
+    back = pairs(t, *b_ship(t, 'tardis', t.card['participant']['id']))  # only a new grant and a fresh assertion
+    assert back['id'] == ships[0]['id'] and not is_held(t.station, back['id']) and is_held(t.station, ships[1]['id'])
 
 
 def test_a_peer_unpaired_without_a_revocation_ends_its_trusts_when_it_pairs_again(trusted, paired):
