@@ -224,6 +224,15 @@ effect of interest is `δ = 0.05`.
 - **Too little data:** fewer than 200 test steps, or fewer than 20 test sessions, or one session holding over 15% of
   the steps. The run then reports "insufficient" and claims nothing.
 
+**Before the real run (conditions).**
+- A pre-count first: recalls and sessions since 2026-09-02. Below about 4,600 recalls or 230 sessions, expect
+  "inconclusive".
+- The script is frozen by its sha256 (printed in the report). A rerun uses the same script; a design change after
+  seeing real numbers is a new experiment.
+- At most two looks (this run and section 7's doubled-steps rerun), so the false-holds rate across looks is at most
+  about 2 × 5%.
+- Vectors of mixed dimensions (after an embedder change) are reported, and the run stops if the minority is over 5%.
+
 **Built-in checks.**
 - **A null for order:** (ii) is also computed with the recalls' order shuffled within each training session.
   - There are 20 seeded shuffles, averaged. **The units are fixed once** (Tardis): the training sequence is collapsed
@@ -233,14 +242,15 @@ effect of interest is `δ = 0.05`.
   - `D_order = hit@10(ii) − hit@10(ii shuffled)` on the primary steps, with the same bootstrap.
   - **The null of the null:** two independent sets of 20 shuffles (separate seed streams) are compared the same way,
     on the same steps, with the same bootstrap.
-  - **The order margin is measured, not guessed:** `δ_order = max(0.02, the 95th percentile, over the 20 set-B
-    shuffles, of that single shuffle's hit@10 minus set A's average)`. That's a permutation threshold: how far one
-    ordering can sit from the shuffled average by chance alone, which is exactly the comparison `D_order` makes for the
-    real order. (The bootstrap resamples test sessions with training fixed, so it can't see training-order variance;
-    the first calibration, from the null-of-null's bootstrap, left `δ_order` at its floor in every smoke run.) Order carries information only if `D_order`'s lower bound is above `δ_order`, and the day bootstrap
-    agrees. Otherwise order ties, and rails, which are directed edges, aren't warranted even if C1′ holds. The report
-    gives `δ_order`'s value and source. Why: the first smoke runs found `D_order` slightly above 0 (+0.006 to +0.011)
-    on logs with no order at all.
+  - **The order test (revision 4):** set B has **K = 199** single shuffles, and the rank p-value is
+    `p = (1 + #{k : hit@10 of shuffle k ≥ hit@10 of real order}) / (K + 1)`. **Order carries information only if
+    `p ≤ 0.05` and `D_order`'s lower bounds, by session and by day, are both above 0.02.** The permutation measures
+    significance against training-order variance, which the bootstrap can't see because it holds training fixed. The
+    bootstrap measures size against test sampling. The rule is conservative, so a real order effect under roughly 0.05
+    to 0.08 at about 600 steps reads "ties", which section 7 maps to co-use only. (Revision 3's 95th percentile of 20
+    shuffles was too coarse: about 2/21 false-claim size under the null.)
+  - **The rule's own false-claim rate** is measured before the real run, on fresh realistic no-order logs, and
+    reported.
 - **Counts:** the share of test steps where (ii) had no counts (so it equalled (i)) is reported, and so is `D` on the
   steps that had counts.
 - **Also reported:** hit@{1,5}; hit rate by the support of (ii)'s top edge (the C2 analogue); and the uptake subset
@@ -256,7 +266,8 @@ order effect and **doesn't hold** on the no-order one.
 - **Only through SQL projections:** `json_extract(context,'$.session_id')`, `json_extract(context,'$.recall_id')`, the
   row's time, `layer`, `target_ids`, `outcome LIKE 'used%'` as a boolean, and `outcome LIKE 'used: auto%'`. Never
   the query, and never the outcome's text.
-- **Also:** each named memory's `created_at` and its stored vector.
+- **Also:** each named memory's `created_at` and its stored vector; and each passed `config.toml`, read whole into
+  memory, of which only `recency_mode` is used.
 - **Vectors** stay in memory only, never in scratch or on disk.
 - **The store** is opened as the live file with a `mode=ro` URI, with no copy made. So section 8's rule on store
   copies isn't touched. Everything is read inside **one read transaction**, so a recall or a decay pass landing
@@ -283,7 +294,8 @@ back to the station. Running it on his store is his yes, asked once, with this l
   smallest first, as "C1 holds" says, with recalls as footpaths.
 - **E1′ holds, but order ties:** use is informative but undirected. Build co-use only (undirected edges between
   memories surfaced in sequence), observed and never steering. No rails, no A*, until a later run shows order.
-- **E1′ fails:** the trails part of the rail stops for Engram too. Say why, and keep the lessons rail and sharing.
+- **E1′ fails, or is negligible:** the trails part of the rail stops for Engram too. Say why, and keep the lessons
+  rail and sharing.
 - **E1′ is inconclusive or insufficient:** build nothing for trails. Rerun once the test steps have doubled.
 
 ## 8. What stays the same

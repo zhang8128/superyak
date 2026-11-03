@@ -19,7 +19,8 @@ A session's recalls in time order are a footpath. Consecutive recalls of the sam
 
 D = hit@10(ii) − max(i, i′, iii, iii-m, iv, v), with the max inside each resample, and D_order = hit@10(ii) −
 hit@10(ii-s). Intervals are BCa from a bootstrap clustered by session (10,000 resamples), checked against one clustered
-by day.
+by day. Order carries information only if real order's rank among K = 199 single shuffles gives p ≤ 0.05 and D_order's
+lower bounds, by session and by day, are both above 0.02 (section 6′, revision 4).
 
 Bounds. The store opens as the live file with a `mode=ro` URI and `query_only`, and every read happens inside one read
 transaction, through the projections the plan lists: the session and recall ids from `context`, the row's time, its
@@ -77,7 +78,10 @@ RESAMPLES = 10_000
 CHUNK = 500  # resamples per block, so the weight matrix stays small
 SHUFFLES = 20
 DELTA = 0.05
-DELTA_ORDER = 0.02  # section 6′ (amended): order needs D_order's lower bound above this margin
+DELTA_ORDER = 0.02  # section 6′ rev 4: D_order's lower bounds, by session and by day, must both be above this
+K_SHUFFLES = 199  # section 6′ rev 4: set B's single shuffles for the rank p-value
+ALPHA_ORDER = 0.05  # section 6′ rev 4: order needs the rank p-value at most this
+MIXED_DIM_MAX = 0.05  # section 6′ rev 4: stop when the minority vector dimension is over this share
 MIN_STEPS, MIN_SESSIONS, MAX_SESSION_SHARE = 200, 20, 0.15
 SEED = 20261103
 
@@ -133,13 +137,13 @@ CHOICES = [
     "**BCa.** 10,000 multinomial cluster resamples, seeded. `z0` comes from the share of resamples below the estimate, "
     "with ties counting half, clipped to [0.5/B, 1 − 0.5/B]. The acceleration comes from the leave-one-cluster-out "
     "jackknife.",
-    "**Shuffle sets.** Set A uses seed streams (seed, period, j) and set B uses (seed, period, 1, j), for j = 0 to 19. "
-    "Set A's average gives D_order. D_null = hit@10(set B's average) − hit@10(set A's average) is reported beside it "
-    "(descriptive), with the very resample draws of D_order's bootstraps.",
-    "**Order.** δ_order = max(0.02, the permutation threshold), where the threshold is numpy's linear 95th "
-    "percentile, over set B's 20 shuffles, of (that shuffle's hit@10 − set A's average) on the primary steps. "
-    "\"Order carries information\" needs D_order's session BCa lower bound above δ_order and its day BCa lower bound "
-    "above the same δ_order.",
+    "**Shuffle sets.** Set A is 20 shuffles with seed streams (seed, period, j), and its per-step average is D_order's "
+    "comparator. Set B is K = 199 single shuffles with streams (seed, period, 1, k), on the primary steps only, and "
+    "is computed only when the data are sufficient. D_null = hit@10(set B's average) − hit@10(set A's average) is "
+    "descriptive, with the very resample draws of D_order's bootstraps.",
+    "**Rank p-value.** It's computed on integer hit counts over the primary steps, so a shuffle that ties real order "
+    "counts against it: p = (1 + #{k : hits of shuffle k ≥ real order's hits}) / 200. \"Order carries information\" "
+    "needs p ≤ 0.05 and D_order's session BCa and day BCa lower bounds both above 0.02.",
     "**Permuted check.** `--permute-real` (synthetic logs only) replaces each session's real order with one more "
     "seeded shuffle of its recalls over their times before anything is computed. Order must then tie.",
     "**Insufficient.** Test sessions are those with at least one primary step. When the data are insufficient, no "
@@ -204,6 +208,7 @@ class Universe:
     no_created: int = 0
     zero: int = 0
     bad_size: int = 0
+    other_dim: int = 0  # vectors of a minority dimension, left out (the run stops if they're over 5%)
     both_tables: int = 0
     n_codes: int = 0  # universe codes plus codes for logged ids with no vector
 
@@ -253,9 +258,23 @@ def read_store(conn: sqlite3.Connection) -> tuple[Log, Universe]:
 
 
 def read_vectors(conn: sqlite3.Connection) -> tuple[Universe, dict]:
-    total = sum(conn.execute(f"SELECT count(*) FROM {vt}").fetchone()[0] for _, vt, _ in VECTOR_TABLES)
+    sizes: dict[int, int] = {}  # blob length → vectors, over both tables
+    for _, vt, _ in VECTOR_TABLES:
+        for length, count in conn.execute(f"SELECT length(embedding), count(*) FROM {vt} GROUP BY 1"):
+            sizes[length or 0] = sizes.get(length or 0, 0) + count
+    total = sum(sizes.values())
     uni = Universe(V=np.empty((0, 0), np.float32), created=np.empty(0))
-    V, created, row_of, n, dim = None, np.empty(total), {}, 0, None
+    usable = {length: count for length, count in sizes.items() if length > 0 and length % 4 == 0}
+    major = max(usable, key=lambda length: (usable[length], length)) if usable else None
+    minority = sum(count for length, count in usable.items() if length != major)
+    if usable and minority / sum(usable.values()) > MIXED_DIM_MAX:
+        raise Stop(f"vectors of mixed dimensions: {minority} of {sum(usable.values())} "
+                   f"({minority / sum(usable.values()):.1%}) are not {major // 4}-d, over the {MIXED_DIM_MAX:.0%} limit")
+    dim = major // 4 if major else None
+    if dim is not None and total * dim * 4 > MEMORY_CAP // 2:
+        raise Stop("the vectors alone would take over half the memory cap")
+    V = np.empty((total, dim), np.float32) if dim is not None else None
+    created, row_of, n = np.empty(total), {}, 0
     for layer, vt, mt in VECTOR_TABLES:
         kept = 0
         cursor = conn.execute(f"SELECT v.id, v.embedding, (SELECT m.created_at FROM {mt} m WHERE m.id = v.id) "
@@ -267,13 +286,8 @@ def read_vectors(conn: sqlite3.Connection) -> tuple[Universe, dict]:
             if not isinstance(blob, bytes) or not blob or len(blob) % 4:
                 uni.bad_size += 1
                 continue
-            if dim is None:
-                dim = len(blob) // 4
-                if total * dim * 4 > MEMORY_CAP // 2:
-                    raise Stop("the vectors alone would take over half the memory cap")
-                V = np.empty((total, dim), np.float32)
             if len(blob) != 4 * dim:
-                uni.bad_size += 1
+                uni.other_dim += 1
                 continue
             moment = parse_time(created_at)
             if moment is None:
@@ -664,6 +678,7 @@ class Table:
         self.ptr = np.searchsorted(keys // n_codes, np.arange(n_codes + 1))
         self.c = counts
         self.pairs = len(keys)
+        self.n_codes = n_codes
 
     def scores(self, sources: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         parts = [(self.ptr[x], self.ptr[x + 1]) for x in sources.tolist() if self.ptr[x + 1] > self.ptr[x]]
@@ -671,8 +686,9 @@ class Table:
             return np.empty(0, np.int64), np.empty(0, np.int64)
         ys = np.concatenate([self.y[lo:hi] for lo, hi in parts])
         cs = np.concatenate([self.c[lo:hi] for lo, hi in parts])
-        u, inv = np.unique(ys, return_inverse=True)
-        return u, np.bincount(inv, weights=cs).astype(np.int64)
+        summed = np.bincount(ys, weights=cs, minlength=self.n_codes)  # exact: integer counts in float64
+        u = np.flatnonzero(summed)
+        return u, summed[u].astype(np.int64)
 
     def edge(self, x: int, y: int) -> tuple[int, int]:
         lo, hi = int(self.ptr[x]), int(self.ptr[x + 1])
@@ -701,7 +717,7 @@ def transitions(seqs: list, log: Log, n_codes: int, support: bool = False, cutof
             if not len(new) or not len(src):
                 continue
             xs.append(np.repeat(src, len(new)))
-            ys.append(np.tile(new, len(src)))
+            ys.append(np.broadcast_to(new, (len(src), len(new))).reshape(-1))
             if support:
                 ss.append(np.full(len(src) * len(new), s, np.int64))
     return Table(xs, ys, n_codes, ss if support else None), pairs, after
@@ -767,6 +783,45 @@ def count_arm(V: np.ndarray, ys: np.ndarray, sc: np.ndarray, cache: StepCache, s
     d = V[ys] @ cache.c
     top = ys[np.lexsort((ys, -d, -sc))][:slots]
     return fill(top, cache.i_top), positive
+
+
+def member(values: np.ndarray, sorted_set: np.ndarray) -> np.ndarray:
+    """values ∈ sorted_set, elementwise, by binary search (faster than np.isin on small arrays)."""
+    if not len(sorted_set):
+        return np.zeros(len(values), bool)
+    at = np.minimum(np.searchsorted(sorted_set, values), len(sorted_set) - 1)
+    return sorted_set[at] == values
+
+
+def count_hit(V: np.ndarray, ys: np.ndarray, sc: np.ndarray, cache: StepCache, target: np.ndarray,
+              a_sorted: np.ndarray) -> bool:
+    """Whether a count arm hits at 10: the same answer as first_hit(count_arm(...)[0], target) <= TOP, without ranking
+    every candidate. `target` and `a_sorted` are the step's target and a's codes, sorted. The best-ranked target is
+    the one with the highest count, then the first in (i)'s order, so it hits if fewer than 10 candidates outrank
+    it."""
+    ok = (ys < cache.n_u) & ~member(ys, a_sorted) & (sc > 0)
+    ys, sc = ys[ok], sc[ok]
+    is_target = member(ys, target)
+    if len(ys) <= TOP:
+        if is_target.any():
+            return True  # every counted candidate is in the top 10
+        have = set(ys.tolist())
+        backfill = [z for z in cache.i_top.tolist() if z not in have][: TOP - len(ys)]
+        return any(z in cache.target for z in backfill)
+    if not is_target.any():
+        return False  # 10 counted candidates fill the top 10 before any backfill
+    best = sc[is_target].max()
+    above = int((sc > best).sum())
+    if above >= TOP:
+        return False
+    tied = sc == best
+    if above + int(tied.sum()) <= TOP:
+        return True
+    group = ys[tied]
+    d = V[group] @ cache.c
+    order = np.lexsort((group, -d))
+    position = int(np.flatnonzero(member(group[order], target))[0])
+    return above + position < TOP
 
 
 def first_hit(top: np.ndarray, target: frozenset) -> int:
@@ -892,27 +947,6 @@ def evaluate(log: Log, uni: Universe, recalls: np.ndarray, tag: int) -> dict:
     out["meta"] = {key: np.array(v) for key, v in meta.items()}
     n = len(caches)
 
-    # Two independent sets of SHUFFLES shuffles from different seed streams: set A gives D_order, and set B against
-    # set A gives the null of the null (descriptive).
-    for name, stream in (("shuffled", (SEED, tag)), ("shuffled_b", (SEED, tag, 1))):
-        hits = np.zeros(n)
-        each = np.zeros((SHUFFLES, n), bool)
-        for j in range(SHUFFLES):
-            rng = np.random.default_rng(stream + (j,))
-            table, _, _ = transitions([[runs[i] for i in rng.permutation(len(runs))] for runs in train_runs], log,
-                                      uni.n_codes)
-            for step, cache in enumerate(caches):
-                ys, sc = table.scores(cache.a)
-                top, _ = count_arm(V, ys, sc, cache)
-                each[j, step] = first_hit(top, cache.target) <= TOP
-            hits += each[j]
-            del table
-            guard("shuffles")
-        out[name] = hits / SHUFFLES
-        if name == "shuffled_b":
-            out["shuffled_b_each"] = each  # for the permutation threshold δ_order
-    del caches
-
     primary = out["meta"]["jaccard"] <= JACCARD_MAX if n else np.zeros(0, bool)
     out["primary"] = primary
     sids = out["meta"]["sid"][primary] if n else np.zeros(0, np.int64)
@@ -928,6 +962,30 @@ def evaluate(log: Log, uni: Universe, recalls: np.ndarray, tag: int) -> dict:
         reasons.append(f"one session holds {share:.0%} of the steps (at most {MAX_SESSION_SHARE:.0%})")
     out.update(steps=n_steps, step_sessions=n_sessions, max_share=share, insufficient=reasons,
                days=len(np.unique(out["meta"]["day"][primary])) if n_steps else 0)
+
+    def shuffle_hits(stream: tuple, count: int, steps: list[StepCache]) -> np.ndarray:
+        """hit@10 of (ii) trained on `count` shuffles of the collapsed training runs, one row per shuffle."""
+        each = np.zeros((count, len(steps)), bool)
+        targets = [np.sort(np.fromiter(cache.target, np.int64)) for cache in steps]
+        a_sorted = [np.sort(cache.a) for cache in steps]
+        for j in range(count):
+            rng = np.random.default_rng(stream + (j,))
+            table, _, _ = transitions([[runs[i] for i in rng.permutation(len(runs))] for runs in train_runs], log,
+                                      uni.n_codes)
+            for k, cache in enumerate(steps):
+                ys, sc = table.scores(cache.a)
+                each[j, k] = count_hit(V, ys, sc, cache, targets[k], a_sorted[k])
+            del table
+            guard("shuffles")
+        return each
+
+    # Set A: SHUFFLES shuffles on every kept step, averaged per step; D_order's comparator.
+    out["shuffled"] = shuffle_hits((SEED, tag), SHUFFLES, caches).mean(axis=0) if n else np.zeros(0)
+    # Set B: K single shuffles on the primary steps, for the rank p-value. Only a sufficient period needs it.
+    if not reasons:
+        out["set_b"] = shuffle_hits((SEED, tag, 1), K_SHUFFLES, [c for c, keep in zip(caches, primary) if keep])
+    del caches
+
     if not reasons:
         out["stats"] = statistics(out, primary)
     return out
@@ -991,12 +1049,15 @@ def statistics(res: dict, mask: np.ndarray) -> dict:
     order = np.stack([H10[:, COL["ii"]], res["shuffled"][mask]], axis=1)
     stats["order"] = {"session": bca(order, sid, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 1)),
                       "day": bca(order, day, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 2))}
-    null = np.stack([res["shuffled_b"][mask], res["shuffled"][mask]], axis=1)
+    set_b = res["set_b"]  # K × primary steps, in the primary steps' order
+    null = np.stack([set_b.mean(axis=0), res["shuffled"][mask]], axis=1)
     stats["null"] = {"session": bca(null, sid, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 1)),
                      "day": bca(null, day, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 2))}
-    singles = res["shuffled_b_each"][:, mask].mean(axis=1)  # each set-B shuffle's hit@10 on the primary steps
-    q95 = permutation_q95(singles, float(res["shuffled"][mask].mean()))
-    stats["delta_order"] = {"value": calibrate_delta_order(q95), "q95": q95, "sd": float(singles.std(ddof=1))}
+    real = int((first["ii"][mask] <= 10).sum())
+    singles = set_b.sum(axis=1)
+    stats["rank"] = {"p": rank_p(real, singles), "ge": int((singles >= real).sum()), "k": len(singles),
+                     "real": real / len(sid), "mean": float(singles.mean()) / len(sid),
+                     "sd": float(singles.std(ddof=1)) / len(sid) if len(singles) > 1 else float("nan")}
     counted = meta["positive"][mask] > 0
     if counted.any():
         stats["counted"] = bca(H10[counted], sid[counted], d_stat, (SEED, 5, 1))
@@ -1020,22 +1081,18 @@ def combine(by_session: str, by_day: str) -> str:
     return by_session if by_session == by_day else "inconclusive"
 
 
-def permutation_q95(singles, mean_a: float) -> float:
-    """The 95th percentile, over the set-B shuffles, of (that single shuffle's hit@10 − set A's average hit@10): how
-    far one ordering sits from the shuffled average by chance alone, the comparison D_order makes for real order."""
-    singles = np.asarray(singles, np.float64)
-    return float(np.quantile(singles - mean_a, 0.95)) if len(singles) else float("nan")
+def rank_p(real: int, singles) -> float:
+    """The rank p-value of real order among K single shuffles: (1 + #{k : hits of shuffle k ≥ real's hits}) / (K + 1),
+    on integer hit counts over the same primary steps, so a tie counts against order."""
+    singles = np.asarray(singles)
+    return (1 + int((singles >= real).sum())) / (len(singles) + 1)
 
 
-def calibrate_delta_order(q95: float) -> float:
-    """δ_order = max(0.02, the permutation threshold q95). With no threshold, it's NaN, and order can't be claimed."""
-    return max(DELTA_ORDER, q95) if q95 == q95 else float("nan")
-
-
-def order_verdict(session: dict, day: dict, delta: float) -> str:
-    """Order carries information only if D_order's lower bound is above δ_order by session, and by day too."""
+def order_verdict(session: dict, day: dict, p: float) -> str:
+    """Order carries information only if p ≤ 0.05 and D_order's lower bounds, by session and by day, are both above
+    0.02."""
     lo_s, lo_d = session["lo"], day["lo"]
-    return "carries information" if lo_s > delta and lo_d > delta else "ties"
+    return "carries information" if p <= ALPHA_ORDER and lo_s > DELTA_ORDER and lo_d > DELTA_ORDER else "ties"
 
 
 def check_classifier() -> int:
@@ -1066,50 +1123,41 @@ def check_classifier() -> int:
     for (s, d), expected in pairs:
         if combine(s, d) != expected:
             raise Stop(f"classifier check: session {s} with day {d} gave {combine(s, d)}, expected {expected}")
-    calibrations = [(0.0, DELTA_ORDER), (0.01, DELTA_ORDER), (DELTA_ORDER, DELTA_ORDER), (0.035, 0.035)]
-    for q95, expected in calibrations:
-        if calibrate_delta_order(q95) != expected:
-            raise Stop(f"classifier check: δ_order from q95 {q95} gave {calibrate_delta_order(q95)}, expected {expected}")
-    if calibrate_delta_order(float("nan")) == calibrate_delta_order(float("nan")):
-        raise Stop("classifier check: δ_order from no null distribution should be NaN")
-    # The permutation threshold over 20 shuffles: numpy's linear 95th percentile sits 5% of the way from the 19th to
-    # the 20th sorted difference. Values are powers of two, so the arithmetic is exact.
-    mean_a, zeros = 0.25, [0.0] * 18
-    thresholds = [
-        (zeros + [0.015625, 0.015625], 0.015625, DELTA_ORDER),  # below the floor: δ_order is 0.02
-        (zeros + [0.03125, 0.03125], 0.03125, 0.03125),  # above the floor: δ_order is the threshold
-        (zeros + [0.03125, 0.0625], 0.03125 + 0.05 * 0.03125, 0.03125 + 0.05 * 0.03125),  # interpolated
-        ([0.0] * 19 + [0.5], 0.025, 0.025),  # one far shuffle moves the threshold only 5% of its way
-        ([0.0] * 20, 0.0, DELTA_ORDER),  # every shuffle at the average: the floor
-        ([-0.0625] * 20, -0.0625, DELTA_ORDER),
+    # The rank p-value with K = 199: p = (1 + #≥) / 200, so 9 shuffles at or above real order give p = 0.05 exactly.
+    K = K_SHUFFLES
+    ranks = [
+        (100, [99] * K, 1 / 200),  # every shuffle below: the smallest p
+        (100, [101] * 9 + [99] * (K - 9), 10 / 200),  # 9 above: p = 0.05 exactly
+        (100, [101] * 10 + [99] * (K - 10), 11 / 200),  # 10 above: p = 0.055
+        (100, [100] * 9 + [99] * (K - 9), 10 / 200),  # ties count as at or above
+        (100, [100] * K, 1.0),  # every shuffle ties: p = 1
+        (100, [], 1.0),  # no shuffles: p = 1
     ]
-    for diffs, q_expected, d_expected in thresholds:
-        q = permutation_q95([mean_a + x for x in diffs], mean_a)
-        d = calibrate_delta_order(q)
-        if abs(q - q_expected) > 1e-12 or abs(d - d_expected) > 1e-12:
-            raise Stop(f"classifier check: permutation threshold {q} (δ_order {d}), expected {q_expected} "
-                       f"({d_expected})")
-    if permutation_q95([], mean_a) == permutation_q95([], mean_a):
-        raise Stop("classifier check: a permutation threshold from no shuffles should be NaN")
-    orders = []
-    for delta in (DELTA_ORDER, 0.035):  # the floor, and a calibrated value above it
-        orders += [
-            ((delta + tiny, delta + tiny, delta), "carries information"),
-            ((0.10, 0.10, delta), "carries information"),
-            ((delta, delta + tiny, delta), "ties"),  # exactly δ_order isn't above it
-            ((delta + tiny, delta, delta), "ties"),  # the day bootstrap must agree
-            ((delta - tiny, 0.10, delta), "ties"),
-            ((0.01, 0.01, delta), "ties"),  # above 0 but inside the margin
-            ((0.0, 0.0, delta), "ties"),
-            ((float("nan"), 0.10, delta), "ties"),
-        ]
-    orders.append(((0.10, 0.10, float("nan")), "ties"))  # no calibrated δ_order: no claim
-    for (lo_s, lo_d, delta), expected in orders:
-        got = order_verdict({"lo": lo_s}, {"lo": lo_d}, delta)
+    for real, singles, expected in ranks:
+        if abs(rank_p(real, singles) - expected) > 1e-12:
+            raise Stop(f"classifier check: rank p-value {rank_p(real, singles)}, expected {expected}")
+    if not rank_p(100, [101] * 9 + [99] * (K - 9)) <= ALPHA_ORDER:
+        raise Stop("classifier check: p = 10/200 must count as p ≤ 0.05")
+    above = DELTA_ORDER + tiny
+    orders = [
+        ((above, above, 10 / 200), "carries information"),  # p exactly 0.05, both bounds above 0.02
+        ((above, above, 1 / 200), "carries information"),
+        ((0.10, 0.10, 0.01), "carries information"),
+        ((above, above, 11 / 200), "ties"),  # p above 0.05
+        ((DELTA_ORDER, above, 1 / 200), "ties"),  # the session bound exactly 0.02 isn't above it
+        ((above, DELTA_ORDER, 1 / 200), "ties"),  # the day bound must agree
+        ((0.01, 0.10, 1 / 200), "ties"),
+        ((0.10, 0.10, 1.0), "ties"),  # large and certain, but not significant against the shuffles
+        ((float("nan"), 0.10, 1 / 200), "ties"),
+        ((0.10, float("nan"), 1 / 200), "ties"),
+        ((0.10, 0.10, float("nan")), "ties"),
+    ]
+    for (lo_s, lo_d, p_value), expected in orders:
+        got = order_verdict({"lo": lo_s}, {"lo": lo_d}, p_value)
         if got != expected:
-            raise Stop(f"classifier check: D_order lower bounds {lo_s} (session), {lo_d} (day) at δ_order {delta} "
+            raise Stop(f"classifier check: D_order lower bounds {lo_s} (session), {lo_d} (day) with p {p_value} "
                        f"gave {got}, expected {expected}")
-    return len(cases) + len(pairs) + len(calibrations) + 1 + len(thresholds) + 1 + len(orders)
+    return len(cases) + len(pairs) + len(ranks) + 1 + len(orders)
 
 
 def verdict(res: dict) -> dict:
@@ -1124,7 +1172,7 @@ def verdict(res: dict) -> dict:
     if by_session != by_day:
         notes.append(f"the session bootstrap says {by_session} and the day bootstrap says {by_day}")
     o = st["order"]
-    order = order_verdict(o["session"], o["day"], st["delta_order"]["value"])
+    order = order_verdict(o["session"], o["day"], st["rank"]["p"])
     return {"c1": c1, "order": order, "note": "; ".join(notes)}
 
 
@@ -1225,10 +1273,10 @@ def period_section(name: str, res: dict, v: dict, primary_period: bool) -> list[
               f"({st[('D', 10)]['day']['clusters']} clusters). δ = {DELTA}.",
               f"- **Order {v['order']}.** D_order = {interval(st['order']['session'])} by session, "
               f"{interval(st['order']['day'])} by day.",
-              f"- **δ_order = {fmt(st['delta_order']['value'])}**, the larger of the floor {DELTA_ORDER} and the "
-              f"permutation threshold {signed(st['delta_order']['q95'])}: the 95th percentile, over set B's "
-              f"{SHUFFLES} shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies "
-              f"with SD {st['delta_order']['sd']:.3f}.",
+              f"- **Rank p-value = {st['rank']['p']:.3f}**: {st['rank']['ge']} of {st['rank']['k']} single "
+              f"shuffles score hit@10 at or above real order's {fmt(st['rank']['real'])}. The shuffles average "
+              f"{fmt(st['rank']['mean'])} with SD {st['rank']['sd']:.3f}. Order needs p ≤ {ALPHA_ORDER} and both "
+              f"lower bounds above {DELTA_ORDER}.",
               f"- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = "
               f"{interval(st['null']['session'])} by session, {interval(st['null']['day'])} by day.",
               ]
@@ -1350,7 +1398,7 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
                       "queries are then permuted over its times. That keeps co-retrieval and who shares a session, "
                       "and removes order."]
         wants_order = not p["kind"].endswith("noorder") and not source.get("permuted")
-        required_text = ("C1′ holds, and D_order's lower bound is above δ_order" if wants_order
+        required_text = ("C1′ holds, and order carries information (p ≤ 0.05, both lower bounds above 0.02)" if wants_order
                          else "C1′ does not hold, and D_order ties")
         if source.get("permuted"):
             L += ["", "**The permuted check.** Before anything was computed, each session's real order was replaced by "
@@ -1388,13 +1436,16 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
           "bootstrap's outcome differs. The classifier is checked at each boundary before every run.",
           f"- **Insufficient:** fewer than {MIN_STEPS} test steps, fewer than {MIN_SESSIONS} test sessions, or one "
           f"session above {MAX_SESSION_SHARE:.0%} of the steps.",
-          f"- **Order:** (ii) retrained on each training session in shuffled order ({SHUFFLES} seeded shuffles, "
-          "averaged). The training sequence is collapsed once, from real order. The shuffles permute those runs, "
-          "and pairs then follow the Jaccard rule and the mirroring, with no re-collapse. Evaluation steps are the same "
-          "in every arm. D_order = hit@10(ii) − hit@10(ii-s). A second, independent set of 20 shuffles against the "
-          "first gives the null of the null, D_null (descriptive). Order carries information only if D_order's lower "
-          f"bound is above δ_order = max({DELTA_ORDER}, the 95th percentile over set B's 20 shuffles of that single "
-          "shuffle's hit@10 minus set A's average): a permutation threshold. The day bootstrap must agree.", ""]
+          "- **Order (revision 4):** (ii) is retrained on each training session's runs in shuffled order. The "
+          "training sequence is collapsed once, from real order. The shuffles permute those runs, and pairs then follow "
+          "the Jaccard rule and the mirroring, with no re-collapse. Evaluation steps are the same in every arm.",
+          f"  - **D_order** = hit@10(ii) − hit@10 averaged over set A's {SHUFFLES} shuffles, with the same "
+          "bootstraps.",
+          f"  - **The rank p-value** comes from set B's K = {K_SHUFFLES} single shuffles: p = (1 + #{{k : hit@10 of "
+          f"shuffle k ≥ hit@10 of real order}}) / (K + 1).",
+          f"  - **Order carries information only if p ≤ {ALPHA_ORDER} and D_order's lower bounds, by session and by "
+          f"day, are both above {DELTA_ORDER}.** The permutation measures significance against training-order "
+          "variance, and the bootstrap measures size against test sampling.", ""]
 
     L += ["## Choices this script made where the plan leaves one", ""]
     L += [f"{j}. {c}" for j, c in enumerate(CHOICES, 1)] + [""]
@@ -1408,14 +1459,15 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
         L += ["- **Source:** the live store file, opened with a `mode=ro` URI and `query_only`, and read in one read "
               "transaction. No copy was made.",
               f"- **Config check:** {cfg['looked']} places looked at ({cfg['named']} named with `--config`). "
-              f"{cfg['found']} `config.toml` found, with recency_mode: "
+              f"{cfg['found']} `config.toml` found, each read whole into memory with only `recency_mode` used: "
               + (", ".join(cfg["modes"]) if cfg["modes"] else "none found") + ". Nothing overrides `tiebreak`."]
     L.append(f"- **Classifier:** {source['classifier_checks']} boundary checks of the four outcomes passed before "
              "the store was read.")
     L += [f"- **Universe:** {len(uni.created)} memories with a vector ("
           + ", ".join(f"{k} {n}" for k, n in uni.tables.items()) + f"), dimension {uni.V.shape[1] if uni.V.size else 0}. "
-          f"Left out: {uni.no_created} with no `created_at` row, {uni.zero} with zero norm, {uni.bad_size} of the "
-          f"wrong size, {uni.both_tables} already seen in the other table.",
+          f"Left out: {uni.no_created} with no `created_at` row, {uni.zero} with zero norm, {uni.bad_size} "
+          f"unreadable, {uni.other_dim} of another dimension (the run stops above {MIXED_DIM_MAX:.0%}), and "
+          f"{uni.both_tables} already seen in the other table.",
           f"- **Logged ids with no vector now:** {uni.n_codes - len(uni.created)} distinct ids.",
           f"- **Recall rows:** {counts['rows']}. Unparseable: {log.unparsed}. With no session id: {log.no_context}. "
           f"Instinct layer: {counts['instinct_primary']} in the primary period and {counts['instinct_additive']} "
@@ -1541,7 +1593,7 @@ def run(argv: list[str] | None) -> int:
         st = res["stats"]
         line += (f"; D@10 {interval(st[('D', 10)]['session'])} session, {interval(st[('D', 10)]['day'])} day; "
                  f"order {v['order']}: D_order {interval(st['order']['session'])} session, "
-                 f"{interval(st['order']['day'])} day; δ_order {fmt(st['delta_order']['value'])}; "
+                 f"{interval(st['order']['day'])} day; rank p {st['rank']['p']:.3f}; "
                  f"D_null {interval(st['null']['session'])} session")
     else:
         line += f" ({v['note']})"

@@ -1,14 +1,9 @@
 # E1′ smoke runs: the script on planted logs and on the Pi's own store
 
-2026-11-03. Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e, as
-amended on 2026-11-03).
-- **The amendments:**
-  - the fourth outcome, "negligible";
-  - training collapsed once, with the shuffled arm permuting the collapsed runs;
-  - δ_order as a permutation threshold.
-- **Script:** `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d…`.
+2026-11-03. Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′, revision 4.
+- **Script:** `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392…`, frozen for the real run.
 - **What section 6′ asks:** (ii) must **hold** on a planted order effect and must **not hold** on a no-order one. The
-  Pi's store shows the floor working on a real schema.
+  Pi's store shows the floor working on a real schema, and the rule's own false-claim rate is measured.
 
 The script has **not** run on Andy's store or on any Mac. That run is his decision, made after he reads the script and
 this report. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
@@ -34,6 +29,21 @@ That's roughly **230 sessions and 4,600 recalls since 2026-09-02**, because the 
   sqlite3 -readonly <store> "SELECT count(*), count(DISTINCT json_extract(context, '\$.session_id')) FROM memory_log WHERE event_type = 'recall' AND layer != 'instinct' AND timestamp >= '2026-09-02T03:08:04'"
   ```
 
+## Before the real run: the conditions
+
+1. **A pre-count first.** Count the store's recalls and sessions since 2026-09-02 (the command is under "First"
+   above). Below about 4,600 recalls or 230 sessions, expect "inconclusive".
+2. **The script is frozen.** Its sha256 is printed in every report: `21b7d1a7cab5e392…` for this one. A rerun uses
+   this same script. A design change after seeing real numbers is a new experiment.
+3. **At most two looks:** this run and section 7's rerun once the test steps have doubled. Each look can falsely
+   hold about 5% of the time, so across both the false-holds rate is at most about 2 × 5%.
+4. **Configs.** Each `config.toml` passed with `--config`, or found beside the store, is read whole into memory, and
+   only `[memory] recency_mode` is used.
+5. **Mixed dimensions stop the run.** After an embedder change, a store can hold vectors of two dimensions. The run
+   reports how many are of the minority dimension and leaves them out, and it stops if they're over 5%.
+6. **The power of the order test.** The rule is conservative. A real order effect under about 0.05 to 0.08 in
+   D_order, at about 600 test steps, reads "ties". Section 7 maps that to co-use only, not rails.
+
 ## For the real run: three facts
 
 1. **The command.** Run it from a checkout of `rail-mathematics` at this commit, with Engram's own Python:
@@ -51,12 +61,13 @@ That's roughly **230 sessions and 4,600 recalls since 2026-09-02**, because the 
    - **What the run does.** It checks the outcome classifier first, opens the store read-only (`mode=ro`,
      `query_only`, one read transaction, no copy), and writes nothing but the report. Its first stderr line is the
      outcome. `--self-check` runs only the classifier check.
+   - **The script.** Check `sha256sum scripts/rail_e1_prime.py` begins `21b7d1a7cab5e392` before the run.
 
 2. **Every project's `.engram/config.toml` goes in with `--config`.** Engram's server reads the config in each
    session's working directory (its project root), not beside the store. So the script can't find those files by
    itself. It also checks the store's directory and every `.engram` directory above the store.
    - **When it stops.** It stops if any config sets `[memory] recency_mode` to anything but `tiebreak`, or can't be
-     read.
+     read. Each file is read whole into memory, and only `recency_mode` is used.
    - **To list them** (macOS's zsh or bash; `2>/dev/null` hides folders macOS won't let `find` read):
 
      ```
@@ -79,49 +90,75 @@ That's roughly **230 sessions and 4,600 recalls since 2026-09-02**, because the 
    ```
 
    The whole run is also held under 512 MiB. macOS may not enforce RLIMIT_DATA, so the script checks its peak RSS
-   after each stage and stops if the peak passes 512 MiB.
+   after each stage and stops if the peak passes 512 MiB. It also stops if more than 5% of the vectors are of a
+   minority dimension, which can happen after an embedder change.
 
 ## Summary
 
-- **The outcome classifier** passed 48 boundary checks before every run. They cover:
+- **The outcome classifier** passed 37 boundary checks before every run. They cover:
   - the four outcomes at and around 0 and δ;
   - the session/day agreement;
-  - the permutation threshold (floor, interpolation, no shuffles);
-  - the order verdict at δ_order's floor and above it.
-- **What the columns mean:**
-  - **δ_order** is the larger of 0.02 and the permutation threshold in brackets. The threshold is the 95th
-    percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average.
-  - **D_null** compares the two shuffle sets' averages. It's descriptive.
+  - the rank p-value: p = 10/200 counts as p ≤ 0.05, and ties count against order;
+  - the order verdict, in which each condition fails alone.
+- **The order rule (revision 4)** has two parts:
+  - real order's rank among K = 199 single shuffles gives p ≤ 0.05;
+  - D_order's lower bounds, by session and by day, are both above 0.02.
+- **The columns.** "#≥" counts the single shuffles that scored at or above real order. D_order is against set A's
+  20-shuffle average.
 
-| run | primary steps / test sessions | C1′ | D@10 [session BCa] | D@10 [day BCa] | order | D_order [session BCa] | D_order [day BCa] | δ_order [threshold] | D_null [session BCa] | met |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 1. simple order | 453 / 31 | holds | +0.256 [+0.232, +0.281] | +0.256 [+0.232, +0.283] | carries information | +0.442 [+0.432, +0.455] | +0.442 [+0.432, +0.455] | 0.034 [+0.034] | +0.006 [−0.000, +0.013] | yes |
-| 2. simple noorder (the draw that claimed order) | 343 / 32 | fails | −0.440 [−0.509, −0.371] | −0.440 [−0.491, −0.398] | ties | +0.027 [+0.004, +0.051] | +0.027 [+0.003, +0.047] | 0.031 [+0.031] | −0.008 [−0.018, +0.006] | yes |
-| 3. realistic order, about 300 test steps | 298 / 21 | inconclusive | +0.138 [−0.006, +0.245] | +0.138 [−0.027, +0.257] | carries information | +0.223 [+0.157, +0.301] | +0.223 [+0.154, +0.312] | 0.033 [+0.033] | +0.011 [+0.006, +0.016] | **no**: too small (see "First") |
-| 4. realistic noorder, about 300 test steps | 396 / 21 | fails | −0.063 [−0.112, −0.033] | −0.063 [−0.116, −0.031] | ties | −0.002 [−0.027, +0.017] | −0.002 [−0.017, +0.017] | 0.023 [+0.023] | +0.004 [−0.002, +0.008] | yes |
-| 5. realistic order, about 600 test steps | 609 / 44 | holds | +0.241 [+0.153, +0.313] | +0.241 [+0.181, +0.295] | carries information | +0.247 [+0.201, +0.294] | +0.247 [+0.216, +0.297] | 0.025 [+0.025] | −0.005 [−0.013, +0.002] | yes |
-| 6. realistic noorder, about 600 test steps | 830 / 44 | fails | −0.034 [−0.061, −0.007] | −0.034 [−0.056, −0.019] | ties | −0.007 [−0.022, +0.009] | −0.007 [−0.023, +0.007] | 0.020 [+0.011] | +0.001 [−0.002, +0.005] | yes |
-| 7. the Pi's store | 0 / 0 | insufficient | not computed | | | | | | | yes |
-| 8. permuted check: simple order, real order replaced by a shuffle | 479 / 31 | fails | −0.121 [−0.159, −0.083] | −0.121 [−0.154, −0.094] | ties | +0.011 [−0.020, +0.045] | +0.011 [−0.014, +0.048] | 0.020 [+0.019] | +0.003 [−0.007, +0.013] | yes |
-| 9. permuted check: simple noorder | 361 / 32 | fails | −0.438 [−0.510, −0.371] | −0.438 [−0.511, −0.355] | ties | +0.015 [−0.023, +0.044] | +0.015 [−0.029, +0.041] | 0.026 [+0.026] | −0.001 [−0.015, +0.017] | yes |
-| 10. permuted check: realistic order, about 600 test steps | 826 / 44 | fails | −0.052 [−0.077, −0.025] | −0.052 [−0.066, −0.037] | ties | +0.002 [−0.010, +0.013] | +0.002 [−0.009, +0.012] | 0.020 [+0.003] | −0.001 [−0.004, +0.003] | yes |
+| run | primary steps / test sessions | C1′ | D@10 [session BCa] | D@10 [day BCa] | order | D_order [session BCa] | D_order [day BCa] | rank p (#≥ of 199) | met |
+|---|---|---|---|---|---|---|---|---|---|
+| 1. simple order | 453 / 31 | holds | +0.256 [+0.232, +0.281] | +0.256 [+0.232, +0.283] | carries information | +0.442 [+0.432, +0.455] | +0.442 [+0.432, +0.455] | 0.005 (0) | yes |
+| 2. simple noorder (the draw that once claimed order) | 343 / 32 | fails | −0.440 [−0.509, −0.371] | −0.440 [−0.491, −0.398] | ties | +0.027 [+0.004, +0.051] | +0.027 [+0.003, +0.047] | 0.085 (16) | yes |
+| 3. realistic order, about 300 test steps | 298 / 21 | inconclusive | +0.138 [−0.006, +0.245] | +0.138 [−0.027, +0.257] | carries information | +0.223 [+0.157, +0.301] | +0.223 [+0.154, +0.312] | 0.005 (0) | **no**: too small (see "First") |
+| 4. realistic noorder, about 300 test steps | 396 / 21 | fails | −0.063 [−0.112, −0.033] | −0.063 [−0.116, −0.031] | ties | −0.002 [−0.027, +0.017] | −0.002 [−0.017, +0.017] | 0.655 (130) | yes |
+| 5. realistic order, about 600 test steps | 609 / 44 | holds | +0.241 [+0.153, +0.313] | +0.241 [+0.181, +0.295] | carries information | +0.247 [+0.201, +0.294] | +0.247 [+0.216, +0.297] | 0.005 (0) | yes |
+| 6. realistic noorder, about 600 test steps | 830 / 44 | fails | −0.034 [−0.061, −0.007] | −0.034 [−0.056, −0.019] | ties | −0.007 [−0.022, +0.009] | −0.007 [−0.023, +0.007] | 0.760 (151) | yes |
+| 7. the Pi's store | 0 / 0 | insufficient | not computed | | | | | | yes |
+| 8. permuted check: simple order, real order replaced by a shuffle | 479 / 31 | fails | −0.121 [−0.159, −0.083] | −0.121 [−0.154, −0.094] | ties | +0.011 [−0.020, +0.045] | +0.011 [−0.014, +0.048] | 0.270 (53) | yes |
+| 9. permuted check: simple noorder | 361 / 32 | fails | −0.438 [−0.510, −0.371] | −0.438 [−0.511, −0.355] | ties | +0.015 [−0.023, +0.044] | +0.015 [−0.029, +0.041] | 0.280 (55) | yes |
+| 10. permuted check: realistic order, about 600 test steps | 826 / 44 | fails | −0.052 [−0.077, −0.025] | −0.052 [−0.066, −0.037] | ties | +0.002 [−0.010, +0.013] | +0.002 [−0.009, +0.012] | 0.430 (85) | yes |
 
 **What's required.**
 - **The order logs** (runs 1, 3 and 5) must reach "holds" with order carrying information.
 - **The no-order logs** (runs 2, 4 and 6) must not reach "holds", and order must tie.
 - **The permuted checks** (runs 8 to 10) must say order ties.
 
-Every requirement is met except run 3's, at about 300 test steps. That's the sample-size finding at the top.
+Every requirement is met except run 3's C1′ at about 300 test steps. That's the sample-size finding at the top. Run
+3 still finds the order itself.
 
-- **Peak RSS** was under 193 MiB in every run, against the 512 MiB cap.
+- **Peak RSS** was under 192 MiB in every run, against the 512 MiB cap.
 - **No scratch file was written**, and vectors stayed in memory.
 - **Reruns** give the same numbers: every generator and resample is seeded.
+
+## The rule's false-claim rate
+
+**The study.** The final rule ran on **99 fresh realistic no-order logs**. Each holds about 400 primary test steps,
+and none has order to find. The harness is `scripts/rail_e1_prime_null_rate.py`.
+- **Planned and run.** 100 seeds were planned. 99 finished in about 2 hours 15 minutes on the busy Pi (three
+  low-priority workers), and the hundredth was cut off when the workers stopped.
+- **What it changed.** For this study only, the bootstrap used 1,000 resamples instead of the real run's 10,000.
+  Everything else is the real rule, set B's 199 shuffles included.
+
+| what | how often, of 99 | Wilson 95% |
+|---|---|---|
+| order falsely "carries information" | **0** | 0.0% to 3.7% |
+| C1′ falsely "holds" | **0** (all 99 "fail") | 0.0% to 3.7% |
+| the rank test alone at p ≤ 0.05 | 2 | about its nominal 5% |
+| D_order's session lower bound alone above 0.02 | 0 | |
+
+**What it shows.**
+- **The parts.** The rank test alone fires at about its nominal rate, and the 0.02 bound alone never fires. Each
+  catches what the other can't, and the rule needs both.
+- **D_order under no order** averaged +0.001 (SD 0.010).
+- **In plain words:** on logs like these with no order, the rule claimed order 0 times in 99, and C1′ held 0 times
+  in 99.
 
 ## How the order bias was found and fixed, in plain words
 
 The order check asks one question: does the real order of a session's recalls predict the next recall better than the
-same recalls shuffled? To answer it, (ii) is trained once on real order and 20 times on shuffled orders, and the
-scores are compared.
+same recalls shuffled? To answer it, (ii) is trained on real order and on many shuffled orders, and the scores are
+compared.
 
 **What went wrong.** On logs built to have no order at all, the first smoke runs found real order scoring slightly
 better than the shuffles, by about 1 point in 100. One of them cleared the bar and claimed order that wasn't there.
@@ -133,21 +170,24 @@ Two things were behind it.
   - **Its size.** It was worth about 0.4 points in 100.
   - **The fix.** Both now use the same merged recalls, merged once, from real order.
 - **Luck in a single ordering, which the old bar didn't measure.**
-  - **The comparison.** Real order is one ordering, and it's compared with the average of 20 shuffles.
+  - **The comparison.** Real order is one ordering, compared with an average of shuffles.
   - **How much luck.** One ordering on its own can land 2 or 3 points above that average by chance. On the log that
     claimed order, single shuffles scattered with a spread of about 2 points, and real order sat 2.9 points above
     the average.
   - **Why the old bar missed it.** The error bars resample the test sessions with the training held fixed, so they
     never saw this.
-  - **The fix: measure the bar from the shuffles.** For each of 20 fresh shuffles, take how far that one shuffle
-    alone sits from the average. Order now counts only if real order clears the 95th percentile of those distances,
-    and never by less than 2 points.
+
+**The bar now.** Real order is ranked against 199 single shuffles of the same log. Order counts only if:
+- real order beats all but at most 9 of them, which is p ≤ 0.05;
+- its gain over the shuffles' average is above 2 points by both error bars, the session one and the day one.
+
+The ranking catches luck in the ordering, and the error bars catch luck in the test sessions.
 
 **How it was checked.**
-- **No-order logs.** Over many fresh logs with no order, the corrected comparison averages about 0.
-- **Every rerun.** In the reruns below, every no-order log says order ties, and so does every log whose real order
-  was replaced by one more shuffle. The logs with a planted order still say order carries information, well past
-  the bar.
+- **Reruns.** The log that claimed order now ranks with p = 0.085, so order ties. Every no-order log, and every log
+  whose real order was replaced by one more shuffle, says order ties. The logs with a planted order still say order
+  carries information.
+- **The false-claim rate.** It was measured directly on many fresh no-order logs (below).
 
 ### The technical record of the bias hunt
 
@@ -155,27 +195,30 @@ Two things were behind it.
   expected D_order is exactly 0 whenever real and shuffled training go through the same code.
   - **Not tested separately:** the Jaccard filter, and ties broken by (i)'s order. Both treat real and shuffled
     sequences alike.
-  - **Tested:** the permuted checks (runs 8 to 10), which make real order one more shuffle. All three tie.
-- **Re-collapsing after a shuffle was a real asymmetry, about +0.004.** It was measured paired on 6 seeds: the old
-  design's D_order minus the collapse-once design's, positive in 4 of 6. Collapse-once removes it.
+  - **Tested:** the permuted checks (runs 8 to 10), which make real order one more shuffle.
+- **Re-collapsing after a shuffle was a real asymmetry, about +0.004.** It was measured paired on 6 seeds, positive in
+  4 of 6. Collapse-once removes it.
 - **The rest was the training arrangement's variance.**
-  - **The size.** Under no order, D_order's spread across fresh logs is about 0.024. With collapse-once, its mean is
+  - **Its size.** Under no order, D_order's spread across fresh logs is about 0.024. With collapse-once, its mean is
     −0.007 over 14 simple logs (SE 0.006) and −0.002 over 4 realistic ones.
   - **What a single shuffle does.** On run 2's log, a single shuffle's hit@10 varies with SD 0.019 around the
     average, and real order sat +0.029 above it.
-  - **What the bootstrap misses.** The session bootstrap holds the trained tables fixed, so neither D_order's interval
-    nor D_null's sees that variance. D_null's interval in run 3, [+0.006, +0.016], excludes 0 although its
-    expectation is 0.
-- **So δ_order is now a permutation threshold.**
-  - **The calibration this replaces.** The one from D_null's bootstrap left δ_order at its 0.02 floor in every
-    run.
-  - **The new values.** The threshold gives 0.020 to 0.034 across these runs. On run 2 it's 0.031, so run 2 ties on
-    the measured threshold, not just the floor.
-  - **Its cost.** None: set B was already computed.
+  - **What the bootstrap misses.** It holds the trained tables fixed, so it can't see that variance.
+- **Two bars were tried and dropped.**
+  - **The bootstrap of D_null** left the bar at its 0.02 floor in every run.
+  - **The 95th percentile of 20 single shuffles** was too coarse. Its false-claim size under the null is about 2 in
+    21.
+- **Revision 4's rank test.** It sees the training arrangement directly, with K = 199 shuffles and a smallest p of
+  1/200, and the 0.02 bound on both bootstraps still demands a real size.
+- **The shuffle pass now decides hit or miss without a full ranking**, and it aggregates counts with `bincount`. Both
+  changes are exact.
+  - **Checked step by step:** 0 mismatches against the full ranking in 4,452 step-table pairs.
+  - **Checked end to end:** a full run's report came out identical to the slower version's.
 
 ## The realistic pair
 
-**What makes it realistic.** Runs 3 to 6 and 10 use a log shaped like Engram's (planted structure under each run):
+**What makes it realistic.** Runs 3 to 6 and 10, and the rate study, use a log shaped like Engram's (planted structure
+under each run):
 - 80 topics of 40 memories, each topic graded along its own low-dimensional subspace.
 - Every recall is the 15 to 20 memories nearest its query, so meaning makes every set.
 - Consecutive recalls overlap. The rule drops 29–30% of steps above Jaccard 0.5 in the order log, and 4–6% in the
@@ -200,35 +243,31 @@ added to their rows.
 This section is written by hand. Everything from "Run 1" on is the script's output.
 
 - **The planted order effects are found, and order is what finds them.**
-  - The simple order log holds with D = +0.256, and the realistic one holds at about 600 test steps with D = +0.241.
-  - Both carry order far past their δ_order: D_order +0.442 against 0.034, and +0.247 against 0.025.
-  - With their real order replaced by a shuffle (runs 8 and 10), both fail and order ties.
+  - **What they show.** Real order beats all 199 single shuffles in runs 1, 3 and 5 (p = 0.005, the smallest
+    possible), and D_order is far above 0.02.
+  - **The control.** With real order replaced by one more shuffle (runs 8 and 10), the same logs rank in the middle
+    of their shuffles (p = 0.27 and 0.43), and order ties.
 - **Logs with co-retrieval and no order don't hold, and order ties.** The realistic no-order log fails at both sizes.
   It holds the order log's very sessions, permuted, so the difference between runs 5 and 6 is order alone.
-- **The draw that claimed order now ties on a measured threshold.**
-  - **Its D_order.** It's +0.027 [+0.004, +0.051], against δ_order 0.031, the 95th percentile of single shuffles on
-    that very log.
+- **The draw that once claimed order now ties on the rank test.** 16 of 199 single shuffles score at or above its
+  real order (p = 0.085). Its D_order, +0.027 [+0.004, +0.051], is the luck of one ordering, which the rank test sees.
 - **The Pi's store shows the floor on a real schema.**
   - **What it holds.** 5 recalls in one session, so `T` falls inside that session. No session starts after `T`, so
     there are 0 test steps: "insufficient".
   - **What the run touched.** It read the live file with `mode=ro` in one read transaction:
     - the recall projections;
-    - 45 vectors, with every logged id found among them;
+    - 45 vectors of one dimension (none of another), with every logged id found among them;
     - the project's `config.toml`, which sets `tiebreak`.
 
 ## Concerns for the reviewer and for Andy
 
-1. **(ii) needs a large store to show a modest effect.**
-   - **Why.** It fills its top 10 by count, so meaning wins the steps that stay in a topic for free.
-   - **How large.** A realistic effect of D ≈ 0.13 is inconclusive at about 300 test steps, and holds at about 600 in
-     about 45 test sessions.
-   - **What that means.** A store between the floor and that size will most likely say "inconclusive": too little
-     data, not "no effect".
-2. **The threshold comes from 20 shuffles.** Its 95th percentile interpolates between the two largest of 20
-   differences, so it moves from log to log: 0.003 to 0.034 here.
-   - **What protects it.** The 0.02 floor covers the low draws.
-   - **What the order claim demands.** D_order's own lower bound has to clear the threshold, which adds the test-side
-     uncertainty on top. Read together, the bar is conservative.
+1. **The store needs to be large, and the order test is conservative.**
+   - **C1′.** A realistic effect of D ≈ 0.13 is inconclusive at about 300 test steps, and holds at about 600 in about
+     45 test sessions.
+   - **Order.** An effect under about 0.05 to 0.08 in D_order at about 600 steps reads "ties", which section 7 maps
+     to co-use only. A store between the floor and that size will most likely say "inconclusive", not "fails".
+2. **The rate study ran on fewer bootstrap resamples** (1,000) than the real run's 10,000, to fit the Pi's time. The
+   rank test's p-value and the planted logs are the real rule's.
 3. **The config check can't find every config by itself.** The fix is the second fact above. It also sees today's
    files only, not what a config said in the past.
 4. **Day clusters use UTC days.** On Andy's Pacific clock, a UTC day ends at 4 or 5 pm.
@@ -238,7 +277,7 @@ This section is written by hand. Everything from "Run 1" on is the script's outp
 
 ## Run 1: simple order
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -248,7 +287,7 @@ Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathemati
 
 128 groups of 12 memories (768-d, each group tight in meaning). There are 120 regular groups and 8 hub groups, and each regular group has a fixed hub. A session takes one regular group per hub, in random order, and recalls each group and then its hub, 16 recalls of 6 random members each. A memory is followed by a specific next set, and every hub sits in every session, so only order says which hub follows.
 
-**Required:** C1′ holds, and D_order's lower bound is above δ_order.
+**Required:** C1′ holds, and order carries information (p ≤ 0.05, both lower bounds above 0.02).
 
 Both simple logs also carry 160 primary-period sessions, 12 additive-period sessions, 300 never-recalled distractor memories created during the log, 10 vectors with no `created_at` row, immediate repeats (5%), and empty recalls (2%).
 Every synthetic log also carries 40 instinct recalls, 20 recalls with no session id, and non-recall log rows. These exercise each filter.
@@ -258,8 +297,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 ### The store as read
 
 - **Source:** a synthetic log in a shared-cache in-memory SQLite database (no file), read through the same reader (an in-memory URI in place of `mode=ro`, with `query_only`), in one read transaction.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 1836 memories with a vector (episode 1452, semantic 384), dimension 768. Left out: 10 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 1836 memories with a vector (episode 1452, semantic 384), dimension 768. Left out: 10 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 7 distinct ids.
 - **Recall rows:** 3007. Unparseable: 0. With no session id: 20. Instinct layer: 40 in the primary period and 0 before it (left out and reported apart). Analysed: 2737 in the primary period (from 2026-09-02, engram 548c97dd) and 210 in the additive period before it.
 - **Recall days:** the analysed recalls span 71 days.
@@ -286,8 +325,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 
 - **C1′ holds.** D@10 = +0.256 [+0.232, +0.281] by session (31 clusters), +0.256 [+0.232, +0.283] by day (8 clusters). δ = 0.05.
 - **Order carries information.** D_order = +0.442 [+0.432, +0.455] by session, +0.442 [+0.432, +0.455] by day.
-- **δ_order = 0.034**, the larger of the floor 0.02 and the permutation threshold +0.034: the 95th percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies with SD 0.017.
-- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = +0.006 [-0.000, +0.013] by session, +0.006 [-0.001, +0.012] by day.
+- **Rank p-value = 0.005**: 0 of 199 single shuffles score hit@10 at or above real order's 0.534. The shuffles average 0.091 with SD 0.017. Order needs p ≤ 0.05 and both lower bounds above 0.02.
+- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.001 [-0.006, +0.004] by session, -0.001 [-0.007, +0.004] by day.
 - **Section 7:** E1′ holds, and order carries information: build trails from recall logs, smallest first.
 
 #### Hit rates on the primary steps
@@ -453,13 +492,13 @@ Primary steps whose `b` was marked used: 3, of which 3 explicit and 0 by `auto` 
 
 ### Resources
 
-- **Peak RSS:** 76.9 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
-- **Wall time:** 16 s.
+- **Peak RSS:** 75.8 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
+- **Wall time:** 178 s.
 - **Scratch:** none. Vectors stayed in memory.
 
-## Run 2: simple noorder (the draw that claimed order)
+## Run 2: simple noorder (the draw that once claimed order)
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -479,8 +518,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 ### The store as read
 
 - **Source:** a synthetic log in a shared-cache in-memory SQLite database (no file), read through the same reader (an in-memory URI in place of `mode=ro`, with `query_only`), in one read transaction.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 2100 memories with a vector (episode 1656, semantic 444), dimension 768. Left out: 10 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 2100 memories with a vector (episode 1656, semantic 444), dimension 768. Left out: 10 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 7 distinct ids.
 - **Recall rows:** 2262. Unparseable: 0. With no session id: 20. Instinct layer: 40 in the primary period and 0 before it (left out and reported apart). Analysed: 2047 in the primary period (from 2026-09-02, engram 548c97dd) and 155 in the additive period before it.
 - **Recall days:** the analysed recalls span 71 days.
@@ -507,8 +546,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 
 - **C1′ fails.** D@10 = -0.440 [-0.509, -0.371] by session (32 clusters), -0.440 [-0.491, -0.398] by day (12 clusters). δ = 0.05.
 - **Order ties.** D_order = +0.027 [+0.004, +0.051] by session, +0.027 [+0.003, +0.047] by day.
-- **δ_order = 0.031**, the larger of the floor 0.02 and the permutation threshold +0.031: the 95th percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies with SD 0.021.
-- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.008 [-0.018, +0.006] by session, -0.008 [-0.020, +0.007] by day.
+- **Rank p-value = 0.085**: 16 of 199 single shuffles score hit@10 at or above real order's 0.382. The shuffles average 0.352 with SD 0.022. Order needs p ≤ 0.05 and both lower bounds above 0.02.
+- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.003 [-0.011, +0.006] by session, -0.003 [-0.014, +0.004] by day.
 - **Section 7:** E1′ fails: the trails part of the rail stops for Engram too.
 
 #### Hit rates on the primary steps
@@ -672,13 +711,13 @@ Primary steps whose `b` was marked used: 6, of which 4 explicit and 2 by `auto` 
 
 ### Resources
 
-- **Peak RSS:** 73.8 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
-- **Wall time:** 13 s.
+- **Peak RSS:** 72.5 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
+- **Wall time:** 72 s.
 - **Scratch:** none. Vectors stayed in memory.
 
 ## Run 3: realistic order, 120 sessions (about 300 test steps)
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -694,7 +733,7 @@ A log shaped like Engram's: 80 topics of 40 memories (768-d). Each topic's membe
 
 A session is one footpath of 12 to 24 recalls, or two footpaths of 8 to 14 recalls interleaved by time under one session id, as subagents do (29 of 120 sessions). 301 memories are created during the log, and 318 have no vector now (decay, about 10%).
 
-**Required:** C1′ holds, and D_order's lower bound is above δ_order.
+**Required:** C1′ holds, and order carries information (p ≤ 0.05, both lower bounds above 0.02).
 
 Every synthetic log also carries 40 instinct recalls, 20 recalls with no session id, and non-recall log rows. These exercise each filter.
 
@@ -703,8 +742,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 ### The store as read
 
 - **Source:** a synthetic log in a shared-cache in-memory SQLite database (no file), read through the same reader (an in-memory URI in place of `mode=ro`, with `query_only`), in one read transaction.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 322 distinct ids.
 - **Recall rows:** 2329. Unparseable: 0. With no session id: 20. Instinct layer: 40 in the primary period and 0 before it (left out and reported apart). Analysed: 2269 in the primary period (from 2026-09-02, engram 548c97dd) and 0 in the additive period before it.
 - **Recall days:** the analysed recalls span 50 days.
@@ -731,8 +770,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 
 - **C1′ inconclusive.** D@10 = +0.138 [-0.006, +0.245] by session (21 clusters), +0.138 [-0.027, +0.257] by day (9 clusters). δ = 0.05.
 - **Order carries information.** D_order = +0.223 [+0.157, +0.301] by session, +0.223 [+0.154, +0.312] by day.
-- **δ_order = 0.033**, the larger of the floor 0.02 and the permutation threshold +0.033: the 95th percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies with SD 0.017.
-- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = +0.011 [+0.006, +0.016] by session, +0.011 [+0.004, +0.017] by day.
+- **Rank p-value = 0.005**: 0 of 199 single shuffles score hit@10 at or above real order's 0.292. The shuffles average 0.076 with SD 0.017. Order needs p ≤ 0.05 and both lower bounds above 0.02.
+- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = +0.007 [+0.003, +0.012] by session, +0.007 [+0.002, +0.010] by day.
 - **Section 7:** E1′ is inconclusive or insufficient: build nothing for trails; rerun once the test steps have doubled.
 
 #### Hit rates on the primary steps
@@ -821,13 +860,13 @@ No analysed recalls in the additive period.
 
 ### Resources
 
-- **Peak RSS:** 113.0 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
-- **Wall time:** 36 s.
+- **Peak RSS:** 119.3 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
+- **Wall time:** 197 s.
 - **Scratch:** none. Vectors stayed in memory.
 
 ## Run 4: realistic noorder, 120 sessions
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -854,8 +893,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 ### The store as read
 
 - **Source:** a synthetic log in a shared-cache in-memory SQLite database (no file), read through the same reader (an in-memory URI in place of `mode=ro`, with `query_only`), in one read transaction.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 322 distinct ids.
 - **Recall rows:** 2329. Unparseable: 0. With no session id: 20. Instinct layer: 40 in the primary period and 0 before it (left out and reported apart). Analysed: 2269 in the primary period (from 2026-09-02, engram 548c97dd) and 0 in the additive period before it.
 - **Recall days:** the analysed recalls span 50 days.
@@ -882,8 +921,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 
 - **C1′ fails.** D@10 = -0.063 [-0.112, -0.033] by session (21 clusters), -0.063 [-0.116, -0.031] by day (9 clusters). δ = 0.05.
 - **Order ties.** D_order = -0.002 [-0.027, +0.017] by session, -0.002 [-0.017, +0.017] by day.
-- **δ_order = 0.023**, the larger of the floor 0.02 and the permutation threshold +0.023: the 95th percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies with SD 0.010.
-- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = +0.004 [-0.002, +0.008] by session, +0.004 [-0.002, +0.008] by day.
+- **Rank p-value = 0.655**: 130 of 199 single shuffles score hit@10 at or above real order's 0.038. The shuffles average 0.041 with SD 0.009. Order needs p ≤ 0.05 and both lower bounds above 0.02.
+- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = +0.001 [-0.003, +0.005] by session, +0.001 [-0.004, +0.004] by day.
 - **Section 7:** E1′ fails: the trails part of the rail stops for Engram too.
 
 #### Hit rates on the primary steps
@@ -971,13 +1010,13 @@ No analysed recalls in the additive period.
 
 ### Resources
 
-- **Peak RSS:** 122.7 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
-- **Wall time:** 35 s.
+- **Peak RSS:** 122.3 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
+- **Wall time:** 215 s.
 - **Scratch:** none. Vectors stayed in memory.
 
 ## Run 5: realistic order, 240 sessions (about 600 test steps)
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -993,7 +1032,7 @@ A log shaped like Engram's: 80 topics of 40 memories (768-d). Each topic's membe
 
 A session is one footpath of 12 to 24 recalls, or two footpaths of 8 to 14 recalls interleaved by time under one session id, as subagents do (74 of 240 sessions). 301 memories are created during the log, and 318 have no vector now (decay, about 10%).
 
-**Required:** C1′ holds, and D_order's lower bound is above δ_order.
+**Required:** C1′ holds, and order carries information (p ≤ 0.05, both lower bounds above 0.02).
 
 Every synthetic log also carries 40 instinct recalls, 20 recalls with no session id, and non-recall log rows. These exercise each filter.
 
@@ -1002,8 +1041,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 ### The store as read
 
 - **Source:** a synthetic log in a shared-cache in-memory SQLite database (no file), read through the same reader (an in-memory URI in place of `mode=ro`, with `query_only`), in one read transaction.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 324 distinct ids.
 - **Recall rows:** 4667. Unparseable: 0. With no session id: 20. Instinct layer: 40 in the primary period and 0 before it (left out and reported apart). Analysed: 4607 in the primary period (from 2026-09-02, engram 548c97dd) and 0 in the additive period before it.
 - **Recall days:** the analysed recalls span 50 days.
@@ -1030,8 +1069,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 
 - **C1′ holds.** D@10 = +0.241 [+0.153, +0.313] by session (44 clusters), +0.241 [+0.181, +0.295] by day (8 clusters). δ = 0.05.
 - **Order carries information.** D_order = +0.247 [+0.201, +0.294] by session, +0.247 [+0.216, +0.297] by day.
-- **δ_order = 0.025**, the larger of the floor 0.02 and the permutation threshold +0.025: the 95th percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies with SD 0.021.
-- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.005 [-0.013, +0.002] by session, -0.005 [-0.011, +0.001] by day.
+- **Rank p-value = 0.005**: 0 of 199 single shuffles score hit@10 at or above real order's 0.378. The shuffles average 0.129 with SD 0.018. Order needs p ≤ 0.05 and both lower bounds above 0.02.
+- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.002 [-0.007, +0.003] by session, -0.002 [-0.007, +0.003] by day.
 - **Section 7:** E1′ holds, and order carries information: build trails from recall logs, smallest first.
 
 #### Hit rates on the primary steps
@@ -1121,12 +1160,12 @@ No analysed recalls in the additive period.
 ### Resources
 
 - **Peak RSS:** 161.5 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
-- **Wall time:** 90 s.
+- **Wall time:** 429 s.
 - **Scratch:** none. Vectors stayed in memory.
 
 ## Run 6: realistic noorder, 240 sessions
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -1153,8 +1192,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 ### The store as read
 
 - **Source:** a synthetic log in a shared-cache in-memory SQLite database (no file), read through the same reader (an in-memory URI in place of `mode=ro`, with `query_only`), in one read transaction.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 324 distinct ids.
 - **Recall rows:** 4667. Unparseable: 0. With no session id: 20. Instinct layer: 40 in the primary period and 0 before it (left out and reported apart). Analysed: 4607 in the primary period (from 2026-09-02, engram 548c97dd) and 0 in the additive period before it.
 - **Recall days:** the analysed recalls span 50 days.
@@ -1181,8 +1220,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 
 - **C1′ fails.** D@10 = -0.034 [-0.061, -0.007] by session (44 clusters), -0.034 [-0.056, -0.019] by day (8 clusters). δ = 0.05.
 - **Order ties.** D_order = -0.007 [-0.022, +0.009] by session, -0.007 [-0.023, +0.007] by day.
-- **δ_order = 0.020**, the larger of the floor 0.02 and the permutation threshold +0.011: the 95th percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies with SD 0.007.
-- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = +0.001 [-0.002, +0.005] by session, +0.001 [-0.002, +0.005] by day.
+- **Rank p-value = 0.760**: 151 of 199 single shuffles score hit@10 at or above real order's 0.053. The shuffles average 0.057 with SD 0.008. Order needs p ≤ 0.05 and both lower bounds above 0.02.
+- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.003 [-0.006, +0.001] by session, -0.003 [-0.007, +0.000] by day.
 - **Section 7:** E1′ fails: the trails part of the rail stops for Engram too.
 
 #### Hit rates on the primary steps
@@ -1270,13 +1309,13 @@ No analysed recalls in the additive period.
 
 ### Resources
 
-- **Peak RSS:** 192.3 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
-- **Wall time:** 83 s.
+- **Peak RSS:** 191.6 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
+- **Wall time:** 449 s.
 - **Scratch:** none. Vectors stayed in memory.
 
 ## Run 7: the Pi's own store (rio-grande), read-only
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -1285,9 +1324,9 @@ Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathemati
 ### The store as read
 
 - **Source:** the live store file, opened with a `mode=ro` URI and `query_only`, and read in one read transaction. No copy was made.
-- **Config check:** 3 places looked at (1 named with `--config`). 1 `config.toml` found, with recency_mode: tiebreak. Nothing overrides `tiebreak`.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 45 memories with a vector (episode 33, semantic 12), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Config check:** 3 places looked at (1 named with `--config`). 1 `config.toml` found, each read whole into memory with only `recency_mode` used: tiebreak. Nothing overrides `tiebreak`.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 45 memories with a vector (episode 33, semantic 12), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 0 distinct ids.
 - **Recall rows:** 5. Unparseable: 0. With no session id: 0. Instinct layer: 0 in the primary period and 0 before it (left out and reported apart). Analysed: 5 in the primary period (from 2026-09-02, engram 548c97dd) and 0 in the additive period before it.
 - **Recall days:** the analysed recalls span 1 day.
@@ -1322,13 +1361,13 @@ No analysed recalls in the additive period.
 
 ### Resources
 
-- **Peak RSS:** 48.2 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
+- **Peak RSS:** 46.7 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
 - **Wall time:** 0 s.
 - **Scratch:** none. Vectors stayed in memory.
 
 ## Run 8: permuted check: simple order, real order replaced by a shuffle
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -1350,8 +1389,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 ### The store as read
 
 - **Source:** a synthetic log in a shared-cache in-memory SQLite database (no file), read through the same reader (an in-memory URI in place of `mode=ro`, with `query_only`), in one read transaction.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 1836 memories with a vector (episode 1452, semantic 384), dimension 768. Left out: 10 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 1836 memories with a vector (episode 1452, semantic 384), dimension 768. Left out: 10 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 7 distinct ids.
 - **Recall rows:** 3007. Unparseable: 0. With no session id: 20. Instinct layer: 40 in the primary period and 0 before it (left out and reported apart). Analysed: 2737 in the primary period (from 2026-09-02, engram 548c97dd) and 210 in the additive period before it.
 - **Recall days:** the analysed recalls span 71 days.
@@ -1378,8 +1417,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 
 - **C1′ fails.** D@10 = -0.121 [-0.159, -0.083] by session (31 clusters), -0.121 [-0.154, -0.094] by day (8 clusters). δ = 0.05.
 - **Order ties.** D_order = +0.011 [-0.020, +0.045] by session, +0.011 [-0.014, +0.048] by day.
-- **δ_order = 0.020**, the larger of the floor 0.02 and the permutation threshold +0.019: the 95th percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies with SD 0.011.
-- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = +0.003 [-0.007, +0.013] by session, +0.003 [-0.006, +0.012] by day.
+- **Rank p-value = 0.270**: 53 of 199 single shuffles score hit@10 at or above real order's 0.150. The shuffles average 0.141 with SD 0.014. Order needs p ≤ 0.05 and both lower bounds above 0.02.
+- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = +0.002 [-0.006, +0.008] by session, +0.002 [-0.005, +0.009] by day.
 - **Section 7:** E1′ fails: the trails part of the rail stops for Engram too.
 
 #### Hit rates on the primary steps
@@ -1545,13 +1584,13 @@ Primary steps whose `b` was marked used: 3, of which 3 explicit and 0 by `auto` 
 
 ### Resources
 
-- **Peak RSS:** 76.2 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
-- **Wall time:** 22 s.
+- **Peak RSS:** 75.6 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
+- **Wall time:** 99 s.
 - **Scratch:** none. Vectors stayed in memory.
 
 ## Run 9: permuted check: simple noorder, real order replaced by a shuffle
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -1573,8 +1612,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 ### The store as read
 
 - **Source:** a synthetic log in a shared-cache in-memory SQLite database (no file), read through the same reader (an in-memory URI in place of `mode=ro`, with `query_only`), in one read transaction.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 2100 memories with a vector (episode 1656, semantic 444), dimension 768. Left out: 10 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 2100 memories with a vector (episode 1656, semantic 444), dimension 768. Left out: 10 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 7 distinct ids.
 - **Recall rows:** 2262. Unparseable: 0. With no session id: 20. Instinct layer: 40 in the primary period and 0 before it (left out and reported apart). Analysed: 2047 in the primary period (from 2026-09-02, engram 548c97dd) and 155 in the additive period before it.
 - **Recall days:** the analysed recalls span 71 days.
@@ -1601,8 +1640,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 
 - **C1′ fails.** D@10 = -0.438 [-0.510, -0.371] by session (32 clusters), -0.438 [-0.511, -0.355] by day (12 clusters). δ = 0.05.
 - **Order ties.** D_order = +0.015 [-0.023, +0.044] by session, +0.015 [-0.029, +0.041] by day.
-- **δ_order = 0.026**, the larger of the floor 0.02 and the permutation threshold +0.026: the 95th percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies with SD 0.025.
-- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.001 [-0.015, +0.017] by session, -0.001 [-0.017, +0.014] by day.
+- **Rank p-value = 0.280**: 55 of 199 single shuffles score hit@10 at or above real order's 0.382. The shuffles average 0.367 with SD 0.023. Order needs p ≤ 0.05 and both lower bounds above 0.02.
+- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.000 [-0.012, +0.009] by session, -0.000 [-0.010, +0.010] by day.
 - **Section 7:** E1′ fails: the trails part of the rail stops for Engram too.
 
 #### Hit rates on the primary steps
@@ -1766,13 +1805,13 @@ Primary steps whose `b` was marked used: 7, of which 6 explicit and 1 by `auto` 
 
 ### Resources
 
-- **Peak RSS:** 73.3 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
-- **Wall time:** 15 s.
+- **Peak RSS:** 73.8 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
+- **Wall time:** 78 s.
 - **Scratch:** none. Vectors stayed in memory.
 
 ## Run 10: permuted check: realistic order, 240 sessions, real order replaced by a shuffle
 
-Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `e0e8b5a6a23f506d`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
+Run on 2026-11-03 (UTC). Plan: `docs/superpowers/specs/2026-11-03-rail-mathematics.md`, section 6′ (revision 3, e2ba0a3e). Script: `scripts/rail_e1_prime.py`, sha256 `21b7d1a7cab5e392`. Numbers only: no memory text, query, id or outcome text appears here, and no time finer than a day.
 
 ### Result
 
@@ -1799,8 +1838,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 ### The store as read
 
 - **Source:** a synthetic log in a shared-cache in-memory SQLite database (no file), read through the same reader (an in-memory URI in place of `mode=ro`, with `query_only`), in one read transaction.
-- **Classifier:** 48 boundary checks of the four outcomes passed before the store was read.
-- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 of the wrong size, 0 already seen in the other table.
+- **Classifier:** 37 boundary checks of the four outcomes passed before the store was read.
+- **Universe:** 2882 memories with a vector (episode 2156, semantic 726), dimension 768. Left out: 0 with no `created_at` row, 0 with zero norm, 0 unreadable, 0 of another dimension (the run stops above 5%), and 0 already seen in the other table.
 - **Logged ids with no vector now:** 324 distinct ids.
 - **Recall rows:** 4667. Unparseable: 0. With no session id: 20. Instinct layer: 40 in the primary period and 0 before it (left out and reported apart). Analysed: 4607 in the primary period (from 2026-09-02, engram 548c97dd) and 0 in the additive period before it.
 - **Recall days:** the analysed recalls span 50 days.
@@ -1827,8 +1866,8 @@ Every synthetic log also carries 40 instinct recalls, 20 recalls with no session
 
 - **C1′ fails.** D@10 = -0.052 [-0.077, -0.025] by session (44 clusters), -0.052 [-0.066, -0.037] by day (8 clusters). δ = 0.05.
 - **Order ties.** D_order = +0.002 [-0.010, +0.013] by session, +0.002 [-0.009, +0.012] by day.
-- **δ_order = 0.020**, the larger of the floor 0.02 and the permutation threshold +0.003: the 95th percentile, over set B's 20 shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies with SD 0.004.
-- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.001 [-0.004, +0.003] by session, -0.001 [-0.003, +0.002] by day.
+- **Rank p-value = 0.430**: 85 of 199 single shuffles score hit@10 at or above real order's 0.054. The shuffles average 0.052 with SD 0.007. Order needs p ≤ 0.05 and both lower bounds above 0.02.
+- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = -0.000 [-0.003, +0.002] by session, -0.000 [-0.004, +0.002] by day.
 - **Section 7:** E1′ fails: the trails part of the rail stops for Engram too.
 
 #### Hit rates on the primary steps
@@ -1916,8 +1955,8 @@ No analysed recalls in the additive period.
 
 ### Resources
 
-- **Peak RSS:** 192.3 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
-- **Wall time:** 96 s.
+- **Peak RSS:** 191.6 MiB. The cap is 512 MiB: RLIMIT_DATA was set, and peak RSS was checked after each stage.
+- **Wall time:** 555 s.
 - **Scratch:** none. Vectors stayed in memory.
 
 ## What all the runs share
@@ -1929,7 +1968,10 @@ No analysed recalls in the additive period.
 - **Arms:** (i), (i′), (ii), (iii) pure, (iii) matched, (iv) and (v), each a ranking of 10 memories excluding `a`'s ids, each backfilled by (i).
 - **Outcome:** D = hit@10(ii) − max(i, i′, iii, iii-m, iv, v), with the max inside each resample, and a bootstrap clustered by session (10,000 resamples, BCa, jackknife acceleration), δ = 0.05. **Holds:** the lower bound is above 0 and the upper bound is at least δ. **Negligible:** the lower bound is above 0 and the upper bound is below δ (real, but it builds nothing). **Fails:** the upper bound is below δ and the lower bound isn't above 0. **Inconclusive:** anything else, or when the day-clustered bootstrap's outcome differs. The classifier is checked at each boundary before every run.
 - **Insufficient:** fewer than 200 test steps, fewer than 20 test sessions, or one session above 15% of the steps.
-- **Order:** (ii) retrained on each training session in shuffled order (20 seeded shuffles, averaged). The training sequence is collapsed once, from real order. The shuffles permute those runs, and pairs then follow the Jaccard rule and the mirroring, with no re-collapse. Evaluation steps are the same in every arm. D_order = hit@10(ii) − hit@10(ii-s). A second, independent set of 20 shuffles against the first gives the null of the null, D_null (descriptive). Order carries information only if D_order's lower bound is above δ_order = max(0.02, the 95th percentile over set B's 20 shuffles of that single shuffle's hit@10 minus set A's average): a permutation threshold. The day bootstrap must agree.
+- **Order (revision 4):** (ii) is retrained on each training session's runs in shuffled order. The training sequence is collapsed once, from real order. The shuffles permute those runs, and pairs then follow the Jaccard rule and the mirroring, with no re-collapse. Evaluation steps are the same in every arm.
+  - **D_order** = hit@10(ii) − hit@10 averaged over set A's 20 shuffles, with the same bootstraps.
+  - **The rank p-value** comes from set B's K = 199 single shuffles: p = (1 + #{k : hit@10 of shuffle k ≥ hit@10 of real order}) / (K + 1).
+  - **Order carries information only if p ≤ 0.05 and D_order's lower bounds, by session and by day, are both above 0.02.** The permutation measures significance against training-order variance, and the bootstrap measures size against test sampling.
 
 ### Choices this script made where the plan leaves one
 
@@ -1951,8 +1993,8 @@ No analysed recalls in the additive period.
 16. **Shuffles.** As section 6′ now says, each training session's pre-`T` recalls are collapsed once, from real order. Each shuffle permutes those runs with a seeded generator, then forms consecutive pairs and applies the Jaccard rule and the `b ∖ a` mirroring. It never re-collapses. Per-step hit@10 is averaged over the 20 shuffles.
 17. **Day clusters.** The UTC day of the session's first recall, so each session sits in one day.
 18. **BCa.** 10,000 multinomial cluster resamples, seeded. `z0` comes from the share of resamples below the estimate, with ties counting half, clipped to [0.5/B, 1 − 0.5/B]. The acceleration comes from the leave-one-cluster-out jackknife.
-19. **Shuffle sets.** Set A uses seed streams (seed, period, j) and set B uses (seed, period, 1, j), for j = 0 to 19. Set A's average gives D_order. D_null = hit@10(set B's average) − hit@10(set A's average) is reported beside it (descriptive), with the very resample draws of D_order's bootstraps.
-20. **Order.** δ_order = max(0.02, the permutation threshold), where the threshold is numpy's linear 95th percentile, over set B's 20 shuffles, of (that shuffle's hit@10 − set A's average) on the primary steps. "Order carries information" needs D_order's session BCa lower bound above δ_order and its day BCa lower bound above the same δ_order.
+19. **Shuffle sets.** Set A is 20 shuffles with seed streams (seed, period, j), and its per-step average is D_order's comparator. Set B is K = 199 single shuffles with streams (seed, period, 1, k), on the primary steps only, and is computed only when the data are sufficient. D_null = hit@10(set B's average) − hit@10(set A's average) is descriptive, with the very resample draws of D_order's bootstraps.
+20. **Rank p-value.** It's computed on integer hit counts over the primary steps, so a shuffle that ties real order counts against it: p = (1 + #{k : hits of shuffle k ≥ real order's hits}) / 200. "Order carries information" needs p ≤ 0.05 and D_order's session BCa and day BCa lower bounds both above 0.02.
 21. **Permuted check.** `--permute-real` (synthetic logs only) replaces each session's real order with one more seeded shuffle of its recalls over their times before anything is computed. Order must then tie.
 22. **Insufficient.** Test sessions are those with at least one primary step. When the data are insufficient, no interval is computed: only counts and point hit rates appear.
 23. **Additive period.** It runs the same pipeline on its own: its own `T`, with training inside it. It's secondary and decides nothing.
