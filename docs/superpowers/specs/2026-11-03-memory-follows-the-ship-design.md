@@ -1,145 +1,253 @@
 # Memory follows the ship: Engram's side
 
 Rio Grande, 2026-11-03. Andy: "the engram probably shouldn't necessarily all be in folders. it should stay with you. at
-least parts of it". Tardis takes the station half (a session key resolves to its ship's home, the transport, the
-cluster station). This page is the Engram half: what follows the ship, who writes it, and how a session far from home
-uses it. Revision 1, for a fresh reviewer (station law section 3).
+least parts of it". Tardis takes the station half: a session key resolves to its ship's home, the cluster station, and
+"lighthouse crossing between peers", a spec of its own. This page is the Engram half: what follows the ship, who
+writes it, and how a session far from home uses it.
+
+Revision 2. Revision 1 (5e80abaa) got REVISE from a fresh reviewer: the core held, with four gaps (exactly-once across
+files, away mode for state-dependent calls, per-session state, numbering across processes) and a list of missing files
+and failure modes. Each is answered below.
 
 ## 1. Why
 
 - **The cluster.** The first supercomputer is 600 nodes. A ship's sessions run on whichever nodes its jobs land on,
   and a node's scratch disk dies with its job. With memory in folders, a ship's memory is lost, or split into hundreds
   of stores that never meet.
-- **The rail.** Trails are sessions taken as paths (rail mathematics, section 2). A trail needs the whole session in
-  one store. Split stores give broken paths, and no road forms from them.
+- **The rail.** A trail is the sequence of memories a session touched (rail mathematics, section 1). A trail needs the
+  whole session in one store. Split stores give broken paths, and no road forms from them.
 - **Cost.** Every Claude session runs its own Engram server today: about 240 MB at rest, and 1.1 GB if it loads the
   model itself. A thousand agents can't each carry that. One store host per site, serving many ships, can.
 
-## 2. What we found in the code (2026-11-03)
+## 2. What the code does today (checked by the reviewer, 2026-11-03)
 
-- A session's store is a file: `<memory_home>/.engram/instances/<ship>/graph.db`, plus `clipboard.db`,
-  `categories.db` and `knowledge.kuzu` beside it. If the instance store is missing, Engram falls back to the legacy
-  `~/.engram/graph.db` with a warning. That's how Rio Grande ran on the wrong store until this morning.
-- The MCP server and the three hooks (wake, nudge, sleep) each open `graph.db` themselves. Each hook resolves the
-  instance path with its own copy of the code.
-- Of the 45 MCP tools, 32 are marked as mutating. The other 13 still write: `recall` updates access counts and adds
-  log rows, and maintenance (decay, prune, compress, cohesion) rewrites derived state.
+- A ship's store is `<memory_home>/.engram/instances/<ship>/graph.db`, with `cold.db`, `clipboard.db`,
+  `categories.db`, `categories_v2.db` and `knowledge.kuzu` beside it. Only `config.resolve_db_path` warns when the
+  instance store is missing. The MCP server and the three hooks fall back to the legacy `~/.engram/graph.db`
+  **silently**. That's how Rio Grande ran on the wrong store until this morning.
+- Instance resolution has five copies (the three hooks, `server._init`, `config.py`), and 24 non-test lines build
+  `instances/` paths.
+- Of the 45 MCP tools, 32 are marked mutating. Of the other 13, `recall` writes (access counts, log rows) and
+  `search_code` reindexes into `graph.db`. The biggest writers aren't tools:
+  - **nudge** inserts and prunes episodes, and writes residues, `session_bias` and co-firing rows;
+  - **wake** runs the deep pass and the assessment state;
+  - **sleep** writes residues every time Stop fires.
+- One call can write several files. `remember` of delivered content writes the permission ledger and receipts before
+  the episode. Every tenth `remember` in a session runs `auto_compress` inline. `log_outcome` writes `categories.db`.
+  Prune writes `cold.db`.
+- Per-session state is shared store-wide: `context_prev_embedding` is one row; `session_bias` has no session column
+  and every wake clears it; the co-firing window uses a store-wide message index; one task context is active. The
+  server keeps more in module globals (`_session_id`, `_recall_scores`, `_wander_visits`, ...) under one lock.
 - The lighthouse crossing between stores is same-machine only, over a Unix socket.
 
 So two machines can't each keep a copy of a ship's store and merge later. Each would decay the same episodes,
-compress the same clusters into different semantics, and count the same recalls twice. Episodes alone would merge as
-a union, but everything derived from them would fork.
+compress the same clusters into different semantics, and count the same recalls twice.
 
 ## 3. Decisions
 
-### 3.1 What follows the ship, and what stays
+### 3.1 One home, one writer
 
-| Part | Where it lives | Why |
+- **Each ship has one home: one station holds its store.** For a laptop or the Pi, that's the ship's own machine. For
+  a cluster ship, it's the cluster station. A home is chosen when the ship docks, and moves only by export and import
+  (3.10), never by a session.
+- **The home's store host is the store's only writer.** It applies operations, runs maintenance on its own schedule
+  and answers reads. It keeps every invariant Engram has today: one decay clock, one compression, one model per store,
+  one `instance_id`.
+- One session is several processes: the MCP client and the short-lived hooks. All of them are clients, and none opens
+  a store.
+
+### 3.2 What lives where
+
+| Part | Where | Why |
 |---|---|---|
-| Episodes in both lanes, core marks, semantics, instincts, clusters, dream residue, task contexts, recall logs, resonances | **The ship's home store** | This is the ship: what it learned and how it attends. Andy's "stay with you". |
-| The knowledge graph (`knowledge.kuzu`) and evolving categories (`categories.db`) | The home, derived there | Built from the store, by the home's maintenance. |
-| The code index (`search_code`) | The machine, per checkout | It indexes files on that disk. |
-| The clipboard | The session's machine | Short-lived pins and reminders for one place. My call; it can move home later. |
+| `graph.db`, `cold.db`, `categories.db`, `categories_v2.db`, `clipboard.db` | **Home** | The ship's memory and attention. The clipboard reads the store and the embedder, so it lives with them. |
+| `knowledge.kuzu` | **Home**, opened only by maintenance | See 3.8. |
+| `jot`'s `scope="global"` notepad | **Home**: the ship's notepad | "Machine-wide" means nothing on a cluster. At migration, the machine's `~/.engram/notepad.db` is copied into each ship homed on that machine. |
+| `jot`'s `scope="project"` notepad | The checkout (`<repo>/.engram/notepad.db`) | Notes about a repository stay with it. |
+| The code index | The checkout, in `<repo>/.engram/code-index.db` | It indexes files on that disk. It's embedded by the machine's shared embedder when one runs; otherwise `search_code` says there's no index. Migration drops the code-index rows from `graph.db`. |
+| Publisher policy, receiver settings, the published house | **Home**, beside the store | Sharing is decided where the store is. |
+| `permissions.db`, `permission-uses.db` | **Home**: one pair per owner at each station, under that owner's memory home there | Each home's owner sets its permissions (rail commons, principle 2). Signing stays the owner's own act. |
+| The genome (`genome/graph.db`, `signals.db`) | **The owner's machine** | It's the owner's. It syncs into a ship's store only at a home on the owner's machine. Anywhere else it needs an imprint. |
+| `~/.reader/reader.db` | The machine that has it (the Mac) | The deep pass reads it only where it is. |
 | A person's memories | Never in a ship's store | Imprints, under the owner's consent, as today. |
 
-### 3.2 One home, one writer
+### 3.3 Operations through a local outbox
 
-- **Each ship has one home: one station holds its store.** For a laptop or the Pi, that's the ship's own machine's
-  peer. For a cluster ship, it's the cluster station. A ship's home is chosen when it docks, and moves only by an
-  explicit export and import, never by a session.
-- **The home's store host is the store's only writer.** Sessions anywhere send it operations. It applies them in the
-  order it receives them, runs maintenance, and answers reads. SQLite's single writer then holds by design rather
-  than by luck.
-- This keeps every invariant Engram has today: one decay clock, one compression, one model per store, one
-  `instance_id`.
+- **Every operation goes into a local outbox before it's sent,** away or not. The outbox is one SQLite file per
+  session: `<outbox_dir>/<ship>/<session_id>.db`. The MCP client and the hooks share it.
+- **The outbox numbers operations.** `seq` is the outbox's own row id, assigned inside the insert's transaction, so
+  two processes can't take the same number, and a killed process leaves no gap.
+- **One sender at a time** drains the outbox in `seq` order, under a file lock. A hook that can't take the lock leaves
+  its operation for the holder or the next sender. An operation leaves the outbox only after the home acknowledges it.
+- **Exactly once by a high-water mark.** The home keeps one row per session: the highest `seq` applied and its client
+  time. It applies `seq = high + 1` and nothing else. A replayed `seq <= high` is acknowledged and changes nothing.
+  A `seq > high + 1` is refused with `gap` and the expected number, and the sender resends from there. The row is
+  updated in the same `graph.db` transaction as the operation's writes. This needs no retention rule: one small row
+  per session, kept as long as the store.
+- **A lost outbox** (a corrupt file) is the only source of a real gap. The client then sends an explicit `skip to n`
+  operation, which the home records as a gap with its reason. Nothing is applied twice, and nothing stalls silently.
+- **Ids are minted by the client:** `op_id` (a UUID, for cross-checking and logs), an episode's id in `remember`, and
+  the `recall_id` of every recall. So no answer needs to be stored for a replay, and no stored answer holds content.
+- **Time is the client's, bounded.** Each operation carries its client time. The home clamps it between the session's
+  last applied client time and the time it received the operation. Decay and trails use the clamped time, so hours of
+  away work don't land as one burst.
 
-### 3.3 Operations, not rows
+### 3.4 One operation, one `graph.db` transaction
 
-- A session's Engram calls become requests to the home's store host: the same 45 tools, with the same arguments and
-  the same answers. The MCP server a session runs becomes a thin client. It holds no store and loads no model.
-- **Every write carries an operation id,** minted by the session (a UUID). The store host records applied ids in an
-  `applied_ops` table, in the same transaction as the write. A replayed operation changes nothing and returns its
-  first answer.
-- **`remember` returns its episode id at once,** minted by the session as part of the operation. The home refuses an
-  id it already holds under a different operation.
-- Each operation carries `session_id` and a per-session sequence number. The home applies one session's operations
-  in sequence order, so a session's trail lands as the path it was.
+- An operation's writes, and the session's high-water mark, are one `graph.db` transaction.
+- **Writes that aren't decisions move behind `graph.db`.** The operation writes rows in `graph.db`. Maintenance then
+  carries them to `categories.db`, `cold.db`, the knowledge graph and the genome, idempotently by row id. So
+  `log_outcome` no longer writes `categories.db` inline, and `remember(genome=True)` marks its episode for the genome
+  instead of writing it.
+- **`auto_compress` leaves `remember`.** Compression runs only in scheduled maintenance.
+- **The permission ledger and receipts are the exception.** A delivered copy's record has to exist before the copy.
+  Each record carries the operation's `op_id`, and the writer refuses a second record with the same `op_id`. A replay
+  after a crash between the record and the episode then skips the record and commits the episode. This is the one
+  change to the permissions code, and it's safety code, so its review follows station law section 2.
 
-### 3.4 The home embeds
+### 3.5 Away from home
 
-- A session sends text, never vectors. The home's shared embedder embeds documents and queries.
-- So a store holds one model's vectors, whatever machine its sessions ran on. A vector from another model, or a
-  hostile one, would bend the store's geometry silently. Refusing vectors from clients makes that impossible, not
-  just detectable.
+Every operation is one of four kinds. The plan's first task checks this table against the code, tool by tool.
 
-### 3.5 Away from home: the journal
+| Kind | Live | Away | Operations |
+|---|---|---|---|
+| **Sent** | Applied at once | Kept in the outbox, applied on reconnect. Its answer is marked `provisional`. | `remember` (except delivered content and `genome=True`), `log_outcome`, `instinct_feedback`, `challenge_instinct`, `mark_core`, `unmark_core`, `unmark_core_batch`, `add_anchor`, `task_focus`, `task_update`, `task_done`, `dream_capture`, `dream_react`, `assessment_schedule`, `assessment_report`, `jot`, `erase`, `clipboard_pin`, `clipboard_unpin`, `clipboard_remind`, `clipboard_dismiss`; nudge's capture, residue, bias and co-firing writes; sleep's residues and `auto_capture_outcomes` |
+| **Touch** | The read runs at home and records what it touched | The read runs on the session's snapshot. The outbox records a touch: the ids seen, in order, with the `recall_id` and the client time. On reconnect the home records the touch. It never re-runs the read. A touched memory that's gone since is logged as gone. | `recall`, `look`, `wander`, `dream_surface`, `clipboard_view`; nudge's recall |
+| **Snapshot** | Read at home | Read on the snapshot, marked `degraded: ["home"]` | `core_memories`, `introspect`, `status` (it also says the home is unreachable), wake's orientation |
+| **Live only** | Applied at home | Refused: `home unreachable` | `share`, `unshare`, `permit`, `permissions`, `shares`, `compress`, `compress_commit`, `retire_instinct`, `propose_retirement`, `revive`, `recall_cold`, `dream_verify`, `reflect`, `graph_view`, `remember` of delivered content or with `genome=True` |
+| **Machine** | No home involved | Same | `search_code`, `reindex` (the code index is per checkout) |
 
-- A session that can't reach its home keeps a **journal**: an append-only SQLite file of its write operations, on
-  local disk (`<memory_home>/.engram/journal/<ship>/<session>.db`).
-- **Reads while away** use the newest read-only snapshot the session holds, if any. Every answer then says
-  `degraded: ["home"]`, as a recall now says `neighbors` when no lighthouse was reached. A session never takes a
-  snapshot for the live store without knowing.
-- **On reconnect,** the client replays the journal in order. Replay is idempotent (3.3), so a crash mid-replay just
-  replays again. A replayed journal is deleted only after the home acknowledges its last operation.
-- **On a cluster node,** the Stop hook drains the journal to the cluster station before the job ends. A node that dies
-  without reaching it loses that session's unsent operations. The station's internal network makes that rare; the
-  spec says it plainly rather than promising it can't happen.
-- Snapshots: a session may fetch one at start (the home sends a read-only copy of the store, capped in size). A
-  session that never fetches one simply has no reads while away, and says so.
+- **Paired operations work by client-minted ids.** An away recall's touch carries its `recall_id`, so a later
+  `log_outcome` naming it lands after it in `seq` order and finds it. `compress` and `compress_commit` are live only,
+  because the pending compression lives in the home's memory. `dream_verify` is live only, and an away recall applies
+  no dream bias, so there's nothing to verify.
+- **Away search.** A snapshot recall embeds its query with the machine's shared embedder when one runs the store's
+  model (checked by model id). Otherwise it searches by text alone. Its answer says which: `away_search: "vector"` or
+  `"text"`.
+- **Snapshots.** A session may fetch a read-only snapshot at start, capped in size, and refresh it. A session without
+  one answers Touch and Snapshot reads with `home unreachable`.
+- **A refusal at replay reaches the ship.** A provisional operation can be refused when it's applied, for example by
+  the permission gate, which decides at application time. The home records each refusal with the session, `seq` and
+  reason, and the ship's next wake shows them. The session that sent it may be gone by then.
 
-### 3.6 The home serves its own ship only
+### 3.6 Many sessions of one ship at once
 
-- The store host answers a session only for the ship that session authenticated as (Tardis's half: the session key
-  and the station's identity check). No request names a store path; the home maps the authenticated ship to its
-  store.
-- Another ship reads this store only through the lighthouse crossing, under the store's publisher policy, with
-  receipts. That's sharing, and it belongs to the rail and the commons (rail-commons principle 1), not to this spec.
+- **A migration keys per-session state by `session_id`:** `context_prev_embedding`, `session_bias` (each wake clears
+  only its own session's rows) and the co-firing window, whose message index becomes per session.
+- **Task contexts:** one active context per session. `task_focus` archives only that session's previous context.
+  Wake resumes the most recently updated open context that no live session holds. A session holds a context while its
+  last operation is under 2 hours old. A ship running one session at a time keeps today's behaviour.
+- **Claims:** the next-session assessment and an unreacted dream residue each go to the first session that claims
+  them, atomically.
+- **The server's globals become per-store and per-session contexts, with one lock per store.** This refactor is most
+  of stage 1's work.
 
-### 3.7 Memory at the home
+### 3.7 The home embeds, with an interactive lane
 
-- One store host process serves many ships. It keeps at most `max_open_stores` stores open (least recently used
-  closes first), with Engram's caches bounded per store.
-- Maintenance runs one store at a time, under one lock, as imprint jobs do.
-- Budgets, measured on the Pi before stage 2 is called done: the store host with 10 ships' stores open stays under
-  512 MB resident, besides the shared embedder. A thin client stays under 80 MB.
+- Clients send text, never vectors. A request carrying a vector is refused. So a store holds one model's geometry,
+  whatever machine its sessions ran on.
+- The shared embedder gets a **priority lane**: a query from a recall or a nudge goes ahead of batch work (maintenance,
+  experiments). Stage 3 waits for it.
+- **Deadlines.** Each operation carries the client's deadline. The nudge's call home has 4 seconds, the budget the
+  nudge's embed already has on `engram-neighbors-visible` (6e4f5b16, not yet on main). On a miss, the hook skips and
+  says so, and never blocks the prompt. A recall applied after its deadline is recorded as expired, with no touches,
+  so no one is said to have seen what no one read.
+
+### 3.8 The store host
+
+- **One process serves many ships.** It keeps at most `max_open_stores` stores open, and closes the least recently
+  used first. Opening or reopening a store runs no maintenance.
+- **Maintenance runs on a schedule,** per store, by maintenance workers, one store per worker at a time. Each store
+  records its last maintenance in `meta`. A store idle for a long time decays as today's first open would; the host
+  never prunes more than the in-process server would have.
+- **Throughput.** A fresh store took about 40 s to compress (measured 2026-09-02). With one worker, 1,000 stores take
+  about 11 hours. The host runs `ceil(stores × measured seconds per store / 12 hours)` workers, so every store is
+  maintained at least twice a day. Steps that need Ollama (dedup, framing, knowledge extraction) run only where
+  Ollama runs. The Pi has none.
+- **The knowledge graph** is opened only by a maintenance worker, one store's at a time, with its 256 MB buffer pool.
+  Recall at a host doesn't search it until a pooled design exists.
+- **Budgets,** measured on the Pi before stage 1 is called done: the host with 10 stores open stays under 512 MB
+  resident, besides the shared embedder and one maintenance worker. A thin client stays under 80 MB.
+
+### 3.9 Failure modes
+
+- **A poisoned operation** that fails 3 times is quarantined: recorded with its error, counted as a gap, and shown at
+  the ship's next wake. The session's later operations continue.
+- **A corrupt store** is marked unavailable. Its clients get `refused: store unavailable`, and every other store keeps
+  serving.
+- **Out of memory.** The host runs under a memory cap and restarts. On a cluster, hosts are sharded by ship, so one
+  kill takes down a share of them, not all. Clients see `unreachable` and keep their outboxes.
+- **Disk full:** writes get `retry`, and outboxes hold.
+- **A dead cluster node.** On a cluster, outboxes live on the shared filesystem, not node scratch. The station, or
+  the ship's next job, drains a dead node's outbox. Each outbox is one session's, so drains don't collide. Stop isn't
+  relied on: it has 5 s and doesn't run when the scheduler kills a job.
+
+### 3.10 Migration and moving a home
+
+- An existing instance store becomes its ship's home in place. It keeps its `instance_id`; it's never forked.
+- The legacy `~/.engram/graph.db` stays as a read-only archive, and no host or client opens it. Rio Grande's
+  misrouted 2026-11-02 episodes are already in `instances/rio-grande` (copied 2026-11-03).
+- No silent fallback: a client whose ship has no home store says so and stops.
+- **Export and import:** a SQLite backup of `graph.db` and its side files, with a manifest (ship, `instance_id`,
+  counts, digests). Import refuses an `instance_id` already homed at that station. The old home marks the store moved
+  and refuses writes with `moved`, naming the new home.
+
+### 3.11 The interface with Tardis's half
+
+- **The request envelope.** From authentication, never from the request body: `ship`, `agent_ref`, and whether the
+  agent acts for the owner (gate G13). From the client: `session_id`, `seq`, `op_id`, `client_time`, `deadline_ms`,
+  `kind`, and the tool and its arguments.
+- **Error kinds:** `unreachable` (keep the outbox), `retry` (with a delay), `gap` (with the expected `seq`), `refused`
+  (permanent, with a code), `moved` (with the new home).
+- **A ship reaching its own home is a different route from a crossing.** Its own store: every tool, read and write,
+  no publisher policy. A crossing: another store, under its policy, recall and read only, with receipts. Two routes,
+  two checks, so a bug in one can't widen the other.
+- **Stage 1 can't prove the ship.** On the Pi, ships share the uid `andy`, so a local socket can't tell them apart,
+  and any of them could open another's file anyway. Stage 1 proves routing: a client configured as ship A never
+  touches B's store. The "one ship" test belongs to stage 3, with authenticated transport.
 
 ## 4. Stages
 
 Each is small, reversible and measured, in the commons' order.
 
-1. **The store host on one machine.** The Pi's ships use their stores through a local store host over a Unix socket.
-   The MCP server and the three hooks become clients, and their three copies of instance resolution become one.
-   - Measure: Engram's MCP tool tests pass against the client, as they do against the in-process server.
-   - Rollback: the client's `mode = "local"` opens the store in process, as today.
-2. **The journal and away mode.** The home is made unreachable on purpose.
-   - Measure: writes land after reconnect, exactly once, in session order. Reads say `degraded`.
-3. **Across machines.** The same requests over the peer transport (Tardis's half): a Tardis session uses its home
-   store from another machine.
-4. **The cluster station.** A cluster ship's sessions on many nodes share one store at the cluster station, and their
-   trails form there.
+1. **The store host on one machine.**
+   - The Pi's ships use their stores through a local host over a Unix socket. The MCP server and the hooks become
+     clients, and the five copies of instance resolution become one.
+   - The work: the server refactor (3.6), the outbox (3.3), side writes behind `graph.db` (3.4), the per-session
+     migration, and scheduled maintenance.
+   - Rollback: `mode = "local"` opens the store in process, as today.
+2. **Away mode.** The home is made unreachable on purpose, with snapshots and the operation kinds (3.5).
+3. **Across machines.** The same requests over Tardis's transport, with the interactive embedder lane: a Tardis session
+   uses its home store from another machine.
+4. **The cluster station.** A cluster ship's sessions on many nodes share one store, with outboxes on the shared
+   filesystem, and their trails form there.
 
 ## 5. Tests that prove it
 
-- **Parity:** every MCP tool's existing tests, run through the client against a store host, give the same answers.
-- **Exactly once:** an operation sent twice, or replayed after a crash at each step, changes the store once.
-- **Order:** two sessions of one ship writing at once lose nothing, and each session's operations land in its own
-  sequence order.
-- **No vectors:** a request carrying a vector is refused, and nothing in the protocol accepts one.
-- **One ship:** a session authenticated as ship A can't read or write ship B's store by any argument.
-- **Away:** with the home unreachable, every read says `degraded: ["home"]`, and no read pretends to be live.
-- **No silent fallback:** a client whose ship has no home store says so and stops. It never falls back to another
-  store, as the instance resolution does today.
-- **Memory:** the budgets in 3.7, measured on the Pi.
+- **Parity:** every MCP tool's existing tests, run through the client against a host, give the same answers, and wake's
+  orientation text is identical.
+- **Hooks in time:** nudge, wake and Stop through the client finish within their timeouts while another store is
+  mid-compress, and a missed deadline skips and says so.
+- **Exactly once:** an operation sent twice, or replayed after a crash at each step (including between the ledger
+  record and the episode), changes the store once.
+- **Numbering:** the MCP client and a hook in one session never take the same `seq`, a hook killed mid-send leaves no
+  gap, and a real gap is refused, resent and never stalls.
+- **Concurrent sessions:** two sessions of one ship writing at once lose nothing, land in their own order, and share no
+  per-session state (bias, topic shift, co-firing, task context).
+- **Away:** each operation behaves as its kind says, including a `log_outcome` of an away recall, a refused
+  `compress_commit` and `dream_verify`, and a refusal at replay that shows at the next wake.
+- **No vectors:** a request carrying a vector is refused.
+- **Migration:** a migrated store keeps its `instance_id`, counts and decay state, and closing and reopening it runs no
+  maintenance.
+- **Quarantine:** a poisoned operation is quarantined after 3 failures while other ships keep working.
+- **No silent fallback:** a client with no home store says so and stops.
+- **Memory:** the budgets in 3.8, measured on the Pi.
+- **One ship** (stage 3): a session authenticated as ship A can't read or write ship B's store by any argument.
 
 ## 6. Not in this spec
 
-- The station API, session authentication and the transport between machines: Tardis's half.
+- The station API, session authentication and the transport: Tardis's half.
 - Sharing between ships: the lighthouse crossing and the rail commons.
 - A person's memories: imprints.
-- Copies of a home for failover. A home is backed up as stores are today; replication waits until a site needs it.
-
-## 7. Open, for the reviewer and Tardis
-
-- Should the clipboard follow the ship too? It's cheap either way.
-- Should a ship ever have two homes, say one per site, with the rail between them? My answer is no for now: one
-  home, and the rail carries what one site learns to another.
+- Copies of a home for failover. A home is backed up as stores are today.
+- A ship with two homes. One home, and the rail carries what one site learns to another (the reviewer agreed).
