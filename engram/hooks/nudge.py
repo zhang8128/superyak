@@ -151,16 +151,17 @@ def nudge():
 
         # Embed the user's message
         import numpy as np
-        from embeddings import create_embedding_provider
+        from embeddings import EmbedderUnavailableError, create_embedding_provider
 
-        from embeddings import EmbedderUnavailableError
         # The hook has 10 s; a shared embedder busy with a large batch would hold it past that, and Claude Code then
         # discards the hook's output with a timeout message. Give up within NUDGE_EMBED_SECONDS and say so instead.
         embedder = create_embedding_provider(response_timeout=NUDGE_EMBED_SECONDS)
         try:
             query_emb = embedder.embed([prompt], prefix="search_query")[0]
-        except EmbedderUnavailableError:
-            print("# nudge: the shared embedder is busy; this prompt's recall was skipped", file=sys.stderr)
+        except EmbedderUnavailableError as error:
+            # The same error covers a busy service, one that's down, and a model mismatch, so name it.
+            print(f"# nudge: the shared embedder didn't answer within {NUDGE_EMBED_SECONDS:g} s ({error}); "
+                  "this prompt's recall was skipped", file=sys.stderr)
             return
         packed_query = _pack_embedding(query_emb)
         now = datetime.now(timezone.utc).isoformat()
