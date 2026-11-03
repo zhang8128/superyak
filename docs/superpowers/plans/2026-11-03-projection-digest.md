@@ -268,3 +268,64 @@ steps are Andy's, in the one sitting the crossing plan names:
 - **Writer drift reads as a tear.** The suite-wide conftest check and the drift rules are the guard, and `rebuild` is
   the live recovery.
 - **Descriptors kept open** grow by one per file replacement in a process's life, which is bounded by restores.
+
+## Plan re-check: decided items (approved)
+
+The same fresh reviewer re-read revision 3 and gave **APPROVE WITH CHANGES**
+([re-check](../reviews/2026-11-03-projection-digest-plan-recheck.md)). M1, M3, S2, S3, S5, S6, S9 and N1-N8 are closed.
+It said a third plan review isn't needed, since the build's review can check these. Each remaining item is decided
+here, and each overrides the text above where they differ.
+
+**Must-fix 1: the descriptor closes when no connection needs it.** The reviewer confirmed it's sound against SQLite's
+locking, but one descriptor per ledger ever read would exhaust a test process's limit (about 1,180 tests; the Pi's
+default is 1,024, the Mac's 256).
+- **The count:** the process keeps one descriptor per (dev, inode), with a count of this process's open SQLite
+  connections on that inode, StateRows and LogTimes included.
+- **When it closes:** only when the count reaches zero. Then the process holds no SQLite lock on that inode, so closing
+  drops nothing.
+- **How it opens:** with `O_RDONLY | O_CLOEXEC`, so hooks and subprocesses don't inherit it (Rio Grande, ee2d95a3). It's
+  `fstat`ed after opening and must match the path's (dev, inode).
+- **The test:** 2,000 ledgers opened and closed in one process, under `RLIMIT_NOFILE` 256.
+- **Risks, named for `lsof` readers:** after a restore replaces the inode, a still-open descriptor pins the deleted
+  file's space until that process's last connection on it closes.
+
+**Must-fix 2: late connections accept a verified change.** StateRows and LogTimes still require the checked (dev,
+inode).
+- A changed counter is **accepted when the current key matches the in-process memo or the marker,** after one 50 ms
+  re-read. That's an ordinary verified write landing mid-build, which today's lazy reads allow by design
+  (permission_ledger.py:691-693).
+- Only an unverified change refuses.
+
+**M4: the inode test forges the marker,** as the head test does: right counter, ctime and head, and a wrong inode. A
+renamed file also changes ctime, so a rename-over would let the "drops inode" mutant live.
+
+**S1: writers wait out a rare check.**
+- A full check holds SHARED for its whole length, which is about 3.8 s on a loaded Pi. So `_append`'s busy timeout is
+  12 s, against `BUSY_MS`'s 5 s elsewhere, and the Pi's rare-path budget stays at 8 s.
+- New readers can queue behind a pending writer during a rare check. That's accepted for a rare path, and named in
+  Risks.
+
+**S4: rebuild.**
+- **Task 0c** measures rebuild at the large shape before and after this change, and sets a rebuild budget of the
+  measured time plus 25%. `REBUILD_LEDGER_S` is the eligible set's budget, not rebuild's.
+- **Rebuild and migrate** own a fresh file, so they skip the key protocol entirely, with no memo, marker or key reads
+  per append. They run one full check at the end.
+
+**S8: the suite-wide conftest check** runs only on ledgers under 5,000 projected rows, and is off in the budget tests
+(an environment flag), so U24's 811,000-append rebuild isn't recomputed per append.
+
+**Writers' first step** (should-fix) gets the same 50 ms marker re-read before it falls back to a full check.
+
+**`SCHEMA_VERSION`** (should-fix):
+- New code opens "1", which is unstamped, `off` and `shadow` only, and "2".
+- **The way back,** if this branch is ever reverted: scripts/unstamp_ledger.py sets the version to "1" and deletes the
+  `projection*` keys and the marker. It's a writing act on the ledger, so it's the person's terminal yes, and it's
+  tested.
+
+**Nits:**
+- A writing open **tries** `PRAGMA journal_mode=DELETE` and carries on if the database is locked. The WAL pin still
+  forces a full check until the switch succeeds.
+- After the writer's three tries, it raises a new `LedgerBusy`, not `LedgerUnreadable`, since callers read the latter as
+  a torn ledger.
+- The unstamped cause text gives the whole recovery: "run `engram-permissions rebuild`, then the move step it prints".
+- A `meta` upsert subtracts the old row's hash before adding the new one.
