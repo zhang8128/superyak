@@ -126,6 +126,52 @@ def _enforce_raised_as_before():
         yield
 
 
+# The suite-wide check runs on ledgers under this many projected rows (the plan's re-check, S8): U24's reference
+# ledger, rebuilt by 811,000 appends, would be recomputed per append.
+PROJECTION_CHECK_ROWS = 5000
+
+
+@pytest.fixture(autouse=True)
+def _projection_follows_every_append(monkeypatch):
+    """The projection digest plan's Task 3 (S8), in place of a random-act generator: after every `Ledger._append` in
+    this suite, on a ledger that keeps the digest and holds under PROJECTION_CHECK_ROWS projected rows,
+    `meta.projection` and `projection_parts` are the tables recomputed (`projection_now`), read in one transaction.
+    ENGRAM_PROJECTION_CHECK=off turns it off (the budget tests, and a test whose own assert must be the one that
+    fails)."""
+    import os
+
+    import permission_ledger
+    real = permission_ledger.Ledger._append
+
+    def checked(self, *args, **kwargs):
+        seq = real(self, *args, **kwargs)
+        if os.environ.get("ENGRAM_PROJECTION_CHECK") != "off":
+            _check_projection(self.conn, seq)
+        return seq
+
+    monkeypatch.setattr(permission_ledger.Ledger, "_append", checked)
+    yield
+
+
+def _check_projection(conn, seq):
+    import permission_ledger
+    conn.execute("BEGIN")
+    try:
+        meta = {k: v for k, v in conn.execute("SELECT key, value FROM meta")}
+        if "projection_parts" not in meta:
+            return                                       # a ledger made before the digest keeps none (D5)
+        held = permission_ledger._read_parts(meta["projection_parts"])
+        if sum(n for n, _ in held.values()) >= PROJECTION_CHECK_ROWS:
+            return
+        whole, parts = permission_ledger.projection_now(conn)
+    finally:
+        conn.execute("COMMIT")
+    differs = [p for p in parts if parts[p] != held[p]]
+    assert meta["projection"] == f"{seq}:{whole}" and not differs, (
+        f"meta.projection is not the tables after seq {seq}: {meta['projection']} against {seq}:{whole}, the parts "
+        f"that differ: {differs}")
+
+
 @pytest.fixture
 def route_open(monkeypatch):
     """Route waits until trails ships (`imprint_filter.ROUTE_OPEN`, Serenity's

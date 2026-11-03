@@ -10,8 +10,8 @@ import pytest
 import permission_ledger
 from lighthouse_protocol import canonical_json
 from permission_ledger import SCHEMA_VERSION, Ledger, LedgerUnreadable, ledger_path, projection_now
-from permissions import _COLUMNS
-from tests.permissions_support import ANDY, M2, M3, MEDICAL, do, e1_county_ledger
+from permissions import _COLUMNS, RuleError
+from tests.permissions_support import ANDY, M2, M3, MEDICAL, T, do, e1_county_ledger
 
 
 # ---------------------------------------------------------------- Task 0b: what this Python gives the key read
@@ -202,4 +202,128 @@ def test_2_a_projection_behind_head_names_both_seqs_and_any_sqlite_error_reads_u
     _sql(tmp_path, "DROP TABLE copies")
     with pytest.raises(LedgerUnreadable, match="the projection digest could not be checked: no such table: copies"):
         _full_check(tmp_path)
+
+
+# ---------------------------------------------------------------- Task 3: the incremental writer (D3)
+
+@pytest.fixture
+def own_asserts(monkeypatch):
+    """The suite-wide check after each append (tests/conftest.py) off, so a test's own assert is the one that fails."""
+    monkeypatch.setenv("ENGRAM_PROJECTION_CHECK", "off")
+
+
+def _follows(led) -> bool:
+    """Whether meta.projection and projection_parts are the tables recomputed now, read in one transaction."""
+    led.conn.execute("BEGIN")
+    try:
+        meta, top = led.meta(), led.seq()
+        whole, parts = projection_now(led.conn)
+    finally:
+        led.conn.execute("COMMIT")
+    return meta["projection"] == f"{top}:{whole}" and permission_ledger._read_parts(meta["projection_parts"]) == parts
+
+
+def test_3_a_new_ledger_is_stamped_with_its_projection_at_seq_0(tmp_path):
+    led = Ledger._blank(tmp_path, "ledger-fixed")
+    expected = permission_ledger._new_parts()
+    for kv in (("ledger_id", "ledger-fixed"), ("schema_version", SCHEMA_VERSION)):
+        permission_ledger._fold(expected, "meta", kv)
+    meta = led.meta()
+    assert meta["projection"] == "0:" + permission_ledger._parts_digest(expected)
+    assert meta["projection_parts"] == permission_ledger._parts_text(expected)
+    led.close()
+
+
+# (what, a body, a read of the value it left, the value SQLite holds): affinity converts a bound value, so `_project`
+# hashes the row it reads back, never the values it bound
+_HAND_MADE = [
+    ("an int into TEXT", {"insert": [{"table": "groups", "row": {"id": "group:g1", "owner": 5, "created_seq": "@seq"}}]},
+     "SELECT owner FROM groups", "5"),
+    ('"5" into INTEGER', {"insert": [{"table": "persons", "row": {
+        "id": "person:p5", "home": "place:home/p5", "is_admin": "5", "created_seq": "@seq"}}]},
+     "SELECT is_admin FROM persons WHERE id = 'person:p5'", 5),
+    ("1.5 into INTEGER", {"insert": [{"table": "lane_notes", "row": {
+        "object": "mem:S/episode/m1", "lane": "work", "at": 1.5, "seq": "@seq"}}]}, "SELECT at FROM lane_notes", 1.5),
+    ("2.0 into INTEGER", {"insert": [{"table": "lane_notes", "row": {
+        "object": "mem:S/episode/m1", "lane": "work", "at": 2.0, "seq": "@seq"}}]}, "SELECT at FROM lane_notes", 2),
+    ("a bool", {"insert": [{"table": "persons", "row": {
+        "id": "person:pb", "home": "place:home/pb", "is_admin": True, "created_seq": "@seq"}}]},
+     "SELECT is_admin FROM persons WHERE id = 'person:pb'", 1),
+    ("a dict", {"insert": [{"table": "groups", "row": {"id": "group:g2", "owner": {"b": 1, "a": [2]},
+                                                       "created_seq": "@seq"}}]},
+     "SELECT owner FROM groups", '{"a":[2],"b":1}'),
+    ("the salt", {"insert": [{"table": "places", "row": {"id": "place:x", "is_root": 1, "created_seq": "@seq",
+                                                          "pseudonym_salt": "00ff" * 8}}]},
+     "SELECT pseudonym_salt FROM places WHERE id = 'place:x'", bytes.fromhex("00ff" * 8)),
+]
+
+
+@pytest.mark.parametrize("what, body, read, held", _HAND_MADE, ids=[h[0] for h in _HAND_MADE])
+def test_3_hand_made_bodies_hash_the_value_sqlite_holds(tmp_path, own_asserts, what, body, read, held):
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    led._append("hand-made", "x", ANDY, "terminal", body, at=T("2026-11-02"))
+    got = led.conn.execute(read).fetchone()[0]
+    assert (got, type(got)) == (held, type(held))
+    assert _follows(led), what
+    led.close()
+
+
+def test_3_an_update_that_changes_its_own_where_column(tmp_path, own_asserts):
+    """The rowids are read before the update and the rows re-read by them after: re-run, the where (removed_seq IS
+    NULL) would match none of the rows it changed."""
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    led._append("group", "group:g", ANDY, "terminal", {"insert": [
+        {"table": "groups", "row": {"id": "group:g", "owner": ANDY, "created_seq": "@seq"}},
+        *({"table": "group_members", "row": {"group_id": "group:g", "agent": a, "added_seq": "@seq"}}
+          for a in ("agent:a", "agent:b"))]}, at=T("2026-11-02"))
+    seq = led._append("ungroup", "group:g", ANDY, "terminal", {"update": [
+        {"table": "group_members", "where": {"group_id": "group:g", "removed_seq": None},
+         "set": {"removed_seq": "@seq"}}]}, at=T("2026-11-03"))
+    assert [r[0] for r in led.conn.execute("SELECT removed_seq FROM group_members")] == [seq, seq]
+    assert _follows(led)
+    led.close()
+
+
+def test_3_meta_set_by_a_body_is_re_read_and_its_old_row_taken_out(tmp_path, own_asserts):
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    for admins in ("person:andy,person:jenn", "person:andy"):
+        led._append("admins", "meta", ANDY, "terminal", {"meta": {"admins": admins}}, at=T("2026-11-02"))
+        assert _follows(led)
+    led.close()
+
+
+def test_3_a_body_never_sets_the_projection_keys(tmp_path):
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    before = led.seq()
+    for key in ("projection", "projection_parts"):
+        with pytest.raises(RuleError, match=f"meta.{key} follows the tables and is never set by a log body"):
+            led._append("x", "meta", ANDY, "terminal", {"meta": {key: "1:00"}}, at=T("2026-11-02"))
+    assert led.seq() == before
+    led.close()
+
+
+def test_3_the_authorizer_refuses_a_delete_on_a_projection_table(tmp_path):
+    """S8: rows are only inserted, or updated to set later columns, so no writing connection deletes one."""
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    for table in ("collection_members", "places", "meta"):
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            led.conn.execute(f"DELETE FROM {table}")
+    led.close()
+    led = Ledger.open(tmp_path)
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        led.conn.execute("DELETE FROM persons WHERE id = ?", (ANDY,))
+    assert led.state().persons[ANDY].home == "place:home/andy"
+    led.close()
+
+
+def test_3_the_suite_checks_the_projection_after_every_append(tmp_path, monkeypatch):
+    """S8's suite-wide check (tests/conftest.py), in place of a random-act generator: a row a writer never hashed
+    fails the next append, unless the check is off."""
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    _sql(tmp_path, f"INSERT INTO groups VALUES('group:raw', '{ANDY}', 1)")
+    with pytest.raises(AssertionError, match="meta.projection is not the tables"):
+        led._append("x", "a", ANDY, "terminal", {}, at=T("2026-11-02"))
+    monkeypatch.setenv("ENGRAM_PROJECTION_CHECK", "off")
+    led._append("x", "b", ANDY, "terminal", {}, at=T("2026-11-03"))
+    led.close()
 

@@ -4,10 +4,28 @@ through `Ledger.perform` or `Ledger._append`."""
 import json
 import sqlite3
 
-from permission_ledger import Ledger, ledger_path
+from permission_ledger import Ledger, _parts_text, ledger_path, projection_now
 
 OWNER = "person:andy"
 HOME = "place:home/andy"
+
+
+def restamp_projection(home):
+    """`meta.projection` and `projection_parts` set to the tables as they are now, at the log's last seq, after a
+    fixture wrote rows by its own SQL: the stamp a writer would have kept had it made them (the projection digest
+    plan, Task 6). For fixtures only: on a real ledger this would bless whatever tear it holds (D5). A ledger that
+    keeps no digest is left as it is."""
+    conn = sqlite3.connect(ledger_path(home), isolation_level=None)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM meta WHERE key = 'projection_parts'").fetchone() is not None:
+            whole, parts = projection_now(conn)
+            top = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM ledger_log").fetchone()[0]
+            conn.executemany("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                             [("projection", f"{top}:{whole}"), ("projection_parts", _parts_text(parts))])
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
 
 
 def _body(size: int | None, seq: int) -> str:
@@ -65,6 +83,7 @@ def synthetic_ledger(home, memories, *, records=False, body_bytes=None, log_rows
          for s in range(1, seqs + 1)))
     conn.execute("COMMIT")
     led.close()
+    restamp_projection(home)
     return ledger_path(home)
 
 
@@ -83,3 +102,4 @@ def add_records_by_sql(home, count):
         conn.execute("COMMIT")
     finally:
         conn.close()
+    restamp_projection(home)

@@ -282,10 +282,10 @@ def test_a_rebuild_that_raises_leaves_no_file_and_a_retry_works(tmp_path, monkey
     dest = tmp_path / "copy"
     real = Ledger._project
 
-    def boom(self, body, seq, at):
+    def boom(self, body, seq, at, *parts):
         if seq == 5:
             raise RuntimeError("disk gone")
-        return real(self, body, seq, at)
+        return real(self, body, seq, at, *parts)
 
     monkeypatch.setattr(Ledger, "_project", boom)
     with pytest.raises(RuntimeError):

@@ -695,6 +695,18 @@ def _full_check(conn: sqlite3.Connection) -> None:
         raise LedgerUnreadable(f"the projection digest could not be checked: {e}") from e
 
 
+# the tables whose rows the digest holds (D3, S8): a writing connection deletes none of their rows
+_NO_DELETE = frozenset(_PARTS)
+
+
+def _no_deletes(action: int, table, _arg2, _db, _trigger) -> int:
+    """The writing connections' authorizer: rows of the projection are only inserted, or updated to set later
+    columns, so a DELETE on one of its tables is refused (S8). A fixture that deletes by its own SQL restamps."""
+    if action == sqlite3.SQLITE_DELETE and table in _NO_DELETE:
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
 class Ledger:
     def __init__(self, conn: sqlite3.Connection, path: Path, read_only: bool):
         self.conn, self.path, self.read_only = conn, path, read_only
@@ -709,6 +721,7 @@ class Ledger:
                 conn.execute("PRAGMA query_only=ON")
             else:
                 conn = sqlite3.connect(path, isolation_level=None, timeout=busy_ms / 1000)
+                conn.set_authorizer(_no_deletes)
             conn.row_factory = sqlite3.Row
             conn.execute(f"PRAGMA busy_timeout={busy_ms}")
             return conn
@@ -756,8 +769,13 @@ class Ledger:
         make_private(path)
         conn = cls._connect(path, read_only=False)
         conn.executescript(_SCHEMA)
+        conn.execute("BEGIN IMMEDIATE")
         conn.executemany("INSERT INTO meta VALUES(?,?)",
                          [("ledger_id", ledger_id), ("schema_version", SCHEMA_VERSION)])
+        whole, parts = projection_now(conn)          # D5: a new ledger is stamped with its projection at seq 0
+        conn.executemany("INSERT INTO meta VALUES(?,?)",
+                         [("projection", f"0:{whole}"), ("projection_parts", _parts_text(parts))])
+        conn.execute("COMMIT")
         return cls(conn, path, False)
 
     @classmethod
@@ -1000,15 +1018,19 @@ class Ledger:
             cut = self._tail_problems(seq - 1, {} if head is None else {"head": head[0]}, loaded={})
             if cut:
                 raise LedgerUnreadable(f"{self.path}: a row written now would take seq {seq}, but {cut[0]}. {_CUT}")
+            parts = self._parts()
             entry = {"seq": seq, "at": at, "kind": kind, "ref": ref, "actor": actor, "channel": channel,
                      "under_grant": under_grant, "proposal_id": proposal_id, "body": text}
             digest = _digest(prev, entry)
             self.conn.execute(
                 "INSERT INTO ledger_log VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (seq, at, kind, ref, actor, channel, under_grant, proposal_id, text, prev, digest))
-            self._project(json.loads(text), seq, at)
-            self.conn.execute("INSERT INTO meta VALUES('head', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                              (f"{seq}:{digest}",))
+            self._project(json.loads(text), seq, at, parts)
+            upsert = "INSERT INTO meta VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+            self.conn.execute(upsert, ("head", f"{seq}:{digest}"))
+            if parts is not None:         # D1: the digest beside head, in the same transaction
+                self.conn.executemany(upsert, [("projection", f"{seq}:{_parts_digest(parts)}"),
+                                               ("projection_parts", _parts_text(parts))])
             self.conn.execute("COMMIT")
         except BaseException as e:
             if self.conn.in_transaction:
@@ -1070,7 +1092,27 @@ class Ledger:
                     return f"{rid} {self._ALREADY[c]} (by another write)"
         return f"{table} update matched no row: {where}"
 
-    def _project(self, body: dict, seq: int, at: int) -> None:
+    def _parts(self) -> dict | None:
+        """The parts `meta.projection_parts` holds, read inside the writer's transaction; None for a ledger that
+        keeps no digest (D5)."""
+        row = self.conn.execute("SELECT value FROM meta WHERE key = 'projection_parts'").fetchone()
+        if row is None:
+            return None
+        try:
+            return _read_parts(row[0])
+        except ValueError as e:
+            raise LedgerUnreadable(f"{self.path}: the projection digest: projection_parts cannot be read ({e})") from e
+
+    def _rows_at(self, table: str, rowids: Sequence[int]) -> list[tuple]:
+        """The rows of `table` with these rowids, as SQLite holds them."""
+        cur = self.conn.cursor()
+        cur.row_factory = None
+        return cur.execute(f"SELECT {', '.join(_COLUMNS[table])} FROM {table} WHERE rowid IN "
+                           f"({', '.join('?' * len(rowids))})", tuple(rowids)).fetchall()
+
+    def _project(self, body: dict, seq: int, at: int, parts: dict | None = None) -> None:
+        """Write a log body's rows. With `parts` (a ledger that keeps the digest), each row it adds or changes is
+        folded into them as SQLite holds it, re-read after the write (D3): affinity converts bound values."""
         def fill(v):
             if v == "@seq":
                 return seq
@@ -1085,6 +1127,9 @@ class Ledger:
                 raise _bad(f"unknown part of a log body: {key}")
         if "head" in body.get("meta", {}):
             raise _bad("meta.head follows the log and is never set by a log body")
+        for key in ("projection", "projection_parts"):
+            if key in body.get("meta", {}):
+                raise _bad(f"meta.{key} follows the tables and is never set by a log body")
         for item in body.get("insert", ()):
             table, row = item["table"], dict(item["row"])
             self._check_table(table)
@@ -1095,22 +1140,43 @@ class Ledger:
             if table == "places" and isinstance(row["pseudonym_salt"], str):
                 row["pseudonym_salt"] = bytes.fromhex(row["pseudonym_salt"])
             cols = list(row)
-            self.conn.execute(f"INSERT INTO {table}({', '.join(cols)}) VALUES({', '.join('?' * len(cols))})",
-                              [row[c] if isinstance(row[c], bytes) else fill(row[c]) for c in cols])
+            cur = self.conn.execute(f"INSERT INTO {table}({', '.join(cols)}) VALUES({', '.join('?' * len(cols))})",
+                                    [row[c] if isinstance(row[c], bytes) else fill(row[c]) for c in cols])
+            if parts is not None:
+                _fold(parts, table, self._rows_at(table, (cur.lastrowid,))[0])
         for item in body.get("update", ()):
             table, where, sets = item["table"], dict(item["where"]), dict(item["set"])
             self._check_table(table)
             if not where or not sets or (set(where) | set(sets)) - set(_COLUMNS[table]):
                 raise _bad(f"{table} update: columns must be real and where/set not empty")
             clause = " AND ".join(f"{c} IS ?" for c in where)
-            cur = self.conn.execute(
-                f"UPDATE {table} SET {', '.join(c + '=?' for c in sets)} WHERE {clause}",
-                [fill(v) for v in sets.values()] + [fill(v) for v in where.values()])
-            if cur.rowcount < 1:
+            # The rows the where matches, by rowid, before the update: they are re-read by rowid after it, never by
+            # the where again, which an update that sets its own where column (removed_seq IS NULL) no longer matches.
+            rowids = [r[0] for r in self.conn.execute(f"SELECT rowid FROM {table} WHERE {clause}",
+                                                      [fill(v) for v in where.values()])]
+            if not rowids:
                 raise _bad(self._unmatched(table, where))
+            values = [fill(v) for v in sets.values()]
+            for i in range(0, len(rowids), 500):
+                chunk = rowids[i:i + 500]
+                if parts is not None:
+                    for old in self._rows_at(table, chunk):
+                        _fold(parts, table, old, -1)
+                self.conn.execute(f"UPDATE {table} SET {', '.join(c + '=?' for c in sets)} WHERE rowid IN "
+                                  f"({', '.join('?' * len(chunk))})", values + chunk)
+                if parts is not None:
+                    for new in self._rows_at(table, chunk):
+                        _fold(parts, table, new)
         for k, v in body.get("meta", {}).items():
+            if parts is not None:
+                old = self.conn.execute("SELECT key, value FROM meta WHERE key = ?", (k,)).fetchone()
+                if old is not None:
+                    _fold(parts, "meta", tuple(old), -1)
             self.conn.execute("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                               (k, str(v)))
+            if parts is not None:
+                _fold(parts, "meta", tuple(self.conn.execute("SELECT key, value FROM meta WHERE key = ?",
+                                                             (k,)).fetchone()))
 
     @staticmethod
     def _check_table(table: str) -> None:
