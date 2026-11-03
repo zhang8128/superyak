@@ -447,9 +447,12 @@ station-carry-nonces:
 station-alerts:
 	uv run --locked --project peer python -m superyak_peer station-alerts --data-dir "$(STATION_DATA)"
 
+# PEER reaches the recipe through the environment, never as shell text (the fresh reader's finding 3): a `$(...)` or a
+# backtick in it stays a string, and the CLI refuses anything but 64 lowercase hex.
+join-machine-plan: export JOIN_PEER = $(PEER)
 join-machine-plan:
-	@test -n "$(PEER)" || { echo 'Usage: make join-machine-plan PEER=<that peer'"'"'s full id> (read-only: what is left to bring it into the lessons room, and whose)'; exit 2; }
-	uv run --locked --project peer python -m superyak_peer join-plan --data-dir "$(STATION_DATA)" --peer "$(PEER)"
+	@test -n "$$JOIN_PEER" || { echo 'Usage: make join-machine-plan PEER=<that peer'"'"'s full id> (read-only: what is left to bring it into the lessons room, and whose)'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer join-plan --data-dir "$(STATION_DATA)" --peer "$$JOIN_PEER"
 
 station-lessons-room:
 	@test -n "$(ID)" || { echo 'Usage: make station-lessons-room ID=<short id from make station-rooms> [PEERS="<paired peer id> …"] [CONFIRM=<the code it showed>] [LESSONS_SHIP=rio-grande] [APPROVER=andy]'; exit 2; }

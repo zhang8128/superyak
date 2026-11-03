@@ -129,3 +129,37 @@ def test_names_from_the_other_machine_are_safe_lines(station):   # Tardis's read
     text = describe(plan(data, PEER, run=host()), PEER)
     assert '@rio-grande' not in text and 'Evil (at)rio-grande' in text
     assert all(not line.startswith('@') for line in text.splitlines())
+
+
+def test_a_loop_in_the_room_chain_ends_and_says_so(station):   # fresh reader's finding 1: it hung forever
+    data, db = station
+    live_contacts(db, 'Andy', 'Tardis')
+    db.execute("INSERT INTO rooms(id, owner_id, title, epoch, linked_room_id) VALUES('r2', 'u-andy', 'Lessons', 1, 'r1')")
+    db.execute("UPDATE rooms SET linked_room_id='r2' WHERE id='r1'")
+    db.commit()
+    members = next(s for s in plan(data, PEER, run=host()) if s[3] == "that peer's accounts are members of the lessons room")
+    assert members[0] == 'left' and 'chain loops' in members[4]
+
+
+def test_a_wal_store_gains_no_file(tmp_path):   # fresh reader's finding 2: mode=ro made a -wal and a -shm
+    import os
+    Store(tmp_path)
+    db = sqlite3.connect(tmp_path / 'peer.sqlite3')
+    db.execute('PRAGMA journal_mode=wal')
+    db.execute('PRAGMA foreign_keys=OFF')
+    db.execute("INSERT INTO rooms(id, owner_id, title, epoch, linked_room_id) VALUES('r1', 'u-andy', 'Lessons', 1, NULL)")
+    db.execute("INSERT INTO lessons_room VALUES(1, 'r1', 'u-rio', 0)")
+    db.commit()
+    db.close()   # the last close checkpoints and removes the -wal and the -shm
+    before = (sorted(os.listdir(tmp_path)), (tmp_path / 'peer.sqlite3').read_bytes())
+    plan(tmp_path, PEER, run=host())
+    assert (sorted(os.listdir(tmp_path)), (tmp_path / 'peer.sqlite3').read_bytes()) == before
+
+
+def test_the_make_target_never_hands_peer_to_the_shell(tmp_path):   # fresh reader's finding 3
+    from pathlib import Path
+    marker = tmp_path / 'ran'
+    repo = Path(__file__).resolve().parents[2]
+    done = subprocess.run(['make', '-s', '-C', str(repo), 'join-machine-plan', f'PEER=$$(touch {marker})',
+                           f'STATION_DATA={tmp_path}'], capture_output=True, text=True, timeout=120)
+    assert not marker.exists() and done.returncode != 0

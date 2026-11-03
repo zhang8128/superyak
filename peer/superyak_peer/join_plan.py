@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from .journal_mode import header_mode
 from .ships import safe_line
 
 PERSON, SHIP, HERE, THERE = 'Andy', 'a ship', 'this station', 'that machine'
@@ -16,14 +17,33 @@ LIVE_NEEDED = 2
 
 
 def _read(data_dir):
-    return sqlite3.connect(f'file:{Path(data_dir).resolve() / "peer.sqlite3"}?mode=ro', uri=True)
+    """The store, read so that nothing beside it changes (the fresh reader's finding 2): a WAL-mode file opened `mode=ro`
+    with no -wal gains a -wal and a -shm. So, as the carry reads a restored station (backups._source_uri): rollback mode
+    `mode=ro`; WAL mode with no -wal `immutable=1`, since the last close checkpointed every commit into the file; WAL mode
+    with its -wal and -shm `mode=ro` through them; a -wal without its -shm is refused, since reading would create one."""
+    path = Path(data_dir).resolve() / 'peer.sqlite3'
+    uri = path.as_uri() + '?mode=ro'
+    if header_mode(path) == 'wal':
+        wal, shm = (Path(f'{path}{end}').exists() for end in ('-wal', '-shm'))
+        if wal and not shm:
+            raise ValueError(f'{path} has a -wal without its -shm, and reading it would create one beside it')
+        if not wal:
+            uri += '&immutable=1'
+    return sqlite3.connect(uri, uri=True)
+
+
+LOOPS = 'loops'
 
 
 def _current_room(db):
-    """The lessons room's current room: the recorded one, followed forward along linked_room_id."""
+    """The lessons room's current room: the recorded one, followed forward along linked_room_id. A chain that comes back
+    to a room it passed returns LOOPS (the fresh reader's finding 1: on a damaged store it hung forever)."""
     row = db.execute('SELECT room_key FROM lessons_room WHERE id=1').fetchone()
-    room = row[0] if row else None
+    room, seen = (row[0] if row else None), set()
     while room:
+        if room in seen:
+            return LOOPS
+        seen.add(room)
         newer = db.execute('SELECT id FROM rooms WHERE linked_room_id=?', (room,)).fetchone()
         if not newer:
             return room
@@ -49,7 +69,8 @@ def plan(data_dir, peer, run=subprocess.run):
             'WHERE c.peer_id=? ORDER BY c.name', (peer,)).fetchall()
         listed = db.execute('SELECT 1 FROM lessons_peers WHERE peer_id=?', (peer,)).fetchone() is not None
         room = _current_room(db)
-        members = {r[0] for r in db.execute('SELECT contact_id FROM remote_room_members WHERE room_id=?', (room,))} if room else set()
+        members = {r[0] for r in db.execute('SELECT contact_id FROM remote_room_members WHERE room_id=?', (room,))} \
+            if room and room != LOOPS else set()
     finally:
         db.close()
     listening = _quiet(run, ['systemctl', '--user', 'is-active', 'superyak-federation-listen.service']).strip() == 'active'
@@ -70,8 +91,10 @@ def plan(data_dir, peer, run=subprocess.run):
                       for c in contacts) or 'none')),
         ('done' if listed else 'left', SHIP, HERE, 'the lessons room lists that peer',
          'Rio Grande: make station-lessons-room ID=<short id> PEERS="<every listed peer>", then CONFIRM='),
-        ('done' if live and all(c[0] in members for c in live) else 'left', PERSON, HERE,
+        ('done' if live and room != LOOPS and all(c[0] in members for c in live) else 'left', PERSON, HERE,
          "that peer's accounts are members of the lessons room",
+         "the lessons room's chain loops back on itself, so its current room can't be told; check the store's rooms"
+         if room == LOOPS else
          f'in the browser, add {", ".join(safe_line(c[1]) for c in live if c[0] not in members) or "them"} to the room '
          f'{(room or "?")[:6]}; that makes the chain\'s next room'),
         ('check there', SHIP, THERE, 'the room recorded there, the hook docked, the lessons laid',
