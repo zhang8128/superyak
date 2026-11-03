@@ -5,7 +5,14 @@ Rio Grande, 2026-11-03, board item `spec:rail-lesson-outcomes`. Builds on the fi
 and repeats (section 7.1); the code is `peer/superyak_peer/lessons.py` on main. Ties to the rail mathematics
 (`2026-11-03-rail-mathematics.md`, branch rail-mathematics): weights learned from use, loose where evidence is thin.
 
-Revision 2. A fresh reviewer gave revision 1 (54d9344d) APPROVE WITH CHANGES, with four must-fixes:
+Revision 3. A fresh reviewer approved revision 2 (531f0f54) with changes (station law section 3). Those changes are
+folded in here:
+- the shadow measured on the free slots;
+- the weight applied in step 4's transaction;
+- falling out of the slots, stated;
+- the time basis.
+
+Revision 1 (54d9344d) got APPROVE WITH CHANGES, with four must-fixes:
 - the weight's real bound depends on how many ships judged;
 - a dropped lesson could never be judged again;
 - the temperature was named but unused;
@@ -52,7 +59,8 @@ Outcomes are local to each peer, like receipts and repeats. They never federate 
 
 ## 4. Ranking weighs it, in shadow first
 
-**The evidence.** For each lesson, take each ship's latest outcome on this peer from the last **30 days**. Let `n` be
+**The evidence.** For each lesson, take each ship's latest outcome on this peer, latest by its receipt's time, among
+outcomes recorded in the last **30 days** (counted from the outcome's own time). Let `n` be
 the number of ships whose latest outcome is `helped` or `misled`, with `h` helped and `m` misled (`n = h + m`). An
 `unused` counts for neither.
 
@@ -82,7 +90,10 @@ lies in `[1/(n+2), (n+1)/(n+2)]`, the largest shift is `n² / (4 (n+2)²)` of `�
   ship is the only judge the weight is off. That's the honest result.
 - **It reorders, and never removes.** A lesson is a candidate when its true angle `θ` is within `r_max`, as today,
   however it's judged. `θ'` only orders the candidates. So a misled lesson still shows when nothing better matches,
-  and it can be judged again. No lesson is ever shown farther than today.
+  and it can be judged again. No lesson is ever shown farther than today. It can still fall out of the slots: with
+  several Near candidates, a lesson two ships judged `misled` may rank below the free slots, take no receipts and so
+  no new outcomes. It comes back when those outcomes expire at 30 days, or when its author revises it. The cycle is
+  bounded, and a lesson that never reached the slots by angle is unaffected.
 - **Outcomes expire after 30 days,** so an old verdict can't hold a lesson down forever.
 - **Words matches aren't reweighted.** A literal command, error or file match is evidence of its own kind.
 
@@ -92,11 +103,22 @@ id that starts at the prior and inherits nothing, or retract it, as today.
 **The prompt path is unchanged.** It reads only the index file and opens no database (first rail, section 5), so at
 a prompt the weight doesn't apply. Carrying `p` in the index can come later, if the shadow shows it's worth it.
 
-**Shadow first** (rail commons, stage 5). Until a proposal turns it on, the query ranks as today and computes the
-outcome order beside it. That's on the post-skip candidates (after step 4's `seen`, retraction and own-lesson
-skips), before the cut to 3. The query row gains two integers, so no ids or text enter it:
-- `reordered`, 0 or 1: whether the outcome order would have changed the shown set or its order;
-- `displaced`: how many shown lessons it would have pushed out of the top 3.
+**Where it's computed.** Words matches fill the slots first, and Near only fills the `limit` slots words left free
+(0 to 3; `query()`, lessons.py ~:690-705). Near's candidates are found and sorted by angle before the transaction,
+but outcomes live in the store. So the weight is applied **inside step 4's transaction**, to the Near candidates
+that pass its skips (`seen`, retraction, own lesson). That's one extra table read in a transaction the query already
+opens. Near keeps all its candidates within `r_max`, not only the first `limit`, so the weighted order can bring in
+one the angle order left out.
+
+**Shadow first** (rail commons, stage 5). Until a proposal turns it on, the query answers as today and computes the
+outcome order beside it, on those post-skip Near candidates, for the free slots. Words entries are fixed. The query
+row gains two integers, so no ids or text enter it:
+- `reordered`, 0 or 1: whether the outcome order would have changed which Near lessons fill the free slots, or their
+  order;
+- `displaced`: how many of the Near lessons actually shown (after the skips and the answer's 2,000-byte fit) the
+  outcome order would have pushed out of the free slots.
+
+When words fill every slot, both are 0.
 
 `λ`, the 30-day window, the 2-judge minimum and the 24-hour window go on the rail-parameters list (rail commons,
 principle 3). Turning the weight on is a proposal the ships accept when no one objects.
@@ -145,7 +167,10 @@ is about the hook's timing (section 6). It isn't counted as `misled`.
   - a lesson outside `r_max` is never shown, however it's judged;
   - words matches keep their order.
 - **Shadow:** with the weight off, the answer is today's. `reordered` and `displaced` are right in a case where the
-  weight would change the order, one where it would push a lesson out, and one where it would change nothing.
+  weight would change the order, one where it would push a lesson out, one where it would change nothing, and one
+  where words fill every slot (both 0).
+- **Falling out of the slots:** a lesson two ships judged `misled` that just misses a free slot isn't shown, and is
+  shown again once those outcomes are 30 days old.
 - **The answer** names each lesson's receipt short id. The prompt path's answer names none, and its order doesn't
   change with outcomes.
 - **The query's p95** stays under 1 s with outcomes for every lesson in the index (first rail, section 5).
@@ -155,7 +180,7 @@ is about the hook's timing (section 6). It isn't counted as `misled`.
 1. Three outcomes, not a scale: a ship can say which with no free text, and `unused` keeps "shown but irrelevant"
    apart from "wrong".
 2. Latest per ship and lesson, within 30 days: one ship can't drown a lesson, and an old verdict fades.
-3. A bounded effective angle that reorders and never removes. It composes with `r_max`, never shows a lesson farther
-   than today, and can't lock a lesson out.
+3. A bounded effective angle that reorders and never removes. It composes with `r_max` and never shows a lesson
+   farther than today. A lesson can sit out of the slots only until its outcomes expire.
 4. The weight grows with the number of judges, and needs at least 2.
 5. Local, like receipts and repeats: the first rail's privacy shape holds, and federation can come later.
