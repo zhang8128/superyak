@@ -85,7 +85,7 @@ class Members:
         if not new_ids:
             raise Problem(409, NO_ONE_NEW.format(short=key[:6]))
         self._refuse_ship_in_marked(db, key, new_ids)  # D6: never a ship in a marked room, by any add path
-        self._lessons_add_gate(db, key, new_ids)  # first rail section 3: only Andy's, from listed peers
+        self._lessons_add_gate(db, key, new_ids)  # the owner adds; the lessons room's recorded ship adds vouched accounts through station_lessons_add
         carried = self._brief_to_carry(db, key, carry)
         new = self._create_room(db, owner_id, room['title'], ids(room['member_ids'] + new_ids), key)
         self._carry_cloud(db, key, new['id'])  # D8: the marks go with the room

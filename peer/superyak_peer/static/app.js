@@ -1427,7 +1427,7 @@ function accountRoleDialog() {
 function lessonsLine(preview) {
   const line = preview.lessons_line;
   if (!line) return "";
-  const at = Math.max(0, line.indexOf(` on ${preview.peer_id.slice(0, 12)} `));
+  const at = Math.max(0, line.lastIndexOf(` on ${preview.peer_id.slice(0, 12)} `));
   return `<p class="notice" data-testid="lessons-line">${isolatedName(line.slice(0, at))}${escapeHtml(line.slice(at))}</p>`;
 }
 

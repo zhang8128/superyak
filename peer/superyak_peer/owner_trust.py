@@ -64,6 +64,7 @@ DIGEST_TEXT = ('Owner trust, {day}: {n} ship(s) of {owner} on {peer} paired by {
 PAUSE_TEXT = ("Owner trust for {owner} on {peer} paused after {n} pairings. make station-trust-list shows them; if you "
               "didn't expect them, unpair that peer as retired; otherwise renew or revoke it in the browser.")
 PAUSE_WAITING = ' {k} of its ships wait for the lessons room until you renew.'
+PAUSE_WAITING_ONE = ' 1 of its ships waits for the lessons room until you renew.'
 # A contact as every display names it (the ruling after Tardis's plan review): by its label, never its raw name.
 LABELLED_CONTACT = 'SELECT c.id, c.peer_id, c.user_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id'
 
@@ -384,7 +385,7 @@ def trust_pauses(db, waiting=None):
                                      peer=grant['peer_id'][:12], n=paired if expect is None else expect)
             waits = waiting(grant['grant_id']) if waiting else 0
             notices.append({'id': f'trust-paused-{grant["grant_id"][:12]}-{window_seq}',
-                            'text': text + (PAUSE_WAITING.format(k=waits) if waits else '')})
+                            'text': text + (PAUSE_WAITING_ONE if waits == 1 else PAUSE_WAITING.format(k=waits) if waits else '')})
     return notices
 
 

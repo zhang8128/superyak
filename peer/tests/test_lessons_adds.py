@@ -197,7 +197,7 @@ def test_the_line_names_a_bidi_name_plainly(adds):
 
 # Task 3: the listing names the addable accounts.
 import json
-from superyak_peer.lessons import describe_station_room, listable
+from superyak_peer.lessons import describe_station_room, listable, CHANGED
 
 
 def list_view(adds, confirm=None):
@@ -280,8 +280,9 @@ def test_a_stale_confirm_writes_nothing(adds):
     adds.pair_new('defiant')
     view = list_view(adds)
     adds.pair_new('voyager')
-    with pytest.raises(Exception):
+    with pytest.raises(Problem) as refused:
         list_view(adds, view['confirm'])
+    assert (refused.value.status, refused.value.message) == (409, CHANGED)
     assert addable_rows(adds) == []
 
 
@@ -1037,7 +1038,7 @@ def test_an_expired_or_revoked_grants_ship_lays_nothing_at_either_door(adds_trus
     a.pi.station_lessons_add(short(a.ship))
     a.clock[0] += FAR
     before = stored(a)
-    ended = "ship of Andy Example: voyager's owner trust has expired, so it lays no lessons."
+    ended = "ship of Andy Example: voyager's owner trust is expired, so it lays no lessons."
     for door in (lambda: reply(a, 'ship-voyager', 'Late.', 'c1'), lambda: post(a, a.ship, 'Late.')):
         with pytest.raises(Problem) as refused:
             door()
@@ -1143,7 +1144,7 @@ def test_a_hold_batch_posts_one_notice_for_all_its_ships(adds_trusted):
     with a.pi.transaction() as db:
         first = db.execute("SELECT id FROM member_changes WHERE reason='held' ORDER BY rowid LIMIT 1").fetchone()['id']
     assert notice['id'] == f'lessons-held-{first}'
-    assert notice['text'].startswith('7 ships left the lessons room when a hold took them out: ')
+    assert notice['text'].startswith('7 accounts left the lessons room when a hold took them out: ')
     assert notice['text'].endswith(', and 2 more.') and notice['text'].count(',') == 5
     a.clock[0] += 3600
     assert lessons_notices_of(a, 'held') == [notice]
@@ -1151,11 +1152,23 @@ def test_a_hold_batch_posts_one_notice_for_all_its_ships(adds_trusted):
 
 def test_two_batches_post_two_notices(adds_trusted):
     a = adds_trusted
+    a.clock[0] += 86400
+    renew((a.pi, {'id': a.ids['andy']}), a.trust['grant_id'], days=90, expect=20, password='a-long-password')
+    other = a.trusted_ship('defiant')
     a.pi.station_lessons_add(short(a.ship))
+    a.pi.station_lessons_add(short(other))
     a.clock[0] += 60
-    a.pi_fed.unpair(a.ids['andy'], a.ship)
+    from superyak_peer.owner_trust import hold_contact
+    with a.pi.transaction() as db:                        # the first batch: one account
+        hold_contact(db, db.execute('SELECT * FROM remote_contacts WHERE id=?', (other,)).fetchone(), a.clock[0])
     (one,) = lessons_notices_of(a, 'held')
-    assert 'ships left' in one['text'] and VOYAGER in one['text']
+    assert one['text'].startswith('1 account left the lessons room when a hold took it out: ') and 'defiant' in one['text']
+    a.clock[0] += 60
+    a.pi_fed.unpair(a.ids['andy'], a.ship)                # a later hold, a second batch
+    notices = lessons_notices_of(a, 'held')
+    assert len(notices) == 2 and len({n['id'] for n in notices}) == 2 and one in notices
+    (two,) = [n for n in notices if n != one]
+    assert two['text'].startswith('1 account left the lessons room when a hold took it out: ') and VOYAGER in two['text']
 
 
 def test_a_paused_trust_says_how_many_ships_wait_for_the_lessons_room(adds_trusted):
@@ -1164,7 +1177,7 @@ def test_a_paused_trust_says_how_many_ships_wait_for_the_lessons_room(adds_trust
     assert [n for n in a.pi.station_notices() if n['id'].startswith('trust-paused-')] == []
     a.trusted_ship('defiant')                             # the second pairing fills the window: paused
     (notice,) = [n for n in a.pi.station_notices() if n['id'].startswith('trust-paused-')]
-    assert notice['text'].endswith(' 1 of its ships wait for the lessons room until you renew.')
+    assert notice['text'].endswith(' 1 of its ships waits for the lessons room until you renew.')
     with a.pi.transaction() as db:                        # a held ship waits for nothing
         db.execute('INSERT INTO contact_holds SELECT id, ? FROM remote_contacts WHERE name=?', (a.clock[0], 'defiant'))
     (notice,) = [n for n in a.pi.station_notices() if n['id'].startswith('trust-paused-')]

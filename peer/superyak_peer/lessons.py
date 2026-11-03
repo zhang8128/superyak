@@ -78,7 +78,7 @@ LIVE_KEY = ('This lesson contains a live ship key, so it was not posted. Treat t
 RETRACTED = "That lesson was retracted, for good: its text can't be laid again on this peer"
 CAP = 'This ship already has 32 live lessons in the room; retract one first'
 GRANT_PAUSED = "{label}'s owner trust is paused until {owner} renews it, so it lays no lessons."
-GRANT_ENDED = "{label}'s owner trust has {state}, so it lays no lessons."
+GRANT_ENDED = "{label}'s owner trust is {state}, so it lays no lessons."
 GRANT_CAP = 'The ships of one owner trust share 32 live lessons, and they have them.'
 NO_SUCH_LESSON = 'No live lesson in this room has that id'
 WHO_RETRACTS = "Only a lesson's author or the room's owner retracts it"
@@ -1886,8 +1886,9 @@ def lessons_notices(db):
     for rows in batches.values():
         names = [line(r['label'], 40) for r in rows]
         shown = ', '.join(names[:HELD_NAMED]) + (f', and {len(names) - HELD_NAMED} more' if len(names) > HELD_NAMED else '')
-        notices.append({'id': f'lessons-held-{rows[0]["id"]}',
-                        'text': safe_line(f'{len(rows)} ships left the lessons room when a hold took them out: {shown}.', 400)})
+        head = '1 account left the lessons room when a hold took it out' if len(rows) == 1 else \
+            f'{len(rows)} accounts left the lessons room when a hold took them out'
+        notices.append({'id': f'lessons-held-{rows[0]["id"]}', 'text': safe_line(f'{head}: {shown}.', 400)})
     return notices
 
 
