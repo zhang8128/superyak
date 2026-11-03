@@ -1342,9 +1342,26 @@ class CarryUnmarked(Exception):
 CARRIED_NAME = 'carried'
 
 
+def _lstat(path):
+    """os.lstat(path), or None when nothing is there: only a missing name, or a file where a directory should be, reads
+    as absent. Any other OSError, an unsearchable directory's EACCES above all, is raised, so the carry names the right
+    cause on every Python (the F1 reader's finding 2: from 3.14, is_file() and is_symlink() return False on it)."""
+    try:
+        return os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
 def _symlinked(path):
     """The database or one of its sidecars is a symlink, as _refuse and Store._check_paths refuse."""
-    return any(Path(f'{path}{end}').is_symlink() for end in ('', '-journal', '-wal', '-shm'))
+    return any((found := _lstat(f'{path}{end}')) is not None and stat.S_ISLNK(found.st_mode)
+               for end in ('', '-journal', '-wal', '-shm'))
+
+
+def _regular(path):
+    """A regular file is at path. Not followed: _symlinked has refused a link there already."""
+    found = _lstat(path)
+    return found is not None and stat.S_ISREG(found.st_mode)
 
 
 def _has_table(db, name, schema='main'):
@@ -1367,8 +1384,14 @@ REPLACED_DIR = re.compile(r'replaced-\d{8}-\d{6}')
 
 
 def _newest_replaced(backups):
-    """The newest restore directory's name: they are named by step 1's local time, all one width, so it sorts last."""
-    return max((path.name for path in backups.glob('replaced-*') if REPLACED_DIR.fullmatch(path.name)), default=None)
+    """The newest restore directory's name: they are named by step 1's local time, all one width, so it sorts last.
+    Listed, not globbed, so a backups directory that can't be listed is refused under its own cause, not read as one
+    with no restore in it (the F1 reader's second "for later")."""
+    try:
+        names = os.listdir(backups)
+    except OSError as error:
+        raise CarryRefused(f'{backups} could not be listed ({error.strerror or type(error).__name__})') from None
+    return max((name for name in names if REPLACED_DIR.fullmatch(name)), default=None)
 
 
 def _source_uri(source):
@@ -1378,16 +1401,20 @@ def _source_uri(source):
     sidecar; with no -wal, the last connection's close checkpointed every commit into it. WAL mode with a -wal, which a
     listener killed mid-run leaves: `mode=ro` through it and its -shm, so a commit made only there is carried too. A -wal
     without its -shm is refused, since reading it would create one. The header is read with header_mode, before any
-    connection opens the source; a source it can't read is refused, saying nothing was changed (Task 7 reader's B-3,
-    where an OSError reached the person as a traceback). A WAL header with a -journal beside it, which only a journal
-    mode switch cut short leaves, is refused too: immutable=1 would read past a journal that rollback mode's mode=ro
-    refuses (B-2)."""
+    connection opens the source; a source it can't read is refused, saying nothing was changed (Task 7 reader's B-3: the
+    OSError reached the person as a bare errno line, with no "nothing was changed" and no cause). A WAL header with a
+    -journal beside it, which only a journal mode switch cut short leaves, is refused too: immutable=1 would read past a
+    journal that rollback mode's mode=ro refuses (B-2). So is its mirror, a rollback header with a -wal beside it, which
+    only a mismatched copy leaves: mode=ro would read that -wal and create a -shm beside the source (the B-2 reader's
+    note)."""
     uri = source.absolute().as_uri()
     try:
         mode = header_mode(source)
     except OSError as error:
         raise CarryRefused(f'{source} could not be read ({error.strerror or type(error).__name__})') from None
     if mode != 'wal':
+        if Path(f'{source}-wal').exists():
+            raise CarryRefused(f'{source} is in rollback mode with a -wal beside it, which only a mismatched copy leaves')
         return uri + '?mode=ro'
     if Path(f'{source}-journal').exists():
         raise CarryRefused(f'{source} is in WAL mode with a -journal beside it, which a cut-short journal mode switch leaves')
@@ -1409,23 +1436,35 @@ def carry_pull_nonces(data_dir, aside):
     copy or chosen.sqlite3 carried 0 and said all was well). Refused, with nothing changed: a live file that is missing,
     has no pull_nonces, or is a symlink or has one among its sidecars; a $ASIDE that still holds peer.sqlite3 (10.3's
     move hasn't run, so the live file is not the one put back); a source that is missing, symlinked the same way, the
-    live file, in WAL mode with a -wal but no -shm (_source_uri), without pull_nonces, damaged, or not marked as
-    restored from $ASIDE; and a $ASIDE that isn't the
-    newest replaced-<time> directory, as the runbook's ASIDE line names it (the re-check's nit 2: an earlier restore that
-    was also rolled back passed everything else). After the commit it writes $ASIDE/carried, without which step 8 leaves
+    live file, unreadable, with sidecars that don't match its journal mode (_source_uri), without pull_nonces, damaged,
+    or not marked as restored from $ASIDE; a restored-live that is itself a symlink, which would carry from a directory
+    elsewhere (the F1 reader's first "for later"); a path among these that can't be checked, on any Python, such as an
+    unsearchable directory or an $ASIDE or backups directory that can't be listed (_lstat, os.listdir); and a $ASIDE
+    that isn't the newest replaced-<time> directory, as the runbook's ASIDE line names it (the re-check's nit 2: an
+    earlier restore that was also rolled back passed everything else). After the commit it writes $ASIDE/carried, without which step 8 leaves
     the federation units off after a rollback (CarryUnmarked if it can't). Returns (nonces added, nonces in the
     source)."""
     aside = Path(aside)
     live, source = Path(data_dir) / LIVE_NAME, aside / 'restored-live' / LIVE_NAME
-    if _symlinked(live) or not live.is_file():
-        raise CarryRefused(f'No peer database at {live} (or it or a sidecar is a symlink): nothing to carry into')
-    if any(path.name == LIVE_NAME or path.name.startswith(LIVE_NAME + '-') for path in aside.glob(LIVE_NAME + '*')):
-        raise CarryRefused(f"{aside} still holds a {LIVE_NAME} file, so 10.3's move hasn't run and {live} is not the file put back")
-    if _symlinked(source) or not source.is_file():
-        raise CarryRefused(f'No restored station at {source} (or it or a sidecar is a symlink): nothing to carry from '
-                           '(10.2 moves it there)')
-    if source.samefile(live):  # also a hard link to it
-        raise CarryRefused('The source is the live database itself')
+    try:
+        if _symlinked(live) or not _regular(live):
+            raise CarryRefused(f'No peer database at {live} (or it or a sidecar is a symlink): nothing to carry into')
+        try:  # listed, not globbed: glob swallows a PermissionError and would hide a stray file (finding 3)
+            names = os.listdir(aside)
+        except (FileNotFoundError, NotADirectoryError):
+            names = []   # no $ASIDE: the source check below says so
+        if any(name == LIVE_NAME or name.startswith(LIVE_NAME + '-') for name in names):
+            raise CarryRefused(f"{aside} still holds a {LIVE_NAME} file, so 10.3's move hasn't run and {live} is not the file put back")
+        found = _lstat(source.parent)
+        if found is not None and stat.S_ISLNK(found.st_mode):  # 10.2 makes restored-live with install -d, never a link
+            raise CarryRefused(f'{source.parent} is a symlink, so the station in it is not the one 10.2 moved aside')
+        if _symlinked(source) or not _regular(source):
+            raise CarryRefused(f'No restored station at {source} (or it or a sidecar is a symlink): nothing to carry from '
+                               '(10.2 moves it there)')
+        if source.samefile(live):  # also a hard link to it
+            raise CarryRefused('The source is the live database itself')
+    except OSError as error:  # F1: a CarryRefused raised above isn't an OSError, so only a failed check lands here
+        raise CarryRefused(f'{error.filename or source} could not be checked ({error.strerror or type(error).__name__})') from None
     attach = _source_uri(source)  # before anything here opens the source in SQLite (header_mode's rule)
     # URIs: the live file opened `mode=rw` is never created, and the source is never changed and gains no file beside it
     # (_source_uri; in rollback mode a hot journal, from a listener killed mid-transaction, is refused rather than rolled

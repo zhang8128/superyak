@@ -173,6 +173,64 @@ def test_the_sign_in_page_says_it_is_a_prototype_and_links_what_superyak_is(brow
         expect(link).to_have_attribute("href", "https://github.com/zhang8128/superyak#readme")
 
 
+def test_the_sign_in_page_tells_a_stranger_how_to_get_an_account(browser_peer):
+    """T4's baseline walk: the sign-in page offered a token box and nothing for someone not yet invited. Any peer's
+    owner invites its people, so the page says to ask them."""
+    with sync_playwright() as playwright, signed_out_browser(playwright) as page:
+        page.goto(browser_peer["base_url"] + "/")
+        expect(page.get_by_text("No account? The person who runs this home invites people: ask them for an invitation.",
+                                exact=True)).to_be_visible()
+
+
+def test_before_a_password_the_sign_in_page_says_the_owner_can_read_the_home(browser_peer):
+    """Rio Grande, on T4's branch: whoever runs a home reads what's stored on it, and a person should know that before
+    typing a password into someone else's home. Until now it was said only in the README."""
+    with sync_playwright() as playwright, signed_out_browser(playwright) as page:
+        page.goto(browser_peer["base_url"] + "/")
+        expect(page.get_by_text("This home is run by its owner, who can read what's stored here.", exact=True)).to_be_visible()
+
+
+ABOUT = ("A Superyak home: a free, open-source, self-hosted place for the parts of your life you choose to share. Its "
+         "owner invites the people in it.")
+
+
+def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):
+    """T4's walks: a fetcher that runs no JavaScript saw only "Opening your home…". The first fix put the text in
+    <noscript>, and the live walk still saw nothing: that fetcher's HTML-to-text step drops <noscript> and <head>. So the
+    text is ordinary shell content, and this reads it two ways: as such a text step does, and in a browser with
+    scripts off."""
+    with urlopen(browser_peer["base_url"] + "/") as response:
+        page = response.read().decode()
+    assert f'<meta name="description" content="{ABOUT}">' in page
+    assert f'<meta property="og:description" content="{ABOUT}">' in page
+    body = re.sub(r"<(head|script|style|noscript)\b.*?</\1>", " ", page, flags=re.S | re.I)
+    link = re.search(r'<a href="([^"]+)"[^>]*>What is Superyak\?</a>', body)
+    assert link and link.group(1) == "https://github.com/zhang8128/superyak#readme"
+    text = " ".join(re.sub(r"<[^>]+>", " ", body).split())
+    assert ABOUT in text
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(java_script_enabled=False)
+        try:
+            shell = context.new_page()
+            shell.goto(browser_peer["base_url"] + "/")
+            expect(shell.get_by_text(ABOUT, exact=False)).to_be_visible()
+            expect(shell.get_by_role("link", name="What is Superyak?")).to_have_attribute(
+                "href", "https://github.com/zhang8128/superyak#readme")
+        finally:
+            context.close()
+            browser.close()
+
+
+def test_once_the_app_loads_the_shell_description_is_gone(browser_peer):
+    """Rio Grande: the shell shows for a moment to everyone while app.js loads, so it reads as plain "what this is";
+    once the app renders its first view, the shell is replaced."""
+    with sync_playwright() as playwright, signed_out_browser(playwright) as page:
+        page.goto(browser_peer["base_url"] + "/")
+        expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+        expect(page.get_by_text("Its owner invites the people in it.", exact=False)).to_have_count(0)
+
+
 def test_source_library_import_pause_and_private_review(browser_peer):
     store = browser_peer['app'].state.store
     actor = browser_peer['users']['patient']['id']

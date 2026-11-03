@@ -234,7 +234,9 @@ function showLogin(message = "") {
           <button class="button" type="submit">Sign in</button>
         </form>
         ${state.demoAccounts.length ? '</details>' : ''}
+        <p class="meta login-help">This home is run by its owner, who can read what's stored here.</p>
         <details class="invitation-redeem"><summary>Use an invitation</summary><p>An admin gives you a one-use token. Use the supplied username and name for a reserved account, or choose your own for a new invitation. You choose your password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" name="password" type="password" minlength="12" autocomplete="new-password" required></div><button class="button secondary" type="submit">Create my account</button></form></details>
+        <p class="meta login-help">No account? The person who runs this home invites people: ask them for an invitation.</p>
       </section>
     </div>
   </main>`;

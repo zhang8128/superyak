@@ -363,7 +363,10 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
        carried too; a `-wal` without its `-shm` is refused, since reading it would create one, and the rollback
        fails closed into 10.4's wait. It refuses, changing neither database, when `$ASIDE` still holds a `peer.sqlite3` file
        or any of its sidecars (10.3's move hasn't run, or was cut short: run 10.3 again first, as its `NOT done` line
-       says), when `restored-live` is missing or damaged, when it isn't marked as the station restored from `$ASIDE`, or
+       says), when `restored-live/peer.sqlite3` is missing, damaged or unreadable, or a directory on its path can't be
+       searched, when its sidecars don't match its journal mode (a `-journal` beside a WAL file, or a `-wal` beside a
+       rollback one), when `restored-live` is a symlink, when `$ASIDE` or its backups directory can't be listed, when it
+       isn't marked as the station restored from `$ASIDE`, or
        when `$ASIDE` isn't the newest `replaced-*` directory (set it again with the line at the top). If it refused and
        you can't fix what it names, go on with 10.4: step 8 then leaves the federation units off.
     4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo and

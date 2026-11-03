@@ -647,6 +647,10 @@ def main(argv=None):
     trust_list = commands.add_parser('station-trust-list', help='Trusted local: list each owner trust and every ship it '
                                      'paired, with full participant ids; no pairing code')
     trust_list.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    join = commands.add_parser('join-plan', help="Trusted local, read-only: every step of bringing another machine's "
+                               'peer into the lessons room, done or left, and whose (make join-machine-plan)')
+    join.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    join.add_argument('--peer', required=True, help="That peer's full id (64 hex characters)")
     rooms = commands.add_parser('station-rooms', help='Trusted local: list the rooms a person owns by short id, and which are bridged to the wormhole')
     rooms.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     rooms.add_argument('--as', dest='person', required=True, help='The room owner')
@@ -837,6 +841,12 @@ def main(argv=None):
             store = Store(args.data_dir, signing=False)
             with store.transaction() as db:  # gated: only the named moved reads leave the gate (store-wal-mode D3)
                 print(describe_trust_list(listed_trusts(db, store.clock())))
+        elif args.command == 'join-plan':
+            import re
+            from .join_plan import describe, plan
+            if not re.fullmatch(r'[0-9a-f]{64}', args.peer):
+                parser.exit(2, 'join-plan: --peer takes a full peer id, 64 lowercase hex characters\n')
+            print(describe(plan(args.data_dir, args.peer), args.peer))
         elif args.command == 'station-rooms':
             print(describe_rooms(args.person, Store(args.data_dir, signing=False).station_rooms(args.person)))
         elif args.command in ('station-bridge', 'station-unbridge'):
