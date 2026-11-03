@@ -80,6 +80,7 @@
   - `trust_confirmations(id TEXT PRIMARY KEY, contact_id TEXT NOT NULL, grant_id TEXT NOT NULL, assertion TEXT NOT NULL, acting_ship_id TEXT NOT NULL, confirmed REAL NOT NULL, day TEXT NOT NULL)`;
   - `trust_cap_refusals(grant_id TEXT NOT NULL, day TEXT NOT NULL, refused INTEGER NOT NULL, PRIMARY KEY(grant_id, day))`;
   - `retired_peers(peer_id TEXT PRIMARY KEY, retired REAL NOT NULL, by_id TEXT)`.
+- Produces: `OWNER_TRUST_STATEMENTS`, a tuple of single SQL statements (each table and each trigger), and `OWNER_TRUST_SCHEMA = ';\n'.join(OWNER_TRUST_STATEMENTS) + ';'`, so Task 5 can create them one statement at a time (a trigger body holds its own semicolon, so the schema can't be split on `;`).
 - Produces: `TRUST_DAYS = 90`; `code_current(db, contact_id: str) -> bool`, the rule `connections()` uses now (federation.py:189: the confirmation's code equals `pairing_code` of the stored card with this contact's participant, and the peer is paired). Task 6 makes `connections()` call it.
 - Produces: `live_trust(db, peer_id: str, owner_user_id: str, now: float) -> sqlite3.Row | None`, the unrevoked trust for that owner with its latest `until`, or None. A grant is revoked once any of its rows is `revoke`.
 - Produces on `Store` (mixin `OwnerTrust`): `grant_owner_trust(actor, contact_id, *, days, password, source, public=True, device=None) -> dict` and `renew_owner_trust(actor, grant_id, *, days, password, source, public=True, device=None) -> dict`. Both return `{'grant_id', 'until', 'text'}`, where `text` is the Global Constraints grant line. Both take `_admin(db, actor)` and `check_password_attempt` (as `confirm_imprint` does, imprints.py:948), and refuse 401 on a wrong password.
@@ -127,7 +128,8 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
   - `test_a_card_whose_other_fields_differ` (endpoint changed), `test_a_participant_that_differs_from_the_assertions`;
   - `test_a_forged_card_from_a_public_card` (B's person card with a new `participant` and no assertion signed for it → refused at check 3);
   - `test_an_owner_on_another_peer` (M3): a third peer C, paired, whose contact shares `andy-b`'s user id; an assertion signed by C naming that id, for a trust granted on B's owner → refused;
-  - `test_names_that_fail_ship_name_or_collide`: `Tardis`, `andy`, `andy-b` (a local username), and the remote person contact's own name casefolded → each refused;
+  - `test_names_that_fail_ship_name_or_collide`: `Tardis` (fails SHIP_NAME); `andy` (the station's own username); a ship `dock-hand` after a local user named `Dock-Hand` is made on A (a local name, by casefold); and a ship `sam` after a second person `Sam` on B is paired here with its code (a remote person contact's name) → each refused;
+  - `test_a_ships_name_may_repeat_on_another_host` (S6): with the M3 test's peer C under its own trust, a ship `tardis` from C pairs after B's `tardis`, since trust contacts are left out of the collision names;
   - `test_a_contact_that_already_exists` (the same card twice);
   - `test_the_cap`: 200 pair, the 201st → 429 with `trust_cap_refusals.refused == 1` and nothing else written;
   - `test_two_pairings_at_the_cap_pair_one` (Review Focus 2): 199 rows seeded, two threads, each with its own `Federation` on its own `Store` over the same directory → exactly one succeeds;
@@ -176,7 +178,7 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
 
 **Files:**
 - Modify: `peer/superyak_peer/backups.py` (two steps and the report; the step lists at backups.py:1452-1466)
-- Test: `peer/tests/test_owner_trust_restore.py` (new; use `tests/test_restore.py`'s helpers for a staged copy and a replaced file)
+- Test: `peer/tests/test_owner_trust_restore.py` (new; import or mirror `tests/test_restore.py`'s helpers: `staged(tmp_path, store, label)`, `go_live(copy, directory)`, `reconcile(capsys, *args)` and `peer_station(tmp_path)`, as `test_reconcile_unpairs_a_peer_as_federation_unpair_does` uses them)
 
 **Interfaces:**
 - Consumes: `settle_owner_trust`, `OWNER_TRUST_SCHEMA` (Tasks 2 and 4).
@@ -256,12 +258,12 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
 ### Task 8: The law lines and the make target
 
 **Files:**
-- Modify: `CLAUDE.md` ("Pairing peers (every machine)")
+- Later, after Andy's yes: `CLAUDE.md` ("Pairing peers (every machine)")
 - Modify: `Makefile` (`station-pair-trusted CARD= ASSERTION= SHIP=`)
 - Modify: `peer/pyproject.toml` (confirm every new file is listed), `docs/checklists.md` if a checklist names pairing
 
 - [ ] **Step 1: Add the target.** `station-pair-trusted` refuses a missing `CARD`, `ASSERTION` or `SHIP` with a usage line, then runs `pair-trusted --data-dir "$(STATION_DATA)" --card "$(CARD)" --assertion "$(ASSERTION)" --as "$(SHIP)"`.
-- [ ] **Step 2: Draft the CLAUDE.md lines,** appended to "Pairing peers": "Within an owner trust, a ship may pair another machine's ship with no code: on that machine, `export-ship --username <ship>` writes its card and a signed assertion; here, `make station-pair-trusted CARD= ASSERTION= SHIP=<this ship>`. The trust is Andy's act alone, granted, renewed and revoked in the station's browser with his password, and a ship never grants, renews or revokes one, runs it under a pty or a wrapper, or types the password. `make station-trust-list` names every ship paired that way; Odo's daily digest in Ops counts them." These lines bind the ships, so they land only with Andy's yes in the harness (spec, "What it costs Andy"). Ask him once, in the room, with the text.
+- [ ] **Step 2: Leave CLAUDE.md unchanged; the controller applies these lines only after Andy's yes. The lines, for that commit,** appended to "Pairing peers": "Within an owner trust, a ship may pair another machine's ship with no code: on that machine, `export-ship --username <ship>` writes its card and a signed assertion; here, `make station-pair-trusted CARD= ASSERTION= SHIP=<this ship>`. The trust is Andy's act alone, granted, renewed and revoked in the station's browser with his password, and a ship never grants, renews or revokes one, runs it under a pty or a wrapper, or types the password. `make station-trust-list` names every ship paired that way; Odo's daily digest in Ops counts them." These lines bind the ships, so they land only with Andy's yes in the harness (spec, "What it costs Andy"). Ask him once, in the room, with the text.
 - [ ] **Step 3: Run the whole peer suite.** `cd peer && uv run --locked pytest -q` → all passed (lesson 26). Then `make -n station-pair-trusted CARD=a ASSERTION=b SHIP=c` prints the command.
 - [ ] **Step 4: Commit.** `git commit -m "Owner trust 8: make station-pair-trusted, and the pairing law's new lines"`
 
