@@ -1489,9 +1489,11 @@ def main(argv=None):
 
 @verb('station-room', 'On the origin: show, then record, the lessons room Andy names by short id',
       ('--id', {'required': True}), ('--as', {'dest': 'person', 'required': True}), ('--ship', {'required': True}),
+      ('--peer', {'action': 'append', 'default': [], 'dest': 'peers',
+                  'help': "A paired peer's full id that is one of Andy's machines (repeatable); a peer id, never a pairing code"}),
       ('--confirm', {}))
 def _station_room(store, args):
-    return describe_station_room(store.station_lessons_room(args.person, args.id, args.ship, (), args.confirm))
+    return describe_station_room(store.station_lessons_room(args.person, args.id, args.ship, args.peers, args.confirm))
 
 
 @verb('where', "The lessons room's current room, by its full id")
