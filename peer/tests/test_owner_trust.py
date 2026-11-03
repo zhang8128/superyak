@@ -1,5 +1,6 @@
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 
@@ -7,7 +8,8 @@ import pytest
 from superyak_peer.common import Problem
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
-from superyak_peer.identity import canonical, check_ship_assertion, make_ship_assertion
+from superyak_peer.identity import canonical, check_ship_assertion, make_ship_assertion, pairing_code
+from superyak_peer.owner_trust import OWNER_TRUST_STATEMENTS, OWNER_TRUST_SCHEMA, live_trust
 
 NOW = 1_800_000_000
 
@@ -173,9 +175,6 @@ def test_export_ship_refuses_a_peer_with_no_mode(tmp_path):
 
 # Task 2: the owner trust table, granting and renewing
 
-import sqlite3
-from superyak_peer.identity import pairing_code
-
 PASSWORD = 'station-password'
 
 
@@ -248,15 +247,86 @@ def test_renewing_extends_and_owner_trust_is_append_only(paired):
     with pytest.raises(Problem) as caught:
         station.renew_owner_trust(admin['id'], done['grant_id'], days=5, password=PASSWORD, source='127.0.0.1')
     assert caught.value.status == 409
-    for sql in ('UPDATE owner_trust SET until=0', 'DELETE FROM owner_trust'):
+    for sql in ('UPDATE owner_trust SET until=0', 'DELETE FROM owner_trust',
+                "INSERT OR REPLACE INTO owner_trust(seq,grant_id,event,peer_id,owner_user_id,at) VALUES (1,'x','revoke','p','o',0)"):
         with station.transaction() as db, pytest.raises(sqlite3.IntegrityError):
             db.execute(sql)
     assert len(rows(station)) == 2
 
 
 def test_the_schema_statements_each_run_alone():
-    from superyak_peer.owner_trust import OWNER_TRUST_STATEMENTS, OWNER_TRUST_SCHEMA
     db = sqlite3.connect(':memory:')
     for statement in OWNER_TRUST_STATEMENTS:
         db.execute(statement)
     assert OWNER_TRUST_SCHEMA.endswith(';') and OWNER_TRUST_SCHEMA.count('CREATE') == len(OWNER_TRUST_STATEMENTS)
+
+
+def renew(paired, grant_id, days=30, password=PASSWORD):
+    station, admin = paired[:2]
+    return station.renew_owner_trust(admin['id'], grant_id, days=days, password=password, source='127.0.0.1')
+
+
+def revoke_row(station, grant_id, peer_id, owner):
+    with station.transaction() as db:
+        db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,at) VALUES (?,'revoke',?,?,?)",
+                   (grant_id, peer_id, owner, NOW))
+
+
+def test_renewing_needs_the_password_a_known_unrevoked_grant(paired):
+    station, admin, contact, card = paired
+    done = grant(paired, days=5)
+    with pytest.raises(Problem) as caught:
+        renew(paired, done['grant_id'], password='not-the-password')
+    assert caught.value.status == 401
+    with pytest.raises(Problem) as caught:
+        renew(paired, 'nope')
+    assert caught.value.status == 404
+    revoke_row(station, done['grant_id'], contact['peer_id'], contact['user_id'])
+    with pytest.raises(Problem) as caught:
+        renew(paired, done['grant_id'])
+    assert caught.value.status == 409 and len(rows(station)) == 2
+
+
+def test_renewing_re_checks_the_owner_and_refuses_a_trust_made_contact(paired):
+    station, admin, contact, card = paired
+    done = grant(paired, days=5)
+    with station.transaction() as db:
+        db.execute('INSERT INTO contact_holds VALUES (?,?)', (contact['id'], NOW))
+    with pytest.raises(Problem) as caught:
+        renew(paired, done['grant_id'])
+    assert caught.value.status == 409
+    with station.transaction() as db:
+        db.execute('DELETE FROM contact_holds')
+        db.execute('INSERT INTO trust_confirmations VALUES (?,?,?,?,?,?,?)', ('t', contact['id'], 'g', '{}', 's', NOW, '2027-01-15'))
+    for attempt in (lambda: renew(paired, done['grant_id']), lambda: grant(paired)):
+        with pytest.raises(Problem) as caught:
+            attempt()
+        assert caught.value.status == 409
+    assert len(rows(station)) == 1
+
+
+def test_an_expired_grant_cannot_come_back_beside_a_newer_one(paired):
+    station, admin, contact, card = paired
+    now = [NOW]
+    station.clock = lambda: now[0]
+    first = grant(paired, days=1)
+    now[0] = NOW + 2 * 86400
+    second = grant(paired, days=10)
+    with pytest.raises(Problem) as caught:
+        renew(paired, first['grant_id'])
+    assert caught.value.status == 409
+    assert len(rows(station)) == 2
+    with station.transaction() as db:
+        assert live_trust(db, contact['peer_id'], contact['user_id'], now[0])['grant_id'] == second['grant_id']
+
+
+def test_live_trust_excludes_a_revoked_grant_and_ends_at_until(paired):
+    station, admin, contact, card = paired
+    done = grant(paired, days=1)
+    peer, owner = contact['peer_id'], contact['user_id']
+    with station.transaction() as db:
+        assert live_trust(db, peer, owner, done['until'] - 1)['grant_id'] == done['grant_id']
+        assert live_trust(db, peer, owner, done['until']) is None
+    revoke_row(station, done['grant_id'], peer, owner)
+    with station.transaction() as db:
+        assert live_trust(db, peer, owner, NOW) is None

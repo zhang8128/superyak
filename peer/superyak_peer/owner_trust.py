@@ -18,6 +18,9 @@ OWNER_TRUST_STATEMENTS = (
 BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
     '''CREATE TRIGGER IF NOT EXISTS owner_trust_no_delete BEFORE DELETE ON owner_trust
 BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
+    '''CREATE TRIGGER IF NOT EXISTS owner_trust_no_replace BEFORE INSERT ON owner_trust
+WHEN EXISTS (SELECT 1 FROM owner_trust WHERE seq=NEW.seq)
+BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
     '''CREATE TABLE IF NOT EXISTS trust_confirmations(id TEXT PRIMARY KEY, contact_id TEXT NOT NULL,
   grant_id TEXT NOT NULL, assertion TEXT NOT NULL, acting_ship_id TEXT NOT NULL, confirmed REAL NOT NULL,
   day TEXT NOT NULL)''',
@@ -67,11 +70,24 @@ def _text(name, peer_id, until):
     return GRANT_TEXT.format(name=safe_line(name), peer=peer_id[:12], date=date)
 
 
+def _eligible(db, contact):
+    """The refusals grant and renew share: the owner is a remote person contact, not held, not made by a trust, whose
+    typed code is still current."""
+    if contact is None:
+        raise Problem(404, 'No such contact')
+    if db.execute('SELECT 1 FROM contact_holds WHERE contact_id=?', (contact['id'],)).fetchone():
+        raise Problem(409, 'That contact is held')
+    if db.execute('SELECT 1 FROM trust_confirmations WHERE contact_id=?', (contact['id'],)).fetchone():
+        raise Problem(409, 'That contact was paired by an owner trust, not by a typed code')
+    if not code_current(db, contact['id']):
+        raise Problem(409, 'A code typed for that contact is needed first')
+
+
 class OwnerTrust:
-    def _trust_password(self, db_actor, password, source, public, device):
+    def _trust_password(self, actor, password, source, public, device):
         with self.transaction() as db:
-            self._admin(db, db_actor)
-            username = db.execute('SELECT username FROM users WHERE id=?', (db_actor,)).fetchone()['username']
+            self._admin(db, actor)
+            username = db.execute('SELECT username FROM users WHERE id=?', (actor,)).fetchone()['username']
         if not self.check_password_attempt(username, password, source, public=public, device=device):
             raise Problem(401, 'Invalid password')
 
@@ -84,12 +100,7 @@ class OwnerTrust:
             self._admin(db, actor)
             now = self.clock()
             contact = db.execute('SELECT * FROM remote_contacts WHERE id=?', (contact_id,)).fetchone()
-            if contact is None:
-                raise Problem(404, 'No such contact')
-            if db.execute('SELECT 1 FROM contact_holds WHERE contact_id=?', (contact_id,)).fetchone():
-                raise Problem(409, 'That contact is held')
-            if not code_current(db, contact_id):
-                raise Problem(409, 'A code typed for that contact is needed first')
+            _eligible(db, contact)
             if live_trust(db, contact['peer_id'], contact['user_id'], now):
                 raise Problem(409, 'That owner is already trusted; renew it')
             grant_id, until = uid(), now + days * 86400
@@ -110,11 +121,19 @@ class OwnerTrust:
             if any(r['event'] == 'revoke' for r in rows):
                 raise Problem(409, 'That owner trust was revoked')
             peer_id, owner = rows[0]['peer_id'], rows[0]['owner_user_id']
+            contact = db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer_id, owner)).fetchone()
+            _eligible(db, contact)
+            latest = db.execute("SELECT grant_id FROM owner_trust WHERE peer_id=? AND owner_user_id=? AND event='grant' "
+                                'ORDER BY seq DESC LIMIT 1', (peer_id, owner)).fetchone()
+            if latest['grant_id'] != grant_id:
+                raise Problem(409, "That is not this owner's latest trust; grant a new one")
+            live = live_trust(db, peer_id, owner, now)
+            if live and live['grant_id'] != grant_id:
+                raise Problem(409, 'That owner is already trusted under another grant')
             current = max(r['until'] for r in rows)
             until = now + days * 86400
             if until <= current:
                 raise Problem(409, 'That owner trust already runs longer')
             db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at) '
                        "VALUES (?,'renew',?,?,?,?,?)", (grant_id, peer_id, owner, until, actor, now))
-            name = db.execute('SELECT name FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer_id, owner)).fetchone()
-        return {'grant_id': grant_id, 'until': until, 'text': _text(name['name'] if name else owner, peer_id, until)}
+        return {'grant_id': grant_id, 'until': until, 'text': _text(contact['name'], peer_id, until)}
