@@ -1,6 +1,8 @@
 # A ship's own home, and lighthouse crossings between peers
 
-**Status:** revision 3, by Tardis. This is the station half of "memory follows the ship". Rio Grande's Engram half is
+**Status:** revision 4, by Tardis. **Approved:** the same fresh reviewer gave APPROVE WITH CHANGES on revision 3
+([re-check 2](../reviews/2026-11-03-ship-home-and-crossing-recheck2.md)). Its seven changes and four nits are folded
+in here (law section 3), and it said no further round was needed once they were applied as written. This is the station half of "memory follows the ship". Rio Grande's Engram half is
 approved (branch memory-follows-ship), and its section 3.11 is the interface this spec meets.
 
 **History:**
@@ -91,14 +93,21 @@ The client never queues an operation over the cap; the tool call gets `refused: 
 | `seq` ahead of `high` | 409 `{kind: "gap", expected}` | `gap` |
 | Moved | 409 `{kind: "moved", home}` | `moved` |
 | Refused at the host | 403 `{kind: "refused", code}` | `refused`. A 403 without `code` reads as `unreachable` |
-| Refused at the station before the host (a 400 or 413 on a body the client did send) | 400 or 413 `{kind: "refused", code, seq?}` | sends 3.3's `skip to n` for that `seq`, so `high` advances, then continues. With no `seq` it can name, it stops and shows the gap at next wake |
+| Refused at the station before the host (a 400 or 413 on a body the client did send) | 400 or 413 `{kind: "refused", code, seq}` | sends 3.3's `skip to n` for that `seq`, **carrying the station's code**. The host accepts that skip only for `n = high + 1`, so `high` advances, and the client continues |
+| Any 4xx without a `kind` (for example BrowserBoundary's 413, app.py:110-111) | 4xx | `unreachable`: keeps the outbox. A wrongly deployed cap can't silently drop work |
 | Key expired | 401 `{kind: "expired"}` | **`expired`** (Rio Grande's 3.11): stops, keeps the outbox, and replays under a renewed key for the same ship |
 | Key revoked | 401 `{kind: "revoked"}` | **`revoked`**: stops, holds the outbox and never replays it. The next wake under a new key says how many operations are held |
 | Any other 401 | 401 | read as `revoked`, the safe reading |
 | Connection failed, a timeout, any other 5xx, or a 503 without `Retry-After` | (none) | `unreachable`: keeps the outbox and backs off |
 
 The memory client never deletes a key, unlike the dock client (dock.py:67-71). Off a cluster there's no station drain,
-so a held or expired outbox stays on that machine until a renewed key replays it, or the owner discards it.
+so a held or expired outbox stays on that machine until a renewed key replays it (expired only), or the owner discards
+it.
+- **A revoked outbox** can be discarded, or released by the owner after reading it, never by the ship.
+- **Telling 401s apart:** `ship_for_key` today returns nothing for any bad key. It gains a reason (`expired` from
+  `expires`, `revoked` from `revoked`), and an unknown key answers `revoked`. That's a named change.
+- **A cluster station knows it's one** by `peer_meta.station_kind = 'cluster'`, set when it's initialized. The public
+  route's exception for this route reads that.
 
 **What isolation needs:** a key proves the ship only as well as the key is kept. Per-job keys on a cluster live inside
 the job. On one uid on one machine, any process can read any ship's key, and real isolation there needs one uid per
@@ -114,7 +123,13 @@ ship, which this spec doesn't require.
   identity, which is a new data directory and outside this spec.
 - **Any peer with a long-running federation process can ask.** It asks through its own local socket (2.4):
   - on push peers, `federation-listen` opens it;
-  - on pull peers, `federate` does. It's a Unix socket, not a network listener.
+  - on pull peers, `federate` does, **only when started with `--crossing-socket`**. It's off by default, so the Mac
+    never opens it. It's a Unix socket, not a network listener.
+  - **In `federate`, the socket runs on its own thread.** A pass is single-threaded and can block for minutes on pull
+    rounds. A fault on the socket thread is logged and the thread restarts, and never ends `federate`.
+  - **Three places say federate never listens, and each is amended by name:** the pull spec, section 1;
+    federate.py:5-6; and test_federate.py:112-122, which fails on any `bind`. The test becomes "no network bind, and
+    a Unix socket only under `--crossing-socket`".
   - On the Mac, law section 6 governs listeners while a browser lane runs, so the Mac asks only once that's settled
     (section 6 below).
 - **Cluster route B** carries no crossings.
@@ -139,16 +154,30 @@ ship, which this spec doesn't require.
 3. **The permission ledger (A).** Agent names can't hold `:` (permissions.py:104, 138-139), and an unregistered
    requester is refused (permissions.py:2062-2067).
    - **One reserved ledger agent per home, `remote-stores`,** stands for every remote ref. The home's owner registers
-     it once, with the place `outside-home`.
-   - Every crossing is judged in the ledger as `agent:remote-stores` at `outside-home`. So every ledger rule that
+     it once, at `place:outside-home`.
+   - **What the owner reads when registering it** (Rio Grande, 77dec36f): "Every remote store this home's publisher
+     grants may cross, under these audiences", followed by the audiences and exact refs granted at that moment. So
+     the one act is an informed one.
+   - Every crossing is judged in the ledger as `agent:remote-stores` at `place:outside-home`. So every ledger rule that
      keeps a memory inside the home holds for every crossing.
-   - The audience map and policy, by exact ref, decide which remote store sees what.
    - Until the owner registers it, every crossing is refused (`UNKNOWN_REQUESTER`), so a home fails closed.
    - Local instance creation refuses the name `remote-stores`.
-   - The ledger sites that take a local name (lighthouse_daemon.py:483-486 agent and place, :499-512 the receiver's
-     policy file) branch on a remote ref: the reserved agent, and no local receiver file.
+   - **The ledger sites that take a local name branch on a remote ref:**
+     - lighthouse_daemon.py:483-486 (agent and place) uses the reserved agent;
+     - :499-512 reads no local receiver file;
+     - the "receiver" layer (:493-496, :514-516) is **left out** for a remote ref, since the receiver checked its own
+       policy before asking (2.4). Otherwise that layer refuses every crossing under `enforce`.
 
 That's one owner act per home, ever, not one per store. This is safety code under law section 2.
+
+**What the shared agent costs, said plainly** (re-check 2): the ledger no longer holds per-store protections.
+- **What's gone:** rules naming one remote store, retiring or granting to one remote store, and receipts that say
+  which store received what. Every ledger receipt reads `agent:remote-stores`. The peer's `crossings` table and the
+  sidecar still name the store.
+- **Where "which store sees what" now lives:** in the policy file and the audience map. The publisher's ship can edit
+  those, and they're digested, not signed.
+- **The owner's way to cut off one remote store** is a hold on its ship's contact (or an unpair of its peer), which
+  check 5 enforces before any Engram read.
 
 **The ship behind the store** must be a current contact of the publisher's peer from that origin: not held, with a
 current typed confirmation by the rule `connections()` uses. Holds belong to contacts (federation.py:78, 151-193). When
@@ -196,14 +225,19 @@ exact-ref audience, the ledger as `remote-stores` at `outside-home`, expiry on i
 `disclosures` row. It never touches the private store, so `unshare` removes a memory from crossings. It never serves
 an imprint store (sharing.py:109-110).
 
-**Read ids are bound** (S-f): for 30 seconds after a `query`, the daemon keeps `turnId` mapped to (the receiver ref,
-the publisher, the candidate ids it actually returned). A `read` that differs in any of those is refused. That's a code
-change at lighthouse_daemon.py:978-1000, named here.
+**Read ids are bound, for remote refs only** (S-f):
+- For 30 seconds after a remote `query`, the daemon keeps `turnId` mapped to (the receiver ref, the publisher, the
+  candidate ids it actually returned). A remote `read` that differs in any of those is refused.
+- The map holds at most 1,000 entries, dropping the oldest first.
+- Local reads are unchanged, since `context` re-reads by `turnId` minutes after a recall (context_lighthouse.py:171-174,
+  213, 250).
+- It's a code change at lighthouse_daemon.py:978-1000, named here.
 
 **The crossings table** (S-c): the daemon learns only the frame, so the peer keeps the network half. After the daemon
 answers with its `disclosureId`, federation-listen writes a row to `crossings(disclosure_id PRIMARY KEY, origin_peer,
 receiver_ref, request_digest, nonce, at)` in `peer.sqlite3`. If that write fails, it returns 503 and no answer. The
-daemon's sidecar row and this row link by `disclosureId`.
+daemon's sidecar row and this row link by `disclosureId`. A sidecar disclosure with no `crossings` row means no answer
+was sent, and the peer's reconciliation reports it as unsent.
 
 **The answer** is canonical JSON, signed by this peer, with exactly these keys:
 - `version`;
@@ -242,28 +276,41 @@ sides, and stage 2 grants it. Two things are forbidden across peers, and each is
 1. **No unasked text in a session.** Remote text never enters the wake or nudge hooks' output. Those hooks run no
    crossing: only `recall` with a lighthouse context does, in that turn.
 2. **No remote text stored as memory.**
-   - **The record:** the receiving home records every remote delivery locally, in its own `permission-uses.db`, in a
-     `remote_deliveries` table. Each row holds the `disclosureId`, the content digest of each delivered item's
-     normalized text, and digests of each of its sentences of 12 words or more. The table is created on first use.
-     A failed record suppresses the delivery, as a failed receipt does.
-   - **The guard:** `remember` refuses text whose digest, or any of whose sentence digests, matches a remote
-     delivery. It does so in **every** gate mode, not only `enforce`, since today's guard reads only local
-     deliveries and does nothing with the gate off (server.py:2104-2109).
-   - **What it doesn't catch, said plainly:** a paraphrase. A model that restates remote text in its own words is
-     making its own memory, and the receipt records that it saw the source.
+   - **The record** is a separate file at the receiving home, `remote-deliveries.db`, beside the store. It isn't
+     `permission-uses.db`, which is a hash-chained receipts file with schema checks.
+     - Each row holds the `disclosureId`, the digest of each delivered item's normalized text, and the digest of each
+       of its sentences of 12 words or more.
+     - **Normalized** means Unicode NFKC, casefolded, with whitespace collapsed to single spaces.
+     - **Sentences** split after `.`, `!` or `?` when followed by whitespace, or at a newline.
+     - Rows are kept 90 days. A failed record suppresses the delivery, as a failed receipt does.
+   - **The guard** refuses text whose digest, or any of whose sentence digests, matches a recorded remote delivery.
+     - It runs in **every** gate mode, and runs **before** the existing guard's gate-off early return
+       (server.py:2104-2109), which reads only local deliveries.
+     - It covers every tool that stores text at the home: `remember`, `jot` (both scopes), `task_update`,
+       `dream_capture`, `clipboard_pin` and `add_anchor`.
+   - **What it doesn't catch, said plainly:**
+     - a paraphrase, since a model that restates remote text in its own words is making its own memory, and the
+       receipt records that it saw the source;
+     - a copy made more than 90 days after delivery.
 
 ## 3. Stages
 
 1. **Own home on the same machine** (1.1), with Rio Grande's stage 1.
 2. **One crossing: Tardis asks, the Pi answers** (rail commons stage 4, one direction):
-   - **Setup:** the Pi publishes its work lane only, to Tardis's store ref. The Pi's owner registers `remote-stores`
-     once. Recall, read and inject are granted on both sides for one context. Tardis's `federate` opens
-     `crossing.sock`.
+   - **Setup:**
+     - **The tardis ship is a current contact on the Pi** (check 5). Only `pair()` creates a contact
+       (federation.py:144). Tardis's ship card was exported on 2026-11-02, and Rio Grande reports it as a
+       code-confirmed contact on the Pi, so `make join-machine-plan` on the Pi confirms it first. If it's absent, it's
+       paired as CLAUDE.md says: `card --username tardis --pull` on Tardis, and Andy reads and types its code himself.
+     - The Pi publishes its work lane only, to Tardis's store ref, and the Pi's owner registers `remote-stores` once.
+     - Recall, read and inject are granted on both sides for one context.
+     - Tardis's `federate` runs with `--crossing-socket`.
    - **The measure:** a recall on Tardis that delivers from the Pi's published house, with the same `disclosureId` in
      Tardis's receipt, in its `remote_deliveries`, in the Pi daemon's sidecar and in the Pi peer's `crossings`. Then
      lighthouse_sheaf on a few shared topics.
    - **The rollback:** the receiver off, or an unpair.
-   - **The other direction** waits for a push identity on Tardis.
+   - **The other direction** waits for a push identity on Tardis. Until then the link is one-way: the Pi learns
+     nothing from Tardis's store, and nobody should read stage 2 as two-way.
 3. **Own home, authenticated** (1.2), on a home that serves, then cluster sessions.
 
 ## 4. Tests that prove it
@@ -303,10 +350,11 @@ sides, and stage 2 grants it. Two things are forbidden across peers, and each is
 - From Funnel, the route is refused except on a cluster station.
 - Each row of the answers table maps as written.
 
-## 5. Asked of Rio Grande's 3.11
+## 5. Rio Grande's 3.11
 
-- **List `outbox_id`** in the client's half of the envelope.
-- **The 401 body** carries `kind: "expired"` or `kind: "revoked"`, and anything else reads as revoked (1.2).
+Both of this spec's asks are in Rio Grande's 3.11 (memory-follows-ship 888a5a2d):
+- `outbox_id` is in the client's half of the envelope;
+- the 401 body carries `kind: "expired"` or `kind: "revoked"`, and anything else reads as revoked (1.2).
 
 ## 6. Not in this spec
 
