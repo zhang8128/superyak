@@ -1,7 +1,7 @@
 # Owner trust: a confirmed person's ships pair without a code each
 
-Rio Grande, 2026-11-02. Revision 3, after the fresh review of revision 1 (M1, M2, S1 to S5) and its re-check (M3, S6 to S9). Status: draft
-for its second re-check (law section 3).
+Rio Grande, 2026-11-02. Revision 4, after the fresh review of revision 1 (M1, M2, S1 to S5) and its re-checks (M3, S6 to S9; M4, S10).
+Status: draft for its third re-check (law section 3).
 
 ## Why
 
@@ -30,7 +30,7 @@ person whose own account a person confirmed with a code.
    - the peer id, in the record's `station` field, which `verify_record` checks against the card's peer id;
    - the ship's participant id and name;
    - its owner's participant id;
-   - issued and expires times (at most 30 days; an `issued` time in the future is refused).
+   - issued and expires times (at most 30 days; an `issued` time more than 5 minutes in the future is refused).
 
    `export-ship --username <ship>` writes the card and its assertion together. The command refuses an account that
    isn't a ship, or a ship whose owner isn't that peer's local person. A copied card can't carry a forged assertion
@@ -52,10 +52,11 @@ person whose own account a person confirmed with a code.
      its typed confirmation is still current, by the rule `connections()` uses (M3);
    - the card, apart from `participant`, equals the paired card (as `pair` compares it, federation.py:130);
    - the participant equals the assertion's;
-   - it isn't already a contact;
-   - its name matches SHIP_NAME (ships.py:15: lowercase letters, digits and dashes, which rules out "Andy." and a
-     Cyrillic "Аndy"), and it doesn't equal a local user's name or a remote person contact's name, compared by
-     casefold. Ships of the same name on different hosts are allowed, since each shows with its owner (S6).
+   - it isn't already a contact, except a ship held because its trust was revoked, re-paired under a later trust (step
+     6, S10);
+   - its name fullmatches SHIP_NAME (ships.py:15: lowercase letters, digits and dashes, which rules out "Andy." and a
+     Cyrillic "Аndy"), and it doesn't equal a local user's name or a remote person contact's name (a remote contact
+     with no trust confirmation), compared by casefold. Ships of the same name on different hosts are allowed, since each shows with its owner (S6).
 
    On success it adds the contact with a `trust_confirmations` row (contact, grant, the signed assertion itself, the
    acting ship), so `connections()` reports it as "confirmed by owner trust", not as missing a code. The contact shows
@@ -63,14 +64,25 @@ person whose own account a person confirmed with a code.
    Holding the owner, by unpair, a restore or a revoke, holds every ship made under its trust (M3).
 4. **The cap:** at most 200 contacts per owner trust per day, counted from `trust_confirmations` by day (UTC). A
    refusal at the cap writes nothing but a station notice (below).
-5. **Notices:** one digest line per owner trust per day, built in `station_notices` from `trust_confirmations`, not
-   through Odo's alert path, which is built for unit failures and keeps only 20 (S7). It says how many ships were paired,
-   their full participant ids in the notice's detail, the owner, the peer's 12 characters and the acting ships, all
-   through `safe_line`, plus any refusal at the cap. It's read in the Ops room, or in the station log without Odo.
+5. **Notices:** one digest line per owner trust per day (UTC), posted by Odo once per digest id like other station
+   notices, built in `station_notices` from `trust_confirmations`, not
+   through Odo's alert path, which is built for unit failures and keeps only 20 (S7). Its text says how many ships were
+   paired, the owner, the peer's 12 characters and the acting ships, all through `safe_line`, plus any refusal at the
+   cap. The full participant ids are in `make station-trust-list`, which the line names. It's read in the Ops room, or
+   in the station log without Odo.
 6. **Revoking**, the admin's act in the browser, or unpairing the owner's peer, ends the trust. Every contact made
    under it is put in `contact_holds` at once, as `_hold_like_replaced` does: its outbox rows are withdrawn and its inbox
-   payloads cleared. So revoking stops a compromise. **Recovery (S8):** a new owner trust, granted after the revocation,
-   may re-pair a held ship only with a fresh assertion issued after that revocation; nothing issued before it counts.
+   payloads cleared. **Any hold of the owner** (unpair, a restore, a revoke) writes a revocation row in `owner_trust`, so
+   every hold has a date (S10).
+   - **What revoking stops (M4):** a trust that was misused, or granted wrongly, while the exporting peer's signing key
+     is still safe. It does not stop a compromised host. The key sits unencrypted in that peer's identity.json
+     (identity.py:133), so an attacker there can sign new assertions with any date, and still speaks as every contact
+     of that peer, Andy's own account there included.
+   - **A compromised host** is unpaired, which holds every contact of that peer, its person contacts too. It comes
+     back only as a new identity: two typed codes, a new owner trust, and fresh assertions under the new key. Trust
+     material can never be replaced, so the old key is never trusted again.
+   - **Recovery after a revoke (S8), with the key safe:** a new owner trust, granted after the revocation, may re-pair a
+     held ship only with a fresh assertion issued after that revocation; nothing issued before it counts.
    **Expiry:** an expired trust pairs nothing new, and the ships already paired under it stay paired until a revoke or
    unpair holds them.
 7. **Restore:** a restored station re-applies the revocations recorded after the copy was taken, as `backups.py`
@@ -96,7 +108,10 @@ person whose own account a person confirmed with a code.
   which is a decision for the plan.
 - The trust rests on the exporting peer's word. Its admins can make ships "owned by" Andy's account there. On his own
   machines that is Andy. On a shared host, its other admins are trusted for his ships, and that is what he grants.
-- After a compromise and a revoke, a new grant and fresh assertions recover the ships (S8), not 1,000 codes.
+- After a misused trust and a revoke, a new grant and fresh assertions recover the ships (S8). After a compromised
+  host, a new identity: two codes, one confirm, fresh assertions. Either way, not 1,000 codes.
+- Tardis's peer's admin is Andy: he ran its `init` with his account and typed the password there. So the grant on
+  Tardis's side is his act. A host where someone else is admin would need that person's grant.
 - Someone reads the daily digest in Ops; the notices make a compromise visible, not impossible.
 - The new CLAUDE.md lines change instructions that bind the ships, so they need Andy's yes in the harness when the
   plan lands.
@@ -114,7 +129,9 @@ Each refusal writes nothing:
 - a name that fails SHIP_NAME, or equals a local user's or a remote person contact's name by casefold;
 - an assertion whose owner is a contact on another peer (M3);
 - a held owner, or an owner whose typed confirmation is no longer current (M3);
-- an `issued` time in the future;
+- an `issued` time more than 5 minutes in the future;
+- re-pairing a held ship with an assertion issued before the revocation; re-pairing it after a later trust and a fresh
+  assertion succeeds;
 - a contact that already exists;
 - the cap.
 
