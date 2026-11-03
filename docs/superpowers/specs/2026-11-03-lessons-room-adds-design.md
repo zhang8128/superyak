@@ -44,11 +44,14 @@ nothing new. It's administration.
    for the lessons room, `pair` says so before the person types: the CLI before its code prompt, the browser beside
    its code box once the card's peer is known: "<name> on <peer 12> can be added to the lessons room by Rio Grande
    once you type its code; its lessons would reach every ship." `pair` writes `pairing_confirmations.confirmed_by`,
-   its actor. The CLAUDE.md pairing paragraph says it too.
+   its actor, and `pairing_confirmations.lessons_line=1` when the peer was listed in its own transaction (the line was
+   shown). An add on this path needs both. The CLAUDE.md pairing paragraph says it too.
 2a. **The listing names the addable accounts.** `make station-lessons-room … PEERS=` shows, under each listed peer,
    every code-current, unheld contact on it that owner trust didn't make, as "addable by Rio Grande", and those
    contact ids go into its confirm code, so the CONFIRM run records exactly what was shown (`lessons_addable`:
-   contact id, listing time). Peers are paired before they're listed, so this is the path for most accounts: Andy
+   contact id, the confirmation code shown, listing time). A CONFIRM rerun replaces the table, as it replaces
+   `lessons_peers`, and a row counts only while its code is still the contact's current one, so a later re-pair
+   under a new name or by another admin no longer counts. Peers are paired before they're listed, so this is the path for most accounts: Andy
    sees each one in the view he already confirms, and no new act is asked of him.
 3. **Shown and recorded.** The command prints the contact's label and its user id's short form, its peer's 12
    characters, the old and new room's short ids, and how many lessons were carried. `station_notices` builds a one-off
@@ -72,11 +75,14 @@ room still takes no new local member.
 
 Each refusal writes nothing: an unlisted peer; an unconfirmed, stale or held contact; a trust-made contact whose trust is revoked, expired or paused, or whose owner
 isn't addable; an existing
-member; a contact Andy removed; a station with a second admin; a contact id that isn't remote; a moved chain (the add
+member; a contact Andy removed; a contact confirmed by another admin; a contact id that isn't remote; a moved chain (the add
 goes to the chain's newest room). `pair` of an account on a listed peer says the addable line before the code prompt, and writes
 `confirmed_by`; on an unlisted peer it doesn't. A contact confirmed by another admin, or with no `confirmed_by` and not
 in `lessons_addable`, is refused. The listing view names the addable contacts, and its confirm code changes when one
-is added or goes stale. The notice posts once per add, keyed by its `member_changes` row. The success path makes the chain's
+is added or goes stale. The notice posts once per add, keyed by its `member_changes` row. The restore keeps `confirmed_by`, `lessons_line` and
+`lessons_addable` in its compared lists (backups.py `COMPARED`/`_usable`); a restored confirmation with no `confirmed_by`
+comes in only through 2a. A trust-made ship is added while its trust is live and its owner addable, and refused when
+its trust is revoked, expired or paused, or its owner isn't addable. The success path makes the chain's
 next room with the contact, carries the chain's lessons once, and posts the notice once. The CLAUDE.md lessons-room
 paragraph changes from "he adds his own account and that ship's account on that peer" to the new command, with
 Andy's yes in the harness when it lands.
