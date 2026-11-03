@@ -875,12 +875,14 @@ def test_carry_nonces_refuses_a_linked_restored_live_and_a_directory_it_cannot_l
     """The F1 reader's re-read: a restored-live that is itself a symlink would carry from a station elsewhere, so it is
     refused (10.2 makes the directory with install -d, never a link). An $ASIDE that can be searched but not listed
     (0o300) would hide a stray peer.sqlite3-journal from a glob, and a backups directory that can't be listed would
-    read as one with no restore in it: both are refused under their own cause. Nothing changes. Mutations: the link
-    check dropped (the carry goes through), $ASIDE globbed again (the stray file is hidden and the carry goes
-    through), the backups directory globbed again ("not the newest (None)")."""
-    backups_dir = tmp_path / 'backups'
+    read as one with no restore in it: both are refused under their own cause. Nothing changes. Each case has its own
+    backups directory, where its $ASIDE is the newest, so the check it pins is the only one that stops it (the re-read's
+    nit 1: with one shared directory, two cases died on "not the newest" instead). Mutations: the link check dropped
+    (the carry goes through), $ASIDE globbed again (the stray file is hidden and the carry goes through), the backups
+    directory globbed again ("not the newest (None)")."""
     live = Store(tmp_path / 'lighthouse')
-    linked, unlisted, newest = (backups_dir / f'replaced-20261017-1{n}0000' for n in (1, 2, 3))
+    linked, unlisted, newest = (tmp_path / name / 'replaced-20261017-110000' for name in ('b-linked', 'b-unlisted', 'b-unlistable'))
+    backups_dir = newest.parent
     elsewhere = Store(tmp_path / 'elsewhere')
     with elsewhere.transaction() as db:
         backups._write_mark(db, None, 1.0, linked / 'restored.sqlite3')
