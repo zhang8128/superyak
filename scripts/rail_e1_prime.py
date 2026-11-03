@@ -28,8 +28,9 @@ No query text and no outcome text is read. Vectors stay in memory. Ids become in
 output is aggregate numbers only, with times no finer than a day, and an exception prints its type and line only.
 RLIMIT_DATA is capped at 512 MiB, and peak RSS is checked against the same cap.
 
-`--synthetic order|noorder` builds a planted log in a shared-cache in-memory SQLite database (nothing on disk) with
-Engram's table names and reads it through the same code.
+`--synthetic order|noorder|realistic-order|realistic-noorder` builds a planted log in a shared-cache in-memory SQLite
+database (nothing on disk) with Engram's table names and reads it through the same code. Every run first checks the
+outcome classifier at each boundary; `--self-check` runs only that check.
 
 Run:
   /home/andy/superyak/engram/.venv/bin/python -I scripts/rail_e1_prime.py --synthetic order --report PATH
@@ -131,9 +132,6 @@ CHOICES = [
     "**BCa.** 10,000 multinomial cluster resamples, seeded. `z0` comes from the share of resamples below the estimate, "
     "with ties counting half, clipped to [0.5/B, 1 − 0.5/B]. The acceleration comes from the leave-one-cluster-out "
     "jackknife.",
-    "**Holds and fails at once.** An interval with its lower bound above 0 and its upper bound below δ meets both. "
-    "This script calls it **fails** (the effect is surely below the smallest effect of interest), and the report says "
-    "so when it happens.",
     "**Order.** `D_order` says \"order carries information\" only if its lower bound is above 0 under both the session "
     "bootstrap and the day bootstrap.",
     "**Insufficient.** Test sessions are those with at least one primary step. When the data are insufficient, no "
@@ -370,31 +368,41 @@ def check_config(store: Path, named: list[Path]) -> dict:
 # --------------------------------------------------------------------------------------------------- synthetic
 
 
-def synthetic(kind: str) -> tuple[sqlite3.Connection, str, dict]:
-    """A planted log in a shared-cache in-memory database, with Engram's tables and row shapes.
+SYNTHETIC_KINDS = ("order", "noorder", "realistic-order", "realistic-noorder")
+DEFAULT_SESSIONS = {"order": 160, "noorder": 160, "realistic-order": 120, "realistic-noorder": 120}
+# The realistic plant's order effect: after a topic, the footpath jumps to that topic's fixed next set with this
+# probability on a jump (else to a random topic). Chosen so that D@10 sits near 0.10 to 0.15.
+P_FOLLOW = 0.6
 
-    Memories sit in groups that are tight in meaning (members ~31° from their centre; random vectors are ~90° apart).
-    A recall returns 6 random members of one group, in random order.
 
-    order: 120 regular groups and 8 hub groups. Each regular group G has a fixed hub f(G), 15 groups per hub. A
-      session takes one regular group per hub, in random order, and recalls G1, f(G1), G2, f(G2), ... (16 recalls).
-      So a memory is followed by a specific next set. Every hub is in every session, so sharing a session says
-      nothing about which hub follows: only order does.
-    noorder: 150 groups. A session takes 2 groups and makes 12 recalls, each from one of its two groups at random.
-      Recalls are co-retrieved within a group, and the order within a session is exchangeable.
+def unit(x: np.ndarray) -> np.ndarray:
+    return x / np.linalg.norm(x, axis=-1, keepdims=True)
 
-    Both add: 300 never-recalled distractor memories created during the log, 10 vectors with no created_at row,
-    a 5% chance of an immediate repeat of a recall (collapsed), a 2% chance of an empty recall, 40 instinct recalls,
-    20 recalls with no session id, 12 sessions in the additive period, and non-recall log rows."""
+
+def iso(t: float) -> str:
+    return datetime.fromtimestamp(t, timezone.utc).isoformat()
+
+
+def midnight(y: int, mo: int, d: int) -> float:
+    return datetime(y, mo, d, tzinfo=timezone.utc).timestamp()
+
+
+LOG_START, LOG_END = midnight(2026, 9, 10), midnight(2026, 10, 30)
+
+
+def synthetic(kind: str, sessions: int | None = None) -> tuple[sqlite3.Connection, str, dict]:
+    """A planted log in a shared-cache in-memory database, with Engram's tables and row shapes. See plant_simple and
+    plant_realistic for what is planted. Every log also carries 40 instinct recalls, 20 recalls with no session id and
+    50 non-recall rows, so each filter is exercised."""
     import sqlite_vec
 
-    rng = np.random.default_rng((SEED, 1 if kind == "order" else 2))
+    rng = np.random.default_rng((SEED, SYNTHETIC_KINDS.index(kind) + 1))
     uri = f"file:rail-e1-prime-{kind}-{os.getpid()}?mode=memory&cache=shared"
     db = sqlite3.connect(uri, uri=True)
     db.enable_load_extension(True)
     sqlite_vec.load(db)
     db.enable_load_extension(False)
-    dim, size, m = 768, 12, 6
+    dim = 768
     db.executescript(f"""
         CREATE TABLE memory_log (id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, event_type TEXT NOT NULL,
             layer TEXT NOT NULL, target_ids JSON, context JSON, outcome TEXT);
@@ -404,35 +412,72 @@ def synthetic(kind: str) -> tuple[sqlite3.Connection, str, dict]:
         CREATE VIRTUAL TABLE semantic_vectors USING vec0(id TEXT PRIMARY KEY, embedding float[{dim}]);
     """)
 
-    def unit(x: np.ndarray) -> np.ndarray:
-        return x / np.linalg.norm(x, axis=-1, keepdims=True)
+    def memory(name: str, vector: np.ndarray | None, created: float, semantic: bool = False,
+               row: bool = True) -> None:
+        table = "semantic" if semantic else "episode"
+        if row:
+            db.execute(f"INSERT INTO {table}s (id, content, created_at) VALUES (?, '', ?)", (name, iso(created)))
+        if vector is not None:
+            db.execute(f"INSERT INTO {table}_vectors (id, embedding) VALUES (?, ?)",
+                       (name, np.asarray(vector, np.float32).tobytes()))
 
-    def iso(t: float) -> str:
-        return datetime.fromtimestamp(t, timezone.utc).isoformat()
+    rows: list[tuple] = []
+    counter = [0]
 
-    def stamp(y: int, mo: int, d: int) -> float:
-        return datetime(y, mo, d, tzinfo=timezone.utc).timestamp()
+    def recall(t: float, session: str | None, ids: list[str], layer: str = "all") -> None:
+        counter[0] += 1
+        context = {"recall_id": f"syn-recall-{counter[0]}", "query": "synthetic"}
+        if session is not None:
+            context["session_id"] = session
+        outcome = rng.choice([None, "used", "used: auto: cited", "not_used"], p=[0.7, 0.15, 0.1, 0.05])
+        rows.append((f"syn-log-{counter[0]}", iso(t), "recall", layer, json.dumps(ids), json.dumps(context), outcome))
 
+    n_sessions = sessions or DEFAULT_SESSIONS[kind]
+    plant = plant_simple if kind in ("order", "noorder") else plant_realistic
+    planted, names = plant(kind, rng, n_sessions, dim, memory, recall)
+    for j in range(40):
+        recall(rng.uniform(LOG_START, LOG_END), f"syn-session-{rng.integers(n_sessions)}", [f"syn-instinct-{j % 7}"],
+               layer="instinct")
+    for _ in range(20):
+        start = int(rng.integers(len(names) - 6))
+        recall(rng.uniform(LOG_START, LOG_END), None, names[start:start + 6])
+    for _ in range(50):
+        counter[0] += 1
+        rows.append((f"syn-log-{counter[0]}", iso(rng.uniform(LOG_START, LOG_END)), "remember", "episode", "[]",
+                     "{}", None))
+    db.executemany("INSERT INTO memory_log (id, timestamp, event_type, layer, target_ids, context, outcome) "
+                   "VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    db.commit()
+    planted.update(kind=kind, dim=dim, sessions=n_sessions, recall_rows=sum(r[2] == "recall" for r in rows))
+    return db, uri, planted
+
+
+def plant_simple(kind, rng, n_sessions, dim, memory, recall) -> tuple[dict, list[str]]:
+    """Memories sit in groups that are tight in meaning (members ~31° from their centre; random vectors are ~90°
+    apart). A recall returns 6 random members of one group, in random order.
+
+    order: 120 regular groups and 8 hub groups. Each regular group G has a fixed hub f(G), 15 groups per hub. A
+      session takes one regular group per hub, in random order, and recalls G1, f(G1), G2, f(G2), ... (16 recalls).
+      So a memory is followed by a specific next set. Every hub is in every session, so sharing a session says
+      nothing about which hub follows: only order does.
+    noorder: 150 groups. A session takes 2 groups and makes 12 recalls, each from one of its two groups at random.
+      Recalls are co-retrieved within a group, and the order within a session is exchangeable.
+
+    Both add 300 never-recalled distractors created during the log, 10 vectors with no created_at row, a 5% chance
+    of an immediate repeat of a recall (collapsed), a 2% chance of an empty recall, and 12 additive-period sessions."""
+    size, m = 12, 6
     n_groups = 128 if kind == "order" else 150
     centres = unit(rng.standard_normal((n_groups, dim)))
     members = unit(centres[:, None, :] + 0.6 * unit(rng.standard_normal((n_groups, size, dim))))
     names = [[f"syn-{g:03d}-{j:02d}" for j in range(size)] for g in range(n_groups)]
-    early, log_start, log_end = stamp(2026, 7, 1), stamp(2026, 9, 10), stamp(2026, 10, 30)
     for g in range(n_groups):
-        table = "semantic" if g % 4 == 3 else "episode"
         for j in range(size):
-            db.execute(f"INSERT INTO {table}s (id, content, created_at) VALUES (?, '', ?)",
-                       (names[g][j], iso(rng.uniform(early, stamp(2026, 8, 15)))))
-            db.execute(f"INSERT INTO {table}_vectors (id, embedding) VALUES (?, ?)",
-                       (names[g][j], members[g, j].astype(np.float32).tobytes()))
-    for j in range(300):  # distractors, created during the log, never recalled
-        db.execute("INSERT INTO episodes (id, content, created_at) VALUES (?, '', ?)",
-                   (f"syn-late-{j:03d}", iso(rng.uniform(log_start, log_end))))
-        db.execute("INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
-                   (f"syn-late-{j:03d}", unit(rng.standard_normal(dim)).astype(np.float32).tobytes()))
-    for j in range(10):  # vectors whose memory row is gone
-        db.execute("INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
-                   (f"syn-orphan-{j}", unit(rng.standard_normal(dim)).astype(np.float32).tobytes()))
+            memory(names[g][j], members[g, j], rng.uniform(midnight(2026, 7, 1), midnight(2026, 8, 15)),
+                   semantic=g % 4 == 3)
+    for j in range(300):
+        memory(f"syn-late-{j:03d}", unit(rng.standard_normal(dim)), rng.uniform(LOG_START, LOG_END))
+    for j in range(10):
+        memory(f"syn-orphan-{j}", unit(rng.standard_normal(dim)), 0.0, row=False)
 
     if kind == "order":
         hubs, regular = 8, 120
@@ -448,17 +493,6 @@ def synthetic(kind: str) -> tuple[sqlite3.Connection, str, dict]:
             pair = rng.choice(n_groups, 2, replace=False)
             return [int(pair[rng.integers(2)]) for _ in range(12)]
 
-    rows = []
-    counter = [0]
-
-    def recall(t: float, session: str | None, ids: list[str], layer: str = "all") -> None:
-        counter[0] += 1
-        context = {"recall_id": f"syn-recall-{counter[0]}", "query": "synthetic"}
-        if session is not None:
-            context["session_id"] = session
-        outcome = rng.choice([None, "used", "used: auto: cited", "not_used"], p=[0.7, 0.15, 0.1, 0.05])
-        rows.append((f"syn-log-{counter[0]}", iso(t), "recall", layer, json.dumps(ids), json.dumps(context), outcome))
-
     def session_rows(s: int, start: float) -> None:
         t = start
         for g in footpath():
@@ -472,30 +506,112 @@ def synthetic(kind: str) -> tuple[sqlite3.Connection, str, dict]:
                 recall(t, f"syn-session-{s}", [])
             t += rng.uniform(30, 300)
 
-    sessions = 160
-    for s in range(sessions):
-        session_rows(s, rng.uniform(log_start, log_end))
-    for s in range(sessions, sessions + 12):  # the additive period
-        session_rows(s, rng.uniform(stamp(2026, 8, 20), stamp(2026, 9, 1)))
-    for j in range(40):
-        recall(rng.uniform(log_start, log_end), f"syn-session-{rng.integers(sessions)}", [f"syn-instinct-{j % 7}"],
-               layer="instinct")
-    for j in range(20):
-        g = int(rng.integers(n_groups))
-        recall(rng.uniform(log_start, log_end), None, [names[g][k] for k in range(m)])
-    for j in range(50):
-        counter[0] += 1
-        rows.append((f"syn-log-{counter[0]}", iso(rng.uniform(log_start, log_end)), "remember", "episode", "[]",
-                     "{}", None))
-    db.executemany("INSERT INTO memory_log (id, timestamp, event_type, layer, target_ids, context, outcome) "
-                   "VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
-    db.commit()
-    planted = {
-        "kind": kind, "groups": n_groups, "group_size": size, "recall_size": m, "dim": dim,
-        "sessions": sessions, "additive_sessions": 12, "recall_rows": sum(r[2] == "recall" for r in rows),
-        "hubs": 8 if kind == "order" else 0,
-    }
-    return db, uri, planted
+    for s in range(n_sessions):
+        session_rows(s, rng.uniform(LOG_START, LOG_END))
+    for s in range(n_sessions, n_sessions + 12):  # the additive period
+        session_rows(s, rng.uniform(midnight(2026, 8, 20), midnight(2026, 9, 1)))
+    planted = {"groups": n_groups, "group_size": size, "recall_size": m, "hubs": 8 if kind == "order" else 0,
+               "additive_sessions": 12}
+    return planted, [n for group in names for n in group]
+
+
+REALISTIC = {
+    "topics": 80, "per_topic": 40, "rank": 4, "spread": 0.9, "jitter": 0.3, "p_stay": 0.35, "p_shift": 0.15,
+    "interleaved": 0.30, "decayed": 0.10, "late": 0.10, "recall_size": (15, 20),
+}
+
+
+def plant_realistic(kind, rng, n_sessions, dim, memory, recall) -> tuple[dict, list[str]]:
+    """A log shaped like Engram's. 80 topics of 40 memories each. A topic's members vary along a 4-dimensional subspace
+    of their own around the topic's centre, so similarity within a topic is graded (dot ~0.1 to 1), as in real
+    embeddings, whose intrinsic dimension is low; in 768-d, isotropic offsets would make every member equally near
+    every point of its topic. A recall returns the 15 to 20 memories nearest its query, among those created by then,
+    in rank order, so meaning makes every set. A footpath keeps an anchor in a topic and queries near it (jitter 0.3
+    within the topic's subspace). After each recall it:
+    - stays at the anchor with p = 0.25 (a re-query: large overlap, mostly Jaccard above 0.5);
+    - shifts to a new anchor in the same topic with p = 0.40 (partial overlap);
+    - jumps with p = 0.35: with p = P_FOLLOW to its topic's fixed next set (a fixed anchor in a fixed other topic,
+      the planted order effect), else to a random point in a random other topic.
+    A session is one footpath of 12 to 24 recalls, or, with p = 0.30, two footpaths of 8 to 14 recalls interleaved
+    by time under one session id, as subagents do. 10% of memories are created during the log, and 10% have no
+    vector now (decay). The two realistic logs share one structure generator, so they hold the same sessions,
+    queries and times. realistic-noorder then permutes each session's queries over its times, which keeps
+    co-retrieval and who-shares-a-session and removes order. There is no additive period."""
+    p = REALISTIC
+    structure = np.random.default_rng((SEED, 30))  # the same for both realistic kinds
+    topics, per = p["topics"], p["per_topic"]
+    centres = unit(structure.standard_normal((topics, dim)))
+    bases = np.stack([np.linalg.qr(structure.standard_normal((dim, p["rank"])))[0] for _ in range(topics)])
+
+    def place(topic: int, z: np.ndarray) -> np.ndarray:
+        """The point of a topic at subspace coordinates z: its centre plus spread along the topic's own subspace."""
+        return unit(centres[topic] + p["spread"] * unit(bases[topic] @ z))
+
+    X = np.stack([place(k // per, structure.standard_normal(p["rank"])) for k in range(topics * per)])
+    X = X.astype(np.float32)
+    names = [f"syn-t{k // per:02d}-{k % per:02d}" for k in range(len(X))]
+    late = structure.random(len(X)) < p["late"]
+    created = np.where(late, structure.uniform(LOG_START, LOG_END, len(X)),
+                       structure.uniform(midnight(2026, 7, 1), midnight(2026, 8, 31), len(X)))
+    decayed = structure.random(len(X)) < p["decayed"]
+    for k in range(len(X)):
+        memory(names[k], None if decayed[k] else X[k], float(created[k]), semantic=(k // per) % 4 == 3)
+    succ = structure.permutation(topics)
+    while (succ == np.arange(topics)).any():
+        succ = structure.permutation(topics)
+    next_set = [unit(structure.standard_normal(p["rank"])) for _ in range(topics)]  # in topic succ[t]'s subspace
+
+    def point() -> np.ndarray:
+        return unit(structure.standard_normal(p["rank"]))
+
+    def footpath(length: int) -> list[tuple[np.ndarray, int]]:
+        topic = int(structure.integers(topics))
+        anchor, out = point(), []
+        for _ in range(length):
+            z = anchor + p["jitter"] * structure.standard_normal(p["rank"]) / np.sqrt(p["rank"])
+            query = place(topic, z)
+            out.append((query, int(structure.integers(p["recall_size"][0], p["recall_size"][1] + 1))))
+            u = structure.random()
+            if u < p["p_stay"]:
+                continue
+            if u < p["p_stay"] + p["p_shift"]:
+                anchor = point()
+            elif structure.random() < P_FOLLOW:
+                anchor, topic = next_set[topic], int(succ[topic])
+            else:
+                topic = int((topic + 1 + structure.integers(topics - 1)) % topics)
+                anchor = point()
+        return out
+
+    shuffle = np.random.default_rng((SEED, 31))
+    interleaved = 0
+    for s in range(n_sessions):
+        start = structure.uniform(LOG_START, LOG_END)
+        if structure.random() < p["interleaved"]:
+            interleaved += 1
+            paths = [footpath(int(structure.integers(8, 15))), footpath(int(structure.integers(8, 15)))]
+            offsets = [0.0, structure.uniform(60, 600)]
+        else:
+            paths, offsets = [footpath(int(structure.integers(12, 25)))], [0.0]
+        items = []
+        for path, offset in zip(paths, offsets):
+            t = start + offset
+            for query in path:
+                items.append((t, query))
+                t += structure.uniform(30, 300)
+        items.sort(key=lambda item: item[0])
+        if kind == "realistic-noorder":
+            order = shuffle.permutation(len(items))
+            items = [(items[j][0], items[order[j]][1]) for j in range(len(items))]
+        for t, (query, m) in items:
+            scores = X @ query.astype(np.float32)
+            scores[created > t] = -np.inf
+            top = np.argsort(-scores, kind="stable")[:m]
+            recall(t, f"syn-session-{s}", [names[k] for k in top])
+    planted = {"topics": topics, "per_topic": per, "interleaved_sessions": interleaved, "p_follow": P_FOLLOW,
+               "decayed_memories": int(decayed.sum()), "late_memories": int(late.sum()), "additive_sessions": 0}
+    planted.update({k: v for k, v in p.items() if k not in ("topics", "per_topic")})
+    return planted, names
 
 
 # --------------------------------------------------------------------------------------------------- counting
@@ -864,14 +980,51 @@ def statistics(res: dict, mask: np.ndarray) -> dict:
 
 
 def outcome(interval: dict) -> str:
+    """Section 6′'s four outcomes (as amended 2026-11-03): holds, negligible, fails, inconclusive."""
     lo, hi = interval["lo"], interval["hi"]
     if not (lo == lo and hi == hi):
         return "inconclusive"
+    if lo > 0:
+        return "holds" if hi >= DELTA else "negligible"
     if hi < DELTA:
         return "fails"
-    if lo > 0:
-        return "holds"
     return "inconclusive"
+
+
+def combine(by_session: str, by_day: str) -> str:
+    """The day bootstrap must give the same outcome as the session one, or the result is inconclusive."""
+    return by_session if by_session == by_day else "inconclusive"
+
+
+def check_classifier() -> int:
+    """The classifier at each boundary of section 6′'s outcomes. Runs before any store is read."""
+    tiny = 1e-9
+    cases = [
+        ((0.01, 0.20), "holds"),
+        ((tiny, DELTA), "holds"),  # upper bound exactly δ: at least δ
+        ((tiny, DELTA - tiny), "negligible"),
+        ((0.01, 0.04), "negligible"),
+        ((0.0, DELTA - tiny), "fails"),  # lower bound exactly 0 isn't above 0
+        ((-0.10, DELTA - tiny), "fails"),
+        ((-0.30, -0.10), "fails"),
+        ((0.0, DELTA), "inconclusive"),
+        ((-0.10, DELTA), "inconclusive"),
+        ((0.0, 0.20), "inconclusive"),
+        ((-0.10, 0.20), "inconclusive"),
+        ((float("nan"), 0.20), "inconclusive"),
+        ((0.01, float("nan")), "inconclusive"),
+    ]
+    for (lo, hi), expected in cases:
+        got = outcome({"lo": lo, "hi": hi})
+        if got != expected:
+            raise Stop(f"classifier check: [{lo}, {hi}] gave {got}, expected {expected}")
+    pairs = [(("holds", "holds"), "holds"), (("negligible", "negligible"), "negligible"),
+             (("fails", "fails"), "fails"), (("holds", "negligible"), "inconclusive"),
+             (("negligible", "fails"), "inconclusive"), (("holds", "inconclusive"), "inconclusive")]
+    for (s, d), expected in pairs:
+        if combine(s, d) != expected:
+            raise Stop(f"classifier check: session {s} with day {d} gave {combine(s, d)}, expected {expected}")
+    return len(cases) + len(pairs)
 
 
 def verdict(res: dict) -> dict:
@@ -881,13 +1034,10 @@ def verdict(res: dict) -> dict:
         return {"c1": "insufficient", "order": "not computed", "note": "; ".join(res["insufficient"])}
     st = res["stats"]
     by_session, by_day = outcome(st[("D", 10)]["session"]), outcome(st[("D", 10)]["day"])
-    c1 = by_session if by_session == by_day else "inconclusive"
+    c1 = combine(by_session, by_day)
     notes = []
     if by_session != by_day:
         notes.append(f"the session bootstrap says {by_session} and the day bootstrap says {by_day}")
-    s = st[("D", 10)]["session"]
-    if s["lo"] > 0 and s["hi"] < DELTA:
-        notes.append("the session interval lies above 0 and below δ, which meets both rules; it counts as fails")
     o = st["order"]
     order = "carries information" if o["session"]["lo"] > 0 and o["day"]["lo"] > 0 else "ties"
     return {"c1": c1, "order": order, "note": "; ".join(notes)}
@@ -898,6 +1048,8 @@ def branch(v: dict) -> str:
         return ("E1′ holds, and order carries information: build trails from recall logs, smallest first"
                 if v["order"] == "carries information" else
                 "E1′ holds, but order ties: build co-use only (undirected), observed and never steering")
+    if v["c1"] == "negligible":
+        return "E1′ is negligible: the effect is real but below δ, so it builds nothing, as fails does"
     if v["c1"] == "fails":
         return "E1′ fails: the trails part of the rail stops for Engram too"
     return "E1′ is inconclusive or insufficient: build nothing for trails; rerun once the test steps have doubled"
@@ -1079,21 +1231,46 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
                   f"There are 120 regular groups and {p['hubs']} hub groups, and each regular group has a fixed hub. "
                   "A session takes one regular group per hub, in random order, and recalls each group and then its "
                   f"hub, 16 recalls of {p['recall_size']} random members each. A memory is followed by a specific "
-                  "next set, and every hub sits in every session, so only order says which hub follows.",
-                  "", "**Required:** C1′ holds, and D_order's lower bound is above 0.", ""]
-        else:
+                  "next set, and every hub sits in every session, so only order says which hub follows."]
+        elif p["kind"] == "noorder":
             L += [f"{p['groups']} groups of {p['group_size']} memories ({p['dim']}-d, each group tight in meaning). "
                   "A session takes 2 groups and makes 12 recalls, each drawing "
                   f"{p['recall_size']} random members from one of the two at random. Memories are co-retrieved "
-                  "within a group, and order within a session is exchangeable.",
-                  "", "**Required:** C1′ does not hold, and D_order ties.", ""]
-        L += [f"Both logs also carry {p['sessions']} primary-period sessions, {p['additive_sessions']} additive-period "
-              "sessions, 300 never-recalled distractor memories created during the log, 10 vectors with no "
-              "`created_at` row, immediate repeats (5%), empty recalls (2%), 40 instinct recalls, 20 recalls with no "
-              "session id, and non-recall log rows. These exercise each filter.", ""]
-        required = (v["c1"] == "holds" and v["order"] == "carries information") if p["kind"] == "order" else \
+                  "within a group, and order within a session is exchangeable."]
+        else:
+            lo_m, hi_m = p["recall_size"]
+            L += [f"A log shaped like Engram's: {p['topics']} topics of {p['per_topic']} memories ({p['dim']}-d). "
+                  f"Each topic's members vary along a {p['rank']}-dimensional subspace of their own, so similarity "
+                  "within a topic is graded, as in real embeddings. A recall returns the {lo_m} to {hi_m} memories nearest its query among those created by then, "
+                  "in rank order, so meaning makes every set. A footpath queries near an anchor point and then:",
+                  "",
+                  f"- stays at the anchor (p = {p['p_stay']}), a re-query with large overlap, mostly Jaccard above 0.5;",
+                  f"- shifts to a new anchor in the same topic (p = {p['p_shift']}), with partial overlap;",
+                  f"- jumps (p = {1 - p['p_stay'] - p['p_shift']:.2f}). With p = {p['p_follow']} it goes to its "
+                  "topic's fixed next set, a fixed anchor in a fixed other topic: the planted order effect. "
+                  "Otherwise it goes to a random point in a random other topic.",
+                  "",
+                  f"A session is one footpath of 12 to 24 recalls, or two footpaths of 8 to 14 recalls interleaved by "
+                  f"time under one session id, as subagents do ({p['interleaved_sessions']} of {p['sessions']} "
+                  f"sessions). {p['late_memories']} memories are created during the log, and {p['decayed_memories']} "
+                  "have no vector now (decay, about 10%)."]
+            if p["kind"] == "realistic-noorder":
+                L += ["", "This log holds the same sessions, queries and times as realistic-order. Each session's "
+                      "queries are then permuted over its times. That keeps co-retrieval and who shares a session, "
+                      "and removes order."]
+        wants_order = not p["kind"].endswith("noorder")
+        required_text = ("C1′ holds, and D_order's lower bound is above 0" if wants_order
+                         else "C1′ does not hold, and D_order ties")
+        L += ["", f"**Required:** {required_text}.", ""]
+        if p["kind"] in ("order", "noorder"):
+            L += [f"Both simple logs also carry {p['sessions']} primary-period sessions, {p['additive_sessions']} "
+                  "additive-period sessions, 300 never-recalled distractor memories created during the log, 10 "
+                  "vectors with no `created_at` row, immediate repeats (5%), and empty recalls (2%)."]
+        L += ["Every synthetic log also carries 40 instinct recalls, 20 recalls with no session id, and non-recall log "
+              "rows. These exercise each filter.", ""]
+        required = (v["c1"] == "holds" and v["order"] == "carries information") if wants_order else \
             (v["c1"] != "holds" and v["order"] == "ties")
-        L += [f"**Smoke check: {'passed' if required else 'FAILED'}.**", ""]
+        L += [f"**Smoke check: {'passed' if required else 'not met'}** (C1′ {v['c1']}, order {v['order']}).", ""]
 
     L += ["## Pre-registered rules (section 6′, implemented as written)", "",
           "- **Steps:** recalls in time order per session, with consecutive repeats of an id set collapsed. A step "
@@ -1105,9 +1282,11 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
           "- **Arms:** (i), (i′), (ii), (iii) pure, (iii) matched, (iv) and (v), each a ranking of 10 memories "
           "excluding `a`'s ids, each backfilled by (i).",
           f"- **Outcome:** D = hit@10(ii) − max(i, i′, iii, iii-m, iv, v), with the max inside each resample, and a "
-          f"bootstrap clustered by session ({RESAMPLES:,} resamples, BCa, jackknife acceleration). **Holds:** the "
-          f"lower bound is above 0. **Fails:** the upper bound is below δ = {DELTA}. **Inconclusive:** anything "
-          "else, or when the day-clustered bootstrap's outcome differs.",
+          f"bootstrap clustered by session ({RESAMPLES:,} resamples, BCa, jackknife acceleration), δ = {DELTA}. "
+          "**Holds:** the lower bound is above 0 and the upper bound is at least δ. **Negligible:** the lower bound "
+          "is above 0 and the upper bound is below δ (real, but it builds nothing). **Fails:** the upper bound is "
+          "below δ and the lower bound isn't above 0. **Inconclusive:** anything else, or when the day-clustered "
+          "bootstrap's outcome differs. The classifier is checked at each boundary before every run.",
           f"- **Insufficient:** fewer than {MIN_STEPS} test steps, fewer than {MIN_SESSIONS} test sessions, or one "
           f"session above {MAX_SESSION_SHARE:.0%} of the steps.",
           f"- **Order:** (ii) retrained on each training session in shuffled order ({SHUFFLES} seeded shuffles, "
@@ -1128,6 +1307,8 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
               f"- **Config check:** {cfg['looked']} places looked at ({cfg['named']} named with `--config`). "
               f"{cfg['found']} `config.toml` found, with recency_mode: "
               + (", ".join(cfg["modes"]) if cfg["modes"] else "none found") + ". Nothing overrides `tiebreak`."]
+    L.append(f"- **Classifier:** {source['classifier_checks']} boundary checks of the four outcomes passed before "
+             "the store was read.")
     L += [f"- **Universe:** {len(uni.created)} memories with a vector ("
           + ", ".join(f"{k} {n}" for k, n in uni.tables.items()) + f"), dimension {uni.V.shape[1] if uni.V.size else 0}. "
           f"Left out: {uni.no_created} with no `created_at` row, {uni.zero} with zero norm, {uni.bad_size} of the "
@@ -1169,18 +1350,26 @@ def run(argv: list[str] | None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--store", type=Path, help="an Engram graph.db, read in place with mode=ro")
-    source.add_argument("--synthetic", choices=("order", "noorder"), help="a planted log, in memory")
+    source.add_argument("--synthetic", choices=SYNTHETIC_KINDS, help="a planted log, in memory")
+    source.add_argument("--self-check", action="store_true", help="check the outcome classifier and stop")
     parser.add_argument("--config", type=Path, action="append", default=[],
                         help="a project's .engram/config.toml to check for recency_mode (repeatable)")
+    parser.add_argument("--sessions", type=int, help="synthetic only: how many sessions to plant")
     parser.add_argument("--report", type=Path, help="write the markdown report here")
     args = parser.parse_args(argv)
+    if args.sessions is not None and not args.synthetic:
+        parser.error("--sessions is for --synthetic only")
 
+    checks = check_classifier()  # before anything is read
+    if args.self_check:
+        print(f"classifier: {checks} boundary checks passed", file=sys.stderr)
+        return 0
     started = time.monotonic()
     cap = limit_memory()
     writer = None
-    info: dict = {}
+    info: dict = {"classifier_checks": checks}
     if args.synthetic:
-        writer, uri, planted = synthetic(args.synthetic)
+        writer, uri, planted = synthetic(args.synthetic, args.sessions)
         info["planted"] = planted
         label = f"synthetic {args.synthetic}"
     else:

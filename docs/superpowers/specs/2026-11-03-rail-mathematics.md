@@ -214,8 +214,10 @@ was. Results are also reported by `|b ∖ a|` and by Jaccard band.
 **Pre-registered outcomes.** On the primary steps, `D = hit@10(ii) − max(i, i′, iii pure, iii matched, iv, v)`, with the max taken
 inside each resample. The interval comes from a bootstrap clustered by session, 10,000 resamples, BCa. The smallest
 effect of interest is `δ = 0.05`.
-- **Holds:** the interval's lower bound is above 0.
-- **Fails:** its upper bound is below δ.
+- **Holds:** the interval's lower bound is above 0 and its upper bound is at least δ.
+- **Negligible:** its lower bound is above 0 and its upper bound is below δ. The effect is real but smaller than any
+  worth building on, so it builds nothing, as "fails" does, and the report says which.
+- **Fails:** its upper bound is below δ and its lower bound isn't above 0.
 - **Inconclusive:** anything else.
 - A bootstrap clustered by day must give the same one of the three outcomes as the session one, or the result is
   inconclusive. BCa's acceleration comes from a leave-one-cluster-out jackknife.
