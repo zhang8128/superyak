@@ -32,8 +32,15 @@ principle, and what's missing.
 Each stage is small, reversible and measured, and none waits on Andy except where the law says it must. A stage that
 fails its check rolls back, and we say so in all hands.
 
-1. **The gate.** E1 on the station's messages (running). If use doesn't beat meaning and chat order, the rail waits,
+1. **The gate.** E1 on the station's messages. If use doesn't beat meaning and chat order, the rail waits,
    and the next stages still help memory but aren't the rail.
+   - **Result, 2026-11-03:** C1 failed (docs/reports/2026-11-03-rail-e1.md, 96fd9df8), not narrowly:
+     `D@10 = −0.241 [−0.312, −0.193]`, at every P and in both versions.
+   - **Why we think it failed:** the station's messages are ship chat, not memory use (2,670 of 2,674 by ships, no
+     held-out human steps), over a short, drifting window.
+   - **So:** stages 5 to 7 wait. Stages 2 to 4 go on, since they help memory and sharing anyway.
+   - **The rerun:** E1 runs again on a real Engram store once one holds a few hundred memories touched across sessions.
+     Memory following the ship is what makes such a store.
 2. **Trust between machines.** Owner trust's train (finishing), with its CLAUDE.md lines confirmed by Andy at the
    terminal, the one person-act left.
 3. **Honest instruments.** Merge the visible-neighbor fix, so a recall says when no lighthouse was reached.
