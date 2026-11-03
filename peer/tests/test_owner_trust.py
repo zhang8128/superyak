@@ -7,7 +7,7 @@ import pytest
 from superyak_peer.common import Problem
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
-from superyak_peer.identity import check_ship_assertion, make_ship_assertion
+from superyak_peer.identity import canonical, check_ship_assertion, make_ship_assertion
 
 NOW = 1_800_000_000
 
@@ -23,6 +23,7 @@ def machine(tmp_path):
     with store.transaction() as db:
         ship = store._new_ship(db, 'tardis', 'Tardis', person['id'])
     fed = Federation(store, endpoint='https://localhost:7435')
+    store.claim_federation_mode('push')
     return store, person, ship, fed
 
 
@@ -55,6 +56,11 @@ def test_an_assertion_signed_by_another_key_or_edited_is_refused(machine, tmp_pa
     other.store.create_user('zed', 'Zed', 'a-long-password', is_admin=True)
     forged = make_ship_assertion(other.identity, ship_id='x', ship_name='tardis', owner_id='y', now=NOW)
     refused(card_of(machine), forged)
+    # names this peer's station, but the signature is by another key over the same canonical record
+    record = dict(assertion_for(machine)['record'])
+    import base64
+    wrong_key = base64.b64encode(other.identity.key.sign(canonical(record))).decode()
+    refused(card_of(machine), {'record': record, 'signature': wrong_key})
     edited = assertion_for(machine)
     edited['record']['ship_name'] = 'odo'
     refused(card_of(machine), edited)
@@ -73,6 +79,20 @@ def test_an_expired_or_long_or_future_assertion_is_refused(machine):
     refused(card, future)
     check_ship_assertion(card, assertion_for(machine, now=NOW + 300), NOW)
     check_ship_assertion(card, assertion_for(machine, now=NOW), NOW)
+
+
+def signed(machine, **fields):
+    record = dict(assertion_for(machine)['record'], **fields)
+    return {'record': record, 'signature': machine[3].identity.sign_record(record)}
+
+
+def test_times_are_checked_by_rule_not_by_luck(machine):
+    card = card_of(machine)
+    refused(card, signed(machine, issued=float(NOW), expires=NOW + 86400))
+    refused(card, signed(machine, issued=True, expires=86401), now=0)
+    refused(card, signed(machine, issued=NOW + 100, expires=NOW + 50))
+    refused(card, signed(machine, issued=NOW, expires=NOW))
+    refused(card, signed(machine, issued=NOW, expires=float(NOW + 86400)))
 
 
 def resign(machine, assertion):
@@ -107,6 +127,9 @@ def test_export_ship_writes_a_card_and_assertion_and_no_code(machine, tmp_path):
     assertion = json.loads((out / 'tardis.assertion.json').read_text())
     record = check_ship_assertion(card, assertion, time.time())
     assert record['ship_name'] == 'tardis' and card['participant']['name'] == 'tardis'
+    _, person, _, fed = machine
+    person_card = fed.card(person['id'])
+    assert canonical({**card, 'participant': 0}) == canonical({**person_card, 'participant': 0})
     assert str(out / 'tardis.card.json') in done.stdout
     for text in (done.stdout, done.stderr):
         assert not re.search(r'[0-9a-f]{32}', text)
@@ -131,3 +154,18 @@ def test_export_ship_never_makes_an_identity(tmp_path):
                '--endpoint', 'https://localhost:7435', '--out', tmp_path / 'out')
     assert done.returncode == 1 and 'identity.json' in done.stderr
     assert not (store.data_dir / 'identity.json').exists()
+
+
+def test_export_ship_follows_the_stored_mode_not_the_flag(machine, tmp_path):
+    pull = run('export-ship', '--data-dir', machine[0].data_dir, '--username', 'tardis', '--pull', '--out', tmp_path / 'p')
+    assert pull.returncode == 1 and 'push peer' in pull.stderr and not (tmp_path / 'p').exists()
+
+
+def test_export_ship_refuses_a_peer_with_no_mode(tmp_path):
+    store = Store(tmp_path / 'home')
+    person = store.create_user('andy-b', 'Andy B', 'a-long-password', is_admin=True)
+    with store.transaction() as db:
+        store._new_ship(db, 'tardis', 'Tardis', person['id'])
+    Federation(store, endpoint='https://localhost:7435')
+    done = export(type('M', (), {'__getitem__': lambda self, i: store})(), tmp_path, 'tardis')
+    assert done.returncode == 1 and 'no federation mode' in done.stderr and not (tmp_path / 'out').exists()

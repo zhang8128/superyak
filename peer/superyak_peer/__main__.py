@@ -907,9 +907,12 @@ def main(argv=None):
             if not (args.data_dir / 'identity.json').is_file():
                 raise ValueError('identity.json is missing, and export-ship never makes one')
             store = Store(args.data_dir)
-            mode = 'pull' if args.pull else 'push'
-            if store.federation_mode() not in (None, mode):
-                raise ValueError(f'This peer is not a {mode} peer, so it cannot export a {mode} card')
+            mode = store.federation_mode()  # as Federation.card: the stored mode, never the flag, picks the card's kind
+            if mode is None:
+                raise ValueError('This peer has no federation mode yet: export a person card first, and export-ship follows it')
+            if mode != ('pull' if args.pull else 'push'):
+                raise ValueError(f'This peer is a {mode} peer, so export-ship takes '
+                                 f'{"--pull" if mode == "pull" else "--endpoint"}')
             with store.transaction() as db:
                 ship = db.execute('SELECT id,username,kind,owner_id FROM users WHERE username=?', (args.username,)).fetchone()
                 if not ship or ship['kind'] != 'ship':
