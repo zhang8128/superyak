@@ -132,12 +132,14 @@ PROJECTION_CHECK_ROWS = 5000
 
 
 @pytest.fixture(autouse=True)
-def _projection_follows_every_append(monkeypatch):
+def _projection_follows_every_append():
     """The projection digest plan's Task 3 (S8), in place of a random-act generator: after every `Ledger._append` in
     this suite, on a ledger that keeps the digest and holds under PROJECTION_CHECK_ROWS projected rows,
     `meta.projection` and `projection_parts` are the tables recomputed (`projection_now`), read in one transaction.
     ENGRAM_PROJECTION_CHECK=off turns it off (the budget tests, and a test whose own assert must be the one that
-    fails)."""
+    fails). It sets and restores the method itself, not through the `monkeypatch` fixture: an autouse fixture that
+    took `monkeypatch` would set it up before a test's `tmp_path`, so it would undo a test's patches after `tmp_path`'s
+    teardown had run with them (an `os.open` patched in tests/test_categories_v2.py broke its rmtree)."""
     import os
 
     import permission_ledger
@@ -149,8 +151,11 @@ def _projection_follows_every_append(monkeypatch):
             _check_projection(self.conn, seq)
         return seq
 
-    monkeypatch.setattr(permission_ledger.Ledger, "_append", checked)
-    yield
+    permission_ledger.Ledger._append = checked
+    try:
+        yield
+    finally:
+        permission_ledger.Ledger._append = real
 
 
 def _check_projection(conn, seq):
