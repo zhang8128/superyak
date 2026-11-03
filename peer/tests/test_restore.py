@@ -810,6 +810,31 @@ def test_carry_nonces_reads_a_wal_a_killed_listener_left_and_adds_no_file(tmp_pa
     assert {path: after[path] for path in kept} == kept
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason='root reads a file whatever its mode')
+def test_carry_nonces_refuses_a_wal_source_beside_a_journal_and_one_it_cannot_read(tmp_path, capsys):
+    """The Task 7 reader's B-2 and B-3. A WAL source with a -journal beside it, which a journal mode switch cut short
+    leaves, is refused, as rollback mode's mode=ro refuses a hot journal; and a source the carry can't read exits 1
+    saying nothing was changed, never a traceback. Neither changes a byte. Mutations: the -journal check dropped (the
+    carry reads past it with immutable=1), the OSError uncaught (a traceback, and no "nothing was changed")."""
+    backups_dir = tmp_path / 'backups'
+    live = Store(tmp_path / 'lighthouse')
+    beside, unreadable = backups_dir / 'replaced-20261017-110000', backups_dir / 'replaced-20261017-120000'
+    for where in (beside, unreadable):
+        in_mode(restored_live(where).db_path, 'wal')
+    (beside / 'restored-live' / 'peer.sqlite3-journal').write_bytes(b'')
+    locked = unreadable / 'restored-live' / 'peer.sqlite3'
+    before = tree(tmp_path)
+    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', beside)
+    assert code == 1 and out == '' and 'nothing was changed' in err and 'a -journal beside it' in err, err
+    locked.chmod(0)
+    try:
+        code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', unreadable)
+    finally:
+        locked.chmod(0o600)
+    assert code == 1 and out == '' and 'nothing was changed' in err and 'could not be read' in err, err
+    assert tree(tmp_path) == before
+
+
 def test_reconcile_unpair_refuses_an_ambiguous_id_and_changes_no_byte(tmp_path, capsys):
     """--unpair with a short id two peers share is refused (exit 2) and the staged copy is byte for byte unchanged, also when
     the refusal comes after other work. A full id picks the one peer even if another shares its prefix, and the report does
