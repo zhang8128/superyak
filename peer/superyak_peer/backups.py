@@ -385,6 +385,11 @@ MEMBERSHIPS = (
     ('remote_room_members', 'rooms', 'room_id', 'contact_id', 'room', 'title', 'epoch'),
     ('space_members', 'spaces', 'space_id', 'user_id', 'space', 'name', 'version'),
 )
+# Owner trust (Task 5): what _keep_trust_like_replaced and _name_lost_trusts read from the replaced file.
+TRUST_COMPARED = ('owner_trust.seq', 'owner_trust.grant_id', 'owner_trust.event', 'owner_trust.peer_id',
+                  'owner_trust.owner_user_id', 'owner_trust.until', 'owner_trust.by_id', 'owner_trust.at',
+                  'owner_trust.reason', 'owner_trust.expect', 'trust_confirmations.window_seq', 'retired_peers.peer_id',
+                  'retired_peers.retired', 'retired_peers.by_id')
 # Fix round 1 (review I1): every table and column the comparing steps read from the replaced file, step 5's sequences
 # included. The live file is always at least as new as the copy and migrations only add, so a replaced file lacking
 # one that the copy has is the wrong file or a damaged one.
@@ -407,7 +412,10 @@ COMPARED = ('users.id', 'users.is_admin', 'users.is_super_admin', 'users.salt', 
             # Task 8's read receipts: a replaced file lacking a column is absent, so the copy's stay and the loss is said
             'connector_reads.id', 'connector_reads.grant_id', 'connector_reads.person_id', 'connector_reads.app',
             'connector_reads.at', 'connector_reads.tool', 'connector_reads.rooms_read', 'connector_reads.rooms_refused',
-            'connector_reads.size', 'connector_reads.outcome')
+            'connector_reads.size', 'connector_reads.outcome',
+            # owner trust (spec item 7): a replaced file lacking one is absent, so every trust is revoked, never one whose
+            # revocation or retirement it may have lost left live
+            *TRUST_COMPARED)
 
 
 class ReconcileRefused(ValueError):
@@ -835,6 +843,150 @@ def _hold_like_replaced(db, old, now, report):
                             (contact['peer_id'], contact['user_id'])).rowcount
         report['held'].append((_shown(db, old, contact['peer_id']), contact['name']))
         report['held_counts'] = [sum(pair) for pair in zip(report['held_counts'], (withdrawn, nulled))]
+
+
+# Owner trust (Task 5; spec items 4a, 6 and 7): a restore never brings back a revoked trust, a retirement or a paused
+# trust. owner_trust and trust_confirmations are append-only, so the copy's rows are the replaced file's first ones, and
+# what the replaced file has more happened since the copy.
+TRUST_RETIREMENTS_NOT_KEPT = ('Peers retired since the copy were not kept: unpair them as retired again before anything '
+                              'pairs.')
+UNREVOKED_TRUSTS = ("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' AND grant_id NOT IN "
+                    "(SELECT grant_id FROM owner_trust WHERE event='revoke') ORDER BY seq")
+WINDOWS = "SELECT grant_id, event, until, at, expect FROM owner_trust WHERE event IN ('grant','renew')"
+# owner_trust.trust_window's rule, read on the replaced file (whose connection gives tuples): each grant whose latest
+# grant-or-renewal row, its window, is named by as many trust_confirmations rows as it expects, or more.
+PAUSED_THERE = ("SELECT w.grant_id FROM owner_trust w WHERE w.seq=(SELECT MAX(seq) FROM owner_trust WHERE "
+                "grant_id=w.grant_id AND event IN ('grant','renew')) AND "
+                "(SELECT COUNT(*) FROM trust_confirmations WHERE window_seq=w.seq) >= w.expect")
+
+
+def _trust_tables(db):
+    """A copy from before owner trust gains its tables, triggers, indexes and view as the station's start makes them,
+    one statement at a time: executescript would commit the reconcile's transaction (as for room_cloud below). Imported
+    here, not at the top, as room_cloud is: owner_trust reaches identity and its cryptography."""
+    from .owner_trust import OWNER_TRUST_STATEMENTS
+    for statement in OWNER_TRUST_STATEMENTS:
+        db.execute(statement)
+
+
+def _revoke_trust(db, grant, by_id, at, reason):
+    """A revocation row for the grant (grant_id, peer_id, owner_user_id), its seq left to SQLite: owner_trust is
+    append-only, and its triggers refuse a row that names a seq already used."""
+    db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
+               "VALUES (?,'revoke',?,?,NULL,?,?,?)", (grant[0], grant[1], grant[2], by_id, at, reason))
+
+
+def _trust_line(db, old, grant, how):
+    """How the report names an owner trust: its grant's short id (6 characters), its owner's name as the copy has the
+    contact, else as the replaced file has it, and what happened to it."""
+    for connection in (db, old):
+        if connection is not None and _has(connection, 'remote_contacts.name', 'remote_contacts.user_id'):
+            row = connection.execute('SELECT name FROM remote_contacts WHERE peer_id=? AND user_id=?',
+                                     (grant[1], grant[2])).fetchone()
+            if row:
+                return (grant[0][:6], row[0], how)
+    return (grant[0][:6], 'an unknown owner', how)
+
+
+def _revoke_every_trust(db, old, now, report):
+    """Spec item 7, without a usable replaced file: the revocations and retirements since the copy can't be known, so
+    every trust not yet revoked, an expired one too, is revoked now with reason `restored` and no person, and
+    _settle_trust holds its ships. The report says retirements since the copy are gone (TRUST_RETIREMENTS_NOT_KEPT)."""
+    _trust_tables(db)
+    for grant in db.execute(UNREVOKED_TRUSTS).fetchall():
+        _revoke_trust(db, grant, None, now, 'restored')
+        report['trusts'].append(_trust_line(db, old, grant, 'revoked: no usable replaced file'))
+
+
+def _keep_trust_like_replaced(db, old, now, report):
+    """Spec items 4a, 6 and 7, with a usable replaced file; it only takes power away. Each trust the copy has unrevoked
+    is revoked here when the replaced file revoked it (with that revocation's time, person and reason); when the
+    replaced file lacks one of its grant or renewal rows (rows are never deleted, so that is damage; reason `restored`);
+    or when it is paused there (its latest window reached its expect: the pairings that paused it are lost with the
+    copy, so it would come back live with its notice posted; reason `paused at restore`). Each retirement there that
+    the copy lacks is added, and its peer unpaired as Federation.unpair does when the copy has it paired. The
+    owner_trust sequence is first raised to the replaced file's, so no row written from now on takes a seq it used: a
+    pause notice's id names its window's seq, and one posted for a window lost with the copy must not stand for a new
+    one. _settle_trust then holds the ships. A replaced file lacking these tables, when the copy has them, was treated
+    as absent (COMPARED); when the copy lacks them too there is nothing to keep."""
+    _trust_tables(db)
+    if not _has(old, *TRUST_COMPARED):
+        return
+    used = _sequence(old, 'owner_trust')
+    if used > _sequence(db, 'owner_trust') and not db.execute(
+            "UPDATE sqlite_sequence SET seq=? WHERE name='owner_trust'", (used,)).rowcount:
+        db.execute("INSERT INTO sqlite_sequence(name, seq) VALUES('owner_trust', ?)", (used,))
+    there = set(old.execute(WINDOWS).fetchall())
+    missing = {row[0] for row in db.execute(WINDOWS) if tuple(row) not in there}
+    revoked_there = {}
+    for grant_id, by_id, at, reason in old.execute("SELECT grant_id, by_id, at, reason FROM owner_trust "
+                                                   "WHERE event='revoke' ORDER BY seq").fetchall():
+        revoked_there.setdefault(grant_id, (by_id, at, reason))
+    paused_there = {row[0] for row in old.execute(PAUSED_THERE)}
+    for grant in db.execute(UNREVOKED_TRUSTS).fetchall():
+        if grant['grant_id'] in revoked_there:
+            values, how = revoked_there[grant['grant_id']], 'revoked as in the replaced file'
+        elif grant['grant_id'] in missing:
+            values, how = (None, now, 'restored'), 'revoked: missing from the replaced file'
+        elif grant['grant_id'] in paused_there:
+            values, how = (None, now, 'paused at restore'), 'revoked: paused in the replaced file'
+        else:
+            continue
+        _revoke_trust(db, grant, *values)
+        report['trusts'].append(_trust_line(db, old, grant, how))
+    kept = 0
+    for peer, retired, by_id in old.execute('SELECT peer_id, retired, by_id FROM retired_peers ORDER BY retired, peer_id').fetchall():
+        if not db.execute('INSERT OR IGNORE INTO retired_peers(peer_id, retired, by_id) VALUES (?,?,?)',
+                          (peer, retired, by_id)).rowcount:
+            continue
+        kept += 1
+        if _has(db, *PEER_NEEDS) and peer not in report['unpaired_full'] \
+                and db.execute('SELECT 1 FROM peers WHERE peer_id=? AND paired', (peer,)).fetchone():
+            _unpair(db, old, peer, report)
+    report['counts']['peer retirements kept'] = kept
+
+
+def _name_lost_trusts(db, old, report):
+    """Spec item 4a, Restore: a grant or renewal made since the copy is lost with it, so its trust comes back shorter,
+    or paused again under a window whose notice has posted, failing closed but silently. Each trust revoked neither
+    there nor here, whose grant or renewal row there is missing here, is named for the admin to grant or renew again."""
+    if not _has(old, *TRUST_COMPARED):
+        return
+    here = {tuple(row) for row in db.execute(WINDOWS)}
+    granted = {row[0] for row in here if row[1] == 'grant'}
+    revoked = {row[0] for connection in (db, old)
+               for row in connection.execute("SELECT grant_id FROM owner_trust WHERE event='revoke'")}
+    lost = {}
+    for grant_id, event, until, at, expect, peer_id, owner_user_id in old.execute(
+            "SELECT grant_id, event, until, at, expect, peer_id, owner_user_id FROM owner_trust "
+            "WHERE event IN ('grant','renew') ORDER BY seq").fetchall():
+        if grant_id in revoked or grant_id in lost or (grant_id, event, until, at, expect) in here:
+            continue
+        lost[grant_id] = ((grant_id, peer_id, owner_user_id),
+                          'renewed since the copy, and the renewal was lost: renew it again' if grant_id in granted
+                          else 'granted since the copy, and the grant was lost: grant it again')
+    report['trusts'] += [_trust_line(db, old, grant, how) for grant, how in lost.values()]
+
+
+def _settle_trust(db, old, now, report):
+    """After both lists and before _unpair_named, with or without a replaced file: settle_owner_trust ends each trust
+    whose owner a step above held, unpaired or retired (reason `owner held`, so every hold of an owner has a date) and
+    holds every ship of a trust ended, as a revoke holds them (spec items 6 and 7). Then, with a replaced file, the
+    trusts whose grant or renewal was lost with the copy are named. A copy without contact holds is from before owner
+    trust, so its trust tables were made just now and hold nothing to settle."""
+    from .owner_trust import settle_owner_trust
+    _trust_tables(db)
+    if _has(db, 'remote_contacts.user_id', 'contact_holds.contact_id'):
+        held = db.execute('SELECT COUNT(*) FROM contact_holds').fetchone()[0]
+        for grant_id in settle_owner_trust(db, now):
+            grant = db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE grant_id=? AND event='grant'",
+                               (grant_id,)).fetchone()
+            report['trusts'].append(_trust_line(db, old, grant, 'revoked: its owner is held'))
+        report['counts']['ships held as their owner trust ended'] = \
+            db.execute('SELECT COUNT(*) FROM contact_holds').fetchone()[0] - held
+    if old is not None:
+        _name_lost_trusts(db, old, report)
+    report['counts']['owner trusts revoked'] = sum(how.startswith('revoked') for *_, how in report['trusts'])
 
 
 MARKS_NOT_KEPT = ('Marks set since the copy to keep rooms away from cloud models were not kept: ask the members of the '
@@ -1422,7 +1574,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0],
               'held': [], 'held_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
-              'not_compared': [], 'grants': [], 'connections': []}
+              'not_compared': [], 'grants': [], 'connections': [], 'trusts': []}
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
     try:
@@ -1457,14 +1609,17 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 _revoke_every_grant(db, old, now, report)
                 _revoke_every_connection(db, old, now, report)
                 _revoke_every_token(db, old, now, report)
+                _revoke_every_trust(db, old, now, report)
             else:
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
                              _add_member_changes_like_replaced,
-                             _unpair_like_replaced, _hold_like_replaced, _keep_marks_like_replaced,
+                             _unpair_like_replaced, _hold_like_replaced, _keep_trust_like_replaced,
+                             _keep_marks_like_replaced,
                              _keep_connections_like_replaced, _keep_tokens_like_replaced, _keep_receipts_like_replaced,
                              _report_differences):
                     step(db, old, now, report)
+            _settle_trust(db, old, now, report)
             _unpair_named(db, old, named, report)
             _write_mark(db, old, now, db_path)
             db.execute('COMMIT')
@@ -1496,7 +1651,7 @@ def describe_reconcile(report):
                      "compared: check them by hand in runbook step 8. Peer pairings were not compared either, and nothing was "
                      'unpaired: before the copy goes live (runbook step 5), peer pairings: list them and name any you had cut '
                      "off in UNPAIR=. Every owned ship's keys were revoked, so those machines dock again. " + MARKS_NOT_KEPT
-                     + ' ' + CONNECTIONS_NOT_KEPT + ' ' + RECEIPTS_NOT_KEPT)
+                     + ' ' + CONNECTIONS_NOT_KEPT + ' ' + RECEIPTS_NOT_KEPT + ' ' + TRUST_RETIREMENTS_NOT_KEPT)
     lines.append('Taken back: ' + ', '.join(f'{label} ({count})' for label, count in report['counts'].items()) + '.')
     for table, (before, after) in report['sequences'].items():
         if after != before:
@@ -1529,6 +1684,9 @@ def describe_reconcile(report):
         lines.append('Held again, as in the replaced file, each until its own code is typed: '
                      + '; '.join(f'{peer} ({safe_line(name)})' for peer, name in report['held'])
                      + f'. Withdrew {withdrawn} pending and failed deliveries and cleared {cleared} received payloads.')
+    if report['trusts']:
+        lines.append('Owner trusts: ' + '; '.join(f'{short} ({safe_line(owner)}, {how})'
+                                                  for short, owner, how in report['trusts']) + '.')
     if report['passwords']:
         lines.append(f'Reported, not applied: these passwords differ from the replaced file: {people(report["passwords"])}. '
                      'Change again any that was changed for a reason.')
