@@ -1470,6 +1470,9 @@ RAW_NAME_READS = {
     ('backups.py', '<module>', 'SELECT id, peer_id, user_id, name AS label FROM remote_contacts'):
         'a restore file from before owner trust: no view and no trust confirmation (one schema batch makes both), '
         'so every contact there is a person, whose name is its label',
+    ('join_plan.py', 'plan', 'SELECT c.id, c.name, (h.contact_id IS NOT NULL)'):
+        'a store from before owner trust, opened read-only: no contact_labels view (plan checks), so every contact there '
+        'is a person, whose name is its label',
     # Filled-in tables and columns that are never remote_contacts' (the check can't see what a variable holds):
     ('backups.py', '_remove_members_like_replaced', 'SELECT {}, {} FROM {}'):
         "a MEMBERSHIPS table's memberships (room, remote-room or space members), as the replaced file has them",
