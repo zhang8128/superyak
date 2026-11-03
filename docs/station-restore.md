@@ -123,8 +123,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    ```
    Leave out `REPLACED=` only when the old file won't open; then every docked ship's keys are revoked, and those
    machines dock again; every owner trust is revoked as `restored`, so after the restore you grant each machine its
-   trust again, one password click each, and its ships wait held until then; and no peer is unpaired (see the peers
-   paragraph below). It refuses a `DB=` with any name but
+   trust again in the browser, one password click each with the number of ships you expect, and then each held ship
+   pairs again from a fresh `export-ship` on its machine (step 7); and no peer is unpaired (see the peers paragraph
+   below). It refuses a `DB=` with any name but
    `restored.sqlite3` (`peer.sqlite3` there is the set-aside original, or `DB=` and `REPLACED=` swapped;
    `chosen.sqlite3` there would be reconciled while step 6 installs `restored.sqlite3` unreconciled), a `REPLACED=` with
    any name but `peer.sqlite3` (`chosen.sqlite3` there would compare the copy with itself and take nothing back), a

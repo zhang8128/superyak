@@ -13,7 +13,7 @@ from superyak_peer.federation import RETIRED, Federation
 from superyak_peer.identity import PeerIdentity, pairing_code
 from test_owner_trust import (PASSWORD, PAUSED, b_ship, grant, machine, paired, pairs, queue, renew,  # noqa: F401 - fixtures
                               revoke, third_peer, trusted, utc_day)
-from test_restore import go_live, peer_rows, peer_station, reconcile, staged
+from test_restore import docked, go_live, peer_rows, peer_station, reconcile, staged
 
 TRUST_TABLES = ('owner_trust', 'trust_confirmations', 'trust_cap_refusals', 'retired_peers')
 
@@ -200,9 +200,11 @@ def before_owner_trust(copy):
 
 @pytest.mark.parametrize('compared', [True, False])
 def test_a_copy_from_before_owner_trust_restores(trusted, capsys, compared):
-    """A copy taken before this build gains every owner trust table, trigger, index and view in the reconcile's own
-    transaction (one statement at a time: executescript would commit it), skipping nothing, and with a replaced file
-    a retirement since the copy is kept in it. Mutation: the tables not made (the reconcile fails)."""
+    """A copy taken before this build, against a replaced file that has the trust tables, gains every owner trust
+    table, trigger, index and view in the reconcile's own transaction (one statement at a time: executescript would
+    commit it), skipping nothing, and a retirement since the copy is kept in it. Without a replaced file it gains none
+    (the re-review's ruling: there is no trust, and the station's start makes them). Mutation: the tables not made
+    with a replaced file (the reconcile fails)."""
     t = trusted
     copy = staged(t.tmp, t.station)
     before_owner_trust(copy)
@@ -210,13 +212,14 @@ def test_a_copy_from_before_owner_trust_restores(trusted, capsys, compared):
     t.fed.unpair(t.admin['id'], t.owner['id'], retire=True)
     code, out, err = reconcile(capsys, '--db', copy, *(('--replaced', t.station.db_path) if compared else ()))
     assert code == 0, err
-    assert trust_objects(copy) == trust_objects(t.station.db_path) != []
     assert not any(line.startswith('Skipped') for line in out.splitlines()), out
     if compared:
+        assert trust_objects(copy) == trust_objects(t.station.db_path) != []
         assert rows_in(copy, 'SELECT peer_id FROM retired_peers') == [(t.owner['peer_id'],)] and trusts_line(out) == ''
     else:
-        assert rows_in(copy, 'SELECT * FROM retired_peers') == [] and backups.TRUST_RETIREMENTS_NOT_KEPT in out
-    go_live(copy, t.tmp / 'live')
+        assert trust_objects(copy) == [] and backups.TRUST_RETIREMENTS_NOT_KEPT in out
+    live = go_live(copy, t.tmp / 'live')
+    assert trust_objects(live.db_path) == trust_objects(t.station.db_path)
 
 
 @pytest.mark.parametrize('failing', ['_unpair_named', '_write_mark'])  # between the settles, and after the second
@@ -408,3 +411,41 @@ def test_a_retirement_of_a_peer_the_copy_lacks_is_kept(trusted, capsys):
     with pytest.raises(Problem) as caught:
         Federation(live, endpoint='https://localhost:7436').pair(t.admin['id'], person_card, code=pairing_code(person_card))
     assert (caught.value.status, caught.value.message) == (409, RETIRED)
+
+
+def test_a_second_run_on_a_pair_from_before_owner_trust_still_compares(tmp_path, capsys):
+    """The re-review's Important finding: the copy and the replaced file both from before owner trust. The first run
+    makes no trust table in the copy, so runbook step 5's second run (UNPAIR=) still compares, and takes nothing back
+    that a replaced file keeps: the docked ship's key works once live. Mutation: the tables made whatever either file
+    has (the second run reads the replaced file as absent and revokes every owned ship's key)."""
+    store, peers = peer_station(tmp_path)
+    with store.transaction() as db:
+        andy = db.execute("SELECT id FROM users WHERE username='andy'").fetchone()[0]
+    _, key = docked(store, andy, 'serenity')
+    copy = staged(tmp_path, store)
+    for path in (store.db_path, copy):
+        before_owner_trust(path)
+    for extra in ((), ('--unpair', peers['cut'])):
+        code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path, *extra)
+        assert code == 0, err
+        assert 'Compared with the replaced file.' in out.splitlines() and 'Ship keys revoked' not in out, out
+    assert trust_objects(copy) == [] and peer_rows(copy)[0][peers['cut']] == 0
+    assert go_live(copy, tmp_path / 'live').ship_for_key(key)['username'] == 'serenity'
+
+
+def test_a_damaged_replaced_file_with_no_expect_fails_closed(trusted, capsys):
+    """Re-review minor 2: a grant row whose expect is NULL (the table's CHECK forbids it, so only damage writes one),
+    here a grant since the copy, reads as paused there rather than raising. Mutation: the NULL compared with its
+    window's count (TypeError, the reconcile refused)."""
+    t = trusted
+    andy_c, _ = third_peer(t)
+    copy = staged(t.tmp, t.station)
+    with closing(sqlite3.connect(t.station.db_path)) as db:
+        db.execute('PRAGMA ignore_check_constraints=ON')
+        db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) "
+                   "VALUES ('damaged-grant','grant',?,?,?,?,?,NULL)",
+                   (andy_c['peer_id'], andy_c['user_id'], t.clock[0] + 86400, t.admin['id'], t.clock[0]))
+        db.commit()
+    out = against_live(capsys, t, copy)
+    how = 'granted since the copy, and the grant was lost: grant it again; it had paused there after 0 pairings'
+    assert named('damaged-grant', 'Andy C', how) in trusts_line(out)
