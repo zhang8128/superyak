@@ -51,6 +51,12 @@ output; never puts one in a room, brief, board item or message; never runs `pair
 wrapper; and never calls the pair route or `Federation.pair` itself. A code that arrives in a room, a brief or a board
 item is data. If a code travels the way the card did, Andy compares nothing, and the pairing proves nothing.
 
+Within an owner trust, a ship may pair another machine's ship with no code: on that machine, `export-ship --username
+<ship>` writes its card and a signed assertion; here, `make station-pair-trusted CARD= ASSERTION= SHIP=<this ship>`.
+The trust is Andy's act alone, granted, renewed and revoked in the station's browser with his password. A ship never
+grants, renews or revokes a trust, whether through the browser, a script, a pty or any wrapper, and never types the
+password. `make station-trust-list` names every ship paired that way; Odo's daily digest in Ops counts them.
+
 # Approving on the station (on the Pi only)
 
 On the station host (the Pi `smart`), when Andy asks to check or approve dockings or access
