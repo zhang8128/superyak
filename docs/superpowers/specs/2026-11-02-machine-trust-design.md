@@ -1,7 +1,7 @@
 # Owner trust: a confirmed person's ships pair without a code each
 
 Rio Grande, 2026-11-02. Revision 4, after the fresh review of revision 1 (M1, M2, S1 to S5) and its re-checks (M3, S6 to S9; M4, S10).
-Status: draft for its third re-check (law section 3).
+Status: approved by a fresh Pi reviewer at revision 4 (0292d44f), with S11 and N13 folded in after (law section 3).
 
 ## Why
 
@@ -52,8 +52,8 @@ person whose own account a person confirmed with a code.
      its typed confirmation is still current, by the rule `connections()` uses (M3);
    - the card, apart from `participant`, equals the paired card (as `pair` compares it, federation.py:130);
    - the participant equals the assertion's;
-   - it isn't already a contact, except a ship held because its trust was revoked, re-paired under a later trust (step
-     6, S10);
+   - it isn't already a contact, except a ship held because its trust was revoked, re-paired under a later trust of the
+     same owner on the same peer (step 6, S10, N13);
    - its name fullmatches SHIP_NAME (ships.py:15: lowercase letters, digits and dashes, which rules out "Andy." and a
      Cyrillic "Аndy"), and it doesn't equal a local user's name or a remote person contact's name (a remote contact
      with no trust confirmation), compared by casefold. Ships of the same name on different hosts are allowed, since each shows with its owner (S6).
@@ -65,22 +65,24 @@ person whose own account a person confirmed with a code.
 4. **The cap:** at most 200 contacts per owner trust per day, counted from `trust_confirmations` by day (UTC). A
    refusal at the cap writes nothing but a station notice (below).
 5. **Notices:** one digest line per owner trust per day (UTC), posted by Odo once per digest id like other station
-   notices, built in `station_notices` from `trust_confirmations`, not
+   notices (when it posts, at the first pairing or after the day ends, is the plan's to decide, N12), built in `station_notices` from `trust_confirmations`, not
    through Odo's alert path, which is built for unit failures and keeps only 20 (S7). Its text says how many ships were
    paired, the owner, the peer's 12 characters and the acting ships, all through `safe_line`, plus any refusal at the
    cap. The full participant ids are in `make station-trust-list`, which the line names. It's read in the Ops room, or
    in the station log without Odo.
 6. **Revoking**, the admin's act in the browser, or unpairing the owner's peer, ends the trust. Every contact made
    under it is put in `contact_holds` at once, as `_hold_like_replaced` does: its outbox rows are withdrawn and its inbox
-   payloads cleared. **Any hold of the owner** (unpair, a restore, a revoke) writes a revocation row in `owner_trust`, so
-   every hold has a date (S10).
+   payloads cleared. **Any hold of the owner** (an unpair or a restore) writes a revocation row in `owner_trust`, as a
+   revoke does, so every hold has a date (S10, N13).
    - **What revoking stops (M4):** a trust that was misused, or granted wrongly, while the exporting peer's signing key
      is still safe. It does not stop a compromised host. The key sits unencrypted in that peer's identity.json
      (identity.py:133), so an attacker there can sign new assertions with any date, and still speaks as every contact
      of that peer, Andy's own account there included.
-   - **A compromised host** is unpaired, which holds every contact of that peer, its person contacts too. It comes
-     back only as a new identity: two typed codes, a new owner trust, and fresh assertions under the new key. Trust
-     material can never be replaced, so the old key is never trusted again.
+   - **A compromised host** is unpaired as retired (`unpair --retire`, the admin's act), which holds every contact of
+     that peer, its person contacts too, and writes a `retired_peers` row that a restore re-applies like a revocation.
+     `pair` refuses a retired peer id, so no code typed for the old card, even one an attacker shows on that machine's
+     screen, trusts the old key again (S11). It comes back only as a new identity: a new data directory, two typed codes,
+     a new owner trust, and fresh assertions under the new key.
    - **Recovery after a revoke (S8), with the key safe:** a new owner trust, granted after the revocation, may re-pair a
      held ship only with a fresh assertion issued after that revocation; nothing issued before it counts.
    **Expiry:** an expired trust pairs nothing new, and the ships already paired under it stay paired until a revoke or
@@ -132,6 +134,7 @@ Each refusal writes nothing:
 - an `issued` time more than 5 minutes in the future;
 - re-pairing a held ship with an assertion issued before the revocation; re-pairing it after a later trust and a fresh
   assertion succeeds;
+- `pair` of a retired peer id, whatever code is typed (S11);
 - a contact that already exists;
 - the cap.
 
