@@ -279,3 +279,26 @@ def test_an_owner_held_by_the_restore_ends_its_trust(trusted, capsys):
     assert held_in(copy, t.owner['id']) and held_in(copy, tardis['id'])
     assert named(t.trust['grant_id'], 'Andy B', 'revoked: its owner is held') in trusts_line(out)
     assert 'ships held as their owner trust ended (1)' in out
+
+
+def test_unpair_named_holds_an_owner_with_a_dated_revocation(trusted, capsys):
+    """Spec item 6 (S10, N13), the coordinator's ruling on Task 5's C1: UNPAIR= naming the owner's peer holds every
+    contact of it, the owner too, after the first settle has run, so settling runs again after it. The trust gets its
+    revocation (reason `owner held`, dated by the reconcile), the report names it, and the copy, once live, pairs
+    nothing. Mutation: the settle after _unpair_named left out (no revocation row, though the owner is held)."""
+    import time
+    t = trusted
+    tardis = pairs(t)
+    copy = staged(t.tmp, t.station)
+    started = time.time()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', t.station.db_path, '--unpair', t.owner['peer_id'])
+    assert code == 0, err
+    revoked = revocations_in(copy)
+    assert [row[:3] for row in revoked] == [(t.trust['grant_id'], 'owner held', None)] and revoked[0][3] >= started
+    assert held_in(copy, t.owner['id']) and held_in(copy, tardis['id'])
+    assert named(t.trust['grant_id'], 'Andy B', 'revoked: its owner is held') in trusts_line(out)
+    assert 'owner trusts revoked (1)' in out
+    live = go_live(copy, t.tmp / 'live')
+    with pytest.raises(Problem) as caught:
+        Federation(live, endpoint='https://localhost:7436').pair_trusted(t.ship, *b_ship(t, 'serenity'))
+    assert caught.value.status == 409

@@ -948,10 +948,11 @@ def _keep_trust_like_replaced(db, old, now, report):
 
 
 def _name_lost_trusts(db, old, report):
-    """Spec item 4a, Restore: a grant or renewal made since the copy is lost with it, so its trust comes back shorter,
-    or paused again under a window whose notice has posted, failing closed but silently. Each trust revoked neither
-    there nor here, whose grant or renewal row there is missing here, is named for the admin to grant or renew again."""
-    if not _has(old, *TRUST_COMPARED):
+    """Spec item 4a, Restore, last of the owner trust steps (after both settles): a grant or renewal made since the copy
+    is lost with it, so its trust comes back shorter, or paused again under a window whose notice has posted, failing
+    closed but silently. With a usable replaced file, each trust revoked neither there nor here, whose grant or renewal
+    row there is missing here, is named for the admin to grant or renew again."""
+    if old is None or not _has(old, *TRUST_COMPARED):
         return
     here = {tuple(row) for row in db.execute(WINDOWS)}
     granted = {row[0] for row in here if row[1] == 'grant'}
@@ -970,11 +971,11 @@ def _name_lost_trusts(db, old, report):
 
 
 def _settle_trust(db, old, now, report):
-    """After both lists and before _unpair_named, with or without a replaced file: settle_owner_trust ends each trust
-    whose owner a step above held, unpaired or retired (reason `owner held`, so every hold of an owner has a date) and
-    holds every ship of a trust ended, as a revoke holds them (spec items 6 and 7). Then, with a replaced file, the
-    trusts whose grant or renewal was lost with the copy are named. A copy without contact holds is from before owner
-    trust, so its trust tables were made just now and hold nothing to settle."""
+    """With or without a replaced file, after both lists and again after _unpair_named (it is idempotent):
+    settle_owner_trust ends each trust whose owner a step held, unpaired or retired, UNPAIR= included (reason `owner
+    held`, so every hold of an owner has a date, S10 and N13), and holds every ship of a trust ended, as a revoke holds
+    them (spec items 6 and 7). A copy without contact holds is from before owner trust, so its trust tables were made
+    just now and hold nothing to settle."""
     from .owner_trust import settle_owner_trust
     _trust_tables(db)
     if _has(db, 'remote_contacts.user_id', 'contact_holds.contact_id'):
@@ -983,10 +984,9 @@ def _settle_trust(db, old, now, report):
             grant = db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE grant_id=? AND event='grant'",
                                (grant_id,)).fetchone()
             report['trusts'].append(_trust_line(db, old, grant, 'revoked: its owner is held'))
-        report['counts']['ships held as their owner trust ended'] = \
-            db.execute('SELECT COUNT(*) FROM contact_holds').fetchone()[0] - held
-    if old is not None:
-        _name_lost_trusts(db, old, report)
+        label = 'ships held as their owner trust ended'
+        report['counts'][label] = report['counts'].get(label, 0) + db.execute(
+            'SELECT COUNT(*) FROM contact_holds').fetchone()[0] - held
     report['counts']['owner trusts revoked'] = sum(how.startswith('revoked') for *_, how in report['trusts'])
 
 
@@ -1622,6 +1622,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                     step(db, old, now, report)
             _settle_trust(db, old, now, report)
             _unpair_named(db, old, named, report)
+            _settle_trust(db, old, now, report)  # again: an owner UNPAIR= held gets its dated revocation (S10, N13)
+            _name_lost_trusts(db, old, report)
             _write_mark(db, old, now, db_path)
             db.execute('COMMIT')
         except BaseException:
