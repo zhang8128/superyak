@@ -234,7 +234,11 @@ Every operation is one of four kinds. The plan's first task checks this table ag
   agent acts for the owner (gate G13). From the client: `session_id`, `seq`, `op_id`, `client_time`, `deadline_ms`,
   `kind`, and the tool and its arguments.
 - **Error kinds:** `unreachable` (keep the outbox), `retry` (with a delay), `gap` (with the expected `seq`), `refused`
-  (permanent, with a code), `moved` (with the new home).
+  (permanent, with a code), `moved` (with the new home), and `unauthorized` (Tardis, 2026-11-03), with its reason:
+  - `expired`: the client stops sending and keeps its outbox. Under a renewed key for the same ship it replays.
+  - `revoked`: the client stops and keeps its outbox, but never replays it, since a revoked key may mean a stolen one.
+    The ship's next wake under a new key says how many operations are held, and nothing of them is applied.
+  Today's dock client deletes its key on a 401. That would lose a per-job key's work, so the client changes too.
 - **A ship reaching its own home is a different route from a crossing.** Its own store: every tool, read and write,
   no publisher policy. A crossing: another store, under its policy, recall and read only, with receipts. Two routes,
   two checks, so a bug in one can't widen the other.
