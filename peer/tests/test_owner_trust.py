@@ -194,9 +194,9 @@ def paired(tmp_path, machine):
     return station, admin, contact, card
 
 
-def grant(paired, days=90, password=PASSWORD):
+def grant(paired, days=90, password=PASSWORD, expect=50):
     station, admin, contact, card = paired
-    return station.grant_owner_trust(admin['id'], contact['id'], days=days, password=password, source='127.0.0.1')
+    return station.grant_owner_trust(admin['id'], contact['id'], days=days, expect=expect, password=password, source='127.0.0.1')
 
 
 def rows(station):
@@ -247,11 +247,11 @@ def test_a_second_grant_while_one_is_live_is_refused(paired):
 def test_renewing_extends_and_owner_trust_is_append_only(paired):
     station, admin, contact, card = paired
     done = grant(paired, days=10)
-    renewed = station.renew_owner_trust(admin['id'], done['grant_id'], days=60, password=PASSWORD, source='127.0.0.1')
+    renewed = station.renew_owner_trust(admin['id'], done['grant_id'], days=60, expect=50, password=PASSWORD, source='127.0.0.1')
     assert renewed['grant_id'] == done['grant_id'] and renewed['until'] == NOW + 60 * 86400 > done['until']
     assert [r['event'] for r in rows(station)] == ['grant', 'renew']
     with pytest.raises(Problem) as caught:
-        station.renew_owner_trust(admin['id'], done['grant_id'], days=5, password=PASSWORD, source='127.0.0.1')
+        station.renew_owner_trust(admin['id'], done['grant_id'], days=5, expect=50, password=PASSWORD, source='127.0.0.1')
     assert caught.value.status == 409
     for sql in ('UPDATE owner_trust SET until=0', 'DELETE FROM owner_trust',
                 "INSERT OR REPLACE INTO owner_trust(seq,grant_id,event,peer_id,owner_user_id,at) VALUES (1,'x','revoke','p','o',0)"):
@@ -267,9 +267,9 @@ def test_the_schema_statements_each_run_alone():
     assert OWNER_TRUST_SCHEMA.endswith(';') and OWNER_TRUST_SCHEMA.count('CREATE') == len(OWNER_TRUST_STATEMENTS)
 
 
-def renew(paired, grant_id, days=30, password=PASSWORD):
+def renew(paired, grant_id, days=30, password=PASSWORD, expect=50):
     station, admin = paired[:2]
-    return station.renew_owner_trust(admin['id'], grant_id, days=days, password=password, source='127.0.0.1')
+    return station.renew_owner_trust(admin['id'], grant_id, days=days, expect=expect, password=password, source='127.0.0.1')
 
 
 def revoke_row(station, grant_id, peer_id, owner):
@@ -303,7 +303,7 @@ def test_renewing_re_checks_the_owner_and_refuses_a_trust_made_contact(paired):
     assert caught.value.status == 409
     with station.transaction() as db:
         db.execute('DELETE FROM contact_holds')
-        db.execute('INSERT INTO trust_confirmations VALUES (?,?,?,?,?,?,?)', ('t', contact['id'], 'g', '{}', 's', NOW, '2027-01-15'))
+        db.execute('INSERT INTO trust_confirmations VALUES (?,?,?,?,?,?,?,?)', ('t', contact['id'], 'g', '{}', 's', NOW, '2027-01-15', 1))
     for attempt in (lambda: renew(paired, done['grant_id']), lambda: grant(paired)):
         with pytest.raises(Problem) as caught:
             attempt()
@@ -608,7 +608,7 @@ def test_a_ships_name_may_repeat_on_another_host(trusted):
     t = trusted
     first = pairs(t)
     contact, c_ship = third_peer(t)
-    t.station.grant_owner_trust(t.admin['id'], contact['id'], days=30, password=PASSWORD, source='127.0.0.1')
+    t.station.grant_owner_trust(t.admin['id'], contact['id'], days=30, expect=50, password=PASSWORD, source='127.0.0.1')
     second = pairs(t, *c_ship('tardis', 'c-tardis'))
     assert first['name'] == second['name'] == 'tardis' and first['peer_id'] != second['peer_id']
     assert label_of(t.station, first['id']) == 'ship of Andy B: tardis'
@@ -622,10 +622,17 @@ def test_a_contact_that_already_exists(trusted):
     refuses(t, 409, 'already', *b_ship(t, 'andy-bee', ship_id=t.owner['user_id']))  # no trust relabels a person
 
 
+def expect_more(t, expect):
+    """A renewal a minute on that expects `expect` ships, so a test of another limit isn't stopped by the count."""
+    t.clock[0] += 60
+    renew((t.station, t.admin), t.trust['grant_id'], days=90, expect=expect)
+
+
 def test_the_cap(trusted):
     from superyak_peer.federation import TRUST_CAP
     t = trusted
     assert TRUST_CAP == 200
+    expect_more(t, 300)  # the day's cap is the limit under test, not the window's count
     for i in range(TRUST_CAP):
         pairs(t, *b_ship(t, f'ship-{i}'))
     before = counts(t.station)
@@ -644,9 +651,10 @@ def test_the_cap(trusted):
 
 def test_two_pairings_at_the_cap_pair_one(trusted):
     t = trusted
+    expect_more(t, 300)
     with t.station.transaction() as db:
-        db.executemany('INSERT INTO trust_confirmations VALUES (?,?,?,?,?,?,?)',
-                       [(f'seed-{i}', f'contact-{i}', t.trust['grant_id'], '{}', t.ship, t.clock[0], utc_day(t.clock[0]))
+        db.executemany('INSERT INTO trust_confirmations VALUES (?,?,?,?,?,?,?,?)',
+                       [(f'seed-{i}', f'contact-{i}', t.trust['grant_id'], '{}', t.ship, t.clock[0], utc_day(t.clock[0]), 1)
                         for i in range(199)])
     feds = [Federation(Store(t.station.data_dir, clock=lambda: t.clock[0]), endpoint='https://localhost:7436')
             for _ in range(2)]
@@ -733,7 +741,7 @@ def test_the_cli_line_keeps_the_ships_name_after_a_long_owner_name(trusted):
     person = store.create_user('long', long_name, 'a-long-password')
     person_card = fed.card(person['id'])
     contact = t.fed.pair(t.admin['id'], person_card, code=pairing_code(person_card))
-    t.station.grant_owner_trust(t.admin['id'], contact['id'], days=30, password=PASSWORD, source='127.0.0.1')
+    t.station.grant_owner_trust(t.admin['id'], contact['id'], days=30, expect=50, password=PASSWORD, source='127.0.0.1')
     card, assertion = b_ship(t, 'longs-ship', owner=person['id'])
     files = (t.tmp / 'longs-ship.card.json', t.tmp / 'longs-ship.assertion.json')
     for path, value in zip(files, (card, assertion)):
@@ -977,7 +985,7 @@ def test_a_held_ship_does_not_come_back_under_another_owners_trust(trusted):
     sam = store.create_user('sam', 'Sam', 'a-long-password')
     sam_card = fed.card(sam['id'])
     contact = t.fed.pair(t.admin['id'], sam_card, code=pairing_code(sam_card))
-    t.station.grant_owner_trust(t.admin['id'], contact['id'], days=30, password=PASSWORD, source='127.0.0.1')
+    t.station.grant_owner_trust(t.admin['id'], contact['id'], days=30, expect=50, password=PASSWORD, source='127.0.0.1')
     refuses(t, 409, 'granted after', *b_ship(t, 'tardis', t.card['participant']['id'], owner=sam['id']))
 
 
@@ -1027,3 +1035,101 @@ def test_pair_refuses_a_retired_peer_whatever_code_is_typed(trusted, paired):
     t.fed.unpair(t.admin['id'], t.owner['id'], retire=True)  # retired again: the first row stays
     with t.station.transaction() as db:
         assert [tuple(r) for r in db.execute('SELECT * FROM retired_peers')] == [(t.owner['peer_id'], retired_at, t.admin['id'])]
+
+
+# Task 4b: the expected count (spec revision 5, item 4a)
+
+PAUSED = 'paused after {} pairings; the admin renews or revokes in the browser'
+
+
+def window_rows(station):
+    with station.transaction() as db:
+        return [tuple(r) for r in db.execute('SELECT c.name, t.window_seq FROM trust_confirmations t JOIN remote_contacts c '
+                                             'ON c.id=t.contact_id ORDER BY t.rowid')]
+
+
+def owner_trust_tables(station):
+    with station.transaction() as db:
+        return {table: [tuple(r) for r in db.execute(f'SELECT * FROM {table}')]
+                for table in ('owner_trust', 'trust_confirmations', 'trust_cap_refusals', 'remote_contacts', 'contact_holds')}
+
+
+def test_the_nth_pairs_and_the_next_is_paused(trusted):
+    t = trusted
+    revoke(t)
+    t.clock[0] += 60
+    t.trust = grant((t.station, t.admin, t.owner, None), expect=2)
+    pairs(t, *b_ship(t, 'ship-a'))
+    pairs(t, *b_ship(t, 'ship-b'))
+    before = owner_trust_tables(t.station)
+    card, assertion = b_ship(t, 'ship-c')
+    for _ in (1, 2):
+        error = refuses(t, 429, PAUSED.format(2), card, assertion)
+        assert error.message == PAUSED.format(2)
+        assert owner_trust_tables(t.station) == before
+
+
+def test_a_renewal_opens_a_new_window_up_to_its_own_count(trusted):
+    from superyak_peer.owner_trust import trust_window
+    t = trusted
+    revoke(t)
+    t.clock[0] += 60
+    t.trust = grant((t.station, t.admin, t.owner, None), expect=1)
+    first = rows(t.station)[-1]['seq']
+    pairs(t, *b_ship(t, 'ship-a'))
+    refuses(t, 429, PAUSED.format(1), *b_ship(t, 'ship-b'))
+    t.clock[0] += 60
+    with t.station.transaction() as db:
+        assert trust_window(db, t.trust['grant_id']) == (first, 1, 1)
+    renew((t.station, t.admin), t.trust['grant_id'], days=90, expect=1)
+    second = rows(t.station)[-1]['seq']
+    assert second != first
+    with t.station.transaction() as db:
+        assert trust_window(db, t.trust['grant_id']) == (second, 1, 0)
+    pairs(t, *b_ship(t, 'ship-b'))
+    refuses(t, 429, PAUSED.format(1), *b_ship(t, 'ship-c'))
+    assert window_rows(t.station) == [('ship-a', first), ('ship-b', second)]
+    with t.station.transaction() as db:
+        assert trust_window(db, t.trust['grant_id']) == (second, 1, 1)
+
+
+def test_expect_is_required_and_bounded(paired):
+    station, admin, contact, card = paired
+    bad = (0, 10_001, -1, True, '5', 5.0, None)
+    for expect in bad:  # checked before the password, so a wrong password still says 400
+        with pytest.raises(Problem) as caught:
+            grant(paired, expect=expect, password='not-the-password')
+        assert caught.value.status == 400
+    assert rows(station) == []
+    with pytest.raises(TypeError):
+        station.grant_owner_trust(admin['id'], contact['id'], days=90, password=PASSWORD, source='127.0.0.1')
+    done = grant(paired, expect=10_000)
+    before = rows(station)
+    assert before[0]['expect'] == 10_000
+    for expect in bad:
+        with pytest.raises(Problem) as caught:
+            renew(paired, done['grant_id'], days=90, expect=expect, password='not-the-password')
+        assert caught.value.status == 400
+    assert rows(station) == before
+    with pytest.raises(TypeError):
+        station.renew_owner_trust(admin['id'], done['grant_id'], days=90, password=PASSWORD, source='127.0.0.1')
+
+
+def test_a_revoke_row_carries_no_expect(trusted):
+    t = trusted
+    revoke(t)
+    assert [r['expect'] for r in rows(t.station)] == [50, None]
+
+
+def test_a_repaired_held_ship_counts_in_the_new_window(trusted):
+    t = trusted
+    tardis = pairs(t)
+    revoked_at = t.clock[0]
+    revoke(t)
+    t.clock[0] += 60
+    later = grant((t.station, t.admin, t.owner, None), expect=1)
+    window = rows(t.station)[-1]['seq']
+    pairs(t, *b_ship(t, 'tardis', t.card['participant']['id'], now=revoked_at + 1))
+    assert window_rows(t.station)[-1] == ('tardis', window)
+    refuses(t, 429, PAUSED.format(1), *b_ship(t, 'ship-b'))
+    assert later['grant_id'] != t.trust['grant_id']

@@ -10,10 +10,11 @@ from .identity import pairing_code
 from .ships import safe_line
 
 TRUST_DAYS = 90
+EXPECT_MAX = 10_000
 OWNER_TRUST_STATEMENTS = (
     '''CREATE TABLE IF NOT EXISTS owner_trust(seq INTEGER PRIMARY KEY AUTOINCREMENT, grant_id TEXT NOT NULL,
   event TEXT NOT NULL CHECK(event IN ('grant','renew','revoke')), peer_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
-  until REAL, by_id TEXT, at REAL NOT NULL, reason TEXT)''',
+  until REAL, by_id TEXT, at REAL NOT NULL, reason TEXT, expect INTEGER)''',
     '''CREATE TRIGGER IF NOT EXISTS owner_trust_no_update BEFORE UPDATE ON owner_trust
 BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
     '''CREATE TRIGGER IF NOT EXISTS owner_trust_no_delete BEFORE DELETE ON owner_trust
@@ -23,7 +24,7 @@ WHEN EXISTS (SELECT 1 FROM owner_trust WHERE seq=NEW.seq)
 BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
     '''CREATE TABLE IF NOT EXISTS trust_confirmations(id TEXT PRIMARY KEY, contact_id TEXT NOT NULL,
   grant_id TEXT NOT NULL, assertion TEXT NOT NULL, acting_ship_id TEXT NOT NULL, confirmed REAL NOT NULL,
-  day TEXT NOT NULL)''',
+  day TEXT NOT NULL, window_seq INTEGER NOT NULL)''',
     # The cap's count and contact_labels' latest confirmation per contact, by index rather than by scan (ruling, Task 3).
     'CREATE INDEX IF NOT EXISTS trust_confirmations_contact ON trust_confirmations(contact_id, confirmed)',
     'CREATE INDEX IF NOT EXISTS trust_confirmations_grant_day ON trust_confirmations(grant_id, day)',
@@ -43,6 +44,7 @@ BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
 OWNER_TRUST_SCHEMA = ';\n'.join(OWNER_TRUST_STATEMENTS) + ';'
 
 DAYS_SHAPE = f'days is a whole number from 1 to {TRUST_DAYS}'
+EXPECT_SHAPE = f'expect is a whole number from 1 to {EXPECT_MAX}'
 GRANT_TEXT = "ships owned by {name} on {peer} may be paired by this station's ships, until {date}"
 
 
@@ -150,6 +152,24 @@ def _days(days):
     return days
 
 
+def _expect(expect):
+    if type(expect) is not int or not 1 <= expect <= EXPECT_MAX:
+        raise Problem(400, EXPECT_SHAPE)
+    return expect
+
+
+def trust_window(db, grant_id):
+    """`(window_seq, expect, paired)` of the grant's latest grant-or-renewal row: that row's seq, the count its person
+    expected, and the trust_confirmations rows that paired under it (spec item 4a). The trust is paused when
+    paired >= expect."""
+    row = db.execute("SELECT seq, expect FROM owner_trust WHERE grant_id=? AND event IN ('grant','renew') "
+                     'ORDER BY seq DESC LIMIT 1', (grant_id,)).fetchone()
+    if row is None:
+        raise Problem(404, 'No such owner trust')
+    paired = db.execute('SELECT COUNT(*) FROM trust_confirmations WHERE window_seq=?', (row['seq'],)).fetchone()[0]
+    return row['seq'], row['expect'], paired
+
+
 def _text(name, peer_id, until):
     date = datetime.fromtimestamp(until, timezone.utc).strftime('%Y-%m-%d')
     return GRANT_TEXT.format(name=safe_line(name), peer=peer_id[:12], date=date)
@@ -176,10 +196,12 @@ class OwnerTrust:
         if not self.check_password_attempt(username, password, source, public=public, device=device):
             raise Problem(401, 'Invalid password')
 
-    def grant_owner_trust(self, actor, contact_id, *, days, password, source, public=True, device=None):
+    def grant_owner_trust(self, actor, contact_id, *, days, expect, password, source, public=True, device=None):
         """The admin's act, with their password: a remote person contact, whose code was typed and is still current,
-        may have their ships paired by this station's ships for `days` whole days."""
+        may have their ships paired by this station's ships for `days` whole days, up to `expect` of them before the
+        trust pauses (spec item 4a)."""
         _days(days)
+        _expect(expect)
         self._trust_password(actor, password, source, public, device)
         with self.transaction() as db:
             self._admin(db, actor)
@@ -189,13 +211,14 @@ class OwnerTrust:
             if live_trust(db, contact['peer_id'], contact['user_id'], now):
                 raise Problem(409, 'That owner is already trusted; renew it')
             grant_id, until = uid(), now + days * 86400
-            db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at) '
-                       "VALUES (?,'grant',?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor, now))
+            db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) '
+                       "VALUES (?,'grant',?,?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor, now, expect))
         return {'grant_id': grant_id, 'until': until, 'text': _text(contact['name'], contact['peer_id'], until)}
 
-    def renew_owner_trust(self, actor, grant_id, *, days, password, source, public=True, device=None):
+    def renew_owner_trust(self, actor, grant_id, *, days, expect, password, source, public=True, device=None):
         """Extends an unrevoked trust to `days` whole days from now; it never shortens one."""
         _days(days)
+        _expect(expect)
         self._trust_password(actor, password, source, public, device)
         with self.transaction() as db:
             self._admin(db, actor)
@@ -219,8 +242,8 @@ class OwnerTrust:
             until = now + days * 86400
             if until <= current:
                 raise Problem(409, 'That owner trust already runs longer')
-            db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at) '
-                       "VALUES (?,'renew',?,?,?,?,?)", (grant_id, peer_id, owner, until, actor, now))
+            db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) '
+                       "VALUES (?,'renew',?,?,?,?,?,?)", (grant_id, peer_id, owner, until, actor, now, expect))
         return {'grant_id': grant_id, 'until': until, 'text': _text(contact['name'], peer_id, until)}
 
     def revoke_owner_trust(self, actor, grant_id):

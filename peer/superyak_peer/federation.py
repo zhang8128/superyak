@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from .identity import (PeerIdentity, validate_card, verify_envelope, verify_pull, pull_shape_ok, canonical, parse,
                        pairing_code, show_code, typed_code, HEX32, check_ship_assertion)
 from .common import Problem, require, uid, encode, text, linked_room_ok
-from .owner_trust import latest_grant, live_trust, owner_eligible, settle_owner_trust
+from .owner_trust import latest_grant, live_trust, owner_eligible, settle_owner_trust, trust_window
 from .ships import SHIP_NAME
 
 class Obsolete(Exception):
@@ -260,6 +260,11 @@ class Federation:
                                  (station, owner_id)).fetchone()[0]
             if revoked is not None and record['issued'] <= revoked:
                 raise Problem(403, "The assertion was issued before this owner's trust was last revoked; export a fresh one")
+            # 5a. Under the window's expected count (spec item 4a): the nth pairing succeeds and the next is paused,
+            # writing nothing, not even a cap count (an ordinary Problem, not _AtCap).
+            window_seq, expect, paired = trust_window(db, trust['grant_id'])
+            if paired >= expect:
+                raise Problem(429, f'paused after {expect} pairings; the admin renews or revokes in the browser')
             # 6. A ship's name, and no person's or local account's.
             name = record['ship_name']
             if not SHIP_NAME.fullmatch(name):
@@ -283,9 +288,9 @@ class Federation:
             else:
                 contact_id = 'remote_' + uid()
                 db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?)', (contact_id, peer, record['ship_id'], name))
-            db.execute('INSERT INTO trust_confirmations(id, contact_id, grant_id, assertion, acting_ship_id, confirmed, day) '
-                       'VALUES (?,?,?,?,?,?,?)',
-                       (uid(), contact_id, trust['grant_id'], canonical(assertion).decode(), actor, now, day))
+            db.execute('INSERT INTO trust_confirmations(id, contact_id, grant_id, assertion, acting_ship_id, confirmed, day, '
+                       'window_seq) VALUES (?,?,?,?,?,?,?,?)',
+                       (uid(), contact_id, trust['grant_id'], canonical(assertion).decode(), actor, now, day, window_seq))
             contact = dict(db.execute('SELECT * FROM remote_contacts WHERE id=?', (contact_id,)).fetchone())
         return {**contact, 'confirmed_by': 'owner trust', 'grant_id': trust['grant_id']}
 
