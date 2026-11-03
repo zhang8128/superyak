@@ -1,6 +1,6 @@
 # The rail, as mathematics: a research plan
 
-Rio Grande, 2026-11-03. Revision 2, after a fresh mathematician's review (Majors 1 to 5, Minors 6 to 8). Andy: "remember the idea was that the sheaf cohomologies could form paths that you could A*
+Rio Grande, 2026-11-03. Revision 3, after a fresh mathematician's review (Majors 1 to 5, Minors 6 to 8) and its re-check (two Majors in statements; E1 sound). Andy: "remember the idea was that the sheaf cohomologies could form paths that you could A*
 around easily like high speed rail. expanding your range", "the sheafs could anneal the n category theory graphs
 together", and "your instincts follow your training which is promarily centered around what the world operates on.
 Spreadsheets. table based understanding of the world. But that is now how humans think, and we may be able to do
@@ -21,7 +21,7 @@ later object (roads, rails, the annealed graph) is a way of keeping and sharing 
 ## 1. Objects
 
 - **Memories and meaning.** A store `S` has a finite set of memories `M_S` and an embedding `φ: M_S → S^{d-1}`
-  (`d = 768`, vectors normalized; angle `θ(a, b) = atan2(‖φ(a) × φ(b)‖, ⟨φ(a), φ(b)⟩)`, numerically stable). `θ` is a
+  (`d = 768`, vectors normalized; angle `θ(a, b) = 2·atan2(‖â − b̂‖, ‖â + b̂‖)`, numerically stable). `θ` is a
   metric on the sphere and a pseudometric on `M_S`, since two memories can share a vector.
 - **Use.** A session is a finite sequence `γ = (m_1, …, m_k)` of touched memories (the trail spec's *trail*). Its steps
   are the pairs `(m_i, m_{i+1})`. The *trail graph* `G_S` is the directed multigraph of all steps of all sessions.
@@ -50,7 +50,7 @@ The goal is `Q = {n : θ(n, q) ≤ r}` (the trail spec's 6.3).
 *Admissible.* For any path `p` from `n` to `g ∈ Q`, the triangle inequality gives `θ(n, g) ≤ Σ θ(a_i, a_{i+1})`, so
 `w_rail θ(n, g) ≤ c_w(p)`; and `θ(n, q) − r ≤ θ(n, g)`. So `h(n) ≤ c_w(p)`.
 
-*Consistent.* For an edge `(u, v)`: `θ(u, q) ≤ θ(u, v) + θ(v, q)`, so
+*Consistent* (which also covers a vectorless node, where the admissibility chain breaks). For an edge `(u, v)`: `θ(u, q) ≤ θ(u, v) + θ(v, q)`, so
 `w_rail(θ(u, q) − r) ≤ w_rail θ(u, v) + w_rail(θ(v, q) − r) ≤ w(u, v) θ(u, v) + h(v)`. With `h ≥ 0`, this gives
 `h(u) ≤ w(u, v) θ(u, v) + h(v)`, so closed-set A* is exact. ∎
 
@@ -58,27 +58,30 @@ The heuristic uses the constant floor `w_rail`, not a minimum that changes as we
 an *epoch*; a new epoch recomputes. The vectorless case (a memory with no vector) has cost `w · π` and `h = 0`.
 **High-speed rail is a lower `w`, not a shortcut that breaks optimality.** But cheap rails also weaken `h`'s pruning
 everywhere, so C3 could fail on search effort alone. ALT landmarks fix that: for landmarks `L`,
-`h_L(n) = max_L (d(L, Q) − d(L, n))`, with `d` the exact `c_w` distances computed once per epoch. `max(h, h_L)` stays
+`h_L(n) = max_L (d(L, Q) − d(L, n))`, with `d` the exact `c_w` distances computed once per epoch and a landmark skipped
+when `d(L, n) = ∞`. `max(h, h_L)` stays
 consistent. The trail spec's own weights are `1 + 1/support`, which this plan replaces.
 
 ## 3. Annealing, as a model of routes
 
 A schedule that lowers weights wherever agents walked is a tautology: it lowers cost on the routes it was fit to, and
-`w ≡ w_rail` minimizes it (the review's M5). The real object is a probability law over routes.
+`w ≡ w_rail` minimizes it (the review's M5). And a plain Gibbs law `P_w(p) ∝ exp(−β c_w(p))` with `w` refit at each `β`
+is vacuous too: `c_w` is linear in `w`, so the law depends only on `βw`, and the fit just rescales `w` (the re-check's
+M1). The model that works is randomized shortest paths (Saerens et al., 2009).
 
-- **The Gibbs measure.** For an origin and goal, routes have probability `P_w(p) ∝ exp(−β c_w(p))`. An agent that
-  knows the cheap ways takes them more often. The temperature is `1/β`.
-- **Fitting the weights is learning the graph.** Choose `w` to maximize the likelihood of the routes agents actually
-  took, discounted by age: `L(w) = Σ_γ λ^{age(γ)} [ −β c_w(γ) − log Z_w(γ) ]` (maximum-entropy inverse reinforcement
-  learning). `log Z_w` keeps `w` from collapsing to the floor. The gradient per edge is `β θ(e)·(expected use − observed
-  use)`: an edge walked more than the model expects gets cheaper, and one walked less gets dearer. Reheating needs no
-  separate rule. When a better detour appears, the old path's expected use exceeds its observed use and its weight
-  rises. Forgetting is the discount `λ`.
-- **Annealing is the schedule on `β`.** Start hot (small `β`: routes spread, the graph stays soft), and raise `β` as
-  evidence accumulates (an explicit schedule, `β_t = β_0 · log(1 + t)` or in steps per epoch). Structure that survives
-  cooling is the store's road network: edges whose fitted `w` sits near `w_rail` across epochs.
-- Physarum-style flow reinforcement (Tero et al., 2010) is a second, provably convergent dynamic for the same end. It
-  goes in as an alternative to compare, not the default.
+- **The route law.** Routes are walks to an absorbing goal, `P_w(p) ∝ P_ref(p) · exp(−c_w(p))`, with `P_ref` the plain
+  random walk on the place graph (or one with a per-hop cost `κ > 0`, so zero-angle self-loops can't make `Z` diverge).
+  `β` is fixed at 1: the weights carry the scale.
+- **Fitting is learning the graph.** Maximize the age-discounted likelihood of the routes agents actually took,
+  `L(w) = Σ_γ λ^{age(γ)} log P_w(γ)`. It is concave in `w`, and its gradient per edge is
+  `θ(e) · (expected use − observed use)`, both weighted by `λ^{age}`: an edge walked more than the model expects gets
+  cheaper, and one walked less gets dearer. Reheating needs no separate rule. When a better detour appears, the old
+  path's expected use exceeds its observed use, and its weight rises. Forgetting is `λ`.
+- **Temperature is per edge, and it cools with evidence.** `T(e)` is the posterior variance of `w(e)`, about
+  `1 / (θ(e)² · Σ_γ λ^{age} Var_P[n_e])`. A rarely walked edge is hot, since its weight is uncertain and moves easily.
+  A much-confirmed one is cold. Annealing is this cooling. The store's road network is the edges whose `w` sits near
+  `w_rail` with low `T`, across epochs.
+- Physarum-style flow reinforcement (Tero et al., 2010), which provably converges, is an alternative to compare against.
 
 ## 4. Gluing stores, and what a rail is
 
@@ -90,26 +93,33 @@ There are two different sheaves here, and revision 1 conflated them (the review'
   meaning is the energy `xᵀ L x` and the residuals. That sheaf tells whether stores *describe a topic* alike.
 - **The rail sheaf** lives on the *place graph*. Fix one cover `{U_α}` shared by all stores (centroids fitted on a
   common sample, or the trail spec's anchors). For each place edge `e = (α, β)`, the stalk over each store `S` that
-  covers both ends is `x_S(e)`: `S`'s normalized transition mass on `e`, or its fitted weight `w_S(e)`. A place edge
-  glues where the covering stores agree: the per-edge energy `E(e) = Σ_{S,S'} W_{SS'} (x_S(e) − x_{S'}(e))²`, with
-  trust `W` as in the existing module, is at most `ε`.
+  covers both ends is `x_S(e) = P_S(β | α)`, `S`'s own untied transition probability out of `α` (never the tied
+  weight, which would make every rail agree by construction). A place edge
+  glues where the covering stores agree: the per-edge energy
+  `E(e) = Σ_{S,S'} W_{SS'} (x_S(e) − x_{S'}(e))² / Σ_{S,S'} W_{SS'}`, with trust `W` as in the existing module scaled by
+  each store's count of steps out of `α` (unexplored is not dissent), is at most `ε`.
 - **A rail** is a place edge with at least two independent carriers (stores, with independent sessions) whose
   energy is at most `ε`. Its weight is the floor: `w = w_rail` on a rail.
-- **Seams, and a real `H^1`.** Treat the fitted cross-store flow on the place graph as a 1-cochain `f`, and fill the
-  graph's triangles to make a 2-complex. Hodge decomposition (HodgeRank, Jiang et al., 2011) splits
-  `C^1 = im δ_0 ⊕ H ⊕ im δ_1ᵀ`:
-  - a gradient part, a consistent "downhill" ordering of places;
-  - a harmonic part `H ≅ H^1`, global cycles no ordering explains;
-  - a curl part, local triangle inconsistency.
-  A **seam** is where the harmonic or curl part is large: stores' use contradicts itself around a loop. That is an
-  obstruction, and a frontier worth sending a curious agent to. The existing module's `harmonic_fraction` measures
-  the non-kernel part, not the harmonic one, and should be renamed in its own change.
-- **Annealing the category graphs together.** The glued 2-category is the pushout `C_1 ⊔_{C_12} C_2`, over the
-  sub-2-category `C_12` of places both stores cover with energy at most `ε`. Free is a left adjoint, so this is the
-  free 2-category on the glued computad. The joint dynamic is one likelihood across stores, with the weights of glued
-  edges tied: `L_glue(w) = Σ_S L_S(w)`, with `w_S(e) = w(e)` on every rail. Use in either store now moves the shared
-  weight, so gluing depends on use (the review's M4). Each store keeps its own graph, and only the tied weights and
-  the transition masses on covered place edges cross, under permissions by place.
+- **Seams, and a real `H^1`.** Summed use is mostly circulation: one store's cyclic workflow (plan, build, review,
+  plan) fills a loop with no contradiction at all (the re-check's M2). So use each store's skew net flow
+  `f_S(α, β) = n_S(α, β) − n_S(β, α)`, an alternating 1-cochain, and decompose the *disagreement*
+  `g = f_S/‖f_S‖ − f_{S'}/‖f_{S'}‖` on the place graph with its triangles filled. Hodge decomposition (HodgeRank, Jiang
+  et al., 2011) splits `C^1 = im δ_0 ⊕ H ⊕ im δ_1ᵀ` into:
+  - a gradient part, where the stores disagree on a consistent ordering;
+  - a harmonic part `H ≅ H^1`, global loops where they disagree;
+  - a curl part, local triangles where they disagree.
+  A **seam** is where `g`'s harmonic or curl part is large: an obstruction, and a frontier worth sending a curious agent
+  to. The existing module's `harmonic_fraction` measures the non-kernel part, not the harmonic one, and should be
+  renamed in its own change.
+- **Annealing the category graphs together.** Push out the place quotients, not the memory-level categories (whose
+  objects differ): `C_1/π ← Free(R) → C_2/π`, where `R` is the rail sub-computad (rails' places and the rail edges
+  themselves) and the legs are induced by computad inclusions. Free is a left adjoint on 2-computads, so the pushout is
+  the free 2-category on the glued computad, and the tied rail weights live inside it because the edges are glued,
+  not only the places. The joint dynamic is one likelihood across stores, `L_glue(w) = Σ_S L_S(w)`, with
+  `w_S(e) = w(e)` on every rail, so use in either store moves the shared rail weight. Gluing is judged on the untied
+  `P_S`, and only rails get tied. Each store keeps its own graph, and only the tied weights and transition
+  probabilities on covered place edges cross, under permissions by place. The detour set `D_S` changes with each
+  epoch.
 
 ## 5. Statements to test, weakest first
 
@@ -126,18 +136,19 @@ There are two different sheaves here, and revision 1 conflated them (the review'
 
 The station has 2,629 messages in 7 rooms by 8 authors. Each is unique, so E1 works on places (section 1).
 
-- **Places:** k-means on the training messages' embeddings (shared embedder, `search_document:`), k in {32, 64, 128}.
+- **Places:** spherical k-means on the training messages' embeddings (shared embedder, `search_document:`). `P = 64`
+  places is primary, pre-registered; 32 and 128 are secondary.
 - **Sessions:** a maximal run of one author's messages in one room with gaps under 30 minutes. Steps go between
   consecutive messages, read as place steps. Split by time at the 80th percentile of session starts.
-- **Arms, all ranking places, at matched k:**
+- **Arms, each a ranking of 10 places:**
   - (i) meaning: θ from the current message to each centroid;
   - (ii) use: the trained transition counts from the current place, backfilled by centroid θ;
-  - (iv) chat: the place nearest the room's latest message by anyone;
+  - (iv) chat: the place nearest the room's latest message by another author;
   - (v) same-author kNN;
   - (vi) same-room kNN.
 - **Cleaning:** drop near-duplicate templated posts (θ < 0.05 to the same author's earlier post), and report both
   ways. Report person-only and ship-only, and the drift of place occupancy across the split.
-- **Pre-registered falsifier:** hit@10 of (ii) minus max(i, iv, v, vi) on non-reply steps, with a paired bootstrap
+- **Pre-registered falsifier:** hit@10 of (ii) minus max(i, iv, v, vi) on place-changing (`α ≠ β`), non-reply steps, with a paired bootstrap
   clustered by session (1,000 resamples). **C1 fails if the 95% CI includes 0.** Also report hit@{1,5}, and C2's
   buckets by `n_eff` conditioned on out-degree.
 - **Bounds:** read-only store, bodies in memory only, numbers-only report, under 512 MiB, the shared embedder only.
