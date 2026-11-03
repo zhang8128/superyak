@@ -1173,8 +1173,14 @@ REPLACED_DIR = re.compile(r'replaced-\d{8}-\d{6}')
 
 
 def _newest_replaced(backups):
-    """The newest restore directory's name: they are named by step 1's local time, all one width, so it sorts last."""
-    return max((path.name for path in backups.glob('replaced-*') if REPLACED_DIR.fullmatch(path.name)), default=None)
+    """The newest restore directory's name: they are named by step 1's local time, all one width, so it sorts last.
+    Listed, not globbed, so a backups directory that can't be listed is refused under its own cause, not read as one
+    with no restore in it (the F1 reader's second "for later")."""
+    try:
+        names = os.listdir(backups)
+    except OSError as error:
+        raise CarryRefused(f'{backups} could not be listed ({error.strerror or type(error).__name__})') from None
+    return max((name for name in names if REPLACED_DIR.fullmatch(name)), default=None)
 
 
 def _source_uri(source):
@@ -1220,10 +1226,11 @@ def carry_pull_nonces(data_dir, aside):
     has no pull_nonces, or is a symlink or has one among its sidecars; a $ASIDE that still holds peer.sqlite3 (10.3's
     move hasn't run, so the live file is not the one put back); a source that is missing, symlinked the same way, the
     live file, unreadable, with sidecars that don't match its journal mode (_source_uri), without pull_nonces, damaged,
-    or not marked as restored from $ASIDE; a path among these that can't be checked (an unsearchable directory, which
-    is_file() raises on before Python 3.14: the Task 7 reader's F1); and a $ASIDE that isn't the
-    newest replaced-<time> directory, as the runbook's ASIDE line names it (the re-check's nit 2: an earlier restore that
-    was also rolled back passed everything else). After the commit it writes $ASIDE/carried, without which step 8 leaves
+    or not marked as restored from $ASIDE; a restored-live that is itself a symlink, which would carry from a directory
+    elsewhere (the F1 reader's first "for later"); a path among these that can't be checked, on any Python, such as an
+    unsearchable directory or an $ASIDE or backups directory that can't be listed (_lstat, os.listdir); and a $ASIDE
+    that isn't the newest replaced-<time> directory, as the runbook's ASIDE line names it (the re-check's nit 2: an
+    earlier restore that was also rolled back passed everything else). After the commit it writes $ASIDE/carried, without which step 8 leaves
     the federation units off after a rollback (CarryUnmarked if it can't). Returns (nonces added, nonces in the
     source)."""
     aside = Path(aside)
@@ -1237,6 +1244,9 @@ def carry_pull_nonces(data_dir, aside):
             names = []   # no $ASIDE: the source check below says so
         if any(name == LIVE_NAME or name.startswith(LIVE_NAME + '-') for name in names):
             raise CarryRefused(f"{aside} still holds a {LIVE_NAME} file, so 10.3's move hasn't run and {live} is not the file put back")
+        found = _lstat(source.parent)
+        if found is not None and stat.S_ISLNK(found.st_mode):  # 10.2 makes restored-live with install -d, never a link
+            raise CarryRefused(f'{source.parent} is a symlink, so the station in it is not the one 10.2 moved aside')
         if _symlinked(source) or not _regular(source):
             raise CarryRefused(f'No restored station at {source} (or it or a sidecar is a symlink): nothing to carry from '
                                '(10.2 moves it there)')
