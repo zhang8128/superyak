@@ -20,7 +20,7 @@
 - At most 200 contacts per owner trust per UTC day, counted from `trust_confirmations`.
 - (Spec revision 5) Each grant and renewal states `expect`, a required whole number 1 to 10,000. A window is the `trust_confirmations` rows naming one grant-or-renewal row; the nth pairing in a window succeeds and the (n+1)th is refused (429, `paused after <n> pairings; the admin renews or revokes in the browser`), writing nothing.
 - A ship's name fullmatches `SHIP_NAME` (ships.py:15) and differs, by `casefold()`, from every local user's `name` and `username` and from every remote contact's name that has no trust confirmation.
-- The contact's stored name is exactly `ship of <owner name>: <ship name>`.
+- (Ruling, Tardis's review) `remote_contacts.name` stays the card's participant name; the label `ship of <owner name>: <ship name>` comes from the `contact_labels` view, for every contact with a trust confirmation, revoked or held included.
 - The grant reads exactly: `ships owned by <name> on <peer 12> may be paired by this station's ships, until <YYYY-MM-DD>` (UTC date).
 - `connections()` and the CLI say exactly `confirmed by owner trust`.
 - Every refusal writes nothing, except a cap refusal, which writes only its `trust_cap_refusals` count.
@@ -35,7 +35,7 @@
 2. Two ships pairing at once at 199 of the cap: one pairs, one is refused; the count and the insert share the `BEGIN IMMEDIATE` transaction. (Task 3)
 3. Andy unpairs the owner's peer and later pairs it again with a typed code: the old trust stays revoked and its ships stay held; only a new grant and fresh assertions bring them back. (Task 4)
 4. `pair-trusted` given a missing file, a directory, a non-JSON or 7 MB file, or an assertion with extra keys: one line on stderr, exit 1, nothing written. (Task 3)
-5. An owner name holding a newline, `@rio-grande` or 300 characters: the digest is one safe line that mentions no one, and the stored label still starts `ship of `. (Task 6)
+5. An owner name holding a newline, `@rio-grande` or 300 characters: the digest is one safe line that mentions no one, and the `contact_labels` label still starts `ship of `. (Task 6)
 
 ---
 
@@ -122,7 +122,7 @@ The checks, in this order, all inside one `self.store.transaction()`, each refus
 7. `(peer, ship_id)` isn't in `remote_contacts` (Task 4 adds the one exception).
 8. Fewer than 200 `trust_confirmations` rows for this grant with today's UTC `day`. At the cap, the transaction raises; then, in a second transaction, `INSERT ... ON CONFLICT(grant_id, day) DO UPDATE SET refused=refused+1`; then the 429 is raised to the caller.
 
-On success: insert `remote_contacts` with name `ship of <owner name>: <ship name>`, and a `trust_confirmations` row (the assertion's canonical JSON, the acting ship, now, today's day).
+On success: insert `remote_contacts` with the card's participant name (the label comes from the `contact_labels` view, by ruling), and a `trust_confirmations` row (the assertion's canonical JSON, the acting ship, now, today's day).
 
 - [ ] **Step 1: Write the failing tests.** Fixture `trusted(paired)`: Task 2's fixture plus a live grant, and B's `export-ship` output for `tardis`. One test per spec refusal, each asserting the Problem and that `remote_contacts`, `trust_confirmations` and `owner_trust` row counts are unchanged:
   - `test_no_trust`, `test_an_expired_trust` (store clock past `until`: a new ship is refused, and a ship paired before it expired is still paired and not held), `test_a_trust_whose_owners_code_was_never_typed` (the confirmation deleted after granting), `test_a_held_owner` (a `contact_holds` row for the owner);
@@ -243,6 +243,8 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
 - `connections()` gives each contact `confirmed_by`: `'typing'`, `'owner trust'` or None. A trust contact is confirmed when it has a `trust_confirmations` row, isn't held and its peer is paired. Each code-confirmed contact also gets `owner_trust`: `{'grant_id', 'until', 'live'}` or None. `contact_state` returns `confirmed by owner trust` for a trust contact.
 - `trust_digests(db, now) -> list[dict]`: one notice per grant per UTC day that ended in the last 7 days and had a pairing or a cap refusal. Its id is `trust-digest-<grant_id[:12]>-<YYYY-MM-DD>`. Ruling on N12: a notice is posted once the day has ended, because the watcher refuses a changed text under a used id (agent/superyak_agent/watch.py:368). Its text is `Owner trust, <day>: <n> ship(s) of <owner> on <peer 12> paired by <acting ships>[; <r> refused at the cap of 200]. Full ids: make station-trust-list on the Pi.`, with every name through `safe_line`.
 - (Spec revision 5) `trust_pauses(db) -> list[dict]`, added to `station_notices`: one notice per paused window of a live trust, id `trust-paused-<grant_id[:12]>-<window_seq>`, text exactly `Owner trust for <owner> on <peer 12> paused after <n> pairings. make station-trust-list shows them; if you didn't expect them, unpair that peer as retired; otherwise renew or revoke it in the browser.`, names through `safe_line`.
+- (Ruling, Tardis's review) Every display read of a remote contact's name (contacts(), connections(), room members, message authors, the digest, trust_list) reads `contact_labels.label`; an architecture test fails if display SQL in superyak_peer reads `remote_contacts.name` directly (the allow-list names the writes and the collision check).
+- The pause notice is the alarm (it posts at Odo's next cycle); the daily digest is only the record.
 - `trust_list(db) -> list[dict]` and CLI `station-trust-list --data-dir D`: one line per trust (grant short id, owner, peer 12, until, live or revoked and why), then each of its ships with the full participant id, the acting ship and when.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -250,6 +252,8 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
   - `test_the_digest_comes_once_the_day_ends`: three ships today → no digest; clock past UTC midnight → one notice with `3 ship(s)`, the peer's 12 and the acting ship.
   - `test_the_digest_is_one_safe_line` (Review Focus 5): owner name `'Andy\n@rio-grande ' + 'x' * 300` → no `\n`, no `@rio-grande`, and the label still starts `ship of `.
   - `test_a_pause_posts_once_per_window`: a paused trust lists one `trust-paused-…` notice; after a renewal and a second pause, a second id.
+  - `test_an_assertion_naming_another_station_is_refused` (Tardis's read): B's key hand-signs, over `canonical(record)`, a record whose `station` is peer C, presented with B's card → refused at check 3, nothing written.
+  - `test_display_reads_go_through_contact_labels`: the architecture test above.
   - `test_station_trust_list_names_full_ids`: the CLI lists the ship's full participant id.
 
 - [ ] **Step 2: Run them to see them fail.**
