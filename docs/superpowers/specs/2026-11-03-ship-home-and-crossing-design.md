@@ -1,8 +1,13 @@
 # A ship's own home, and lighthouse crossings between peers
 
-**Status:** revision 4, by Tardis. **Approved:** the same fresh reviewer gave APPROVE WITH CHANGES on revision 3
-([re-check 2](../reviews/2026-11-03-ship-home-and-crossing-recheck2.md)). Its seven changes and four nits are folded
-in here (law section 3), and it said no further round was needed once they were applied as written. This is the station half of "memory follows the ship". Rio Grande's Engram half is
+**Status:** revision 5, by Tardis. **Approved** at revision 4 (d36fee92): the same fresh reviewer gave APPROVE WITH
+CHANGES on revision 3 ([re-check 2](../reviews/2026-11-03-ship-home-and-crossing-recheck2.md)), and its changes were
+folded in.
+- **Revision 5 changes no decision.** It corrects eleven statements that writing the plan
+  (../plans/2026-11-03-ship-home-and-crossing.md) found false against the code, each marked **R5**.
+- It also records the plan's P19: until Rio Grande's store host exists, today's in-process Engram server asks
+  (2.4, R5).
+- The plan's fresh reviewer checks these with the plan. This is the station half of "memory follows the ship". Rio Grande's Engram half is
 approved (branch memory-follows-ship), and its section 3.11 is the interface this spec meets.
 
 **History:**
@@ -104,8 +109,10 @@ The memory client never deletes a key, unlike the dock client (dock.py:67-71). O
 so a held or expired outbox stays on that machine until a renewed key replays it (expired only), or the owner discards
 it.
 - **A revoked outbox** can be discarded, or released by the owner after reading it, never by the ship.
-- **Telling 401s apart:** `ship_for_key` today returns nothing for any bad key. It gains a reason (`expired` from
-  `expires`, `revoked` from `revoked`), and an unknown key answers `revoked`. That's a named change.
+- **Telling 401s apart:** `ship_for_key` today returns nothing for any bad key. It gains a reason: `revoked` from the
+  `revoked` column; `expired` from the expiry column the cluster station spec adds (R5: `ship_keys` has no `expires`
+  today, ships.py:32). An unknown key answers `revoked`. That's a named change. Until expiry exists, no key answers
+  `expired`.
 - **A cluster station knows it's one** by `peer_meta.station_kind = 'cluster'`, set when it's initialized. The public
   route's exception for this route reads that.
 
@@ -127,9 +134,14 @@ ship, which this spec doesn't require.
     never opens it. It's a Unix socket, not a network listener.
   - **In `federate`, the socket runs on its own thread.** A pass is single-threaded and can block for minutes on pull
     rounds. A fault on the socket thread is logged and the thread restarts, and never ends `federate`.
-  - **Three places say federate never listens, and each is amended by name:** the pull spec, section 1;
-    federate.py:5-6; and test_federate.py:112-122, which fails on any `bind`. The test becomes "no network bind, and
-    a Unix socket only under `--crossing-socket`".
+  - **Four places say federate never listens, and each is amended by name** (R5: the fourth was missed):
+    - the pull spec, section 1;
+    - the pull spec, section 10, test 11;
+    - federate.py:5-6;
+    - test_federate.py:112-122, which fails on any `bind`. The test becomes "no network bind, and a Unix socket only
+      under `--crossing-socket`".
+  - **`federation-listen` opens it only under `--crossing-socket` too** (R5, the plan's P9). It isn't automatic on push
+    peers.
   - On the Mac, law section 6 governs listeners while a browser lane runs, so the Mac asks only once that's settled
     (section 6 below).
 - **Cluster route B** carries no crossings.
@@ -149,8 +161,9 @@ ship, which this spec doesn't require.
    - a rule must name the exact ref;
    - selector matching never lets a wildcard or prefix match a `urn:superyak:` ref. That's a code change at
      lighthouse_policy.py:78-83 and the rule selector at lighthouse_daemon.py:785-798.
-2. **Audience map** (`engram:audiences`): it accepts the remote form as a key, in sharing's validation and in
-   `_allowed_audiences` (lighthouse_daemon.py:208-236; also :958 and :988-992).
+2. **Audience map** (`engram:audiences`): it accepts the remote form as a key, read in `_allowed_audiences`
+   (lighthouse_daemon.py:208-236; also :958 and :988-992). Sharing validates no audience-map keys today, so the remote
+   form's validator is new code in sharing.py (R5, the plan's P12).
 3. **The permission ledger (A).** Agent names can't hold `:` (permissions.py:104, 138-139), and an unregistered
    requester is refused (permissions.py:2062-2067).
    - **One reserved ledger agent per home, `remote-stores`,** stands for every remote ref. The home's owner registers
@@ -160,7 +173,11 @@ ship, which this spec doesn't require.
      the one act is an informed one.
    - Every crossing is judged in the ledger as `agent:remote-stores` at `place:outside-home`. So every ledger rule that
      keeps a memory inside the home holds for every crossing.
-   - Until the owner registers it, every crossing is refused (`UNKNOWN_REQUESTER`), so a home fails closed.
+   - Until the owner registers it, every crossing is refused, so a home fails closed. **R5:** the ledger refuses an
+     unregistered requester only under `enforce`. Under `off` the daemon builds no ledger side
+     (lighthouse_daemon.py:856-857), and under `shadow` the legacy path delivers (:640-641, :959). So **the daemon
+     serves a remote frame only under `enforce`** (the plan's P10), and refuses it in `off` and `shadow`. Stage 2
+     therefore needs the publisher home's gate set to `enforce`.
    - Local instance creation refuses the name `remote-stores`.
    - **The ledger sites that take a local name branch on a remote ref:**
      - lighthouse_daemon.py:483-486 (agent and place) uses the reserved agent;
@@ -197,7 +214,7 @@ owner trust and `retired_peers` land, their holds apply through the same check.
 | `receiver_instance` | the receiving store's `instance_id`, which must match the instance id pattern |
 | `receiver_ship` | the receiving ship's participant id on the origin |
 | `publisher_ship` | the asked ship's participant id on this peer |
-| `frame` | the local crossing's own `query` frame (`purpose`, `context`, query text at most 4,096 characters, `k` at most 20) or `read` frame (`purpose`, `context`, `turnId`, at most 5 ids), validated by lighthouse_protocol. The destination **overwrites** its `receiver` with the 2.2 ref, and its `publisher` with the daemon name that `publisher_ship` maps to (below) |
+| `frame` | the local crossing's own `recall` frame (R5: the kind is `recall`, not `query`) (`purpose`, `context`, query text at most 4,096 characters **and at most 12 KiB as UTF-8**, so the request fits 16 KiB, R5; `k` at most 20) or `read` frame (`purpose`, `context`, `turnId`, at most 5 ids), validated by lighthouse_protocol. The asking side refuses an oversize request locally, before any dial (the plan's P17). The destination **overwrites** its `receiver` with the 2.2 ref, and its `publisher` with the daemon name that `publisher_ship` maps to (below) |
 | `deadline_ms` | an `int` from 100 to 10,000: the time remaining in the receiver's shared deadline |
 | `nonce` | 32 lowercase hex characters |
 | `at` | an `int` Unix time |
@@ -247,14 +264,26 @@ was sent, and the peer's reconciliation reports it as unsent.
 - `frame`: the daemon's `recall_result` or `read_result`, with its `disclosureId`;
 - `signature`.
 
-It's at most 128 KiB, with delivered text at most 32 KiB, as locally. The asking peer verifies the answer before
-handing on the frame.
+It's at most 128 KiB, with delivered text at most 32 KiB.
+- **R5, who enforces it:** locally the 32 KiB is the receiver's limit, and the daemon caps nothing, so a five-item read
+  could pass 128 KiB. Here **the answering peer** enforces both caps: a larger daemon answer is a 502 with no
+  `crossings` row (the plan's P7).
+- The asking peer verifies the answer before handing on the frame.
 
 ### 2.4 The receiver's side
 
-- **Which process asks:** only the receiving home's store host, during a live `recall` with a `lighthouse_context`.
-  Never inside an open `graph.db` transaction (3.4). An away recall gets no crossing, and says so in
+- **Which process asks:** the receiving home's store host, during a live `recall` with a `lighthouse_context`. Never
+  inside an open `graph.db` transaction (3.4). An away recall gets no crossing, and says so in
   `degraded: ["neighbors"]`.
+- **Until the host exists (R5, the plan's P19),** today's in-process Engram server asks, from `recall`. Rio Grande's
+  host is a week or more away, and he agreed this order (all hands, 4164449a). His two conditions:
+  - **All asking goes through one function** with the host's call shape, `lighthouse_client.ask_crossing(receiver_instance,
+    receiver_ship, publisher, frame, deadline_ms)`. When the host lands it swaps the caller, not the protocol, and
+    nothing in the socket, the route or the daemon knows which process asked.
+  - **The interim's limit, named:** two sessions of one ship asking at once each write receipts and
+    `remote-deliveries.db` rows through their own server. That's today's receiver behaviour: a receipt is one insert
+    that the server commits by itself (storage.py:1802-1815). It ends with the host. Both sessions read the same
+    `remote-deliveries.db`, so each one's guard refuses text the other received.
 - **The local hop** goes over `<peer data dir>/crossing.sock`, mode 0600.
   - One host serves many ships, so the request names its `receiver_instance` and `receiver_ship`. The peer checks
     both against the home's own host configuration, so it's a store this home hosts, for that ship. A store not
@@ -264,8 +293,14 @@ handing on the frame.
 - **Receiver settings:** `[[remote_publishers]]`, a format change to lighthouse_receiver_config.py:26-42, gives
   `peer_id`, the asked ship's participant id and `context`. At most eight publishers in total, local and remote.
 - **The receiver's own checks** are unchanged: its policy grants `recall`, `read` and `inject_context`
-  (neighbors.py:121, 139). The publisher's ref there is `urn:superyak:<peer_id>:ship:<participant id>` (neighbors.py:80,
-  88, 117 take a `urn:engram:` prefix today, a named change). A failed receipt write suppresses content.
+  (neighbors.py:121, 139).
+  - The publisher's ref there is `urn:superyak:<peer_id>:ship:<participant id>`. neighbors.py:80, :88 and :125 take a
+    `urn:engram:` prefix today, which is a named change (R5: :117 isn't one of them).
+  - A receiver policy that weights a remote publisher is invalid as a whole today (lighthouse_validation.py:56-58),
+    so remote publishers carry no weight, and weights stay local (R5, the plan's P14).
+  - A failed receipt write suppresses content.
+  - **The read's `disclosureId`** is dropped by `validate_read` today. It's kept and recorded in the receipt as
+    `engram:readDisclosures`, so the records can link (R5, the plan's P15).
 - **No silent fallback:** an unreachable or refusing remote publisher shows in `neighbors` and `degraded` by name.
 
 ### 2.5 What "inject" means across peers, and what's enforced (B)
@@ -284,8 +319,8 @@ sides, and stage 2 grants it. Two things are forbidden across peers, and each is
      - **Sentences** split after `.`, `!` or `?` when followed by whitespace, or at a newline.
      - Rows are kept 90 days. A failed record suppresses the delivery, as a failed receipt does.
    - **The guard** refuses text whose digest, or any of whose sentence digests, matches a recorded remote delivery.
-     - It runs in **every** gate mode, and runs **before** the existing guard's gate-off early return
-       (server.py:2104-2109), which reads only local deliveries.
+     - It runs in **every** gate mode, **before** the existing guard's gate-off return (server.py:2091-2092) and its
+       return for a missing `permission-uses.db` (:2104-2105). R5: revision 4 cited only :2104-2109.
      - It covers every tool that stores text at the home: `remember`, `jot` (both scopes), `task_update`,
        `dream_capture`, `clipboard_pin` and `add_anchor`.
    - **What it doesn't catch, said plainly:**
