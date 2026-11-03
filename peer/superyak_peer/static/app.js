@@ -2845,6 +2845,9 @@ async function submitTrust(form) {
       if (!state.trust) setFlash(error.message, true);
     }
     await refresh();
+    if (state.me && state.trust === open && !document.querySelector(`#trust-${open.mode}-form`)) {
+      state.trust = null; setFlash(open.error, true); render();  // the trust changed under the form: say it in the flash
+    }
   }
 }
 

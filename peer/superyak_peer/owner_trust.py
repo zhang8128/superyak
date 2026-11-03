@@ -242,15 +242,15 @@ def contact_line(db, contact_id, limit):
 def trust_state(db, grant_id, now):
     """One grant as trust_list, connections() and the renewal page say it: its latest `until`, its first revocation
     (time, reason, person) or None, its current window (trust_window) and its state: 'revoked', else 'expired' once
-    `until` is past, else 'paused' when the window is full (a window with no count, which only a damaged file holds,
-    reads as paused: fail closed), else 'live'."""
+    `until` is past, else 'paused' when the window is full, else 'live'. Only a damaged file holds a NULL `until` or a
+    window with no count; each fails closed, as expired and as paused."""
     until = db.execute("SELECT MAX(until) FROM owner_trust WHERE grant_id=? AND event IN ('grant','renew')",
                        (grant_id,)).fetchone()[0]
     revoke = db.execute("SELECT owner_trust.at, owner_trust.reason, users.username FROM owner_trust LEFT JOIN users ON "
                         "users.id=owner_trust.by_id WHERE grant_id=? AND event='revoke' ORDER BY seq LIMIT 1",
                         (grant_id,)).fetchone()
     window_seq, expect, paired = trust_window(db, grant_id)
-    state = ('revoked' if revoke else 'expired' if until <= now
+    state = ('revoked' if revoke else 'expired' if until is None or until <= now
              else 'paused' if expect is None or paired >= expect else 'live')
     return {'until': until, 'revoke': revoke, 'window_seq': window_seq, 'expect': expect, 'paired': paired, 'state': state}
 

@@ -275,6 +275,21 @@ def test_connections_say_a_paused_trust_is_paused(trust_station):
     assert (trust()['live'], trust()['state']) == (False, 'revoked')
 
 
+def test_a_trust_with_no_until_reads_as_expired(trust_station):
+    """Only a damaged file holds a grant with a NULL `until`. It fails closed, as a window with no count does: the trust
+    reads as expired in connections(), the renewal page and the trust list, and nothing raises."""
+    from superyak_peer.owner_trust import trust_list
+    st = trust_station
+    with st.store.transaction() as db:
+        db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) "
+                   "VALUES ('damaged','grant',?,?,NULL,?,?,5)", (st.owner['peer_id'], st.owner['user_id'], st.andy['id'], NOW))
+    trust = next(c for c in st.fed.connections(st.andy['id']) if c['id'] == st.owner['id'])['owner_trust']
+    assert (trust['grant_id'], trust['state'], trust['live']) == ('damaged', 'expired', False)
+    assert st.andy_client.get('/api/owner-trust/damaged').json()['state'] == 'expired'
+    with st.store.transaction() as db:
+        assert [t['state'] for t in trust_list(db, NOW)] == ['expired']
+
+
 def test_a_trust_ship_and_a_retired_peer_say_what_holds_them(trust_station):
     """Task 6's review: a ship held because its owner's trust was revoked read "held until its own code is typed",
     which leaves out the trust. Each contact says whether a trust made it and whether its peer was retired, and the
@@ -464,6 +479,24 @@ def test_renewing_lists_the_window_and_refuses_a_page_gone_stale(trust_browser):
     expect(flash(page)).to_have_text(f'Owner trust renewed: {grant_line(st, 90)}')
     expect(owner.get_by_text('Live: 0 of 5 expected ships paired in this window.', exact=True)).to_be_visible()
     assert [(r['event'], r['expect']) for r in trust_rows(st)] == [('grant', 2), ('renew', 5)]
+
+
+def test_a_refusal_that_ends_the_form_says_so_in_the_flash(trust_browser):
+    """A trust revoked elsewhere while its renewal is open: the renewal is refused, the page reads the trust again and
+    offers a new grant instead of the form, and the refusal is said in the flash, not lost with the form."""
+    st = trust_browser
+    done = grant(st)
+    page = connections_page(st)
+    owner = page.locator(f"[data-contact=\"{st.owner['id']}\"]")
+    owner.get_by_role('button', name='Renew', exact=True).click()
+    form = owner.locator('#trust-renew-form')
+    expect(form.get_by_text('No ships paired in this window yet.', exact=True)).to_be_visible()
+    st.store.revoke_owner_trust(st.andy['id'], done['grant_id'])
+    form.get_by_label('Password').fill(PASSWORD)
+    form.get_by_role('button', name='Renew', exact=True).click()
+    expect(flash(page)).to_have_text('That owner trust was revoked')
+    expect(owner.get_by_role('button', name='Trust ships owned by Andy B')).to_be_visible()
+    assert [r['event'] for r in trust_rows(st)] == ['grant', 'revoke']
 
 
 def test_revoking_asks_first_and_holds_the_ships(trust_browser):

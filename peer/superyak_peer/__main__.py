@@ -441,8 +441,10 @@ def pair_trusted_command(data_dir, card_path, assertion_path, username):
 
 
 HELD_RETIRED = 'held: its peer was retired; it comes back only as a new identity'  # pair() refuses it (spec item 6, S11)
+# A trust ship is held only once its trust is revoked: by a revoke, or by a hold of its owner (an unpair, a restore),
+# which settle_owner_trust turns into a revocation in the same transaction (spec item 6, S8, S10).
 HELD_TRUST_SHIP = ("held: its owner's trust was revoked; a new trust and a fresh export-ship bring it back, "
-                   'or its own code')  # spec item 6, S8; every hold of a trust ship's owner revokes its trust (S10)
+                   'or its own code')
 
 
 def contact_state(contact):
