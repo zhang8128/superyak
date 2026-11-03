@@ -163,3 +163,26 @@ def test_pruning_failure_rolls_back_all_deletions_and_still_emits_echo(capture, 
     assert {row["id"] for row in rows(capture)} == {"auto-0", "auto-1"}
     assert capture.store.conn.execute("SELECT count(*) FROM episode_vectors").fetchone()[0] == 2
     assert capture.store.conn.execute("SELECT count(*) FROM residue").fetchone()[0] == 1
+
+
+def test_an_embedder_that_does_not_answer_skips_the_recall_and_says_why(capture, monkeypatch, capsys):
+    """The nudge asks the shared embedder with NUDGE_EMBED_SECONDS, and when it doesn't answer the hook writes nothing,
+    says why on stderr (the error's own words, since the same error covers busy, down and a model mismatch), and
+    returns well inside the hook's 10 s. Mutation: the give-up removed, or the timeout not passed."""
+    import embeddings
+    asked = {}
+
+    class Silent:
+        def embed(self, texts, **kwargs):
+            raise embeddings.EmbedderUnavailableError("the service took longer than 4 s")
+
+    def provider(**kwargs):
+        asked.update(kwargs)
+        return Silent()
+
+    monkeypatch.setattr(embeddings, "create_embedding_provider", provider)
+    capture.hook.nudge()
+    output = capsys.readouterr()
+    assert asked == {"response_timeout": capture.hook.NUDGE_EMBED_SECONDS} and capture.hook.NUDGE_EMBED_SECONDS < 10
+    assert rows(capture) == [] and output.out == ""
+    assert "didn't answer within 4 s (the service took longer than 4 s)" in output.err
