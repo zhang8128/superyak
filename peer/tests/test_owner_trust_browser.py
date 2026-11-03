@@ -19,6 +19,7 @@ from superyak_peer.app import create_app
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
 from superyak_peer.identity import make_ship_assertion, pairing_code
+from superyak_peer.owner_trust import grant_line as stored_line
 from test_presence import docked
 
 NOW = 1_800_000_000
@@ -44,6 +45,15 @@ def build(tmp_path, *, clock=None, origins=(ORIGIN,), name='Andy B'):
     owner = app.state.federation.pair(andy['id'], card, code=pairing_code(card))
     return SimpleNamespace(app=app, store=store, fed=app.state.federation, andy=andy, sam=sam, ship=ship, key=key,
                            b_fed=b_fed, b_person=b_person, owner=owner)
+
+
+HELD_SHIP = ("held: its owner's trust ended; once the owner is confirmed again, a new trust and a fresh export-ship "
+             'bring it back, or its own code')
+
+
+def line_of(st, days=90):
+    """The grant line the page would show now for Andy B, from the station (the preview route's store call)."""
+    return st.store.owner_trust_line(st.andy['id'], st.owner['id'], days)
 
 
 def now_of(st):
@@ -111,18 +121,19 @@ def test_a_ship_key_cannot_grant_renew_revoke_or_retire(trust_station):
     done = grant(st)
     pair_ship(st, 'tardis')
     window = st.andy_client.get(f"/api/owner-trust/{done['grant_id']}").json()
-    seen = [window['window_seq'], window['paired']]
+    seen, shown = [window['window_seq'], window['paired']], line_of(st)['text']
     bare = TestClient(st.app, base_url=ORIGIN, headers={'origin': ORIGIN, 'authorization': f'Bearer {st.key}'})
     riding = TestClient(st.app, base_url=ORIGIN, cookies={'superyak_session': st.andy_client.cookies.get('superyak_session')},
                         headers={'origin': ORIGIN, 'authorization': f'Bearer {st.key}',
                                  'x-csrf-token': st.andy_client.headers['x-csrf-token']})
     before, attempts = written(st), table(st, 'SELECT * FROM login_attempts')
     for client in (bare, riding):
+        assert answer(client.get(f"/api/connections/{st.owner['id']}/trust?days=90")) == FORBIDDEN
         assert answer(client.post(f"/api/connections/{st.owner['id']}/trust",
-                                  json={'days': 90, 'expect': 5, 'password': PASSWORD})) == FORBIDDEN
+                                  json={'days': 90, 'expect': 5, 'password': PASSWORD, 'shown': shown})) == FORBIDDEN
         assert answer(client.get(f"/api/owner-trust/{done['grant_id']}")) == FORBIDDEN
-        assert answer(client.post(f"/api/owner-trust/{done['grant_id']}/renew",
-                                  json={'days': 90, 'expect': 5, 'seen': seen, 'password': PASSWORD})) == FORBIDDEN
+        assert answer(client.post(f"/api/owner-trust/{done['grant_id']}/renew", json={
+            'days': 90, 'expect': 5, 'seen': seen, 'password': PASSWORD, 'shown': shown})) == FORBIDDEN
         assert answer(client.post(f"/api/owner-trust/{done['grant_id']}/revoke", json={})) == FORBIDDEN
         assert answer(client.request('DELETE', f"/api/connections/{st.owner['id']}", json={'retire': True})) == FORBIDDEN
     assert written(st) == before and table(st, 'SELECT * FROM login_attempts') == attempts
@@ -153,8 +164,12 @@ def test_a_wrong_password_is_counted_as_a_sign_in(tmp_path, host):
             clock[0] += 7
         return mine, theirs
 
+    shown = andy.get(f"/api/connections/{trusts.owner['id']}/trust?days=90").json()['text']  # a read: nothing counted
+    assert counters(trusts) == counters(logins)
+
     def granted(password):
-        return andy.post(f"/api/connections/{trusts.owner['id']}/trust", json={'days': 90, 'expect': 5, 'password': password})
+        return andy.post(f"/api/connections/{trusts.owner['id']}/trust",
+                         json={'days': 90, 'expect': 5, 'password': password, 'shown': shown})
     for word in ('wrong', 'wrong', 'right'):
         mine, theirs = step(granted, PASSWORD if word == 'right' else 'wrong-wrong-wrong')
         if word == 'wrong':
@@ -167,7 +182,7 @@ def test_a_wrong_password_is_counted_as_a_sign_in(tmp_path, host):
 
     def renewed(password):
         return andy.post(f'/api/owner-trust/{grant_id}/renew', json={
-            'days': 90, 'expect': 5, 'seen': [window['window_seq'], window['paired']], 'password': password})
+            'days': 90, 'expect': 5, 'seen': [window['window_seq'], window['paired']], 'password': password, 'shown': shown})
     mine, theirs = step(renewed, 'wrong-wrong-wrong')
     assert answer(mine) == (401, {'error': 'Invalid password'}) and theirs.status_code == 401
     assert counters(trusts) == counters(logins)
@@ -177,7 +192,13 @@ def test_a_wrong_password_is_counted_as_a_sign_in(tmp_path, host):
 def test_the_routes_grant_show_renew_and_revoke(trust_station):
     st = trust_station
     owner, andy = st.owner, st.andy_client
-    made = andy.post(f"/api/connections/{owner['id']}/trust", json={'days': 30, 'expect': 2, 'password': PASSWORD})
+    line = andy.get(f"/api/connections/{owner['id']}/trust?days=30").json()
+    assert line == {'before': 'ships owned by ', 'name': 'Andy B',
+                    'after': f" on {owner['peer_id'][:12]} may be paired by this station's ships, until 2027-02-14",
+                    'text': f"ships owned by Andy B on {owner['peer_id'][:12]} may be paired by this station's ships, "
+                            'until 2027-02-14', 'until': NOW + 30 * 86400}
+    made = andy.post(f"/api/connections/{owner['id']}/trust",
+                     json={'days': 30, 'expect': 2, 'password': PASSWORD, 'shown': line['text']})
     assert made.status_code == 201, made.text
     done = made.json()
     assert done == {'grant_id': done['grant_id'], 'until': NOW + 30 * 86400,
@@ -192,18 +213,19 @@ def test_the_routes_grant_show_renew_and_revoke(trust_station):
                               'confirmed': NOW, 'held': False}]
     seen = [view['window_seq'], view['paired']]
     pair_ship(st, 'defiant')  # the window fills after the page was read: the renewal refuses, and writes nothing
+    shown = line_of(st)['text']
     stale = andy.post(f"/api/owner-trust/{done['grant_id']}/renew",
-                      json={'days': 90, 'expect': 5, 'seen': seen, 'password': PASSWORD})
+                      json={'days': 90, 'expect': 5, 'seen': seen, 'password': PASSWORD, 'shown': shown})
     assert answer(stale) == (409, {'error': 'the trust paired more ships since you looked; read the page again'})
     view = andy.get(f"/api/owner-trust/{done['grant_id']}").json()
     assert (view['state'], view['paired'], [s['label'] for s in view['ships']]) == (
         'paused', 2, ['ship of Andy B: tardis', 'ship of Andy B: defiant'])
     for bad in ('1,2', [1], [1, 2, 3], [True, 2], [1.0, 2], None):  # `seen` is the two whole numbers the page showed
         refused = andy.post(f"/api/owner-trust/{done['grant_id']}/renew",
-                            json={'days': 90, 'expect': 5, 'seen': bad, 'password': PASSWORD})
+                            json={'days': 90, 'expect': 5, 'seen': bad, 'password': PASSWORD, 'shown': shown})
         assert refused.status_code == 400, bad
-    renewed = andy.post(f"/api/owner-trust/{done['grant_id']}/renew",
-                        json={'days': 90, 'expect': 5, 'seen': [view['window_seq'], view['paired']], 'password': PASSWORD})
+    renewed = andy.post(f"/api/owner-trust/{done['grant_id']}/renew", json={
+        'days': 90, 'expect': 5, 'seen': [view['window_seq'], view['paired']], 'password': PASSWORD, 'shown': shown})
     assert renewed.status_code == 200, renewed.text
     assert renewed.json()['until'] == NOW + 90 * 86400
     assert andy.get(f"/api/owner-trust/{done['grant_id']}").json()['paired'] == 0  # a new window
@@ -213,15 +235,54 @@ def test_the_routes_grant_show_renew_and_revoke(trust_station):
     assert trust_rows(st)[-1]['by_id'] == st.andy['id']
 
 
+def test_a_grant_line_gone_stale_is_refused_before_the_password(trust_station):
+    """Task 7's review: the line the admin reads is the line stored. The page sends the line it showed (`shown`); a
+    grant or renewal whose line now reads otherwise (a new UTC day since it was read, or the owner renamed) is refused
+    409 before the password is counted, and writes nothing. A request with no `shown` text is 400."""
+    st = trust_station
+    path = f"/api/connections/{st.owner['id']}/trust"
+    read = line_of(st)['text']
+
+    def next_day():  # a new UTC day: the same 90 days now end a day later. Andy signs in again (sessions last a day).
+        st.clock[0] += 86400
+        st.andy_client = person(st.app, 'andy', PASSWORD)
+        return written(st), counters(st)
+    before, attempts = next_day()
+    stale = st.andy_client.post(path, json={'days': 90, 'expect': 5, 'password': PASSWORD, 'shown': read})
+    assert answer(stale) == (409, {'error': 'the grant reads differently now; read it again'})
+    for bad in ({}, {'shown': None}, {'shown': 5}):
+        refused = st.andy_client.post(path, json={'days': 90, 'expect': 5, 'password': PASSWORD, **bad})
+        assert answer(refused) == (400, {'error': 'shown is the grant line the page showed'}), bad
+    assert written(st) == before and counters(st) == attempts
+    made = st.andy_client.post(path, json={'days': 90, 'expect': 5, 'password': PASSWORD, 'shown': line_of(st)['text']})
+    assert made.status_code == 201 and made.json()['text'] == line_of(st)['text']
+    grant_id = made.json()['grant_id']
+    read = line_of(st)['text']
+    window = st.andy_client.get(f'/api/owner-trust/{grant_id}').json()
+    before, attempts = next_day()
+    stale = st.andy_client.post(f'/api/owner-trust/{grant_id}/renew', json={
+        'days': 90, 'expect': 5, 'seen': [window['window_seq'], window['paired']], 'password': PASSWORD, 'shown': read})
+    assert answer(stale) == (409, {'error': 'the grant reads differently now; read it again'})
+    assert written(st) == before and counters(st) == attempts
+    renewed = st.andy_client.post(f'/api/owner-trust/{grant_id}/renew', json={
+        'days': 90, 'expect': 5, 'seen': [window['window_seq'], window['paired']], 'password': PASSWORD,
+        'shown': line_of(st)['text']})
+    assert renewed.status_code == 200, renewed.text
+
+
 def test_only_an_admin_with_csrf_reaches_the_routes(trust_station):
     st = trust_station
     done = grant(st)
     before = written(st)
     view = st.andy_client.get(f"/api/owner-trust/{done['grant_id']}").json()
-    calls = [('POST', f"/api/connections/{st.owner['id']}/trust", {'days': 90, 'expect': 5, 'password': 'long-password-sam'}),
+    shown = line_of(st)['text']
+    calls = [('GET', f"/api/connections/{st.owner['id']}/trust?days=90", None),
+             ('POST', f"/api/connections/{st.owner['id']}/trust",
+              {'days': 90, 'expect': 5, 'password': 'long-password-sam', 'shown': shown}),
              ('GET', f"/api/owner-trust/{done['grant_id']}", None),
              ('POST', f"/api/owner-trust/{done['grant_id']}/renew",
-              {'days': 90, 'expect': 5, 'seen': [view['window_seq'], view['paired']], 'password': 'long-password-sam'}),
+              {'days': 90, 'expect': 5, 'seen': [view['window_seq'], view['paired']], 'password': 'long-password-sam',
+               'shown': shown}),
              ('POST', f"/api/owner-trust/{done['grant_id']}/revoke", {}),
              ('DELETE', f"/api/connections/{st.owner['id']}", {'retire': True})]
     for method, path, payload in calls:
@@ -263,12 +324,13 @@ def test_connections_say_a_paused_trust_is_paused(trust_station):
 
     def trust():
         return next(c for c in st.fed.connections(st.andy['id']) if c['id'] == st.owner['id'])['owner_trust']
-    window = trust()['window_seq']
+    window, line = trust()["window_seq"], stored_line('Andy B', st.owner['peer_id'], done['until'])
+    assert line['text'] == done['text']  # the trust's own line, as its grant stored it
     assert trust() == {'grant_id': done['grant_id'], 'until': done['until'], 'live': True, 'state': 'live',
-                       'window_seq': window, 'expect': 1, 'paired': 0}
+                       'window_seq': window, 'expect': 1, 'paired': 0, 'line': line}
     pair_ship(st, 'tardis')
     assert trust() == {'grant_id': done['grant_id'], 'until': done['until'], 'live': False, 'state': 'paused',
-                       'window_seq': window, 'expect': 1, 'paired': 1}
+                       'window_seq': window, 'expect': 1, 'paired': 1, 'line': line}
     st.clock[0] = done['until']
     assert (trust()['live'], trust()['state']) == (False, 'expired')
     st.store.revoke_owner_trust(st.andy['id'], done['grant_id'])
@@ -284,7 +346,7 @@ def test_a_trust_with_no_until_reads_as_expired(trust_station):
         db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) "
                    "VALUES ('damaged','grant',?,?,NULL,?,?,5)", (st.owner['peer_id'], st.owner['user_id'], st.andy['id'], NOW))
     trust = next(c for c in st.fed.connections(st.andy['id']) if c['id'] == st.owner['id'])['owner_trust']
-    assert (trust['grant_id'], trust['state'], trust['live']) == ('damaged', 'expired', False)
+    assert (trust['grant_id'], trust['state'], trust['live'], trust['line']) == ('damaged', 'expired', False, None)
     assert st.andy_client.get('/api/owner-trust/damaged').json()['state'] == 'expired'
     with st.store.transaction() as db:
         assert [t['state'] for t in trust_list(db, NOW)] == ['expired']
@@ -305,8 +367,7 @@ def test_a_trust_ship_and_a_retired_peer_say_what_holds_them(trust_station):
     assert (ship['trust_ship'], ship['retired'], owner['trust_ship'], owner['retired']) == (True, False, False, False)
     assert contact_state(ship) == 'confirmed by owner trust'
     st.store.revoke_owner_trust(st.andy['id'], table(st, 'SELECT grant_id FROM owner_trust')[0]['grant_id'])
-    assert contact_state(listed()[tardis['id']]) == ("held: its owner's trust was revoked; a new trust and a fresh "
-                                                     'export-ship bring it back, or its own code')
+    assert contact_state(listed()[tardis['id']]) == HELD_SHIP
     assert contact_state(listed()[st.owner['id']]) == 'confirmed by typing'
     st.fed.unpair(st.andy['id'], st.owner['id'])
     assert contact_state(listed()[st.owner['id']]) == 'held until its own code is typed'
@@ -368,8 +429,12 @@ def trust_browser(tmp_path, chromium, request):
     thread.join(timeout=10)
 
 
-def connections_page(st):
-    page = st.browser.new_context(viewport={'width': 1440, 'height': 960}).new_page()
+def connections_page(st, browser_time=None):
+    """Andy signed in, on Connections; `browser_time` sets the browser's own clock, away from the station's."""
+    context = st.browser.new_context(viewport={'width': 1440, 'height': 960})
+    if browser_time is not None:
+        context.clock.set_system_time(browser_time)
+    page = context.new_page()
     page.goto(st.url + '/')
     page.get_by_label('Username', exact=True).fill('andy')
     page.get_by_label('Password', exact=True).fill(PASSWORD)
@@ -399,7 +464,7 @@ def test_granting_in_the_browser(trust_browser):
     st = trust_browser
     page = connections_page(st)
     sent = []
-    page.on('request', lambda request: sent.append(request.url) if '/trust' in request.url else None)
+    page.on('request', lambda request: sent.append(request.url) if request.method == 'POST' and '/trust' in request.url else None)
     owner = page.locator(f"[data-contact=\"{st.owner['id']}\"]")
     owner.get_by_role('button', name='Trust ships owned by Andy B').click()
     expect(owner.get_by_text(grant_line(st, 90), exact=True)).to_be_visible()
@@ -499,6 +564,81 @@ def test_a_refusal_that_ends_the_form_says_so_in_the_flash(trust_browser):
     assert [r['event'] for r in trust_rows(st)] == ['grant', 'revoke']
 
 
+SPOOF = 'Andy\u202eB@home\u2066x'  # a right-to-left override, an '@' and a left-to-right isolate
+
+
+@pytest.mark.parametrize('trust_browser', [{'name': SPOOF}], indirect=True)
+def test_the_line_read_before_the_password_is_the_stored_text(trust_browser):
+    """Task 7's review: the grant line the admin reads before typing the password is the text the station stores. Its
+    name went through safe_line on the station, so no bidi control survives and the '@' reads '(at)', and it sits in
+    <bdi>, so a right-to-left name can't reorder the peer or the date. Its date is the station's, not the browser's:
+    this browser's clock says 2031."""
+    st = trust_browser
+    page = connections_page(st, browser_time=datetime(2031, 6, 1, tzinfo=timezone.utc))
+    assert page.evaluate('new Date().getUTCFullYear()') == 2031
+    owner = page.locator(f"[data-contact=\"{st.owner['id']}\"]")
+    owner.get_by_role('button', name='Trust ships owned by').click()
+    preview = owner.locator('.trust-preview')
+    expect(preview.locator('bdi')).to_have_text('Andy B(at)home x')
+    owner.get_by_label('Expect up to').fill('3')
+    owner.get_by_label('Password').fill(PASSWORD)
+    shown = preview.text_content()
+    owner.get_by_role('button', name='Grant', exact=True).click()
+    expect(owner.get_by_text('Live: 0 of 3 expected ships paired in this window.', exact=True)).to_be_visible()
+    stored = stored_line(SPOOF, st.owner['peer_id'], trust_rows(st)[0]['until'])['text']
+    assert shown == stored and not {'\u202e', '\u2066', '@'} & set(shown) and '2031' not in shown
+    assert flash(page).text_content() == f'Owner trust granted: {stored}'
+    assert page.locator(f"#trust-line-{st.owner['id']}").text_content() == stored  # the live trust's line, too
+    assert page.locator(f"#trust-line-{st.owner['id']} bdi").text_content() == 'Andy B(at)home x'
+    # Elsewhere in the card the name is shown raw, as every contact's is, but isolated, so its override can't run on
+    # into the pairing code after it (the heading, the contact's line, the disconnect sentence, the trust button).
+    card = page.locator('.card .card', has=owner)
+    for place in ('h3', f"[data-contact=\"{st.owner['id']}\"] > span:first-child", 'p.meta:has-text("This disconnects")'):
+        assert card.locator(f'{place} bdi').first.text_content() == SPOOF, place
+    owner.get_by_role('button', name='Revoke', exact=True).click()
+    assert owner.locator('.trust-question bdi').text_content() == SPOOF
+
+
+def test_retiring_a_peer_disconnected_earlier(trust_browser):
+    """Task 7's review: a peer disconnected earlier, and not retired, can still be unpaired as retired in the browser,
+    the only place a peer is retired."""
+    st = trust_browser
+    st.fed.unpair(st.andy['id'], st.owner['id'])
+    page = connections_page(st)
+    expect(page.get_by_text('Disconnected peer', exact=True)).to_be_visible()
+    expect(page.get_by_role('button', name='Disconnect peer and 1 contact')).to_have_count(0)
+    owner = page.locator(f"[data-contact=\"{st.owner['id']}\"]")
+    expect(owner).to_contain_text('Held until its own code is typed')
+    page.get_by_role('button', name='Unpair as retired (this machine may be compromised)').click()
+    page.get_by_role('button', name='Yes, unpair as retired').click()
+    expect(flash(page)).to_have_text('The peer is retired, and all of its contacts are held.')
+    expect(page.get_by_text('Retired peer', exact=True)).to_be_visible()
+    expect(owner).to_contain_text('Held: its peer was retired; it comes back only as a new identity')
+    expect(page.get_by_role('button', name='Unpair as retired (this machine may be compromised)')).to_have_count(0)
+    assert [r['peer_id'] for r in table(st, 'SELECT * FROM retired_peers')] == [st.owner['peer_id']]
+
+
+def test_an_expired_trust_says_so_and_renews(trust_browser):
+    """Task 7's review: an expired trust shows its line and "Expired: …", and offers Renew and Revoke; renewing it from
+    the browser opens a new window."""
+    st = trust_browser
+    done = grant(st, days=1)
+    st.store.clock = lambda: time.time() + 2 * 86400  # the station two days on: the one-day trust has ended
+    page = connections_page(st)
+    owner = page.locator(f"[data-contact=\"{st.owner['id']}\"]")
+    expect(owner.get_by_text("Expired: it pairs no new ship. The ships it paired stay paired until it's revoked.",
+                             exact=True)).to_be_visible()
+    expect(owner.get_by_text(done['text'], exact=True)).to_be_visible()
+    expect(owner.get_by_role('button', name='Revoke', exact=True)).to_be_visible()
+    owner.get_by_role('button', name='Renew', exact=True).click()
+    form = owner.locator('#trust-renew-form')
+    expect(form.get_by_label('Expect up to')).to_have_value('5')
+    form.get_by_label('Password').fill(PASSWORD)
+    form.get_by_role('button', name='Renew', exact=True).click()
+    expect(owner.get_by_text('Live: 0 of 5 expected ships paired in this window.', exact=True)).to_be_visible()
+    assert [r['event'] for r in trust_rows(st)] == ['grant', 'renew']
+
+
 def test_revoking_asks_first_and_holds_the_ships(trust_browser):
     st = trust_browser
     grant(st)
@@ -508,12 +648,11 @@ def test_revoking_asks_first_and_holds_the_ships(trust_browser):
     ship = page.locator(f"[data-contact=\"{tardis['id']}\"]")
     expect(ship).to_have_text('ship of Andy B: tardis, confirmed by owner trust')
     owner.get_by_role('button', name='Revoke', exact=True).click()
-    expect(owner.get_by_text('Every ship it paired is held at once', exact=False)).to_be_visible()
+    expect(owner.get_by_text("Every ship paired under this owner's trust is held at once", exact=False)).to_be_visible()
     assert [r['event'] for r in trust_rows(st)] == ['grant']
     owner.get_by_role('button', name='Yes, revoke').click()
     expect(flash(page)).to_have_text('Owner trust revoked; 1 ship held.')
-    expect(ship).to_have_text("ship of Andy B: tardis, held: its owner's trust was revoked; a new trust and a fresh "
-                              'export-ship bring it back, or its own code')
+    expect(ship).to_have_text(f'ship of Andy B: tardis, {HELD_SHIP}')
     expect(owner.get_by_role('button', name='Trust ships owned by Andy B')).to_be_visible()
     expect(owner.get_by_role('button', name='Revoke', exact=True)).to_have_count(0)
     assert [(r['event'], r['by_id']) for r in trust_rows(st)] == [('grant', st.andy['id']), ('revoke', st.andy['id'])]

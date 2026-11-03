@@ -141,13 +141,23 @@ def install(app):
     # (current_user), so a ship key gets 403 and never acts. The grant's and the renewal's password run in a sign-in
     # lane and count as /api/login counts a sign-in from the same client, as the imprint confirm's does (app.py).
     async def with_password(request, call, target, **more):
-        """`call(person, target, days=, expect=, password=, ...)` in the lane; `more` names a body field to pass on."""
+        """`call(person, target, days=, expect=, password=, shown=, ...)` in the lane; `more` names a body field to pass
+        on. `shown` is the grant line the page showed the admin, which the store refuses unless it is what it stores."""
         user = await run_in_threadpool(current_user, request)  # a person with CSRF; a ship key gets 403
         data = await body(request)
+        if not isinstance(data.get('shown'), str):
+            raise Problem(400, 'shown is the grant line the page showed')
         lane, public, device = await app.state.sign_in_lane(request, user['username'])
         return await lane.run(call, user['id'], target, days=data.get('days'), expect=data.get('expect'),
                               password=data.get('password'), source=request.client.host if request.client else 'unknown',
-                              public=public, device=device, **{name: read(data) for name, read in more.items()})
+                              public=public, device=device, shown=data['shown'],
+                              **{name: read(data) for name, read in more.items()})
+
+    @router.get('/api/connections/{contact_id}/trust')
+    def trust_line(contact_id: str, request: Request, days: int = 90):
+        """The grant line for this owner contact and `days`, by this station's clock: the page shows it, for a grant
+        or a renewal, before it asks for the password, and sends it back as `shown`."""
+        return fed.store.owner_trust_line(actor(request), contact_id, days)
 
     @router.post('/api/connections/{contact_id}/trust', status_code=201)
     async def grant_trust(contact_id: str, request: Request):

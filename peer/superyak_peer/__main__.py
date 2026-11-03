@@ -376,10 +376,10 @@ def pair_command(data_dir, card_path, username, terminal=controlling_terminal):
         return 2
     try:  # raw reads and writes: a terminal isn't seekable, so no read-write text stream over it
         say = lambda text: os.write(fd, text.encode('utf-8'))  # noqa: E731
-        say(f"Pairing {safe_line(card['participant']['name'])} ({safe_line(card['participant']['id'])}) "
-            f"at {safe_line(card['endpoint'], 200)}\n{PAIR_PROMPT}")
         typed = b''
-        try:
+        try:  # the prompt is inside: a Ctrl-C the moment it shows, before the read begins, is caught too
+            say(f"Pairing {safe_line(card['participant']['name'])} ({safe_line(card['participant']['id'])}) "
+                f"at {safe_line(card['endpoint'], 200)}\n{PAIR_PROMPT}")
             while not typed.endswith(b'\n') and len(typed) < 1024:  # a canonical-mode terminal hands over whole lines
                 chunk = os.read(fd, 1024)
                 if not chunk:
@@ -441,10 +441,11 @@ def pair_trusted_command(data_dir, card_path, assertion_path, username):
 
 
 HELD_RETIRED = 'held: its peer was retired; it comes back only as a new identity'  # pair() refuses it (spec item 6, S11)
-# A trust ship is held only once its trust is revoked: by a revoke, or by a hold of its owner (an unpair, a restore),
-# which settle_owner_trust turns into a revocation in the same transaction (spec item 6, S8, S10).
-HELD_TRUST_SHIP = ("held: its owner's trust was revoked; a new trust and a fresh export-ship bring it back, "
-                   'or its own code')
+# A trust ship is held only once its trust ended: by a revoke, or by a hold of its owner (an unpair, a restore), which
+# settle_owner_trust turns into a revocation in the same transaction (spec item 6, S8, S10). After an unpair the owner
+# needs its code typed again before any new trust, so the line says that too (Task 7 review).
+HELD_TRUST_SHIP = ("held: its owner's trust ended; once the owner is confirmed again, a new trust and a fresh "
+                   'export-ship bring it back, or its own code')
 
 
 def contact_state(contact):

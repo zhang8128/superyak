@@ -196,9 +196,34 @@ def _unchanged_since(db, grant_id, seen):
         raise Problem(409, 'the trust paired more ships since you looked; read the page again')
 
 
+def grant_line(name, peer_id, until):
+    """The grant's words (spec item 2, GRANT_TEXT) for an owner's name, its peer and an `until` (UTC date), as the
+    station stores them and the page shows them: `before`, `name` (through safe_line, so no control or bidi character
+    and no '@' survives), `after`, the whole `text` and `until`. The page puts `name` in <bdi> between the other two, so
+    what the admin reads before the password is exactly `text` (Task 7's review)."""
+    before, _, rest = GRANT_TEXT.partition('{name}')
+    name, after = safe_line(name), rest.format(peer=peer_id[:12], date=utc_day(until))
+    return {'before': before, 'name': name, 'after': after, 'text': before + name + after, 'until': until}
+
+
 def _text(name, peer_id, until):
-    date = datetime.fromtimestamp(until, timezone.utc).strftime('%Y-%m-%d')
-    return GRANT_TEXT.format(name=safe_line(name), peer=peer_id[:12], date=date)
+    return grant_line(name, peer_id, until)['text']
+
+
+def _as_shown(text, shown):
+    """Refuses (409) when the line the page showed the admin (`shown`) is not the text this grant or renewal would
+    store: a new UTC day since the page read it, or the owner renamed (Task 7's review). Run before the password and
+    again in the writing transaction, as _unchanged_since is. None, a caller with no page, checks nothing."""
+    if shown is not None and shown != text:
+        raise Problem(409, 'the grant reads differently now; read it again')
+
+
+def _owner_contact(db, grant_id):
+    """The labelled contact of a trust's owner, by (peer, participant id), or None."""
+    grant = db.execute("SELECT peer_id, owner_user_id FROM owner_trust WHERE grant_id=? AND event='grant'",
+                       (grant_id,)).fetchone()
+    return grant and db.execute(f'{LABELLED_CONTACT} WHERE c.peer_id=? AND c.user_id=?',
+                                (grant['peer_id'], grant['owner_user_id'])).fetchone()
 
 
 def owner_eligible(db, contact):
@@ -257,16 +282,19 @@ def trust_state(db, grant_id, now):
 
 def contact_trust(db, peer_id, user_id, now):
     """connections()' `owner_trust` for a contact whose code was typed: its unrevoked, unexpired trust, else its latest
-    grant, as {'grant_id', 'until', 'live', 'state', 'window_seq', 'expect', 'paired'} (trust_state); None when no
-    trust was ever granted for it. `live` is whether it pairs now, so a paused trust is not live (Task 6's review)."""
+    grant, as {'grant_id', 'until', 'live', 'state', 'window_seq', 'expect', 'paired', 'line'} (trust_state); None when no
+    trust was ever granted for it. `live` is whether it pairs now, so a paused trust is not live (Task 6's review).
+    `line` is the trust's grant line (grant_line) for its `until`, which the page shows; None when `until` is."""
     live = live_trust(db, peer_id, user_id, now)
     row = live or db.execute("SELECT grant_id FROM owner_trust WHERE peer_id=? AND owner_user_id=? AND event='grant' "
                              'ORDER BY seq DESC LIMIT 1', (peer_id, user_id)).fetchone()
     if row is None:
         return None
     known = trust_state(db, row['grant_id'], now)
+    line = None if known['until'] is None else grant_line(owner_label(db, peer_id, user_id), peer_id, known['until'])
     return {'grant_id': row['grant_id'], 'until': known['until'], 'live': known['state'] == 'live',
-            'state': known['state'], 'window_seq': known['window_seq'], 'expect': known['expect'], 'paired': known['paired']}
+            'state': known['state'], 'window_seq': known['window_seq'], 'expect': known['expect'], 'paired': known['paired'],
+            'line': line}
 
 
 def trust_renewal(db, grant_id, now):
@@ -384,12 +412,30 @@ class OwnerTrust:
         if not self.check_password_attempt(username, password, source, public=public, device=device):
             raise Problem(401, 'Invalid password')
 
-    def grant_owner_trust(self, actor, contact_id, *, days, expect, password, source, public=True, device=None):
+    def owner_trust_line(self, actor, contact_id, days):
+        """The grant line the page shows before the password (grant_line): what a grant, or a renewal, for this owner
+        contact would store if made now for `days` days, by this station's clock, never the browser's."""
+        _days(days)
+        with self.transaction() as db:
+            self._admin(db, actor)
+            contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
+            if contact is None:
+                raise Problem(404, 'No such contact')
+            return grant_line(contact['label'], contact['peer_id'], self.clock() + days * 86400)
+
+    def grant_owner_trust(self, actor, contact_id, *, days, expect, password, source, public=True, device=None,
+                          shown=None):
         """The admin's act, with their password: a remote person contact, whose code was typed and is still current,
         may have their ships paired by this station's ships for `days` whole days, up to `expect` of them before the
-        trust pauses (spec item 4a)."""
+        trust pauses (spec item 4a). `shown` is the grant line the page showed (_as_shown)."""
         _days(days)
         _expect(expect)
+        if shown is not None:
+            with self.transaction() as db:  # before the password, so a stale line spends no attempt
+                self._admin(db, actor)
+                contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
+                if contact is not None:  # an unknown one is refused below, as before
+                    _as_shown(_text(contact['label'], contact['peer_id'], self.clock() + days * 86400), shown)
         self._trust_password(actor, password, source, public, device)
         with self.transaction() as db:
             self._admin(db, actor)
@@ -399,12 +445,16 @@ class OwnerTrust:
             if live_trust(db, contact['peer_id'], contact['user_id'], now):
                 raise Problem(409, 'That owner is already trusted; renew it')
             grant_id, until = uid(), now + days * 86400
+            text = _text(contact['label'], contact['peer_id'], until)
+            _as_shown(text, shown)  # again: the day may have turned while the password was checked
             db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) '
                        "VALUES (?,'grant',?,?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor, now, expect))
-        return {'grant_id': grant_id, 'until': until, 'text': _text(contact['label'], contact['peer_id'], until)}
+        return {'grant_id': grant_id, 'until': until, 'text': text}
 
-    def renew_owner_trust(self, actor, grant_id, *, days, expect, seen, password, source, public=True, device=None):
-        """Extends an unrevoked trust to `days` whole days from now; it never shortens one."""
+    def renew_owner_trust(self, actor, grant_id, *, days, expect, seen, password, source, public=True, device=None,
+                          shown=None):
+        """Extends an unrevoked trust to `days` whole days from now; it never shortens one. `seen` is the window the
+        renewal page showed (_unchanged_since) and `shown` its grant line (_as_shown)."""
         _days(days)
         _expect(expect)
         if not (type(seen) is tuple and len(seen) == 2 and all(type(n) is int for n in seen)):
@@ -412,6 +462,9 @@ class OwnerTrust:
         with self.transaction() as db:  # before the password, so a stale page spends no attempt
             self._admin(db, actor)
             _unchanged_since(db, grant_id, seen)
+            known = _owner_contact(db, grant_id)
+            if known is not None:  # an unknown trust or owner is refused below, as before
+                _as_shown(_text(known['label'], known['peer_id'], self.clock() + days * 86400), shown)
         self._trust_password(actor, password, source, public, device)
         with self.transaction() as db:
             self._admin(db, actor)
@@ -436,9 +489,11 @@ class OwnerTrust:
             until = now + days * 86400
             if until <= current:
                 raise Problem(409, 'That owner trust already runs longer')
+            text = _text(contact['label'], peer_id, until)
+            _as_shown(text, shown)
             db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) '
                        "VALUES (?,'renew',?,?,?,?,?,?)", (grant_id, peer_id, owner, until, actor, now, expect))
-        return {'grant_id': grant_id, 'until': until, 'text': _text(contact['label'], peer_id, until)}
+        return {'grant_id': grant_id, 'until': until, 'text': text}
 
     def owner_trust_renewal(self, actor, grant_id):
         """The admin's renewal page for one trust (trust_renewal): what a renewal would renew, read before the
