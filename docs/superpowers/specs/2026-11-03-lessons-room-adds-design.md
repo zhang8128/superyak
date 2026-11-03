@@ -1,6 +1,6 @@
 # Lessons room adds: the ship adds what Andy's code already vouched for
 
-Rio Grande, 2026-11-03, revision 2 after its fresh review (two Majors: a removal undone, per-account vouching). Amends first-rail spec section 3 ("Only Andy's", "Moderators": "Until then only Andy changes
+Rio Grande, 2026-11-03, revision 3 after its fresh review and re-check (Majors: a removal undone; per-account vouching, at pair time and in the listing view). Amends first-rail spec section 3 ("Only Andy's", "Moderators": "Until then only Andy changes
 who is in it"), on branch trail-arrows-spec, 2026-10-27-first-rail-lessons-design.md.
 
 ## Why
@@ -33,13 +33,20 @@ nothing new. It's administration.
      back a member he took out stays his act;
    - it is not a contact made by owner trust (a `trust_confirmations` row): a ship paired without a code joins the
      room only by Andy's own add, until a later spec says otherwise;
-   - the station has no admin but the room's owner. The typed code is then his, since `pairing_confirmations`
-     doesn't record who typed it. While another admin exists, the add is refused and says why.
-2. **Pairing says what it makes addable.** When a person types the code for an account on a peer listed for the lessons
-   room, `pair` (the CLI and the browser) says so on success: "<name> on <peer 12> can now be added to the lessons room
-   by Rio Grande; its lessons would reach every ship." The CLAUDE.md pairing paragraph says it too. So the person's
-   act that vouches for an account is the code he types with that line in front of him, account by account, not the
-   listing of its peer alone.
+   - Andy vouched for this account, one of two ways: its confirmation's `confirmed_by` (a column `pair` now writes,
+     the admin who typed the code) is the room's owner, and `pair` showed him the addable line (item 2); or the
+     listing view he confirmed named it as addable (item 2a), which is how every contact paired before its peer was
+     listed, or before this build, comes in.
+2. **Pairing says what it makes addable, before the code.** When the card in hand is for an account on a peer listed
+   for the lessons room, `pair` says so before the person types: the CLI before its code prompt, the browser beside
+   its code box once the card's peer is known: "<name> on <peer 12> can be added to the lessons room by Rio Grande
+   once you type its code; its lessons would reach every ship." `pair` writes `pairing_confirmations.confirmed_by`,
+   its actor. The CLAUDE.md pairing paragraph says it too.
+2a. **The listing names the addable accounts.** `make station-lessons-room … PEERS=` shows, under each listed peer,
+   every code-current, unheld contact on it that owner trust didn't make, as "addable by Rio Grande", and those
+   contact ids go into its confirm code, so the CONFIRM run records exactly what was shown (`lessons_addable`:
+   contact id, listing time). Peers are paired before they're listed, so this is the path for most accounts: Andy
+   sees each one in the view he already confirms, and no new act is asked of him.
 3. **Shown and recorded.** The command prints the contact's label and its user id's short form, its peer's 12
    characters, the old and new room's short ids, and how many lessons were carried. `station_notices` builds a one-off
    Ops notice from the add's `member_changes` row, id `lessons-add-<member_changes.id>` (change 'add', a room in the
@@ -61,8 +68,10 @@ room still takes no new local member.
 
 Each refusal writes nothing: an unlisted peer; an unconfirmed, stale or held contact; a trust-made contact; an existing
 member; a contact Andy removed; a station with a second admin; a contact id that isn't remote; a moved chain (the add
-goes to the chain's newest room). `pair` of an account on a listed peer says the addable line; on an unlisted peer it
-doesn't. The notice posts once per add, keyed by its `member_changes` row. The success path makes the chain's
+goes to the chain's newest room). `pair` of an account on a listed peer says the addable line before the code prompt, and writes
+`confirmed_by`; on an unlisted peer it doesn't. A contact confirmed by another admin, or with no `confirmed_by` and not
+in `lessons_addable`, is refused. The listing view names the addable contacts, and its confirm code changes when one
+is added or goes stale. The notice posts once per add, keyed by its `member_changes` row. The success path makes the chain's
 next room with the contact, carries the chain's lessons once, and posts the notice once. The CLAUDE.md lessons-room
 paragraph changes from "he adds his own account and that ship's account on that peer" to the new command, with
 Andy's yes in the harness when it lands.
