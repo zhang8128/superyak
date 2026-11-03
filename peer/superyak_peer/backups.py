@@ -1167,10 +1167,19 @@ def _source_uri(source):
     sidecar; with no -wal, the last connection's close checkpointed every commit into it. WAL mode with a -wal, which a
     listener killed mid-run leaves: `mode=ro` through it and its -shm, so a commit made only there is carried too. A -wal
     without its -shm is refused, since reading it would create one. The header is read with header_mode, before any
-    connection opens the source."""
+    connection opens the source; a source it can't read is refused, saying nothing was changed (Task 7 reader's B-3,
+    where an OSError reached the person as a traceback). A WAL header with a -journal beside it, which only a journal
+    mode switch cut short leaves, is refused too: immutable=1 would read past a journal that rollback mode's mode=ro
+    refuses (B-2)."""
     uri = source.absolute().as_uri()
-    if header_mode(source) != 'wal':
+    try:
+        mode = header_mode(source)
+    except OSError as error:
+        raise CarryRefused(f'{source} could not be read ({error.strerror or type(error).__name__})') from None
+    if mode != 'wal':
         return uri + '?mode=ro'
+    if Path(f'{source}-journal').exists():
+        raise CarryRefused(f'{source} is in WAL mode with a -journal beside it, which a cut-short journal mode switch leaves')
     wal, shm = (Path(f'{source}{end}').exists() for end in ('-wal', '-shm'))
     if not wal:
         return uri + '?mode=ro&immutable=1'
