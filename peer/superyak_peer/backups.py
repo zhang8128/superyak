@@ -935,7 +935,8 @@ def _keep_trust_like_replaced(db, old, now, report):
         _revoke_trust(db, grant, *values)
         report['trusts'].append(_trust_line(db, old, grant, how))
     kept = 0
-    for peer, retired, by_id in old.execute('SELECT peer_id, retired, by_id FROM retired_peers ORDER BY retired, peer_id').fetchall():
+    for peer, retired, by_id in old.execute('SELECT peer_id, retired, by_id FROM retired_peers '
+                                            'ORDER BY retired, peer_id').fetchall():
         if not db.execute('INSERT OR IGNORE INTO retired_peers(peer_id, retired, by_id) VALUES (?,?,?)',
                           (peer, retired, by_id)).rowcount:
             continue

@@ -57,7 +57,8 @@ def test_a_revocation_after_the_copy_is_kept(trusted, capsys):
     revoke(t)
     out = against_live(capsys, t, copy)
     assert revocations_in(copy) == [(t.trust['grant_id'], 'revoked', t.admin['id'], t.clock[0])]
-    assert held_in(copy, tardis['id']) and rows_in(copy, 'SELECT status FROM outbox WHERE contact_id=?', tardis['id']) == [('withdrawn',)]
+    assert held_in(copy, tardis['id'])
+    assert rows_in(copy, 'SELECT status FROM outbox WHERE contact_id=?', tardis['id']) == [('withdrawn',)]
     assert named(t.trust['grant_id'], 'Andy B', 'revoked as in the replaced file') in trusts_line(out)
     assert 'owner trusts revoked (1)' in out
     live = go_live(copy, t.tmp / 'live')
