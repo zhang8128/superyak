@@ -484,10 +484,20 @@ lesson-repeat:
 lesson-repeats:
 	$(LESSONS) repeats --data-dir "$(LESSONS_DATA)"
 
+# The units run from %h/superyak, the station's checkout. A checkout elsewhere is linked there by each target that
+# installs units, so every unit and drop-in runs as written (Tardis, 2026-11-02: from ~/Projects/superyak, federate
+# failed with 203/EXEC). One home holds one ~/superyak: anything else there is refused, and a second checkout for the
+# same user would need a unit drop-in or a second user.
+CHECKOUT_LINK = here="$$(cd "$(CURDIR)" && pwd -P)"; link="$(HOME)/superyak"; \
+	if [ "$$(cd "$$link" 2>/dev/null && pwd -P)" = "$$here" ]; then :; \
+	elif [ -e "$$link" ] || [ -L "$$link" ]; then echo "$$link is not this checkout ($$here), and the units run from $$link. One home holds one ~/superyak: move it aside, or install a second checkout's units as another user"; exit 2; \
+	else ln -s "$$here" "$$link" && echo "Linked $$link to this checkout: the units run from there"; fi
+
 # First rail section 4: the index timer on this peer. The directory is resolved in the shell: make's abspath splits a
 # path on its spaces.
 lessons-units:
 	@test -f "$(LESSONS_DATA)/peer.sqlite3" || { echo 'No peer database at $(LESSONS_DATA)/peer.sqlite3: set LESSONS_DATA to this peer data directory'; exit 2; }
+	@$(CHECKOUT_LINK)
 	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
 	for unit in $(LESSONS_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
 	test -d "$(HOME)/.config/superyak" || install -d -m 700 "$(HOME)/.config/superyak"
@@ -513,6 +523,7 @@ lessons-timing:
 
 station-units:
 	@test -f "$(STATION_DATA)/peer.sqlite3" || { echo 'No station database at $(STATION_DATA)/peer.sqlite3: make station-units runs on the station host only'; exit 2; }
+	@$(CHECKOUT_LINK)
 	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
 	for unit in $(STATION_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
 	for service in $(ALERTED_SERVICES); do d="$(SYSTEMD_USER)/$$service.service.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && install -m 644 peer/systemd/50-alerts.conf "$$d/50-alerts.conf" || exit 1; done
@@ -532,6 +543,7 @@ station-units-remove:
 # runs where.
 federation-units:
 	@test -f "$(FEDERATION_DATA)/peer.sqlite3" || { echo 'No peer database at $(FEDERATION_DATA)/peer.sqlite3: set FEDERATION_DATA to this peer data directory'; exit 2; }
+	@$(CHECKOUT_LINK)
 	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
 	for unit in $(FEDERATION_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
 	data="$$(cd "$(FEDERATION_DATA)" && pwd | sed 's/%/%%/g')" && for unit in $(FEDERATION_UNITS); do d="$(SYSTEMD_USER)/$$unit.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && printf '[Service]\nEnvironment="FEDERATION_DATA=%s"\n' "$$data" > "$$d/20-federation-data.conf" && chmod 644 "$$d/20-federation-data.conf" || exit 1; done
