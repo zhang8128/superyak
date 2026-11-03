@@ -190,9 +190,9 @@ class Federation:
                            (self.store.clock(), card['peer_id']))
                 db.execute('DELETE FROM pairing_confirmations WHERE contact_id IN '
                            '(SELECT id FROM remote_contacts WHERE peer_id=?)', (card['peer_id'],))
-                # That holds each owner on the peer too, and any hold of an owner ends its trust (N13), so a peer that
-                # main's unpair left with a live trust can't bring the trust back with its owner's code.
-                settle_owner_trust(db, self.store.clock())
+                # Held as unpair holds them: nothing queued for them since goes out on this re-pair (review minor 2).
+                db.execute(f"UPDATE outbox SET status='withdrawn' WHERE {THEIRS} AND status IN ('pending','failed')",
+                           (card['peer_id'],))
             db.execute('INSERT INTO peers VALUES(?,?,1) ON CONFLICT(peer_id) DO UPDATE SET paired=1', (card['peer_id'], encode(card)))
             # spec §7 and plan P14: the mode from the card, on both paths; a person re-pairing makes the peer due again
             db.execute('INSERT INTO peer_delivery(peer_id, mode, failures) VALUES(?,?,0) ON CONFLICT(peer_id) DO UPDATE SET '
@@ -201,6 +201,9 @@ class Federation:
             contact = dict(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (card['peer_id'],card['participant']['id'])).fetchone())
             db.execute('INSERT INTO pairing_confirmations VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET '
                        'code=excluded.code, confirmed=excluded.confirmed', (contact['id'], expected, self.store.clock()))
+            # Any hold of an owner ends its trust (N13), whatever made the hold: the MF2 holds just above, or a hold
+            # with no revocation beside it (a restore's), so typing a held owner's code can't bring its trust back.
+            settle_owner_trust(db, self.store.clock())
             db.execute('DELETE FROM contact_holds WHERE contact_id=?', (contact['id'],))  # this one's code was typed
             settle_owner_trust(db, self.store.clock())  # a ship whose own code was just typed stays: that is the proof
             return {**contact, 'pairing_code': show_code(expected), 'confirmed': True, 'held': False}

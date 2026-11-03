@@ -71,6 +71,7 @@ def live_trust(db, peer_id, owner_user_id, now):
         'GROUP BY grant_id HAVING MAX(until)>? ORDER BY MAX(until) DESC LIMIT 1', (peer_id, owner_user_id, now)).fetchone()
 
 
+# Latest by the wall-clock `confirmed`: a clock stepped back fails closed, the ship held again at the next settle.
 LATEST = 'ORDER BY confirmed DESC, rowid DESC LIMIT 1'  # a contact's latest trust confirmation, as contact_labels picks it
 # The ships not held, each with the grant of its latest confirmation.
 UNHELD_SHIPS = ('SELECT c.id, c.peer_id, c.user_id, t.grant_id FROM remote_contacts c JOIN trust_confirmations t ON '
@@ -85,12 +86,19 @@ def latest_grant(db, contact_id):
     return row[0] if row else None
 
 
-def ships_to_hold(db, grants, params=()):
-    """The ships a revocation holds: those not held whose latest confirmation's grant is in `grants` (SQL), less any
-    whose own typed code is current. A code typed for that one account is a person's act and the stronger proof, so it
-    stands when a trust ends (coordinator's ruling on Task 4, after the spec's "What a code proves")."""
-    return [ship for ship in db.execute(f'{UNHELD_SHIPS} AND t.grant_id IN ({grants})', params).fetchall()
-            if not code_current(db, ship['id'])]
+def ships_to_hold(db, grant_ids=None):
+    """The ships a revocation holds: those not held whose latest confirmation's grant is revoked (`grant_ids` None) or
+    one of `grant_ids`, less any whose own typed code is current. A code typed for that one account is a person's act
+    and the stronger proof, so it stands when a trust ends (coordinator's ruling on Task 4, after the spec's "What a
+    code proves")."""
+    if grant_ids is None:
+        rows = db.execute(f'{UNHELD_SHIPS} AND t.grant_id IN ({REVOKED})')
+    else:
+        grant_ids = list(grant_ids)
+        if not grant_ids:
+            return []
+        rows = db.execute(f"{UNHELD_SHIPS} AND t.grant_id IN ({','.join('?' * len(grant_ids))})", grant_ids)
+    return [ship for ship in rows.fetchall() if not code_current(db, ship['id'])]
 
 
 def hold_contact(db, contact, now):
@@ -130,7 +138,7 @@ def settle_owner_trust(db, now):
             db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
                        "VALUES (?,'revoke',?,?,NULL,NULL,?,'owner held')", (g['grant_id'], g['peer_id'], g['owner_user_id'], now))
         revoked += [g['grant_id'] for g in ended]
-        for ship in ships_to_hold(db, REVOKED):
+        for ship in ships_to_hold(db):
             hold_contact(db, ship, now)
         if not ended:
             return revoked
@@ -216,10 +224,11 @@ class OwnerTrust:
         return {'grant_id': grant_id, 'until': until, 'text': _text(contact['name'], peer_id, until)}
 
     def revoke_owner_trust(self, actor, grant_id):
-        """The admin's act (spec "The change" item 6): ends a trust at once, expired or not, and holds every ship whose
-        latest confirmation it made and that has no current typed code of its own (ships_to_hold), as
-        settle_owner_trust holds them; `held` counts them. It only takes power away, so it needs no password. A trust
-        revoked already is refused, so it never gains a second revocation."""
+        """The admin's act (spec "The change" item 6): ends the trust at once, so this grant, expired or not, and every
+        other unrevoked grant of the same owner (peer, participant id), whose ships would otherwise stay paired (review
+        ruling). It holds every ship whose latest confirmation one of them made and that has no current typed code of
+        its own (ships_to_hold), as settle_owner_trust holds them; `held` counts them. It only takes power away, so it
+        needs no password. A grant revoked already is refused, so it never gains a second revocation."""
         with self.transaction() as db:
             self._admin(db, actor)
             now = self.clock()
@@ -229,8 +238,12 @@ class OwnerTrust:
                 raise Problem(404, 'No such owner trust')
             if any(r['event'] == 'revoke' for r in rows):
                 raise Problem(409, 'That owner trust was revoked already')
-            ships = ships_to_hold(db, '?', (grant_id,))
-            db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
-                       "VALUES (?,'revoke',?,?,NULL,?,?,'revoked')", (grant_id, rows[0]['peer_id'], rows[0]['owner_user_id'], actor, now))
+            peer_id, owner = rows[0]['peer_id'], rows[0]['owner_user_id']
+            grants = [r[0] for r in db.execute("SELECT grant_id FROM owner_trust WHERE peer_id=? AND owner_user_id=? "
+                                               f"AND event='grant' AND grant_id NOT IN ({REVOKED}) ORDER BY seq",
+                                               (peer_id, owner))]
+            ships = ships_to_hold(db, grants)
+            db.executemany("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
+                           "VALUES (?,'revoke',?,?,NULL,?,?,'revoked')", [(g, peer_id, owner, actor, now) for g in grants])
             settle_owner_trust(db, now)
         return {'grant_id': grant_id, 'held': len(ships)}
