@@ -1243,3 +1243,273 @@ def test_a_ship_paired_during_the_password_check_stales_the_renewal(trusted, mon
         renew((t.station, t.admin), t.trust['grant_id'], days=90, seen=seen)
     assert caught.value.status == 409 and 'read the page again' in caught.value.message
     assert rows(t.station) == before and len(window_rows(t.station)) == 1
+
+
+# Task 6: seeing it: connections, the digest and the pause notice in Ops, station-trust-list, and the label everywhere
+
+DIGEST_END = '. Full ids: make station-trust-list on the Pi.'
+PAUSE_TEXT = ("Owner trust for {owner} on {peer} paused after {n} pairings. make station-trust-list shows them; if you "
+              "didn't expect them, unpair that peer as retired; otherwise renew or revoke it in the browser.")
+
+
+def notices(station, kind):
+    return [notice for notice in station.station_notices() if notice['id'].startswith(f'trust-{kind}-')]
+
+
+def midnight_after(at):
+    return (int(at) // 86400 + 1) * 86400
+
+
+def test_connections_say_confirmed_by_owner_trust(trusted):
+    from superyak_peer.__main__ import describe_connections
+    t = trusted
+    ship = pairs(t)
+    listed = {c['id']: c for c in t.fed.connections(t.admin['id'])}
+    mine, owner = listed[ship['id']], listed[t.owner['id']]
+    assert (mine['confirmed_by'], mine['confirmed'], mine['pairing_code'], mine['held']) == ('owner trust', True, None, False)
+    assert mine['owner_trust'] is None and mine['name'] == 'ship of Andy B: tardis'
+    assert mine['card']['participant'] == t.card['participant']  # the card it was paired with, its own name in it
+    assert (owner['confirmed_by'], owner['confirmed'], owner['name']) == ('typing', True, 'Andy B')
+    assert owner['pairing_code'] is not None
+    assert owner['owner_trust'] == {'grant_id': t.trust['grant_id'], 'until': t.trust['until'], 'live': True}
+    shown = describe_connections(list(listed.values()), now=t.clock[0]).splitlines()
+    assert any(line.startswith('ship of Andy B: tardis (') and ', confirmed by owner trust' in line for line in shown)
+    assert any(line.startswith('Andy B (') and ', confirmed by typing' in line for line in shown)
+    contacts = {c['id']: c['name'] for c in t.station.contacts(t.admin['id'])}
+    assert contacts[ship['id']] == 'ship of Andy B: tardis' and contacts[t.owner['id']] == 'Andy B'
+    revoke(t)  # the ship is held, and the owner's trust is no longer live
+    listed = {c['id']: c for c in t.fed.connections(t.admin['id'])}
+    assert (listed[ship['id']]['confirmed_by'], listed[ship['id']]['confirmed'], listed[ship['id']]['held']) == (None, False, True)
+    assert listed[ship['id']]['name'] == 'ship of Andy B: tardis'
+    assert listed[t.owner['id']]['owner_trust'] == {'grant_id': t.trust['grant_id'], 'until': t.trust['until'], 'live': False}
+    assert 'held until its own code is typed' in describe_connections(list(listed.values()), now=t.clock[0])
+
+
+def test_a_layer_preview_names_a_ship_by_its_label(trusted):
+    t = trusted
+    ship = pairs(t)
+    layer = t.station.create_layer(t.admin['id'], {'body': 'for a ship and its owner', 'audience_users': [ship['id'], t.owner['id']]})
+    preview = t.station.preview_layer(t.admin['id'], layer['id'])
+    assert (preview['id'], preview['body'], preview['owner_id']) == (layer['id'], 'for a ship and its owner', t.admin['id'])
+    assert preview['people'] == [{'id': ship['id'], 'name': 'ship of Andy B: tardis'}, {'id': t.owner['id'], 'name': 'Andy B'}]
+
+
+def test_the_digest_comes_once_the_day_ends(trusted):
+    t = trusted
+    with t.station.transaction() as db:
+        defiant = t.station._new_ship(db, 'defiant', 'Defiant', t.admin['id'])['id']
+    first = utc_day(t.clock[0])
+    pairs(t, *b_ship(t, 'ship-a'))
+    pairs(t, *b_ship(t, 'ship-b'))
+    t.fed.pair_trusted(defiant, *b_ship(t, 'ship-c'))
+    assert notices(t.station, 'digest') == []  # today hasn't ended
+    t.clock[0] = midnight_after(t.clock[0]) + 60
+    second = utc_day(t.clock[0])
+    pairs(t, *b_ship(t, 'ship-d'))
+    with t.station.transaction() as db:  # as pair_trusted counts a refusal at the cap
+        db.execute('INSERT INTO trust_cap_refusals VALUES (?,?,2)', (t.trust['grant_id'], second))
+    g12, peer12 = t.trust['grant_id'][:12], t.owner['peer_id'][:12]
+    one = {'id': f'trust-digest-{g12}-{first}',
+           'text': f'Owner trust, {first}: 3 ship(s) of Andy B on {peer12} paired by defiant, rio-grande{DIGEST_END}'}
+    assert notices(t.station, 'digest') == [one]
+    t.clock[0] = midnight_after(t.clock[0]) + 60
+    two = {'id': f'trust-digest-{g12}-{second}',
+           'text': f'Owner trust, {second}: 1 ship(s) of Andy B on {peer12} paired by rio-grande; 2 refused at the cap '
+                   f'of 200{DIGEST_END}'}
+    assert notices(t.station, 'digest') == [one, two]
+    t.clock[0] = midnight_after(t.clock[0]) + 6 * 86400 - 1  # the first day ended 8 days ago less a second, the second 7
+    assert notices(t.station, 'digest') == [two]
+    t.clock[0] += 1
+    assert notices(t.station, 'digest') == []
+
+
+def test_the_digest_is_one_safe_line(trusted):
+    t = trusted
+    revoke(t)
+    t.clock[0] += 60
+    t.trust = grant((t.station, t.admin, t.owner, None), expect=1)
+    ship = pairs(t, *b_ship(t, 'ship-a'))
+    with t.station.transaction() as db:  # longer than a card holds, so by hand
+        db.execute('UPDATE remote_contacts SET name=? WHERE id=?', ('Andy\n@rio-grande ' + 'x' * 300, t.owner['id']))
+    t.clock[0] = midnight_after(t.clock[0]) + 60
+    [digest], [pause] = notices(t.station, 'digest'), notices(t.station, 'paused')
+    for text in (digest['text'], pause['text']):
+        assert '\n' not in text and '@' not in text and 'Andy (at)rio-grande xxx' in text
+    assert digest['text'].endswith(f' on {t.owner["peer_id"][:12]} paired by rio-grande{DIGEST_END}')
+    assert pause['text'].endswith(f' on {t.owner["peer_id"][:12]} paused after 1 pairings. make station-trust-list shows '
+                                  "them; if you didn't expect them, unpair that peer as retired; otherwise renew or revoke "
+                                  'it in the browser.')
+    assert len(digest['text']) < 300 and len(pause['text']) < 360
+    assert label_of(t.station, ship['id']).startswith('ship of Andy\n@rio-grande x')  # the view keeps it; lines make it safe
+
+
+def test_a_pause_posts_once_per_window(trusted):
+    t = trusted
+    revoke(t)
+    t.clock[0] += 60
+    t.trust = grant((t.station, t.admin, t.owner, None), expect=1)
+    assert notices(t.station, 'paused') == []
+    pairs(t, *b_ship(t, 'ship-a'))
+    first = window_of(t.station, t.trust['grant_id'])[0]
+    g12, peer12 = t.trust['grant_id'][:12], t.owner['peer_id'][:12]
+    paused = [{'id': f'trust-paused-{g12}-{first}', 'text': PAUSE_TEXT.format(owner='Andy B', peer=peer12, n=1)}]
+    assert notices(t.station, 'paused') == paused
+    t.clock[0] += 3600
+    assert notices(t.station, 'paused') == paused  # the same id and text each cycle, so Odo posts it once
+    renew((t.station, t.admin), t.trust['grant_id'], days=90, expect=2)
+    assert notices(t.station, 'paused') == []
+    pairs(t, *b_ship(t, 'ship-b'))
+    assert notices(t.station, 'paused') == []
+    pairs(t, *b_ship(t, 'ship-c'))
+    second = window_of(t.station, t.trust['grant_id'])[0]
+    assert second != first
+    assert notices(t.station, 'paused') == [{'id': f'trust-paused-{g12}-{second}',
+                                              'text': PAUSE_TEXT.format(owner='Andy B', peer=peer12, n=2)}]
+    revoke(t)  # a revoked trust is the admin's answer: nothing more to raise
+    assert notices(t.station, 'paused') == []
+
+
+def test_an_assertion_naming_another_station_is_refused(trusted):
+    """Tardis's read of the plan: the assertion's station is bound to the presented card's peer, by verify_record under
+    the stored card. B's key signs, by hand, a record naming peer C, where the same owner id is a contact under a live
+    trust of its own; presented with B's card it is refused at check 3, and nothing is written."""
+    t = trusted
+    andy_c, _ = third_peer(t)
+    t.station.grant_owner_trust(t.admin['id'], andy_c['id'], days=30, expect=50, password=PASSWORD, source='127.0.0.1')
+    card, honest = b_ship(t, 'ship-x')
+    record = {**honest['record'], 'station': andy_c['peer_id']}
+    signature = base64.b64encode(t.machine[3].identity.key.sign(canonical(record))).decode()
+    refuses(t, 400, "does not verify under this peer's card", card, {'record': record, 'signature': signature})
+    assert pairs(t, card, honest)['grant_id'] == t.trust['grant_id']  # the same ship, naming B, pairs under B's trust
+
+
+def test_station_trust_list_names_full_ids(trusted):
+    t = trusted
+    ship = pairs(t)
+    done = run('station-trust-list', '--data-dir', t.station.data_dir)
+    assert done.returncode == 0 and done.stderr == '', done.stderr
+    lines = done.stdout.splitlines()
+    until = datetime.fromtimestamp(t.trust['until'], timezone.utc).strftime('%Y-%m-%d')
+    assert lines[1] == f'{t.trust["grant_id"][:6]}  Andy B on {t.owner["peer_id"][:12]}, until {until}: live, 1 of 50 paired in this window'
+    assert lines[2].startswith(f'  ship of Andy B: tardis  participant {t.card["participant"]["id"]}, paired by rio-grande ')
+    assert lines[2].endswith(' UTC, in this window') and len(lines) == 3
+    from superyak_peer.identity import show_code
+    for card in (t.card, t.machine[3].card(t.machine[1]['id'])):  # no pairing code, whole or shown
+        assert pairing_code(card) not in done.stdout and show_code(pairing_code(card)) not in done.stdout
+    assert not re.search(r'[0-9a-f]{4}( [0-9a-f]{4}){7}', done.stdout)
+    revoke(t)
+    done = run('station-trust-list', '--data-dir', t.station.data_dir)
+    lines = done.stdout.splitlines()
+    assert ': revoked ' in lines[1] and lines[1].endswith('(by andy)') and lines[2].endswith(' UTC, in this window, held')
+    assert ship['id'] not in done.stdout  # the local contact id isn't the participant id
+
+
+# The display-read check: every SQL text in superyak_peer that reads remote_contacts.name raw (a column, an alias's
+# .name, a bare name beside the table, or *), apart from these, each by (module, a piece of its text) and why.
+RAW_NAME_READS = {
+    ('federation.py', 'SELECT username, name FROM users UNION ALL SELECT name, name FROM remote_contacts'):
+        "_name_taken, the collision check: a ship's name against every person's raw name",
+    ('federation.py', 'ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name'):
+        "a write: pair() stores the card's participant name",
+    ('federation.py', 'UPDATE remote_contacts SET name=? WHERE id=?'):
+        "a write: pair_trusted stores the assertion's ship name",
+    ('federation.py', 'remote_contacts.name AS card_name'):
+        "connections() rebuilds the card it was paired with, as code_current does; it shows the label",
+    ('owner_trust.py', 'CREATE VIEW IF NOT EXISTS contact_labels'):
+        'the view itself, which makes every label from the raw name',
+    ('owner_trust.py', 'SELECT remote_contacts.user_id,remote_contacts.name,peers.card'):
+        "code_current rebuilds the paired card with its participant's name, to check the typed code",
+    ('backups.py', 'SELECT id, peer_id, user_id, name AS label FROM remote_contacts'):
+        'a restore file from before owner trust: no view and no trust confirmation (one schema batch makes both), '
+        'so every contact there is a person, whose name is its label',
+}
+SQL_WORD = re.compile(r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE|WITH)\b', re.IGNORECASE)
+NOT_ALIASES = {'join', 'where', 'on', 'using', 'left', 'inner', 'cross', 'outer', 'natural', 'order', 'group', 'having',
+               'values', 'set', 'limit', 'as', 'union', 'except', 'intersect', 'and', 'or', 'not', 'returning', 'window'}
+
+
+def strings_of(source):
+    """(qualified function, line, text) for each string the code holds: constants, f-strings (each {...} as '{}') and
+    strings joined by +. Docstrings and other bare string statements are left out."""
+    import ast
+    found = []
+
+    def text_of(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            return ''.join(part.value if isinstance(part, ast.Constant) else '{}' for part in node.values)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = text_of(node.left), text_of(node.right)
+            return left + right if left is not None and right is not None else None
+        return None
+
+    def visit(node, where):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            where = f'{where}.{node.name}' if where else node.name
+        if isinstance(node, ast.Expr) and isinstance(node.value, (ast.Constant, ast.JoinedStr)):
+            return
+        text = text_of(node)
+        if text is not None:
+            found.append((where or '<module>', node.lineno, text))
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child, where)
+    visit(ast.parse(source), '')
+    return found
+
+
+def reads_contact_name(sql):
+    """Whether one SQL statement reads remote_contacts' raw name. A table's own definition is not a read."""
+    if not re.search(r'\bremote_contacts\b', sql) or not SQL_WORD.search(sql):
+        return False
+    if re.match(r'\s*CREATE\s+(TABLE|INDEX|UNIQUE)\b', sql, re.IGNORECASE) and not re.search(r'\bSELECT\b', sql, re.IGNORECASE):
+        return False
+    aliases = {m.group(1) for m in re.finditer(r'\bremote_contacts\s+(?:AS\s+)?([A-Za-z_]\w*)', sql, re.IGNORECASE)
+               if m.group(1).lower() not in NOT_ALIASES}
+    if any(re.search(rf'\b{re.escape(alias)}\.(name\b|\*)', sql) for alias in ('remote_contacts', *aliases)):
+        return True
+    if re.search(r'(?<![\w.])(?<!AS )name\b', sql, re.IGNORECASE):  # a bare name; `AS name` names a result instead
+        return True
+    return bool(re.search(r'\bSELECT\s+\*\s+FROM\s+remote_contacts\b', sql, re.IGNORECASE))
+
+
+def contact_name_reads(root):
+    """(module path under root, function, line, statement) for each statement that reads the raw name."""
+    return [(path.relative_to(root).as_posix(), where, line, statement.strip())
+            for path in sorted(root.rglob('*.py'))
+            for where, line, text in strings_of(path.read_text())
+            for statement in text.split(';') if reads_contact_name(statement)]
+
+
+def explained(read):
+    return any(read[0] == module and piece in read[3] for module, piece in RAW_NAME_READS)
+
+
+def test_display_reads_go_through_contact_labels():
+    """Tardis's ruling: every display of a remote contact's name (contacts(), connections(), room members, message
+    authors, the notices, trust_list) reads contact_labels.label, so a ship reads "ship of <owner>: <name>" wherever it
+    shows. Only the reads RAW_NAME_READS names, each with its reason, take the raw name; each of those still exists."""
+    import superyak_peer
+    root = Path(superyak_peer.__file__).parent
+    found = contact_name_reads(root)
+    assert [read for read in found if not explained(read)] == []
+    assert [key for key in RAW_NAME_READS if not any(read[0] == key[0] and key[1] in read[3] for read in found)] == []
+
+
+def test_the_display_read_check_finds_a_planted_read(tmp_path):
+    (tmp_path / 'planted.py').write_text('''
+def shown(db, contact_id, table):
+    db.execute('SELECT name FROM remote_contacts WHERE id=?', (contact_id,))
+    db.execute("SELECT c.name, rooms.title FROM rooms JOIN remote_contacts AS c ON c.id=rooms.owner_id")
+    db.execute(f'SELECT remote_contacts.name FROM remote_contacts WHERE id={contact_id}')
+    db.execute('SELECT * FROM remote_contacts WHERE id=?', (contact_id,))
+    db.execute('SELECT x.* FROM remote_contacts x' + ' WHERE x.id=?', (contact_id,))
+    db.execute('SELECT group_concat(name) FROM (SELECT name FROM remote_contacts ORDER BY name)')
+    db.execute('SELECT label FROM contact_labels WHERE id=?', (contact_id,))
+    db.execute('SELECT c.id, l.label AS name FROM remote_contacts c JOIN contact_labels l ON l.id=c.id')
+    db.execute('SELECT username, name FROM users WHERE id=?', (contact_id,))
+    _has(db, 'remote_contacts.name')
+    """A docstring may say SELECT name FROM remote_contacts."""
+''')
+    assert [(where, line) for _, where, line, _ in contact_name_reads(tmp_path)] == [('shown', n) for n in range(3, 9)]

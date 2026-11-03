@@ -47,9 +47,9 @@ class Members:
                                                    (room_id, wormhole)).fetchone() is not None
 
     def _account_name(self, db, member_id):
-        """A member's display name as one safe line: the account's, else the remote contact's, else the id's start."""
+        """A member's display name as one safe line: the account's, else the remote contact's label, else the id's start."""
         row = db.execute('SELECT name FROM users WHERE id=?', (member_id,)).fetchone()
-        row = row or db.execute('SELECT name FROM remote_contacts WHERE id=?', (member_id,)).fetchone()
+        row = row or db.execute('SELECT label AS name FROM contact_labels WHERE id=?', (member_id,)).fetchone()
         return safe_line(row['name'] if row else member_id[:6], 40)
 
     def _record_change(self, db, change, room_id, member_id, actor_id, grant_id, new_room_id=None, earlier_rooms=0, claims_released=0):

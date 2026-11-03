@@ -960,6 +960,7 @@ function chatsView() {
 function contactState(contact) {
   // a code shows only for a contact confirmed by typing: any other could be copied into a re-pair (fix:pairing-code)
   if (contact.held) return "Held until its own code is typed";
+  if (contact.confirmed_by === "owner trust") return "Confirmed by owner trust";  // confirmed, but no code was typed
   return contact.confirmed ? "Confirmed by typing" : "No typed code on record";
 }
 

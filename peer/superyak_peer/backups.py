@@ -689,9 +689,23 @@ def _add_member_changes_like_replaced(db, old, now, report):
     report['counts']['member changes added'] = added
 
 
+# Owner trust (Task 6): the report names a remote contact as every display does, by contact_labels' label, so a ship
+# reads "ship of <owner>: <name>". A file from before owner trust has no view and no trust confirmation either (one
+# schema batch makes both), so each of its contacts is a person, whose name is its label. The tables are checked before
+# the view, whose columns can't be read without them.
+LABELLED = 'SELECT c.id, c.peer_id, c.user_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id'
+UNLABELLED = 'SELECT id, peer_id, user_id, name AS label FROM remote_contacts'
+
+
+def _labelled(db):
+    """The file's remote contacts, as (id, peer_id, user_id, label) rows to select from."""
+    return LABELLED if _has(db, 'trust_confirmations.contact_id', 'owner_trust.grant_id', 'contact_labels') else UNLABELLED
+
+
 def _member_name(db, table, member):
     if table == 'remote_room_members':
-        row = db.execute('SELECT name FROM remote_contacts WHERE id=?', (member,)).fetchone() if _has(db, 'remote_contacts.name') else None
+        row = db.execute(f'SELECT label FROM ({_labelled(db)}) WHERE id=?', (member,)).fetchone() \
+            if _has(db, 'remote_contacts.name') else None
         return f'remote contact {row[0]}' if row else f'remote contact {member[:6]}'
     row = db.execute('SELECT username FROM users WHERE id=?', (member,)).fetchone()
     return row[0] if row else member[:6]
@@ -791,7 +805,7 @@ def _unpair(db, old, peer, report):
     pairing one participant again reconnects that one only (fix:pairing-code, review SF3); paired=0, that peer's
     contacts' pending and failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled. A
     copy from before contact holds gains the table here, so the hold isn't lost on restore."""
-    names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))]
+    names = [row[0] for row in db.execute(f'SELECT label FROM ({_labelled(db)}) WHERE peer_id=? ORDER BY label', (peer,))]
     db.execute('CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL)')
     db.execute('INSERT OR REPLACE INTO contact_holds SELECT id, ? FROM remote_contacts WHERE peer_id=?', (time.time(), peer))
     if _has(db, 'pairing_confirmations.contact_id'):
@@ -832,7 +846,7 @@ def _hold_like_replaced(db, old, now, report):
     held_there = {row[0] for row in old.execute('SELECT contact_id FROM contact_holds')}
     db.execute('CREATE TABLE IF NOT EXISTS contact_holds(contact_id TEXT PRIMARY KEY, held REAL NOT NULL)')
     held_here = {row[0] for row in db.execute('SELECT contact_id FROM contact_holds')}
-    for contact in db.execute('SELECT id, peer_id, user_id, name FROM remote_contacts ORDER BY peer_id, name, id').fetchall():
+    for contact in db.execute(f'SELECT id, peer_id, user_id, label FROM ({_labelled(db)}) ORDER BY peer_id, label, id').fetchall():
         if contact['id'] not in held_there or contact['id'] in held_here:
             continue
         db.execute('INSERT INTO contact_holds VALUES(?, ?)', (contact['id'], now))
@@ -842,7 +856,7 @@ def _hold_like_replaced(db, old, now, report):
                                (contact['id'],)).rowcount
         nulled = db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND actor=? AND payload IS NOT NULL',
                             (contact['peer_id'], contact['user_id'])).rowcount
-        report['held'].append((_shown(db, old, contact['peer_id']), contact['name']))
+        report['held'].append((_shown(db, old, contact['peer_id']), contact['label']))
         report['held_counts'] = [sum(pair) for pair in zip(report['held_counts'], (withdrawn, nulled))]
 
 
@@ -906,7 +920,7 @@ def _trust_line(db, old, grant, how):
     contact, else as the replaced file has it, and what happened to it."""
     for connection in (db, old):
         if connection is not None and _has(connection, 'remote_contacts.name', 'remote_contacts.user_id'):
-            row = connection.execute('SELECT name FROM remote_contacts WHERE peer_id=? AND user_id=?',
+            row = connection.execute(f'SELECT label FROM ({_labelled(connection)}) WHERE peer_id=? AND user_id=?',
                                      (grant[1], grant[2])).fetchone()
             if row:
                 return (grant[0][:6], row[0], how)
@@ -1497,7 +1511,7 @@ def _report_differences(db, old, now, report):
         here = dict(db.execute('SELECT peer_id, paired FROM peers').fetchall())
         there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
         def known(peer):
-            names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))] \
+            names = [row[0] for row in db.execute(f'SELECT label FROM ({_labelled(db)}) WHERE peer_id=? ORDER BY label', (peer,))] \
                 if _has(db, 'remote_contacts.name') else []
             return (_shown(db, old, peer), names, peer)
         report['peers'] = [known(peer) for peer in sorted(there) if there[peer] and not here.get(peer)]

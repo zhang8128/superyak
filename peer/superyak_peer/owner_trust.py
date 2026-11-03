@@ -11,6 +11,8 @@ from .ships import safe_line
 
 TRUST_DAYS = 90
 EXPECT_MAX = 10_000
+TRUST_CAP = 200  # spec "The change" item 4: contacts per owner trust per UTC day, from trust_confirmations
+DIGEST_DAYS = 7  # the ended UTC days the digest lists, so Odo catches up after a week away (spec item 5)
 OWNER_TRUST_STATEMENTS = (
     '''CREATE TABLE IF NOT EXISTS owner_trust(seq INTEGER PRIMARY KEY AUTOINCREMENT, grant_id TEXT NOT NULL,
   event TEXT NOT NULL CHECK(event IN ('grant','renew','revoke')), peer_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
@@ -53,6 +55,12 @@ OWNER_TRUST_SCHEMA = ';\n'.join(OWNER_TRUST_STATEMENTS) + ';'
 DAYS_SHAPE = f'days is a whole number from 1 to {TRUST_DAYS}'
 EXPECT_SHAPE = f'expect is a whole number from 1 to {EXPECT_MAX}'
 GRANT_TEXT = "ships owned by {name} on {peer} may be paired by this station's ships, until {date}"
+DIGEST_TEXT = ('Owner trust, {day}: {n} ship(s) of {owner} on {peer} paired by {ships}{refused}. '
+               'Full ids: make station-trust-list on the Pi.')
+PAUSE_TEXT = ("Owner trust for {owner} on {peer} paused after {n} pairings. make station-trust-list shows them; if you "
+              "didn't expect them, unpair that peer as retired; otherwise renew or revoke it in the browser.")
+# A contact as every display names it (the ruling after Tardis's plan review): by its label, never its raw name.
+LABELLED_CONTACT = 'SELECT c.id, c.peer_id, c.user_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id'
 
 
 def code_current(db, contact_id):
@@ -203,6 +211,121 @@ def owner_eligible(db, contact):
         raise Problem(409, 'A code typed for that contact is needed first')
 
 
+def utc_day(at):
+    """A time's UTC date, as trust_confirmations.day and the cap count it."""
+    return datetime.fromtimestamp(at, timezone.utc).strftime('%Y-%m-%d')
+
+
+def owner_label(db, peer_id, owner_user_id):
+    """A trust's owner as every display names it: the label of its contact, found by the pair (peer, participant id),
+    never an id alone."""
+    row = db.execute(f'{LABELLED_CONTACT} WHERE c.peer_id=? AND c.user_id=?', (peer_id, owner_user_id)).fetchone()
+    return row['label'] if row else 'an unknown owner'
+
+
+def contact_trust(db, peer_id, user_id, now):
+    """connections()' `owner_trust` for a contact whose code was typed: its live trust, else its latest grant, as
+    {'grant_id', 'until', 'live'}; None when no trust was ever granted for it."""
+    live = live_trust(db, peer_id, user_id, now)
+    if live:
+        return {'grant_id': live['grant_id'], 'until': live['until'], 'live': True}
+    row = db.execute("SELECT grant_id FROM owner_trust WHERE peer_id=? AND owner_user_id=? AND event='grant' "
+                     'ORDER BY seq DESC LIMIT 1', (peer_id, user_id)).fetchone()
+    if row is None:
+        return None
+    until = db.execute("SELECT MAX(until) FROM owner_trust WHERE grant_id=? AND event IN ('grant','renew')",
+                       (row['grant_id'],)).fetchone()[0]
+    return {'grant_id': row['grant_id'], 'until': until, 'live': False}
+
+
+def trust_digests(db, now):
+    """Spec item 5, the record (the pause notice is the alarm): one Ops line per owner trust per UTC day, for each of
+    the DIGEST_DAYS days before today that had a pairing or a refusal at the cap, in day order. Ruling on N12: a day is
+    listed only once it has ended, so its count never changes under its id, which Odo announces once (agent watch.py,
+    `_announce`). Every name goes through safe_line. A pure read: station_notices runs off the gate."""
+    days = [utc_day(now - back * 86400) for back in range(DIGEST_DAYS, 0, -1)]
+    marks = ','.join('?' * len(days))
+    listed = []
+    for grant in db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' ORDER BY seq").fetchall():
+        grant_id = grant['grant_id']
+        paired = dict(db.execute(f'SELECT day, COUNT(*) FROM trust_confirmations WHERE grant_id=? AND day IN ({marks}) '
+                                 'GROUP BY day', (grant_id, *days)).fetchall())
+        refused = dict(db.execute(f'SELECT day, refused FROM trust_cap_refusals WHERE grant_id=? AND day IN ({marks})',
+                                  (grant_id, *days)).fetchall())
+        for day in sorted(set(paired) | set(refused)):
+            ships = [safe_line(row[0]) for row in db.execute(
+                'SELECT DISTINCT COALESCE(users.username, substr(t.acting_ship_id, 1, 6)) AS ship FROM trust_confirmations t '
+                'LEFT JOIN users ON users.id=t.acting_ship_id WHERE t.grant_id=? AND t.day=? ORDER BY ship', (grant_id, day))]
+            text = DIGEST_TEXT.format(
+                day=day, n=paired.get(day, 0), owner=safe_line(owner_label(db, grant['peer_id'], grant['owner_user_id'])),
+                peer=grant['peer_id'][:12], ships=', '.join(ships) or 'no ship',
+                refused=f'; {refused[day]} refused at the cap of {TRUST_CAP}' if refused.get(day) else '')
+            listed.append((day, {'id': f'trust-digest-{grant_id[:12]}-{day}', 'text': text}))
+    return [notice for _, notice in sorted(listed, key=lambda item: item[0])]  # stable: grant order within a day
+
+
+def trust_pauses(db):
+    """Spec item 4a, the alarm: one Ops notice for each unrevoked trust whose current window is full, so it posts at
+    Odo's next cycle after the nth pairing. Its id names the grant and its window's row, so each window posts once and
+    a renewal's window, paused in turn, posts again; Task 5's restore raises the sequence, so no id comes back. An
+    expired trust still alarms (its pairings happened while it was live); a revoked one is the admin's answer already.
+    A window with no count, which only a damaged file holds, reads as paused (fail closed, as Task 5's restore reads
+    it). Names go through safe_line. A pure read."""
+    notices = []
+    for grant in db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' "
+                            f'AND grant_id NOT IN ({REVOKED}) ORDER BY seq').fetchall():
+        window_seq, expect, paired = trust_window(db, grant['grant_id'])
+        if expect is None or paired >= expect:
+            notices.append({'id': f'trust-paused-{grant["grant_id"][:12]}-{window_seq}', 'text': PAUSE_TEXT.format(
+                owner=safe_line(owner_label(db, grant['peer_id'], grant['owner_user_id'])), peer=grant['peer_id'][:12],
+                n=paired if expect is None else expect)})
+    return notices
+
+
+def _signed_name(assertion):
+    """The ship's name in a stored assertion (canonical JSON), or None when the row holds none."""
+    try:
+        name = json.loads(assertion)['record']['ship_name']
+    except (ValueError, KeyError, TypeError):
+        return None
+    return name if isinstance(name, str) else None
+
+
+def trust_list(db, now):
+    """`station-trust-list` (spec item 5: the digest's full ids): every owner trust in grant order, with its owner by
+    label, its `until`, its state ('live', 'paused', 'expired' or 'revoked', with the revocation's time, reason and
+    person), its current window, and each ship it paired: the label, the signed name, the full participant id, the
+    acting ship, when, whether it's held and its window. Names are raw here; the CLI makes each line safe."""
+    trusts = []
+    for grant in db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' ORDER BY seq").fetchall():
+        grant_id = grant['grant_id']
+        until = db.execute("SELECT MAX(until) FROM owner_trust WHERE grant_id=? AND event IN ('grant','renew')",
+                           (grant_id,)).fetchone()[0]
+        revoke = db.execute("SELECT owner_trust.at, owner_trust.reason, users.username FROM owner_trust LEFT JOIN users ON "
+                            "users.id=owner_trust.by_id WHERE grant_id=? AND event='revoke' ORDER BY seq LIMIT 1",
+                            (grant_id,)).fetchone()
+        window_seq, expect, paired = trust_window(db, grant_id)
+        state = ('revoked' if revoke else 'expired' if until <= now
+                 else 'paused' if expect is None or paired >= expect else 'live')
+        ships = [{'contact_id': r['contact_id'], 'label': r['label'], 'ship_name': _signed_name(r['assertion']),
+                  'participant_id': r['user_id'], 'acting_ship': r['acting'], 'confirmed': r['confirmed'],
+                  'held': bool(r['held']), 'window_seq': r['window_seq']}
+                 for r in db.execute(
+                     'SELECT t.contact_id, t.assertion, t.confirmed, t.window_seq, c.user_id, '
+                     '(SELECT label FROM contact_labels WHERE id=t.contact_id) AS label, '
+                     'COALESCE(users.username, substr(t.acting_ship_id, 1, 6)) AS acting, '
+                     'EXISTS(SELECT 1 FROM contact_holds WHERE contact_id=t.contact_id) AS held '
+                     'FROM trust_confirmations t LEFT JOIN remote_contacts c ON c.id=t.contact_id '
+                     'LEFT JOIN users ON users.id=t.acting_ship_id WHERE t.grant_id=? ORDER BY t.confirmed, t.rowid',
+                     (grant_id,))]
+        trusts.append({'grant_id': grant_id, 'peer_id': grant['peer_id'], 'owner_user_id': grant['owner_user_id'],
+                       'owner': owner_label(db, grant['peer_id'], grant['owner_user_id']), 'until': until, 'state': state,
+                       'revoked_at': revoke['at'] if revoke else None, 'reason': revoke['reason'] if revoke else None,
+                       'revoked_by': revoke['username'] if revoke else None, 'window_seq': window_seq, 'expect': expect,
+                       'paired': paired, 'ships': ships})
+    return trusts
+
+
 class OwnerTrust:
     def _trust_password(self, actor, password, source, public, device):
         with self.transaction() as db:
@@ -221,14 +344,14 @@ class OwnerTrust:
         with self.transaction() as db:
             self._admin(db, actor)
             now = self.clock()
-            contact = db.execute('SELECT * FROM remote_contacts WHERE id=?', (contact_id,)).fetchone()
+            contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
             owner_eligible(db, contact)
             if live_trust(db, contact['peer_id'], contact['user_id'], now):
                 raise Problem(409, 'That owner is already trusted; renew it')
             grant_id, until = uid(), now + days * 86400
             db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) '
                        "VALUES (?,'grant',?,?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor, now, expect))
-        return {'grant_id': grant_id, 'until': until, 'text': _text(contact['name'], contact['peer_id'], until)}
+        return {'grant_id': grant_id, 'until': until, 'text': _text(contact['label'], contact['peer_id'], until)}
 
     def renew_owner_trust(self, actor, grant_id, *, days, expect, seen, password, source, public=True, device=None):
         """Extends an unrevoked trust to `days` whole days from now; it never shortens one."""
@@ -250,7 +373,7 @@ class OwnerTrust:
             if any(r['event'] == 'revoke' for r in rows):
                 raise Problem(409, 'That owner trust was revoked')
             peer_id, owner = rows[0]['peer_id'], rows[0]['owner_user_id']
-            contact = db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer_id, owner)).fetchone()
+            contact = db.execute(f'{LABELLED_CONTACT} WHERE c.peer_id=? AND c.user_id=?', (peer_id, owner)).fetchone()
             owner_eligible(db, contact)
             latest = db.execute("SELECT grant_id FROM owner_trust WHERE peer_id=? AND owner_user_id=? AND event='grant' "
                                 'ORDER BY seq DESC LIMIT 1', (peer_id, owner)).fetchone()
@@ -265,7 +388,7 @@ class OwnerTrust:
                 raise Problem(409, 'That owner trust already runs longer')
             db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) '
                        "VALUES (?,'renew',?,?,?,?,?,?)", (grant_id, peer_id, owner, until, actor, now, expect))
-        return {'grant_id': grant_id, 'until': until, 'text': _text(contact['name'], peer_id, until)}
+        return {'grant_id': grant_id, 'until': until, 'text': _text(contact['label'], peer_id, until)}
 
     def revoke_owner_trust(self, actor, grant_id):
         """The admin's act (spec "The change" item 6): ends the trust at once, so this grant, expired or not, and every

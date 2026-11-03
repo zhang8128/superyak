@@ -43,7 +43,8 @@ SELECT * FROM (
     WHERE m.body LIKE :pattern ESCAPE '\\' AND NOT EXISTS (SELECT 1 FROM room_cloud WHERE room_cloud.room_id=m.room_id)
       AND (:every OR m.room_id IN (SELECT value FROM json_each(:rooms)))
   UNION ALL
-  SELECT p.id, p.room_id, p.created, r.title, coalesce(c.name, 'Someone on another home') FROM peer_messages p
+  SELECT p.id, p.room_id, p.created, r.title,
+      coalesce((SELECT label FROM contact_labels WHERE id=c.id), 'Someone on another home') FROM peer_messages p
     JOIN room_members rm ON rm.room_id=p.room_id AND rm.user_id=:person JOIN rooms r ON r.id=p.room_id
     LEFT JOIN remote_contacts c ON c.peer_id || ':' || c.user_id=p.author_id
     WHERE p.body LIKE :pattern ESCAPE '\\' AND NOT EXISTS (SELECT 1 FROM room_cloud WHERE room_cloud.room_id=p.room_id)
@@ -233,9 +234,9 @@ class ConnectorReads:
         """Display names only: no username, person or peer id leaves the home (D11)."""
         names = [row[0] for row in db.execute('SELECT users.name FROM room_members JOIN users ON users.id=room_members.user_id '
                                               'WHERE room_members.room_id=?', (room_id,))]
-        names += [row[0] for row in db.execute('SELECT remote_contacts.name FROM remote_room_members JOIN remote_contacts ON '
-                                               'remote_contacts.id=remote_room_members.contact_id WHERE '
-                                               'remote_room_members.room_id=?', (room_id,))]
+        names += [row[0] for row in db.execute('SELECT contact_labels.label FROM remote_room_members JOIN contact_labels ON '
+                                               'contact_labels.id=remote_room_members.contact_id WHERE '
+                                               'remote_room_members.room_id=?', (room_id,))]  # labels (owner trust)
         return sorted(names)
 
     # ---- the tools ----
@@ -393,8 +394,9 @@ class ConnectorReads:
         remote = {row['author_id'] for row, (_, source) in zip(rows, picked) if source == 1}
         people = {r['id']: (r['name'], r['kind']) for r in db.execute(
             f'SELECT id, name, kind FROM users WHERE id IN ({",".join("?" * len(local))})', tuple(local))} if local else {}
-        contacts = {r['author']: r['name'] for r in db.execute(  # a paired home's author is <peer>:<user> (federation.py)
-            "SELECT peer_id || ':' || user_id AS author, name FROM remote_contacts WHERE peer_id || ':' || user_id IN "
+        contacts = {r['author']: r['label'] for r in db.execute(  # a paired home's author is <peer>:<user> (federation.py)
+            "SELECT c.peer_id || ':' || c.user_id AS author, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id "
+            "WHERE c.peer_id || ':' || c.user_id IN "
             f'({",".join("?" * len(remote))})', tuple(remote))} if remote else {}
         shaped = []
         for row, (_, source) in zip(rows, picked):
