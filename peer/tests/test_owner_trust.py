@@ -14,7 +14,8 @@ from superyak_peer.common import Problem
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
 from superyak_peer.identity import PeerIdentity, canonical, check_ship_assertion, make_ship_assertion, pairing_code
-from superyak_peer.owner_trust import OWNER_TRUST_STATEMENTS, OWNER_TRUST_SCHEMA, live_trust
+from superyak_peer.owner_trust import (OWNER_TRUST_STATEMENTS, OWNER_TRUST_SCHEMA, code_current, live_trust,
+                                       settle_owner_trust)
 
 NOW = 1_800_000_000
 
@@ -742,3 +743,209 @@ def test_the_cli_line_keeps_the_ships_name_after_a_long_owner_name(trusted):
     assert done.stdout.startswith('Paired ship of Andy (at)rio-grande x')
     assert done.stdout.endswith(': longs-ship, confirmed by owner trust.\n') and done.stdout.count('\n') == 1
     assert '@' not in done.stdout and len(done.stdout) < 160
+
+
+# Task 4: ending a trust: revoke, the holds that follow, and a retired peer
+
+def revoke(t, grant_id=None, actor=None):
+    return t.station.revoke_owner_trust(t.admin['id'] if actor is None else actor, grant_id or t.trust['grant_id'])
+
+
+def is_held(station, contact_id):
+    with station.transaction() as db:
+        return db.execute('SELECT 1 FROM contact_holds WHERE contact_id=?', (contact_id,)).fetchone() is not None
+
+
+def queue(station, contact_id):
+    """One pending outbox row for a contact, by hand."""
+    with station.transaction() as db:
+        db.execute("INSERT INTO outbox(id,event_seq,contact_id,resource_id,revision,action,metadata,status) "
+                   "VALUES (?,1,?,'room-1',1,'room.message','{}','pending')", ('out-' + contact_id, contact_id))
+
+
+def outbox_of(station, contact_id):
+    with station.transaction() as db:
+        return [r[0] for r in db.execute('SELECT status FROM outbox WHERE contact_id=?', (contact_id,))]
+
+
+def revocations(station):
+    return [(r['grant_id'], r['reason'], r['by_id'], r['at']) for r in rows(station) if r['event'] == 'revoke']
+
+
+def test_revoking_holds_every_ship_and_withdraws_their_outbox(trusted):
+    t = trusted
+    ships = [pairs(t), pairs(t, *b_ship(t, 'serenity'))]
+    for contact in (*ships, t.owner):
+        queue(t.station, contact['id'])
+    with t.station.transaction() as db:  # a payload tardis authored, and one its owner did
+        for author in (ships[0]['user_id'], t.owner['user_id']):
+            db.execute("INSERT INTO inbox VALUES (?,?,'room',?,1,?,'{}')",
+                       (t.owner['peer_id'], 'room-' + author, t.admin['id'], author))
+    assert revoke(t) == {'grant_id': t.trust['grant_id'], 'held': 2}
+    for ship in ships:
+        assert is_held(t.station, ship['id']) and outbox_of(t.station, ship['id']) == ['withdrawn']
+    assert not is_held(t.station, t.owner['id']) and outbox_of(t.station, t.owner['id']) == ['pending']  # ends the trust, not the person
+    with t.station.transaction() as db:
+        assert dict(db.execute('SELECT actor, payload FROM inbox').fetchall()) == \
+            {ships[0]['user_id']: None, t.owner['user_id']: '{}'}
+    assert revocations(t.station) == [(t.trust['grant_id'], 'revoked', t.admin['id'], t.clock[0])]
+    before = counts(t.station)
+    with pytest.raises(Problem) as caught:
+        revoke(t)
+    assert caught.value.status == 409 and counts(t.station) == before and len(revocations(t.station)) == 1
+
+
+def test_only_an_admin_revokes_and_only_a_known_trust(trusted):
+    t = trusted
+    pairs(t)
+    before = counts(t.station)
+    for actor, grant_id, status in ((t.ship, None, 403), (t.admin['id'], 'no-such-grant', 404)):
+        with pytest.raises(Problem) as caught:
+            revoke(t, grant_id, actor)
+        assert caught.value.status == status
+    assert counts(t.station) == before
+
+
+def test_holding_the_owner_holds_its_ships_and_dates_it(trusted):
+    t = trusted
+    ships = [pairs(t), pairs(t, *b_ship(t, 'serenity'))]
+    t.clock[0] += 60
+    t.fed.unpair(t.admin['id'], t.owner['id'])
+    assert revocations(t.station) == [(t.trust['grant_id'], 'owner held', None, t.clock[0])]
+    assert all(is_held(t.station, ship['id']) for ship in ships)
+
+
+@pytest.mark.parametrize('how', ['held', 'stale code', 'unpaired', 'retired', 'gone', 'held after expiry'])
+def test_settling_ends_a_trust_whose_owner_fails_and_holds_its_ships(trusted, how):
+    """Any hold of the owner, as a restore makes one (backups _hold_like_replaced holds a contact alone)."""
+    t = trusted
+    ships = [pairs(t), pairs(t, *b_ship(t, 'serenity'))]
+    queue(t.station, ships[0]['id'])
+    with t.station.transaction() as db:
+        assert settle_owner_trust(db, t.clock[0]) == []  # nothing to settle yet
+    if how == 'held after expiry':
+        t.clock[0] = t.trust['until'] + 1  # an expired trust's ships stay paired until a hold of the owner
+    sql = {'stale code': ("UPDATE pairing_confirmations SET code=? WHERE contact_id=?", ('0' * 32, t.owner['id'])),
+           'unpaired': ('UPDATE peers SET paired=0 WHERE peer_id=?', (t.owner['peer_id'],)),
+           'retired': ('INSERT INTO retired_peers VALUES (?,?,NULL)', (t.owner['peer_id'], t.clock[0])),
+           'gone': ('DELETE FROM remote_contacts WHERE id=?', (t.owner['id'],))
+           }.get(how, ('INSERT INTO contact_holds VALUES (?,?)', (t.owner['id'], t.clock[0])))
+    with t.station.transaction() as db:
+        db.execute(*sql)
+        assert settle_owner_trust(db, t.clock[0]) == [t.trust['grant_id']]
+        assert settle_owner_trust(db, t.clock[0]) == []  # settled: a second run changes nothing
+    assert revocations(t.station) == [(t.trust['grant_id'], 'owner held', None, t.clock[0])]
+    assert all(is_held(t.station, ship['id']) for ship in ships)
+    assert outbox_of(t.station, ships[0]['id']) == ['withdrawn']
+
+
+def test_repairing_the_owners_peer_does_not_bring_the_trust_back(trusted, paired):
+    t = trusted
+    ships = [pairs(t), pairs(t, *b_ship(t, 'serenity'))]
+    t.fed.unpair(t.admin['id'], t.owner['id'])
+    t.clock[0] += 60
+    person_card = paired[3]
+    again = t.fed.pair(t.admin['id'], person_card, code=pairing_code(person_card))
+    assert again['id'] == t.owner['id'] and again['confirmed'] and not again['held']
+    with t.station.transaction() as db:
+        assert code_current(db, t.owner['id'])  # the owner is live again
+        assert live_trust(db, t.owner['peer_id'], t.owner['user_id'], t.clock[0]) is None  # the trust is not
+    assert len(revocations(t.station)) == 1 and all(is_held(t.station, ship['id']) for ship in ships)
+    refuses(t, 403, 'trust')  # the old assertion, with no trust
+    grant((t.station, t.admin, t.owner, None))
+    refuses(t, 403, 'revoked')  # and under a new trust: it was issued before the unpair
+
+
+def test_a_peer_unpaired_without_a_revocation_ends_its_trusts_when_it_pairs_again(trusted, paired):
+    """As main's unpair leaves a peer (a rollback): unpaired, nothing held, no revoke row. Pairing it again holds every
+    contact first (Serenity's MF2), and that hold of the owner ends its trust before the typed one is released."""
+    t = trusted
+    tardis = pairs(t)
+    with t.station.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (t.owner['peer_id'],))
+    t.clock[0] += 60
+    t.fed.pair(t.admin['id'], paired[3], code=pairing_code(paired[3]))
+    assert revocations(t.station) == [(t.trust['grant_id'], 'owner held', None, t.clock[0])]
+    assert is_held(t.station, tardis['id']) and not is_held(t.station, t.owner['id'])
+
+
+def test_a_held_ship_repairs_only_under_a_later_trust_and_a_fresh_assertion(trusted):
+    t = trusted
+    tardis = pairs(t)
+    revoked_at = t.clock[0]
+    revoke(t)
+    t.clock[0] += 60
+    later = grant((t.station, t.admin, t.owner, None))
+    ship_id = t.card['participant']['id']
+    refuses(t, 403, 'revoked')  # its old assertion
+    refuses(t, 403, 'revoked', *b_ship(t, 'tardis', ship_id, now=revoked_at - 1))  # signed anew, dated before
+    before = counts(t.station)
+    done = pairs(t, *b_ship(t, 'tardis', ship_id, now=revoked_at + 1))
+    assert done['id'] == tardis['id'] and done['grant_id'] == later['grant_id'] and done['confirmed_by'] == 'owner trust'
+    assert not is_held(t.station, tardis['id'])
+    assert counts(t.station) == {**before, 'contact_holds': before['contact_holds'] - 1,
+                                 'trust_confirmations': before['trust_confirmations'] + 1}
+    assert label_of(t.station, tardis['id']) == 'ship of Andy B: tardis'
+    refuses(t, 409, 'already', *b_ship(t, 'tardis', ship_id))  # back, so a contact again
+
+
+def test_a_held_ship_does_not_come_back_under_a_trust_granted_before_its_revocation(trusted):
+    t = trusted
+    tardis = pairs(t)
+    ship_id = t.card['participant']['id']
+    t.clock[0] = t.trust['until'] + 10  # the first trust has expired; tardis stays paired under it
+    second = grant((t.station, t.admin, t.owner, None), days=30)
+    t.clock[0] += 10
+    assert revoke(t)['held'] == 1  # the expired trust, revoked after the second was granted
+    t.clock[0] += 10
+    refuses(t, 409, 'granted after', *b_ship(t, 'tardis', ship_id))  # fresh, but the live trust predates the revocation
+    revoke(t, second['grant_id'])
+    t.clock[0] += 10
+    grant((t.station, t.admin, t.owner, None), days=30)
+    t.clock[0] += 10
+    assert pairs(t, *b_ship(t, 'tardis', ship_id))['id'] == tardis['id']
+
+
+def test_a_held_ship_does_not_come_back_under_another_owners_trust(trusted):
+    t = trusted
+    pairs(t)
+    revoke(t)
+    t.clock[0] += 60
+    store, _, _, fed = t.machine
+    sam = store.create_user('sam', 'Sam', 'a-long-password')
+    sam_card = fed.card(sam['id'])
+    contact = t.fed.pair(t.admin['id'], sam_card, code=pairing_code(sam_card))
+    t.station.grant_owner_trust(t.admin['id'], contact['id'], days=30, password=PASSWORD, source='127.0.0.1')
+    refuses(t, 409, 'granted after', *b_ship(t, 'tardis', t.card['participant']['id'], owner=sam['id']))
+
+
+def test_a_typed_code_does_not_bring_back_a_ship_whose_trust_was_revoked(trusted):
+    """The invariant holds it again at once, so pair refuses rather than answer 'confirmed' for a held contact."""
+    t = trusted
+    tardis = pairs(t)
+    revoke(t)
+    before = counts(t.station)
+    with pytest.raises(Problem) as caught:
+        t.fed.pair(t.admin['id'], t.card, code=pairing_code(t.card))
+    assert caught.value.status == 409 and 'revoked' in caught.value.message
+    assert counts(t.station) == before and is_held(t.station, tardis['id'])
+
+
+def test_pair_refuses_a_retired_peer_whatever_code_is_typed(trusted, paired):
+    t = trusted
+    tardis = pairs(t)
+    t.clock[0] += 60
+    t.fed.unpair(t.admin['id'], t.owner['id'], retire=True)
+    with t.station.transaction() as db:
+        assert [tuple(r) for r in db.execute('SELECT * FROM retired_peers')] == \
+            [(t.owner['peer_id'], t.clock[0], t.admin['id'])]
+    assert is_held(t.station, t.owner['id']) and is_held(t.station, tardis['id'])  # its person contacts too
+    assert revocations(t.station) == [(t.trust['grant_id'], 'owner held', None, t.clock[0])]
+    person_card = paired[3]
+    before = counts(t.station)
+    for code in (pairing_code(person_card), '0' * 32, ''):
+        with pytest.raises(Problem) as caught:
+            t.fed.pair(t.admin['id'], person_card, code=code)
+        assert caught.value.status == 409, caught.value.message
+        assert caught.value.message == 'This peer was retired; it comes back only as a new identity'
+        assert counts(t.station) == before

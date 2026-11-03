@@ -71,6 +71,62 @@ def live_trust(db, peer_id, owner_user_id, now):
         'GROUP BY grant_id HAVING MAX(until)>? ORDER BY MAX(until) DESC LIMIT 1', (peer_id, owner_user_id, now)).fetchone()
 
 
+LATEST = 'ORDER BY confirmed DESC, rowid DESC LIMIT 1'  # a contact's latest trust confirmation, as contact_labels picks it
+# The ships not held, each with the grant of its latest confirmation: those a revocation of that grant holds.
+UNHELD_SHIPS = ('SELECT c.id, c.peer_id, c.user_id, t.grant_id FROM remote_contacts c JOIN trust_confirmations t ON '
+                f't.rowid=(SELECT rowid FROM trust_confirmations WHERE contact_id=c.id {LATEST}) '
+                'WHERE c.id NOT IN (SELECT contact_id FROM contact_holds)')
+REVOKED = "SELECT grant_id FROM owner_trust WHERE event='revoke'"
+
+
+def latest_grant(db, contact_id):
+    """The grant of this contact's latest trust confirmation, or None for a contact no trust made."""
+    row = db.execute(f'SELECT grant_id FROM trust_confirmations WHERE contact_id=? {LATEST}', (contact_id,)).fetchone()
+    return row[0] if row else None
+
+
+def hold_contact(db, contact, now):
+    """Holds one contact as Federation.unpair holds each of a peer's (backups._hold_like_replaced, for one): its
+    confirmation gone, its pending and failed outbox rows withdrawn, and the received payloads it authored cleared.
+    A contact already held keeps the date of its first hold."""
+    db.execute('INSERT OR IGNORE INTO contact_holds VALUES(?, ?)', (contact['id'], now))
+    db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (contact['id'],))
+    db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id=? AND status IN ('pending','failed')", (contact['id'],))
+    db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND actor=? AND payload IS NOT NULL',
+               (contact['peer_id'], contact['user_id']))
+
+
+def _owner_failed(db, peer_id, owner_user_id):
+    """Whether a trust's owner can no longer vouch: its peer retired, its contact gone or held, or its typed code no
+    longer current (which `code_current` also finds for a peer that is unpaired or missing)."""
+    if db.execute('SELECT 1 FROM retired_peers WHERE peer_id=?', (peer_id,)).fetchone():
+        return True
+    owner = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer_id, owner_user_id)).fetchone()
+    if owner is None or db.execute('SELECT 1 FROM contact_holds WHERE contact_id=?', (owner['id'],)).fetchone():
+        return True
+    return not code_current(db, owner['id'])
+
+
+def settle_owner_trust(db, now):
+    """The one invariant (spec "The change" items 3 and 6, S10, N13), run inside the caller's transaction by unpair,
+    pair, a revoke and a restore. Every unrevoked trust, expired ones too, whose owner has failed gets a revocation
+    dated `now` with reason 'owner held', so every hold of an owner has a date; then every ship whose latest
+    confirmation names a revoked trust is held. Returns the grant ids it revoked, in grant order."""
+    revoked = []
+    while True:  # until a pass ends nothing; a held ship is never an owner (an owner has no trust confirmation)
+        grants = db.execute(f"SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' "
+                            f'AND grant_id NOT IN ({REVOKED}) ORDER BY seq').fetchall()
+        ended = [g for g in grants if _owner_failed(db, g['peer_id'], g['owner_user_id'])]
+        for g in ended:
+            db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
+                       "VALUES (?,'revoke',?,?,NULL,NULL,?,'owner held')", (g['grant_id'], g['peer_id'], g['owner_user_id'], now))
+        revoked += [g['grant_id'] for g in ended]
+        for ship in db.execute(f'{UNHELD_SHIPS} AND t.grant_id IN ({REVOKED})').fetchall():
+            hold_contact(db, ship, now)
+        if not ended:
+            return revoked
+
+
 def _days(days):
     if type(days) is not int or not 1 <= days <= TRUST_DAYS:
         raise Problem(400, DAYS_SHAPE)
@@ -149,3 +205,22 @@ class OwnerTrust:
             db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at) '
                        "VALUES (?,'renew',?,?,?,?,?)", (grant_id, peer_id, owner, until, actor, now))
         return {'grant_id': grant_id, 'until': until, 'text': _text(contact['name'], peer_id, until)}
+
+    def revoke_owner_trust(self, actor, grant_id):
+        """The admin's act (spec "The change" item 6): ends a trust at once, expired or not, and holds every ship whose
+        latest confirmation it made, as settle_owner_trust holds them. It only takes power away, so it needs no
+        password. A trust revoked already is refused, so it never gains a second revocation."""
+        with self.transaction() as db:
+            self._admin(db, actor)
+            now = self.clock()
+            rows = db.execute('SELECT event, peer_id, owner_user_id FROM owner_trust WHERE grant_id=? ORDER BY seq',
+                              (grant_id,)).fetchall()
+            if not rows:
+                raise Problem(404, 'No such owner trust')
+            if any(r['event'] == 'revoke' for r in rows):
+                raise Problem(409, 'That owner trust was revoked already')
+            ships = db.execute(f'{UNHELD_SHIPS} AND t.grant_id=?', (grant_id,)).fetchall()
+            db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
+                       "VALUES (?,'revoke',?,?,NULL,?,?,'revoked')", (grant_id, rows[0]['peer_id'], rows[0]['owner_user_id'], actor, now))
+            settle_owner_trust(db, now)
+        return {'grant_id': grant_id, 'held': len(ships)}
