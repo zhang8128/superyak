@@ -971,11 +971,32 @@ def _keep_trust_like_replaced(db, old, now, report):
         elif grant['grant_id'] in missing:
             values, how = (None, now, 'restored'), 'revoked: missing from the replaced file'
         elif _paused_whole(here, there, grant['grant_id']) is False:
-            values, how = (None, now, 'paused at restore'), 'revoked: paused in the replaced file'
+            values, how = (None, now, 'paused at restore'), 'revoked: paused in the replaced file; ' + PAUSE_LOST
         else:
             continue
         _revoke_trust(db, grant, *values)
         report['trusts'].append(_trust_line(db, old, grant, how))
+    _keep_retirements(db, old, report)
+
+
+# The pause notice's own advice (owner_trust.PAUSE_TEXT), for a pause whose alarm the restore has lost
+PAUSE_LOST = "its pairings since the copy are lost; if you didn't expect them, unpair that peer as retired before granting again"
+RETIRED_NEEDS = ('retired_peers.peer_id', 'retired_peers.retired', 'retired_peers.by_id')
+
+
+def _keep_retirements(db, old, report):
+    """Each retirement in the replaced file that the copy lacks is added, and its peer unpaired as Federation.unpair does
+    when the copy has it paired. Reached with a usable replaced file, and also (Task 5's parked item) with one treated as
+    absent because it lacks some other trust table, so a retirement it holds is never silently lost: retired_peers is
+    append-only, and a peer once retired must never pair again."""
+    if not _has(old, *RETIRED_NEEDS):
+        return
+    report['retirements_kept'] = True
+    if not _has(db, 'retired_peers'):
+        from .owner_trust import OWNER_TRUST_STATEMENTS
+        for statement in OWNER_TRUST_STATEMENTS:
+            if 'TABLE IF NOT EXISTS retired_peers' in statement:
+                db.execute(statement)
     kept = 0
     for peer, retired, by_id in old.execute('SELECT peer_id, retired, by_id FROM retired_peers '
                                             'ORDER BY retired, peer_id').fetchall():
@@ -1015,7 +1036,7 @@ def _name_trusts(db, old, report):
         else:
             named[grant_id] = 'granted since the copy, and the grant was lost: grant it again'
             if _paused_whole(here, there, grant_id) is not None:
-                named[grant_id] += f'; it had paused there after {there[grant_id][1]} pairings'
+                named[grant_id] += f'; it had paused there after {there[grant_id][1]} pairings, and ' + PAUSE_LOST
     lines = list(named.items())
     lines += [(grant_id, 'paused, as in the replaced file: check its ships, then renew or revoke') for grant_id in grants
               if grant_id not in revoked and grant_id not in named and _paused_whole(here, there, grant_id)]
@@ -1673,6 +1694,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0],
               'held': [], 'held_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
               'not_compared': [], 'grants': [], 'connections': [], 'trusts': []}
+    salvage = None
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
     try:
@@ -1686,7 +1708,10 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
             raise ReconcileRefused('Refused: --replaced is the staged copy itself. REPLACED= is the peer.sqlite3 set aside in runbook step 4.')
         why = _not_this_station(db, old) if old is not None else None
         if why:  # review I1: compared, it would take back nothing and revoke no key; fail closed, as for one that fails its check
-            old.close()
+            if _has(old, *RETIRED_NEEDS):
+                salvage = old  # its retirements are kept below (_keep_retirements); everything else is treated as absent
+            else:
+                old.close()
             old, report['replaced'] = None, f'treated as absent ({why})'
         # The live file always holds the copy's history and more, so its events sequence is never lower; a lower one
         # means DB= and REPLACED= were swapped. Final review M1: only a replaced file that is this station's is checked.
@@ -1708,6 +1733,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 _revoke_every_connection(db, old, now, report)
                 _revoke_every_token(db, old, now, report)
                 _revoke_every_trust(db, old, now, report)
+                if salvage is not None:
+                    _keep_retirements(db, salvage, report)
             else:
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
@@ -1729,8 +1756,9 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
             raise
     finally:
         db.close()
-        if old is not None:
-            old.close()
+        for handle in (old, salvage):
+            if handle is not None:
+                handle.close()
     return report
 
 
@@ -1751,8 +1779,8 @@ def describe_reconcile(report):
                      "compared: check them by hand in runbook step 8. Peer pairings were not compared either, and nothing was "
                      'unpaired: before the copy goes live (runbook step 5), peer pairings: list them and name any you had cut '
                      "off in UNPAIR=. Every owned ship's keys were revoked, so those machines dock again. " + MARKS_NOT_KEPT
-                     + ' ' + CONNECTIONS_NOT_KEPT + ' ' + RECEIPTS_NOT_KEPT + ' ' + TRUSTS_RESTORED + ' '
-                     + TRUST_RETIREMENTS_NOT_KEPT)
+                     + ' ' + CONNECTIONS_NOT_KEPT + ' ' + RECEIPTS_NOT_KEPT + ' ' + TRUSTS_RESTORED
+                     + ('' if report.get('retirements_kept') else ' ' + TRUST_RETIREMENTS_NOT_KEPT))
     lines.append('Taken back: ' + ', '.join(f'{label} ({count})' for label, count in report['counts'].items()) + '.')
     for table, (before, after) in report['sequences'].items():
         if after != before:

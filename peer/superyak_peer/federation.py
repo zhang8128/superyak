@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from .identity import (PeerIdentity, validate_card, verify_envelope, verify_pull, pull_shape_ok, canonical, parse,
                        pairing_code, show_code, typed_code, HEX32, check_ship_assertion)
 from .common import Problem, require, uid, encode, text, linked_room_ok
-from .owner_trust import (TRUST_CAP, code_current, contact_trust, latest_grant, live_trust, owner_eligible,
+from .owner_trust import (TRUST_CAP, plain_name, code_current, contact_trust, latest_grant, live_trust, owner_eligible,
                           settle_owner_trust, trust_window)
 from .ships import SHIP_NAME
 
@@ -109,6 +109,19 @@ def _name_taken(db, name):
     rows = db.execute('SELECT username, name FROM users UNION ALL SELECT name, name FROM remote_contacts '
                       'WHERE id NOT IN (SELECT contact_id FROM trust_confirmations)')  # once, not per contact
     return any(folded in (_folded(row[0]), _folded(row[1])) for row in rows)
+
+def _owner_ship_named(db, peer, owner_id, ship_id, name):
+    """Owner trust (S6): whether another ship of the same owner, as (peer, participant id), that is not held, already
+    reads as `name` by _folded: two identical "ship of <owner>: <name>" lines would show. Ships of the same name on
+    other hosts, and a held ship's name, are left alone."""
+    folded = _folded(name)
+    rows = db.execute("SELECT c.name FROM remote_contacts c JOIN trust_confirmations t ON t.rowid=(SELECT rowid FROM "
+                      "trust_confirmations WHERE contact_id=c.id ORDER BY confirmed DESC, rowid DESC LIMIT 1) "
+                      "WHERE c.peer_id=? AND c.user_id<>? AND c.id NOT IN (SELECT contact_id FROM contact_holds) "
+                      "AND EXISTS(SELECT 1 FROM owner_trust g WHERE g.grant_id=t.grant_id AND g.event='grant' "
+                      "AND g.peer_id=? AND g.owner_user_id=?)", (peer, ship_id, peer, owner_id))
+    return any(_folded(row[0]) == folded for row in rows)
+
 
 def _held_ship_may_return(db, contact_id, station, owner_id, grant_id):
     """pair_trusted's check 7 for a contact that exists: a refusal unless it is a ship held because its trust was
@@ -273,6 +286,8 @@ class Federation:
                 raise Problem(400, "A ship's name is 2 to 32 lowercase letters, digits and dashes, starting with a letter")
             if _name_taken(db, name):
                 raise Problem(409, 'That name is a local account or a person contact here')
+            if _owner_ship_named(db, peer, owner_id, record['ship_id'], name):
+                raise Problem(409, 'Another ship of that owner on that peer already has that name')
             # 7. Not a contact already, except a ship held because its trust was revoked, re-paired under a later trust
             # of the same owner on the same peer (spec item 3, step 6, S10, N13).
             existing = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer, record['ship_id'])).fetchone()
@@ -347,6 +362,7 @@ class Federation:
             listed = []
             for r in rows:
                 fields = {k: r[k] for k in r.keys() if k not in ('card_name', 'held', 'trusted', 'retired')}
+                fields['name'] = plain_name(fields['name'])
                 card = {**json.loads(r['card']), 'participant': {'id': r['user_id'], 'name': r['card_name']}}
                 typed = code_current(db, r['id'])
                 by_trust = not typed and bool(r['trusted']) and not r['held'] and bool(r['paired'])

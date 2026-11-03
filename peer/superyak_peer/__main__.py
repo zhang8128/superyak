@@ -444,7 +444,7 @@ HELD_RETIRED = 'held: its peer was retired; it comes back only as a new identity
 # A trust ship is held only once its trust ended: by a revoke, or by a hold of its owner (an unpair, a restore), which
 # settle_owner_trust turns into a revocation in the same transaction (spec item 6, S8, S10). After an unpair the owner
 # needs its code typed again before any new trust, so the line says that too (Task 7 review).
-HELD_TRUST_SHIP = ("held: its owner's trust ended; once the owner is confirmed again, a new trust and a fresh "
+HELD_TRUST_SHIP = ("held: its owner's trust was revoked; with the owner confirmed by code, a new trust and a fresh "
                    'export-ship bring it back, or its own code')
 
 

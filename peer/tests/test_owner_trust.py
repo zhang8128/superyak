@@ -14,7 +14,7 @@ from superyak_peer.common import Problem
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
 from superyak_peer.identity import PeerIdentity, canonical, check_ship_assertion, make_ship_assertion, pairing_code
-from superyak_peer.owner_trust import (OWNER_TRUST_STATEMENTS, OWNER_TRUST_SCHEMA, code_current, live_trust,
+from superyak_peer.owner_trust import (OWNER_TRUST_STATEMENTS, OWNER_TRUST_SCHEMA, code_current, live_trust, trust_list,
                                        settle_owner_trust)
 
 NOW = 1_800_000_000
@@ -628,6 +628,34 @@ def test_a_ships_name_may_repeat_on_another_host(trusted):
     assert first['name'] == second['name'] == 'tardis' and first['peer_id'] != second['peer_id']
     assert label_of(t.station, first['id']) == 'ship of Andy B: tardis'
     assert label_of(t.station, second['id']) == 'ship of Andy C: tardis'  # the owner is (peer, id), never an id alone
+
+
+def test_a_second_ship_of_the_same_owner_and_name_is_refused(trusted):
+    """Two ships of one owner on one host may not both read "ship of Andy B: tardis"; a held one gives its name back, and
+    the same name on another host is allowed (test above). Mutation: the check left out."""
+    t = trusted
+    first = pairs(t)
+    refuses(t, 409, 'already has that name', *b_ship(t, 'tardis', ship_id='ship-tardis-2'))
+    revoke(t)  # the first is held: its name is free
+    t.station.grant_owner_trust(t.admin['id'], t.owner['id'], days=30, expect=50, password=PASSWORD, source='127.0.0.1')
+    t.clock[0] += 60
+    second = pairs(t, *b_ship(t, 'tardis', ship_id='ship-tardis-2'))
+    assert second['id'] != first['id']
+
+
+def test_a_bidi_control_in_an_owners_name_stays_out_of_the_browsers_labels(trusted):
+    """A format character (RLO, an isolate) in a paired person's name can't reorder the ship part of a label that goes to
+    the browser: connections() and the renewal list carry labels with Cf characters removed. Mutation: plain_name not
+    applied."""
+    t = trusted
+    done = pairs(t)
+    with t.station.transaction() as db:
+        db.execute("UPDATE remote_contacts SET name=? WHERE id=?", ('Andy \u202eB\u2066', t.owner['id']))
+    listed = {c['id']: c for c in t.fed.connections(t.admin['id'])}
+    assert listed[done['id']]['name'] == 'ship of Andy B: tardis'
+    with t.station.transaction() as db:
+        shown = trust_list(db, t.clock[0])
+    assert shown[0]['ships'][0]['label'] == 'ship of Andy B: tardis' and shown[0]['owner'] == 'Andy B'
 
 
 def test_a_contact_that_already_exists(trusted):
@@ -1289,7 +1317,7 @@ def test_connections_say_confirmed_by_owner_trust(trusted):
                                                     'state': 'revoked', 'window_seq': window, 'expect': 50, 'paired': 1,
                                                     'line': line}
     # the held ship says its trust ended (Task 7, after Task 6's review), not "held until its own code is typed"
-    assert "held: its owner's trust ended" in describe_connections(list(listed.values()), now=t.clock[0])
+    assert "held: its owner's trust was revoked" in describe_connections(list(listed.values()), now=t.clock[0])
 
 
 def test_a_layer_preview_names_a_ship_by_its_label(trusted):
@@ -1457,6 +1485,8 @@ def test_station_trust_list_names_full_ids(trusted):
 RAW_NAME_READS = {
     ('federation.py', '_name_taken', 'SELECT username, name FROM users UNION ALL SELECT name, name FROM remote_contacts'):
         "the collision check: a ship's name against every person's raw name",
+    ('federation.py', '_owner_ship_named', 'SELECT c.name FROM remote_contacts c JOIN trust_confirmations'):
+        "the duplicate check: a ship's own card name against its owner's other ships, which are all ships",
     ('federation.py', 'Federation.pair', 'ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name'):
         "a write: pair() stores the card's participant name",
     ('federation.py', 'Federation._pair_trusted', 'UPDATE remote_contacts SET name=? WHERE id=?'):

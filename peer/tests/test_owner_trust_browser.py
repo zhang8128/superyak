@@ -47,7 +47,7 @@ def build(tmp_path, *, clock=None, origins=(ORIGIN,), name='Andy B'):
                            b_fed=b_fed, b_person=b_person, owner=owner)
 
 
-HELD_SHIP = ("held: its owner's trust ended; once the owner is confirmed again, a new trust and a fresh export-ship "
+HELD_SHIP = ("held: its owner's trust was revoked; with the owner confirmed by code, a new trust and a fresh export-ship "
              'bring it back, or its own code')
 
 
@@ -590,13 +590,15 @@ def test_the_line_read_before_the_password_is_the_stored_text(trust_browser):
     assert flash(page).text_content() == f'Owner trust granted: {stored}'
     assert page.locator(f"#trust-line-{st.owner['id']}").text_content() == stored  # the live trust's line, too
     assert page.locator(f"#trust-line-{st.owner['id']} bdi").text_content() == 'Andy B(at)home x'
-    # Elsewhere in the card the name is shown raw, as every contact's is, but isolated, so its override can't run on
-    # into the pairing code after it (the heading, the contact's line, the disconnect sentence, the trust button).
+    # Elsewhere in the card the name is the station's plain_name (format characters such as the override and the isolate
+    # removed, so they can't reorder a ship's label), and isolated, so nothing runs on into the pairing code after it
+    # (the heading, the contact's line, the disconnect sentence, the trust button).
+    plain = ''.join(c for c in SPOOF if c not in '\u202e\u2066')
     card = page.locator('.card .card', has=owner)
     for place in ('h3', f"[data-contact=\"{st.owner['id']}\"] > span:first-child", 'p.meta:has-text("This disconnects")'):
-        assert card.locator(f'{place} bdi').first.text_content() == SPOOF, place
+        assert card.locator(f'{place} bdi').first.text_content() == plain, place
     owner.get_by_role('button', name='Revoke', exact=True).click()
-    assert owner.locator('.trust-question bdi').text_content() == SPOOF
+    assert owner.locator('.trust-question bdi').text_content() == plain
 
 
 def test_retiring_a_peer_disconnected_earlier(trust_browser):

@@ -4,6 +4,7 @@ append-only `owner_trust` table and its companions, granting and renewing, and t
 `connections()` share: `code_current` and `live_trust`."""
 from datetime import datetime, timezone
 import json
+import unicodedata
 
 from .common import Problem, uid
 from .identity import pairing_code
@@ -64,6 +65,16 @@ PAUSE_TEXT = ("Owner trust for {owner} on {peer} paused after {n} pairings. make
               "didn't expect them, unpair that peer as retired; otherwise renew or revoke it in the browser.")
 # A contact as every display names it (the ruling after Tardis's plan review): by its label, never its raw name.
 LABELLED_CONTACT = 'SELECT c.id, c.peer_id, c.user_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id'
+
+
+def plain_name(text):
+    """A label or name bound for the browser's JSON with its format characters (category Cf, such as a right-to-left
+    override or an isolate) and other non-printables removed or made spaces, so a paired person's name can't reorder the
+    ship part of a label, even inside <bdi>. The CLI reads the same text."""
+    if text is None:
+        return None
+    kept = ''.join(c for c in str(text) if unicodedata.category(c) != 'Cf')
+    return ''.join(c if c.isprintable() else ' ' for c in kept)
 
 
 def code_current(db, contact_id):
@@ -314,7 +325,7 @@ def trust_renewal(db, grant_id, now):
         'EXISTS(SELECT 1 FROM contact_holds WHERE contact_id=t.contact_id) AS held FROM trust_confirmations t '
         'LEFT JOIN contact_labels l ON l.id=t.contact_id LEFT JOIN users ON users.id=t.acting_ship_id '
         'WHERE t.window_seq=? ORDER BY t.confirmed, t.rowid', ('a contact no longer here', known['window_seq']))]
-    return {'grant_id': grant_id, 'owner': owner_label(db, grant['peer_id'], grant['owner_user_id']),
+    return {'grant_id': grant_id, 'owner': plain_name(owner_label(db, grant['peer_id'], grant['owner_user_id'])),
             'peer_id': grant['peer_id'], 'until': known['until'], 'state': known['state'],
             'window_seq': known['window_seq'], 'expect': known['expect'], 'paired': known['paired'], 'ships': ships}
 
@@ -385,7 +396,7 @@ def trust_list(db, now):
         known = trust_state(db, grant_id, now)
         until, revoke, state = known['until'], known['revoke'], known['state']
         window_seq, expect, paired = known['window_seq'], known['expect'], known['paired']
-        ships = [{'contact_id': r['contact_id'], 'label': r['label'], 'ship_name': _signed_name(r['assertion']),
+        ships = [{'contact_id': r['contact_id'], 'label': plain_name(r['label']), 'ship_name': _signed_name(r['assertion']),
                   'participant_id': r['user_id'], 'acting_ship': r['acting'], 'confirmed': r['confirmed'],
                   'held': bool(r['held']), 'window_seq': r['window_seq']}
                  for r in db.execute(
@@ -397,7 +408,7 @@ def trust_list(db, now):
                      'LEFT JOIN users ON users.id=t.acting_ship_id WHERE t.grant_id=? ORDER BY t.confirmed, t.rowid',
                      (grant_id,))]
         trusts.append({'grant_id': grant_id, 'peer_id': grant['peer_id'], 'owner_user_id': grant['owner_user_id'],
-                       'owner': owner_label(db, grant['peer_id'], grant['owner_user_id']), 'until': until, 'state': state,
+                       'owner': plain_name(owner_label(db, grant['peer_id'], grant['owner_user_id'])), 'until': until, 'state': state,
                        'revoked_at': revoke['at'] if revoke else None, 'reason': revoke['reason'] if revoke else None,
                        'revoked_by': revoke['username'] if revoke else None, 'window_seq': window_seq, 'expect': expect,
                        'paired': paired, 'ships': ships})

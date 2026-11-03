@@ -967,7 +967,7 @@ function chatsView() {
 function contactState(contact) {
   if (contact.held) {
     if (contact.retired) return "held: its peer was retired; it comes back only as a new identity";
-    return contact.trust_ship ? "held: its owner's trust ended; once the owner is confirmed again, a new trust and a fresh export-ship bring it back, or its own code" : "held until its own code is typed";
+    return contact.trust_ship ? "held: its owner's trust was revoked; with the owner confirmed by code, a new trust and a fresh export-ship bring it back, or its own code" : "held until its own code is typed";
   }
   if (contact.confirmed_by === "owner trust") return "confirmed by owner trust";  // confirmed, but no code was typed
   return contact.confirmed ? "confirmed by typing" : "no typed code on record";
@@ -1029,7 +1029,7 @@ function trustError(open) {
 
 function trustWindow(view) {
   const count = view.paired ? `${escapeHtml(view.paired)} ${view.paired === 1 ? "ship" : "ships"} paired in this window, of ${escapeHtml(view.expect)} expected:` : "No ships paired in this window yet.";
-  return `<div class="trust-window"><p>${count}</p>${view.ships.length ? `<ul>${view.ships.map((ship) => `<li>${escapeHtml(ship.label)} · paired ${escapeHtml(formatDate(ship.confirmed))} by ${escapeHtml(ship.acting_ship)}${ship.held ? " · held" : ""}</li>`).join("")}</ul>` : ""}</div>`;
+  return `<div class="trust-window"><p>${count}</p>${view.ships.length ? `<ul>${view.ships.map((ship) => `<li>${isolatedName(ship.label)} · paired ${escapeHtml(formatDate(ship.confirmed))} by ${escapeHtml(ship.acting_ship)}${ship.held ? " · held" : ""}</li>`).join("")}</ul>` : ""}</div>`;
 }
 
 function trustForm(open) {

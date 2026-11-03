@@ -91,6 +91,25 @@ def test_a_retirement_after_the_copy_is_kept(trusted, paired, capsys):
         Federation(live, endpoint='https://localhost:7436').pair(t.admin['id'], person_card, code=pairing_code(person_card))
     assert (caught.value.status, caught.value.message) == (409, RETIRED)
 
+def test_a_retirement_is_kept_from_a_replaced_file_lacking_another_trust_table(trusted, capsys):
+    """The parked Task 5 item: a replaced file lacking trust_cap_refusals is treated as absent (every trust revoked), but
+    its retired_peers rows are still copied and the peer unpaired, so a retirement is never silently lost, and the report
+    no longer says retirements were not kept. Mutation: the retirements read only from a usable replaced file."""
+    t = trusted
+    tardis = pairs(t)
+    copy = staged(t.tmp, t.station)
+    t.clock[0] += 60
+    t.fed.unpair(t.admin['id'], t.owner['id'], retire=True)
+    with closing(sqlite3.connect(t.station.db_path)) as db:
+        db.execute('DROP TABLE trust_cap_refusals')
+        db.commit()
+    out = against_live(capsys, t, copy)
+    assert 'treated as absent' in out and 'peer retirements kept (1)' in out
+    assert rows_in(copy, 'SELECT * FROM retired_peers') == [(t.owner['peer_id'], t.clock[0], t.admin['id'])]
+    assert rows_in(copy, 'SELECT paired FROM peers WHERE peer_id=?', t.owner['peer_id']) == [(0,)]
+    assert held_in(copy, tardis['id'])
+    assert 'Peers retired since the copy were not kept' not in out
+
 
 def test_a_retirement_unpairs_its_peer_when_the_copy_has_it_paired(tmp_path, capsys):
     """The brief's backstop: a retired peer that the copy has paired is unpaired as Federation.unpair does, even when
@@ -157,7 +176,8 @@ def test_a_trust_paused_in_the_replaced_file_is_revoked(trusted, capsys):
     revoked = revocations_in(copy)
     assert len(revoked) == 2 and revoked[-1][:3] == (t.trust['grant_id'], 'paused at restore', None)
     assert held_in(copy, ship_a['id'])
-    assert named(t.trust['grant_id'], 'Andy B', 'revoked: paused in the replaced file') in trusts_line(out)
+    assert named(t.trust['grant_id'], 'Andy B', 'revoked: paused in the replaced file; ' + backups.PAUSE_LOST) in trusts_line(out)
+    assert "its pairings since the copy are lost; if you didn't expect them, unpair that peer as retired before granting again" in out
 
 
 def test_a_renewal_lost_with_the_copy_is_named(trusted, capsys):
@@ -358,7 +378,7 @@ def test_a_trust_paused_there_under_a_renewal_the_copy_lacks_is_revoked(trusted,
     assert revocations_in(copy)[-1][:3] == (t.trust['grant_id'], 'paused at restore', None)
     assert held_in(copy, ship_a['id']) and held_in(copy, ship_b['id'])
     line = trusts_line(out)
-    assert named(t.trust['grant_id'], 'Andy B', 'revoked: paused in the replaced file') in line and 'again' not in line
+    assert named(t.trust['grant_id'], 'Andy B', 'revoked: paused in the replaced file; ' + backups.PAUSE_LOST) in line and 'grant it again' not in line
 
 
 def test_a_grant_lost_with_the_copy_says_it_had_paused_there(trusted, capsys):
@@ -372,7 +392,7 @@ def test_a_grant_lost_with_the_copy_says_it_had_paused_there(trusted, capsys):
     for number in (1, 2):
         pairs(t, *c_ship(f'c-ship-{number}', f'c-{number}'))
     out = against_live(capsys, t, copy)
-    how = 'granted since the copy, and the grant was lost: grant it again; it had paused there after 2 pairings'
+    how = 'granted since the copy, and the grant was lost: grant it again; it had paused there after 2 pairings, and ' + backups.PAUSE_LOST
     assert named(lost['grant_id'], 'Andy C', how) in trusts_line(out)
 
 
@@ -447,5 +467,5 @@ def test_a_damaged_replaced_file_with_no_expect_fails_closed(trusted, capsys):
                    (andy_c['peer_id'], andy_c['user_id'], t.clock[0] + 86400, t.admin['id'], t.clock[0]))
         db.commit()
     out = against_live(capsys, t, copy)
-    how = 'granted since the copy, and the grant was lost: grant it again; it had paused there after 0 pairings'
+    how = 'granted since the copy, and the grant was lost: grant it again; it had paused there after 0 pairings, and ' + backups.PAUSE_LOST
     assert named('damaged-grant', 'Andy C', how) in trusts_line(out)
