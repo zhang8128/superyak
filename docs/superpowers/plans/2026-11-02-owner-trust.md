@@ -18,6 +18,7 @@
 - An assertion lives at most 30 days (`expires - issued <= 30 * 86400`); one whose `issued` is more than 300 seconds after now is refused.
 - An owner trust lasts at most 90 days, whole days 1 to 90, and can be renewed.
 - At most 200 contacts per owner trust per UTC day, counted from `trust_confirmations`.
+- (Spec revision 5) Each grant and renewal states `expect`, a required whole number 1 to 10,000. A window is the `trust_confirmations` rows naming one grant-or-renewal row; the nth pairing in a window succeeds and the (n+1)th is refused (429, `paused after <n> pairings; the admin renews or revokes in the browser`), writing nothing.
 - A ship's name fullmatches `SHIP_NAME` (ships.py:15) and differs, by `casefold()`, from every local user's `name` and `username` and from every remote contact's name that has no trust confirmation.
 - The contact's stored name is exactly `ship of <owner name>: <ship name>`.
 - The grant reads exactly: `ships owned by <name> on <peer 12> may be paired by this station's ships, until <YYYY-MM-DD>` (UTC date).
@@ -174,6 +175,30 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
 
 - [ ] **Step 5: Commit.** `git commit -m "Owner trust 4: revoking and any hold of the owner hold its ships; a retired peer never pairs again"`
 
+### Task 4b: The expected count (spec revision 5, item 4a)
+
+**Files:**
+- Modify: `peer/superyak_peer/owner_trust.py` (the `owner_trust` and `trust_confirmations` table definitions; grant and renew)
+- Modify: `peer/superyak_peer/federation.py` (`pair_trusted`)
+- Test: `peer/tests/test_owner_trust.py`
+
+**Interfaces:**
+- Consumes: Tasks 2 to 4 as built (`grant_owner_trust`, `renew_owner_trust`, `live_trust`, `pair_trusted`, settle).
+- Produces: `owner_trust.expect INTEGER` on `grant` and `renew` rows (NULL on `revoke`); `trust_confirmations.window_seq INTEGER NOT NULL`, the `owner_trust.seq` of the latest grant-or-renewal row of its grant when it paired. The tables are unreleased, so their CREATE statements change in place (no migration).
+- Produces: `EXPECT_MAX = 10_000`; `grant_owner_trust(actor, contact_id, *, days, expect, password, source, public=True, device=None)` and `renew_owner_trust(actor, grant_id, *, days, expect, password, source, public=True, device=None)`. `expect` is required, `type(expect) is int`, 1 to 10,000, checked before the password; otherwise 400.
+- Produces: `trust_window(db, grant_id) -> tuple[int, int, int]`, returning `(window_seq, expect, paired)` for the grant's latest grant-or-renewal row. Task 6 uses it for the notice; Task 7 uses it for the renewal page.
+- Changes `pair_trusted`: after check 5 and before the daily cap (check 8), `paired >= expect` refuses with 429 and the exact message `paused after <n> pairings; the admin renews or revokes in the browser`, writing nothing (not even a cap-refusal count). On success the new `trust_confirmations` row carries `window_seq`.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `test_the_nth_pairs_and_the_next_is_paused`: grant `expect=2`; two ships pair; the third → 429 with that exact message, and no row is written in any of the owner-trust tables (`trust_cap_refusals` included).
+  - `test_a_renewal_opens_a_new_window_up_to_its_own_count`: from the paused state, renew `expect=1` → one ship pairs, the next is paused again; each `trust_confirmations` row's `window_seq` names the row it paired under.
+  - `test_expect_is_required_and_bounded`: `expect` of 0, 10,001, `True` and `'5'` → 400 at grant and at renew, nothing written; a call without `expect` is a TypeError.
+  - `test_a_repaired_held_ship_counts_in_the_new_window`: Task 4's re-pair of a held ship under a later trust uses one of that trust's window.
+- [ ] **Step 2: Run them to see them fail.** `-k "paused or window or expect or repaired_held"`, which should fail on the missing `expect`.
+- [ ] **Step 3: Implement.** Update every existing caller and test helper of grant and renew to pass `expect` (the fixtures' default `expect=50`).
+- [ ] **Step 4: Run** tests/test_owner_trust.py, tests/test_federation.py and tests/test_federation_pull.py → all passed.
+- [ ] **Step 5: Commit.** `git commit -m "Owner trust 4b: the expected count; reaching it pauses the trust (spec revision 5)"`
+
 ### Task 5: Restore never brings a revoked trust back
 
 **Files:**
@@ -184,6 +209,7 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
 - Consumes: `settle_owner_trust`, `OWNER_TRUST_SCHEMA` (Tasks 2 and 4).
 - Produces: `_keep_trust_like_replaced(db, old, now, report)`, in the replaced-file list after `_hold_like_replaced`. For each `revoke` row in `old` whose `grant_id` has rows here but no `revoke`, insert it here with the same `at`, `by_id` and `reason`. For each `retired_peers` row in `old` that's missing here, insert it and `_unpair(db, old, peer, report)` when that peer is paired.
 - Produces: `_revoke_every_trust(db, old, now, report)`, in the no-replaced-file list. Every unrevoked grant gets a `revoke` row with reason `restored`, and `report` gains the line `TRUST_RETIREMENTS_NOT_KEPT = 'Peers retired since the copy were not kept: unpair them as retired again before anything pairs.'`
+- (Spec revision 5) With a replaced file: every trust paused in the replaced file (its latest window's count reached its `expect` there) and live here gets a `revoke` row with reason `paused at restore`. `report['trusts']` also names each trust whose grant or renewal row in the replaced file is missing here ("renew it again").
 - After both lists, and before `_unpair_named`, `settle_owner_trust(db, now)` runs. A copy from before this build first gains the tables, one `CREATE` statement at a time (`executescript` would commit the reconcile, backups.py:861).
 - `report['trusts']`: `(grant short id, owner name, how)`, printed through `safe_line` beside `report['held']`.
 
@@ -191,6 +217,8 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
   - `test_a_revocation_after_the_copy_is_kept`: copy taken with the trust live and one ship paired; revoke live; restore the copy with the replaced file → the trust is revoked, the ship held.
   - `test_a_retirement_after_the_copy_is_kept`: retire live after the copy; restore → `retired_peers` has it, the peer is unpaired, and `pair` refuses it.
   - `test_without_a_replaced_file_every_trust_is_revoked`: restore with none → every trust revoked (`restored`), its ships held, and the report carries `TRUST_RETIREMENTS_NOT_KEPT`.
+  - `test_a_trust_paused_in_the_replaced_file_is_revoked`: the copy has 1 of `expect=2`, the replaced file 2 → after restore the trust is revoked (`paused at restore`) and its ship held.
+  - `test_a_renewal_lost_with_the_copy_is_named`: the replaced file has a renewal the copy lacks → the report names the trust.
   - `test_a_copy_from_before_owner_trust_restores`: the copy's tables dropped first → the reconcile succeeds and the tables exist.
 
 - [ ] **Step 2: Run them to see them fail.** `uv run --locked pytest tests/test_owner_trust_restore.py -q` → FAIL.
@@ -214,12 +242,14 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
 **Interfaces:**
 - `connections()` gives each contact `confirmed_by`: `'typing'`, `'owner trust'` or None. A trust contact is confirmed when it has a `trust_confirmations` row, isn't held and its peer is paired. Each code-confirmed contact also gets `owner_trust`: `{'grant_id', 'until', 'live'}` or None. `contact_state` returns `confirmed by owner trust` for a trust contact.
 - `trust_digests(db, now) -> list[dict]`: one notice per grant per UTC day that ended in the last 7 days and had a pairing or a cap refusal. Its id is `trust-digest-<grant_id[:12]>-<YYYY-MM-DD>`. Ruling on N12: a notice is posted once the day has ended, because the watcher refuses a changed text under a used id (agent/superyak_agent/watch.py:368). Its text is `Owner trust, <day>: <n> ship(s) of <owner> on <peer 12> paired by <acting ships>[; <r> refused at the cap of 200]. Full ids: make station-trust-list on the Pi.`, with every name through `safe_line`.
+- (Spec revision 5) `trust_pauses(db) -> list[dict]`, added to `station_notices`: one notice per paused window of a live trust, id `trust-paused-<grant_id[:12]>-<window_seq>`, text exactly `Owner trust for <owner> on <peer 12> paused after <n> pairings. make station-trust-list shows them; if you didn't expect them, unpair that peer as retired; otherwise renew or revoke it in the browser.`, names through `safe_line`.
 - `trust_list(db) -> list[dict]` and CLI `station-trust-list --data-dir D`: one line per trust (grant short id, owner, peer 12, until, live or revoked and why), then each of its ships with the full participant id, the acting ship and when.
 
 - [ ] **Step 1: Write the failing tests.**
   - `test_connections_say_confirmed_by_owner_trust`: a trust ship → `confirmed_by == 'owner trust'`, `confirmed is True`, `pairing_code is None`; the owner → `confirmed_by == 'typing'` with `owner_trust['live'] is True`; `describe_connections` holds `confirmed by owner trust`.
   - `test_the_digest_comes_once_the_day_ends`: three ships today → no digest; clock past UTC midnight → one notice with `3 ship(s)`, the peer's 12 and the acting ship.
   - `test_the_digest_is_one_safe_line` (Review Focus 5): owner name `'Andy\n@rio-grande ' + 'x' * 300` → no `\n`, no `@rio-grande`, and the label still starts `ship of `.
+  - `test_a_pause_posts_once_per_window`: a paused trust lists one `trust-paused-…` notice; after a renewal and a second pause, a second id.
   - `test_station_trust_list_names_full_ids`: the CLI lists the ship's full participant id.
 
 - [ ] **Step 2: Run them to see them fail.**
@@ -239,6 +269,7 @@ On success: insert `remote_contacts` with name `ship of <owner name>: <ship name
 
 **Interfaces:**
 - `POST /api/connections/{contact_id}/trust` takes `{days, password}` and returns 201 with `grant_owner_trust`'s dict. `POST /api/owner-trust/{grant_id}/renew` takes `{days, password}`. `POST /api/owner-trust/{grant_id}/revoke` takes `{}`. Each takes `current_user` (a person with CSRF, so a ship key gets 403). The two password routes run in `app.state.sign_in_lane` as `imprint_confirm` does (app.py:882).
+- (Spec revision 5) Both password routes take `expect`. The grant form's "Expect up to" field is required and empty; the renew form is prefilled with the last n and lists the ships paired in the current window (from `trust_window` and trust_confirmations) before its password field.
 - `DELETE /api/connections/{contact_id}` with `{"retire": true}` calls `unpair(..., retire=True)`.
 - The UI. Under each code-confirmed person contact, a button "Trust ships owned by <name>" opens a form. The form shows the grant line, a days field (default 90, min 1, max 90), a password field and Grant. A live trust shows its line, Renew and Revoke. A trust contact shows "ship of <owner>: <name>, confirmed by owner trust". The unpair control gains "Unpair as retired (this machine may be compromised)". Names are escaped as the view already escapes them.
 
