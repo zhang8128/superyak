@@ -670,6 +670,10 @@ def _add_member_changes_like_replaced(db, old, now, report):
     if not _usable(db, old, report, 'grants.id', 'rooms.id', 'users.id', 'member_changes.id', 'member_changes.grant_id', 'member_changes.change',
                    'member_changes.actor_id', 'member_changes.room_id', 'member_changes.new_room_id', 'member_changes.created'):
         return
+    if _has(old, 'member_changes.reason') and not _has(db, 'member_changes.reason'):
+        # A copy from before lessons room adds gains the column (as the store's migration adds it) before the carry, so
+        # a hold's removal keeps its 'held' and never reads as the owner's own (_owner_removed: no actor, no grant).
+        db.execute('ALTER TABLE member_changes ADD COLUMN reason TEXT')
     have = {row[0] for row in db.execute('SELECT id FROM member_changes')}
     grants = {row[0] for row in db.execute('SELECT id FROM grants')} & {row[0] for row in old.execute('SELECT id FROM grants')}
     rooms = {row[0] for row in db.execute('SELECT id FROM rooms')}
@@ -1249,6 +1253,22 @@ def _clear_connector_sign_ins(db, old, now, report):
         report['counts']['connector sign-ins cleared'] = db.execute('DELETE FROM oauth_pending').rowcount
 
 
+ADDABLE_CLEARED = "The lessons listing's addable accounts were cleared; a CONFIRM rerun records them again."
+
+
+def _clear_lessons_addable(db, old, now, report):
+    """Lessons room adds (Task 5 fix round 1, ruling 1): lessons_addable is access, since a row vouches for an account
+    the lessons room's ship may add, so every row is cleared, with a replaced file or without. A restored older listing
+    must never vouch for an account a newer CONFIRM dropped. A CONFIRM rerun of make station-lessons-room records the
+    listing again against the restored pairings. The report says so (ADDABLE_CLEARED) when either file listed one."""
+    if not _usable(db, None, report, 'lessons_addable'):
+        return
+    cleared = db.execute('DELETE FROM lessons_addable').rowcount
+    there = old is not None and _has(old, 'lessons_addable') \
+        and old.execute('SELECT 1 FROM lessons_addable LIMIT 1').fetchone() is not None
+    report['addable_cleared'] = bool(cleared or there)
+
+
 TOKEN_COMPARED = ('connector_tokens.hash', 'connector_tokens.expires', 'connector_tokens.used')
 
 
@@ -1706,7 +1726,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0],
               'held': [], 'held_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
-              'not_compared': [], 'grants': [], 'connections': [], 'trusts': []}
+              'not_compared': [], 'grants': [], 'connections': [], 'trusts': [], 'addable_cleared': False}
     salvage = None
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
@@ -1738,7 +1758,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
         try:
             now = clock()
             for step in (_end_sessions, _use_invitations, _revoke_held_keys, _clear_uncollected, _expire_waiting, _raise_sequences,
-                         _hold_imprints, _clear_connector_sign_ins):
+                         _hold_imprints, _clear_connector_sign_ins, _clear_lessons_addable):
                 step(db, old, now, report)
             if old is None:
                 _revoke_owned_ship_keys(db, old, now, report)
@@ -1829,6 +1849,8 @@ def describe_reconcile(report):
     if report['trusts']:
         lines.append('Owner trusts: ' + '; '.join(f'{short} ({safe_line(owner)}, {how})'
                                                   for short, owner, how in report['trusts']) + '.')
+    if report['addable_cleared']:
+        lines.append(ADDABLE_CLEARED)
     if report['passwords']:
         lines.append(f'Reported, not applied: these passwords differ from the replaced file: {people(report["passwords"])}. '
                      'Change again any that was changed for a reason.')

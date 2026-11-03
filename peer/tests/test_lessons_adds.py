@@ -11,7 +11,7 @@ from superyak_peer import backups
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
 from superyak_peer.identity import pairing_code
-from test_restore import go_live, staged
+from test_restore import go_live, reconcile, staged
 
 
 @pytest.fixture
@@ -884,9 +884,10 @@ def test_a_ship_recovered_under_a_later_trust_rejoins_by_rio_grandes_add(adds_tr
 
 
 def test_andy_can_remove_a_held_contact_and_then_it_stays_out(adds_trusted):
-    """Andy's removal accepts a contact a hold took out of the chain and records his own removal for it (no membership
-    change: the hold made it). Then only he adds it back: Rio Grande's add refuses ADD_OWNER_REMOVED, even under a
-    later trust, and a second removal finds no member."""
+    """Andy's removal accepts a contact a hold took out of the chain, records his own removal for it (no membership
+    change: the hold made it) and posts the usual removal notice in the room (fix round 1, ruling 3). Then only he adds
+    it back: Rio Grande's add refuses ADD_OWNER_REMOVED, even under a later trust, and a second removal finds no
+    member and posts nothing."""
     a = adds_trusted
     a.pi.station_lessons_add(short(a.ship))
     a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])
@@ -898,9 +899,17 @@ def test_andy_can_remove_a_held_contact_and_then_it_stays_out(adds_trusted):
     assert (view['earlier_rooms'], view['claims_released'], view['grant_revoked']) == (0, 0, False)
     assert changes_of(a.pi.db_path, a.ship)[-1] == ('remove', None, a.ids['andy'], None, current, 0, a.clock[0])
     assert epochs_of(a.pi.db_path, [current]) == epochs and members_of(a.pi, current) == members
+    with a.pi.transaction() as db:
+        change = db.execute("SELECT id FROM member_changes WHERE member_id=? AND actor_id=?", (a.ship, a.ids['andy'])).fetchone()[0]
+        notices = [tuple(r) for r in db.execute('SELECT client_message_id, body FROM messages WHERE room_id=? AND author_id=? '
+                                                'ORDER BY created, rowid', (current, a.pi.system_author_id(db)))]
+    assert notices[-1] == (f'member-{change}', f'Andy Example removed {VOYAGER} from this room.')
     with pytest.raises(Problem) as again:
         a.pi.remove_participant(a.ids['andy'], current, a.ship)
     assert again.value.status == 404
+    with a.pi.transaction() as db:
+        assert db.execute('SELECT COUNT(*) FROM messages WHERE room_id=? AND author_id=?',
+                          (current, a.pi.system_author_id(db))).fetchone()[0] == len(notices)
     repair_voyager(a)
     before = snapshot(a.pi)
     with pytest.raises(Problem) as refused:
@@ -945,3 +954,31 @@ def test_every_contact_holds_insert_calls_drop_held_from_lessons():
         == {'S.hold': False}
     assert held_sites("def hold(db):\n    db.execute('INSERT INTO contact_holds VALUES(?, ?)', ('c', 1))\n"
                       "    drop_held_from_lessons(db, ['c'], 1)\n") == {'hold': True}
+
+
+# ---- Task 5, fix round 1: the restore empties lessons_addable and says so ----------------------------------------------
+ADDABLE_CLEARED = "The lessons listing's addable accounts were cleared; a CONFIRM rerun records them again."
+
+
+@pytest.mark.parametrize('listed', ['in_both', 'in_the_copy', 'in_the_replaced_file'])
+def test_a_restore_leaves_lessons_addable_empty_and_says_so(adds, tmp_path, capsys, listed):
+    """Ruling 1: lessons_addable is reconciled: the restore empties it, with a replaced file or without, so a restored
+    older listing never vouches for an account a newer CONFIRM dropped, and the report says so in one line whenever
+    either file listed someone (a listing only the replaced file had is not carried either)."""
+    early = staged(tmp_path, adds.pi, 'replaced-20261017-110000') if listed == 'in_the_replaced_file' else None
+    contact = adds.pair_new('defiant')
+    relist(adds)
+    assert [r['contact_id'] for r in addable_rows(adds)] == [contact]
+    copy = early or staged(tmp_path, adds.pi)
+    code, out, err = reconcile(capsys, '--db', copy, *(() if listed == 'in_the_copy' else ('--replaced', adds.pi.db_path)))
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        assert db.execute('SELECT COUNT(*) FROM lessons_addable').fetchone()[0] == 0
+    assert out.count(ADDABLE_CLEARED) == 1
+
+
+def test_a_restore_with_no_listing_says_nothing_of_it(adds, tmp_path, capsys):
+    copy = staged(tmp_path, adds.pi)
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', adds.pi.db_path)
+    assert code == 0, err
+    assert ADDABLE_CLEARED not in out and 'lessons_addable' not in out

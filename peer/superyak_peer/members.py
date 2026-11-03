@@ -165,14 +165,20 @@ class Members:
 
     def _remove_held(self, db, room, member_id, actor_id):
         """The owner keeps out a member a hold took out of the chain: one owner removal in the act log, so _owner_removed
-        finds it and only he adds them back. The hold already took them out, so no membership, epoch, event or notice
-        changes. Returns what _remove_member returns, with nothing left in any room and nothing released."""
-        self._record_change(db, 'remove', room['id'], member_id, actor_id, None)
+        finds it and only he adds them back, and the usual removal notice in the room ("... from this room."). The hold
+        already took them out, so no membership, epoch or membership event changes. Returns what _remove_member returns,
+        with nothing left in any room and nothing released."""
+        logged = self._record_change(db, 'remove', room['id'], member_id, actor_id, None)
+        name = self._account_name(db, member_id)
+        bridged = self._bridged(db, room['id'])
+        self._post_as_system(db, room['id'], f'member-{logged}',
+                             REMOVED.format(by=self._account_name(db, actor_id), name=name, where=where(True, 0))
+                             + (BRIDGED_NOTE if bridged else ''))
         user = db.execute('SELECT username,name FROM users WHERE id=?', (member_id,)).fetchone()
         view = self._room(db, room['owner_id'], room['id'])
         view.update(removed={'id': member_id, 'username': user['username'] if user else None,
-                             'name': user['name'] if user else self._account_name(db, member_id)},
-                    earlier_rooms=0, claims_released=0, grant_revoked=False, bridged=self._bridged(db, room['id']))
+                             'name': user['name'] if user else name},
+                    earlier_rooms=0, claims_released=0, grant_revoked=False, bridged=bridged)
         return view
 
     def _moderator_add(self, db, actor, room, grant, typed, by_username):

@@ -540,3 +540,23 @@ def test_a_copy_from_before_the_build_records_a_held_removal_with_its_reason(add
         db.commit()
     backups.reconcile(copy, clock=lambda: a.clock[0])
     assert held_rows(copy, a.ship) == [('remove', 'held', None, None, chain[-1], 0, a.clock[0])]
+
+
+def test_a_held_removal_carried_into_a_copy_from_before_the_build_keeps_its_reason(adds_trusted, tmp_path):
+    """Fix round 1, ruling 2: the replaced file's held removal, carried into a copy whose member_changes has no reason
+    column (_add_member_changes_like_replaced), keeps 'held', so it never reads as Andy's own removal: _owner_removed
+    stays false for voyager, and Rio Grande may add it back once a later trust returns it."""
+    a = adds_trusted
+    chain = in_the_room(a)
+    copy = staged(tmp_path, a.pi)
+    with closing(sqlite3.connect(copy)) as db:
+        db.execute('ALTER TABLE member_changes DROP COLUMN reason')
+        db.commit()
+    a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])     # live: voyager held out, its row reason 'held'
+    assert held_rows(a.pi.db_path, a.ship)
+    backups.reconcile(copy, replaced=a.pi.db_path, clock=lambda: a.clock[0])
+    live = go_live(copy, tmp_path / 'live')     # the station's own migration adds the column if the restore didn't
+    with live.transaction() as db:
+        assert not live._owner_removed(db, chain[-1], a.ship, a.ids['andy'])
+    assert [row[:5] for row in changes_of(live.db_path, a.ship) if row[0] == 'remove'] == \
+        [('remove', 'held', None, None, chain[-1])]
