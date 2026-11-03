@@ -1160,6 +1160,25 @@ def _newest_replaced(backups):
     return max((path.name for path in backups.glob('replaced-*') if REPLACED_DIR.fullmatch(path.name)), default=None)
 
 
+def _source_uri(source):
+    """The URI the carry attaches the restored station by, so it leaves no file beside it that it didn't find there
+    (store-wal-mode Task 7: a WAL source attached `mode=ro` gained a -wal and a -shm, which a read-only connection can't
+    remove). Rollback mode: `mode=ro`. WAL mode with no -wal: `immutable=1`, which reads the file alone and makes no
+    sidecar; with no -wal, the last connection's close checkpointed every commit into it. WAL mode with a -wal, which a
+    listener killed mid-run leaves: `mode=ro` through it and its -shm, so a commit made only there is carried too. A -wal
+    without its -shm is refused, since reading it would create one. The header is read with header_mode, before any
+    connection opens the source."""
+    uri = source.absolute().as_uri()
+    if header_mode(source) != 'wal':
+        return uri + '?mode=ro'
+    wal, shm = (Path(f'{source}{end}').exists() for end in ('-wal', '-shm'))
+    if not wal:
+        return uri + '?mode=ro&immutable=1'
+    if not shm:
+        raise CarryRefused(f'{source} has a -wal without its -shm, and reading it would create one beside it')
+    return uri + '?mode=ro'
+
+
 def carry_pull_nonces(data_dir, aside):
     """Runbook 10.3, after a rollback (fix:pull-floor-after-rollback, Rio Grande's reader's better way): the file put back
     lacks the pull nonces the restored station recorded while it was live, so a pull it served could be replayed. This
@@ -1170,7 +1189,8 @@ def carry_pull_nonces(data_dir, aside):
     copy or chosen.sqlite3 carried 0 and said all was well). Refused, with nothing changed: a live file that is missing,
     has no pull_nonces, or is a symlink or has one among its sidecars; a $ASIDE that still holds peer.sqlite3 (10.3's
     move hasn't run, so the live file is not the one put back); a source that is missing, symlinked the same way, the
-    live file, without pull_nonces, damaged, or not marked as restored from $ASIDE; and a $ASIDE that isn't the
+    live file, in WAL mode with a -wal but no -shm (_source_uri), without pull_nonces, damaged, or not marked as
+    restored from $ASIDE; and a $ASIDE that isn't the
     newest replaced-<time> directory, as the runbook's ASIDE line names it (the re-check's nit 2: an earlier restore that
     was also rolled back passed everything else). After the commit it writes $ASIDE/carried, without which step 8 leaves
     the federation units off after a rollback (CarryUnmarked if it can't). Returns (nonces added, nonces in the
@@ -1186,12 +1206,14 @@ def carry_pull_nonces(data_dir, aside):
                            '(10.2 moves it there)')
     if source.samefile(live):  # also a hard link to it
         raise CarryRefused('The source is the live database itself')
-    # URIs: the live file opened `mode=rw` is never created, and the source attached `mode=ro` is never changed (a hot
-    # journal beside it, from a listener killed mid-transaction, is refused rather than rolled back into it)
+    attach = _source_uri(source)  # before anything here opens the source in SQLite (header_mode's rule)
+    # URIs: the live file opened `mode=rw` is never created, and the source is never changed and gains no file beside it
+    # (_source_uri; in rollback mode a hot journal, from a listener killed mid-transaction, is refused rather than rolled
+    # back into it)
     with closing(sqlite3.connect(live.absolute().as_uri() + '?mode=rw', uri=True, timeout=30, isolation_level=None)) as db:
         if not _has_table(db, 'pull_nonces'):
             raise CarryRefused(f'{live} has no pull_nonces table, so it is not a station database')
-        db.execute('ATTACH DATABASE ? AS restored', (source.absolute().as_uri() + '?mode=ro',))
+        db.execute('ATTACH DATABASE ? AS restored', (attach,))
         try:
             if not _has_table(db, 'pull_nonces', 'restored'):
                 raise CarryRefused(f'{source} has no pull_nonces table, so it is not a station database')
