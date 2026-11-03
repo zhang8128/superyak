@@ -54,6 +54,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .invitation-redeem { margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--line); }
 .invitation-redeem summary { cursor: pointer; color: var(--teal); font-weight: 750; }
 .invitation-redeem > p { color: var(--muted); font-size: 13px; }
+.login-help { margin-top: 22px; }
 
 .shell { min-height: 100vh; display: grid; grid-template-columns: 258px minmax(0, 1fr); }
 .sidebar { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 28px 20px; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: rgba(247,243,234,.94); }  /* scrolls on a short screen (9b's M2) */
