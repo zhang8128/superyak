@@ -182,6 +182,9 @@ scripts/projection_digest_timing.py.
    - A second `state()` with no change does no full check, which a counter proves. So does a `state()` in a second
      process after a verified writer's append.
    - A writer killed between COMMIT and its marker write leads to exactly one full check, then a match.
+   - **Writers racing** (Rio Grande, 1f8b8b08): writer A commits, then writer B commits. Then A's marker is written
+     last, carrying A's head and change counter. The next reader doesn't match it against B's state, and runs the full
+     check. A mutant that drops `head` or the change counter from the key must fail this test.
    - A missing or malformed marker leads to a full check, never to a pass.
 5. **Old ledgers, the gate, `verify` and `rebuild`** (D5, D6, D7). Tests:
    - a writing open adds the keys;
