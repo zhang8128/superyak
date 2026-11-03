@@ -1,6 +1,6 @@
 # Lessons room adds: the ship adds what Andy's code already vouched for
 
-Rio Grande, 2026-11-03, revision 3 after its fresh review and re-check (Majors: a removal undone; per-account vouching, at pair time and in the listing view). Amends first-rail spec section 3 ("Only Andy's", "Moderators": "Until then only Andy changes
+Rio Grande, 2026-11-03, revision 4 (trust-made ships join under their owner's live trust, so no agent needs Andy's own add) after its fresh review and re-check (Majors: a removal undone; per-account vouching, at pair time and in the listing view). Amends first-rail spec section 3 ("Only Andy's", "Moderators": "Until then only Andy changes
 who is in it"), on branch trail-arrows-spec, 2026-10-27-first-rail-lessons-design.md.
 
 ## Why
@@ -31,8 +31,11 @@ nothing new. It's administration.
    - it is not a member of the current room;
    - Andy did not remove it: `_owner_removed(db, current, contact, owner)` is false (room-moderators M7's rule). Adding
      back a member he took out stays his act;
-   - it is not a contact made by owner trust (a `trust_confirmations` row): a ship paired without a code joins the
-     room only by Andy's own add, until a later spec says otherwise;
+   - if owner trust made it (a `trust_confirmations` row), its latest trust is live (unrevoked, unexpired, not paused)
+     and its owner, the code-confirmed person contact on the same peer, is itself addable or already a member. Andy's
+     grant already said how many ships to expect from that host, so his act per host covers each of its ships; he
+     never approves agents one by one (Andy, 2026-11-03: "we're going to have thousands of agents running. are you
+     saying I'm going to need to approve every connection?");
    - Andy vouched for this account, one of two ways: its confirmation's `confirmed_by` (a column `pair` now writes,
      the admin who typed the code) is the room's owner, and `pair` showed him the addable line (item 2); or the
      listing view he confirmed named it as addable (item 2a), which is how every contact paired before its peer was
@@ -53,7 +56,8 @@ nothing new. It's administration.
    lessons chain, actor not the room's owner): "<label> (<user id short>) on <peer 12> joined the lessons room, added by
    <ship>", through `safe_line`. A retry or an Odo restart posts it once.
 4. **What stays Andy's.** Opening the room; listing a peer (his word that a machine holds only his accounts and ships);
-   removing a member, and adding back one he removed; adding a contact made by owner trust; retracting a lesson.
+   removing a member, and adding back one he removed; retracting a lesson. His per-host acts (the two codes and the
+   owner-trust grant with its expected count) are the only ones a new agent needs, however many there are.
 
 **Order:** the build lands after owner trust merges, since it uses `code_current` and `trust_confirmations` from that
 branch. Owner trust's line "Pairing grants no content, and no room by itself" gains: "except that a typed code for an
@@ -66,7 +70,8 @@ room still takes no new local member.
 
 ## Tests (for the build)
 
-Each refusal writes nothing: an unlisted peer; an unconfirmed, stale or held contact; a trust-made contact; an existing
+Each refusal writes nothing: an unlisted peer; an unconfirmed, stale or held contact; a trust-made contact whose trust is revoked, expired or paused, or whose owner
+isn't addable; an existing
 member; a contact Andy removed; a station with a second admin; a contact id that isn't remote; a moved chain (the add
 goes to the chain's newest room). `pair` of an account on a listed peer says the addable line before the code prompt, and writes
 `confirmed_by`; on an unlisted peer it doesn't. A contact confirmed by another admin, or with no `confirmed_by` and not
