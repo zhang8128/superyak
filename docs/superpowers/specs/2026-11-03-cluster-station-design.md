@@ -141,6 +141,14 @@ stolen owner-trust key. Per-job keys bound the damage in time, not in number.
 - **Revocations reach every session.** Revoking the owner trust, or unpairing the cluster station, holds every ship
   made under it, as owner trust already does. On the cluster station, revoking a ship's keys ends every session of
   it.
+- **An assertion bound to its station, when it crosses orgs** (from owner trust's final review, "declined to judge":
+  an assertion names no destination station).
+  - That's fine while every station trusting an owner is that owner's.
+  - Once another organization's station may trust Andy, an assertion exported for station A would also pair at
+    station B.
+  - So the ship assertion gains an optional `destination` (a station's peer id), checked by `pair-trusted` when
+    present. `export-ship --destination` sets it, and a cluster station's exports always set it.
+  - It's a small, compatible change to the record kind, under that spec's own review.
 
 ## 5. The law revision Andy signs once
 
