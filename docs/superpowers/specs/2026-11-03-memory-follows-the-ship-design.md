@@ -231,10 +231,11 @@ Every operation is one of four kinds. The plan's first task checks this table ag
 ### 3.11 The interface with Tardis's half
 
 - **The request envelope.** From authentication, never from the request body: `ship`, `agent_ref`, and whether the
-  agent acts for the owner (gate G13). From the client: `session_id`, `seq`, `op_id`, `client_time`, `deadline_ms`,
-  `kind`, and the tool and its arguments.
+  agent acts for the owner (gate G13). From the client: `session_id`, `outbox_id` (the high-water mark is keyed by it,
+  3.3), `seq`, `op_id`, `client_time`, `deadline_ms`, `kind`, and the tool and its arguments.
 - **Error kinds:** `unreachable` (keep the outbox), `retry` (with a delay), `gap` (with the expected `seq`), `refused`
-  (permanent, with a code), `moved` (with the new home), and `unauthorized` (Tardis, 2026-11-03), with its reason:
+  (permanent, with a code), `moved` (with the new home), and `unauthorized` (Tardis, 2026-11-03). The home's 401
+  body says `kind: "expired"` or `kind: "revoked"`, and the client reads anything else as `revoked`:
   - `expired`: the client stops sending and keeps its outbox. Under a renewed key for the same ship it replays.
   - `revoked`: the client stops and keeps its outbox, but never replays it, since a revoked key may mean a stolen one.
     The ship's next wake under a new key says how many operations are held, and nothing of them is applied.
