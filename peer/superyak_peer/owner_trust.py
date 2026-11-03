@@ -67,14 +67,18 @@ PAUSE_TEXT = ("Owner trust for {owner} on {peer} paused after {n} pairings. make
 LABELLED_CONTACT = 'SELECT c.id, c.peer_id, c.user_id, l.label FROM remote_contacts c JOIN contact_labels l ON l.id=c.id'
 
 
+SPELLING_JOINERS = frozenset('‌‍')  # ZWNJ, ZWJ: format characters that names are spelled with
+
+
 def plain_name(text):
     """A label or name bound for the browser's JSON with its format characters (category Cf, such as a right-to-left
     override or an isolate) and other non-printables removed or made spaces, so a paired person's name can't reorder the
-    ship part of a label, even inside <bdi>. The CLI reads the same text."""
+    ship part of a label, even inside <bdi>. The CLI reads the same text. The zero-width non-joiner and joiner stay:
+    Persian, Hindi and other scripts spell names with them, and neither reorders text."""
     if text is None:
         return None
-    kept = ''.join(c for c in str(text) if unicodedata.category(c) != 'Cf')
-    return ''.join(c if c.isprintable() else ' ' for c in kept)
+    kept = ''.join(c for c in str(text) if c in SPELLING_JOINERS or unicodedata.category(c) != 'Cf')
+    return ''.join(c if c.isprintable() or c in SPELLING_JOINERS else ' ' for c in kept)
 
 
 def code_current(db, contact_id):

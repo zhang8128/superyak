@@ -658,6 +658,16 @@ def test_a_bidi_control_in_an_owners_name_stays_out_of_the_browsers_labels(trust
     assert shown[0]['ships'][0]['label'] == 'ship of Andy B: tardis' and shown[0]['owner'] == 'Andy B'
 
 
+def test_a_name_spelled_with_a_joiner_keeps_it():
+    """Persian spells ``می‌خواهم`` with a zero-width non-joiner, and Devanagari and emoji sequences use the joiner.
+    plain_name keeps both, so a person's name isn't misspelled, while the bidi controls beside them go. Mutation: every
+    Cf character removed (the joiners lost)."""
+    from superyak_peer.owner_trust import plain_name
+    assert plain_name('می‌خواهم') == 'می‌خواهم'
+    assert plain_name('क्‍ष') == 'क्‍ष'
+    assert plain_name('‮Andy⁦ \U0001f469‍\U0001f467') == 'Andy \U0001f469‍\U0001f467'
+
+
 def test_a_contact_that_already_exists(trusted):
     t = trusted
     pairs(t)
