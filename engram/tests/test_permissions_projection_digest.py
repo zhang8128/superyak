@@ -1059,16 +1059,21 @@ def _loop_writer(args):
 
 def _loop_reader(args):
     """A reader for the loop test (spawned): one State per open, as a daemon frame reads, until `until`. Returns
-    (reads, the full checks it ran)."""
+    (reads, the full checks it ran, the reads refused, the first refusal)."""
     home, until = args
     import permission_ledger as pl
-    reads = 0
+    reads, refused, first = 0, 0, None
     while time.time() < until:
         led = pl.Ledger.open_read_only(home)
-        led.state()
-        led.close()
+        try:
+            led.state()
+        except pl.LedgerUnreadable as e:
+            refused += 1
+            first = first or str(e)[-160:]
+        finally:
+            led.close()
         reads += 1
-    return reads, pl.full_checks
+    return reads, pl.full_checks, refused, first
 
 
 def test_6_two_writers_and_a_reader_for_60_s_check_whole_at_most_1_percent_of_reads(tmp_path):
@@ -1082,7 +1087,8 @@ def test_6_two_writers_and_a_reader_for_60_s_check_whole_at_most_1_percent_of_re
         (wrote, reads) = writers.get(LOOP_S + 120), reader.get(LOOP_S + 120)
     print(f"loop: writers {wrote}, reader {reads}")
     assert all(busy == 0 and n > 100 for n, busy in wrote), wrote
-    n_reads, checks = reads
+    n_reads, checks, refused, first = reads
+    assert refused == 0, f"{refused} of {n_reads} reads refused under steady writes, the first: {first}"
     assert n_reads > 100 and checks <= n_reads / 100, reads
 
 
