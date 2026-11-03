@@ -186,6 +186,7 @@ only-include = [
     "tests/test_moderate_grants.py",
     "tests/test_moderator_acts.py",
     "tests/test_models.py",
+    "tests/test_owner_trust.py",
     "tests/test_packaging.py",
     "tests/test_presence.py",
     "tests/test_public_route.py",

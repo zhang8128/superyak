@@ -479,6 +479,14 @@ def main(argv=None):
     kind.add_argument('--endpoint')
     kind.add_argument('--pull', action='store_true', help='A pull card: no address; this peer fetches from its peers '
                       '(federation pull)')
+    export_ship = commands.add_parser('export-ship', help="Write a ship's card and a signed assertion that its owner is "
+                                     "this peer's person (owner trust); it prints no pairing code")
+    export_ship.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    export_ship.add_argument('--username', required=True)
+    export_kind = export_ship.add_mutually_exclusive_group(required=True)
+    export_kind.add_argument('--endpoint')
+    export_kind.add_argument('--pull', action='store_true')
+    export_ship.add_argument('--out', type=Path, required=True)
     deliveries = commands.add_parser('deliveries', help="An admin's deliveries, one safe line each (federation pull P10)")
     deliveries.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     deliveries.add_argument('--as', dest='as_user', required=True, help='an admin username on this peer')
@@ -891,6 +899,34 @@ def main(argv=None):
             exported = Federation(store, endpoint=None if args.pull else args.endpoint, identity=identity).card(user[0])
             print(json.dumps(exported, indent=2))  # stdout stays exactly a card
             show_card_code(exported)
+        elif args.command == 'export-ship':
+            import time
+            from .identity import PeerIdentity, make_ship_assertion
+            from .signatures import refuse_a_lost_identity_before_the_store
+            refuse_a_lost_identity_before_the_store(args.data_dir)
+            if not (args.data_dir / 'identity.json').is_file():
+                raise ValueError('identity.json is missing, and export-ship never makes one')
+            store = Store(args.data_dir)
+            mode = 'pull' if args.pull else 'push'
+            if store.federation_mode() not in (None, mode):
+                raise ValueError(f'This peer is not a {mode} peer, so it cannot export a {mode} card')
+            with store.transaction() as db:
+                ship = db.execute('SELECT id,username,kind,owner_id FROM users WHERE username=?', (args.username,)).fetchone()
+                if not ship or ship['kind'] != 'ship':
+                    parser.exit(1, 'export-ship: that account is not a ship\n')
+                owner = ship['owner_id'] and db.execute('SELECT kind FROM users WHERE id=?', (ship['owner_id'],)).fetchone()
+                if not owner or owner['kind'] != 'person':
+                    parser.exit(1, 'export-ship: that ship has no owner who is a person on this peer\n')
+            identity = PeerIdentity.load_or_create(store.data_dir)
+            participant = {'id': ship['id'], 'name': ship['username']}
+            card = identity.card(None if args.pull else args.endpoint, participant, delivery=mode)
+            assertion = make_ship_assertion(identity, ship_id=ship['id'], ship_name=ship['username'],
+                                            owner_id=ship['owner_id'], now=int(time.time()))
+            args.out.mkdir(parents=True, exist_ok=True)
+            paths = [args.out / f'{ship["username"]}.card.json', args.out / f'{ship["username"]}.assertion.json']
+            for path, value in zip(paths, (card, assertion)):
+                path.write_text(json.dumps(value, indent=2) + '\n')
+            print('\n'.join(map(str, paths)))
         elif args.command == 'deliveries':
             store = Store(args.data_dir)
             print(describe_deliveries(federation_here(store).status(admin_account(store, args.as_user))))
