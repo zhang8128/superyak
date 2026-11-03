@@ -26,7 +26,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from permission_ledger import (PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
+from permission_ledger import (MARKER, PUBLISHED_HOUSE, Ledger, LedgerUnreadable, _lacks_029, _seconds, _words_kind,
                                check_gate_mode, check_retire_person, effective_gate, houses, ledger_path,
                                make_private)
 from permissions import (CODE_CHARS, MAX_ACT_OBJECTS, MAX_BULK_DERIVED, REGISTRY, USE_LIST_ROWS, Act, BulkUse,
@@ -1061,9 +1061,10 @@ def _legacy_selector(owner_login: str, audience: str, collection: str) -> str:
 
 
 def _forget_ledger(path: Path) -> None:
-    for suffix in ("", "-journal", "-wal", "-shm"):
+    """A ledger file left from a stopped run, its journal and WAL files, and the marker beside it (N7)."""
+    for name in (path.name, path.name + "-journal", path.name + "-wal", path.name + "-shm", MARKER):
         with contextlib.suppress(OSError):
-            path.with_name(path.name + suffix).unlink()
+            path.with_name(name).unlink()
 
 
 def _migrate(args) -> int:
@@ -1132,7 +1133,8 @@ def _migrate(args) -> int:
                 ids.setdefault(iid, "default" if p.parent.name == ".engram" else p.parent.name)
         led = None
         try:
-            led = Ledger.create(root, login, now=at, channel="migration", path=building)
+            led = Ledger.create(root, login, now=at, channel="migration", path=building,
+                                fresh=True)
 
             def do(kind, **a):
                 out = led.perform(Act(kind, a), actor=owner, channel="migration", now=at)

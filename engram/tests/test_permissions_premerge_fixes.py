@@ -116,7 +116,8 @@ def test_n2_verify_fails_on_any_answer_of_sqlites_check_but_ok(tmp_path, monkeyp
     led = Ledger.open_read_only(tmp_path)
     try:
         top, problems = led.integrity()
-        assert led.state().seq == top                          # a reader still reads it: it reads records whole
+        with pytest.raises(LedgerUnreadable, match="the projection digest: SQLite's integrity check of the file"):
+            led.state()                       # a reader runs SQLite's check too, in the projection digest's full check
     finally:
         led.close()
     assert problems and all(p.startswith("SQLite's integrity check of the file: ") for p in problems), problems
@@ -201,23 +202,19 @@ def test_claims_verify_says_its_tail_checks_catch_a_tear_of_one_row_per_column(t
     assert "projection digest" in out and "that row's change is in the tables" not in out
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception,
-                   reason="N1: a tear across several rows of one column reads whole until the projection digest")
-def test_claims_a_tear_across_two_rows_of_one_column_still_reads_whole(tmp_path):
-    """Andy uncollects m2 and m3 in one act; a tear keeps m3's removal and loses m2's. The column's highest is still
-    the act's seq, so the tail checks pass and m2 reads as a member again. Once the projection digest refuses it,
-    this passes and its xfail mark goes."""
+def test_claims_a_tear_across_two_rows_of_one_column_reads_unreadable_naming_its_table(tmp_path):
+    """N1, closed by the projection digest (its plan's acceptance test, M4d): Andy uncollects m2 and m3 in one act; a
+    tear keeps m3's removal and loses m2's. The column's highest is still the act's seq, so the tail checks pass, and
+    the digest names the table the tear is in. The control: without the tear the same read is whole."""
     led = e1_county_ledger(tmp_path)
     seq = do(led, ANDY, "uncollect", collection=MEDICAL, objects=[M2, M3], now="2026-11-02").seq
     led.close()
+    live = {r.object for r in _state(tmp_path).collection_members.get(MEDICAL) if r.removed_seq is None}
+    assert M2 not in live and M3 not in live
     _sql(tmp_path, "UPDATE collection_members SET removed_seq = NULL, removed_by = NULL "
                    f"WHERE removed_seq = {seq} AND object = '{M2}'")
-    try:
-        state = _state(tmp_path)
-    except LedgerUnreadable:
-        return
-    assert M2 in {r.object for r in state.collection_members.get(MEDICAL) if r.removed_seq is None}
-    pytest.fail("a tear across two rows of one column read whole: m2 is a member again")
+    with pytest.raises(LedgerUnreadable, match="the projection digest: collection_members differs"):
+        _state(tmp_path)
 
 
 # ---------------------------------------------------------------- item 5: `gate enforce` waits for the digest

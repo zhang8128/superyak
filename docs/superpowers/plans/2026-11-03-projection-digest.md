@@ -329,3 +329,39 @@ renamed file also changes ctime, so a rename-over would let the "drops inode" mu
   a torn ledger.
 - The unstamped cause text gives the whole recovery: "run `engram-permissions rebuild`, then the move step it prints".
 - A `meta` upsert subtracts the old row's hash before adding the new one.
+
+### Builder findings (Tardis, during the build; approved by the coordinator)
+
+**Writers' step 2 takes a verified change under the lock.** As first approved, step 2 rolled back on any key changed
+since step 1. With two writers in contention that fails `test_rf5_two_writers_keep_one_chain` 3 runs in 10 with
+`LedgerBusy`.
+- **Measured** (two spawned writers, 50 appends each, tries counted with the limit raised, three runs): most appends took
+  one try; the multi-try ones took 2, 2, 3, 2 and 6. One append in 300 needed more than three, and about one in fifty
+  needed more than one.
+- **The cause:** the other writer commits between step 1 and the lock, so the key differs although its state is
+  verified (its marker, or this process's memo).
+- **The fix:** under the write lock, a changed key is taken when this process's memo or the marker holds it as
+  verified, after one marker re-read 50 ms later while holding RESERVED. RESERVED blocks no reader, so the writer that
+  made the change can still read its key and write its marker. Only an unverified change rolls back to step 1, and no
+  full check ever runs under the lock (S1). The three tries and `LedgerBusy` stay. It's the rule Must-fix 2 gave
+  StateRows and LogTimes.
+- **After the fix,** in a prototype: all 300 contended appends took one try, with no full check. The suite's test (two
+  writers, 150 appends each) asserts no `LedgerBusy`, no full check under the lock and every append in one try; under
+  the old rule it failed 3 runs in 3 (2 `LedgerBusy` each). A mutant that drops the acceptance must die on it.
+
+**Other changes from the text above:**
+- **The marker** is JSON with sorted keys and no spaces, not `canonical_json`, which refuses integers past 2^53: dev,
+  inode and ctime_ns are 64-bit.
+- **The marker write ignores every OS error,** not only EACCES and EROFS (EDQUOT, ENOSPC too), so a committed act never
+  reports a failure; a missing marker costs the next reader one full check.
+- **The authorizer also refuses deletes on `meta`,** which is one of the digest's parts.
+- **`_blank` runs the full check on the new, empty file and keeps its key in the memo,** so a new ledger's first append
+  needs no 50 ms wait.
+- **Fresh mode lands in Task 4,** with the key protocol: rebuild and migrate build their files with no key, memo or
+  marker per append. Their end-of-build check and marker stay in Task 5.
+- **The restamp list** moved from Task 6 to Task 3, where the suite-wide check needs it, and grew beyond the fixtures
+  named: `lazy_state` (test_permissions_reference), `_write_world`, `_with_agent` and `_member_world`
+  (test_permissions_memory_rows). Two `should_fix_3` tests restamp after their tamper, so they still test the writer's
+  tail checks, which a digest that holds the torn tables can't see.
+- **A connection collected unclosed** releases its count at once but leaves its descriptor's close to the next hold or
+  release, since its own SQLite close may still be running.

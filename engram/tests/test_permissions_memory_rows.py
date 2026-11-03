@@ -12,7 +12,7 @@ import permissions
 from lighthouse_protocol import canonical_json
 from permission_ledger import Ledger
 from permissions import _COLUMNS, _NULLABLE, BulkUse, Placement, State, decide, decide_bulk, eligible_set
-from tests.permissions_memory_support import HOME, OWNER, synthetic_ledger
+from tests.permissions_memory_support import HOME, OWNER, restamp_projection, synthetic_ledger
 from tests.permissions_support import Bulk, T, random_world, sample_uses
 
 MB = 1 << 20
@@ -40,6 +40,7 @@ def _with_agent(home):
         conn.execute("INSERT INTO agent_places VALUES(?,?,1,NULL)", (RIO, HOME))
     finally:
         conn.close()
+    restamp_projection(home)
 
 
 def _mems(n):
@@ -173,6 +174,7 @@ def _write_world(home, w) -> Ledger:
         conn.execute("INSERT INTO ledger_log VALUES(?,?,?,?,?,?,NULL,NULL,?,?,?)",
                      (s, w.seq_at[s], kind, ref, w.owner, "terminal", body, pad, pad))
     conn.execute("COMMIT")
+    restamp_projection(home)
     return led
 
 
@@ -401,6 +403,7 @@ def _member_world(home, n, *, log_rows=1600):
         conn.execute("UPDATE collection_members SET added_seq = 1 + (rowid % ?)", (log_rows - 100,))
     finally:
         conn.close()
+    restamp_projection(home)
 
 
 def test_a_decision_reads_the_objects_memberships_once(tmp_path, monkeypatch):

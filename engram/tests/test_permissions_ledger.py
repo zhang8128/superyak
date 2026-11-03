@@ -183,9 +183,12 @@ def test_every_table_takes_a_row_through_append(tmp_path):
 
 def test_u9_read_only_open_changes_no_byte(tmp_path):
     small_ledger(tmp_path).close()
-    before = ledger_path(tmp_path).read_bytes()
+    ledger_path(tmp_path).with_name("permissions.verified").unlink()     # the writer's marker: a reader writes none
+    permission_ledger._forget_verified()
+    before, checks = ledger_path(tmp_path).read_bytes(), permission_ledger.full_checks
     ro = Ledger.open_read_only(tmp_path)
     ro.state()
+    assert permission_ledger.full_checks == checks + 1                      # and it ran the full check
     ro.state(1)
     ro.verify()
     assert ro.conn.total_changes == 0 and ledger_path(tmp_path).read_bytes() == before

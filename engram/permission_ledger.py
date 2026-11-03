@@ -15,12 +15,14 @@ In a row or a `set`, the string "@seq" stands for the log row's own seq and "@at
 value is stored as canonical JSON text; a places row's `pseudonym_salt` is hex."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import dataclasses
 import os
 import sqlite3
 import threading
+import time
 import uuid
 import weakref
 from collections import OrderedDict
@@ -674,7 +676,7 @@ def _full_check(conn: sqlite3.Connection) -> None:
         if seq_text != str(top):
             behind = seq_text.isdigit() and int(seq_text) < top
             raise LedgerUnreadable(f"the projection digest: projection seq {seq_text} "
-                                   f"{'behind' if behind else 'is not'} head {top}")
+                                   f"{'behind' if behind else 'past'} head {top}")
         try:
             held = _read_parts(stored_parts)
         except ValueError as e:
@@ -695,6 +697,254 @@ def _full_check(conn: sqlite3.Connection) -> None:
         raise LedgerUnreadable(f"the projection digest could not be checked: {e}") from e
 
 
+# ---------------------------------------------------------------- the key, its descriptor and the marker (D4)
+# A full check costs seconds at the records bound, so a reader trusts a state some process verified: this process's
+# memo, or the marker a writer leaves beside the ledger. Both hold the file's key, read inside a read transaction
+# (SHARED or more, so no commit lands meanwhile): (dev, inode, size, ctime, the change counter, head). The counter and
+# the file format bytes are read with `os.pread` on a descriptor this process keeps open while it has a connection on
+# that file: closing any descriptor on a file drops every POSIX lock the process holds on it, SQLite's too (M2).
+MARKER = "permissions.verified"
+APPEND_BUSY_MS = 12000          # a writer waits out a rare full check holding SHARED (the re-check's S1)
+WRITER_TRIES = 3
+_RECHECK_S = 0.05               # the wait before the marker is read once more (S2)
+_MEMO_KEPT = 64
+_stat = os.stat                 # the key's stat (a test stands in a coarse-ctime filesystem)
+_CHANGED = "the ledger changed during this read; retry"
+
+
+class LedgerBusy(Exception):
+    """A writer found the ledger changed under its write lock on each of its tries (D4, writers' step 2). Not
+    `LedgerUnreadable`, which callers read as a torn ledger."""
+
+
+@dataclass(frozen=True)
+class _Key:
+    """What says one committed state of one ledger file (D4): the marker holds it as canonical JSON."""
+    dev: int
+    ino: int
+    size: int
+    ctime_ns: int
+    counter: int
+    head: str | None
+
+
+class _Held:
+    """This process's descriptor on one ledger file (dev, inode) and its open connections there (the re-check's
+    Must-fix 1). `spares`: descriptors on the same file opened in a race, closed with it."""
+    __slots__ = ("fd", "count", "spares")
+
+    def __init__(self, fd: int):
+        self.fd, self.count, self.spares = fd, 1, []
+
+
+_HELD: dict = {}
+_HELD_LOCK = threading.Lock()
+_UNHELD: list = []               # (key, fd) of connections collected unclosed: closed at the next hold or release
+
+
+def _close_unheld() -> None:
+    """Under `_HELD_LOCK`: close the descriptors a collected connection left, unless its file is held again."""
+    for key, fd in _UNHELD:
+        held = _HELD.get(key)
+        if held is None:
+            os.close(fd)
+        else:
+            held.spares.append(fd)
+    _UNHELD.clear()
+
+
+def _hold(path: Path) -> tuple[int, int]:
+    """Count one more connection of this process on the file at `path`; for the first, open the descriptor its key
+    read uses (`O_RDONLY | O_CLOEXEC`, so hooks and subprocesses don't inherit it), `fstat` it and keep it under the
+    (dev, inode) it really has. Returns that (dev, inode)."""
+    with _HELD_LOCK:
+        _close_unheld()
+        st = os.stat(path)
+        key = (st.st_dev, st.st_ino)
+        held = _HELD.get(key)
+        if held is not None:
+            held.count += 1
+            return key
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+        st = os.fstat(fd)
+        real = (st.st_dev, st.st_ino)
+        held = _HELD.get(real)
+        if held is None:
+            _HELD[real] = _Held(fd)
+        else:                       # the path was replaced between the stat and the open, by a file held here
+            held.count += 1
+            held.spares.append(fd)
+        return real
+
+
+def _release(key: tuple[int, int], collected: bool = False) -> None:
+    """One connection on that file closed. At the last, its descriptors close: no connection of this process is left
+    there, so no SQLite lock of this process can be dropped. A connection collected unclosed is still closing, so its
+    descriptors wait for the next hold or release."""
+    with _HELD_LOCK:
+        held = _HELD.get(key)
+        if held is None:
+            return
+        held.count -= 1
+        if held.count > 0:
+            return
+        del _HELD[key]
+        fds = (held.fd, *held.spares)
+        if collected:
+            _UNHELD.extend((key, fd) for fd in fds)
+            return
+        _close_unheld()
+    for fd in fds:
+        os.close(fd)
+
+
+class _Conn(sqlite3.Connection):
+    """A ledger connection, counted in `_HELD` while it is open."""
+    _key: tuple = ()
+    _done = None
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            if self._done is not None:
+                self._done.detach()
+                _release(self._key)
+                self._done = None
+
+
+def _held_fd(key: tuple[int, int]) -> int:
+    with _HELD_LOCK:
+        return _HELD[key].fd
+
+
+def _pinned(header: bytes, path: Path) -> bool:
+    """The rollback journal pinned (M3): file format bytes 18 and 19 both 1, and no non-empty `-wal` beside the
+    file. Under WAL a commit moves neither the counter, the size nor ctime."""
+    if len(header) < 28 or header[18] != 1 or header[19] != 1:
+        return False
+    try:
+        return os.stat(f"{path}-wal").st_size == 0
+    except FileNotFoundError:
+        return True
+
+
+_MEMO: "OrderedDict[_Key, None]" = OrderedDict()
+_MEMO_LOCK = threading.Lock()
+_CHECK_LOCK = threading.Lock()   # one full check at a time in this process, so two frames don't both run it (N8)
+
+
+def _remember(key: _Key) -> None:
+    with _MEMO_LOCK:
+        _MEMO[key] = None
+        _MEMO.move_to_end(key)
+        while len(_MEMO) > _MEMO_KEPT:
+            _MEMO.popitem(last=False)
+
+
+def _remembered(key: _Key) -> bool:
+    with _MEMO_LOCK:
+        if key in _MEMO:
+            _MEMO.move_to_end(key)
+            return True
+    return False
+
+
+def _forget_verified() -> None:
+    """This process's memo emptied: what a new process starts with."""
+    with _MEMO_LOCK:
+        _MEMO.clear()
+
+
+def _pause() -> None:
+    time.sleep(_RECHECK_S)
+
+
+def _read_marker(path: Path) -> _Key | None:
+    try:
+        return _Key(**json.loads(path.with_name(MARKER).read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _marker_text(key: _Key) -> str:
+    """The marker: the key as JSON with sorted keys and no spaces (canonical_json refuses integers past 2**53, and
+    dev, inode and ctime_ns are 64-bit)."""
+    return json.dumps(dataclasses.asdict(key), sort_keys=True, separators=(",", ":"))
+
+
+def _write_marker(path: Path, key: _Key) -> None:
+    """The marker, best-effort (D4): written under a unique temporary name and renamed over the old, not fsynced. A
+    marker that can't be written is passed over (a reader then runs one full check), never failing the act that was
+    committed."""
+    marker = path.with_name(MARKER)
+    tmp = marker.with_name(f"{MARKER}.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+        try:
+            os.write(fd, _marker_text(key).encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp, marker)
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+def _verified(path: Path, key: _Key, pinned: bool) -> bool:
+    """Whether `key` is a state some process verified: this process's memo, or the marker (D4 step 5). A key read
+    out of the rollback journal is never trusted."""
+    if not pinned:
+        return False
+    if _remembered(key):
+        return True
+    if _read_marker(path) == key:
+        _remember(key)
+        return True
+    return False
+
+
+def _read_key(conn: sqlite3.Connection, path: Path) -> tuple[_Key, bool]:
+    """D4's steps 2 to 4, inside the caller's transaction: a SELECT, so the transaction holds SHARED (or more) and no
+    commit lands meanwhile; the change counter and the file format bytes by pread on this process's descriptor for
+    the file the connection opened; head by SQL; and a stat that must name that same file. Returns (the key, whether
+    the rollback journal is pinned)."""
+    head = conn.execute("SELECT value FROM meta WHERE key = 'head'").fetchone()
+    opened = conn._key
+    header = os.pread(_held_fd(opened), 28, 0)
+    st = _stat(path)
+    if (st.st_dev, st.st_ino) != opened:
+        raise LedgerUnreadable(f"{path}: {_CHANGED}")
+    return (_Key(st.st_dev, st.st_ino, st.st_size, st.st_ctime_ns, int.from_bytes(header[24:28], "big"),
+                 None if head is None else head[0]), _pinned(header, path))
+
+
+def _keeps_digest(meta: Mapping) -> bool:
+    """Whether a ledger keeps the projection digest (D5): one stamped when it was made or rebuilt."""
+    return "projection_parts" in meta
+
+
+def _back_to_the_rollback_journal(conn: sqlite3.Connection) -> None:
+    """A writing open puts a ledger switched to WAL back in the rollback journal the key relies on (M3), when it can:
+    that needs every other connection gone, so it is tried once, without waiting, and passed over if the ledger is
+    busy. Until it succeeds, the WAL pin makes every read run the full check."""
+    try:
+        if conn.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+            return
+        busy = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.execute("PRAGMA busy_timeout=0")
+        try:
+            conn.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            conn.execute(f"PRAGMA busy_timeout={busy}")
+    except sqlite3.OperationalError:
+        pass
+
+
+_TORN = ("Every reader refuses the ledger until it verifies (P 5.6): `engram-permissions verify` reports it. Restore "
+         "the file together with its journal, or replay its log with `engram-permissions rebuild --out <dir>`.")
+
+
 # the tables whose rows the digest holds (D3, S8): a writing connection deletes none of their rows
 _NO_DELETE = frozenset(_PARTS)
 
@@ -708,25 +958,49 @@ def _no_deletes(action: int, table, _arg2, _db, _trigger) -> int:
 
 
 class Ledger:
-    def __init__(self, conn: sqlite3.Connection, path: Path, read_only: bool):
-        self.conn, self.path, self.read_only = conn, path, read_only
+    def __init__(self, conn: sqlite3.Connection, path: Path, read_only: bool, fresh: bool = False):
+        # `fresh`: a file this process is building beside its final name (rebuild, migrate), which no other process
+        # reads, so it skips the key, the memo and the marker, and is checked whole once at the end (the re-check, S4)
+        self.conn, self.path, self.read_only, self._fresh = conn, path, read_only, fresh
 
     # ---------------------------------------------------------------- opening
     @staticmethod
     def _connect(path: Path, *, read_only: bool, busy_ms: int = BUSY_MS, shared: bool = False) -> sqlite3.Connection:
+        """A connection to the ledger file, counted in this process's `_HELD` until it is closed or collected. It is
+        refused when the path names another file after the connect than before it (D4, M1): its key reads must name
+        the file the connection opened."""
+        try:
+            key = _hold(path)
+        except OSError as e:
+            raise LedgerUnreadable(f"{path}: {e}") from e
         try:
             if read_only:
                 conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, isolation_level=None,
-                                       timeout=busy_ms / 1000, check_same_thread=not shared)
+                                       timeout=busy_ms / 1000, check_same_thread=not shared, factory=_Conn)
+            else:
+                conn = sqlite3.connect(path, isolation_level=None, timeout=busy_ms / 1000, factory=_Conn)
+        except BaseException as e:
+            _release(key)
+            if isinstance(e, sqlite3.Error):
+                raise LedgerUnreadable(f"{path}: {e}") from e
+            raise
+        conn._key, conn._done = key, weakref.finalize(conn, _release, key, True)
+        try:
+            st = os.stat(path)
+            if (st.st_dev, st.st_ino) != key:
+                raise LedgerUnreadable(f"{path}: {_CHANGED}")
+            if read_only:
                 conn.execute("PRAGMA query_only=ON")
             else:
-                conn = sqlite3.connect(path, isolation_level=None, timeout=busy_ms / 1000)
                 conn.set_authorizer(_no_deletes)
             conn.row_factory = sqlite3.Row
             conn.execute(f"PRAGMA busy_timeout={busy_ms}")
             return conn
-        except sqlite3.Error as e:
-            raise LedgerUnreadable(f"{path}: {e}") from e
+        except BaseException as e:
+            conn.close()
+            if isinstance(e, (sqlite3.Error, OSError)):
+                raise LedgerUnreadable(f"{path}: {e}") from e
+            raise
 
     @classmethod
     def _open(cls, engram_home: Path, read_only: bool, busy_ms: int = BUSY_MS) -> "Ledger":
@@ -750,6 +1024,7 @@ class Ledger:
             except sqlite3.Error as e:
                 conn.close()
                 raise LedgerUnreadable(f"{path}: {e}") from e
+            _back_to_the_rollback_journal(conn)
         return cls(conn, path, read_only)
 
     @classmethod
@@ -761,7 +1036,7 @@ class Ledger:
         return cls._open(engram_home, True, busy_ms)
 
     @classmethod
-    def _blank(cls, engram_home: Path, ledger_id: str, path: Path | None = None) -> "Ledger":
+    def _blank(cls, engram_home: Path, ledger_id: str, path: Path | None = None, *, fresh: bool = False) -> "Ledger":
         path = ledger_path(engram_home) if path is None else path
         if path.exists():
             raise FileExistsError(str(path))
@@ -776,17 +1051,27 @@ class Ledger:
         conn.executemany("INSERT INTO meta VALUES(?,?)",
                          [("projection", f"0:{whole}"), ("projection_parts", _parts_text(parts))])
         conn.execute("COMMIT")
-        return cls(conn, path, False)
+        led = cls(conn, path, False, fresh)
+        if not fresh:               # checked whole now, while it is empty, so its first append needs no wait
+            conn.execute("BEGIN")
+            try:
+                key, pinned = led._read_key()
+                _full_check(conn)
+                if pinned:
+                    _remember(key)
+            finally:
+                conn.execute("COMMIT")
+        return led
 
     @classmethod
     def create(cls, engram_home: Path, owner_handle: str, *, now: int, channel: str = "terminal",
-               path: Path | None = None) -> "Ledger":
+               path: Path | None = None, fresh: bool = False) -> "Ledger":
         """A new ledger owned by person:<owner_handle>, at `ledger_path(engram_home)` or at `path`, a file beside it
-        that the caller renames into place (`migrate`, Tardis's T8)."""
+        that the caller renames into place (`migrate`, Tardis's T8; `fresh`, so it skips the key protocol)."""
         owner = check_id("person", "person:" + owner_handle)
         home = "place:home/" + owner_handle
         check_id("place", home)
-        led = cls._blank(engram_home, str(uuid.uuid4()), path=path)
+        led = cls._blank(engram_home, str(uuid.uuid4()), path=path, fresh=fresh)
         led._append("register-person", owner, owner, channel, {
             "meta": {"owner": owner, "admins": owner},
             "insert": [
@@ -799,6 +1084,105 @@ class Ledger:
 
     def close(self) -> None:
         self.conn.close()
+
+    # ---------------------------------------------------------------- the key protocol (D4)
+    def _read_key(self) -> tuple[_Key, bool]:
+        """Inside the caller's transaction: this ledger's key, and whether its rollback journal is pinned."""
+        return _read_key(self.conn, self.path)
+
+    def _verify(self, key: _Key, pinned: bool) -> None:
+        """D4's steps 5 and 6, inside the caller's read transaction: served on a memo or marker match; otherwise, after
+        50 ms, the marker read once more (S2); otherwise the full check, once per key in this process (N8), kept in
+        the memo when it passes. Raises `LedgerUnreadable` when the check fails."""
+        if _verified(self.path, key, pinned):
+            return
+        if pinned:
+            _pause()
+            if _verified(self.path, key, pinned):
+                return
+        with _CHECK_LOCK:
+            if _verified(self.path, key, pinned):        # another frame checked it while this one waited
+                return
+            try:
+                _full_check(self.conn)
+            except LedgerUnreadable as e:
+                raise LedgerUnreadable(f"{self.path}: {e}. {_TORN}") from e
+            if pinned:
+                _remember(key)
+
+    def _late(self, checked: tuple[_Key, bool] | None) -> sqlite3.Connection:
+        """A read-only connection for StateRows or LogTimes, made after the check (S7). It must open the file the
+        check read, and in its own read transaction find the counter the check saw, or a changed key that the memo
+        or the marker holds as verified, after one 50 ms re-read: an ordinary write landing mid-build, which these
+        lazy reads allow by design (the re-check's Must-fix 2). Otherwise `LedgerUnreadable`: the ledger changed
+        during this read; retry."""
+        conn = self._connect(self.path, read_only=True, shared=True)
+        if checked is None:
+            return conn
+        key, _pinned = checked
+        try:
+            if conn._key != (key.dev, key.ino):
+                raise LedgerUnreadable(f"{self.path}: {_CHANGED}")
+            conn.execute("BEGIN")
+            try:
+                now, pinned = _read_key(conn, self.path)
+            finally:
+                conn.execute("COMMIT")
+            if now.counter != key.counter and not _verified(self.path, now, pinned):
+                _pause()
+                if not _verified(self.path, now, pinned):
+                    raise LedgerUnreadable(f"{self.path}: {_CHANGED}")
+        except BaseException as e:
+            conn.close()
+            if isinstance(e, sqlite3.Error):
+                raise LedgerUnreadable(f"{self.path}: {e}") from e
+            raise
+        return conn
+
+    def _verified_under_lock(self, key: _Key, pinned: bool) -> bool:
+        """Under the write lock, whether a key changed since step 1 is verified: the memo or the marker, read once more
+        50 ms later. The lock is RESERVED, so no other commit lands, and the writer that made the change can still
+        read its key (SHARED) and write its marker. Never a full check: it would hold the lock for seconds (S1)."""
+        if _verified(self.path, key, pinned):
+            return True
+        if not pinned:
+            return False
+        _pause()
+        return _verified(self.path, key, pinned)
+
+    def _base_key(self) -> _Key | None:
+        """D4's writers, step 1, outside the write lock (a full check can take seconds on the Pi, S1): the key of the
+        state this write builds on, verified as a reader verifies it. None for a fresh file and for a ledger that
+        keeps no digest (D5)."""
+        if self._fresh:
+            return None
+        self.conn.execute("BEGIN")
+        try:
+            key, pinned = self._read_key()
+            if not _keeps_digest({r[0]: r[1] for r in self.conn.execute(
+                    "SELECT key, value FROM meta WHERE key IN ('schema_version', 'projection_parts')")}):
+                return None
+            self._verify(key, pinned)
+        finally:
+            self.conn.execute("COMMIT")
+        return key
+
+    def _mark_after_commit(self, counter: int, head: str) -> None:
+        """D4's writers, steps 3 and 4: after COMMIT, under SHARED (so no other commit lands), the key read again. It
+        is marked verified, in the marker and this process's memo, only when this write is the one commit since the
+        key read under the write lock (the counter at c+1) and head is its own; otherwise nothing is marked, and the
+        next reader runs one full check."""
+        try:
+            self.conn.execute("BEGIN")
+            try:
+                key, pinned = self._read_key()
+            finally:
+                self.conn.execute("COMMIT")
+        except (LedgerUnreadable, sqlite3.Error, OSError):
+            return
+        if pinned and key.counter == (counter + 1) & 0xFFFFFFFF and key.head == head:
+            _remember(key)
+            _write_marker(self.path, key)
 
     # ---------------------------------------------------------------- reading
     def seq(self) -> int:
@@ -816,9 +1200,11 @@ class Ledger:
         return out
 
     def state(self, seq: int | None = None) -> State:
-        # One read transaction: the log, the tables and meta all come from the same committed seq (P 5.6).
+        # One read transaction: the log, the tables and meta all come from the same committed seq (P 5.6), and the
+        # key that names that state, read first (D4, M1).
         self.conn.execute("BEGIN")
         try:
+            checked = None if self._fresh else self._read_key()
             top = self.seq()
             seq = top if seq is None else seq
             if not 0 <= seq <= top:
@@ -836,6 +1222,10 @@ class Ledger:
             cut = self._tail_problems(top, meta, tables)
             if cut:
                 raise LedgerUnreadable(f"{self.path}: {cut[0]}. {_CUT}")
+            if checked is not None and _keeps_digest(meta):
+                self._verify(*checked)
+            else:
+                checked = None
             # the only log bodies a State reads: place names. Log times are read when a decision asks.
             names = {}
             for r in self.conn.execute(
@@ -849,10 +1239,8 @@ class Ledger:
             self.conn.execute("COMMIT")
         # second read-only connections: the log is append-only and the per-object rows carry the seqs that say
         # what they were, so rows up to `seq` read the same later
-        reader = StateRows(self._connect(self.path, read_only=True, shared=True), seq)
-        state = State.from_tables(tables, seq=seq, seq_at=LogTimes(self._connect(self.path, read_only=True,
-                                                                                  shared=True), seq),
-                                  meta=meta, names=names)
+        reader = StateRows(self._late(checked), seq)
+        state = State.from_tables(tables, seq=seq, seq_at=LogTimes(self._late(checked), seq), meta=meta, names=names)
         return dataclasses.replace(
             state, subjects=RowMap(reader, "subjects"), lane_notes=RowMap(reader, "lane_notes"),
             member_of=RowMap(reader, "member_of"), collection_members=RowMap(reader, "collection_members"),
@@ -997,10 +1385,45 @@ class Ledger:
     # ---------------------------------------------------------------- writing
     def _append(self, kind: str, ref: str, actor: str, channel: str, body: Mapping, *,
                 under_grant: str | None = None, proposal_id: str | None = None, at: int) -> int:
-        """One log row and its projection, in one BEGIN IMMEDIATE. Returns the row's seq."""
+        """One log row and its projection, in one BEGIN IMMEDIATE. Returns the row's seq.
+
+        On a ledger that keeps the digest, a write builds only on a verified state (D4's writers): the state's key is
+        verified before the write lock (step 1, `_base_key`) and read again under it (step 2). A key changed between
+        the two (another writer committed meanwhile) is taken when the memo or the marker holds it as verified, after
+        one 50 ms re-read while holding RESERVED, which blocks no reader and lets that writer mark its commit (the
+        builder's finding on step 2, in the plan's decided items); an unverified change sends the writer back to step
+        1, so no full check runs under the lock, at most WRITER_TRIES times, then `LedgerBusy`. After COMMIT the key
+        is read again and marked verified when this write is the one commit since (steps 3 and 4). It waits up to
+        APPEND_BUSY_MS for the lock, since a reader's rare full check holds SHARED for its whole length (S1)."""
         text = canonical_json(dict(body))
+        busy = self.conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        self.conn.execute(f"PRAGMA busy_timeout={APPEND_BUSY_MS}")
+        try:
+            for _ in range(WRITER_TRIES):
+                done = self._append_on(self._base_key(), kind, ref, actor, channel, body, text, under_grant,
+                                       proposal_id, at)
+                if done is not None:
+                    seq, base, head = done
+                    if base is not None:
+                        self._mark_after_commit(base.counter, head)
+                    return seq
+        finally:
+            self.conn.execute(f"PRAGMA busy_timeout={busy}")
+        raise LedgerBusy(f"{self.path}: the ledger changed under this write {WRITER_TRIES} times running; nothing was "
+                         "written, so try again")
+
+    def _append_on(self, base: _Key | None, kind: str, ref: str, actor: str, channel: str, body: Mapping, text: str,
+                   under_grant: str | None, proposal_id: str | None, at: int) -> tuple | None:
+        """The write itself, under BEGIN IMMEDIATE, on the state `base` names (None: no key to hold it to). Returns
+        (its seq, the key under the lock, its head), or None, having written nothing, when the key under the lock is
+        neither `base` nor a verified one."""
         self.conn.execute("BEGIN IMMEDIATE")
         try:
+            if base is not None:
+                locked, pinned = self._read_key()
+                if locked != base and not self._verified_under_lock(locked, pinned):
+                    self.conn.execute("ROLLBACK")
+                    return None
             added = sum(1 for item in body.get("insert", ()) if item["table"] == "records")
             if added:             # P 5.4, 15: counted here, under the write lock, so two writers can't both pass
                 held = self.conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
@@ -1038,7 +1461,7 @@ class Ledger:
             if isinstance(e, sqlite3.IntegrityError):
                 raise _bad(f"the change collides with an existing row ({e})") from e
             raise
-        return seq
+        return seq, (locked if base is not None else None), f"{seq}:{digest}"
 
     def _check_open_bounds(self, body: Mapping, at: int) -> None:
         """Proposals and child grants an agent can add without a yes, bounded inside the write's BEGIN IMMEDIATE as
@@ -1531,7 +1954,7 @@ class Ledger:
             stale.unlink(missing_ok=True)
         new = None
         try:
-            new = Ledger._blank(dest, self.meta()["ledger_id"], path=tmp)
+            new = Ledger._blank(dest, self.meta()["ledger_id"], path=tmp, fresh=True)
             new.conn.execute("PRAGMA journal_mode=MEMORY")  # per connection: the finished file keeps its own mode
             new.conn.execute("PRAGMA synchronous=OFF")
             for r in self.conn.execute("SELECT * FROM ledger_log ORDER BY seq"):
