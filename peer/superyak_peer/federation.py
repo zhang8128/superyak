@@ -202,12 +202,7 @@ class Federation:
             db.execute('INSERT INTO pairing_confirmations VALUES(?,?,?) ON CONFLICT(contact_id) DO UPDATE SET '
                        'code=excluded.code, confirmed=excluded.confirmed', (contact['id'], expected, self.store.clock()))
             db.execute('DELETE FROM contact_holds WHERE contact_id=?', (contact['id'],))  # this one's code was typed
-            settle_owner_trust(db, self.store.clock())
-            if db.execute('SELECT 1 FROM contact_holds WHERE contact_id=?', (contact['id'],)).fetchone():
-                # A ship whose trust was revoked is held again at once by the invariant, so nothing is paired: it comes
-                # back only under a later trust of its owner, with a fresh assertion (spec item 6, S8).
-                raise Problem(409, 'That ship was paired by an owner trust that was revoked; it comes back only under '
-                                   'a later trust, with a fresh assertion')
+            settle_owner_trust(db, self.store.clock())  # a ship whose own code was just typed stays: that is the proof
             return {**contact, 'pairing_code': show_code(expected), 'confirmed': True, 'held': False}
 
     def pair_trusted(self, actor, card, assertion):

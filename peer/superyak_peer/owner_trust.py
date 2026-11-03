@@ -72,7 +72,7 @@ def live_trust(db, peer_id, owner_user_id, now):
 
 
 LATEST = 'ORDER BY confirmed DESC, rowid DESC LIMIT 1'  # a contact's latest trust confirmation, as contact_labels picks it
-# The ships not held, each with the grant of its latest confirmation: those a revocation of that grant holds.
+# The ships not held, each with the grant of its latest confirmation.
 UNHELD_SHIPS = ('SELECT c.id, c.peer_id, c.user_id, t.grant_id FROM remote_contacts c JOIN trust_confirmations t ON '
                 f't.rowid=(SELECT rowid FROM trust_confirmations WHERE contact_id=c.id {LATEST}) '
                 'WHERE c.id NOT IN (SELECT contact_id FROM contact_holds)')
@@ -83,6 +83,14 @@ def latest_grant(db, contact_id):
     """The grant of this contact's latest trust confirmation, or None for a contact no trust made."""
     row = db.execute(f'SELECT grant_id FROM trust_confirmations WHERE contact_id=? {LATEST}', (contact_id,)).fetchone()
     return row[0] if row else None
+
+
+def ships_to_hold(db, grants, params=()):
+    """The ships a revocation holds: those not held whose latest confirmation's grant is in `grants` (SQL), less any
+    whose own typed code is current. A code typed for that one account is a person's act and the stronger proof, so it
+    stands when a trust ends (coordinator's ruling on Task 4, after the spec's "What a code proves")."""
+    return [ship for ship in db.execute(f'{UNHELD_SHIPS} AND t.grant_id IN ({grants})', params).fetchall()
+            if not code_current(db, ship['id'])]
 
 
 def hold_contact(db, contact, now):
@@ -111,7 +119,8 @@ def settle_owner_trust(db, now):
     """The one invariant (spec "The change" items 3 and 6, S10, N13), run inside the caller's transaction by unpair,
     pair, a revoke and a restore. Every unrevoked trust, expired ones too, whose owner has failed gets a revocation
     dated `now` with reason 'owner held', so every hold of an owner has a date; then every ship whose latest
-    confirmation names a revoked trust is held. Returns the grant ids it revoked, in grant order."""
+    confirmation names a revoked trust, and whose own typed code isn't current, is held. Returns the grant ids it
+    revoked, in grant order."""
     revoked = []
     while True:  # until a pass ends nothing; a held ship is never an owner (an owner has no trust confirmation)
         grants = db.execute(f"SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' "
@@ -121,7 +130,7 @@ def settle_owner_trust(db, now):
             db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
                        "VALUES (?,'revoke',?,?,NULL,NULL,?,'owner held')", (g['grant_id'], g['peer_id'], g['owner_user_id'], now))
         revoked += [g['grant_id'] for g in ended]
-        for ship in db.execute(f'{UNHELD_SHIPS} AND t.grant_id IN ({REVOKED})').fetchall():
+        for ship in ships_to_hold(db, REVOKED):
             hold_contact(db, ship, now)
         if not ended:
             return revoked
@@ -208,8 +217,9 @@ class OwnerTrust:
 
     def revoke_owner_trust(self, actor, grant_id):
         """The admin's act (spec "The change" item 6): ends a trust at once, expired or not, and holds every ship whose
-        latest confirmation it made, as settle_owner_trust holds them. It only takes power away, so it needs no
-        password. A trust revoked already is refused, so it never gains a second revocation."""
+        latest confirmation it made and that has no current typed code of its own (ships_to_hold), as
+        settle_owner_trust holds them; `held` counts them. It only takes power away, so it needs no password. A trust
+        revoked already is refused, so it never gains a second revocation."""
         with self.transaction() as db:
             self._admin(db, actor)
             now = self.clock()
@@ -219,7 +229,7 @@ class OwnerTrust:
                 raise Problem(404, 'No such owner trust')
             if any(r['event'] == 'revoke' for r in rows):
                 raise Problem(409, 'That owner trust was revoked already')
-            ships = db.execute(f'{UNHELD_SHIPS} AND t.grant_id=?', (grant_id,)).fetchall()
+            ships = ships_to_hold(db, '?', (grant_id,))
             db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,reason) "
                        "VALUES (?,'revoke',?,?,NULL,?,?,'revoked')", (grant_id, rows[0]['peer_id'], rows[0]['owner_user_id'], actor, now))
             settle_owner_trust(db, now)

@@ -921,16 +921,27 @@ def test_a_held_ship_does_not_come_back_under_another_owners_trust(trusted):
     refuses(t, 409, 'granted after', *b_ship(t, 'tardis', t.card['participant']['id'], owner=sam['id']))
 
 
-def test_a_typed_code_does_not_bring_back_a_ship_whose_trust_was_revoked(trusted):
-    """The invariant holds it again at once, so pair refuses rather than answer 'confirmed' for a held contact."""
+def test_a_typed_code_brings_back_a_ship_whose_trust_was_revoked(trusted):
+    """A code typed for that one account is a person's act, the stronger proof (ruling on Task 4): it stands."""
     t = trusted
     tardis = pairs(t)
     revoke(t)
-    before = counts(t.station)
-    with pytest.raises(Problem) as caught:
-        t.fed.pair(t.admin['id'], t.card, code=pairing_code(t.card))
-    assert caught.value.status == 409 and 'revoked' in caught.value.message
-    assert counts(t.station) == before and is_held(t.station, tardis['id'])
+    assert is_held(t.station, tardis['id'])
+    done = t.fed.pair(t.admin['id'], t.card, code=pairing_code(t.card))
+    assert done['id'] == tardis['id'] and done['confirmed'] and not done['held']
+    with t.station.transaction() as db:
+        assert settle_owner_trust(db, t.clock[0]) == []
+    assert not is_held(t.station, tardis['id'])  # a later settle leaves it alone
+    assert label_of(t.station, tardis['id']) == 'ship of Andy B: tardis'  # still a ship, never a person
+
+
+def test_a_ship_with_its_own_typed_code_survives_a_revoke_and_its_sibling_does_not(trusted):
+    t = trusted
+    tardis, serenity = pairs(t), pairs(t, *b_ship(t, 'serenity'))
+    t.fed.pair(t.admin['id'], t.card, code=pairing_code(t.card))  # Andy also types tardis's own code
+    assert revoke(t)['held'] == 1
+    assert not is_held(t.station, tardis['id']) and is_held(t.station, serenity['id'])
+    assert label_of(t.station, tardis['id']) == 'ship of Andy B: tardis'
 
 
 def test_pair_refuses_a_retired_peer_whatever_code_is_typed(trusted, paired):
