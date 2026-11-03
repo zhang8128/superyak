@@ -219,18 +219,25 @@ effect of interest is `δ = 0.05`.
   worth building on, so it builds nothing, as "fails" does, and the report says which.
 - **Fails:** its upper bound is below δ and its lower bound isn't above 0.
 - **Inconclusive:** anything else.
-- A bootstrap clustered by day must give the same one of the three outcomes as the session one, or the result is
+- A bootstrap clustered by day must give the same one of the four outcomes as the session one, or the result is
   inconclusive. BCa's acceleration comes from a leave-one-cluster-out jackknife.
 - **Too little data:** fewer than 200 test steps, or fewer than 20 test sessions, or one session holding over 15% of
   the steps. The run then reports "insufficient" and claims nothing.
 
 **Built-in checks.**
 - **A null for order:** (ii) is also computed with the recalls' order shuffled within each training session.
-  - There are 20 seeded shuffles, averaged. After each shuffle, the collapse, the Jaccard rule and the `b ∖ a`
-    mirroring are rebuilt as for real order.
+  - There are 20 seeded shuffles, averaged. **The units are fixed once** (Tardis): the training sequence is collapsed
+    once from real order, and each shuffle permutes that collapsed sequence within each training session. Then
+    consecutive pairs are formed, and the same Jaccard rule and `b ∖ a` mirroring are applied. Nothing is
+    re-collapsed after a shuffle. Evaluation steps come from real order and are the same in every arm.
   - `D_order = hit@10(ii) − hit@10(ii shuffled)` on the primary steps, with the same bootstrap.
-  - **Order carries information only if `D_order`'s lower bound is above 0.** Otherwise order ties, and rails,
-    which are directed edges, aren't warranted even if C1′ holds.
+  - **The null of the null:** two independent sets of 20 shuffles (separate seed streams) are compared the same way,
+    on the same steps, with the same bootstrap.
+  - **The order margin is measured, not guessed:** `δ_order = max(0.02, the 95th percentile of the null-of-null
+    distribution)`. Order carries information only if `D_order`'s lower bound is above `δ_order`, and the day bootstrap
+    agrees. Otherwise order ties, and rails, which are directed edges, aren't warranted even if C1′ holds. The report
+    gives `δ_order`'s value and source. Why: the first smoke runs found `D_order` slightly above 0 (+0.006 to +0.011)
+    on logs with no order at all.
 - **Counts:** the share of test steps where (ii) had no counts (so it equalled (i)) is reported, and so is `D` on the
   steps that had counts.
 - **Also reported:** hit@{1,5}; hit rate by the support of (ii)'s top edge (the C2 analogue); and the uptake subset
@@ -269,7 +276,7 @@ back to the station. Running it on his store is his yes, asked once, with this l
 - **C1 fails:** stop the rail work and write down why (chat isn't memory use, the cover, the window). Rerun on a real
   Engram store once one holds a few hundred memories touched across sessions. (E1 failed on 2026-11-03; E1′ is that
   rerun, section 6′.)
-- **E1′ holds, and order carries information** (`D_order`'s lower bound above 0): build trails from recall logs,
+- **E1′ holds, and order carries information** (`D_order`'s lower bound above `δ_order`): build trails from recall logs,
   smallest first, as "C1 holds" says, with recalls as footpaths.
 - **E1′ holds, but order ties:** use is informative but undirected. Build co-use only (undirected edges between
   memories surfaced in sequence), observed and never steering. No rails, no A*, until a later run shows order.

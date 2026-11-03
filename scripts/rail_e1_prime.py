@@ -77,6 +77,7 @@ RESAMPLES = 10_000
 CHUNK = 500  # resamples per block, so the weight matrix stays small
 SHUFFLES = 20
 DELTA = 0.05
+DELTA_ORDER = 0.02  # section 6′ (amended): order needs D_order's lower bound above this margin
 MIN_STEPS, MIN_SESSIONS, MAX_SESSION_SHARE = 200, 20, 0.15
 SEED = 20261103
 
@@ -125,15 +126,19 @@ CHOICES = [
     "each recall's logged order and skipping `a`'s ids and ids outside the universe.",
     "**Matched popularity.** Slots = min(10, the number of candidates with a positive (ii) score). The slots fill by "
     "popularity, then the rest by (i).",
-    "**Shuffles.** Each shuffle permutes every training session's pre-`T` recalls with a seeded generator, then "
-    "collapses, applies the Jaccard rule and mirrors `b ∖ a` as for real order. Per-step hit@10 is averaged over the "
-    "20 shuffles.",
+    "**Shuffles.** As section 6′ now says, each training session's pre-`T` recalls are collapsed once, from real "
+    "order. Each shuffle permutes those runs with a seeded generator, then forms consecutive pairs and applies the "
+    "Jaccard rule and the `b ∖ a` mirroring. It never re-collapses. Per-step hit@10 is averaged over the 20 shuffles.",
     "**Day clusters.** The UTC day of the session's first recall, so each session sits in one day.",
     "**BCa.** 10,000 multinomial cluster resamples, seeded. `z0` comes from the share of resamples below the estimate, "
     "with ties counting half, clipped to [0.5/B, 1 − 0.5/B]. The acceleration comes from the leave-one-cluster-out "
     "jackknife.",
-    "**Order.** `D_order` says \"order carries information\" only if its lower bound is above 0 under both the session "
-    "bootstrap and the day bootstrap.",
+    "**Null of the null.** Shuffle set A uses seed streams (seed, period, j) and set B uses (seed, period, 1, j), for j "
+    "= 0 to 19. D_null = hit@10(set B) − hit@10(set A). Its bootstraps use the very resample draws of D_order's.",
+    "**Order.** δ_order = max(0.02, the 95th percentile of D_null's session bootstrap distribution, which is the raw "
+    "distribution, not BCa). \"Order carries information\" needs D_order's session BCa lower bound above δ_order and "
+    "its day BCa lower bound above the same δ_order. With one cluster there's no null distribution, and order can't "
+    "be claimed.",
     "**Insufficient.** Test sessions are those with at least one primary step. When the data are insufficient, no "
     "interval is computed: only counts and point hit rates appear.",
     "**Additive period.** It runs the same pipeline on its own: its own `T`, with training inside it. It's secondary "
@@ -675,13 +680,13 @@ class Table:
 
 
 def transitions(seqs: list, log: Log, n_codes: int, support: bool = False, cutoff: float | None = None):
-    """(ii)'s table: for each collapsed consecutive pair a → b with Jaccard ≤ 0.5, c(x, y) += 1 for x in a and y in
-    b ∖ a."""
+    """(ii)'s table from sequences of runs that were collapsed once, from real order (section 6′: the shuffled arm
+    permutes those runs and never re-collapses). For each consecutive pair a → b with Jaccard ≤ 0.5, c(x, y) += 1 for
+    x in a and y in b ∖ a."""
     xs, ys, ss = [], [], []
     pairs = after = 0
-    for s, seq in enumerate(seqs):
-        runs = collapse(seq, log)
-        for (a, _, _), (b, _, _) in zip(runs, runs[1:]):
+    for s, runs in enumerate(seqs):
+        for a, b in zip(runs, runs[1:]):
             A, B = log.sets[a], log.sets[b]
             if jaccard(A, B) > JACCARD_MAX:
                 continue
@@ -789,8 +794,9 @@ def evaluate(log: Log, uni: Universe, recalls: np.ndarray, tag: int) -> dict:
                test_recalls=sum(len(seq) for _, seq in test),
                test_recalls_in_training=sum(1 for _, seq in test for r in seq if log.t[r] < cutoff))
 
-    use, pairs, after = transitions(train_seqs, log, uni.n_codes, support=True, cutoff=cutoff)
-    reps = [run[0] for seq in train_seqs for run in collapse(seq, log)]
+    train_runs = [[run[0] for run in collapse(seq, log)] for seq in train_seqs]  # collapsed once, from real order
+    use, pairs, after = transitions(train_runs, log, uni.n_codes, support=True, cutoff=cutoff)
+    reps = [r for runs in train_runs for r in runs]
     popularity = np.bincount(np.concatenate([log.ids[r] for r in reps] or [np.empty(0, np.int64)]),
                              minlength=uni.n_codes)
     co = co_retrieval(reps, log, uni.n_codes)
@@ -883,18 +889,21 @@ def evaluate(log: Log, uni: Universe, recalls: np.ndarray, tag: int) -> dict:
     out["meta"] = {key: np.array(v) for key, v in meta.items()}
     n = len(caches)
 
-    shuffled = np.zeros(n)
-    for j in range(SHUFFLES):
-        rng = np.random.default_rng((SEED, tag, j))
-        table, _, _ = transitions([[seq[i] for i in rng.permutation(len(seq))] for seq in train_seqs], log,
-                                  uni.n_codes)
-        for step, cache in enumerate(caches):
-            ys, sc = table.scores(cache.a)
-            top, _ = count_arm(V, ys, sc, cache)
-            shuffled[step] += first_hit(top, cache.target) <= TOP
-        del table
-        guard("shuffles")
-    out["shuffled"] = shuffled / SHUFFLES
+    # Two independent sets of SHUFFLES shuffles from different seed streams: set A gives D_order, and set B against
+    # set A gives the null of the null (descriptive).
+    for name, stream in (("shuffled", (SEED, tag)), ("shuffled_b", (SEED, tag, 1))):
+        hits = np.zeros(n)
+        for j in range(SHUFFLES):
+            rng = np.random.default_rng(stream + (j,))
+            table, _, _ = transitions([[runs[i] for i in rng.permutation(len(runs))] for runs in train_runs], log,
+                                      uni.n_codes)
+            for step, cache in enumerate(caches):
+                ys, sc = table.scores(cache.a)
+                top, _ = count_arm(V, ys, sc, cache)
+                hits[step] += first_hit(top, cache.target) <= TOP
+            del table
+            guard("shuffles")
+        out[name] = hits / SHUFFLES
     del caches
 
     primary = out["meta"]["jaccard"] <= JACCARD_MAX if n else np.zeros(0, bool)
@@ -922,7 +931,7 @@ def evaluate(log: Log, uni: Universe, recalls: np.ndarray, tag: int) -> dict:
 NORMAL = NormalDist()
 
 
-def bca(H: np.ndarray, clusters: np.ndarray, stat, seed) -> dict:
+def bca(H: np.ndarray, clusters: np.ndarray, stat, seed, keep: bool = False) -> dict:
     """BCa interval for stat(column means of H), resampling clusters with replacement (multinomial weights)."""
     _, inv = np.unique(clusters, return_inverse=True)
     C = int(inv.max()) + 1
@@ -952,6 +961,8 @@ def bca(H: np.ndarray, clusters: np.ndarray, stat, seed) -> dict:
         levels.append(NORMAL.cdf(z0 + w / shrink) if shrink > 0 else (0.0 if alpha < 0.5 else 1.0))
     lo, hi = np.quantile(boot, levels)
     out.update(lo=float(lo), hi=float(hi), z0=z0, accel=accel)
+    if keep:
+        out["boot"] = boot
     return out
 
 
@@ -973,6 +984,12 @@ def statistics(res: dict, mask: np.ndarray) -> dict:
     order = np.stack([H10[:, COL["ii"]], res["shuffled"][mask]], axis=1)
     stats["order"] = {"session": bca(order, sid, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 1)),
                       "day": bca(order, day, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 2))}
+    null = np.stack([res["shuffled_b"][mask], res["shuffled"][mask]], axis=1)
+    stats["null"] = {"session": bca(null, sid, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 1), keep=True),
+                     "day": bca(null, day, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 2))}
+    boot = stats["null"]["session"].pop("boot", None)
+    q95 = float(np.quantile(boot, 0.95)) if boot is not None else float("nan")
+    stats["delta_order"] = {"value": calibrate_delta_order(q95), "q95": q95}
     counted = meta["positive"][mask] > 0
     if counted.any():
         stats["counted"] = bca(H10[counted], sid[counted], d_stat, (SEED, 5, 1))
@@ -994,6 +1011,18 @@ def outcome(interval: dict) -> str:
 def combine(by_session: str, by_day: str) -> str:
     """The day bootstrap must give the same outcome as the session one, or the result is inconclusive."""
     return by_session if by_session == by_day else "inconclusive"
+
+
+def calibrate_delta_order(q95: float) -> float:
+    """δ_order = max(0.02, the 95th percentile of the null of the null's session bootstrap distribution). With no
+    such distribution (one cluster), it's NaN, and order can't be claimed."""
+    return max(DELTA_ORDER, q95) if q95 == q95 else float("nan")
+
+
+def order_verdict(session: dict, day: dict, delta: float) -> str:
+    """Order carries information only if D_order's lower bound is above δ_order by session, and by day too."""
+    lo_s, lo_d = session["lo"], day["lo"]
+    return "carries information" if lo_s > delta and lo_d > delta else "ties"
 
 
 def check_classifier() -> int:
@@ -1024,7 +1053,31 @@ def check_classifier() -> int:
     for (s, d), expected in pairs:
         if combine(s, d) != expected:
             raise Stop(f"classifier check: session {s} with day {d} gave {combine(s, d)}, expected {expected}")
-    return len(cases) + len(pairs)
+    calibrations = [(0.0, DELTA_ORDER), (0.01, DELTA_ORDER), (DELTA_ORDER, DELTA_ORDER), (0.035, 0.035)]
+    for q95, expected in calibrations:
+        if calibrate_delta_order(q95) != expected:
+            raise Stop(f"classifier check: δ_order from q95 {q95} gave {calibrate_delta_order(q95)}, expected {expected}")
+    if calibrate_delta_order(float("nan")) == calibrate_delta_order(float("nan")):
+        raise Stop("classifier check: δ_order from no null distribution should be NaN")
+    orders = []
+    for delta in (DELTA_ORDER, 0.035):  # the floor, and a calibrated value above it
+        orders += [
+            ((delta + tiny, delta + tiny, delta), "carries information"),
+            ((0.10, 0.10, delta), "carries information"),
+            ((delta, delta + tiny, delta), "ties"),  # exactly δ_order isn't above it
+            ((delta + tiny, delta, delta), "ties"),  # the day bootstrap must agree
+            ((delta - tiny, 0.10, delta), "ties"),
+            ((0.01, 0.01, delta), "ties"),  # above 0 but inside the margin
+            ((0.0, 0.0, delta), "ties"),
+            ((float("nan"), 0.10, delta), "ties"),
+        ]
+    orders.append(((0.10, 0.10, float("nan")), "ties"))  # no calibrated δ_order: no claim
+    for (lo_s, lo_d, delta), expected in orders:
+        got = order_verdict({"lo": lo_s}, {"lo": lo_d}, delta)
+        if got != expected:
+            raise Stop(f"classifier check: D_order lower bounds {lo_s} (session), {lo_d} (day) at δ_order {delta} "
+                       f"gave {got}, expected {expected}")
+    return len(cases) + len(pairs) + len(calibrations) + 1 + len(orders)
 
 
 def verdict(res: dict) -> dict:
@@ -1039,7 +1092,7 @@ def verdict(res: dict) -> dict:
     if by_session != by_day:
         notes.append(f"the session bootstrap says {by_session} and the day bootstrap says {by_day}")
     o = st["order"]
-    order = "carries information" if o["session"]["lo"] > 0 and o["day"]["lo"] > 0 else "ties"
+    order = order_verdict(o["session"], o["day"], st["delta_order"]["value"])
     return {"c1": c1, "order": order, "note": "; ".join(notes)}
 
 
@@ -1140,6 +1193,10 @@ def period_section(name: str, res: dict, v: dict, primary_period: bool) -> list[
               f"({st[('D', 10)]['day']['clusters']} clusters). δ = {DELTA}.",
               f"- **Order {v['order']}.** D_order = {interval(st['order']['session'])} by session, "
               f"{interval(st['order']['day'])} by day.",
+              f"- **δ_order = {fmt(st['delta_order']['value'])}**, the larger of the floor {DELTA_ORDER} and the 95th "
+              f"percentile of D_null's session bootstrap distribution ({signed(st['delta_order']['q95'])}).",
+              f"- **Null of the null:** D_null = hit@10(shuffle set B) − hit@10(shuffle set A) = "
+              f"{interval(st['null']['session'])} by session, {interval(st['null']['day'])} by day.",
               ]
         if v["note"]:
             L.append(f"- **Note:** {v['note']}.")
@@ -1259,7 +1316,7 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
                       "queries are then permuted over its times. That keeps co-retrieval and who shares a session, "
                       "and removes order."]
         wants_order = not p["kind"].endswith("noorder")
-        required_text = ("C1′ holds, and D_order's lower bound is above 0" if wants_order
+        required_text = ("C1′ holds, and D_order's lower bound is above δ_order" if wants_order
                          else "C1′ does not hold, and D_order ties")
         L += ["", f"**Required:** {required_text}.", ""]
         if p["kind"] in ("order", "noorder"):
@@ -1290,8 +1347,12 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
           f"- **Insufficient:** fewer than {MIN_STEPS} test steps, fewer than {MIN_SESSIONS} test sessions, or one "
           f"session above {MAX_SESSION_SHARE:.0%} of the steps.",
           f"- **Order:** (ii) retrained on each training session in shuffled order ({SHUFFLES} seeded shuffles, "
-          "averaged), with collapse, Jaccard and mirroring rebuilt. D_order = hit@10(ii) − hit@10(ii-s). Order "
-          "carries information only if D_order's lower bound is above 0.", ""]
+          "averaged). The training sequence is collapsed once, from real order. The shuffles permute those runs, "
+          "and pairs then follow the Jaccard rule and the mirroring, with no re-collapse. Evaluation steps are the same "
+          "in every arm. D_order = hit@10(ii) − hit@10(ii-s). A second, independent set of 20 shuffles against the "
+          "first gives the null of the null, D_null. Order carries information only if D_order's lower bound is "
+          f"above δ_order = max({DELTA_ORDER}, the 95th percentile of D_null's bootstrap distribution), and the day "
+          "bootstrap agrees.", ""]
 
     L += ["## Choices this script made where the plan leaves one", ""]
     L += [f"{j}. {c}" for j, c in enumerate(CHOICES, 1)] + [""]
@@ -1416,7 +1477,8 @@ def run(argv: list[str] | None) -> int:
         st = res["stats"]
         line += (f"; D@10 {interval(st[('D', 10)]['session'])} session, {interval(st[('D', 10)]['day'])} day; "
                  f"order {v['order']}: D_order {interval(st['order']['session'])} session, "
-                 f"{interval(st['order']['day'])} day")
+                 f"{interval(st['order']['day'])} day; δ_order {fmt(st['delta_order']['value'])}; "
+                 f"D_null {interval(st['null']['session'])} session")
     else:
         line += f" ({v['note']})"
     print(line, file=sys.stderr)
