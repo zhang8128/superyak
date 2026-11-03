@@ -1096,7 +1096,8 @@ class Lessons:
 
     def _member_as_seen(self, db, peer, member):
         """One member of a room from another peer, as this peer sees it: a local account by username and kind (and
-        owner); any other by the name on its card here (None when this peer has no card for it) and its peer."""
+        owner); any other by its contact label here, the name on its card or "ship of <owner>: <name>" for a ship an
+        owner trust paired (None when this peer has no card for it), and its peer."""
         member_peer, _, user = member.partition(':')
         if member_peer == peer:
             row = db.execute('SELECT users.username, users.kind, owners.username AS owner FROM users LEFT JOIN users AS owners '
