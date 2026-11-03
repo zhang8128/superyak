@@ -157,6 +157,51 @@ The station has 2,629 messages in 7 rooms by 8 authors. Each is unique, so E1 wo
   buckets by `n_eff` conditioned on out-degree.
 - **Bounds:** read-only store, bodies in memory only, numbers-only report, under 512 MiB, the shared embedder only.
 
+## 6′. E1′: the same question on Engram's recall log (added 2026-11-03, after E1 failed)
+
+E1 failed on the station's chat (docs/reports/2026-11-03-rail-e1.md). Its likely cause is that chat isn't memory
+use. Engram already logs use. Every `recall` writes a `memory_log` row with the ids it returned (`target_ids`), its
+`session_id` in `context`, and its time. A session's recalls in order are a footpath of memories touched: the trail
+of section 1, with no chat standing in.
+
+The claim is weaker than E1's, and it's framed so (Tardis, 2026-11-03). It's about **what Engram surfaced together**,
+and where outcomes exist, about **what a session took up**. Three biases are built in, and handled:
+- **Meaning made the targets.** Returned ids are ranked by similarity to each query, with recency on top
+  (scoring.py). So meaning starts ahead by construction. A use win is strong evidence, and a tie says little.
+- **The ranker feeds itself.** Recency lifts past returns. So targets are compared as **sets** (the ids returned,
+  unordered), where recency can only move the margin. Under the default `tiebreak` recency adds at most 0.02.
+- **Repeats inflate use.** Consecutive recalls in a session with the same id set are collapsed to one. The split is by
+  time: sessions starting before the 80th percentile train, later ones test.
+
+**Steps.** In each session, recalls are taken in time order, after collapsing. A step goes from recall `a` to the
+next recall `b`. It counts only when `b`'s set isn't contained in `a`'s: a step to somewhere new, the analogue of E1's
+place change.
+
+**Arms, each a ranking of 10 memories,** excluding `a`'s own ids:
+- (i) **meaning:** by angle from the centroid of `a`'s ids' stored vectors;
+- (ii) **use:** by training transition counts from `a`'s ids to the ids of the recall that followed them in training
+  sessions, summed over `a`'s ids, and backfilled by (i);
+- (iii) **popularity:** by how often each memory was returned in training.
+
+**Targets.** Primary: any of `b`'s ids among the arm's 10 (hit@10). Secondary: the same on the steps whose `b` has an
+outcome starting `used` (taken up, through `log_outcome` or the sleep hook's `used: auto: cited`).
+
+**Pre-registered falsifier.** On the primary steps, take hit@10 of (ii) minus max((i), (iii)), with a paired bootstrap
+clustered by session (1,000 resamples). **C1′ holds only if the 95% CI lies above 0.** Report hit@{1,5} and the
+uptake subset too.
+- **Too little data:** with fewer than 200 test steps in 20 sessions, the run reports "insufficient" and stops. It
+  claims nothing either way.
+
+**Bounds, and what's read.**
+- **Reads only:** `memory_log` rows of type `recall` (`target_ids`, the `session_id` and `recall_id` from `context`,
+  the time, the outcome), and the stored vectors of the memories those ids name.
+- **Never reads** a query, a memory's text, or any other table's content. It loads no embedder.
+- Opens a copy of the store read-only (`mode=ro`), runs once, under 512 MiB, and prints aggregate numbers only: no
+  ids, no text, no queries.
+- **Where:** the only store with months of recalls is Andy's, on the Mac. So it runs there, by his session or by him,
+  after he has read the script. Nothing leaves the machine, so no imprint is needed. The report (numbers only) comes
+  back to the station. Running it on his store is his yes, asked once, with this list.
+
 ## 7. What follows each outcome
 
 - **C1 holds:** build smallest first. First the trail spec's derivation (its tasks 1 to 4), with places added. Then
