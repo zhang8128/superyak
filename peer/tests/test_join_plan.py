@@ -163,3 +163,24 @@ def test_the_make_target_never_hands_peer_to_the_shell(tmp_path):   # fresh read
     done = subprocess.run(['make', '-s', '-C', str(repo), 'join-machine-plan', f'PEER=$$(touch {marker})',
                            f'STATION_DATA={tmp_path}'], capture_output=True, text=True, timeout=120)
     assert not marker.exists() and done.returncode != 0
+
+
+def contact_steps(data, db, view):
+    db.execute("INSERT INTO peers VALUES(?, '{}', 1)", (PEER,))
+    db.execute('INSERT INTO remote_contacts VALUES(?, ?, ?, ?)', ('c-ship', PEER, 'c-ship', 'Tardis'))
+    db.execute('DROP VIEW contact_labels')
+    if view:
+        db.execute("CREATE VIEW contact_labels(id, label) AS SELECT id, 'ship of Andy: ' || name FROM remote_contacts")
+    db.commit()
+    return describe(plan(data, PEER, run=host()), PEER)
+
+
+def test_a_contact_shows_by_its_label_so_a_ship_reads_as_its_owners(station):
+    data, db = station
+    assert 'ship of Andy: Tardis' in contact_steps(data, db, view=True)
+
+
+def test_a_store_from_before_owner_trust_shows_the_name(station):   # no contact_labels view there
+    data, db = station
+    text = contact_steps(data, db, view=False)
+    assert 'Tardis' in text and 'ship of' not in text

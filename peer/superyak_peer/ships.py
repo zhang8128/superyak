@@ -43,6 +43,24 @@ def safe_line(value, limit=80):
     return ' '.join(value.split()).replace('@', '(at)')[:limit].rstrip()
 
 
+SHIP_OF = 'ship of '  # the start of every label owner trust gives a ship (owner_trust.py, contact_labels)
+OWNER_FLOOR = 8  # characters of an owner's name a ship's label line keeps, however long the ship's own name
+
+
+def ship_label_line(label, ship, limit=80):
+    """A trust ship's label ("ship of <owner>: <ship>") as one safe line of at most `limit` characters that always ends
+    with the ship's whole name, so two ships whose names differ only at the end never read the same. Only the owner part,
+    which comes from a person and may hold 200 characters, is shortened, to what the limit leaves; it keeps at least
+    OWNER_FLOOR characters, so the owner always shows, which a ship's name near 32 characters may take past a small
+    limit. Any other label, or one that doesn't end with `ship`, is safe_line(label, limit)."""
+    suffix = f': {ship}'
+    if not (label.startswith(SHIP_OF) and label.endswith(suffix) and len(label) > len(SHIP_OF) + len(suffix)):
+        return safe_line(label, limit)
+    tail = f': {safe_line(ship, limit)}'
+    owner = safe_line(label[len(SHIP_OF):-len(suffix)], max(limit - len(SHIP_OF) - len(tail), OWNER_FLOOR))
+    return f'{SHIP_OF}{owner}{tail}'
+
+
 def wal_notice(db_path, now):
     """Store-wal-mode D2: one notice a day (Odo announces an id once) while peer.sqlite3-wal is past WAL_NOTICE_BYTES,
     its size in MB rounded up. The size is read with stat: neither it nor the -shm, where WAL mode keeps its locks, is
@@ -486,7 +504,9 @@ class Ships:
 
     def station_notices(self):
         """Trusted local workers only (Odo): what to announce in Ops. No HTTP route exposes this.
-        Every interpolated value goes through safe_line: the text is posted in a room, where it must not mention anyone."""
+        Every interpolated value goes through safe_line: the text is posted in a room, where it must not mention anyone.
+        A remote contact is named by its label (owner trust), and owner trust adds its pause alarm and daily digest."""
+        from .owner_trust import trust_digests, trust_pauses  # here: owner_trust imports safe_line from this module
         with self.reading() as db:
             now = self.clock()
             notices = [{'id': f'access-{r["id"]}', 'text': f'{safe_line(r["name"])} is asking to come aboard. Approve or deny under Connections → Access requests.'}
@@ -506,8 +526,8 @@ class Ships:
             for r in db.execute("""SELECT peer_delivery.peer_id, mode, failing_since,
                     COALESCE(last_pull, (SELECT MAX(confirmed) FROM pairing_confirmations JOIN remote_contacts AS c
                         ON c.id=pairing_confirmations.contact_id WHERE c.peer_id=peer_delivery.peer_id)) AS quiet_since,
-                    (SELECT group_concat(name, ', ') FROM (SELECT name FROM remote_contacts
-                        WHERE peer_id=peer_delivery.peer_id ORDER BY name)) AS names
+                    (SELECT group_concat(label, ', ') FROM (SELECT l.label FROM remote_contacts AS rc
+                        JOIN contact_labels AS l ON l.id=rc.id WHERE rc.peer_id=peer_delivery.peer_id ORDER BY l.label)) AS names
                     FROM peer_delivery JOIN peers USING(peer_id) WHERE peers.paired=1 ORDER BY peer_delivery.peer_id"""):
                 if r['mode'] == 'pull' and r['quiet_since'] is not None and r['quiet_since'] < day_ago:
                     notices.append({'id': f'pull-quiet-{r["peer_id"][:16]}-{int(r["quiet_since"])}',
@@ -517,5 +537,6 @@ class Ships:
                     notices.append({'id': f'push-failing-{r["peer_id"][:16]}-{int(r["failing_since"])}',
                                     'text': f'Delivery to {safe_line(r["names"])} has failed for a day. It keeps retrying; '
                                             'check that peer and its address under Connections.'})
+            notices += trust_pauses(db) + trust_digests(db, now)  # the alarm, then the record (spec items 4a and 5)
             large = wal_notice(self.db_path, now)
             return notices + [large] if large else notices

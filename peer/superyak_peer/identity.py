@@ -113,7 +113,11 @@ RECORD_KEYS = {
                                      'created', 'records'}),
     'imprint-receipt': frozenset({'kind', 'station', 'id', 'permission', 'event', 'actor_id', 'at', 'detail',
                                   'previous'}),
+    # Owner trust 1: a peer vouches that one of its own people owns one of its ships.
+    'ship-assertion': frozenset({'kind', 'station', 'ship_id', 'ship_name', 'owner_id', 'issued', 'expires'}),
 }
+ASSERTION_DAYS = 30  # an assertion lives at most this long
+FUTURE_SLACK = 300   # an assertion issued more than this many seconds after now is refused
 # Federation pull (spec §4): a pull request's exact keys. It names its origin, never a station, and an envelope has no
 # kind, so a pull request can't pass as a record or an envelope, nor either of them as a pull request.
 PULL_KEYS = frozenset({'version', 'kind', 'origin', 'destination', 'nonce', 'at', 'limit', 'budget', 'ack', 'refused',
@@ -295,6 +299,34 @@ def verify_record(card, record, signature):
         return True
     except Exception:  # noqa: BLE001 - a verifier answers False and never raises (G3)
         return False
+
+def make_ship_assertion(identity, *, ship_id, ship_name, owner_id, now, days=ASSERTION_DAYS):
+    """Owner trust 1: this peer's signed statement that `owner_id` owns the ship. Returns {'record', 'signature'}."""
+    record = {'kind': 'ship-assertion', 'station': identity.peer_id, 'ship_id': ship_id, 'ship_name': ship_name,
+              'owner_id': owner_id, 'issued': now, 'expires': now + days * 86400}
+    return {'record': record, 'signature': identity.sign_record(record)}
+
+def check_ship_assertion(card, assertion, now):
+    """Owner trust 1: the record when the card's key signed it and its times hold, else Problem(400). Its ids and names
+    are text; times are whole seconds (not bool, float or text); issued is at most FUTURE_SLACK ahead; it has not
+    expired; it lives at most 30 days."""
+    if not isinstance(assertion, dict) or set(assertion) != {'record', 'signature'}:
+        raise Problem(400, 'Not a ship assertion')
+    record = assertion['record']
+    if not verify_record(card, record, assertion['signature']) or record['kind'] != 'ship-assertion':
+        raise Problem(400, 'The ship assertion does not verify under this peer\'s card')
+    if not all(isinstance(record[k], str) for k in ('kind', 'ship_id', 'ship_name', 'owner_id')):
+        raise Problem(400, 'Assertion ids and names must be text')  # the signer's own bad data never reaches a query
+    issued, expires = record['issued'], record['expires']
+    if type(issued) is not int or type(expires) is not int:
+        raise Problem(400, 'Assertion times must be whole seconds')
+    if issued > now + FUTURE_SLACK:
+        raise Problem(400, 'The ship assertion is issued in the future')
+    if expires <= now:
+        raise Problem(400, 'The ship assertion has expired')
+    if not 0 < expires - issued <= ASSERTION_DAYS * 86400:
+        raise Problem(400, 'The ship assertion lasts longer than 30 days or not at all')
+    return record
 
 def verify_station_record(public_key_b64, record, signature):
     """I 15: True only when SHA-256 of the key is record['station'], the record has exactly its kind's keys (and each
