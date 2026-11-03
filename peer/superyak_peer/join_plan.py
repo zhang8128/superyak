@@ -63,10 +63,20 @@ def plan(data_dir, peer, run=subprocess.run):
     db = _read(data_dir)
     try:
         paired = db.execute('SELECT paired FROM peers WHERE peer_id=?', (peer,)).fetchone()
-        contacts = db.execute(
-            'SELECT c.id, c.name, (h.contact_id IS NOT NULL), (p.code IS NOT NULL) FROM remote_contacts c '
-            'LEFT JOIN contact_holds h ON h.contact_id=c.id LEFT JOIN pairing_confirmations p ON p.contact_id=c.id '
-            'WHERE c.peer_id=? ORDER BY c.name', (peer,)).fetchall()
+        # Owner trust: a contact shows as contact_labels' label ("ship of <owner>: <name>" for a ship). A store from before
+        # owner trust has no view, and each of its contacts is a person, whose name is its label.
+        has_labels = db.execute("SELECT 1 FROM sqlite_master WHERE type='view' AND name='contact_labels'").fetchone()
+        if has_labels:
+            contacts = db.execute(
+                'SELECT c.id, l.label, (h.contact_id IS NOT NULL), (p.code IS NOT NULL) FROM remote_contacts c '
+                'JOIN contact_labels l ON l.id=c.id '
+                'LEFT JOIN contact_holds h ON h.contact_id=c.id LEFT JOIN pairing_confirmations p ON p.contact_id=c.id '
+                'WHERE c.peer_id=? ORDER BY l.label', (peer,)).fetchall()
+        else:
+            contacts = db.execute(
+                'SELECT c.id, c.name, (h.contact_id IS NOT NULL), (p.code IS NOT NULL) FROM remote_contacts c '
+                'LEFT JOIN contact_holds h ON h.contact_id=c.id LEFT JOIN pairing_confirmations p ON p.contact_id=c.id '
+                'WHERE c.peer_id=? ORDER BY c.name', (peer,)).fetchall()
         listed = db.execute('SELECT 1 FROM lessons_peers WHERE peer_id=?', (peer,)).fetchone() is not None
         room = _current_room(db)
         members = {r[0] for r in db.execute('SELECT contact_id FROM remote_room_members WHERE room_id=?', (room,))} \

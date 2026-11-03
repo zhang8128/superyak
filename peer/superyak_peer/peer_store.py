@@ -77,9 +77,17 @@ class PeerStore:
     def contacts(self, actor):
         with self.transaction() as db:
             local = [dict(r) for r in db.execute("SELECT id,name FROM users WHERE id!=? AND kind!='system' ORDER BY name,id", (actor,))]
-            remote = [dict(r) for r in db.execute('SELECT id,name,peer_id,user_id FROM remote_contacts JOIN peers USING(peer_id) WHERE paired=1 '
-                                                  'AND id NOT IN (SELECT contact_id FROM contact_holds) ORDER BY name,id')]  # SF3
-            return local + [{**r, 'remote': True} for r in remote]
+            # each by its label, so a ship reads "ship of <owner>: <name>" (owner trust, Task 6), and marked when a trust
+            # made it, so the audience picker reads it as a ship, not a named person (Task 6's review)
+            remote = [dict(r) for r in db.execute('SELECT c.id, l.label AS name, c.peer_id, c.user_id, '
+                                                  'EXISTS(SELECT 1 FROM trust_confirmations WHERE contact_id=c.id) AS trust_ship '
+                                                  'FROM remote_contacts c '
+                                                  'JOIN contact_labels l ON l.id=c.id JOIN peers ON peers.peer_id=c.peer_id '
+                                                  'WHERE peers.paired=1 AND c.id NOT IN (SELECT contact_id FROM contact_holds) '
+                                                  'ORDER BY l.label, c.id')]  # SF3
+            from .owner_trust import plain_name  # here, not at import: owner_trust is a sibling module of the store
+            return local + [{**r, 'name': plain_name(r['name']), 'trust_ship': bool(r['trust_ship']), 'remote': True}
+                            for r in remote]
 
     def _remote_inbox(self, db, actor, key, kind):
         origin, sep, rid = key.partition(':')
@@ -195,7 +203,7 @@ class PeerStore:
         own_peer = self._own_peer_id()
         with self.transaction() as db:
             row, room = self._remote_inbox(db, actor, key, 'room')
-            contact = require(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (row['origin'],row['actor'])).fetchone())
+            contact = require(db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (row['origin'],row['actor'])).fetchone())
             previous = db.execute("SELECT * FROM outbox WHERE contact_id=? AND resource_id=? AND action='room.reply'", (contact['id'],row['resource_id'])).fetchall()
             for old in previous:
                 data = json.loads(old['metadata'])
