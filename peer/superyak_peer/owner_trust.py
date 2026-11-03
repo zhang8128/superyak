@@ -14,7 +14,8 @@ EXPECT_MAX = 10_000
 OWNER_TRUST_STATEMENTS = (
     '''CREATE TABLE IF NOT EXISTS owner_trust(seq INTEGER PRIMARY KEY AUTOINCREMENT, grant_id TEXT NOT NULL,
   event TEXT NOT NULL CHECK(event IN ('grant','renew','revoke')), peer_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
-  until REAL, by_id TEXT, at REAL NOT NULL, reason TEXT, expect INTEGER)''',
+  until REAL, by_id TEXT, at REAL NOT NULL, reason TEXT, expect INTEGER,
+  CHECK(event='revoke' OR (expect IS NOT NULL AND expect BETWEEN 1 AND 10000)))''',
     '''CREATE TRIGGER IF NOT EXISTS owner_trust_no_update BEFORE UPDATE ON owner_trust
 BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
     '''CREATE TRIGGER IF NOT EXISTS owner_trust_no_delete BEFORE DELETE ON owner_trust
@@ -26,6 +27,10 @@ BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
   grant_id TEXT NOT NULL, assertion TEXT NOT NULL, acting_ship_id TEXT NOT NULL, confirmed REAL NOT NULL,
   day TEXT NOT NULL, window_seq INTEGER NOT NULL)''',
     # The cap's count and contact_labels' latest confirmation per contact, by index rather than by scan (ruling, Task 3).
+    '''CREATE TRIGGER IF NOT EXISTS trust_confirmations_no_update BEFORE UPDATE ON trust_confirmations
+BEGIN SELECT RAISE(ABORT, 'trust_confirmations is append-only'); END''',
+    '''CREATE TRIGGER IF NOT EXISTS trust_confirmations_no_delete BEFORE DELETE ON trust_confirmations
+BEGIN SELECT RAISE(ABORT, 'trust_confirmations is append-only'); END''',
     'CREATE INDEX IF NOT EXISTS trust_confirmations_contact ON trust_confirmations(contact_id, confirmed)',
     'CREATE INDEX IF NOT EXISTS trust_confirmations_grant_day ON trust_confirmations(grant_id, day)',
     # trust_window's count of one window, by index.
@@ -217,10 +222,17 @@ class OwnerTrust:
                        "VALUES (?,'grant',?,?,?,?,?,?)", (grant_id, contact['peer_id'], contact['user_id'], until, actor, now, expect))
         return {'grant_id': grant_id, 'until': until, 'text': _text(contact['name'], contact['peer_id'], until)}
 
-    def renew_owner_trust(self, actor, grant_id, *, days, expect, password, source, public=True, device=None):
+    def renew_owner_trust(self, actor, grant_id, *, days, expect, seen, password, source, public=True, device=None):
         """Extends an unrevoked trust to `days` whole days from now; it never shortens one."""
         _days(days)
         _expect(expect)
+        if not (type(seen) is tuple and len(seen) == 2 and all(type(n) is int for n in seen)):
+            raise Problem(400, 'seen is the (window_seq, paired) the renewal page showed')
+        with self.transaction() as db:  # before the password, so a stale page spends no attempt
+            self._admin(db, actor)
+            if db.execute('SELECT 1 FROM owner_trust WHERE grant_id=?', (grant_id,)).fetchone() and \
+                    trust_window(db, grant_id)[::2] != seen:
+                raise Problem(409, 'the trust paired more ships since you looked; read the page again')
         self._trust_password(actor, password, source, public, device)
         with self.transaction() as db:
             self._admin(db, actor)

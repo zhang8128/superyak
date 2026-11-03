@@ -247,11 +247,11 @@ def test_a_second_grant_while_one_is_live_is_refused(paired):
 def test_renewing_extends_and_owner_trust_is_append_only(paired):
     station, admin, contact, card = paired
     done = grant(paired, days=10)
-    renewed = station.renew_owner_trust(admin['id'], done['grant_id'], days=60, expect=50, password=PASSWORD, source='127.0.0.1')
+    renewed = station.renew_owner_trust(admin['id'], done['grant_id'], days=60, expect=50, seen=window_of(station, done['grant_id']), password=PASSWORD, source='127.0.0.1')
     assert renewed['grant_id'] == done['grant_id'] and renewed['until'] == NOW + 60 * 86400 > done['until']
     assert [r['event'] for r in rows(station)] == ['grant', 'renew']
     with pytest.raises(Problem) as caught:
-        station.renew_owner_trust(admin['id'], done['grant_id'], days=5, expect=50, password=PASSWORD, source='127.0.0.1')
+        station.renew_owner_trust(admin['id'], done['grant_id'], days=5, expect=50, seen=window_of(station, done['grant_id']), password=PASSWORD, source='127.0.0.1')
     assert caught.value.status == 409
     for sql in ('UPDATE owner_trust SET until=0', 'DELETE FROM owner_trust',
                 "INSERT OR REPLACE INTO owner_trust(seq,grant_id,event,peer_id,owner_user_id,at) VALUES (1,'x','revoke','p','o',0)"):
@@ -267,9 +267,21 @@ def test_the_schema_statements_each_run_alone():
     assert OWNER_TRUST_SCHEMA.endswith(';') and OWNER_TRUST_SCHEMA.count('CREATE') == len(OWNER_TRUST_STATEMENTS)
 
 
-def renew(paired, grant_id, days=30, password=PASSWORD, expect=50):
+def window_of(station, grant_id):
+    """What the renewal page shows: the window's seq and how many paired in it."""
+    from superyak_peer.owner_trust import trust_window
+    with station.transaction() as db:
+        try:
+            window_seq, _, paired = trust_window(db, grant_id)
+        except Problem:
+            return (0, 0)
+    return (window_seq, paired)
+
+
+def renew(paired, grant_id, days=30, password=PASSWORD, expect=50, seen=None):
     station, admin = paired[:2]
-    return station.renew_owner_trust(admin['id'], grant_id, days=days, expect=expect, password=password, source='127.0.0.1')
+    seen = window_of(station, grant_id) if seen is None else seen
+    return station.renew_owner_trust(admin['id'], grant_id, days=days, expect=expect, seen=seen, password=password, source='127.0.0.1')
 
 
 def revoke_row(station, grant_id, peer_id, owner):
@@ -655,9 +667,10 @@ def test_the_cap(trusted):
 def test_two_pairings_at_the_cap_pair_one(trusted):
     t = trusted
     expect_more(t, 300)
+    seq = window_of(t.station, t.trust['grant_id'])[0]  # seeded under the current window, as a real pairing is
     with t.station.transaction() as db:
         db.executemany('INSERT INTO trust_confirmations VALUES (?,?,?,?,?,?,?,?)',
-                       [(f'seed-{i}', f'contact-{i}', t.trust['grant_id'], '{}', t.ship, t.clock[0], utc_day(t.clock[0]), 1)
+                       [(f'seed-{i}', f'contact-{i}', t.trust['grant_id'], '{}', t.ship, t.clock[0], utc_day(t.clock[0]), seq)
                         for i in range(199)])
     feds = [Federation(Store(t.station.data_dir, clock=lambda: t.clock[0]), endpoint='https://localhost:7436')
             for _ in range(2)]
@@ -1115,7 +1128,7 @@ def test_expect_is_required_and_bounded(paired):
         assert caught.value.status == 400
     assert rows(station) == before
     with pytest.raises(TypeError):
-        station.renew_owner_trust(admin['id'], done['grant_id'], days=90, password=PASSWORD, source='127.0.0.1')
+        station.renew_owner_trust(admin['id'], done['grant_id'], days=90, expect=5, password=PASSWORD, source='127.0.0.1')
 
 
 def test_a_revoke_row_carries_no_expect(trusted):
@@ -1136,3 +1149,80 @@ def test_a_repaired_held_ship_counts_in_the_new_window(trusted):
     assert window_rows(t.station)[-1] == ('tardis', window)
     refuses(t, 429, PAUSED.format(1), *b_ship(t, 'ship-b'))
     assert later['grant_id'] != t.trust['grant_id']
+
+
+def test_a_renewal_refuses_a_page_gone_stale(trusted):
+    t = trusted
+    seen = window_of(t.station, t.trust['grant_id'])
+    pairs(t)
+    t.clock[0] += 60
+    before = rows(t.station)
+    with pytest.raises(Problem) as caught:  # before the password: a wrong one still says 409
+        renew((t.station, t.admin), t.trust['grant_id'], days=90, seen=seen, password='not-the-password')
+    assert caught.value.status == 409 and 'read the page again' in caught.value.message
+    assert rows(t.station) == before
+    for bad in (None, [1, 0], (True, 0), (1,)):
+        with pytest.raises(Problem) as caught:
+            t.station.renew_owner_trust(t.admin['id'], t.trust['grant_id'], days=90, expect=5, seen=bad,
+                                        password=PASSWORD, source='127.0.0.1')
+        assert caught.value.status == 400
+    with pytest.raises(TypeError):
+        t.station.renew_owner_trust(t.admin['id'], t.trust['grant_id'], days=90, expect=5, password=PASSWORD,
+                                    source='127.0.0.1')
+    renew((t.station, t.admin), t.trust['grant_id'], days=90, seen=window_of(t.station, t.trust['grant_id']))
+    assert len(rows(t.station)) == 2
+
+
+def test_the_pause_comes_before_the_cap(trusted):
+    t = trusted
+    expect_more(t, 200)
+    seq = window_of(t.station, t.trust['grant_id'])[0]
+    with t.station.transaction() as db:
+        db.executemany('INSERT INTO trust_confirmations VALUES (?,?,?,?,?,?,?,?)',
+                       [(f'seed-{i}', f'contact-{i}', t.trust['grant_id'], '{}', t.ship, t.clock[0], utc_day(t.clock[0]), seq)
+                        for i in range(200)])
+    refuses(t, 429, PAUSED.format(200), *b_ship(t, 'one-too-many'))
+    with t.station.transaction() as db:
+        assert db.execute('SELECT COUNT(*) FROM trust_cap_refusals').fetchone()[0] == 0
+
+
+def test_two_pairings_at_the_last_slot_pair_one(trusted):
+    t = trusted
+    revoke(t)
+    t.clock[0] += 60
+    t.trust = grant((t.station, t.admin, t.owner, None), expect=1)
+    feds = [Federation(Store(t.station.data_dir, clock=lambda: t.clock[0]), endpoint='https://localhost:7436')
+            for _ in range(2)]
+    ships = [b_ship(t, name) for name in ('serenity', 'defiant')]
+    start, results = threading.Barrier(2), [None, None]
+
+    def attempt(i):
+        start.wait()
+        try:
+            results[i] = feds[i].pair_trusted(t.ship, *ships[i])
+        except Problem as problem:
+            results[i] = problem
+    threads = [threading.Thread(target=attempt, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+    assert sorted(type(r).__name__ for r in results) == ['Problem', 'dict']
+    lost = next(r for r in results if isinstance(r, Problem))
+    assert lost.status == 429 and lost.message == PAUSED.format(1)
+    assert window_of(t.station, t.trust['grant_id'])[1] == 1
+    assert len(window_rows(t.station)) == 1
+
+
+def test_trust_confirmations_are_append_only_and_expect_is_checked_by_the_table(trusted):
+    t = trusted
+    pairs(t)
+    for sql in ('UPDATE trust_confirmations SET day=day', 'DELETE FROM trust_confirmations'):
+        with t.station.transaction() as db, pytest.raises(sqlite3.IntegrityError, match='append-only'):
+            db.execute(sql)
+    for event, expect in (('grant', None), ('renew', 0), ('grant', 10_001)):
+        with t.station.transaction() as db, pytest.raises(sqlite3.IntegrityError):
+            db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,at,expect) VALUES (?,?,?,?,?,?)',
+                       ('x', event, 'p', 'o', 0, expect))
+    with t.station.transaction() as db:
+        db.execute("INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,at) VALUES ('x','revoke','p','o',0)")
