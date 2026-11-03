@@ -1,7 +1,7 @@
 # Owner trust: a confirmed person's ships pair without a code each
 
 Rio Grande, 2026-11-02. Revision 5: the expected count (item 4a), from Tardis's review during the build, after its fresh review (R1 to R6). Revision 4, after the fresh review of revision 1 (M1, M2, S1 to S5) and its re-checks (M3, S6 to S9; M4, S10).
-Status: approved by a fresh Pi reviewer at revision 4 (0292d44f), with S11 and N13 folded in after (law section 3). Revision 5 waits for its own fresh review.
+Status: approved by a fresh Pi reviewer at revision 4 (0292d44f), with S11 and N13 folded in after (law section 3). Revision 5 (item 4a) approved by a fresh Pi reviewer after one re-check (697b7ad9), with its three nits folded in after.
 
 ## Why
 
@@ -67,8 +67,8 @@ person whose own account a person confirmed with a code.
 4a. **The expected count (revision 5):** a grant, and each renewal, says how many ships the person expects that host to
    pair in its window ("expect up to <n>"), a whole number from 1 to 10,000. It's a required field with no default, so
    he always says what he expects; a renewal's field is prefilled with the last n.
-   - **The window is marked by row, not by clock.** Each `trust_confirmations` row records the `owner_trust` row (the
-     latest grant or renewal) it paired under. The window's count is the rows that name that row: append-only, one per
+   - **The window is marked by row, not by clock.** Each `trust_confirmations` row records its grant (for the revoke and
+     the cap) and the `owner_trust` row (the latest grant or renewal) it paired under, its window. The window's count is the rows that name that row: append-only, one per
      pairing, whatever later happens to the contact. Re-pairing a held ship under a later trust counts in that trust's
      window, so recovering 1,000 ships takes a grant saying "expect up to 1,000".
    - **Reaching n pauses the trust:** the nth pairing succeeds and the (n+1)th is refused with "paused after <n>
@@ -82,6 +82,9 @@ person whose own account a person confirmed with a code.
    - **Restore:** a restore doesn't bring back the pairings made after the copy, so a trust paused in the replaced file
      would come back live, and its notice id is already used. So a restore revokes every trust that is paused in the
      replaced file (reason `paused at restore`), as it re-applies holds (item 7), and item 7 then keeps the revocation.
+     The other way round fails closed but silently: a renewal made after the copy is lost, so the trust is paused again
+     under a window whose notice was already posted. So the restore report names each trust whose grant or renewal
+     after the copy was lost, and the admin renews it again.
    - **Why:** on a host whose signing key an attacker holds, every assertion is valid, so nothing is refused and no
      refusal notice can post (Tardis, 2026-11-02). The count makes the person say what he expects, and reaching it
      stops the trust and tells a person to look within one cycle, where the daily digest tells them the next day. Revoke
@@ -129,7 +132,8 @@ person whose own account a person confirmed with a code.
 ## What it costs Andy, plainly (S9)
 
 - Per person contact, in each direction, the typed code (as today): two codes per machine. Plus one browser
-  confirmation with his password on the importing station, every 90 days at most, or at each pause. The same grant on Tardis's peer,
+  confirmation with his password on the importing station, every 90 days at most, or at each pause. A revoke at restore holds the trust's legitimate ships too; they come back
+  with a new grant and fresh assertions (S8). The same grant on Tardis's peer,
   for the station's ships, is Andy's act there too, as Tardis's peer's admin.
 - Per ship, nothing, up to the count he expects (item 4a) and 200 a day per owner trust: a host with 1,000 of his ships is one
   grant saying "expect up to 1,000", and takes 5 days at the cap, or a higher cap,
