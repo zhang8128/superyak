@@ -315,14 +315,14 @@ def contact_trust(db, peer_id, user_id, now):
 def trust_renewal(db, grant_id, now):
     """The renewal page (spec item 4a): the grant with its owner by label, its state and its current window, and the
     ships paired in that window, each by label with the acting ship, when, and whether it's held, before the page asks
-    for the password. The page sends back (window_seq, paired) as `seen`, so it renews only what it showed. Names are
-    raw here; the page escapes them."""
+    for the password. The page sends back (window_seq, paired) as `seen`, so it renews only what it showed. Labels are
+    plain here (plain_name: no bidi control can reorder them), and the page escapes them."""
     grant = db.execute("SELECT peer_id, owner_user_id FROM owner_trust WHERE grant_id=? AND event='grant'",
                        (grant_id,)).fetchone()
     if grant is None:
         raise Problem(404, 'No such owner trust')
     known = trust_state(db, grant_id, now)
-    ships = [{'contact_id': r['contact_id'], 'label': r['label'], 'acting_ship': r['acting'], 'confirmed': r['confirmed'],
+    ships = [{'contact_id': r['contact_id'], 'label': plain_name(r['label']), 'acting_ship': r['acting'], 'confirmed': r['confirmed'],
               'held': bool(r['held'])} for r in db.execute(
         'SELECT t.contact_id, t.confirmed, COALESCE(l.label, ?) AS label, '
         'COALESCE(users.username, substr(t.acting_ship_id, 1, 6)) AS acting, '

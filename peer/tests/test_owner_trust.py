@@ -1711,3 +1711,24 @@ def test_the_make_target_never_hands_its_values_to_the_shell(tmp_path):
         subprocess.run(['make', '-s', '-C', str(repo), 'station-pair-trusted', f'STATION_DATA={tmp_path}',
                         *[f'{k}={v}' for k, v in values.items()]], capture_output=True, text=True, timeout=120)
         assert not marker.exists()
+
+
+def test_the_renewal_screen_and_the_audience_picker_show_plain_ship_labels(trusted):
+    """The renewal list Andy reads before typing his password, and the audience picker, carry ship labels with every
+    bidi control removed, so an owner named with an RLO can't reorder ': tardis'. Mutation: plain_name not applied
+    to the renewal list's ships or to contacts()."""
+    t = trusted
+    done = pairs(t)
+    with t.station.transaction() as db:
+        db.execute("UPDATE remote_contacts SET name=? WHERE id=?", ('Andy ‮B⁦', t.owner['id']))
+    renewal = t.station.owner_trust_renewal(t.admin['id'], t.trust['grant_id'])
+    assert [s['label'] for s in renewal['ships']] == ['ship of Andy B: tardis']
+    picked = {c['id']: c['name'] for c in t.station.contacts(t.admin['id']) if c.get('remote')}
+    assert picked[done['id']] == 'ship of Andy B: tardis'
+
+
+def test_the_name_fold_drops_format_characters_so_a_twin_is_taken():
+    """_folded is a comparison key: a joiner, a word joiner or a bidi control inside a name doesn't make a new name, so
+    a same-owner ship can't pass beside a visible twin. Mutation: format characters kept in the fold."""
+    from superyak_peer.federation import _folded
+    assert _folded('tar‍dis') == _folded('tar⁠dis') == _folded('‮tardis') == _folded('tardis')

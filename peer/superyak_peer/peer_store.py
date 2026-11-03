@@ -85,7 +85,9 @@ class PeerStore:
                                                   'JOIN contact_labels l ON l.id=c.id JOIN peers ON peers.peer_id=c.peer_id '
                                                   'WHERE peers.paired=1 AND c.id NOT IN (SELECT contact_id FROM contact_holds) '
                                                   'ORDER BY l.label, c.id')]  # SF3
-            return local + [{**r, 'trust_ship': bool(r['trust_ship']), 'remote': True} for r in remote]
+            from .owner_trust import plain_name  # here, not at import: owner_trust is a sibling module of the store
+            return local + [{**r, 'name': plain_name(r['name']), 'trust_ship': bool(r['trust_ship']), 'remote': True}
+                            for r in remote]
 
     def _remote_inbox(self, db, actor, key, kind):
         origin, sep, rid = key.partition(':')
