@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from superyak_peer.sitting import FIRST_UNIT, OTHER_UNITS, PROBES, Interrupted, Sitting, Stopped, run_command
+from superyak_peer.sitting import FIRST_UNIT, OPTIONAL_UNITS, OTHER_UNITS, PROBES, Interrupted, Sitting, Stopped, run_command
 
 
 def git(cwd, *args):
@@ -49,6 +49,8 @@ class Host:
         self.exec_start = f'{{ path={repo.resolve()}/peer/.venv/bin/python ; argv[]=... }}'
         self.stop = ('Mon 2026-11-02 11:18:15.222427 PST', 'Mon 2026-11-02 11:18:15.592136 PST')
         self.sync_code, self.fail_once, self.signals, self.on_first_curl = 0, None, [], None
+        self.loaded = set()  # optional units installed here
+        self.unreadable = set()  # units whose state systemctl can't read
 
     def __call__(self, argv, cwd):
         self.calls.append((tuple(argv), git(self.repo, 'rev-parse', 'HEAD')))
@@ -64,13 +66,17 @@ class Host:
             path = argv[-1].split(':7435', 1)[1]
             return 0, self.health if path == '/api/health' else self.probes[path], ''
         if argv[0] == 'systemctl' and argv[2] == 'show':
-            unit = argv[4].removesuffix('.service')
+            unit = next(a for a in argv if a.endswith('.service')).removesuffix('.service')
+            if unit in self.unreadable:
+                return 1, '', 'Failed to connect to bus'
+            optional = unit in OPTIONAL_UNITS
+            default = ('active' if unit in self.loaded else 'inactive') if optional else 'active'
             values = {'ExecStart': self.exec_start, 'ActiveExitTimestamp': self.stop[0],
-                      'InactiveEnterTimestamp': self.stop[1], 'ActiveState': self.states.get(unit, 'active'),
-                      'NRestarts': '0'}
+                      'InactiveEnterTimestamp': self.stop[1], 'ActiveState': self.states.get(unit, default),
+                      'NRestarts': '0', 'LoadState': 'loaded' if (unit in self.loaded or not optional) else 'not-found'}
             if self.states.get(unit) == 'crashing':
                 values.update(ActiveState='active', NRestarts='2')
-            asked = [a.removeprefix('--property=') for a in argv[5:]]
+            asked = [a.removeprefix('--property=') for a in argv if a.startswith('--property=')]
             return 0, '\n'.join(f'{name}={values[name]}' for name in asked), ''
         if argv[0] == 'systemctl' and argv[2] == 'restart':
             return self.restart_codes.get(argv[3].removesuffix('.service'), 0), '', ''
@@ -450,3 +456,81 @@ def test_each_report_line_is_flushed_at_once(monkeypatch):
     say_now('main a -> b')
     assert seen == [{'flush': True}]
     assert Sitting('.', 'abc1234', host='h', backup=lambda: '').say is say_now
+
+
+def test_installed_running_optional_units_are_restarted_and_checked_and_the_rest_left_alone(station):
+    host = Host(station['repo'])
+    host.loaded = {'superyak-federation-listen', 'superyak-federate', 'superyak-embedder'}
+    host.states['superyak-federate'] = 'inactive'  # installed but stopped: stays stopped
+    made, _, lines = sitting(station, host)
+    assert made.sit() == 0
+    assert host.restarts() == [FIRST_UNIT, *OTHER_UNITS, 'superyak-federation-listen', 'superyak-embedder']
+    assert any('federation-listen active (0 restarts)' in line and 'embedder active' in line for line in lines)
+
+
+def test_an_optional_unit_that_fails_after_its_restart_puts_main_back_and_is_restarted_on_it(station):
+    host = Host(station['repo'])
+    host.loaded = {'superyak-embedder'}
+    made, _, lines = sitting(station, host)
+    original = host.__call__
+    restarts = []
+
+    def embedder_crashes_once(argv, cwd):
+        if argv[:3] == ('systemctl', '--user', 'restart') and argv[3] == 'superyak-embedder.service':
+            restarts.append(1)
+            host.states['superyak-embedder'] = 'failed' if len(restarts) == 1 else 'active'
+        return original(argv, cwd)
+    made._run = embedder_crashes_once
+    assert made.sit() == 1
+    assert len(restarts) == 2  # the put-back restarted it on the old main too
+    assert 'superyak-embedder is failed' in lines[-1] and head(station) == station['old']
+
+
+def test_the_optional_set_is_chosen_before_anything_moves_so_a_unit_the_train_crashes_is_still_checked(station):
+    host = Host(station['repo'])
+    host.loaded = {'superyak-federation-listen'}
+    host.on_first_curl = lambda: host.states.update({'superyak-federation-listen': 'activating'})  # crashed by the train
+    made, _, lines = sitting(station, host)
+    assert made.sit() == 1
+    assert 'superyak-federation-listen' in host.restarts()
+    assert 'superyak-federation-listen is activating' in lines[-1] and head(station) == station['old']
+
+
+def test_the_report_and_a_dry_run_say_which_optional_units_restart_and_which_are_left_alone(station):
+    host = Host(station['repo'])
+    host.loaded = {'superyak-embedder', 'superyak-federate'}
+    host.states['superyak-federate'] = 'failed'
+    made, _, lines = sitting(station, host, dry_run=True)
+    assert made.sit() == 0
+    line = next(line for line in lines if line.startswith('optional units:'))
+    assert 'restarting embedder' in line and 'federate failed, left as it is' in line and 'federation-listen not installed' in line
+
+
+def test_an_optional_units_state_that_cant_be_read_stops_with_main_unchanged(station):
+    host = Host(station['repo'])
+    host.unreadable = {'superyak-embedder'}
+    made, backups, _ = sitting(station, host)
+    with pytest.raises(Stopped, match="can't read superyak-embedder's state"):
+        made.sit()
+    assert backups == [] and host.restarts() == []
+
+
+def test_a_train_that_changes_engrams_lock_syncs_engram_before_restarting_the_embedder(station):
+    repo = station['repo']
+    git(repo, 'checkout', '-q', 'train')
+    (repo / 'engram').mkdir()
+    commit(repo, 'engram/uv.lock', 'new lock')
+    train = head(station)
+    git(repo, 'checkout', '-q', 'main')
+    host = Host(repo)
+    host.loaded = {'superyak-embedder'}
+    dry, _, dry_lines = sitting(station, Host(repo), train=train, dry_run=True)
+    dry._run.loaded = {'superyak-embedder'}
+    assert dry.sit() == 0 and any("syncs engram before the embedder restarts" in line for line in dry_lines)
+    made, _, _ = sitting(station, host, train=train)
+    assert made.sit() == 0
+    synced = [argv for argv in host.ran('uv')]
+    assert any('engram' in argv and '--inexact' in argv for argv in synced)
+    calls = [argv for argv, _ in host.calls]
+    assert calls.index(next(a for a in calls if a[0] == 'uv' and 'engram' in a)) < calls.index(
+        ('systemctl', '--user', 'restart', 'superyak-embedder.service'))

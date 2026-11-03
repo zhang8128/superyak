@@ -22,6 +22,9 @@ from pathlib import Path
 OLD_HISTORY_BASE = '60dd85175a1709627be63a4678694029c5721b74'
 FIRST_UNIT = 'superyak-lighthouse'
 OTHER_UNITS = ('superyak-door', 'superyak-ship', 'superyak-odo', 'superyak-wormhole')
+# Restarted and checked when installed and running here, left alone otherwise: a station need not federate or embed,
+# and a stopped unit stays stopped (train 1102d restarted these by hand).
+OPTIONAL_UNITS = ('superyak-federation-listen', 'superyak-federate', 'superyak-embedder')
 # The connector isn't deployed (a person's act), so its routes stay closed on the public host.
 PROBES = {'/mcp': '404', '/token': '404', '/api/connected-apps': '404', '/api/connected-apps/notice': '404',
           '/api/admin/connected-apps': '404'}
@@ -30,6 +33,7 @@ PROBE_WAIT = ('--max-time', '10')
 SETTLE_SECONDS = 15  # a unit that dies at import reads active for a moment after its restart
 SLOW_STOP_SECONDS = 6  # past the lighthouse's 5 s grace (SHUTDOWN_GRACE)
 LOCKED_INPUTS = ('peer/uv.lock', 'peer/pyproject.toml')  # the units run peer/.venv as it is
+ENGRAM_INPUTS = ('engram/uv.lock', 'engram/pyproject.toml')  # the embedder runs engram/.venv as it is
 COMMIT_ID = re.compile(r'[0-9a-f]{7,40}')
 
 
@@ -102,7 +106,7 @@ class Sitting:
         self.repo, self.train, self.host, self.backup, self.tree = Path(repo), train, host, backup, tree
         self.port, self.push, self.dry_run, self.base, self.settle = port, push, dry_run, base, settle
         self._run, self.say, self.pause = run, say, pause
-        self.report, self.restarted = [], False
+        self.report, self.restarted, self.optional = [], False, None
 
     def run(self, *argv):
         return self._run(argv, self.repo)
@@ -161,16 +165,44 @@ class Sitting:
             raise Stopped(f'the train adds {added[0]}, which is already here untracked; move it aside')
         if f'{self.repo.resolve()}/' not in self.unit(FIRST_UNIT, 'ExecStart').get('ExecStart', ''):
             raise Stopped(f'{FIRST_UNIT} does not run from {self.repo.resolve()}')
+        self.choose_optional()
         return old, commit, tree
+
+    def choose_optional(self):
+        """The optional units this sitting restarts: each installed and running before anything moves, so a unit the
+        train crashes is still restarted and checked, and the put-back restarts the same set. A state that can't be read
+        stops the sitting with main unchanged."""
+        self.optional, self.left_alone = [], []
+        for name in OPTIONAL_UNITS:
+            code, out, err = self.run('systemctl', '--user', 'show', f'{name}.service', '--property=LoadState',
+                                      '--property=ActiveState')
+            state = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
+            if code or 'LoadState' not in state:
+                raise Stopped(f"can't read {name}'s state ({(err or out)[-120:] or 'no answer'})")
+            if state['LoadState'] != 'loaded':
+                said = 'not installed' if state['LoadState'] == 'not-found' else f'{state["LoadState"]}, left as it is'
+                self.left_alone.append(f'{name.removeprefix("superyak-")} {said}')
+            elif state.get('ActiveState') != 'active':
+                self.left_alone.append(f'{name.removeprefix("superyak-")} {state.get("ActiveState", "?")}, left as it is')
+            else:
+                self.optional.append(name)
 
     def locked_inputs_changed(self, old, commit):
         return bool(self.git('diff', '--name-only', old, commit, '--', *LOCKED_INPUTS, check=False))
 
-    def sync(self):
-        code, _, err = self.run('uv', 'sync', '--locked', '-q', '--project', 'peer')  # the units run peer/.venv
-        self.note(f'peer environment synced to {self.git("rev-parse", "--short", "HEAD", check=False)}'
-                  + ('' if not code else f': FAILED, {err[-200:]}'))
-        return [] if not code else ['uv sync failed']
+    def engram_inputs_changed(self, old, commit):
+        return 'superyak-embedder' in self.optional and bool(
+            self.git('diff', '--name-only', old, commit, '--', *ENGRAM_INPUTS, check=False))
+
+    def sync(self, engram=False):
+        failed = []
+        for project, extra in (('peer', ()), *((('engram', ('--inexact',)),) if engram else ())):
+            code, _, err = self.run('uv', 'sync', '--locked', '-q', *extra, '--project', project)  # the units run its .venv
+            self.note(f'{project} environment synced to {self.git("rev-parse", "--short", "HEAD", check=False)}'
+                      + ('' if not code else f': FAILED, {err[-200:]}'))
+            if code:
+                failed.append(f'uv sync failed ({project})')
+        return failed
 
     def restart_and_check(self):
         """Restart and check every unit, the lighthouse first. Returns what failed, empty when all passed."""
@@ -190,11 +222,13 @@ class Sitting:
         probes = {path: self.http(path, PROBE_WAIT) for path in PROBES}
         self.note('closed routes: ' + ', '.join(f'{path} {code}' for path, code in probes.items()))
         failed += [f'{path} answered {code}, not {PROBES[path]}' for path, code in probes.items() if code != PROBES[path]]
-        for name in OTHER_UNITS:
+        if self.optional is None:  # a caller that skipped preconditions (a test, a put-back of one)
+            self.choose_optional()
+        for name in (*OTHER_UNITS, *self.optional):
             if self.run('systemctl', '--user', 'restart', f'{name}.service')[0]:
                 failed.append(f'{name} did not restart')
         self.pause(self.settle)
-        states = {name: self.unit(name, 'ActiveState', 'NRestarts') for name in (FIRST_UNIT, *OTHER_UNITS)}
+        states = {name: self.unit(name, 'ActiveState', 'NRestarts') for name in (FIRST_UNIT, *OTHER_UNITS, *self.optional)}
         self.note(f'units after {self.settle} s: ' + ', '.join(
             f'{name.removeprefix("superyak-")} {state.get("ActiveState", "?")} ({state.get("NRestarts", "?")} restarts)'
             for name, state in states.items()))
@@ -207,7 +241,7 @@ class Sitting:
             self.note('lighthouse warnings in the last 2 minutes (read them):\n' + '\n'.join(warnings.splitlines()[-3:]))
         return failed
 
-    def put_back(self, old, commit, failed, backup, resync, signals):
+    def put_back(self, old, commit, failed, backup, resync, signals, engram=False):
         signals.hold()
         here = self.git('rev-parse', 'HEAD', check=False)
         if here == commit:
@@ -222,7 +256,7 @@ class Sitting:
             return
         def held():
             return f' {signals.held} more signals arrived and were held.' if signals.held else ''
-        if resync and self.sync():
+        if resync and self.sync(engram):
             self.note(f'SITTING: put main back to {old[:8]}, but its uv sync failed, so nothing was restarted on it: the '
                       f'units may still run {commit[:8]}. Read them now. Nothing pushed. Failed: {"; ".join(failed)}. '
                       f'The backup taken first: {backup}.{held()}')
@@ -244,10 +278,14 @@ class Sitting:
         old, commit, tree = self.preconditions()
         members = self.git('log', '--first-parent', '--format=%h %s', f'{old}..{commit}').splitlines()
         self.note(f'main {old[:8]} -> {commit[:8]}, tree {tree}; no commit from the old history')
+        self.note('optional units: restarting ' + (', '.join(n.removeprefix('superyak-') for n in self.optional) or 'none')
+                  + ('; ' + '; '.join(self.left_alone) if self.left_alone else ''))
         for line in members:
             self.note(f'  {line[:110]}')
         if self.locked_inputs_changed(old, commit):
             self.note('  the train changes peer\'s lock inputs: the sitting runs uv sync before the restart')
+        if self.engram_inputs_changed(old, commit):
+            self.note('  the train changes engram\'s lock inputs: the sitting syncs engram before the embedder restarts')
         if self.dry_run:
             self.note('SITTING: dry run, nothing changed')
             return 0
@@ -259,10 +297,10 @@ class Sitting:
             return self._move(old, commit, members, backup, signals)
 
     def _move(self, old, commit, members, backup, signals):
-        resync = self.locked_inputs_changed(old, commit)
+        resync, engram = self.locked_inputs_changed(old, commit), self.engram_inputs_changed(old, commit)
         try:
             self.git('merge', '--ff-only', '-q', commit)
-            failed = (self.sync() if resync else []) or self.restart_and_check()
+            failed = (self.sync(engram) if resync or engram else []) or self.restart_and_check()
         except BaseException as error:  # a crash or a signal with main moved: put it back, then report it
             signals.hold()
             if not self.restarted and self.git('rev-parse', 'HEAD', check=False) == old:
@@ -273,7 +311,7 @@ class Sitting:
                 raise Stopped(f'the fast-forward did not happen: {type(error).__name__} {error}{left}') from error
             failed = [f'{type(error).__name__} {error}'.strip()]
         if failed:
-            self.put_back(old, commit, failed, backup, resync, signals)
+            self.put_back(old, commit, failed, backup, resync or engram, signals, engram)
             return 1
         if not self.push:
             self.note(f'SITTING: done, and main is NOT pushed (NO_PUSH). Once the fix is live and checked, push it: '
