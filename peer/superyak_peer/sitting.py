@@ -22,6 +22,9 @@ from pathlib import Path
 OLD_HISTORY_BASE = '60dd85175a1709627be63a4678694029c5721b74'
 FIRST_UNIT = 'superyak-lighthouse'
 OTHER_UNITS = ('superyak-door', 'superyak-ship', 'superyak-odo', 'superyak-wormhole')
+# Restarted and checked when installed and running here, left alone otherwise: a station need not federate or embed,
+# and a stopped unit stays stopped (train 1102d restarted these by hand).
+OPTIONAL_UNITS = ('superyak-federation-listen', 'superyak-federate', 'superyak-embedder')
 # The connector isn't deployed (a person's act), so its routes stay closed on the public host.
 PROBES = {'/mcp': '404', '/token': '404', '/api/connected-apps': '404', '/api/connected-apps/notice': '404',
           '/api/admin/connected-apps': '404'}
@@ -102,7 +105,7 @@ class Sitting:
         self.repo, self.train, self.host, self.backup, self.tree = Path(repo), train, host, backup, tree
         self.port, self.push, self.dry_run, self.base, self.settle = port, push, dry_run, base, settle
         self._run, self.say, self.pause = run, say, pause
-        self.report, self.restarted = [], False
+        self.report, self.restarted, self.optional = [], False, None
 
     def run(self, *argv):
         return self._run(argv, self.repo)
@@ -190,11 +193,14 @@ class Sitting:
         probes = {path: self.http(path, PROBE_WAIT) for path in PROBES}
         self.note('closed routes: ' + ', '.join(f'{path} {code}' for path, code in probes.items()))
         failed += [f'{path} answered {code}, not {PROBES[path]}' for path, code in probes.items() if code != PROBES[path]]
-        for name in OTHER_UNITS:
+        if self.optional is None:  # once a sitting, so the put-back restarts the same units
+            self.optional = [name for name in OPTIONAL_UNITS
+                             if self.unit(name, 'LoadState', 'ActiveState') == {'LoadState': 'loaded', 'ActiveState': 'active'}]
+        for name in (*OTHER_UNITS, *self.optional):
             if self.run('systemctl', '--user', 'restart', f'{name}.service')[0]:
                 failed.append(f'{name} did not restart')
         self.pause(self.settle)
-        states = {name: self.unit(name, 'ActiveState', 'NRestarts') for name in (FIRST_UNIT, *OTHER_UNITS)}
+        states = {name: self.unit(name, 'ActiveState', 'NRestarts') for name in (FIRST_UNIT, *OTHER_UNITS, *self.optional)}
         self.note(f'units after {self.settle} s: ' + ', '.join(
             f'{name.removeprefix("superyak-")} {state.get("ActiveState", "?")} ({state.get("NRestarts", "?")} restarts)'
             for name, state in states.items()))
