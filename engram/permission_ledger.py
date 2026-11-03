@@ -555,6 +555,82 @@ def _seq_sets(text: str) -> frozenset:
                      if v == "@seq" and c in _SEQ_COLUMNS.get(t, ()))
 
 
+# ---------------------------------------------------------------- the projection digest (D2)
+# One part per projected table, and one, `meta`, over every meta key but the three that follow the log and the
+# digest itself. A part is a count and a sum of row hashes mod 2**256, so it ignores row order and an update is a
+# subtraction and an addition. It detects accidental tears; it is no MAC against someone who can write the file.
+_PARTS = ("meta", *_COLUMNS)
+_UNHASHED_META = frozenset({"head", "projection", "projection_parts"})
+_MOD = 1 << 256
+
+
+def _row_bytes(table: str, values: Sequence) -> bytes:
+    """A row's encoding (D2): `t<len>:<table>`, then each value as a tag, its length in bytes and its bytes: `n`
+    (NULL, nothing more), `i` (decimal), `s` (UTF-8), `b` (raw bytes) or `r` (`repr` of a REAL)."""
+    name = table.encode("utf-8")
+    out = [b"t%d:" % len(name), name]
+    for v in values:
+        if v is None:
+            out.append(b"n")
+            continue
+        if isinstance(v, int):              # a bool is held as the int sqlite3 binds it as
+            tag, raw = b"i", str(int(v)).encode("ascii")
+        elif isinstance(v, str):
+            tag, raw = b"s", v.encode("utf-8")
+        elif isinstance(v, (bytes, bytearray, memoryview)):
+            tag, raw = b"b", bytes(v)
+        elif isinstance(v, float):
+            tag, raw = b"r", repr(v).encode("ascii")
+        else:
+            raise TypeError(f"{table}: {v!r} is no SQLite value")
+        out += [tag, b"%d:" % len(raw), raw]
+    return b"".join(out)
+
+
+def _row_hash(table: str, values: Sequence) -> int:
+    """BLAKE2b-256 of the row's encoding, as an integer."""
+    return int.from_bytes(hashlib.blake2b(_row_bytes(table, values), digest_size=32).digest(), "big")
+
+
+def _new_parts() -> dict:
+    """Every part empty, in `_PARTS` order: {part: [count, sum]}."""
+    return {p: [0, 0] for p in _PARTS}
+
+
+def _fold(parts: dict, part: str, values: Sequence, sign: int = 1) -> None:
+    """Add a row to its part (`sign` 1), or take it out (-1). A meta row of `_UNHASHED_META` is in no part."""
+    if part == "meta" and values[0] in _UNHASHED_META:
+        return
+    held = parts[part]
+    held[0] += sign
+    held[1] = (held[1] + sign * _row_hash(part, values)) % _MOD
+
+
+def _parts_text(parts: dict) -> str:
+    """`meta.projection_parts`: canonical JSON of each part's count and sum (64 hex digits), keys in sorted order."""
+    return canonical_json({p: [parts[p][0], f"{parts[p][1]:064x}"] for p in _PARTS})
+
+
+def _parts_digest(parts: dict) -> str:
+    """The whole: BLAKE2b-256 of the parts' canonical JSON, in hex."""
+    return hashlib.blake2b(_parts_text(parts).encode("utf-8"), digest_size=32).hexdigest()
+
+
+def _read_parts(text: str) -> dict:
+    """`meta.projection_parts` read back as parts; ValueError when it is not their shape."""
+    raw = json.loads(text)
+    if not isinstance(raw, dict) or set(raw) != set(_PARTS):
+        raise ValueError("projection_parts does not name every part")
+    out = {}
+    for p in _PARTS:
+        v = raw[p]
+        if not (isinstance(v, list) and len(v) == 2 and type(v[0]) is int and v[0] >= 0 and isinstance(v[1], str)
+                and len(v[1]) == 64 and all(c in "0123456789abcdef" for c in v[1])):
+            raise ValueError(f"projection_parts holds no count and sum for {p}")
+        out[p] = [v[0], int(v[1], 16)]
+    return out
+
+
 class Ledger:
     def __init__(self, conn: sqlite3.Connection, path: Path, read_only: bool):
         self.conn, self.path, self.read_only = conn, path, read_only
