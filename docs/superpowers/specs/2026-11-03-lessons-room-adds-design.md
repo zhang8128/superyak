@@ -1,6 +1,6 @@
 # Lessons room adds: the ship adds what Andy's code already vouched for
 
-Rio Grande, 2026-11-03, revision 5 (trust-made ships join under their owner's live trust, bounded by hold, pause and a per-grant cap) after its fresh review and re-check (Majors: a removal undone; per-account vouching, at pair time and in the listing view). Amends first-rail spec section 3 ("Only Andy's", "Moderators": "Until then only Andy changes
+Rio Grande, 2026-11-03. Status: approved by a fresh Pi reviewer at revision 5 (6885593c) after four re-checks, its notes folded in after (law section 3). Revision 5 (trust-made ships join under their owner's live trust, bounded by hold, pause and a per-grant cap) after its fresh review and re-check (Majors: a removal undone; per-account vouching, at pair time and in the listing view). Amends first-rail spec section 3 ("Only Andy's", "Moderators": "Until then only Andy changes
 who is in it"), on branch trail-arrows-spec, 2026-10-27-first-rail-lessons-design.md.
 
 ## Why
@@ -42,10 +42,17 @@ nothing new. It's administration.
        from the lessons chain in the same transaction, recorded with reason `held`, so every index drops its lessons
        on its next run. A `held` removal isn't Andy's removal: a ship recovered under a later trust and a fresh
        assertion rejoins by Rio Grande's add;
+     The hold's removal is a `member_changes` row with a new `reason` column (`held`; in the restore's lists), and
+       `_owner_removed` skips `held` rows. Andy can still keep one ship out: his removal accepts a contact a hold took
+       out of the chain, and records an owner removal for it. A retire removes every contact of the retired peer from
+       the chain, its code-confirmed members too, since the stolen key speaks as them and a retired peer never
+       re-pairs. A hold that covers many ships posts one removal notice for all of them;
      - **a paused grant lays nothing.** While its grant is paused, the origin's lesson gate refuses lessons from that
        grant's ships;
      - **one cap per grant.** All of one grant's ships share one LIVE_CAP of live lessons, so volume can't grow with
        the expected count.
+     The pause and the shared cap are enforced at the origin's post and reply doors, since other peers' indexes can't
+     see grants.
    - Andy vouched for this account, one of two ways: its confirmation's `confirmed_by` (a column `pair` now writes,
      the admin who typed the code) is the room's owner, and `pair` showed him the addable line (item 2); or the
      listing view he confirmed named it as addable (item 2a), which is how every contact paired before its peer was
