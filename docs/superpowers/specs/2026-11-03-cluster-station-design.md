@@ -85,6 +85,17 @@ adds a third party holding envelopes, which are signed but not encrypted.
 **The decision:** A first, with B as the named fallback. Which one a site uses is recorded in its card's endpoint,
 so the choice is per site and visible.
 
+**At TACC, B is likely the real path** (Rio Grande, 7cac051d). This is to be confirmed with TACC's own rules before
+the plan.
+- Its login nodes are expected to forbid long-running daemons, and users have no root, so route A likely isn't
+  available.
+- **That makes B a new public route on the Pi.** It comes under the public route's spec (2026-10-27, "a login in
+  front of everything") and gets its own fresh review: its allow-list, its per-address budget before the signature
+  check, and its refusals. It isn't folded into this spec's approval.
+- **The cluster station itself may have to live inside a job** for the same reason: a long-running service job that
+  keeps its store on the site's work file system and restarts with the next job. That's open question 2, and it
+  decides whether a site needs any long-lived process at all.
+
 ## 3. Admission: sessions by rule
 
 **A session key** is minted by the cluster station for one ship, one job and one node.
