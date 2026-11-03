@@ -193,3 +193,101 @@ def test_the_line_names_a_bidi_name_plainly(adds):
     card = adds.card_of('defiant')
     card = {**card, 'participant': {**card['participant'], 'name': 'Def\u202eiant'}}
     assert line_for(adds, card).startswith('Defiant on ')
+
+
+# Task 3: the listing names the addable accounts.
+import json
+from superyak_peer.lessons import describe_station_room, listable
+
+
+def list_view(adds, confirm=None):
+    return adds.pi.station_lessons_room('andy', adds.room[:6], 'rio-grande', [adds.tardis_fed.identity.peer_id], confirm)
+
+
+def addable_rows(adds):
+    with adds.pi.transaction() as db:
+        return [dict(r) for r in db.execute('SELECT * FROM lessons_addable ORDER BY contact_id')]
+
+
+def test_the_listing_names_each_addable_account(adds):
+    contact = adds.pair_new('defiant')
+    view = list_view(adds)
+    assert [a['id'] for a in view['addable']] == [contact]
+    assert 'addable by' in describe_station_room(view) and 'code' not in json.dumps(view['addable'])
+    assert set(view['addable'][0]) == {'id', 'label', 'user_short', 'peer_id', 'typed_by'}
+
+
+def test_members_trust_made_held_and_removed_contacts_are_not_addable(adds):
+    pi, andy = adds.pi, adds.ids['andy']
+    held, trusted, removed, plain = (adds.pair_new(n) for n in ('held', 'trusted', 'removed', 'plain'))
+    with pi.transaction() as db:
+        db.execute('INSERT INTO contact_holds VALUES(?,?)', (held, 1.0))
+        db.execute("INSERT INTO trust_confirmations VALUES('t1',?,'g','a','s',1.0,'d',1)", (trusted,))
+        db.execute("INSERT INTO member_changes(id,actor_id,member_id,change,room_id,created) VALUES('c1',?,?,'remove',?,5.0)",
+                   (andy, removed, adds.room))
+    ids = [a['id'] for a in list_view(adds)['addable']]
+    assert ids == [plain]            # the members (Tardis's ship and Andy there) are not offered either
+    with pi.transaction() as db:
+        assert listable(pi, db, {'id': adds.room, 'member_ids': [], 'owner_id': andy}, plain, [adds.tardis_fed.identity.peer_id])
+        assert not listable(pi, db, {'id': adds.room, 'member_ids': [plain], 'owner_id': andy}, plain, [adds.tardis_fed.identity.peer_id])
+        assert not listable(pi, db, {'id': adds.room, 'member_ids': [], 'owner_id': andy}, plain, [])
+
+
+def test_an_unlisted_peers_account_is_not_addable(adds):
+    adds.pair_new('elsewhere', on='other')
+    assert list_view(adds)['addable'] == []
+
+
+def test_the_confirm_code_changes_when_one_is_added_or_goes_stale(adds):
+    before = list_view(adds)['confirm']
+    contact = adds.pair_new('defiant')
+    after_add = list_view(adds)['confirm']
+    with adds.pi.transaction() as db:
+        db.execute("UPDATE remote_contacts SET name='Renamed' WHERE id=?", (contact,))
+    assert list_view(adds)['addable'] == []                      # stale: the code no longer fits the name
+    with adds.pi.transaction() as db:                            # typed again under the new name
+        row = db.execute('SELECT c.user_id, c.name, p.card FROM remote_contacts c JOIN peers p USING(peer_id) WHERE c.id=?', (contact,)).fetchone()
+        db.execute('UPDATE pairing_confirmations SET code=? WHERE contact_id=?',
+                   (pairing_code({**json.loads(row['card']), 'participant': {'id': row['user_id'], 'name': row['name']}}), contact))
+    after_retyped = list_view(adds)
+    assert [a['id'] for a in after_retyped['addable']] == [contact]
+    assert len({before, after_add, after_retyped['confirm']}) == 3
+
+
+def test_confirm_records_exactly_what_was_shown_and_a_rerun_replaces_it(adds):
+    first = adds.pair_new('defiant')
+    view = list_view(adds)
+    assert addable_rows(adds) == []                      # a view writes nothing
+    list_view(adds, view['confirm'])
+    rows = addable_rows(adds)
+    assert [r['contact_id'] for r in rows] == [first] and rows[0]['typed_by'] == adds.ids['andy']
+    assert rows[0]['listed'] == adds.clock[0] and len(rows[0]['code_digest']) == 64
+    with adds.pi.transaction() as db:
+        code = db.execute('SELECT code FROM pairing_confirmations WHERE contact_id=?', (first,)).fetchone()['code']
+    import hashlib
+    assert rows[0]['code_digest'] == hashlib.sha256(code.encode()).hexdigest()
+    assert code not in json.dumps(view) and code not in describe_station_room(view) and rows[0]['code_digest'] not in json.dumps(view)
+    with adds.pi.transaction() as db:
+        db.execute("UPDATE remote_contacts SET name='Renamed' WHERE id=?", (first,))
+    second = adds.pair_new('voyager')
+    again = list_view(adds)
+    list_view(adds, again['confirm'])
+    assert [r['contact_id'] for r in addable_rows(adds)] == [second]
+
+
+def test_a_stale_confirm_writes_nothing(adds):
+    adds.pair_new('defiant')
+    view = list_view(adds)
+    adds.pair_new('voyager')
+    with pytest.raises(Exception):
+        list_view(adds, view['confirm'])
+    assert addable_rows(adds) == []
+
+
+def test_the_listing_shows_a_bidi_name_plainly(adds):
+    contact = adds.pair_new('defiant')
+    view = {'room': adds.room, 'title': 'T', 'members': [], 'peers': ['p' * 64], 'recorded': False, 'confirm': 'c',
+            'addable': [{'id': contact, 'label': 'Def‮iant', 'user_short': 'abcd1234', 'peer_id': 'p' * 64, 'typed_by': 'u'}],
+            'ship': 'rio\u202e-grande'}
+    text = describe_station_room(view)
+    assert '‮' not in text and 'Defiant (abcd1234) addable by rio-grande' in text
