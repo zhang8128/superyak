@@ -3,11 +3,15 @@ its task and the decision it pins."""
 import hashlib
 import json
 import os
+import sqlite3
+
+import pytest
 
 import permission_ledger
 from lighthouse_protocol import canonical_json
-from permission_ledger import Ledger, ledger_path
+from permission_ledger import SCHEMA_VERSION, Ledger, LedgerUnreadable, ledger_path, projection_now
 from permissions import _COLUMNS
+from tests.permissions_support import ANDY, M2, M3, MEDICAL, do, e1_county_ledger
 
 
 # ---------------------------------------------------------------- Task 0b: what this Python gives the key read
@@ -100,4 +104,102 @@ def test_1_the_meta_part_excludes_head_and_the_projection_keys_and_covers_gate_a
             if kv[0] != gone:
                 permission_ledger._fold(other, "meta", kv)
         assert other["meta"] != plain["meta"], gone
+
+
+# ---------------------------------------------------------------- Task 2: projection_now and the full check (D2, D4)
+
+# BLAKE2b-256 of every part's [0, 64 zeros] in canonical JSON, computed apart from the code
+EMPTY = "417b1c2804721d7ffedd7efb55ae7db07644ac70329df7a573a74400d27ca01f"
+
+
+def _sql(home, *statements):
+    con = sqlite3.connect(ledger_path(home))
+    try:
+        for s in statements:
+            con.execute(s)
+        con.commit()
+    finally:
+        con.close()
+
+
+def _stamp_by_hand(home):
+    """meta.projection and projection_parts set to the tables as they are, by SQL: what a writer keeps."""
+    con = sqlite3.connect(ledger_path(home))
+    try:
+        whole, parts = projection_now(con)
+        top = con.execute("SELECT COALESCE(MAX(seq), 0) FROM ledger_log").fetchone()[0]
+        con.executemany("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        [("projection", f"{top}:{whole}"), ("projection_parts", permission_ledger._parts_text(parts))])
+        con.commit()
+    finally:
+        con.close()
+
+
+def _full_check(home):
+    con = sqlite3.connect(f"file:{ledger_path(home)}?mode=ro", uri=True, isolation_level=None)
+    try:
+        con.execute("BEGIN")
+        permission_ledger._full_check(con)
+        con.execute("COMMIT")
+    finally:
+        con.close()
+
+
+def test_2_an_empty_ledgers_digest_is_fixed(tmp_path):
+    con = sqlite3.connect(tmp_path / "bare.db")
+    con.executescript(permission_ledger._SCHEMA)          # every table, and no meta row
+    assert projection_now(con) == (EMPTY, permission_ledger._new_parts())
+    con.close()
+    Ledger._blank(tmp_path, "ledger-fixed").close()
+    expected = permission_ledger._new_parts()
+    for kv in (("ledger_id", "ledger-fixed"), ("schema_version", SCHEMA_VERSION)):
+        permission_ledger._fold(expected, "meta", kv)
+    con = sqlite3.connect(ledger_path(tmp_path))
+    assert projection_now(con) == (permission_ledger._parts_digest(expected), expected)
+    con.close()
+
+
+def _uncollected(home):
+    """E1's county; Andy uncollects m2 and m3 in one act (the acceptance test's ledger). Returns the act's seq."""
+    led = e1_county_ledger(home)
+    seq = do(led, ANDY, "uncollect", collection=MEDICAL, objects=[M2, M3], now="2026-11-02").seq
+    led.close()
+    return seq
+
+
+def test_2_the_full_check_passes_on_a_whole_ledger_and_a_mismatch_names_its_part(tmp_path):
+    seq = _uncollected(tmp_path)
+    _stamp_by_hand(tmp_path)
+    _full_check(tmp_path)                                                     # the control: whole, it passes
+    _sql(tmp_path, "UPDATE collection_members SET removed_seq = NULL, removed_by = NULL "
+                   f"WHERE removed_seq = {seq} AND object = '{M2}'")
+    with pytest.raises(LedgerUnreadable, match="the projection digest: collection_members differs"):
+        _full_check(tmp_path)
+    _stamp_by_hand(tmp_path)
+    _sql(tmp_path, "UPDATE meta SET value = 'person:jenn' WHERE key = 'admins'")
+    with pytest.raises(LedgerUnreadable, match="the projection digest: meta differs"):
+        _full_check(tmp_path)
+
+
+def test_2_a_missing_log_middle_row_is_caught_by_the_count(tmp_path):
+    """The log is in no part: a middle row lost leaves every part and the top seq as they were."""
+    seq = _uncollected(tmp_path)
+    _stamp_by_hand(tmp_path)
+    _sql(tmp_path, f"DELETE FROM ledger_log WHERE seq = {seq // 2}")
+    with pytest.raises(LedgerUnreadable, match=f"the projection digest: the log holds {seq - 1} rows, but its last "
+                                               f"seq is {seq}"):
+        _full_check(tmp_path)
+
+
+def test_2_a_projection_behind_head_names_both_seqs_and_any_sqlite_error_reads_unreadable(tmp_path):
+    seq = _uncollected(tmp_path)
+    _stamp_by_hand(tmp_path)
+    _sql(tmp_path, f"UPDATE meta SET value = '{seq - 1}:' || substr(value, instr(value, ':') + 1) "
+                   "WHERE key = 'projection'")
+    with pytest.raises(LedgerUnreadable, match=f"the projection digest: projection seq {seq - 1} behind head {seq}"):
+        _full_check(tmp_path)
+    _stamp_by_hand(tmp_path)
+    _sql(tmp_path, "DROP TABLE copies")
+    with pytest.raises(LedgerUnreadable, match="the projection digest could not be checked: no such table: copies"):
+        _full_check(tmp_path)
 

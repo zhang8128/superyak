@@ -631,6 +631,70 @@ def _read_parts(text: str) -> dict:
     return out
 
 
+def projection_now(conn: sqlite3.Connection) -> tuple[str, dict]:
+    """(the whole, the parts) recomputed from every row of `meta` and the projected tables, each read past its indexes
+    (`NOT INDEXED`), so a torn index page can neither hide a row nor invent one. A pure read: run it inside the
+    caller's read transaction, so every table comes from one committed state."""
+    parts = _new_parts()
+    blake = hashlib.blake2b
+    cur = conn.cursor()
+    cur.row_factory = None
+    for key, value in cur.execute("SELECT key, value FROM meta NOT INDEXED"):
+        _fold(parts, "meta", (key, value))
+    for table, cols in _COLUMNS.items():
+        count = total = 0
+        for row in cur.execute(f"SELECT {', '.join(cols)} FROM {table} NOT INDEXED"):
+            total += int.from_bytes(blake(_row_bytes(table, row), digest_size=32).digest(), "big")
+            count += 1
+        parts[table] = [count, total % _MOD]
+    return _parts_digest(parts), parts
+
+
+# The full checks this process has run (N8): the tests count them.
+full_checks = 0
+_FULL_CHECKS_LOCK = threading.Lock()
+
+
+def _full_check(conn: sqlite3.Connection) -> None:
+    """D4's full check, inside the caller's read transaction: every part recomputed and compared with
+    `meta.projection_parts`, then the whole with `meta.projection`, whose seq must be the log's last; the log's row
+    count against its last seq, so a middle row can't vanish unseen; and SQLite's integrity check, which catches a torn
+    index page. Raises `LedgerUnreadable("the projection digest …")` on any failure, an `sqlite3.Error` included."""
+    global full_checks
+    with _FULL_CHECKS_LOCK:
+        full_checks += 1
+    try:
+        whole, parts = projection_now(conn)
+        meta = dict(conn.execute("SELECT key, value FROM meta NOT INDEXED").fetchall())
+        top = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM ledger_log").fetchone()[0]
+        stored, stored_parts = meta.get("projection"), meta.get("projection_parts")
+        if stored is None or stored_parts is None:
+            raise LedgerUnreadable("the projection digest: meta holds none")
+        seq_text, _, stored_whole = stored.partition(":")
+        if seq_text != str(top):
+            behind = seq_text.isdigit() and int(seq_text) < top
+            raise LedgerUnreadable(f"the projection digest: projection seq {seq_text} "
+                                   f"{'behind' if behind else 'is not'} head {top}")
+        try:
+            held = _read_parts(stored_parts)
+        except ValueError as e:
+            raise LedgerUnreadable(f"the projection digest: projection_parts cannot be read ({e})") from e
+        differs = [p for p in _PARTS if held[p] != parts[p]]
+        if differs:
+            raise LedgerUnreadable(f"the projection digest: {', '.join(differs)} differ{'s' * (len(differs) == 1)}")
+        if stored_whole != whole:
+            raise LedgerUnreadable("the projection digest: the whole differs")
+        rows = conn.execute("SELECT COUNT(*) FROM ledger_log NOT INDEXED").fetchone()[0]
+        if rows != top:
+            raise LedgerUnreadable(f"the projection digest: the log holds {rows} rows, but its last seq is {top}")
+        checked = [str(r[0]) for r in conn.execute("PRAGMA integrity_check")]
+        if checked != ["ok"]:
+            raise LedgerUnreadable(f"the projection digest: SQLite's integrity check of the file: "
+                                   f"{'; '.join(checked) or 'no answer'}")
+    except sqlite3.Error as e:
+        raise LedgerUnreadable(f"the projection digest could not be checked: {e}") from e
+
+
 class Ledger:
     def __init__(self, conn: sqlite3.Connection, path: Path, read_only: bool):
         self.conn, self.path, self.read_only = conn, path, read_only
