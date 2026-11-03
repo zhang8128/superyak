@@ -1158,25 +1158,30 @@ class Ledger:
         conn = self._connect(self.path, read_only=True, shared=True)
         if checked is None:
             return conn
-        key, _pinned = checked
         try:
-            if conn._key != (key.dev, key.ino):
-                raise LedgerUnreadable(f"{self.path}: {_CHANGED}")
-            conn.execute("BEGIN")
-            try:
-                now, pinned = _read_key(conn, self.path)
-            finally:
-                conn.execute("COMMIT")
-            if now.counter != key.counter and not _verified(self.path, now, pinned):
-                _pause()
-                if not _verified(self.path, now, pinned):
-                    raise LedgerUnreadable(f"{self.path}: {_CHANGED}")
+            self._check_late(conn, checked[0])
         except BaseException as e:
             conn.close()
             if isinstance(e, sqlite3.Error):
                 raise LedgerUnreadable(f"{self.path}: {e}") from e
             raise
         return conn
+
+    def _check_late(self, conn: sqlite3.Connection, key: _Key) -> None:
+        """`_late`'s check of its new connection against the key the check read; raises `LedgerUnreadable`. A changed
+        key is looked up while the read transaction still holds SHARED, so no later commit replaces the marker that
+        names it before it is read; the writer that made it can still mark it meanwhile."""
+        if conn._key != (key.dev, key.ino):
+            raise LedgerUnreadable(f"{self.path}: {_CHANGED}")
+        conn.execute("BEGIN")
+        try:
+            now, pinned = _read_key(conn, self.path)
+            if now.counter != key.counter and not _verified(self.path, now, pinned):
+                _pause()
+                if not _verified(self.path, now, pinned):
+                    raise LedgerUnreadable(f"{self.path}: {_CHANGED}")
+        finally:
+            conn.execute("COMMIT")
 
     def _verified_under_lock(self, key: _Key, pinned: bool) -> bool:
         """Under the write lock, whether a key changed since step 1 is verified: the memo or the marker, read once more

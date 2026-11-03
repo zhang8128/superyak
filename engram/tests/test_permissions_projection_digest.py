@@ -5,6 +5,7 @@ import hashlib
 import json
 import multiprocessing
 import os
+import platform
 import shutil
 import sqlite3
 import subprocess
@@ -25,6 +26,7 @@ from permissions import _COLUMNS, RuleError
 from tests.permissions_support import (  # noqa: F401
     ANDY, M2, M3, MEDICAL, T, cli_home, cli_home_with_house, do, e1_county_ledger, fake_tty, raise_gate,
     raised_ledger)
+from tests.permissions_memory_support import digest_shape, digest_timings
 from tests.test_permissions_premerge_fixes import _tear_index
 
 
@@ -1009,3 +1011,76 @@ def test_5_unstamp_is_the_way_back_and_asks_the_persons_yes(tmp_path, monkeypatc
     assert not _marker(tmp_path).exists()
     monkeypatch.setattr(permission_ledger, "SCHEMA_VERSIONS", ("1",))         # old code reads it again
     assert _state(tmp_path).seq == 1
+
+
+# ---------------------------------------------------------------- Task 6: the budgets and the loop (D9, S2)
+
+X86 = platform.machine() in ("x86_64", "AMD64")
+
+
+@pytest.fixture(scope="module")
+def d9_ledger(tmp_path_factory):
+    home = tmp_path_factory.mktemp("d9") / "home"
+    digest_shape(home)
+    return home
+
+
+@pytest.mark.skipif(not X86, reason="D9's x86 line (Tardis); the Pi's is in the U24 file, with ENGRAM_PI_BUDGET=1")
+def test_6_the_budgets_at_d9s_shape_on_x86(d9_ledger, monkeypatch):
+    """D9 on x86, at Task 0's shape (236,389 rows): state() with the full check, the rare path, within 2.5 s; a memo
+    match spends at most 2 ms in the key protocol; an append costs at most 2 ms more than one that keeps no digest."""
+    monkeypatch.setenv("ENGRAM_PROJECTION_CHECK", "off")
+    got = digest_timings(d9_ledger)
+    print(f"D9 on {platform.node()}: {got}")
+    assert got["rare"] <= 2.5, got
+    assert got["match"] <= 0.002, got
+    assert got["append"] <= 0.002, got
+
+
+LOOP_S = 60
+
+
+def _loop_writer(args):
+    """A writer for the loop test (spawned): appends until `until`. Returns (appends, LedgerBusy count)."""
+    home, who, until = args
+    import permission_ledger as pl
+    led, n, busy = pl.Ledger.open(home), 0, 0
+    while time.time() < until:
+        try:
+            led._append("note", f"{who}{n}", ANDY, "terminal", {"insert": [{"table": "lane_notes", "row": {
+                "object": f"mem:S/episode/{who}{n}", "lane": "work", "at": T("2026-12-01") + n, "seq": "@seq"}}]},
+                at=T("2026-12-01") + n)
+        except pl.LedgerBusy:
+            busy += 1
+        n += 1
+    led.close()
+    return n, busy
+
+
+def _loop_reader(args):
+    """A reader for the loop test (spawned): one State per open, as a daemon frame reads, until `until`. Returns
+    (reads, the full checks it ran)."""
+    home, until = args
+    import permission_ledger as pl
+    reads = 0
+    while time.time() < until:
+        led = pl.Ledger.open_read_only(home)
+        led.state()
+        led.close()
+        reads += 1
+    return reads, pl.full_checks
+
+
+def test_6_two_writers_and_a_reader_for_60_s_check_whole_at_most_1_percent_of_reads(tmp_path):
+    """S2: a read that lands between a writer's COMMIT and its marker waits 50 ms and reads the marker again, so a
+    full check stays rare under steady writes."""
+    _created(tmp_path)
+    until = time.time() + LOOP_S + 5                          # each process starts within the 5 s
+    with multiprocessing.get_context("spawn").Pool(3) as pool:
+        writers = pool.map_async(_loop_writer, [(tmp_path, "x", until), (tmp_path, "y", until)])
+        reader = pool.apply_async(_loop_reader, ((tmp_path, until),))
+        (wrote, reads) = writers.get(LOOP_S + 120), reader.get(LOOP_S + 120)
+    print(f"loop: writers {wrote}, reader {reads}")
+    assert all(busy == 0 and n > 100 for n, busy in wrote), wrote
+    n_reads, checks = reads
+    assert n_reads > 100 and checks <= n_reads / 100, reads

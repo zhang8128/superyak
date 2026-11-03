@@ -23,6 +23,21 @@ def test_u24_one_eligible_set_rebuild_within_2_seconds():
     assert took <= REBUILD_BUDGET_S, f"{took:.1f} s for 20,000 placements"
 
 
+def test_u24_the_projection_digests_rare_path_within_8_seconds_and_its_match_and_append_within_2_ms(tmp_path,
+                                                                                                       monkeypatch):
+    """The projection digest plan's D9, the Pi's line, at Task 0's shape (236,389 rows): state() with the full check,
+    the rare path, within 8 s (3.8 s measured on a loaded Pi; an append waits 12 s for it); a memo match spends at
+    most 2 ms in the key protocol; an append costs at most 2 ms more than one that keeps no digest."""
+    from tests.permissions_memory_support import digest_shape, digest_timings
+    monkeypatch.setenv("ENGRAM_PROJECTION_CHECK", "off")
+    digest_shape(tmp_path / "home")
+    got = digest_timings(tmp_path / "home")
+    print(f"D9 on the Pi: {got}")
+    assert got["rare"] <= 8, got
+    assert got["match"] <= 0.002, got
+    assert got["append"] <= 0.002, got
+
+
 def test_u24_one_eligible_set_rebuild_with_sharing_off_within_30_seconds(monkeypatch):
     """No two objects read alike (`SHARED_DECISIONS = 0`, 6.4): 820,000 layer verdicts."""
     import permissions

@@ -103,3 +103,105 @@ def add_records_by_sql(home, count):
     finally:
         conn.close()
     restamp_projection(home)
+
+
+# ---------------------------------------------------------------- the projection digest's budgets (its plan's D9, Task 6)
+
+DIGEST_MEMORIES, DIGEST_RECORDS = 20_000, 16_384     # D9's shape: Task 0's, 236,389 rows and 28.7 MB
+
+
+def digest_shape(home):
+    """D9's ledger under `home`: Task 0's shape, written by SQL and restamped."""
+    synthetic_ledger(home, DIGEST_MEMORIES, records=True)
+    add_records_by_sql(home, DIGEST_RECORDS - 1)
+    return ledger_path(home)
+
+
+def _median(times):
+    times = sorted(times)
+    return times[len(times) // 2]
+
+
+def digest_timings(home, *, runs=5, appends=41):
+    """D9's timings, in seconds, on the ledger under `home` (`digest_shape`), each a median:
+    - "rare": state() with the full check, as a reader with no memo and no marker match runs it (its 50 ms re-read
+      included);
+    - "match": what a state() served by this process's memo spends in the key protocol: the key reads, the memo,
+      the late connections' checks and the descriptor count (a difference of two 0.35 s state()s can't show 2 ms);
+    - "append": an append's time less the same append on a copy made before the digest (version 1, which keeps no
+      digest and no key), both with synchronous=OFF so the disk's fsync is left out.
+    Makes that copy beside `home`."""
+    import shutil
+    import time
+
+    import permission_ledger
+    from permission_ledger import Ledger
+    old = home.parent / (home.name + "-unstamped")
+    (old / ".engram").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ledger_path(home), ledger_path(old))
+    conn = sqlite3.connect(ledger_path(old), isolation_level=None)
+    conn.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
+    conn.execute("DELETE FROM meta WHERE key IN ('projection', 'projection_parts')")
+    conn.close()
+
+    def one_state(where):
+        led = Ledger.open_read_only(where)
+        try:
+            led.state()
+        finally:
+            led.close()
+
+    rare = []
+    real_marker = permission_ledger._read_marker
+    permission_ledger._read_marker = lambda path: None
+    try:
+        for _ in range(runs):
+            permission_ledger._forget_verified()
+            start = time.perf_counter()
+            one_state(home)
+            rare.append(time.perf_counter() - start)
+    finally:
+        permission_ledger._read_marker = real_marker
+
+    spent, wrapped = [0.0], []
+
+    def timed(owner, name):
+        real = getattr(owner, name)
+
+        def run(*args, **kwargs):
+            start = time.perf_counter()
+            try:
+                return real(*args, **kwargs)
+            finally:
+                spent[0] += time.perf_counter() - start
+        wrapped.append((owner, name, real))
+        setattr(owner, name, run)
+
+    for owner, name in ((Ledger, "_read_key"), (Ledger, "_verify"), (Ledger, "_check_late"),
+                        (permission_ledger, "_hold"), (permission_ledger, "_release")):
+        timed(owner, name)
+    match = []
+    try:
+        one_state(home)                              # the memo now holds the key
+        for _ in range(runs * 4):
+            spent[0] = 0.0
+            one_state(home)
+            match.append(spent[0])
+    finally:
+        for owner, name, real in wrapped:
+            setattr(owner, name, real)
+
+    def append_s(where):
+        led = Ledger.open(where)
+        led.conn.execute("PRAGMA synchronous=OFF")
+        times = []
+        for i in range(appends):
+            start = time.perf_counter()
+            led._append("note", f"n{i}", OWNER, "terminal", {"insert": [{"table": "lane_notes", "row": {
+                "object": f"mem:S/episode/m{i}", "lane": "work", "at": 2_000_000 + i, "seq": "@seq"}}]},
+                at=2_000_000 + i)
+            times.append(time.perf_counter() - start)
+        led.close()
+        return _median(times)
+
+    return {"rare": _median(rare), "match": _median(match), "append": append_s(home) - append_s(old)}

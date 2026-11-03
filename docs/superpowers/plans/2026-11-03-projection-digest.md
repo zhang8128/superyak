@@ -365,3 +365,11 @@ since step 1. With two writers in contention that fails `test_rf5_two_writers_ke
   tail checks, which a digest that holds the torn tables can't see.
 - **A connection collected unclosed** releases its count at once but leaves its descriptor's close to the next hold or
   release, since its own SQLite close may still be running.
+- **A late connection looks a changed key up while it still holds SHARED** (fixed in Task 6; Task 4 looked it up after
+  its read transaction). Under steady writes a later commit had replaced the marker by then, so a verified change read
+  as unverified and the State refused ("the ledger changed during this read"). Task 6's loop test found it on its first
+  run. Every memo or marker lookup now happens under a lock that keeps the state still: SHARED for readers and late
+  connections, RESERVED for a writer's step 2.
+- **D9 on Tardis** (Task 6's x86 test, at Task 0's shape): the rare path 1.81 s (budget 2.5 s), a memo match 0.52 ms
+  spent in the key protocol (budget 2 ms), an append 0.60 ms over one that keeps no digest (budget 2 ms). The match
+  path is timed inside the key protocol, since a difference of two 0.35 s `state()`s can't show 2 ms.
