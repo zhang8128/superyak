@@ -133,12 +133,15 @@ CHOICES = [
     "**BCa.** 10,000 multinomial cluster resamples, seeded. `z0` comes from the share of resamples below the estimate, "
     "with ties counting half, clipped to [0.5/B, 1 − 0.5/B]. The acceleration comes from the leave-one-cluster-out "
     "jackknife.",
-    "**Null of the null.** Shuffle set A uses seed streams (seed, period, j) and set B uses (seed, period, 1, j), for j "
-    "= 0 to 19. D_null = hit@10(set B) − hit@10(set A). Its bootstraps use the very resample draws of D_order's.",
-    "**Order.** δ_order = max(0.02, the 95th percentile of D_null's session bootstrap distribution, which is the raw "
-    "distribution, not BCa). \"Order carries information\" needs D_order's session BCa lower bound above δ_order and "
-    "its day BCa lower bound above the same δ_order. With one cluster there's no null distribution, and order can't "
-    "be claimed.",
+    "**Shuffle sets.** Set A uses seed streams (seed, period, j) and set B uses (seed, period, 1, j), for j = 0 to 19. "
+    "Set A's average gives D_order. D_null = hit@10(set B's average) − hit@10(set A's average) is reported beside it "
+    "(descriptive), with the very resample draws of D_order's bootstraps.",
+    "**Order.** δ_order = max(0.02, the permutation threshold), where the threshold is numpy's linear 95th "
+    "percentile, over set B's 20 shuffles, of (that shuffle's hit@10 − set A's average) on the primary steps. "
+    "\"Order carries information\" needs D_order's session BCa lower bound above δ_order and its day BCa lower bound "
+    "above the same δ_order.",
+    "**Permuted check.** `--permute-real` (synthetic logs only) replaces each session's real order with one more "
+    "seeded shuffle of its recalls over their times before anything is computed. Order must then tie.",
     "**Insufficient.** Test sessions are those with at least one primary step. When the data are insufficient, no "
     "interval is computed: only counts and point hit rates appear.",
     "**Additive period.** It runs the same pipeline on its own: its own `T`, with training inside it. It's secondary "
@@ -893,6 +896,7 @@ def evaluate(log: Log, uni: Universe, recalls: np.ndarray, tag: int) -> dict:
     # set A gives the null of the null (descriptive).
     for name, stream in (("shuffled", (SEED, tag)), ("shuffled_b", (SEED, tag, 1))):
         hits = np.zeros(n)
+        each = np.zeros((SHUFFLES, n), bool)
         for j in range(SHUFFLES):
             rng = np.random.default_rng(stream + (j,))
             table, _, _ = transitions([[runs[i] for i in rng.permutation(len(runs))] for runs in train_runs], log,
@@ -900,10 +904,13 @@ def evaluate(log: Log, uni: Universe, recalls: np.ndarray, tag: int) -> dict:
             for step, cache in enumerate(caches):
                 ys, sc = table.scores(cache.a)
                 top, _ = count_arm(V, ys, sc, cache)
-                hits[step] += first_hit(top, cache.target) <= TOP
+                each[j, step] = first_hit(top, cache.target) <= TOP
+            hits += each[j]
             del table
             guard("shuffles")
         out[name] = hits / SHUFFLES
+        if name == "shuffled_b":
+            out["shuffled_b_each"] = each  # for the permutation threshold δ_order
     del caches
 
     primary = out["meta"]["jaccard"] <= JACCARD_MAX if n else np.zeros(0, bool)
@@ -985,11 +992,11 @@ def statistics(res: dict, mask: np.ndarray) -> dict:
     stats["order"] = {"session": bca(order, sid, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 1)),
                       "day": bca(order, day, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 2))}
     null = np.stack([res["shuffled_b"][mask], res["shuffled"][mask]], axis=1)
-    stats["null"] = {"session": bca(null, sid, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 1), keep=True),
+    stats["null"] = {"session": bca(null, sid, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 1)),
                      "day": bca(null, day, lambda m: m[..., 0] - m[..., 1], (SEED, 4, 2))}
-    boot = stats["null"]["session"].pop("boot", None)
-    q95 = float(np.quantile(boot, 0.95)) if boot is not None else float("nan")
-    stats["delta_order"] = {"value": calibrate_delta_order(q95), "q95": q95}
+    singles = res["shuffled_b_each"][:, mask].mean(axis=1)  # each set-B shuffle's hit@10 on the primary steps
+    q95 = permutation_q95(singles, float(res["shuffled"][mask].mean()))
+    stats["delta_order"] = {"value": calibrate_delta_order(q95), "q95": q95, "sd": float(singles.std(ddof=1))}
     counted = meta["positive"][mask] > 0
     if counted.any():
         stats["counted"] = bca(H10[counted], sid[counted], d_stat, (SEED, 5, 1))
@@ -1013,9 +1020,15 @@ def combine(by_session: str, by_day: str) -> str:
     return by_session if by_session == by_day else "inconclusive"
 
 
+def permutation_q95(singles, mean_a: float) -> float:
+    """The 95th percentile, over the set-B shuffles, of (that single shuffle's hit@10 − set A's average hit@10): how
+    far one ordering sits from the shuffled average by chance alone, the comparison D_order makes for real order."""
+    singles = np.asarray(singles, np.float64)
+    return float(np.quantile(singles - mean_a, 0.95)) if len(singles) else float("nan")
+
+
 def calibrate_delta_order(q95: float) -> float:
-    """δ_order = max(0.02, the 95th percentile of the null of the null's session bootstrap distribution). With no
-    such distribution (one cluster), it's NaN, and order can't be claimed."""
+    """δ_order = max(0.02, the permutation threshold q95). With no threshold, it's NaN, and order can't be claimed."""
     return max(DELTA_ORDER, q95) if q95 == q95 else float("nan")
 
 
@@ -1059,6 +1072,25 @@ def check_classifier() -> int:
             raise Stop(f"classifier check: δ_order from q95 {q95} gave {calibrate_delta_order(q95)}, expected {expected}")
     if calibrate_delta_order(float("nan")) == calibrate_delta_order(float("nan")):
         raise Stop("classifier check: δ_order from no null distribution should be NaN")
+    # The permutation threshold over 20 shuffles: numpy's linear 95th percentile sits 5% of the way from the 19th to
+    # the 20th sorted difference. Values are powers of two, so the arithmetic is exact.
+    mean_a, zeros = 0.25, [0.0] * 18
+    thresholds = [
+        (zeros + [0.015625, 0.015625], 0.015625, DELTA_ORDER),  # below the floor: δ_order is 0.02
+        (zeros + [0.03125, 0.03125], 0.03125, 0.03125),  # above the floor: δ_order is the threshold
+        (zeros + [0.03125, 0.0625], 0.03125 + 0.05 * 0.03125, 0.03125 + 0.05 * 0.03125),  # interpolated
+        ([0.0] * 19 + [0.5], 0.025, 0.025),  # one far shuffle moves the threshold only 5% of its way
+        ([0.0] * 20, 0.0, DELTA_ORDER),  # every shuffle at the average: the floor
+        ([-0.0625] * 20, -0.0625, DELTA_ORDER),
+    ]
+    for diffs, q_expected, d_expected in thresholds:
+        q = permutation_q95([mean_a + x for x in diffs], mean_a)
+        d = calibrate_delta_order(q)
+        if abs(q - q_expected) > 1e-12 or abs(d - d_expected) > 1e-12:
+            raise Stop(f"classifier check: permutation threshold {q} (δ_order {d}), expected {q_expected} "
+                       f"({d_expected})")
+    if permutation_q95([], mean_a) == permutation_q95([], mean_a):
+        raise Stop("classifier check: a permutation threshold from no shuffles should be NaN")
     orders = []
     for delta in (DELTA_ORDER, 0.035):  # the floor, and a calibrated value above it
         orders += [
@@ -1077,7 +1109,7 @@ def check_classifier() -> int:
         if got != expected:
             raise Stop(f"classifier check: D_order lower bounds {lo_s} (session), {lo_d} (day) at δ_order {delta} "
                        f"gave {got}, expected {expected}")
-    return len(cases) + len(pairs) + len(calibrations) + 1 + len(orders)
+    return len(cases) + len(pairs) + len(calibrations) + 1 + len(thresholds) + 1 + len(orders)
 
 
 def verdict(res: dict) -> dict:
@@ -1193,9 +1225,11 @@ def period_section(name: str, res: dict, v: dict, primary_period: bool) -> list[
               f"({st[('D', 10)]['day']['clusters']} clusters). δ = {DELTA}.",
               f"- **Order {v['order']}.** D_order = {interval(st['order']['session'])} by session, "
               f"{interval(st['order']['day'])} by day.",
-              f"- **δ_order = {fmt(st['delta_order']['value'])}**, the larger of the floor {DELTA_ORDER} and the 95th "
-              f"percentile of D_null's session bootstrap distribution ({signed(st['delta_order']['q95'])}).",
-              f"- **Null of the null:** D_null = hit@10(shuffle set B) − hit@10(shuffle set A) = "
+              f"- **δ_order = {fmt(st['delta_order']['value'])}**, the larger of the floor {DELTA_ORDER} and the "
+              f"permutation threshold {signed(st['delta_order']['q95'])}: the 95th percentile, over set B's "
+              f"{SHUFFLES} shuffles, of one shuffle's hit@10 minus set A's average. One shuffle's hit@10 varies "
+              f"with SD {st['delta_order']['sd']:.3f}.",
+              f"- **Null of the null** (descriptive): D_null = hit@10(set B's average) − hit@10(set A's average) = "
               f"{interval(st['null']['session'])} by session, {interval(st['null']['day'])} by day.",
               ]
         if v["note"]:
@@ -1315,9 +1349,14 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
                 L += ["", "This log holds the same sessions, queries and times as realistic-order. Each session's "
                       "queries are then permuted over its times. That keeps co-retrieval and who shares a session, "
                       "and removes order."]
-        wants_order = not p["kind"].endswith("noorder")
+        wants_order = not p["kind"].endswith("noorder") and not source.get("permuted")
         required_text = ("C1′ holds, and D_order's lower bound is above δ_order" if wants_order
                          else "C1′ does not hold, and D_order ties")
+        if source.get("permuted"):
+            L += ["", "**The permuted check.** Before anything was computed, each session's real order was replaced by "
+                  "one more seeded shuffle of its recalls over their times (`--permute-real`). Real order is then just "
+                  "another shuffle."]
+            required_text = "D_order ties"
         L += ["", f"**Required:** {required_text}.", ""]
         if p["kind"] in ("order", "noorder"):
             L += [f"Both simple logs also carry {p['sessions']} primary-period sessions, {p['additive_sessions']} "
@@ -1325,8 +1364,11 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
                   "vectors with no `created_at` row, immediate repeats (5%), and empty recalls (2%)."]
         L += ["Every synthetic log also carries 40 instinct recalls, 20 recalls with no session id, and non-recall log "
               "rows. These exercise each filter.", ""]
-        required = (v["c1"] == "holds" and v["order"] == "carries information") if wants_order else \
-            (v["c1"] != "holds" and v["order"] == "ties")
+        if source.get("permuted"):
+            required = v["order"] == "ties"
+        else:
+            required = (v["c1"] == "holds" and v["order"] == "carries information") if wants_order else \
+                (v["c1"] != "holds" and v["order"] == "ties")
         L += [f"**Smoke check: {'passed' if required else 'not met'}** (C1′ {v['c1']}, order {v['order']}).", ""]
 
     L += ["## Pre-registered rules (section 6′, implemented as written)", "",
@@ -1350,9 +1392,9 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
           "averaged). The training sequence is collapsed once, from real order. The shuffles permute those runs, "
           "and pairs then follow the Jaccard rule and the mirroring, with no re-collapse. Evaluation steps are the same "
           "in every arm. D_order = hit@10(ii) − hit@10(ii-s). A second, independent set of 20 shuffles against the "
-          "first gives the null of the null, D_null. Order carries information only if D_order's lower bound is "
-          f"above δ_order = max({DELTA_ORDER}, the 95th percentile of D_null's bootstrap distribution), and the day "
-          "bootstrap agrees.", ""]
+          "first gives the null of the null, D_null (descriptive). Order carries information only if D_order's lower "
+          f"bound is above δ_order = max({DELTA_ORDER}, the 95th percentile over set B's 20 shuffles of that single "
+          "shuffle's hit@10 minus set A's average): a permutation threshold. The day bootstrap must agree.", ""]
 
     L += ["## Choices this script made where the plan leaves one", ""]
     L += [f"{j}. {c}" for j, c in enumerate(CHOICES, 1)] + [""]
@@ -1407,6 +1449,23 @@ def report(path: Path, label: str, source: dict, log: Log, uni: Universe, counts
 # --------------------------------------------------------------------------------------------------- main
 
 
+def permute_real_order(log: Log) -> None:
+    """The permuted check: within each session (and period), the recalls' contents are permuted over their times by
+    one more seeded shuffle, so real order is just another shuffle and order must tie."""
+    rng = np.random.default_rng((SEED, 99))
+    ok = (log.session >= 0) & ~log.instinct
+    for s in np.unique(log.session[ok]):
+        for period in (log.t >= PRIMARY_START, log.t < PRIMARY_START):
+            idx = np.flatnonzero(ok & period & (log.session == s))
+            if len(idx) < 2:
+                continue
+            perm = idx[rng.permutation(len(idx))]
+            ids, sets = [log.ids[i] for i in perm], [log.sets[i] for i in perm]
+            for i, a, b in zip(idx.tolist(), ids, sets):
+                log.ids[i], log.sets[i] = a, b
+            log.used[idx], log.auto[idx] = log.used[perm], log.auto[perm]
+
+
 def run(argv: list[str] | None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     source = parser.add_mutually_exclusive_group(required=True)
@@ -1416,10 +1475,12 @@ def run(argv: list[str] | None) -> int:
     parser.add_argument("--config", type=Path, action="append", default=[],
                         help="a project's .engram/config.toml to check for recency_mode (repeatable)")
     parser.add_argument("--sessions", type=int, help="synthetic only: how many sessions to plant")
+    parser.add_argument("--permute-real", action="store_true",
+                        help="synthetic only: replace each session's real order with one more shuffle (order must tie)")
     parser.add_argument("--report", type=Path, help="write the markdown report here")
     args = parser.parse_args(argv)
-    if args.sessions is not None and not args.synthetic:
-        parser.error("--sessions is for --synthetic only")
+    if (args.sessions is not None or args.permute_real) and not args.synthetic:
+        parser.error("--sessions and --permute-real are for --synthetic only")
 
     checks = check_classifier()  # before anything is read
     if args.self_check:
@@ -1432,7 +1493,7 @@ def run(argv: list[str] | None) -> int:
     if args.synthetic:
         writer, uri, planted = synthetic(args.synthetic, args.sessions)
         info["planted"] = planted
-        label = f"synthetic {args.synthetic}"
+        label = f"synthetic {args.synthetic}" + (", real order permuted" if args.permute_real else "")
     else:
         store = args.store.expanduser()
         if not store.is_file():
@@ -1450,6 +1511,9 @@ def run(argv: list[str] | None) -> int:
         if writer is not None:
             writer.close()
     guard("reading")
+    if args.permute_real:
+        permute_real_order(log)
+        info["permuted"] = True
 
     ok = (log.session >= 0) & ~log.instinct
     primary_idx = np.flatnonzero(ok & (log.t >= PRIMARY_START))

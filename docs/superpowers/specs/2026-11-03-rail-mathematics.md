@@ -233,8 +233,11 @@ effect of interest is `δ = 0.05`.
   - `D_order = hit@10(ii) − hit@10(ii shuffled)` on the primary steps, with the same bootstrap.
   - **The null of the null:** two independent sets of 20 shuffles (separate seed streams) are compared the same way,
     on the same steps, with the same bootstrap.
-  - **The order margin is measured, not guessed:** `δ_order = max(0.02, the 95th percentile of the null-of-null
-    distribution)`. Order carries information only if `D_order`'s lower bound is above `δ_order`, and the day bootstrap
+  - **The order margin is measured, not guessed:** `δ_order = max(0.02, the 95th percentile, over the 20 set-B
+    shuffles, of that single shuffle's hit@10 minus set A's average)`. That's a permutation threshold: how far one
+    ordering can sit from the shuffled average by chance alone, which is exactly the comparison `D_order` makes for the
+    real order. (The bootstrap resamples test sessions with training fixed, so it can't see training-order variance;
+    the first calibration, from the null-of-null's bootstrap, left `δ_order` at its floor in every smoke run.) Order carries information only if `D_order`'s lower bound is above `δ_order`, and the day bootstrap
     agrees. Otherwise order ties, and rails, which are directed edges, aren't warranted even if C1′ holds. The report
     gives `δ_order`'s value and source. Why: the first smoke runs found `D_order` slightly above 0 (+0.006 to +0.011)
     on logs with no order at all.
