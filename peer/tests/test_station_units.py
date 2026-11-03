@@ -417,3 +417,4 @@ def test_station_lessons_room_refuses_anything_but_full_peer_ids(tmp_path, peers
     done = subprocess.run(['make', '-s', 'station-lessons-room', 'ID=ab12', f'PEERS={peers}', f'STATION_DATA={tmp_path}'],
                           cwd=REPO, capture_output=True, text=True, timeout=60)
     assert done.returncode != 0 and 'PEERS takes full peer ids' in done.stdout + done.stderr
+    assert peers not in done.stdout + done.stderr  # never printed back: a word typed there by mistake may be a code
