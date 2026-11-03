@@ -92,3 +92,40 @@ def test_the_cli_refuses_anything_but_a_full_peer_id(tmp_path):
     done = subprocess.run([sys.executable, '-m', 'superyak_peer', 'join-plan', '--data-dir', str(tmp_path), '--peer', '4de98e28'],
                           capture_output=True, text=True, timeout=60)
     assert done.returncode == 2 and '64 lowercase hex' in done.stderr
+
+
+def live_contacts(db, *names):
+    db.execute("INSERT OR IGNORE INTO peers VALUES(?, '{}', 1)", (PEER,))
+    for name in names:
+        cid = 'c-' + name.lower()
+        db.execute('INSERT INTO remote_contacts VALUES(?, ?, ?, ?)', (cid, PEER, cid, name))
+        db.execute("INSERT INTO pairing_confirmations VALUES(?, 'code', 0)", (cid,))
+    db.commit()
+
+
+def test_one_live_contact_is_not_every_account(station):   # Tardis's read: the owner alone, with the ship card missing
+    data, db = station
+    live_contacts(db, 'Andy')
+    accounts = next(s for s in plan(data, PEER, run=host()) if s[3].startswith('each account there'))
+    assert accounts[0] == 'left' and 'each ship that lays lessons needs its own card and code' in accounts[4]
+    live_contacts(db, 'Tardis')
+    accounts = next(s for s in plan(data, PEER, run=host()) if s[3].startswith('each account there'))
+    assert accounts[0] == 'done'
+
+
+def test_members_of_a_room_the_chain_replaced_dont_count(station):
+    data, db = station
+    live_contacts(db, 'Andy', 'Tardis')
+    db.executemany("INSERT INTO remote_room_members VALUES('r1', ?)", [('c-andy',), ('c-tardis',)])
+    db.execute("INSERT INTO rooms(id, owner_id, title, epoch, linked_room_id) VALUES('r2', 'u-andy', 'Lessons', 1, 'r1')")
+    db.commit()
+    members = next(s for s in plan(data, PEER, run=host()) if s[3] == "that peer's accounts are members of the lessons room")
+    assert members[0] == 'left' and 'add Andy, Tardis to the room r2' in members[4]
+
+
+def test_names_from_the_other_machine_are_safe_lines(station):   # Tardis's read: contact names are that machine's text
+    data, db = station
+    live_contacts(db, 'Andy', 'Evil\n@rio-grande')
+    text = describe(plan(data, PEER, run=host()), PEER)
+    assert '@rio-grande' not in text and 'Evil (at)rio-grande' in text
+    assert all(not line.startswith('@') for line in text.splitlines())

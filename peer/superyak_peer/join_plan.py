@@ -7,7 +7,12 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from .ships import safe_line
+
 PERSON, SHIP, HERE, THERE = 'Andy', 'a ship', 'this station', 'that machine'
+# The station can't tell a person's contact from a ship's, so the accounts step is done only once at least the owner
+# and one ship are live (Tardis's read, 2026-11-02: one live "Andy" would have said done with the ship card missing).
+LIVE_NEEDED = 2
 
 
 def _read(data_dir):
@@ -58,14 +63,16 @@ def plan(data_dir, peer, run=subprocess.run):
         ('done' if listening and served else 'left', PERSON, HERE, 'this station listens for peers',
          'make federation-units; enable superyak-federation-listen and superyak-federate; tailscale serve --tcp 7437 '
          '(the harness refuses these to a ship)'),
-        ('done' if live else 'left', PERSON, f'{THERE}, then {HERE}', "each account there paired here, with its own code",
-         'contacts here: ' + (', '.join(f'{c[1]} ({"held" if c[2] else "confirmed" if c[3] else "unconfirmed"})'
-                                     for c in contacts) or 'none')),
+        ('done' if len(live) >= LIVE_NEEDED else 'left', PERSON, f'{THERE}, then {HERE}',
+         "each account there paired here, with its own code",
+         'each ship that lays lessons needs its own card and code; contacts here: '
+         + (', '.join(f'{safe_line(c[1])} ({"held" if c[2] else "confirmed" if c[3] else "unconfirmed"})'
+                      for c in contacts) or 'none')),
         ('done' if listed else 'left', SHIP, HERE, 'the lessons room lists that peer',
          'Rio Grande: make station-lessons-room ID=<short id> PEERS="<every listed peer>", then CONFIRM='),
         ('done' if live and all(c[0] in members for c in live) else 'left', PERSON, HERE,
          "that peer's accounts are members of the lessons room",
-         f'in the browser, add {", ".join(c[1] for c in live if c[0] not in members) or "them"} to the room '
+         f'in the browser, add {", ".join(safe_line(c[1]) for c in live if c[0] not in members) or "them"} to the room '
          f'{(room or "?")[:6]}; that makes the chain\'s next room'),
         ('check there', SHIP, THERE, 'the room recorded there, the hook docked, the lessons laid',
          "that machine's ship: make lessons-room ID=<full id>, CONFIRM=; make dock … --lessons; lay its lessons"),
