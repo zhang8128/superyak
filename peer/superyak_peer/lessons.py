@@ -1532,13 +1532,23 @@ def _held(db, contact_id):
     return db.execute('SELECT 1 FROM contact_holds WHERE contact_id=?', (contact_id,)).fetchone() is not None
 
 
+def trust_made(db, contact_id):
+    """Whether owner trust made this contact, by connections()' rule (federation.py, `by_trust`, less its held and paired
+    parts): a trust confirmation and no current typed code of its own. A contact whose own typed code is current is
+    code-confirmed, even if owner trust paired it too: Andy's typed code is the stronger act (the ruling on Task 4)."""
+    from .owner_trust import code_current
+    return (db.execute('SELECT 1 FROM trust_confirmations WHERE contact_id=?', (contact_id,)).fetchone() is not None
+            and not code_current(db, contact_id))
+
+
 def _unaddable(store, db, room, contact_id, peer_ids=None, *, trust_path=False):
     """Ruling 2's one rule, with its reason: None when the ship could add this contact to `room` (a dict with id,
     member_ids and owner_id), else the name of the add's refusal, in the add's order. On the code path: ADD_NOT_REMOTE,
     ADD_UNLISTED (not on a peer in `peer_ids`, by default the peers recorded as listed), ADD_NO_CODE (its typed code
-    isn't current, or it's held), ADD_MEMBER, ADD_OWNER_REMOVED, then ADD_TRUST (owner trust made it). The trust path
-    (`trust_path`) shares the peer, member and removal checks and leaves the code and the trust to addable_now. Writes
-    nothing. `store` supplies `_owner_removed`, a store method."""
+    isn't current, or it's held), ADD_MEMBER, ADD_OWNER_REMOVED. A trust-made contact (trust_made) has no current
+    typed code, so the code check leaves it out; one owner trust also paired whose own code is current is
+    code-confirmed and stays in. The trust path (`trust_path`) shares the peer, member and removal checks and leaves
+    the code and the trust to addable_now. Writes nothing. `store` supplies `_owner_removed`, a store method."""
     from .owner_trust import code_current
     contact = db.execute('SELECT peer_id FROM remote_contacts WHERE id=?', (contact_id,)).fetchone()
     if contact is None:
@@ -1553,16 +1563,14 @@ def _unaddable(store, db, room, contact_id, peer_ids=None, *, trust_path=False):
         return 'ADD_MEMBER'
     if store._owner_removed(db, room['id'], contact_id, room['owner_id']):
         return 'ADD_OWNER_REMOVED'
-    if not trust_path and db.execute('SELECT 1 FROM trust_confirmations WHERE contact_id=?', (contact_id,)).fetchone():
-        return 'ADD_TRUST'
     return None
 
 
 def listable(store, db, room, contact_id, peer_ids=None):
     """Lessons room adds, Ruling 2: whether the ship could add this contact to `room` (a dict with id, member_ids and
-    owner_id): it is on a peer in `peer_ids` (default: the peers recorded as listed), its typed code is current, it is
-    unheld, no owner trust made it, it isn't a member of `room`, and the owner hasn't removed it (_unaddable). Writes
-    nothing. `store` supplies `_owner_removed`, a store method."""
+    owner_id): it is on a peer in `peer_ids` (default: the peers recorded as listed), its typed code is current (so
+    owner trust didn't make it: trust_made), it is unheld, it isn't a member of `room`, and the owner hasn't removed it
+    (_unaddable). Writes nothing. `store` supplies `_owner_removed`, a store method."""
     return _unaddable(store, db, room, contact_id, peer_ids) is None
 
 
@@ -1625,26 +1633,17 @@ def _vouched(db, contact_id, owner_id):
                       (contact_id, _code_digest(conf['code']), conf['typed_by'])).fetchone() is not None
 
 
-def _trust_word(db, contact_id, now):
-    """The state of the trust a contact's latest trust confirmation names (owner_trust.trust_state): 'live', 'paused',
-    'expired' or 'revoked'."""
-    from .owner_trust import latest_grant, trust_state
-    return trust_state(db, latest_grant(db, contact_id), now)['state']
-
-
 def _refusal(which, **words):
     """addable_now's answer for a refusal: its name and its text, the words filled in."""
     return which, ADD_REFUSALS[which][1].format(**words)
 
 
-def _code_path(store, db, room, contact, owner, now):
-    """The code path, for a contact owner trust didn't make or one with its own current typed code: listable first
-    (Ruling 2), then the vouching. `contact` is a labelled contact with `shown`, its label through plain_name; `owner`
-    is the room owner's name as shown. Returns addable_now's answer."""
+def _code_path(store, db, room, contact, owner):
+    """The code path, for every contact owner trust didn't make (trust_made), one it also paired whose own typed code
+    is current among them: listable first (Ruling 2), then the vouching. `contact` is a labelled contact with `shown`,
+    its label through plain_name; `owner` is the room owner's name as shown. Returns addable_now's answer."""
     why = _unaddable(store, db, room, contact['id'])
     words = {'label': contact['shown'], 'x': contact['shown'], 'peer12': contact['peer_id'][:12], 'owner': owner}
-    if why == 'ADD_TRUST':  # its own code is current, but the listing never names a trust-made contact (Ruling 2)
-        return _refusal(why, state=_trust_word(db, contact['id'], now), **words)
     if why is not None:
         return _refusal(why, **words)
     if not _vouched(db, contact['id'], room['owner_id']):
@@ -1657,26 +1656,27 @@ def addable_now(store, db, room, contact_id, now):
     `room`, the chain's current room at the origin (a dict with id, member_ids and owner_id), else (the refusal's name,
     its text). Names come through plain_name. Writes nothing; `store` supplies `_owner_removed`.
 
-    A contact owner trust made, with no current typed code of its own, takes the trust path: on a listed peer, not a
-    member, not removed by the owner, its latest trust live, unheld, and its owner (the person contact the grant names)
-    a member of `room` or addable on the code path itself, never through another trust. Every other contact takes the
-    code path (_code_path). The trust's state comes before the hold on this path because a revocation holds every ship
-    it ends: checked after, a revoked trust would read as only a hold."""
-    from .owner_trust import LABELLED_CONTACT, _owner_contact, code_current, latest_grant, plain_name
+    A contact owner trust made (trust_made: a trust confirmation and no current typed code of its own) takes the trust
+    path: on a listed peer, not a member, not removed by the owner, its latest trust live, unheld, and its owner (the
+    person contact the grant names) a member of `room` or addable on the code path itself, never through another
+    trust. Every other contact takes the code path (_code_path), one owner trust also paired whose own code is current
+    among them, whatever that trust's state. The trust's state comes before the hold on the trust path because a
+    revocation holds every ship it ends: checked after, a revoked trust would read as only a hold."""
+    from .owner_trust import LABELLED_CONTACT, _owner_contact, latest_grant, plain_name, trust_state
     contact = db.execute(f'{LABELLED_CONTACT} WHERE c.id=?', (contact_id,)).fetchone()
     if contact is None:
         return _refusal('ADD_NOT_REMOTE', x=plain_name(contact_id))
     contact = {**dict(contact), 'shown': plain_name(contact['label'])}
     account = db.execute('SELECT name FROM users WHERE id=?', (room['owner_id'],)).fetchone()
     owner = plain_name(account['name'] if account else room['owner_id'])
+    if not trust_made(db, contact_id):
+        return _code_path(store, db, room, contact, owner)
     grant = latest_grant(db, contact_id)
-    if grant is None or code_current(db, contact_id):
-        return _code_path(store, db, room, contact, owner, now)
     words = {'label': contact['shown'], 'x': contact['shown'], 'peer12': contact['peer_id'][:12], 'owner': owner}
     why = _unaddable(store, db, room, contact_id, trust_path=True)
     if why is not None:
         return _refusal(why, **words)
-    state = _trust_word(db, contact_id, now)
+    state = trust_state(db, grant, now)['state']
     if state != 'live':
         return _refusal('ADD_TRUST', state=state, **words)
     if _held(db, contact_id):
@@ -1684,7 +1684,7 @@ def addable_now(store, db, room, contact_id, now):
     person = _owner_contact(db, grant)
     person = person and {**dict(person), 'shown': plain_name(person['label'])}
     if not person or (person['id'] not in room['member_ids']
-                      and _code_path(store, db, room, person, owner, now) is not None):
+                      and _code_path(store, db, room, person, owner) is not None):
         return _refusal('ADD_OWNER_NOT_ADDABLE', name=person['shown'] if person else 'an unknown owner', **words)
     return None
 

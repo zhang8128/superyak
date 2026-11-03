@@ -223,6 +223,7 @@ def test_members_trust_made_held_and_removed_contacts_are_not_addable(adds):
     with pi.transaction() as db:
         db.execute('INSERT INTO contact_holds VALUES(?,?)', (held, 1.0))
         db.execute("INSERT INTO trust_confirmations VALUES('t1',?,'g','a','s',1.0,'d',1)", (trusted,))
+        db.execute('DELETE FROM pairing_confirmations WHERE contact_id=?', (trusted,))   # trust-made: no typed code of its own
         db.execute("INSERT INTO member_changes(id,actor_id,member_id,change,room_id,created) VALUES('c1',?,?,'remove',?,5.0)",
                    (andy, removed, adds.room))
     ids = [a['id'] for a in list_view(adds)['addable']]
@@ -528,18 +529,47 @@ def test_a_trust_made_ship_is_added_under_a_live_trust_with_its_owner_addable(ad
     assert ship in members_of(a.pi, again['new_room']) and owner not in members_of(a.pi, again['new_room'])
 
 
-def test_a_ship_whose_own_code_was_typed_stays_off_the_code_path_while_trust_made(adds_trusted):
-    """The trust path is for a trust-made contact with no current code of its own; with one, it takes the code path,
-    where listable never names a trust-made contact (Ruling 2), so it is refused, writing nothing."""
-    a = adds_trusted
+def type_voyagers_code(a, *, line):
+    """Andy types voyager's own code (its card as Tardis shows it), with the lessons line shown or not."""
     card = b_ship(SimpleNamespace(machine=(a.tardis, {'id': a.ids['tardis-andy']}, None, a.tardis_fed), clock=a.clock),
                   'voyager', now=int(a.clock[0]))[0]
-    a.pi_fed.pair(a.ids['andy'], card, code=pairing_code(card), lessons_line_shown=True)
+    a.pi_fed.pair(a.ids['andy'], card, code=pairing_code(card), lessons_line_shown=line)
+
+
+def is_trust_made(a, contact):
+    with a.pi.transaction() as db:
+        return lessons.trust_made(db, contact)
+
+
+def test_a_contact_paired_by_trust_and_also_by_its_typed_code_takes_the_code_path(adds_trusted):
+    """The ruling on Task 4: a contact whose own typed code is current is code-confirmed, even if owner trust paired it
+    too. Not vouched, it is refused as the code path refuses (never ADD_TRUST); vouched, it joins, its trust revoked or
+    not, since its own code stands when the trust ends."""
+    a = adds_trusted
+    assert is_trust_made(a, a.ship)
+    type_voyagers_code(a, line=False)
+    assert not is_trust_made(a, a.ship)
     before = snapshot(a.pi)
     with pytest.raises(Problem) as refused:
         a.pi.station_lessons_add(short(a.ship))
-    assert refused.value.message == f'{VOYAGER} was paired by owner trust, and that trust is live.'
+    assert (refused.value.status, refused.value.message) == (403, f"{VOYAGER}'s code wasn't typed by Andy Example with the "
+                                                                  "lessons line shown, and the listing Andy Example confirmed "
+                                                                  "didn't name it.")
     assert snapshot(a.pi) == before
+    type_voyagers_code(a, line=True)
+    a.pi.revoke_owner_trust(a.ids['andy'], a.trust['grant_id'])
+    done = a.pi.station_lessons_add(short(a.ship))
+    assert a.ship in members_of(a.pi, done['new_room'])
+
+
+def test_the_listing_names_a_contact_trust_also_paired_once_its_own_code_is_typed(adds_trusted):
+    a = adds_trusted
+    assert a.ship not in [x['id'] for x in relist(a)['addable']]    # trust-made: the listing leaves it out
+    type_voyagers_code(a, line=False)
+    shown = relist(a)['addable']
+    assert a.ship in [x['id'] for x in shown]
+    done = a.pi.station_lessons_add(next(x['user_short'] for x in shown if x['id'] == a.ship))   # as the listing shows it
+    assert a.ship in members_of(a.pi, done['new_room'])
 
 
 def test_a_contact_key_with_a_colon_or_an_empty_chain_is_refused(adds):
