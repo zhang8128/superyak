@@ -98,7 +98,10 @@ class _AtCap(Problem):
 
 def _folded(name):
     """A name as it reads: NFKC (so fullwidth 'ｓａｍ' is 'sam'), casefolded, NFKC again (casefold can undo it), and its
-    whitespace collapsed and stripped (so 'sam ' is 'sam')."""
+    whitespace collapsed and stripped (so 'sam ' is 'sam'). Format characters (category Cf: bidi controls, zero-width
+    joiners, word joiners) are dropped first: this is a comparison key, so 'tar\u200ddis' folds to 'tardis'. Display
+    keeps the joiners (plain_name)."""
+    name = ''.join(c for c in name if unicodedata.category(c) != 'Cf')
     return ' '.join(unicodedata.normalize('NFKC', unicodedata.normalize('NFKC', name).casefold()).split())
 
 

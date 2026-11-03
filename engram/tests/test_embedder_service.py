@@ -108,3 +108,30 @@ def test_factory_selects_remote_only_when_socket_configured(monkeypatch):
     monkeypatch.delenv("ENGRAM_EMBEDDER_SOCKET")
     monkeypatch.setattr(embeddings, "NomicEmbedProvider", FakeProvider)
     assert isinstance(create_embedding_provider(), FakeProvider)
+
+
+def test_a_short_response_timeout_gives_up_on_a_busy_service(socket_dir):
+    """The nudge hook has 10 s; a shared embedder busy with a large batch would make it wait up to 900 s, so the
+    hook times out with its output discarded (the Pi, 2026-11-03). A provider made with a short response timeout
+    gives up within it."""
+    import time
+    path = socket_dir / "busy.sock"
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    server.listen(1)
+    held = []
+    threading.Thread(target=lambda: held.append(server.accept()), daemon=True).start()  # accepts, never answers
+    provider = create_embedding_provider_for(path, response_timeout=0.5)
+    started = time.monotonic()
+    with pytest.raises(EmbedderUnavailableError):
+        provider.embed(["hello"], prefix="search_query")
+    assert time.monotonic() - started < 5
+    server.close()
+
+
+def create_embedding_provider_for(path, **kw):
+    os.environ["ENGRAM_EMBEDDER_SOCKET"] = str(path)
+    try:
+        return create_embedding_provider(**kw)
+    finally:
+        del os.environ["ENGRAM_EMBEDDER_SOCKET"]

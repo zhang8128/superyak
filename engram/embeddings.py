@@ -278,9 +278,12 @@ class RemoteEmbedProvider:
     # Requests queue behind other agents' batches; maintenance can take minutes.
     RESPONSE_TIMEOUT = 900.0
 
-    def __init__(self, socket_path: str) -> None:
+    def __init__(self, socket_path: str, *, response_timeout: float | None = None) -> None:
         self._socket_path = socket_path
         self._verified = False
+        # A caller with its own deadline (the nudge hook has 10 s) passes a short one, so a service busy with a
+        # large batch makes it give up instead of waiting out the batch (the Pi, 2026-11-03).
+        self._response_timeout = self.RESPONSE_TIMEOUT if response_timeout is None else response_timeout
 
     def dimension(self) -> int:
         return self.DIMENSION
@@ -315,7 +318,7 @@ class RemoteEmbedProvider:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(self.CONNECT_TIMEOUT)
                 sock.connect(self._socket_path)
-                sock.settimeout(self.RESPONSE_TIMEOUT)
+                sock.settimeout(self._response_timeout)
                 send_message(sock, request)
                 response = recv_message(sock)
         except (OSError, ValueError) as e:
@@ -327,11 +330,12 @@ class RemoteEmbedProvider:
         return response
 
 
-def create_embedding_provider():
-    """The process's embedding provider: shared service if configured, else local."""
+def create_embedding_provider(*, response_timeout: float | None = None):
+    """The process's embedding provider: shared service if configured, else local. `response_timeout` bounds a wait
+    on the shared service for a caller with its own deadline; a local provider has no queue to wait in."""
     import os
 
     socket_path = os.environ.get("ENGRAM_EMBEDDER_SOCKET")
     if socket_path:
-        return RemoteEmbedProvider(socket_path)
+        return RemoteEmbedProvider(socket_path, response_timeout=response_timeout)
     return NomicEmbedProvider()
