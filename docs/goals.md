@@ -57,21 +57,33 @@ For this week, each tied to an overarching goal:
 
 ## Tardis: federation, the public route, CI, and the visitor's view
 
-For this week, each tied to an overarching goal:
-- T1 (goal 1): be the rail's blind traveler, and build its hook client. Lay Tardis's ten lessons (b0a80d6) the hour
-  The lessons room opens. Build the prompt hook and the hold fallback against the local index, under the ships'
-  conditions (nothing written, 150 ms or silent, at most 2 lessons). Then run the blind test as a fresh Tardis session
-  that isn't told. Measure: the blind test's report, with the receipt and the transcript showing the lesson arrived
-  before the mistake, and the hook's p95.
-- T2 (goals 1 and 3): make the rail peer to peer. Build fix:pairing-code first, then federation pull (spec 05c9ea7).
-  Tardis becomes a peer paired with the Pi. Measure: a lesson posted on one peer is in the other's index within
-  60 s, and a Mac that wakes after an hour asleep has everything it missed within a minute.
-- T3 (goal 5): ship the public route once every partner says yes, then run the probe from off the tailnet. Measure:
-  docking and access requests are refused through Funnel, the login and the app load, a ship key reaches its rooms,
-  and no security detail is public before the fix is live.
-- T4 (goal 4): the visitor's view. With Serenity's copy and Andy's welcome layer, a visitor at his table can learn
-  what Superyak is and ask for access without an account. Measure: a cold look at the public address answers "what
-  is this" and "how do I join" in one click each.
+Refreshed 2026-11-03. The week of 10-27 delivered:
+- the hook client;
+- federation pull, with Tardis paired with the Pi;
+- the public route, with the probe passing 31 of 31 after every merge;
+- T4's first measured pass (the front door, trains 1103a and 1103b).
+
+Each line is tied to an overarching goal:
+- T1 (goal 1): the rail's first real crossing, a blind test.
+  - When the lessons-room adds land, Rio Grande adds Andy (Tardis) and tardis, and Tardis confirms the room.
+  - Tardis lays today's lessons (the SQLite descriptor-lock lesson, and "check a machine's federation mode on the
+    machine").
+  - Then each side runs a fresh session, told nothing, on a task written down before the lessons were laid.
+  - Measure: the receipt shows the lesson before the step, the transcript shows the step taken or missed, and the
+    lesson outcome (`helped` or `misled`) is recorded.
+- T2 (goals 1 and 3): the crossing between lighthouses. Build stage 2 of the approved plan
+  (plans/2026-11-03-ship-home-and-crossing.md), with Tardis asking the Pi.
+  - Measure: a recall on Tardis delivers from the Pi's published house, and the same `disclosureId` sits in both
+    sides' records.
+  - It waits on T3 and Andy's one sitting.
+- T3 (goal 5): the permission ledger's projection digest, which is enforce's gate (plans/2026-11-03-projection-digest.md,
+  built). It goes through a fresh Pi reader and Rio Grande's yes. Then comes Andy's one sitting at the Pi: `migrate`,
+  `remote-stores`, `gate enforce`.
+  - Measure: enforce set on the Pi, and the torn-copy test passing there.
+- T4 (goal 4): the visitor's view, part 2. Take `fix:sign-in-page-for-a-visitor` (the page's undefined "peer", and
+  "your home" on someone else's station), then run the same cold walk.
+  - Measure: the walk meets no undefined word, and no "your" for a home that isn't the visitor's.
+  - Next after it: the cluster station spec with Rio Grande, since people outside us will arrive at that scale.
 - T5 (goals 2 and 5): CI and second reads. Before each partner head merges, read its GitHub CI result: name a red
   job's failing test, and fix it or put it on the board. GitHub runs every job, Lighthouse and interop included, on
   every pushed branch, so run that job by hand only on a head that travels by Taildrop and is never pushed. Give
