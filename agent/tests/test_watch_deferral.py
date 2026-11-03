@@ -2,6 +2,7 @@
 silent on claim and notice messages, answers with reply_to, and says first when a mention run was read-only (spec S5,
 S6, R10, R12, R20, R22, R23, R32)."""
 import json
+from urllib.parse import urlsplit
 
 import pytest
 from superyak_agent.runs import RunTimeout
@@ -242,7 +243,7 @@ def test_a_reask_asks_for_the_ticket_first_and_fetches_the_room_only_to_run(stat
     gets = []
 
     def counting(method, url, headers, data):
-        if method == 'GET' and url.endswith(f'/api/chats/{room}'):
+        if method == 'GET' and urlsplit(url).path == f'/api/chats/{room}':
             gets.append(url)
         return fake(method, url, headers, data)
     runner = FakeRunner()

@@ -643,3 +643,100 @@ def test_the_watcher_gives_the_plain_read_prompt_for_any_other_basis(station, sh
     runner = FakeRunner()
     assert watcher(fake, ship_config, tmp_path, runner).cycle() == 1
     assert runner.calls[0][0] == 'read' and runner.calls[0][2].endswith(READ_TAIL)
+
+
+# ---- Paged reads (Tardis and Rio Grande, all hands 2e59ae3a): the watcher never reads a whole room. ----
+def room_gets(fake, room):
+    """The query of every GET of the room: empty for a whole read."""
+    return [r['query'] for r in fake.requests if r['method'] == 'GET' and r['path'] == f'/api/chats/{room}']
+
+
+def filler(fake, room, author, count, word='filler'):
+    for n in range(count):
+        fake.say(room, author, f'{word} {n}')
+
+
+def test_a_recent_mention_takes_one_paged_read(station, ship_config, tmp_path):
+    """The mention, any reply after it and its history before it are all in the newest page: one request, paged.
+    Mutation: the mention looked up with `start` first (two requests), or the whole room read."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    filler(fake, room, jenn, 5)
+    asked = fake.say(room, andy, '@serenity a question')
+    fake.requests.clear()
+    assert watcher(fake, ship_config, tmp_path, FakeRunner()).cycle() == 1
+    assert room_gets(fake, room) == ['limit=100']
+
+
+def test_an_old_mention_answered_far_after_it_is_found_by_paging_forward_and_never_answered_twice(station, ship_config, tmp_path):
+    """The reply check: a mention older than the newest page, whose reply came 150 messages after it, is found by paging
+    forward from the mention (`start`, then `after`), so it isn't run again, and no read takes the whole room.
+    Mutations: the check over the first page only (the mention runs again), any whole read."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, andy, '@serenity an old question')
+    filler(fake, room, jenn, 150)
+    fake.say(room, serenity, 'answered long ago', f'reply-{asked["id"]}')   # posted, then the watcher lost its state
+    filler(fake, room, jenn, 150, 'later')
+    fake.requests.clear()
+    runner = FakeRunner()
+    assert watcher(fake, ship_config, tmp_path, runner).cycle() == 0 and runner.calls == []
+    gets = room_gets(fake, room)
+    assert all(gets) and gets[1] == f'start={asked["id"]}&limit=100' and len(gets) == 3   # the newest, then two forward
+
+
+def test_an_old_unanswered_mention_runs_with_the_history_that_ends_at_it(station, ship_config, tmp_path):
+    """No reply anywhere after an old mention: the forward scan reaches the room's end, then the window of HISTORY
+    messages that ends at the mention is read (`before`), and build_prompt quotes it. Nothing reads the whole room.
+    Mutation: the window read as the newest page (the prompt quotes messages after the mention, not before it)."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    filler(fake, room, jenn, 40, 'before')
+    asked = fake.say(room, andy, '@serenity an old question')
+    filler(fake, room, jenn, 150, 'after')
+    fake.requests.clear()
+    runner = FakeRunner()
+    assert watcher(fake, ship_config, tmp_path, runner).cycle() == 1
+    prompt = runner.calls[0][2]
+    assert 'an old question' in prompt and 'before 39' in prompt and 'before 11' in prompt and 'before 10' not in prompt
+    assert 'after 0' not in prompt and all(room_gets(fake, room))
+
+
+def test_a_station_that_does_not_page_is_read_as_before(station, ship_config, tmp_path):
+    """An older station ignores the paging parameters and sends the whole room: the watcher reads it as it always did,
+    runs the mention once, and finds its own reply the next time."""
+    fake, andy, jenn, serenity = station
+    fake.pages = False
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, andy, '@serenity a question')
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    assert w.cycle() == 1 and [mid for _, mid, _ in runner.calls] == [asked['id']]
+    w.state['answered'] = []   # forgotten, as after a lost state: its reply in the room keeps it from running again
+    assert w.cycle() == 0 and len(runner.calls) == 1
+
+
+def test_resident_reads_after_its_cursor_and_keeps_it_when_nothing_is_newer(station, tmp_path):
+    """Resident: a room seen before is read after its cursor (`after`), paged, never whole; and a cycle that finds
+    nothing newer (the room's activity moved, say by an edit) keeps the cursor, so the next message is answered alone.
+    Mutations: the newest page read instead of `after` (a whole room's worth past 100), the cursor dropped when
+    nothing is newer (the next cycle answers as at first sight)."""
+    fake, andy, jenn, serenity = station
+    odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')
+    dm = fake.room('Ask Odo', andy, odo)
+    first = fake.say(dm, andy, 'where is the door?')
+    config = {'station': 'http://station.test', 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': 'odo-key', 'workspace': str(tmp_path)}
+    runner = FakeRunner()
+    w = watcher(fake, config, tmp_path, runner, key='odo-key', resident=True)
+    assert w.cycle() == 1 and [mid for _, mid, _ in runner.calls] == [first['id']]
+    w.state['rooms'][dm]['activity'] = 'moved'
+    assert w.cycle() == 0   # after the cursor there is only Odo's own reply, which it never answers
+    cursor = w.state['rooms'][dm]['cursor']
+    assert cursor == fake.rooms[dm]['messages'][-1]['id']
+    w.state['rooms'][dm]['activity'] = 'moved again'   # the activity changes with nothing newer to read
+    fake.requests.clear()
+    assert w.cycle() == 0 and w.state['rooms'][dm]['cursor'] == cursor
+    assert room_gets(fake, dm) == [f'after={cursor}&limit=100']
+    second = fake.say(dm, andy, 'and the lift?')
+    assert w.cycle() == 1 and [mid for _, mid, _ in runner.calls] == [first['id'], second['id']]
+    assert all(room_gets(fake, dm))

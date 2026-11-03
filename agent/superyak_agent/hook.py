@@ -20,6 +20,7 @@ from . import checklist_firing as firing, checklists, claims, holds
 from .station import BREAKOUT_MARK, CHECKOUT, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, lesson_count_line, plain_id, presence_headers, quoted_title, read_hint, read_json, session_key, shown_id, source_label, tailnet_pin, tailnet_unpin, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
+PAGE = 100  # a page of a paged room read (the station's own default)
 MAX_CHARS = 4000
 MESSAGE_CHARS = 800
 NOTE_ROOM = 600  # the line counting messages left out and where to resume
@@ -775,6 +776,23 @@ def _cursor(state_path):
     return cursor if type(cursor) in (int, float) and math.isfinite(cursor) else None
 
 
+def _newer_than(client, room_id, cursor):
+    """(the room, [(position, message)] for its messages created after `cursor`): its newest pages, read backwards with
+    `before` until a message at or before `cursor` or the room's first (paged reads, never the whole room). Display order
+    is by `created` first, so those messages are the room's last ones. A station that doesn't page sends the whole room."""
+    room = client.room(room_id, limit=PAGE)
+    if room.get('paged') is not True:
+        return room, [(position, m) for position, m in enumerate(room['messages']) if m['created'] > cursor]
+    found = []
+    while True:
+        begin = room['first_position']
+        newer = [(begin + i, m) for i, m in enumerate(room['messages']) if m['created'] > cursor]
+        found = newer + found
+        if len(newer) < len(room['messages']) or begin == 0:
+            return room, found
+        room = client.room(room_id, before=begin, limit=PAGE)
+
+
 def _run(config_path, state_path, clock, transport):
     config = read_json(config_path)
     if not config or not config.get('key'):
@@ -789,10 +807,10 @@ def _run(config_path, state_path, clock, transport):
     for summary in client.rooms():
         if ':' in summary['id'] or (summary.get('last_activity') or 0) <= cursor:
             continue
-        room = client.room(summary['id'])
+        room, fresh = _newer_than(client, summary['id'], cursor)
         members = authors(room)
         items += [(m['created'], room['title'], members.get(m['author_id']), m, room['id'], position)
-                  for position, m in enumerate(room['messages']) if m['created'] > cursor and m['author_id'] != me]
+                  for position, m in fresh if m['author_id'] != me]
     items.sort(key=lambda item: item[0])
     newest = max([cursor] + [item[3]['created'] for item in items])
     blocks = [f'Room {label(title)}, message {shown_id(m["id"])}' + (f' ({source_label(m)})' if source_label(m) else '') + ':\n' + fence_message(who, m['body'], MESSAGE_CHARS, read_hint(room_id, m['id'], position))

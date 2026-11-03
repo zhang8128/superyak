@@ -10,6 +10,7 @@ from .station import BREAKOUT_MARK, MESSAGE_LIMIT, REPLACED_SEND, StationError, 
 log = logging.getLogger('superyak.agent')
 POLL_SECONDS = 30
 HISTORY = 30
+PAGE = 100  # a page of a paged room read (the station's own default)
 HISTORY_CHARS = 2000  # each earlier message; the mentioning message, the request, is never cut
 MAX_FAILURES = 3
 SHIP_EXCHANGES_PER_HOUR = 5
@@ -134,8 +135,8 @@ class Watcher:
             # A listed mention asks for its ticket first and fetches its room only to run (S5), so a mention still
             # deferred costs one request a cycle.
             if reply is not None or not listed:
-                room = self.client.room(mention['room_id'])
-                if self._posted(room, mid):
+                room = self._mention_room(mention['room_id'], mid)
+                if room is None:
                     return True, 0
             if reply is None:
                 try:
@@ -189,8 +190,8 @@ class Watcher:
                     self.save()
                     return True, self._pause_note(mention)
                 if room is None:
-                    room = self.client.room(mention['room_id'])
-                    if self._posted(room, mid):
+                    room = self._mention_room(mention['room_id'], mid)
+                    if room is None:
                         return True, 0
                 mode = 'read' if self.resident or ticket.get('mode') != 'build' else 'build'  # never above the ticket
                 basis = ticket.get('basis')
@@ -215,9 +216,62 @@ class Watcher:
         self.state['failures'].pop(mid, None)
         return True, self._reply(mention['room_id'], mid, reply)
 
-    def _posted(self, room, message_id):
-        """True, and the mention done, when this ship's reply to it is already in the room."""
-        if not any(m['author_id'] == self.me['id'] and m.get('client_message_id') == f'reply-{message_id}' for m in room['messages']):
+    def _mention_room(self, room_id, message_id):
+        """The room with the HISTORY messages that end at the mention, build_prompt's window, or None when this ship's
+        reply to it is already there, which finishes the mention (_posted). Paged reads, never the whole room (Tardis and
+        Rio Grande, all hands 2e59ae3a). A mention is nearly always in the newest page, with every reply after it and its
+        history before it: one request. An older one: a reply always comes after its mention, so the check pages forward
+        from it (`start`, then `after`) and stops at the first reply, reaching the room's end only when there is none,
+        then reads the history window (`before`). A station that doesn't page, or a paired peer's room, sends the whole
+        room, and a mention the station no longer has (404) is looked for in the whole room: both read as before."""
+        page = self.client.room(room_id, limit=PAGE)
+        if page.get('paged') is not True:
+            return None if self._posted(page['messages'], message_id) else page
+        ids = [m['id'] for m in page['messages']]
+        if message_id in ids:
+            at = ids.index(message_id)
+            if self._posted(page['messages'][at:], message_id):
+                return None
+            if at >= HISTORY or page['first_position'] == 0:
+                return page  # build_prompt quotes the window that ends at the mention
+            return self.client.room(room_id, before=page['first_position'] + at + 1, limit=HISTORY)
+        try:
+            page = self.client.room(room_id, start=message_id, limit=PAGE)
+        except StationError as error:
+            if error.status != 404:
+                raise
+            page = self.client.room(room_id)
+            return None if self._posted(page['messages'], message_id) else page
+        at = page['first_position']
+        while not self._posted(page['messages'], message_id):
+            if not page['messages'] or page['first_position'] + len(page['messages']) >= page['total']:
+                return self.client.room(room_id, before=at + 1, limit=HISTORY)
+            page = self.client.room(room_id, after=page['messages'][-1]['id'], limit=PAGE)
+        return None
+
+    def _newer(self, room_id, cursor):
+        """Resident: the room with its messages after `cursor`, paged forward with `after`; the newest page at first sight
+        or when the station no longer has the cursor's message (404), and _resident_reply answers its latest either way.
+        A station that doesn't page sends the whole room, read as before."""
+        if cursor is None:
+            return self.client.room(room_id, limit=PAGE)
+        try:
+            room = self.client.room(room_id, after=cursor, limit=PAGE)
+        except StationError as error:
+            if error.status != 404:
+                raise
+            return self.client.room(room_id, limit=PAGE)
+        if room.get('paged') is not True:
+            return room
+        messages = list(room['messages'])
+        while room['messages'] and room['first_position'] + len(room['messages']) < room['total']:
+            room = self.client.room(room_id, after=room['messages'][-1]['id'], limit=PAGE)
+            messages += room['messages']
+        return dict(room, messages=messages)
+
+    def _posted(self, messages, message_id):
+        """True, and the mention done, when this ship's reply to it is among these messages."""
+        if not any(m['author_id'] == self.me['id'] and m.get('client_message_id') == f'reply-{message_id}' for m in messages):
             return False
         self._finish(message_id)
         self._remember(message_id)
@@ -327,7 +381,7 @@ class Watcher:
             seen = self.state['rooms'].get(summary['id'], {})
             if seen.get('activity') == summary.get('last_activity'):
                 continue
-            room = self.client.room(summary['id'])
+            room = self._newer(summary['id'], seen.get('cursor'))
             members = room.get('members', [])
             people = [m for m in members if m['kind'] == 'person']
             ships = [m['id'] for m in members if m['kind'] == 'ship']
@@ -338,8 +392,9 @@ class Watcher:
                 if not done:
                     continue
             record = {'activity': summary.get('last_activity')}
-            if room['messages']:
-                record['cursor'] = room['messages'][-1]['id']
+            last = room['messages'][-1]['id'] if room['messages'] else seen.get('cursor')  # nothing newer: keep it
+            if last:
+                record['cursor'] = last
             self.state['rooms'][summary['id']] = record
             self.save()
         return posted
