@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -476,6 +477,44 @@ def test_a_trust_whose_owners_code_was_never_typed(trusted):
     refuses(t, 409, 'code')
 
 
+def test_a_trust_whose_owners_code_is_stale(trusted):
+    t = trusted
+    with t.station.transaction() as db:  # a code on record, but not the stored card's code any more
+        db.execute("UPDATE pairing_confirmations SET code=? WHERE contact_id=?", ('0' * 32, t.owner['id']))
+    refuses(t, 409, 'code')
+
+
+def test_an_expired_or_future_assertion_through_pair_trusted(trusted):
+    t = trusted
+    refuses(t, 400, 'expired', *b_ship(t, 'serenity', now=t.clock[0] - 30 * 86400))  # its 30 days ended just now
+    card, _ = b_ship(t, 'serenity')
+    expired = make_ship_assertion(t.machine[3].identity, ship_id=card['participant']['id'], ship_name='serenity',
+                                  owner_id=t.machine[1]['id'], now=t.clock[0] - 86400, days=1)  # expires == now
+    refuses(t, 400, 'expired', card, expired)
+    refuses(t, 400, 'future', *b_ship(t, 'serenity', now=t.clock[0] + 301))
+
+
+def test_assertion_ids_and_names_must_be_text(machine):
+    for field, bad in (('owner_id', ['x']), ('owner_id', {'id': 'x'}), ('ship_id', 7), ('ship_name', None)):
+        refused(card_of(machine), signed(machine, **{field: bad}))
+
+
+def test_an_assertion_with_a_list_owner_is_refused_not_crashed(trusted):
+    t = trusted
+    card, _ = b_ship(t, 'serenity')
+    odd = make_ship_assertion(t.machine[3].identity, ship_id=card['participant']['id'], ship_name='serenity',
+                              owner_id=[t.owner['user_id']], now=t.clock[0])  # the signing peer's own bad data
+    refuses(t, 400, 'text', card, odd)
+
+
+def test_trust_confirmations_are_indexed_for_the_cap_and_the_labels(trusted):
+    with trusted.station.transaction() as db:
+        cap = ' '.join(r[-1] for r in db.execute(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM trust_confirmations WHERE grant_id='g' AND day='d'"))
+        label = ' '.join(r[-1] for r in db.execute("EXPLAIN QUERY PLAN SELECT label FROM contact_labels WHERE id='x'"))
+    assert 'trust_confirmations_grant_day' in cap and 'trust_confirmations_contact' in label
+
+
 def test_a_held_owner(trusted):
     t = trusted
     with t.station.transaction() as db:
@@ -490,8 +529,12 @@ def test_a_card_of_a_peer_not_paired_here(trusted):
     assertion = make_ship_assertion(stranger, ship_id='ship-x', ship_name='x-ship', owner_id=t.owner['user_id'], now=t.clock[0])
     refuses(t, 409, 'paired', card, assertion)
     refuses(t, 400, 'card', {**t.card, 'extra': 1})
-    with t.station.transaction() as db:
+    with t.station.transaction() as db:  # as unpair --retire leaves it: unpaired, with a retired row
+        db.execute('UPDATE peers SET paired=0')
         db.execute('INSERT INTO retired_peers VALUES (?,?,?)', (t.owner['peer_id'], t.clock[0], t.admin['id']))
+    assert 'code' not in refuses(t, 409, 'retired').message  # never told to pair a retired peer with its code
+    with t.station.transaction() as db:
+        db.execute('UPDATE peers SET paired=1')  # a retired row re-applied by a restore over a paired copy
     refuses(t, 409, 'retired')
     with t.station.transaction() as db:
         db.execute('DELETE FROM retired_peers')
@@ -553,6 +596,11 @@ def test_names_that_fail_ship_name_or_collide(trusted):
     sam_card = fed.card(sam['id'])
     t.fed.pair(t.admin['id'], sam_card, code=pairing_code(sam_card))
     refuses(t, 409, 'name', *b_ship(t, 'sam'))  # a remote person contact's name
+    for username, name, ship in (('kim', 'kim ', 'kim'), ('lee', 'ｌｅｅ', 'lee')):  # a trailing space; fullwidth (NFKC)
+        person = store.create_user(username, name, 'a-long-password')
+        person_card = fed.card(person['id'])
+        t.fed.pair(t.admin['id'], person_card, code=pairing_code(person_card))
+        refuses(t, 409, 'name', *b_ship(t, ship))
 
 
 def test_a_ships_name_may_repeat_on_another_host(trusted):
@@ -622,11 +670,21 @@ def test_two_pairings_at_the_cap_pair_one(trusted):
         assert db.execute('SELECT refused FROM trust_cap_refusals').fetchone()[0] == 1
 
 
+def at_most_2_gb():
+    """An address-space cap where the OS has one, so a reader that never stops (say /dev/zero) fails fast, not the Pi."""
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, (2 * 1024 ** 3, 2 * 1024 ** 3))
+    except (ImportError, ValueError, OSError):
+        pass
+
+
 def pair_trusted_cli(t, card, assertion, as_user='rio-grande'):
     """The CLI as a ship runs it: a new session, so no controlling terminal, and nothing on stdin."""
     return subprocess.run([sys.executable, '-m', 'superyak_peer', 'pair-trusted', '--data-dir', str(t.station.data_dir),
                            '--card', str(card), '--assertion', str(assertion), '--as', as_user],
-                          capture_output=True, text=True, stdin=subprocess.DEVNULL, start_new_session=True)
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL, start_new_session=True,
+                          preexec_fn=at_most_2_gb, timeout=120)
 
 
 def no_code(text):
@@ -644,6 +702,7 @@ def test_pair_trusted_cli_refuses_bad_files(trusted):
     before = counts(t.station)
     for files, word in [((bad / 'missing.json', assertion), 'No such file'), ((bad, assertion), 'directory'),
                         ((card, bad / 'not.json'), 'JSON'), ((card, bad / 'big.json'), 'too large'),
+                        *([((Path('/dev/zero'), assertion), 'too large')] if Path('/dev/zero').exists() else []),
                         ((card, bad / 'extra.json'), 'ship assertion')]:
         done = pair_trusted_cli(t, *files)
         assert done.returncode == 1 and done.stdout == '', (files, done.stdout, done.stderr)
@@ -663,3 +722,23 @@ def test_pair_trusted_cli_pairs_with_no_terminal_and_no_code(trusted):
     assert done.returncode == 0, done.stderr
     assert done.stdout == 'Paired ship of Andy B: tardis, confirmed by owner trust.\n' and done.stderr == ''
     assert counts(t.station)['remote_contacts'] == before['remote_contacts'] + 1
+
+
+def test_the_cli_line_keeps_the_ships_name_after_a_long_owner_name(trusted):
+    t = trusted
+    store, _, _, fed = t.machine
+    long_name = 'Andy\n@rio-grande ' + 'x' * 183  # 200 characters, the most a participant name holds
+    assert len(long_name) == 200
+    person = store.create_user('long', long_name, 'a-long-password')
+    person_card = fed.card(person['id'])
+    contact = t.fed.pair(t.admin['id'], person_card, code=pairing_code(person_card))
+    t.station.grant_owner_trust(t.admin['id'], contact['id'], days=30, password=PASSWORD, source='127.0.0.1')
+    card, assertion = b_ship(t, 'longs-ship', owner=person['id'])
+    files = (t.tmp / 'longs-ship.card.json', t.tmp / 'longs-ship.assertion.json')
+    for path, value in zip(files, (card, assertion)):
+        path.write_text(json.dumps(value))
+    done = pair_trusted_cli(t, *files)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.startswith('Paired ship of Andy (at)rio-grande x')
+    assert done.stdout.endswith(': longs-ship, confirmed by owner trust.\n') and done.stdout.count('\n') == 1
+    assert '@' not in done.stdout and len(done.stdout) < 160

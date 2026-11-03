@@ -307,13 +307,16 @@ def make_ship_assertion(identity, *, ship_id, ship_name, owner_id, now, days=ASS
     return {'record': record, 'signature': identity.sign_record(record)}
 
 def check_ship_assertion(card, assertion, now):
-    """Owner trust 1: the record when the card's key signed it and its times hold, else Problem(400). Times are whole
-    seconds (not bool, float or text); issued is at most FUTURE_SLACK ahead; it has not expired; it lives at most 30 days."""
+    """Owner trust 1: the record when the card's key signed it and its times hold, else Problem(400). Its ids and names
+    are text; times are whole seconds (not bool, float or text); issued is at most FUTURE_SLACK ahead; it has not
+    expired; it lives at most 30 days."""
     if not isinstance(assertion, dict) or set(assertion) != {'record', 'signature'}:
         raise Problem(400, 'Not a ship assertion')
     record = assertion['record']
     if not verify_record(card, record, assertion['signature']) or record['kind'] != 'ship-assertion':
         raise Problem(400, 'The ship assertion does not verify under this peer\'s card')
+    if not all(isinstance(record[k], str) for k in ('kind', 'ship_id', 'ship_name', 'owner_id')):
+        raise Problem(400, 'Assertion ids and names must be text')  # the signer's own bad data never reaches a query
     issued, expires = record['issued'], record['expires']
     if type(issued) is not int or type(expires) is not int:
         raise Problem(400, 'Assertion times must be whole seconds')

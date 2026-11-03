@@ -24,6 +24,9 @@ BEGIN SELECT RAISE(ABORT, 'owner_trust is append-only'); END''',
     '''CREATE TABLE IF NOT EXISTS trust_confirmations(id TEXT PRIMARY KEY, contact_id TEXT NOT NULL,
   grant_id TEXT NOT NULL, assertion TEXT NOT NULL, acting_ship_id TEXT NOT NULL, confirmed REAL NOT NULL,
   day TEXT NOT NULL)''',
+    # The cap's count and contact_labels' latest confirmation per contact, by index rather than by scan (ruling, Task 3).
+    'CREATE INDEX IF NOT EXISTS trust_confirmations_contact ON trust_confirmations(contact_id, confirmed)',
+    'CREATE INDEX IF NOT EXISTS trust_confirmations_grant_day ON trust_confirmations(grant_id, day)',
     '''CREATE TABLE IF NOT EXISTS trust_cap_refusals(grant_id TEXT NOT NULL, day TEXT NOT NULL,
   refused INTEGER NOT NULL, PRIMARY KEY(grant_id, day))''',
     '''CREATE TABLE IF NOT EXISTS retired_peers(peer_id TEXT PRIMARY KEY, retired REAL NOT NULL, by_id TEXT)''',
@@ -79,7 +82,7 @@ def _text(name, peer_id, until):
     return GRANT_TEXT.format(name=safe_line(name), peer=peer_id[:12], date=date)
 
 
-def _eligible(db, contact):
+def owner_eligible(db, contact):
     """The refusals grant and renew share: the owner is a remote person contact, not held, not made by a trust, whose
     typed code is still current."""
     if contact is None:
@@ -109,7 +112,7 @@ class OwnerTrust:
             self._admin(db, actor)
             now = self.clock()
             contact = db.execute('SELECT * FROM remote_contacts WHERE id=?', (contact_id,)).fetchone()
-            _eligible(db, contact)
+            owner_eligible(db, contact)
             if live_trust(db, contact['peer_id'], contact['user_id'], now):
                 raise Problem(409, 'That owner is already trusted; renew it')
             grant_id, until = uid(), now + days * 86400
@@ -131,7 +134,7 @@ class OwnerTrust:
                 raise Problem(409, 'That owner trust was revoked')
             peer_id, owner = rows[0]['peer_id'], rows[0]['owner_user_id']
             contact = db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer_id, owner)).fetchone()
-            _eligible(db, contact)
+            owner_eligible(db, contact)
             latest = db.execute("SELECT grant_id FROM owner_trust WHERE peer_id=? AND owner_user_id=? AND event='grant' "
                                 'ORDER BY seq DESC LIMIT 1', (peer_id, owner)).fetchone()
             if latest['grant_id'] != grant_id:

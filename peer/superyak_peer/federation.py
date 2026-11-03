@@ -8,11 +8,12 @@ import re
 import sqlite3
 import threading
 import time
+import unicodedata
 from datetime import datetime, timezone
 from .identity import (PeerIdentity, validate_card, verify_envelope, verify_pull, pull_shape_ok, canonical, parse,
                        pairing_code, show_code, typed_code, HEX32, check_ship_assertion)
 from .common import Problem, require, uid, encode, text, linked_room_ok
-from .owner_trust import _eligible, live_trust
+from .owner_trust import live_trust, owner_eligible
 from .ships import SHIP_NAME
 
 class Obsolete(Exception):
@@ -92,14 +93,20 @@ class _AtCap(Problem):
         self.grant_id, self.day = grant_id, day
 
 
+def _folded(name):
+    """A name as it reads: NFKC (so fullwidth 'ｓａｍ' is 'sam'), casefolded, NFKC again (casefold can undo it), and its
+    whitespace collapsed and stripped (so 'sam ' is 'sam')."""
+    return ' '.join(unicodedata.normalize('NFKC', unicodedata.normalize('NFKC', name).casefold()).split())
+
+
 def _name_taken(db, name):
-    """Owner trust (S6): a ship's name may not be, by casefold, a local user's name or username, or the name of a remote
-    contact with no trust confirmation (a person). Ships of the same name on other hosts are left out: each shows with
-    its owner. casefold, not SQLite's ASCII lower(), so the scan is here."""
-    folded = name.casefold()
+    """Owner trust (S6): a ship's name may not read, by _folded, as a local user's name or username, or as the name of a
+    remote contact with no trust confirmation (a person). Ships of the same name on other hosts are left out: each
+    shows with its owner. Not SQLite's ASCII lower(), so the scan is here."""
+    folded = _folded(name)
     rows = db.execute('SELECT username, name FROM users UNION ALL SELECT name, name FROM remote_contacts '
                       'WHERE id NOT IN (SELECT contact_id FROM trust_confirmations)')  # once, not per contact
-    return any(folded in (row[0].casefold(), row[1].casefold()) for row in rows)
+    return any(folded in (_folded(row[0]), _folded(row[1])) for row in rows)
 
 class Federation:
     def __init__(self, store, *, endpoint, identity=None):
@@ -194,11 +201,11 @@ class Federation:
             # 1. A valid card of a peer paired here and never retired.
             card = validate_card(card)
             peer = card['peer_id']
+            if db.execute('SELECT 1 FROM retired_peers WHERE peer_id=?', (peer,)).fetchone():  # first: never "pair it"
+                raise Problem(409, 'This peer was retired; it comes back only as a new identity')
             known = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (peer,)).fetchone()
             if known is None:
                 raise Problem(409, 'That peer is not paired here: a person pairs it with its code first')
-            if db.execute('SELECT 1 FROM retired_peers WHERE peer_id=?', (peer,)).fetchone():
-                raise Problem(409, 'This peer was retired; it comes back only as a new identity')
             stored = json.loads(known['card'])
             # 2. The paired card in every field but its participant.
             if canonical({**stored, 'participant': card['participant']}) != canonical(card):
@@ -212,7 +219,7 @@ class Federation:
             station, owner_id = record['station'], record['owner_id']
             owner = db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (station, owner_id)).fetchone()
             try:
-                _eligible(db, owner)
+                owner_eligible(db, owner)
             except Problem as problem:
                 raise Problem(problem.status, f"The ship's owner: {problem.message}") from None
             # 5. A live trust for that owner, and an assertion issued after every revocation of it (S8).

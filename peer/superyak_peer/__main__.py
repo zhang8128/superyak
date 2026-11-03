@@ -398,13 +398,30 @@ def pair_command(data_dir, card_path, username, terminal=controlling_terminal):
         os.close(fd)
 
 
+def read_bounded(path):
+    """At most one byte more than identity.parse takes, so a huge file, or /dev/zero, is refused as too large without
+    being read in full."""
+    from .identity import MAX_ENVELOPE
+    with open(path, 'rb') as stream:
+        return stream.read(MAX_ENVELOPE + 1)
+
+
+def ship_label_line(label, ship):
+    """A trust contact's label as one safe line that always ends with the ship's name: only the owner part, which comes
+    from a person and may hold 200 characters, is shortened."""
+    prefix, suffix = 'ship of ', f': {ship}'
+    if label.startswith(prefix) and label.endswith(suffix) and len(label) > len(prefix) + len(suffix):
+        return f'{prefix}{safe_line(label[len(prefix):-len(suffix)], 60)}: {safe_line(ship)}'
+    return safe_line(label, 300)
+
+
 def pair_trusted_command(data_dir, card_path, assertion_path, username):
     """Owner trust: a ship pairs another peer's ship within a trust a person granted, with no terminal and no code. The
-    exit status: 0 paired, 1 refused. Each file is read strictly (identity.parse, MAX_ENVELOPE), and an unreadable file
+    exit status: 0 paired, 1 refused. Each file is read strictly (read_bounded, identity.parse), and an unreadable file
     and a refusal alike are one safe line on stderr; nothing is written before every check holds."""
     from .identity import parse
     try:
-        card, assertion = (parse(Path(path).read_bytes()) for path in (card_path, assertion_path))
+        card, assertion = (parse(read_bounded(path)) for path in (card_path, assertion_path))
         if not (Path(data_dir) / 'peer.sqlite3').is_file():
             raise Problem(404, f'No peer database at {Path(data_dir) / "peer.sqlite3"}')
         store = Store(data_dir)
@@ -420,7 +437,7 @@ def pair_trusted_command(data_dir, card_path, assertion_path, username):
         print(f'pair-trusted: {safe_line(refused.message if isinstance(refused, Problem) else refused, 200)}',
               file=sys.stderr)
         return 1
-    print(f'Paired {safe_line(label)}, confirmed by owner trust.')
+    print(f"Paired {ship_label_line(label, contact['name'])}, confirmed by owner trust.")
     return 0
 
 
