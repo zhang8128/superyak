@@ -1457,6 +1457,25 @@ def lessons_listed_here(db, peer_id):
             and db.execute('SELECT 1 FROM lessons_peers WHERE peer_id=?', (peer_id,)).fetchone() is not None)
 
 
+LESSONS_LINE = ('{name} on {peer} can be added to the lessons room by {ship} once you type its code; its lessons would '
+                'reach every ship.')
+
+
+def lessons_line_for(db, card):
+    """Lessons room adds, item 2: what typing this card's code would make addable, said before the code is typed. None
+    when the card's peer isn't listed, no room is recorded here, this peer isn't its origin, or no ship is recorded.
+    `card` is a validated card; the ship is the recorded ship's account name, read in the caller's transaction."""
+    from .owner_trust import plain_name
+    if not lessons_listed_here(db, card['peer_id']):
+        return None
+    ship = db.execute('SELECT users.name FROM lessons_room JOIN users ON users.id=lessons_room.ship_id '
+                      'WHERE lessons_room.id=1').fetchone()
+    if ship is None:
+        return None
+    return LESSONS_LINE.format(name=plain_name(card['participant']['name']), peer=card['peer_id'][:12],
+                               ship=plain_name(ship['name']))
+
+
 class Malformed(ValueError):
     """A request the query can't take: exit 2, nothing on stdout."""
 

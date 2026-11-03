@@ -36,9 +36,13 @@ def adds(lessons_peers, tmp_path):
         card = fed.card(ship)
         return pi_fed.pair(pi_ids['andy'], card, code=pairing_code(card), lessons_line_shown=lessons_line_shown)['id']
 
+    def card_of(username, *, on='tardis'):
+        store, fed = machines[on]
+        return fed.card(store.lessons_ship(username, 'andy')['id'])
+
     ids = {**pi_ids, 'tardis-andy': tardis_ids['andy']}
     return SimpleNamespace(pi=pi, pi_fed=pi_fed, tardis=tardis, tardis_fed=tardis_fed, ids=ids, room=lp['room'], key=lp['key'],
-                           clock=clock, deliver=lp['deliver'], pair_new=pair_new)
+                           clock=clock, deliver=lp['deliver'], pair_new=pair_new, card_of=card_of)
 
 
 def confirmation(store, contact):
@@ -138,3 +142,54 @@ def test_restore_of_a_backup_from_before_the_build(adds, tmp_path):
     typed, changes, addable = new_state(live.db_path)
     assert typed and all(t[1] is None and t[2] == 0 for t in typed)
     assert changes and all(c[1] is None for c in changes) and addable == []
+
+
+# ---- Task 2: pair says what it makes addable, before the code --------------------------------------------------------
+
+def line_for(adds, card):
+    from superyak_peer.lessons import lessons_line_for
+    with adds.pi.transaction() as db:
+        return lessons_line_for(db, card)
+
+
+def test_the_line_for_a_listed_peer_is_the_exact_text(adds):
+    card = adds.card_of('defiant')
+    assert line_for(adds, card) == (f"Defiant on {card['peer_id'][:12]} can be added to the lessons room by Rio-Grande "
+                                    "once you type its code; its lessons would reach every ship.")
+
+
+def test_the_ship_is_the_recorded_ships_account_name(adds):
+    with adds.pi.transaction() as db:
+        db.execute("UPDATE users SET name='Odo' WHERE username='rio-grande'")
+    assert ' by Odo once you' in line_for(adds, adds.card_of('defiant'))
+
+
+def test_no_line_for_an_unlisted_peer(adds):
+    assert line_for(adds, adds.card_of('defiant', on='other')) is None
+
+
+def test_no_line_without_a_recorded_room(adds):
+    card = adds.card_of('defiant')
+    with adds.pi.transaction() as db:
+        db.execute('DELETE FROM lessons_room')
+    assert line_for(adds, card) is None
+
+
+def test_no_line_off_the_origin(adds):
+    card = adds.card_of('defiant')
+    with adds.pi.transaction() as db:
+        db.execute("UPDATE lessons_room SET room_key='someone:room'")
+    assert line_for(adds, card) is None
+
+
+def test_no_line_without_a_recorded_ship(adds):
+    card = adds.card_of('defiant')
+    with adds.pi.transaction() as db:
+        db.execute('UPDATE lessons_room SET ship_id=NULL')
+    assert line_for(adds, card) is None
+
+
+def test_the_line_names_a_bidi_name_plainly(adds):
+    card = adds.card_of('defiant')
+    card = {**card, 'participant': {**card['participant'], 'name': 'Def\u202eiant'}}
+    assert line_for(adds, card).startswith('Defiant on ')

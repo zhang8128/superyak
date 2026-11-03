@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import pytest
+from test_lessons_adds import adds  # noqa: F401  (the fixture, for the lessons-room line tests)
 
 def run(*args):
     return subprocess.run([sys.executable, '-m', 'superyak_peer', *map(str, args)], capture_output=True, text=True)
@@ -563,3 +564,38 @@ def test_deliveries_lists_a_refused_row_with_its_reason_and_another_admins_retry
     assert mine.returncode == 0, mine.stderr
     with a[0].transaction() as db:
         assert db.execute('SELECT status, last_error FROM outbox WHERE id=?', (key,)).fetchone()[:] == ('pending', None)
+
+
+# ---- lessons room adds, Task 2: the line before the code prompt ------------------------------------------------------
+
+def _card_file(tmp_path, card):
+    path = tmp_path / 'lessons-card.json'
+    path.write_text(json.dumps(card))
+    return path
+
+
+def _pair_on_the_pi(adds, tmp_path, card):
+    from superyak_peer.identity import pairing_code
+    return in_pty(['pair', '--data-dir', adds.pi.data_dir, '--card', _card_file(tmp_path, card), '--as', 'andy'],
+                  typed=pairing_code(card))
+
+
+def _last_confirmation(store):
+    with store.transaction() as db:
+        return dict(db.execute('SELECT * FROM pairing_confirmations ORDER BY rowid DESC LIMIT 1').fetchone())
+
+
+def test_the_cli_says_the_line_before_its_code_prompt(adds, tmp_path):
+    card = adds.card_of('defiant')
+    code, shown, prompted = _pair_on_the_pi(adds, tmp_path, card)
+    assert prompted and code == 0, shown
+    assert shown.index('can be added to the lessons room by Rio-Grande') < shown.index(PROMPT.decode())
+    assert f"Defiant on {card['peer_id'][:12]} can be added" in shown
+    row = _last_confirmation(adds.pi)
+    assert row['lessons_line'] == 1 and row['typed_by'] == adds.ids['andy']
+
+
+def test_the_cli_says_nothing_for_an_unlisted_peer(adds, tmp_path):
+    code, shown, prompted = _pair_on_the_pi(adds, tmp_path, adds.card_of('defiant', on='other'))
+    assert prompted and code == 0, shown
+    assert 'lessons room' not in shown and _last_confirmation(adds.pi)['lessons_line'] == 0

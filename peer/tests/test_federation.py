@@ -1219,7 +1219,7 @@ def test_the_preview_shows_the_card_and_never_its_code(env, remote):
     _, clients, _, _ = env
     card = remote[1].card(remote[2]['id'])
     response = clients[2].post('/api/connections/preview', json={'card': card})
-    assert response.status_code == 200 and response.json() == card
+    assert response.status_code == 200 and response.json() == {**card, 'lessons_line': None}
     assert pairing_code(card) not in response.text and show_code(pairing_code(card)) not in response.text
 
 

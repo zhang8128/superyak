@@ -374,12 +374,19 @@ def pair_command(data_dir, card_path, username, terminal=controlling_terminal):
     if fd is None:
         print(NO_TERMINAL, file=sys.stderr)
         return 2
+    try:  # the line is read before the prompt, so what the person is told is what the code will do
+        from .lessons import lessons_line_for
+        with store.transaction() as db:
+            line = lessons_line_for(db, card)
+    except BaseException:
+        os.close(fd)
+        raise
     try:  # raw reads and writes: a terminal isn't seekable, so no read-write text stream over it
         say = lambda text: os.write(fd, text.encode('utf-8'))  # noqa: E731
         typed = b''
         try:  # the prompt is inside: a Ctrl-C the moment it shows, before the read begins, is caught too
             say(f"Pairing {safe_line(card['participant']['name'])} ({safe_line(card['participant']['id'])}) "
-                f"at {safe_line(card['endpoint'], 200)}\n{PAIR_PROMPT}")
+                f"at {safe_line(card['endpoint'], 200)}\n{safe_line(line, 400) + chr(10) if line else ''}{PAIR_PROMPT}")
             while not typed.endswith(b'\n') and len(typed) < 1024:  # a canonical-mode terminal hands over whole lines
                 chunk = os.read(fd, 1024)
                 if not chunk:
@@ -389,7 +396,8 @@ def pair_command(data_dir, card_path, username, terminal=controlling_terminal):
             say('\nNothing was paired.\n')
             return 130
         try:
-            contact = federation_here(store).pair(actor, card, code=typed.decode('utf-8', 'replace'))
+            contact = federation_here(store).pair(actor, card, code=typed.decode('utf-8', 'replace'),
+                                            lessons_line_shown=bool(line))
         except Problem as exc:
             say(f'{exc.message}\n')
             return 1

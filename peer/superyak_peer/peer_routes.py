@@ -12,6 +12,12 @@ log = logging.getLogger(__name__)
 _LOST_START = LOST_IDENTITY.split('{path}')[0]
 
 
+def lessons_line_here(fed, card):
+    from .lessons import lessons_line_for
+    with fed.store.transaction() as db:
+        return lessons_line_for(db, card)
+
+
 def sign_first(store):
     """Signs the receipts key-less commands left. An error is logged (its class; for a lost identity also the fixed
     sentence, which names only the identity file) and never stops the caller: a read answers with what is there."""
@@ -117,14 +123,16 @@ def install(app):
     @router.post('/api/connections/preview')
     async def preview(request: Request):
         await run_in_threadpool(admin_check, await caller(current_user, request))
-        return validate_card((await body(request)).get('card'))
+        card = validate_card((await body(request)).get('card'))
+        return {**card, 'lessons_line': await run_in_threadpool(lessons_line_here, fed, card)}
 
     @router.post('/api/connections/pair', status_code=201)
     async def pair(request: Request):
         who = await caller(current_user, request)
         data = await body(request)
         # the one check is in pair()
-        return await run_in_threadpool(fed.pair, who, data.get('card'), code=data.get('code'))
+        return await run_in_threadpool(fed.pair, who, data.get('card'), code=data.get('code'),
+                                          lessons_line_shown=data.get('lessons_line_shown') is True)
 
     @router.delete('/api/connections/{contact_id}')
     async def unpair(contact_id: str, request: Request):

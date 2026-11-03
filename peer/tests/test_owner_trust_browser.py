@@ -722,3 +722,50 @@ def test_names_are_escaped(trust_browser):
     expect(owner.get_by_text(f'Revoke the owner trust for ships owned by {HOSTILE}?', exact=False)).to_be_visible()
     assert page.locator('#main-content img').count() == 0
     assert page.evaluate('window.pwned') is None
+
+
+# ---- lessons room adds, Task 2: the line beside the code box ---------------------------------------------------------
+
+def list_peer_b_for_the_lessons_room(st):
+    with st.store.transaction() as db:
+        db.execute('INSERT INTO lessons_room VALUES(1,?,?,?)', ('lessonsroom', st.ship['id'], 1.0))
+        db.execute('INSERT INTO lessons_peers VALUES(?,?)', (st.owner['peer_id'], 1.0))
+        return db.execute('SELECT name FROM users WHERE id=?', (st.ship['id'],)).fetchone()['name']
+
+
+def test_the_browser_shows_the_line_beside_the_code_box_and_sends_it_back(trust_browser):
+    import json
+    st = trust_browser
+    ship = list_peer_b_for_the_lessons_room(st)
+    card = st.b_fed.identity.card(B_ENDPOINT, {'id': 'new-b', 'name': 'Def‮iant <b>x</b>'})
+    page = connections_page(st)
+    sent = []
+    page.on('request', lambda request: sent.append(request.post_data_json) if request.url.endswith('/api/connections/pair') else None)
+    page.get_by_label('Peer card').fill(json.dumps(card))
+    page.get_by_role('button', name='Preview peer card').click()
+    form = page.locator('#pair-confirm-form')
+    line = form.locator('[data-testid="lessons-line"]')
+    expect(line).to_contain_text(f'on {card["peer_id"][:12]} can be added to the lessons room by {ship} once you type its code')
+    html = line.inner_html()
+    assert '<b>' not in html and '\u202e' not in html and '<bdi>Defiant &lt;b&gt;x&lt;/b&gt;</bdi>' in html
+    form.get_by_label('Type the code shown on the other machine').fill(pairing_code(card))
+    form.get_by_role('button', name='Pair this peer').click()
+    expect(page.locator('.notice[role=status]')).to_contain_text('Peer paired')
+    assert sent and sent[0]['lessons_line_shown'] is True and 'lessons_line' not in sent[0]['card']
+
+
+def test_the_browser_shows_no_line_for_an_unlisted_peer_and_sends_false(trust_browser):
+    import json
+    st = trust_browser
+    card = st.b_fed.identity.card(B_ENDPOINT, {'id': 'new-b', 'name': 'Plain'})
+    page = connections_page(st)
+    sent = []
+    page.on('request', lambda request: sent.append(request.post_data_json) if request.url.endswith('/api/connections/pair') else None)
+    page.get_by_label('Peer card').fill(json.dumps(card))
+    page.get_by_role('button', name='Preview peer card').click()
+    expect(page.locator('#pair-confirm-form')).to_be_visible()
+    assert page.locator('[data-testid="lessons-line"]').count() == 0
+    page.get_by_label('Type the code shown on the other machine').fill(pairing_code(card))
+    page.get_by_role('button', name='Pair this peer').click()
+    expect(page.locator('.notice[role=status]')).to_contain_text('Peer paired')
+    assert sent[0]['lessons_line_shown'] is False
