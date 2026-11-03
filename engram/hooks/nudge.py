@@ -89,6 +89,9 @@ def _assessment_active(conn) -> bool:
         return False  # pre-migration DB — assessments table absent, no gating
 
 
+NUDGE_EMBED_SECONDS = 4.0  # within the hook's 10 s budget (engram plugin hooks.json)
+
+
 def nudge():
     ctx = read_context()
     if ctx["skip"]:
@@ -150,8 +153,15 @@ def nudge():
         import numpy as np
         from embeddings import create_embedding_provider
 
-        embedder = create_embedding_provider()
-        query_emb = embedder.embed([prompt], prefix="search_query")[0]
+        from embeddings import EmbedderUnavailableError
+        # The hook has 10 s; a shared embedder busy with a large batch would hold it past that, and Claude Code then
+        # discards the hook's output with a timeout message. Give up within NUDGE_EMBED_SECONDS and say so instead.
+        embedder = create_embedding_provider(response_timeout=NUDGE_EMBED_SECONDS)
+        try:
+            query_emb = embedder.embed([prompt], prefix="search_query")[0]
+        except EmbedderUnavailableError:
+            print("# nudge: the shared embedder is busy; this prompt's recall was skipped", file=sys.stderr)
+            return
         packed_query = _pack_embedding(query_emb)
         now = datetime.now(timezone.utc).isoformat()
 
