@@ -127,8 +127,50 @@ def install(app):
         return await run_in_threadpool(fed.pair, who, data.get('card'), code=data.get('code'))
 
     @router.delete('/api/connections/{contact_id}')
-    def unpair(contact_id: str, request: Request):
-        return fed.unpair(actor(request), contact_id)
+    async def unpair(contact_id: str, request: Request):
+        """Disconnects the peer; with {"retire": true}, for a host that may be compromised, also retires it (owner trust
+        spec item 6, S11). No body, or retire false, unpairs as before."""
+        who = await caller(current_user, request)
+        data = await body(request) if (await request.body()).strip() else {}
+        retire = data.get('retire', False)
+        if type(retire) is not bool:
+            raise Problem(400, 'retire is true or false')
+        return await run_in_threadpool(fed.unpair, who, contact_id, retire=retire)
+
+    # Owner trust (spec items 2, 4a and 6): the admin's acts in the browser. Each takes a person's session with CSRF
+    # (current_user), so a ship key gets 403 and never acts. The grant's and the renewal's password run in a sign-in
+    # lane and count as /api/login counts a sign-in from the same client, as the imprint confirm's does (app.py).
+    async def with_password(request, call, target, **more):
+        """`call(person, target, days=, expect=, password=, ...)` in the lane; `more` names a body field to pass on."""
+        user = await run_in_threadpool(current_user, request)  # a person with CSRF; a ship key gets 403
+        data = await body(request)
+        lane, public, device = await app.state.sign_in_lane(request, user['username'])
+        return await lane.run(call, user['id'], target, days=data.get('days'), expect=data.get('expect'),
+                              password=data.get('password'), source=request.client.host if request.client else 'unknown',
+                              public=public, device=device, **{name: read(data) for name, read in more.items()})
+
+    @router.post('/api/connections/{contact_id}/trust', status_code=201)
+    async def grant_trust(contact_id: str, request: Request):
+        return await with_password(request, fed.store.grant_owner_trust, contact_id)
+
+    @router.get('/api/owner-trust/{grant_id}')
+    def trust_renewal(grant_id: str, request: Request):
+        """What the renewal page shows before it asks for the password: the trust and the ships in its window."""
+        return fed.store.owner_trust_renewal(actor(request), grant_id)
+
+    @router.post('/api/owner-trust/{grant_id}/renew')
+    async def renew_trust(grant_id: str, request: Request):
+        def seen(data):  # the (window_seq, paired) the page showed, a JSON pair; anything else is renew's 400
+            shown = data.get('seen')
+            return tuple(shown) if isinstance(shown, list) else shown
+        return await with_password(request, fed.store.renew_owner_trust, grant_id, seen=seen)
+
+    @router.post('/api/owner-trust/{grant_id}/revoke')
+    async def revoke_trust(grant_id: str, request: Request):
+        """It only takes power away, so it needs no password (revoke_owner_trust)."""
+        who = await caller(current_user, request)
+        await body(request)
+        return await run_in_threadpool(fed.store.revoke_owner_trust, who, grant_id)
 
     @router.get('/api/sync')
     def status(request: Request):

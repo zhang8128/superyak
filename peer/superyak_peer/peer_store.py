@@ -77,12 +77,15 @@ class PeerStore:
     def contacts(self, actor):
         with self.transaction() as db:
             local = [dict(r) for r in db.execute("SELECT id,name FROM users WHERE id!=? AND kind!='system' ORDER BY name,id", (actor,))]
-            # each by its label, so a ship reads "ship of <owner>: <name>" (owner trust, Task 6)
-            remote = [dict(r) for r in db.execute('SELECT c.id, l.label AS name, c.peer_id, c.user_id FROM remote_contacts c '
+            # each by its label, so a ship reads "ship of <owner>: <name>" (owner trust, Task 6), and marked when a trust
+            # made it, so the audience picker reads it as a ship, not a named person (Task 6's review)
+            remote = [dict(r) for r in db.execute('SELECT c.id, l.label AS name, c.peer_id, c.user_id, '
+                                                  'EXISTS(SELECT 1 FROM trust_confirmations WHERE contact_id=c.id) AS trust_ship '
+                                                  'FROM remote_contacts c '
                                                   'JOIN contact_labels l ON l.id=c.id JOIN peers ON peers.peer_id=c.peer_id '
                                                   'WHERE peers.paired=1 AND c.id NOT IN (SELECT contact_id FROM contact_holds) '
                                                   'ORDER BY l.label, c.id')]  # SF3
-            return local + [{**r, 'remote': True} for r in remote]
+            return local + [{**r, 'trust_ship': bool(r['trust_ship']), 'remote': True} for r in remote]
 
     def _remote_inbox(self, db, actor, key, kind):
         origin, sep, rid = key.partition(':')

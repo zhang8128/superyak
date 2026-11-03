@@ -325,7 +325,9 @@ class Federation:
         code confirms it only while code_current holds, the rule pair_trusted shares: the code is still the card's
         (fix:pairing-code, re-check SF1) and the peer is paired (re-check minor 1). An owner trust confirms a contact with
         a trust_confirmations row that isn't held, on a paired peer (owner trust spec, item 3). `confirmed_by` is
-        'typing', 'owner trust' or None; a code-confirmed contact also gets `owner_trust` (contact_trust). The code is
+        'typing', 'owner trust' or None; a code-confirmed contact also gets `owner_trust` (contact_trust). `trust_ship`
+        says an owner trust made the contact (it has a trust_confirmations row, held or not) and `retired` that its
+        peer was unpaired as retired, so a held contact can say what holds it (Task 6's review). The code is
         listed only for a contact confirmed by typing: shown for any other, it could be copied into a re-pair with no
         screens compared (pairing review, nit 1)."""
         with self.store.transaction() as db:
@@ -335,6 +337,7 @@ class Federation:
                               'contact_labels.label AS name,remote_contacts.name AS card_name,peers.card,peers.paired,'
                               'contact_holds.contact_id IS NOT NULL AS held, '
                               'EXISTS(SELECT 1 FROM trust_confirmations WHERE contact_id=remote_contacts.id) AS trusted, '
+                              'EXISTS(SELECT 1 FROM retired_peers WHERE retired_peers.peer_id=remote_contacts.peer_id) AS retired, '
                               'peer_delivery.mode, peer_delivery.failures, '
                               'peer_delivery.next_attempt, peer_delivery.last_success, peer_delivery.last_pull, '
                               'peer_delivery.failing_since, peer_delivery.last_problem '  # spec §8
@@ -343,13 +346,14 @@ class Federation:
                               'LEFT JOIN contact_holds ON contact_holds.contact_id=remote_contacts.id').fetchall()
             listed = []
             for r in rows:
-                fields = {k: r[k] for k in r.keys() if k not in ('card_name', 'held', 'trusted')}
+                fields = {k: r[k] for k in r.keys() if k not in ('card_name', 'held', 'trusted', 'retired')}
                 card = {**json.loads(r['card']), 'participant': {'id': r['user_id'], 'name': r['card_name']}}
                 typed = code_current(db, r['id'])
                 by_trust = not typed and bool(r['trusted']) and not r['held'] and bool(r['paired'])
                 confirmed_by = 'typing' if typed else 'owner trust' if by_trust else None
                 listed.append({**fields, 'card': card, 'pairing_code': show_code(pairing_code(card)) if typed else None,
                                'confirmed': confirmed_by is not None, 'confirmed_by': confirmed_by, 'held': bool(r['held']),
+                               'trust_ship': bool(r['trusted']), 'retired': bool(r['retired']),
                                'owner_trust': contact_trust(db, r['peer_id'], r['user_id'], now) if typed else None})
         return listed
 

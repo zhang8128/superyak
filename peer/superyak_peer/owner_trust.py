@@ -239,19 +239,56 @@ def contact_line(db, contact_id, limit):
     return ship_label_line(row['label'], row['label'].rpartition(': ')[2], limit)
 
 
+def trust_state(db, grant_id, now):
+    """One grant as trust_list, connections() and the renewal page say it: its latest `until`, its first revocation
+    (time, reason, person) or None, its current window (trust_window) and its state: 'revoked', else 'expired' once
+    `until` is past, else 'paused' when the window is full (a window with no count, which only a damaged file holds,
+    reads as paused: fail closed), else 'live'."""
+    until = db.execute("SELECT MAX(until) FROM owner_trust WHERE grant_id=? AND event IN ('grant','renew')",
+                       (grant_id,)).fetchone()[0]
+    revoke = db.execute("SELECT owner_trust.at, owner_trust.reason, users.username FROM owner_trust LEFT JOIN users ON "
+                        "users.id=owner_trust.by_id WHERE grant_id=? AND event='revoke' ORDER BY seq LIMIT 1",
+                        (grant_id,)).fetchone()
+    window_seq, expect, paired = trust_window(db, grant_id)
+    state = ('revoked' if revoke else 'expired' if until <= now
+             else 'paused' if expect is None or paired >= expect else 'live')
+    return {'until': until, 'revoke': revoke, 'window_seq': window_seq, 'expect': expect, 'paired': paired, 'state': state}
+
+
 def contact_trust(db, peer_id, user_id, now):
-    """connections()' `owner_trust` for a contact whose code was typed: its live trust, else its latest grant, as
-    {'grant_id', 'until', 'live'}; None when no trust was ever granted for it."""
+    """connections()' `owner_trust` for a contact whose code was typed: its unrevoked, unexpired trust, else its latest
+    grant, as {'grant_id', 'until', 'live', 'state', 'window_seq', 'expect', 'paired'} (trust_state); None when no
+    trust was ever granted for it. `live` is whether it pairs now, so a paused trust is not live (Task 6's review)."""
     live = live_trust(db, peer_id, user_id, now)
-    if live:
-        return {'grant_id': live['grant_id'], 'until': live['until'], 'live': True}
-    row = db.execute("SELECT grant_id FROM owner_trust WHERE peer_id=? AND owner_user_id=? AND event='grant' "
-                     'ORDER BY seq DESC LIMIT 1', (peer_id, user_id)).fetchone()
+    row = live or db.execute("SELECT grant_id FROM owner_trust WHERE peer_id=? AND owner_user_id=? AND event='grant' "
+                             'ORDER BY seq DESC LIMIT 1', (peer_id, user_id)).fetchone()
     if row is None:
         return None
-    until = db.execute("SELECT MAX(until) FROM owner_trust WHERE grant_id=? AND event IN ('grant','renew')",
-                       (row['grant_id'],)).fetchone()[0]
-    return {'grant_id': row['grant_id'], 'until': until, 'live': False}
+    known = trust_state(db, row['grant_id'], now)
+    return {'grant_id': row['grant_id'], 'until': known['until'], 'live': known['state'] == 'live',
+            'state': known['state'], 'window_seq': known['window_seq'], 'expect': known['expect'], 'paired': known['paired']}
+
+
+def trust_renewal(db, grant_id, now):
+    """The renewal page (spec item 4a): the grant with its owner by label, its state and its current window, and the
+    ships paired in that window, each by label with the acting ship, when, and whether it's held, before the page asks
+    for the password. The page sends back (window_seq, paired) as `seen`, so it renews only what it showed. Names are
+    raw here; the page escapes them."""
+    grant = db.execute("SELECT peer_id, owner_user_id FROM owner_trust WHERE grant_id=? AND event='grant'",
+                       (grant_id,)).fetchone()
+    if grant is None:
+        raise Problem(404, 'No such owner trust')
+    known = trust_state(db, grant_id, now)
+    ships = [{'contact_id': r['contact_id'], 'label': r['label'], 'acting_ship': r['acting'], 'confirmed': r['confirmed'],
+              'held': bool(r['held'])} for r in db.execute(
+        'SELECT t.contact_id, t.confirmed, COALESCE(l.label, ?) AS label, '
+        'COALESCE(users.username, substr(t.acting_ship_id, 1, 6)) AS acting, '
+        'EXISTS(SELECT 1 FROM contact_holds WHERE contact_id=t.contact_id) AS held FROM trust_confirmations t '
+        'LEFT JOIN contact_labels l ON l.id=t.contact_id LEFT JOIN users ON users.id=t.acting_ship_id '
+        'WHERE t.window_seq=? ORDER BY t.confirmed, t.rowid', ('a contact no longer here', known['window_seq']))]
+    return {'grant_id': grant_id, 'owner': owner_label(db, grant['peer_id'], grant['owner_user_id']),
+            'peer_id': grant['peer_id'], 'until': known['until'], 'state': known['state'],
+            'window_seq': known['window_seq'], 'expect': known['expect'], 'paired': known['paired'], 'ships': ships}
 
 
 def trust_digests(db, now):
@@ -317,14 +354,9 @@ def trust_list(db, now):
     trusts = []
     for grant in db.execute("SELECT grant_id, peer_id, owner_user_id FROM owner_trust WHERE event='grant' ORDER BY seq").fetchall():
         grant_id = grant['grant_id']
-        until = db.execute("SELECT MAX(until) FROM owner_trust WHERE grant_id=? AND event IN ('grant','renew')",
-                           (grant_id,)).fetchone()[0]
-        revoke = db.execute("SELECT owner_trust.at, owner_trust.reason, users.username FROM owner_trust LEFT JOIN users ON "
-                            "users.id=owner_trust.by_id WHERE grant_id=? AND event='revoke' ORDER BY seq LIMIT 1",
-                            (grant_id,)).fetchone()
-        window_seq, expect, paired = trust_window(db, grant_id)
-        state = ('revoked' if revoke else 'expired' if until <= now
-                 else 'paused' if expect is None or paired >= expect else 'live')
+        known = trust_state(db, grant_id, now)
+        until, revoke, state = known['until'], known['revoke'], known['state']
+        window_seq, expect, paired = known['window_seq'], known['expect'], known['paired']
         ships = [{'contact_id': r['contact_id'], 'label': r['label'], 'ship_name': _signed_name(r['assertion']),
                   'participant_id': r['user_id'], 'acting_ship': r['acting'], 'confirmed': r['confirmed'],
                   'held': bool(r['held']), 'window_seq': r['window_seq']}
@@ -407,6 +439,13 @@ class OwnerTrust:
             db.execute('INSERT INTO owner_trust(grant_id,event,peer_id,owner_user_id,until,by_id,at,expect) '
                        "VALUES (?,'renew',?,?,?,?,?,?)", (grant_id, peer_id, owner, until, actor, now, expect))
         return {'grant_id': grant_id, 'until': until, 'text': _text(contact['label'], peer_id, until)}
+
+    def owner_trust_renewal(self, actor, grant_id):
+        """The admin's renewal page for one trust (trust_renewal): what a renewal would renew, read before the
+        password is asked for."""
+        with self.transaction() as db:
+            self._admin(db, actor)
+            return trust_renewal(db, grant_id, self.clock())
 
     def revoke_owner_trust(self, actor, grant_id):
         """The admin's act (spec "The change" item 6): ends the trust at once, so this grant, expired or not, and every

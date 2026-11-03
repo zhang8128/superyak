@@ -1271,7 +1271,9 @@ def test_connections_say_confirmed_by_owner_trust(trusted):
     assert mine['card']['participant'] == t.card['participant']  # the card it was paired with, its own name in it
     assert (owner['confirmed_by'], owner['confirmed'], owner['name']) == ('typing', True, 'Andy B')
     assert owner['pairing_code'] is not None
-    assert owner['owner_trust'] == {'grant_id': t.trust['grant_id'], 'until': t.trust['until'], 'live': True}
+    window = owner['owner_trust']['window_seq']
+    assert owner['owner_trust'] == {'grant_id': t.trust['grant_id'], 'until': t.trust['until'], 'live': True,
+                                    'state': 'live', 'window_seq': window, 'expect': 50, 'paired': 1}
     shown = describe_connections(list(listed.values()), now=t.clock[0]).splitlines()
     assert any(line.startswith('ship of Andy B: tardis (') and ', confirmed by owner trust' in line for line in shown)
     assert any(line.startswith('Andy B (') and ', confirmed by typing' in line for line in shown)
@@ -1281,8 +1283,10 @@ def test_connections_say_confirmed_by_owner_trust(trusted):
     listed = {c['id']: c for c in t.fed.connections(t.admin['id'])}
     assert (listed[ship['id']]['confirmed_by'], listed[ship['id']]['confirmed'], listed[ship['id']]['held']) == (None, False, True)
     assert listed[ship['id']]['name'] == 'ship of Andy B: tardis'
-    assert listed[t.owner['id']]['owner_trust'] == {'grant_id': t.trust['grant_id'], 'until': t.trust['until'], 'live': False}
-    assert 'held until its own code is typed' in describe_connections(list(listed.values()), now=t.clock[0])
+    assert listed[t.owner['id']]['owner_trust'] == {'grant_id': t.trust['grant_id'], 'until': t.trust['until'], 'live': False,
+                                                    'state': 'revoked', 'window_seq': window, 'expect': 50, 'paired': 1}
+    # the held ship says its trust was revoked (Task 7, after Task 6's review), not "held until its own code is typed"
+    assert "held: its owner's trust was revoked" in describe_connections(list(listed.values()), now=t.clock[0])
 
 
 def test_a_layer_preview_names_a_ship_by_its_label(trusted):

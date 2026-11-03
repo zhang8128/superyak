@@ -440,11 +440,18 @@ def pair_trusted_command(data_dir, card_path, assertion_path, username):
     return 0
 
 
+HELD_RETIRED = 'held: its peer was retired; it comes back only as a new identity'  # pair() refuses it (spec item 6, S11)
+HELD_TRUST_SHIP = ("held: its owner's trust was revoked; a new trust and a fresh export-ship bring it back, "
+                   'or its own code')  # spec item 6, S8; every hold of a trust ship's owner revokes its trust (S10)
+
+
 def contact_state(contact):
-    """One contact's standing, in the CLI's and the browser's words: held, confirmed by typing or by owner trust, or
-    neither."""
+    """One contact's standing, in the CLI's and the browser's words (app.js contactState): held, and why, confirmed by
+    typing or by owner trust, or neither."""
     if contact['held']:
-        return 'held until its own code is typed'
+        if contact.get('retired'):
+            return HELD_RETIRED
+        return HELD_TRUST_SHIP if contact.get('trust_ship') else 'held until its own code is typed'
     if contact.get('confirmed_by') == 'owner trust':
         return 'confirmed by owner trust'
     return 'confirmed by typing' if contact['confirmed'] else 'no typed code on record'
