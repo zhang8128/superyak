@@ -1131,9 +1131,26 @@ class CarryUnmarked(Exception):
 CARRIED_NAME = 'carried'
 
 
+def _lstat(path):
+    """os.lstat(path), or None when nothing is there: only a missing name, or a file where a directory should be, reads
+    as absent. Any other OSError, an unsearchable directory's EACCES above all, is raised, so the carry names the right
+    cause on every Python (the F1 reader's finding 2: from 3.14, is_file() and is_symlink() return False on it)."""
+    try:
+        return os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
 def _symlinked(path):
     """The database or one of its sidecars is a symlink, as _refuse and Store._check_paths refuse."""
-    return any(Path(f'{path}{end}').is_symlink() for end in ('', '-journal', '-wal', '-shm'))
+    return any((found := _lstat(f'{path}{end}')) is not None and stat.S_ISLNK(found.st_mode)
+               for end in ('', '-journal', '-wal', '-shm'))
+
+
+def _regular(path):
+    """A regular file is at path. Not followed: _symlinked has refused a link there already."""
+    found = _lstat(path)
+    return found is not None and stat.S_ISREG(found.st_mode)
 
 
 def _has_table(db, name, schema='main'):
@@ -1212,11 +1229,15 @@ def carry_pull_nonces(data_dir, aside):
     aside = Path(aside)
     live, source = Path(data_dir) / LIVE_NAME, aside / 'restored-live' / LIVE_NAME
     try:
-        if _symlinked(live) or not live.is_file():
+        if _symlinked(live) or not _regular(live):
             raise CarryRefused(f'No peer database at {live} (or it or a sidecar is a symlink): nothing to carry into')
-        if any(path.name == LIVE_NAME or path.name.startswith(LIVE_NAME + '-') for path in aside.glob(LIVE_NAME + '*')):
+        try:  # listed, not globbed: glob swallows a PermissionError and would hide a stray file (finding 3)
+            names = os.listdir(aside)
+        except (FileNotFoundError, NotADirectoryError):
+            names = []   # no $ASIDE: the source check below says so
+        if any(name == LIVE_NAME or name.startswith(LIVE_NAME + '-') for name in names):
             raise CarryRefused(f"{aside} still holds a {LIVE_NAME} file, so 10.3's move hasn't run and {live} is not the file put back")
-        if _symlinked(source) or not source.is_file():
+        if _symlinked(source) or not _regular(source):
             raise CarryRefused(f'No restored station at {source} (or it or a sidecar is a symlink): nothing to carry from '
                                '(10.2 moves it there)')
         if source.samefile(live):  # also a hard link to it

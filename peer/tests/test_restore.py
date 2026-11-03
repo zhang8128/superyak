@@ -835,31 +835,36 @@ def test_carry_nonces_refuses_a_wal_source_beside_a_journal_and_one_it_cannot_re
     assert tree(tmp_path) == before
 
 
-def test_carry_nonces_refuses_a_rollback_source_beside_a_wal_and_a_path_it_cannot_check(tmp_path, capsys, monkeypatch):
-    """The Task 7 reader's F1 and B-2's mirror. A rollback-mode source with a -wal beside it, which only a mismatched
-    copy leaves, is refused: mode=ro would read that -wal and create a -shm. And a check that raises (is_file() on a
-    directory it can't search, before Python 3.14; patched here so every Python sees it) exits 1 saying nothing was
-    changed and why. Neither changes a byte. Mutations: the -wal check dropped (a -shm appears), the pre-attach OSError
-    uncaught (a bare errno line)."""
+@pytest.mark.skipif(os.geteuid() == 0, reason='root searches a directory whatever its mode')
+def test_carry_nonces_refuses_a_rollback_source_beside_a_wal_and_a_path_it_cannot_check(tmp_path, capsys):
+    """The Task 7 reader's F1 and B-2's mirror. A rollback-mode source with a real -wal beside it, which only a
+    mismatched copy leaves, is refused: mode=ro would read that -wal, carrying a nonce found only there, and create a
+    -shm beside the source. And an unsearchable restored-live exits 1 saying nothing was changed and why, on every
+    Python: the checks lstat, where is_file() returns False on EACCES from 3.14 and names the wrong cause (the F1
+    reader's finding 2). Neither changes a byte. Mutations: the -wal check dropped (exit 0, and a -shm appears), the
+    pre-attach OSError uncaught (a bare errno line), is_file() back in the checks ("No restored station" on 3.14)."""
     backups_dir = tmp_path / 'backups'
     live = Store(tmp_path / 'lighthouse')
     mirror, hidden = backups_dir / 'replaced-20261017-110000', backups_dir / 'replaced-20261017-120000'
-    for where in (mirror, hidden):
-        in_mode(restored_live(where).db_path, 'delete')
-    (mirror / 'restored-live' / 'peer.sqlite3-wal').write_bytes(b'')
+    source = restored_live(mirror).db_path
+    in_mode(source, 'wal')
+    with closing(sqlite3.connect(source)) as db:   # the -wal a WAL twin holds, kept before the switch below
+        db.execute('PRAGMA wal_autocheckpoint=0')
+        db.execute("INSERT INTO pull_nonces VALUES('o', 'only-in-the-wal', 8)")
+        db.commit()
+        frames = Path(f'{source}-wal').read_bytes()
+    in_mode(source, 'delete')
+    Path(f'{source}-wal').write_bytes(frames)
+    in_mode(restored_live(hidden).db_path, 'delete')
     before = tree(tmp_path)
     code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', mirror)
     assert code == 1 and out == '' and 'nothing was changed' in err and 'a -wal beside it' in err, err
     assert tree(tmp_path) == before
-    unsearchable, is_file = hidden / 'restored-live' / 'peer.sqlite3', Path.is_file
-
-    def raising(path):
-        if path == unsearchable:
-            raise PermissionError(13, 'Permission denied', str(path))
-        return is_file(path)
-    monkeypatch.setattr(Path, 'is_file', raising)
-    code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', hidden)
-    monkeypatch.undo()   # tree() below calls is_file() too
+    (hidden / 'restored-live').chmod(0)
+    try:
+        code, out, err = carry(capsys, '--data-dir', live.data_dir, '--aside', hidden)
+    finally:
+        (hidden / 'restored-live').chmod(0o700)
     assert code == 1 and out == '' and 'nothing was changed' in err and 'could not be checked (Permission denied)' in err, err
     assert tree(tmp_path) == before
 
