@@ -1,6 +1,6 @@
 # Lessons room adds: the ship adds what Andy's code already vouched for
 
-Rio Grande, 2026-11-03, revision 4 (trust-made ships join under their owner's live trust, so no agent needs Andy's own add) after its fresh review and re-check (Majors: a removal undone; per-account vouching, at pair time and in the listing view). Amends first-rail spec section 3 ("Only Andy's", "Moderators": "Until then only Andy changes
+Rio Grande, 2026-11-03, revision 5 (trust-made ships join under their owner's live trust, bounded by hold, pause and a per-grant cap) after its fresh review and re-check (Majors: a removal undone; per-account vouching, at pair time and in the listing view). Amends first-rail spec section 3 ("Only Andy's", "Moderators": "Until then only Andy changes
 who is in it"), on branch trail-arrows-spec, 2026-10-27-first-rail-lessons-design.md.
 
 ## Why
@@ -36,6 +36,16 @@ nothing new. It's administration.
      grant already said how many ships to expect from that host, so his act per host covers each of its ships; he
      never approves agents one by one (Andy, 2026-11-03: "we're going to have thousands of agents running. are you
      saying I'm going to need to approve every connection?");
+     Because a stolen host key makes every assertion verify (owner trust M4), a trust-made member is bounded three
+     ways, all at the origin:
+     - **a hold removes it.** Any hold of a trust-made contact (a revoke, a retire, an unpair, a restore) removes it
+       from the lessons chain in the same transaction, recorded with reason `held`, so every index drops its lessons
+       on its next run. A `held` removal isn't Andy's removal: a ship recovered under a later trust and a fresh
+       assertion rejoins by Rio Grande's add;
+     - **a paused grant lays nothing.** While its grant is paused, the origin's lesson gate refuses lessons from that
+       grant's ships;
+     - **one cap per grant.** All of one grant's ships share one LIVE_CAP of live lessons, so volume can't grow with
+       the expected count.
    - Andy vouched for this account, one of two ways: its confirmation's `confirmed_by` (a column `pair` now writes,
      the admin who typed the code) is the room's owner, and `pair` showed him the addable line (item 2); or the
      listing view he confirmed named it as addable (item 2a), which is how every contact paired before its peer was
@@ -49,9 +59,9 @@ nothing new. It's administration.
 2a. **The listing names the addable accounts.** `make station-lessons-room … PEERS=` shows, under each listed peer,
    every code-current, unheld contact on it that owner trust didn't make, as "addable by Rio Grande", and those
    contact ids go into its confirm code, so the CONFIRM run records exactly what was shown (`lessons_addable`:
-   contact id, the confirmation code shown, listing time). A CONFIRM rerun replaces the table, as it replaces
-   `lessons_peers`, and a row counts only while its code is still the contact's current one, so a later re-pair
-   under a new name or by another admin no longer counts. Peers are paired before they're listed, so this is the path for most accounts: Andy
+   contact id, the confirmation code shown, its `confirmed_by`, listing time). A CONFIRM rerun replaces the table,
+   as it replaces `lessons_peers`, and a row counts only while the contact's current code and `confirmed_by` are
+   still those shown, so a later re-pair under a new name, or by another admin, no longer counts. Peers are paired before they're listed, so this is the path for most accounts: Andy
    sees each one in the view he already confirms, and no new act is asked of him.
 3. **Shown and recorded.** The command prints the contact's label and its user id's short form, its peer's 12
    characters, the old and new room's short ids, and how many lessons were carried. `station_notices` builds a one-off
@@ -61,6 +71,11 @@ nothing new. It's administration.
 4. **What stays Andy's.** Opening the room; listing a peer (his word that a machine holds only his accounts and ships);
    removing a member, and adding back one he removed; retracting a lesson. His per-host acts (the two codes and the
    owner-trust grant with its expected count) are the only ones a new agent needs, however many there are.
+
+**Owner trust's pause notice** adds, when the trust's ships wait for the lessons room: "<k> of its ships wait for the
+lessons room until you renew." **Owner trust 4a's damage line** ("A trust-made ship lands in no room") becomes: "A
+trust-made ship lands in no room but the lessons room, and only under a live trust, removed from it by any hold,
+silenced while its grant is paused, and capped per grant."
 
 **Order:** the build lands after owner trust merges, since it uses `code_current` and `trust_confirmations` from that
 branch. Owner trust's line "Pairing grants no content, and no room by itself" gains: "except that a typed code for an
@@ -82,7 +97,9 @@ in `lessons_addable`, is refused. The listing view names the addable contacts, a
 is added or goes stale. The notice posts once per add, keyed by its `member_changes` row. The restore keeps `confirmed_by`, `lessons_line` and
 `lessons_addable` in its compared lists (backups.py `COMPARED`/`_usable`); a restored confirmation with no `confirmed_by`
 comes in only through 2a. A trust-made ship is added while its trust is live and its owner addable, and refused when
-its trust is revoked, expired or paused, or its owner isn't addable. The success path makes the chain's
+its trust is revoked, expired or paused, or its owner isn't addable. A hold of a trust-made member removes it from the chain
+(reason `held`) and its lessons leave every index; a paused grant's ship can't lay a lesson; one grant's ships share one
+LIVE_CAP; a ship recovered under a later trust rejoins. The success path makes the chain's
 next room with the contact, carries the chain's lessons once, and posts the notice once. The CLAUDE.md lessons-room
 paragraph changes from "he adds his own account and that ship's account on that peer" to the new command, with
 Andy's yes in the harness when it lands.
