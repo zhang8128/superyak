@@ -444,8 +444,8 @@ station-alerts:
 
 station-lessons-room:
 	@test -n "$(ID)" || { echo 'Usage: make station-lessons-room ID=<short id from make station-rooms> [PEERS="<paired peer id> …"] [CONFIRM=<the code it showed>] [LESSONS_SHIP=rio-grande] [APPROVER=andy]'; exit 2; }
-	@set -f; peers=; for p in $$PEERS; do peers="$$peers --peer $$p"; done; \
-	$(LESSONS) station-room --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --ship "$(LESSONS_SHIP)" $$peers$(if $(CONFIRM), --confirm "$(CONFIRM)")
+	@for p in $(PEERS); do case "$$p" in *[!0-9a-f]*) echo "PEERS takes full peer ids (64 hex characters), not: $$p"; exit 2;; esac; test "$${#p}" -eq 64 || { echo "PEERS takes full peer ids (64 hex characters), not: $$p"; exit 2; }; done
+	$(LESSONS) station-room --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)" --ship "$(LESSONS_SHIP)"$(foreach p,$(PEERS), --peer $(p))$(if $(CONFIRM), --confirm "$(CONFIRM)")
 
 lessons-room:
 	@test -n "$(ID)" || { echo 'Usage: make lessons-room ID=<origin peer id>:<room id> [CONFIRM=<the code it showed>] [LESSONS_DATA=<this peer data dir>]'; exit 2; }

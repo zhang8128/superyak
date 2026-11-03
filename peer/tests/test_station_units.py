@@ -291,6 +291,8 @@ def test_lessons_units_install_and_remove_only_their_own_files(tmp_path):
     ('station-lessons-room', ['ID=ab12', 'CONFIRM=0f0f0f0f'], ['station-room', '--data-dir', 'S', '--id', 'ab12', '--as', 'andy',
                                                              '--ship', 'rio-grande', '--confirm', '0f0f0f0f']),
     ('station-lessons-room', ['ID=ab12'], ['station-room', '--data-dir', 'S', '--id', 'ab12', '--as', 'andy', '--ship', 'rio-grande']),
+    ('station-lessons-room', ['ID=ab12', 'PEERS=' + 'a' * 64 + ' ' + 'b' * 64],
+     ['station-room', '--data-dir', 'S', '--id', 'ab12', '--as', 'andy', '--ship', 'rio-grande', '--peer', 'a' * 64, '--peer', 'b' * 64]),
     ('lessons-room', ['ID=x:y'], ['room', '--data-dir', 'L', '--id', 'x:y']),
     ('lessons-room', ['ID=x:y', 'CONFIRM=0f0f0f0f'], ['room', '--data-dir', 'L', '--id', 'x:y', '--confirm', '0f0f0f0f']),
     ('lessons-where', [], ['where', '--data-dir', 'L']),
@@ -405,3 +407,13 @@ def test_the_launchd_template_runs_federate_and_is_restarted_only_after_a_crash(
     assert plist['ProgramArguments'] == ['USER_HOME/superyak/peer/.venv/bin/python', '-I', '-m', 'superyak_peer', 'federate',
                                          '--data-dir', 'PEER_DATA']
     assert (plist['KeepAlive'], plist['ThrottleInterval'], plist['RunAtLoad']) == ({'SuccessfulExit': False}, 30, True)
+
+
+@pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make'), reason='needs the parent repository Makefile')
+@pytest.mark.parametrize('peers', ['4de98e28', 'not-a-peer-id' + 'a' * 51, 'A' * 64])
+def test_station_lessons_room_refuses_anything_but_full_peer_ids(tmp_path, peers):
+    """PEERS takes full peer ids, 64 lowercase hex characters, never a pairing code or a short id; the check runs before
+    the lessons command, so nothing reads the store."""
+    done = subprocess.run(['make', '-s', 'station-lessons-room', 'ID=ab12', f'PEERS={peers}', f'STATION_DATA={tmp_path}'],
+                          cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert done.returncode != 0 and 'PEERS takes full peer ids' in done.stdout + done.stderr
