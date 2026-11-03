@@ -173,6 +173,38 @@ def test_the_sign_in_page_says_it_is_a_prototype_and_links_what_superyak_is(brow
         expect(link).to_have_attribute("href", "https://github.com/zhang8128/superyak#readme")
 
 
+def test_the_sign_in_page_tells_a_stranger_how_to_get_an_account(browser_peer):
+    """T4's baseline walk: the sign-in page offered a token box and nothing for someone not yet invited. Any peer's
+    owner invites its people, so the page says to ask them."""
+    with sync_playwright() as playwright, signed_out_browser(playwright) as page:
+        page.goto(browser_peer["base_url"] + "/")
+        expect(page.get_by_text("No account? The person who runs this home invites people: ask them for an invitation.",
+                                exact=True)).to_be_visible()
+
+
+def test_before_a_password_the_sign_in_page_says_the_owner_can_read_the_home(browser_peer):
+    """Rio Grande, on T4's branch: whoever runs a home reads what's stored on it, and a person should know that before
+    typing a password into someone else's home. Until now it was said only in the README."""
+    with sync_playwright() as playwright, signed_out_browser(playwright) as page:
+        page.goto(browser_peer["base_url"] + "/")
+        expect(page.get_by_text("This home is run by its owner, who can read what's stored here.", exact=True)).to_be_visible()
+
+
+def test_without_javascript_the_page_still_says_what_superyak_is(browser_peer):
+    """T4's baseline walk: a fetcher or link preview that runs no JavaScript saw only "Opening your home…". This reads
+    the served HTML as such a reader does, since Chromium with script execution turned off still hides <noscript>."""
+    with urlopen(browser_peer["base_url"] + "/") as response:
+        page = response.read().decode()
+    noscript = re.search(r"<noscript>(.*?)</noscript>", page, re.S)
+    assert noscript, "the shell has no <noscript> text"
+    text = " ".join(noscript.group(1).split())
+    assert "This is a Superyak home" in text and "Signing in needs JavaScript." in text
+    assert '<a href="https://github.com/zhang8128/superyak#readme" rel="noopener noreferrer">What is Superyak?</a>' in text
+    description = "A Superyak home: a self-hosted place for the parts of your life you choose to share. Its owner invites the people in it."
+    assert f'<meta name="description" content="{description}">' in page
+    assert f'<meta property="og:description" content="{description}">' in page
+
+
 def test_source_library_import_pause_and_private_review(browser_peer):
     store = browser_peer['app'].state.store
     actor = browser_peer['users']['patient']['id']
