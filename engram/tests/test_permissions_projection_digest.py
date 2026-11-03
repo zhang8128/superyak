@@ -1084,3 +1084,19 @@ def test_6_two_writers_and_a_reader_for_60_s_check_whole_at_most_1_percent_of_re
     assert all(busy == 0 and n > 100 for n, busy in wrote), wrote
     n_reads, checks = reads
     assert n_reads > 100 and checks <= n_reads / 100, reads
+
+
+# ---------------------------------------------------------------- Task 0c: an append's cost in a rebuild
+
+def test_0c_an_append_spends_no_canonical_json_on_the_parts(tmp_path, monkeypatch, own_asserts):
+    """Task 0c: canonical_json on the parts, twice an append, with reading them back, nearly tripled a rebuild of U24's
+    reference ledger (158.7 s to 450.3 s on Tardis). The parts text is built directly (Task 1's test holds it to
+    canonical_json's) and read back with a compiled check, so an append calls canonical_json for its body and its log
+    entry only."""
+    led = Ledger.create(tmp_path, "andy", now=T("2026-11-01"))
+    calls, real = [], permission_ledger.canonical_json
+    monkeypatch.setattr(permission_ledger, "canonical_json", lambda value: (calls.append(1), real(value))[1])
+    led._append("note", "x", ANDY, "terminal", {}, at=T("2026-11-02"))
+    assert len(calls) == 2
+    assert _follows(led)
+    led.close()

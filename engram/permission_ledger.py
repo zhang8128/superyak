@@ -20,6 +20,7 @@ import hashlib
 import json
 import dataclasses
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -565,8 +566,10 @@ def _seq_sets(text: str) -> frozenset:
 # digest itself. A part is a count and a sum of row hashes mod 2**256, so it ignores row order and an update is a
 # subtraction and an addition. It detects accidental tears; it is no MAC against someone who can write the file.
 _PARTS = ("meta", *_COLUMNS)
+_SORTED_PARTS = tuple(sorted(_PARTS))
 _UNHASHED_META = frozenset({"head", "projection", "projection_parts"})
 _MOD = 1 << 256
+_HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
 def _row_bytes(table: str, values: Sequence) -> bytes:
@@ -612,13 +615,21 @@ def _fold(parts: dict, part: str, values: Sequence, sign: int = 1) -> None:
 
 
 def _parts_text(parts: dict) -> str:
-    """`meta.projection_parts`: canonical JSON of each part's count and sum (64 hex digits), keys in sorted order."""
-    return canonical_json({p: [parts[p][0], f"{parts[p][1]:064x}"] for p in _PARTS})
+    """`meta.projection_parts`: canonical JSON of each part's count and sum (64 hex digits), keys in sorted order.
+    Built directly, as canonical_json writes it: the keys are the parts' names, which need no escaping, and the values
+    an int and a hex string. canonical_json took about 0.1 ms here, twice an append, and nearly tripled a rebuild of
+    U24's reference ledger (Task 0c)."""
+    return "{" + ",".join(f'"{p}":[{parts[p][0]},"{parts[p][1]:064x}"]' for p in _SORTED_PARTS) + "}"
+
+
+def _text_digest(text: str) -> str:
+    """BLAKE2b-256 of a parts text, in hex."""
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=32).hexdigest()
 
 
 def _parts_digest(parts: dict) -> str:
     """The whole: BLAKE2b-256 of the parts' canonical JSON, in hex."""
-    return hashlib.blake2b(_parts_text(parts).encode("utf-8"), digest_size=32).hexdigest()
+    return _text_digest(_parts_text(parts))
 
 
 def _read_parts(text: str) -> dict:
@@ -630,7 +641,7 @@ def _read_parts(text: str) -> dict:
     for p in _PARTS:
         v = raw[p]
         if not (isinstance(v, list) and len(v) == 2 and type(v[0]) is int and v[0] >= 0 and isinstance(v[1], str)
-                and len(v[1]) == 64 and all(c in "0123456789abcdef" for c in v[1])):
+                and _HEX64.fullmatch(v[1])):
             raise ValueError(f"projection_parts holds no count and sum for {p}")
         out[p] = [v[0], int(v[1], 16)]
     return out
@@ -1501,8 +1512,9 @@ class Ledger:
             upsert = "INSERT INTO meta VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             self.conn.execute(upsert, ("head", f"{seq}:{digest}"))
             if parts is not None:         # D1: the digest beside head, in the same transaction
-                self.conn.executemany(upsert, [("projection", f"{seq}:{_parts_digest(parts)}"),
-                                               ("projection_parts", _parts_text(parts))])
+                held = _parts_text(parts)
+                self.conn.executemany(upsert, [("projection", f"{seq}:{_text_digest(held)}"),
+                                               ("projection_parts", held)])
             self.conn.execute("COMMIT")
         except BaseException as e:
             if self.conn.in_transaction:

@@ -373,3 +373,11 @@ since step 1. With two writers in contention that fails `test_rf5_two_writers_ke
 - **D9 on Tardis** (Task 6's x86 test, at Task 0's shape): the rare path 1.81 s (budget 2.5 s), a memo match 0.52 ms
   spent in the key protocol (budget 2 ms), an append 0.60 ms over one that keeps no digest (budget 2 ms). The match
   path is timed inside the key protocol, since a difference of two 0.35 s `state()`s can't show 2 ms.
+- **Task 0c on Tardis** (U24's reference ledger, 811,000 log rows, rebuilt from the same kept file; quiet, back to back):
+  143.7 s before the digest, 210.4 s after (+46%), so the x86 rebuild budget is 263 s (measured plus 25%). As first
+  built it took 450.3 s (against 158.7 s before, each beside one pytest process): `canonical_json`, a pure-Python
+  encoder, ran twice an append on the 18 parts, and reading them back checked each hex digit in Python. The parts text
+  is now built directly, once an append (Task 1's test holds it to `canonical_json`'s), and read back with a compiled
+  check. **The Pi's rebuild budget is still to measure** on the Pi.
+- **The suite-wide check sets and restores `_append` itself,** not through the `monkeypatch` fixture, which changed
+  every test's fixture order (the whole suite found it: a test's patched `os.open` broke `tmp_path`'s teardown).
